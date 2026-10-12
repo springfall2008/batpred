@@ -47,7 +47,7 @@ STATE_FIELDS = (
     "car_charging_loss",
     "car_charging_limit_model",
 )
-ARG_KEYS = ("car_charging_loss", "car_charging_soc", "car_charging_limit", "octopus_intelligent_slot", "octopus_intelligent_smart_control")
+ARG_KEYS = ("car_charging_loss", "car_charging_soc", "car_charging_limit", "octopus_intelligent_slot", "octopus_intelligent_smart_control", "octopus_intelligent_planned_slot")
 
 
 def _setup(my_predbat):
@@ -203,6 +203,18 @@ def run_octopus_smart_control_tests(my_predbat):
         items[SWITCH] = "off"
         kwh = _slots(my_predbat)
         failed |= _check("t10b schedule kept", kwh == [5.0, 10.0], "kwh {}".format(kwh))
+        _setup(my_predbat)
+
+        print("Test 10c: planned slots from octopus_intelligent_planned_slot are the charger's own, so are kept while Smart Control is off")
+        attributes = copy.deepcopy(items[SLOT_SENSOR])
+        attributes["planned_dispatches"][0]["charge_in_kwh"] = 7.0
+        attributes["completed_dispatches"] = []
+        my_predbat.ha_interface.set_state(CUSTOM_SENSOR, "off", attributes=attributes)
+        my_predbat.args["octopus_intelligent_planned_slot"] = CUSTOM_SENSOR
+        items[SWITCH] = "off"
+        kwh = _slots(my_predbat)
+        failed |= _check("t10c charger plan kept", kwh == [5.0, 7.0], "kwh {}".format(kwh))
+        my_predbat.args.pop("octopus_intelligent_planned_slot", None)
         _setup(my_predbat)
 
         print("Test 11: the state is case-insensitive, and an odd state string is no evidence")

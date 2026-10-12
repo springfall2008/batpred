@@ -1846,6 +1846,7 @@ class Fetch:
                 completed = []
                 planned = []
                 started = []
+                planned_entity_id = None
 
                 if entity_id and "octopus_intelligent_slot_action_config" in self.args:
                     config_entry = self.get_arg("octopus_intelligent_slot_action_config", None, indirect=False)
@@ -1889,9 +1890,10 @@ class Fetch:
                 # Octopus keeps returning the plan it made before Smart Control was switched off, but nothing will act
                 # on it (#5339). Slots already delivered (completed) are real, so those are still counted above, as are
                 # the manual bump/boost charges the user asked for themselves. So is a charger's own schedule: the Ohme
-                # component wires that in when Octopus no longer drives the charger, and Smart Control has no say in it
+                # component wires that in when Octopus no longer drives the charger, and Smart Control has no say in it.
+                # Planned slots taken from octopus_intelligent_planned_slot are the charger's own plan too, not Octopus's
                 planned_used = planned
-                if self.octopus_smart_control_off(car_n, save=save):
+                if not planned_entity_id and self.octopus_smart_control_off(car_n, save=save):
                     planned_used = [slot for slot in (planned or []) if isinstance(slot, dict) and (slot.get("source") or (slot.get("meta") or {}).get("source")) in OCTOPUS_MANUAL_DISPATCH_SOURCES + (DISPATCH_SOURCE_CHARGER_SCHEDULE,)]
                 if planned_used and (not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n] or self.car_charging_now[car_n]):
                     # We only count planned slots if the car is plugged in or we are ignoring unplugged cars. A car
