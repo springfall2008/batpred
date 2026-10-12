@@ -2839,6 +2839,7 @@ APPS_SCHEMA = {
     "enphase_automatic": {"type": "boolean"},
     "enphase_automatic_ignore_pv": {"type": "boolean"},
     "octopus_intelligent_slot": {"type": "sensor|sensor_list", "sensor_type": "boolean|action", "entries": "num_cars", "optional_entries": True},
+    "octopus_intelligent_planned_slot": {"type": "sensor|sensor_list", "sensor_type": "boolean", "entries": "num_cars", "optional_entries": True},
     "octopus_ready_time": {"type": "sensor|sensor_list", "sensor_type": "string", "entries": "num_cars", "optional_entries": True},
     "octopus_charge_limit": {"type": "sensor|sensor_list", "sensor_type": "float", "entries": "num_cars", "optional_entries": True},
     "octopus_slot_low_rate": {"type": "boolean"},
