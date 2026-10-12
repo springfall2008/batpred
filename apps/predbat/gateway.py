@@ -228,6 +228,77 @@ class GatewayMQTT(ComponentBase):
     # control writes (engine thread) and by acks arriving on the MQTT listener's loop.
     _command_lock = threading.Lock()
 
+    @staticmethod
+    async def observe_readonly_transport(base, wire, control, timeout_s):
+        """Round-trip one signed probe through the loaded MQTT credential.
+
+        This separate one-shot path never starts ordinary component lifecycle,
+        schedules, preference sync or EV control. Only the service-issued probe
+        retry is publishable. The backend independently requires authenticated
+        device ACK ingress; a message here is not physical release authority.
+        """
+        from control_readiness import canonical_battery_value
+
+        args = base.args
+        gate = control_gate_for(base)
+        snapshot = gate.snapshot() if gate else {}
+        if not snapshot.get("closed") or snapshot.get("pending") != 0 or snapshot.get("uncertain") != 0:
+            raise ValueError("Target write admission must remain sealed")
+        if not HAS_AIOMQTT or type(wire) is not dict or set(wire) != {"device_id", "command_id", "command", "expires_at", "control_grant"} or type(control) is not dict or wire.get("command") != "probe_battery_control":
+            raise ValueError("Invalid read-only transport challenge")
+        device_id = args.get("gateway_device_id")
+        command_id = wire.get("command_id")
+        if not isinstance(device_id, str) or wire.get("device_id") != device_id or not isinstance(command_id, str) or str(uuid.UUID(command_id)) != command_id:
+            raise ValueError("Target MQTT challenge identity differs")
+        if type(wire.get("expires_at")) is not int or wire.get("expires_at") != control.get("expires_at") or control.get("domain") != "battery" or type(control.get("protocol")) is not int or control.get("protocol") != 1 or not wire.get("control_grant"):
+            raise ValueError("Target MQTT challenge binding differs")
+        if args.get("gateway_display_only", False) is not False or not args.get("gateway_mqtt_token") or not args.get("gateway_mqtt_host") or type(args.get("gateway_mqtt_port", 8883)) is not int:
+            raise ValueError("Target MQTT configuration unsupported")
+        topic = "predbat/devices/" + device_id
+        expected = {**control, "phase": "probe_ready", "persisted": True, "pending": 0, "uncertain": 0}
+        async with asyncio.timeout(timeout_s):
+            async with aiomqtt.Client(
+                hostname=args["gateway_mqtt_host"],
+                port=args.get("gateway_mqtt_port", 8883),
+                username=device_id,
+                password=args["gateway_mqtt_token"],
+                tls_context=ssl.create_default_context(),
+                identifier="predbat-readiness-" + uuid.uuid4().hex,
+                clean_session=True,
+            ) as client:
+                ack_topic = topic + "/ack/" + command_id
+                result = await client.subscribe(ack_topic, qos=0)
+                if not result or any(int(getattr(code, "value", code)) >= 0x80 for code in result):
+                    raise ValueError("Target MQTT subscription refused")
+                # No unsigned preference command or executable retained plan can
+                # pass this path, even while all normal write sinks stay sealed.
+                await client.publish(topic + "/command", json.dumps(wire, separators=(",", ":")), qos=1, retain=False)
+                async for message in client.messages:
+                    if str(message.topic) != ack_topic or getattr(message, "retain", True) is not False:
+                        continue
+                    if len(message.payload) > 2048:
+                        raise ValueError("Oversized target MQTT receipt")
+                    value = json.loads(message.payload)
+                    if type(value) is not dict or value.get("command_id") != command_id or value.get("command") != "probe_battery_control" or value.get("ok") is not True:
+                        raise ValueError("Target MQTT probe refused")
+                    receipt = value.get("applied", {}).get("control")
+                    if canonical_battery_value(receipt) != canonical_battery_value(expected):
+                        raise ValueError("Target MQTT receipt binding differs")
+                    snapshot = gate.snapshot()
+                    if not snapshot["closed"] or snapshot["pending"] or snapshot["uncertain"]:
+                        raise ValueError("Target write admission changed")
+                    return {
+                        "provider": "predbat_gateway",
+                        "serials": receipt["inverter_serials"],
+                        "command_id": command_id,
+                        "receipt": receipt,
+                        "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                        "sealed": True,
+                        "pending": 0,
+                        "uncertain": 0,
+                    }
+        raise ValueError("Target MQTT receipt unavailable")
+
     # Defaults for an instance built without initialize()
     gateway_shared_ct = True
     gateway_integrate_power = False

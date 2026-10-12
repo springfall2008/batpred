@@ -393,6 +393,10 @@ def start_control_handoff(base):
             service.stop()
         raise ControlAttachFailed("Controller startup cannot replace an attached gate")
     config = base.args.get("control_handoff")
+    if base.args.get("control_readiness") is not None or isinstance(config, dict) and "readiness" in config:
+        from control_readiness import observe_loaded_target
+
+        return observe_loaded_target(base)
     if config is None or isinstance(config, dict) and config.get("enabled", False) is False:
         return None
     boot_id = str(uuid.uuid4())
