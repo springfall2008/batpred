@@ -473,7 +473,7 @@ class ControlServiceTests(unittest.TestCase):
         self.assertEqual(gate.epoch, self.epoch)
         call = post.call_args
         self.assertEqual(call.args[0], "https://service.invalid/functions/v1/engine-battery-control")
-        self.assertEqual(call.kwargs["json"], {"action": "attach", "instance_id": self.instance, "boot_id": self.boot})
+        self.assertEqual(call.kwargs["json"], {"action": "attach", "instance_id": self.instance, "boot_id": self.boot, "loaded_config_version": 7})
         self.assertFalse(call.kwargs["allow_redirects"])
         self.assertEqual(call.kwargs["headers"]["Authorization"], "Bearer synthetic-service-key")
 
