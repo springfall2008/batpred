@@ -693,6 +693,17 @@ def run_cap_minutes_tests(my_predbat, midnight_utc, time_format):
         print("\n**** Cap minutes: a dispatch crossing the end of the budget ****")
         slots = [dispatch((10, 40), (11, 20), 4.0), dispatch((11, 30), (12, 0), 3.0)]
         failed |= run_cap_minutes_case("cap_minutes_crossing", my_predbat, slots, 1, rates_for((630, 690, 4.0), (690, 720, 10.0)), [(640, 670, 4), (670, 680, 10), (690, 720, 10)])
+
+        # One 7-hour dispatch against the 6-hour cap: the first 6 hours are cheap and the 7th is not
+        print("\n**** Cap minutes: a single 7-hour dispatch ****")
+        slots = [dispatch((10, 30), (17, 30), 7.0)]
+        failed |= run_cap_minutes_case("cap_minutes_seven_hours", my_predbat, slots, 12, rates_for((630, 990, 4.0), (990, 1050, 10.0)), [(630, 990, 4), (990, 1050, 10)])
+
+        # The same off the half hour: the car plan splits 6 hours in, at 16:40, and the rates keep the
+        # half hour that falls in cheap to 17:00
+        print("\n**** Cap minutes: a single 7-hour dispatch off the half hour ****")
+        slots = [dispatch((10, 40), (17, 40), 7.0)]
+        failed |= run_cap_minutes_case("cap_minutes_seven_hours_offset", my_predbat, slots, 12, rates_for((630, 1020, 4.0), (1020, 1080, 10.0)), [(640, 1000, 4), (1000, 1060, 10)])
     finally:
         for key, value in saved.items():
             setattr(my_predbat, key, value)
