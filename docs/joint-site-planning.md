@@ -45,7 +45,7 @@ The mapping accepts:
 | --- | --- |
 | `mode` | `off` (default), `shadow`, or explicitly commissioned `apply` |
 | `import_limit_w` | Positive whole-site import ceiling; may use the companion diagnostic's configured limit when installed |
-| `control_model` | `native` (default) or the explicitly hypothetical `deye_tou` shadow model |
+| `control_model` | `native` (default), explicitly hypothetical `deye_tou` shadow, or capability-constrained `deye_solarman` when the verified shared-template core is installed |
 | `load_port_limit_w` | Explicit aggregate household + EV AC demand limit, distinct from `import_limit` |
 | `session.available_from` | Offset-aware expected arrival timestamp |
 | `session.departure` | Offset-aware departure inside the forecast horizon |
@@ -198,8 +198,10 @@ signal.
 
 ### Execution contract
 
-Apply currently requires the **separate local DEYE adapter**. The joint PR remains
-independent and can be tested without that adapter; missing support blocks execution.
+The original `deye_tou` apply path requires the **separate local DEYE adapter**.
+The combined integration additionally supports the narrower shared-template
+path described below. The joint PR remains independent and can be tested without
+either adapter; missing support blocks execution.
 SK, Deye Cloud and generic inverter capability overrides do not become DEYE merely
 because the hypothetical model worked in shadow.
 
@@ -260,6 +262,68 @@ This branch **does not install or replace that external automation**. Keep
 timer delay have been tested in the particular installation. Publishing expiry
 metadata is not a promise of instantaneous physical OFF. Native status-age
 watchdogs and electrical protections remain independent backstops.
+
+#### Shared-template integration
+
+The combination of diagnostics, joint planning and the shared
+`templates/deye_solarman.yaml` profile accepts `control_model: deye_solarman`.
+It searches **only battery-first demand and full-rate charge**. Hold/freeze,
+limited discharge, forced export, physical ToU-time and global-current writes
+remain unsupported. Selecting this model does not turn those capabilities on.
+The previous `deye_tou` counterfactual is still separate; its successful plan
+cannot be applied through this template.
+
+In shadow, the actual custom `Inverter` profile, both verified source/SOC
+sequences and all twelve cached control entities must validate before searching.
+The model's capacity, reserve and raw power ceilings must match the actual
+single-inverter inputs. Rate scaling must be 1.0 for this fixed-rate template;
+it cannot execute a reduced or raised hardware rate merely because the model
+was scaled. Non-matching inputs are rejected, not silently rewritten.
+There is no fake DEYE object or `deye_local` fallback. The candidate passes both
+native replays with the real no-freeze settings, retains manual domestic floors
+and reserves full EV power per ON step. A bounded miss at a smaller beam may use
+one reported retry at 512; this does not prove optimality or physical feasibility.
+For capability subsets without hold, pruning retains both the cheapest and
+highest-stored-energy label per EV-progress group within the same beam budget.
+This avoids discarding the battery energy needed by a later fixed-power EV start.
+The default all-mode search retains its existing ranking.
+
+Apply is still **default-off and independently commissioned**. Existing
+`apply_verified` and `ev_executor_lease_verified` attestations, field-specific
+180-second SOC/connection observations, exact permission/connection checks,
+15%/25% hysteresis, configured OFF delay, read-only/calibration and competing
+controller guards remain required. Installing this combination sets none of them.
+Command validation rejects hold or power ceilings anywhere in the horizon,
+including injected future actions.
+
+Dispatch uses the real `Inverter.adjust_charge_immediate` entry point and the
+template's existing observed phase barriers. All six sources and six targets
+must match before an EV lease is published. A rejected or partial service,
+changed mapping, unavailable row or later observed-control drift revokes EV
+authority without speculative recovery writes or falling through to legacy
+execution. The lease is at most 300 seconds and never switches the EV relay
+directly. Reports still say HA-observed, not hardware-confirmed.
+
+This is an **experimental software integration**, not approval to merge/deploy
+the related PRs. It cannot promise the same savings
+or trajectory as a commissioned hold/limited-discharge controller. Persistent
+ToU behaviour, actual rate delivery, topology/protections and independent EV
+lease-expiry response still require physical commissioning before live use.
+
+From `coverage/`, run the new synthetic acceptance groups alongside the original
+ones, saving the complete output before inspecting it:
+
+```bash
+python ../apps/predbat/unit_test.py --test joint_site_capabilities --test joint_site_template --test joint_site_combined > joint-template-tests.log 2>&1
+```
+
+The joint-planning PR remains independently importable without the verified
+service-sequence core or YAML fixture from the shared-template PR. In that case,
+the two integration groups test the missing-core rejection and explicitly report
+that real-template scenarios were skipped; this is not evidence of integration
+acceptance. Once the shared-template PR is present, set
+`PREDBAT_JOINT_TEMPLATE_REQUIRED=1` when running those groups (or the full suite)
+to fail rather than skip if either dependency is absent.
 
 Blocked apply makes no speculative recovery writes to the inverter: its last
 accepted ToU controls can remain in force. The observed six-row commands are

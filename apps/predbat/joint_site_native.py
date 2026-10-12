@@ -145,7 +145,7 @@ def _options(base):
     if mode not in ("shadow", "apply"):
         raise ValueError("joint_site mode must be off, shadow or apply")
     control_model = settings.get("control_model", "native")
-    if control_model not in ("native", "deye_tou"):
+    if control_model not in ("native", "deye_tou", "deye_solarman"):
         raise ValueError("Unsupported joint-site control model")
     if type(settings.get("allow_stale_shadow_soc", False)) is not bool:
         raise ValueError("allow_stale_shadow_soc must be boolean")
@@ -153,8 +153,8 @@ def _options(base):
         raise ValueError("apply_verified must be boolean")
     if type(settings.get("ev_executor_lease_verified", False)) is not bool:
         raise ValueError("ev_executor_lease_verified must be boolean")
-    if mode == "apply" and (control_model != "deye_tou" or settings.get("allow_stale_shadow_soc", False)):
-        raise ValueError("Apply requires real DEYE controls and cannot use stale SOC assumptions")
+    if mode == "apply" and (control_model not in ("deye_tou", "deye_solarman") or settings.get("allow_stale_shadow_soc", False)):
+        raise ValueError("Apply requires supported real controls and cannot use stale SOC assumptions")
     for name in ("connection_observed_at_entity", "soc_observed_at_entity"):
         if settings.get(name) is not None and (not isinstance(settings[name], str) or not settings[name]):
             raise ValueError("Observation timestamp entities must be non-empty strings")
@@ -366,8 +366,26 @@ def _collect_blockers(base, options):
         blockers.append("iboost_unsupported")
     if not base.car_energy_reported_load:
         blockers.append("load_not_reported")
-    if not base.set_charge_window or not base.set_charge_freeze or base.set_charge_freeze_only or base.set_charge_low_power:
+    template_model = options and options["control_model"] == "deye_solarman"
+    if not base.set_charge_window or (not template_model and not base.set_charge_freeze) or base.set_charge_freeze_only or base.set_charge_low_power:
         blockers.append("freeze_required")
+    if template_model:
+        from joint_site_template import validate_template
+
+        inverters = getattr(base, "inverters", None)
+        if not isinstance(inverters, list) or len(inverters) != 1:
+            blockers.append("single_template_inverter_required")
+        else:
+            try:
+                validate_template(inverters[0])
+            except (ValueError, TypeError, KeyError, AttributeError):
+                blockers.append("template_contract_invalid")
+        if base.export_limit != 0 or not base.set_discharge_during_charge:
+            blockers.append("template_dispatch_model_mismatch")
+        if base.args.get("charge_freeze_service") not in (None, "", []):
+            # The native target-equals-current branch can call this even without
+            # an explicit freeze. The narrow template must not acquire that writer.
+            blockers.append("template_freeze_service_unsupported")
     if not base.car_charging_from_battery:
         blockers.append("ev_from_battery_required")
     if getattr(base, "manual_charge_times", None):
@@ -459,8 +477,16 @@ def build_candidate(base, options):
         initial_off_minutes=options["initial_off_minutes"],
     )
     site = SiteConfig(options["import_limit_w"] / 1000, base.export_limit * 60, options["load_cap"])
-    result = plan(slots, ev, battery, site, PlannerConfig(beam_width=options["beam"], allow_limited_discharge=options["control_model"] == "deye_tou"))
+    modes = ("demand", "charge") if options["control_model"] == "deye_solarman" else ("demand", "hold", "charge")
+    result = plan(slots, ev, battery, site, PlannerConfig(beam_width=options["beam"], allow_limited_discharge=options["control_model"] == "deye_tou", allowed_battery_modes=modes))
     return result, slots
+
+
+def _validate_candidate_modes(options, result):
+    """Reject unsupported solver actions before replay/staging, never reinterpret a hold as demand."""
+    if options["control_model"] == "deye_solarman":
+        if any(action.battery_mode not in ("demand", "charge") or getattr(action, "discharge_limit_kw", None) is not None for action in result.actions):
+            raise UnsupportedJointSite("unsupported_template_candidate_controls")
 
 
 def _native_windows(base, result, slots):
@@ -641,7 +667,7 @@ def evaluate_joint_site(base, publish=True):
             },
             "ready_to_activate": False,
             "control_model": options["control_model"],
-            "counterfactual_controls": options["control_model"] != "native" and options["mode"] == "shadow",
+            "counterfactual_controls": options["control_model"] == "deye_tou" and options["mode"] == "shadow",
             "requested_mode": options["mode"],
             "activation_requirements": execution_requirements,
             "manual_domestic_floor_slots": len(base.all_active_keep),
@@ -694,6 +720,16 @@ def evaluate_joint_site(base, publish=True):
         _forecast_inputs(model_base, options)
         stage = "solver"
         result, slots = build_candidate(model_base, options)
+        if options["control_model"] == "deye_solarman":
+            report["supported_battery_modes"] = ["demand", "charge"]
+            report["search_beam_attempts"] = [{"beam_width": options["beam"], "solver_status": result.status}]
+            if not result.actions and options["beam"] < 512:
+                # A bounded search miss is not infeasibility. One explicit, reported
+                # retry retains the exact capabilities/inputs and stays within the cap.
+                retry_options = {**options, "beam": 512}
+                result, slots = build_candidate(model_base, retry_options)
+                report["search_beam_attempts"].append({"beam_width": 512, "solver_status": result.status})
+            _validate_candidate_modes(options, result)
         if not result.actions:
             report["status"] = "conditional_no_plan_found" if stale_hypothesis else "no_plan_found"
             report["execution_blockers"] = list(blockers)
@@ -704,12 +740,13 @@ def evaluate_joint_site(base, publish=True):
             windows = _native_windows(model_base, result, slots)
             checks = {"nominal": _replay(model_base, options, result, slots, windows, 0), "pv10": _replay(model_base, options, result, slots, windows, 1)}
             attempts = [{"forecast_basis": "nominal", "solver_status": result.status, "native_passed": all(check["passed"] for check in checks.values())}]
-            if options["control_model"] == "deye_tou" and not attempts[0]["native_passed"]:
+            if options["control_model"] in ("deye_tou", "deye_solarman") and not attempts[0]["native_passed"]:
                 # One bounded retry uses the forecast envelope and PV10 charge
                 # delivery assumption. Native nominal AND PV10 still validate
                 # the same full-rate commands; this is not charge modulation.
                 retry_options = {**options, "forecast_basis": "envelope"}
                 retry_result, retry_slots = build_candidate(model_base, retry_options)
+                _validate_candidate_modes(options, retry_result)
                 retry_checks = {}
                 if retry_result.actions:
                     retry_windows = _native_windows(model_base, retry_result, retry_slots)

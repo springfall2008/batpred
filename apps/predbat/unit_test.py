@@ -58,6 +58,9 @@ from tests.test_joint_site_native import run_joint_site_native_tests
 from tests.test_joint_site_limited import run_joint_site_limited_tests
 from tests.test_joint_site_apply import run_joint_site_apply_tests
 from tests.test_joint_site_entrypoints import run_joint_site_entrypoint_tests
+from tests.test_joint_site_capabilities import run_joint_site_capabilities_tests
+from tests.test_joint_site_template import run_joint_site_template_tests
+from tests.test_joint_site_combined import run_joint_site_combined_tests
 from tests.test_basic_rates import test_basic_rates
 from tests.test_clock import run_clock_tests
 from tests.test_rate_export_max_forward_calc import test_rate_export_max_forward_calc
@@ -489,6 +492,9 @@ def main():
         ("joint_site_limited", run_joint_site_limited_tests, "Limited battery discharge and native step replay", False),
         ("joint_site_apply", run_joint_site_apply_tests_isolated, "Joint site gated native execution", False),
         ("joint_site_entrypoints", run_joint_site_entrypoint_tests_isolated, "Joint site actual native entry points", False),
+        ("joint_site_capabilities", run_joint_site_capabilities_tests, "Joint solver capability subsets", False),
+        ("joint_site_template", run_joint_site_template_tests, "Verified shared-template joint dispatch", False),
+        ("joint_site_combined", run_joint_site_combined_tests, "Three-PR integration through the real template", False),
         ("execute", run_execute_tests, "Execute tests", False),
         ("multi_inverter_status", test_multi_inverter_status, "Multi-inverter headline status resolution tests (#4446)", False),
         ("load_car_energy", test_load_car_energy_warns_when_configured_entity_has_no_data, "car_charging_energy configured-but-empty warning tests (#4458 follow-up)", False),

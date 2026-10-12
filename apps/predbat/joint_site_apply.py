@@ -102,6 +102,8 @@ def execution_fingerprint(base):
     payload = {name: getattr(base, name, None) for name in names}
     payload["settings"] = base.args.get("joint_site")
     payload["deye_local"] = base.args.get("deye_local")
+    if isinstance(payload["settings"], dict) and payload["settings"].get("control_model") == "deye_solarman":
+        payload["template_controls"] = {name: base.args.get(name) for name in ("inverter", "inverter_type", "deye_entity_prefix", "charge_start_service", "charge_stop_service", "discharge_stop_service", "charge_freeze_service")}
     encoded = json.dumps(payload, sort_keys=True, allow_nan=False, default=str).encode()
     return hashlib.sha256(encoded).hexdigest()
 
@@ -118,7 +120,12 @@ def _cached(base, entity):
 
 def _control_fingerprint(inverter):
     """Detect observed control drift without claiming read-back proves hardware state."""
-    snapshot = inverter.deye_local.snapshot()
+    if getattr(inverter, "inverter_type", None) == "DeyeSolarman":
+        from joint_site_template import snapshot_template
+
+        snapshot = snapshot_template(inverter)
+    else:
+        snapshot = inverter.deye_local.snapshot()
     return hashlib.sha256(json.dumps(snapshot, sort_keys=True, allow_nan=False).encode()).hexdigest()
 
 
@@ -137,7 +144,7 @@ def _evidence(base):
     now = _clock()
     _require(all(0 <= (now - stamp).total_seconds() <= OBSERVATION_MAX_AGE_SECONDS for stamp in stamps), "physical_observation_stale_or_future")
     options = _options(base)
-    _require(options is not None and options["mode"] == "apply" and options["control_model"] == "deye_tou", "real_deye_controls_required")
+    _require(options is not None and options["mode"] == "apply" and options["control_model"] in ("deye_tou", "deye_solarman"), "real_deye_controls_required")
     _require(not _collect_blockers(base, options), "native_inputs_or_overrides_blocked")
     _require(not base.set_read_only and not getattr(base, "set_read_only_axle", False), "read_only")
     _require(not any(getattr(base, name, False) for name in ("inverter_needs_reset", "had_errors", "fatal_error")), "native_state_not_ready")
@@ -145,11 +152,21 @@ def _evidence(base):
     inverters = getattr(base, "inverters", None)
     _require(isinstance(inverters, list) and len(inverters) == 1, "single_inverter_required")
     inverter = inverters[0]
-    _require(getattr(inverter, "inverter_type", None) == "DEYE", "local_deye_required")
-    adapter = getattr(inverter, "deye_local", None)
-    _require(adapter is not None, "local_deye_adapter_missing")
-    _require(adapter.settings.get("control") is True and adapter.settings.get("hold_verified") is True, "deye_commissioning_required")
-    _require(getattr(inverter, "inv_support_charge_freeze", False) is True and not getattr(inverter, "in_calibration", True), "inverter_capability_or_calibration")
+    if options["control_model"] == "deye_solarman":
+        from joint_site_template import validate_template
+
+        _require(getattr(inverter, "inverter_type", None) == "DeyeSolarman", "template_inverter_required")
+        try:
+            validate_template(inverter)
+        except (ValueError, TypeError, KeyError, AttributeError):
+            raise JointBlocked("template_contract_invalid") from None
+        _require(not getattr(inverter, "in_calibration", True), "inverter_capability_or_calibration")
+    else:
+        _require(getattr(inverter, "inverter_type", None) == "DEYE", "local_deye_required")
+        adapter = getattr(inverter, "deye_local", None)
+        _require(adapter is not None, "local_deye_adapter_missing")
+        _require(adapter.settings.get("control") is True and adapter.settings.get("hold_verified") is True, "deye_commissioning_required")
+        _require(getattr(inverter, "inv_support_charge_freeze", False) is True and not getattr(inverter, "in_calibration", True), "inverter_capability_or_calibration")
     _require(not getattr(base, "manual_soc_max_keep", None), "manual_ceiling_unsupported")
     _require(base.export_limit == 0 and base.set_discharge_during_charge, "deye_dispatch_model_mismatch")
     _require(options["import_limit_w"] == getattr(base, "import_limit", options["import_limit_w"]), "import_limit_mismatch")
@@ -168,7 +185,7 @@ def _evidence(base):
     minute = (now - base.midnight_utc).total_seconds() / 60
     floor = max(base.reserve, base.all_active_keep.get(int(minute), 0) * base.soc_max / 100)
     _require(base.soc_kw >= floor - 0.002, "domestic_manual_floor")
-    adapter.snapshot()
+    _control_fingerprint(inverter)
     return options, inverter, relay, now, minute
 
 
@@ -192,6 +209,9 @@ def _intent(command, inverter):
     _require(type(command.get("target_soc")) is int and command["target_soc"] in (0, 100), "invalid_target")
     _require(type(command.get("freeze")) is bool and type(command.get("ev_on")) is bool, "invalid_command_boolean")
     _require(not command["freeze"] or command["target_soc"] == 0, "invalid_hold_target")
+    if getattr(inverter, "inverter_type", None) == "DeyeSolarman":
+        _require(command["freeze"] is False and command.get("power_w") is None, "unsupported_template_command")
+        return command["target_soc"], False, None
     cap = min(inverter.deye_local.settings["max_discharge_power_w"], inverter.battery_rate_max_discharge * MINUTE_WATT)
     power = command.get("power_w")
     _require(_finite(cap, 1), "invalid_discharge_cap")
@@ -313,7 +333,12 @@ def execute_joint_site(base):
         # No call to the adapter directly: this is the same native entry point
         # whose optional DEYE implementation owns all physical service writes.
         attempted = True
-        observed = inverter.adjust_charge_immediate(target, freeze=freeze, discharge_power_w=power)
+        if options["control_model"] == "deye_solarman":
+            from joint_site_template import dispatch_template
+
+            observed = dispatch_template(inverter, target)
+        else:
+            observed = inverter.adjust_charge_immediate(target, freeze=freeze, discharge_power_w=power)
         _require(observed is True, "inverter_command_not_observed")
         # Permission, clocks and protection inputs can change while writes settle.
         options, inverter, relay, now, minute = _evidence(base)

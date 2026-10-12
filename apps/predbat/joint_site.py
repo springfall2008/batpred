@@ -97,12 +97,21 @@ class PlannerConfig:
 
     Bucketing merges search labels, never stored energy. Such merging and beam
     pruning can miss a feasible/cheaper plan, so a miss is not infeasibility proof.
+
+    `allowed_battery_modes` declares the subset of battery dispatch modes the
+    planner may emit. It must be a tuple or list of string tags drawn from
+    the supported battery-mode vocabulary (`demand`, `hold`, `charge`). The
+    default equals the full base vocabulary; a tighter subset is honoured by
+    `_validate` and the search loop. When `allow_limited_discharge` is true,
+    `limited_demand` is added on top of whatever subset is declared here.
+    The planner never returns a mode that is not in this subset.
     """
 
     time_step_minutes: int = 5
     beam_width: Optional[int] = 128
     soc_bucket_kwh: float = 0.05
     allow_limited_discharge: bool = False
+    allowed_battery_modes: Tuple[str, ...] = BATTERY_MODES
 
 
 @dataclass(frozen=True)
@@ -206,6 +215,20 @@ def _validate(slots, ev, battery, site, planner):
         raise PlannerInputError("beam_width must be an integer in 1..4096 or None")
     if type(planner.allow_limited_discharge) is not bool:
         raise PlannerInputError("allow_limited_discharge must be boolean")
+    allowed = planner.allowed_battery_modes
+    if not isinstance(allowed, (tuple, list)) or isinstance(allowed, (str, bytes)):
+        raise PlannerInputError("allowed_battery_modes must be a tuple or list")
+    if not allowed:
+        raise PlannerInputError("allowed_battery_modes must not be empty")
+    seen = set()
+    for mode in allowed:
+        if type(mode) is not str:
+            raise PlannerInputError("allowed_battery_modes entries must be strings")
+        if mode not in BATTERY_MODES:
+            raise PlannerInputError("allowed_battery_modes contains unsupported mode")
+        if mode in seen:
+            raise PlannerInputError("allowed_battery_modes contains duplicate mode")
+        seen.add(mode)
     _require_finite("soc_bucket_kwh", planner.soc_bucket_kwh, 1e-6)
     if not slots or len(slots) > 576 or (planner.beam_width is None and len(slots) > 12):
         raise PlannerInputError("Horizon must have 1..576 slots (at most 12 for exhaustive search)")
@@ -382,13 +405,21 @@ def _resolve_action(slot, ev_on, mode, node, battery, ev, site):
     )
 
 
-def _prune(nodes, width, bucket, terminal_value):
-    """Preserve EV-progress diversity instead of pruning every energy-consuming EV path."""
+def _prune(nodes, width, bucket, terminal_value, preserve_battery=False):
+    """Preserve EV progress and optionally stored-energy resilience within the same beam bound."""
     groups = {}
     for node in nodes:
         groups.setdefault(_bucket(node.ev_kwh, bucket), []).append(node)
     for group in groups.values():
         group.sort(key=lambda n: (n.cost - terminal_value * n.battery_kwh, n.switches))
+        if preserve_battery:
+            # With no hold action, the cheapest label can have too little stored
+            # energy to serve a later fixed-rate EV start. Keep the cost leader
+            # and highest-energy label before filling the remaining cost layers.
+            high = max(group, key=lambda n: n.battery_kwh)
+            if high is not group[0]:
+                group.remove(high)
+                group.insert(1, high)
     ordered = [groups[key] for key in sorted(groups, reverse=True)]
     kept = []
     layer = 0
@@ -440,7 +471,8 @@ def plan(slots: Sequence[Slot], ev: EVConfig, battery: BatteryConfig, site: Site
     """
     planner = planner if planner is not None else PlannerConfig()
     _validate(slots, ev, battery, site, planner)
-    modes = BATTERY_MODES + (BATTERY_LIMITED_DEMAND,) if planner.allow_limited_discharge else BATTERY_MODES
+    base_modes = tuple(planner.allowed_battery_modes)
+    modes = base_modes + ((BATTERY_LIMITED_DEMAND,) if planner.allow_limited_discharge and BATTERY_LIMITED_DEMAND not in base_modes else ())
     required_end = _reachable_floor_envelope(slots, battery, site)
     deadline_idx = _deadline_slot_index(slots, ev.deadline_min)
     future = [0.0] * (len(slots) + 1)
@@ -484,7 +516,7 @@ def plan(slots: Sequence[Slot], ev: EVConfig, battery: BatteryConfig, site: Site
             return _bounded_no_plan(deadline_idx, transitions, max_frontier, "no_complete_transition_at_slot_{}".format(i))
         frontier = list(next_states.values())
         if planner.beam_width is not None and len(frontier) > planner.beam_width:
-            frontier = _prune(frontier, planner.beam_width, planner.soc_bucket_kwh, battery.terminal_value_per_kwh)
+            frontier = _prune(frontier, planner.beam_width, planner.soc_bucket_kwh, battery.terminal_value_per_kwh, preserve_battery=BATTERY_HOLD not in base_modes)
             pruned = True
         max_frontier = max(max_frontier, len(frontier))
     best = min(frontier, key=lambda n: (n.cost - battery.terminal_value_per_kwh * n.battery_kwh, n.switches))
