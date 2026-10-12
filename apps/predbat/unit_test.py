@@ -49,6 +49,7 @@ from tests.test_window2minutes import test_window2minutes
 from tests.test_car_plan_windows import test_car_plan_windows
 from tests.test_hass_watcher import test_hass_watcher
 from tests.test_new_install_detection import test_new_install_detection
+from tests.test_config_json_format import test_config_json_format
 from tests.test_history_attribute import test_history_attribute
 from tests.test_inverter import run_inverter_tests
 from tests.test_basic_rates import test_basic_rates
@@ -123,6 +124,7 @@ from tests.test_chat import run_chat_tests
 from tests.test_web_chat import run_web_chat_tests
 from tests.test_web_mcp import run_web_mcp_tests
 from tests.test_debug_history_client_js import test_debug_history_client_js
+from tests.test_plan_staleness_js import test_plan_staleness_js
 from tests.test_metrics_dashboard_soc_refresh import test_soc_chart_center_text_reads_live_data
 from tests.test_web_functions import run_web_functions_tests, run_web_logo_image_tests, run_web_dark_mode_preference_tests
 from tests.test_web_power_flow import run_web_power_flow_tests
@@ -277,6 +279,7 @@ from tests.test_download import test_download
 from tests.test_ohme import test_ohme
 from tests.test_givtcp_component import test_givtcp_component
 from tests.test_debug_yaml_scope import run_debug_yaml_scope_tests
+from tests.test_log_replay_inputs import run_log_replay_inputs_tests
 from tests.test_memory_release import run_memory_release_tests
 from tests.test_inverter_write_poll import run_inverter_write_poll_tests
 from tests.test_givtcp_rest import run_givtcp_rest_tests
@@ -468,6 +471,7 @@ def main():
         ("car_plan_windows", test_car_plan_windows, "parse_car_plan_windows year anchoring: New Year either side, long windows, leap day", False),
         ("hass_watcher", test_hass_watcher, "Standalone-mode file watcher tests (#4397/#4396)", False),
         ("new_install_detection", test_new_install_detection, "New-install misdetection tests (Bug B, #4397/#4396, #3259, #3306)", False),
+        ("config_json_format", test_config_json_format, "predbat_config.json written one setting per line and loads back", False),
         ("compute_metric", run_compute_metric_tests, "Compute metric tests", False),
         ("pv90", run_pv90_tests, "pv90 upside scenario tests", False),
         ("performance_tweaks", run_performance_tweaks_tests, "performance_tweaks toggle tests", False),
@@ -547,6 +551,7 @@ def main():
         ("web_chat", run_web_chat_tests, "Chat tab route, SSE framing and markdown escaping tests", False),
         ("web_mcp", run_web_mcp_tests, "MCP get_log and apps.yaml redaction tests (issue #4768)", False),
         ("debug_history_client_js", test_debug_history_client_js, "Debug-history client-side JS structure tests (#4438 review item 22)", False),
+        ("plan_staleness_js", test_plan_staleness_js, "Plan page stale-data warning JS: per-view data and refresh interval", False),
         ("metrics_dashboard_soc_refresh", test_soc_chart_center_text_reads_live_data, "Metrics dashboard SoC chart live-refresh tests", False),
         ("web_functions", run_web_functions_tests, "Web function unit tests", False),
         ("web_power_flow", run_web_power_flow_tests, "Power flow diagram car charging tests", False),
@@ -713,6 +718,7 @@ def main():
         ("ohme", test_ohme, "Ohme EV charger comprehensive tests (helper functions, client methods, API operations, event handlers)", False),
         ("givtcp_component", test_givtcp_component, "GivTCP component tests (entity publishing, automatic_config, event handlers)", False),
         ("debug_yaml_scope", run_debug_yaml_scope_tests, "create_debug_yaml() reachability/scope tests", False),
+        ("log_replay_inputs", run_log_replay_inputs_tests, "Replay-input log lines (forecasts, rates, plan state, cars, inverter)", False),
         ("memory_release", run_memory_release_tests, "glibc malloc_trim()/arena cap helper tests", False),
         ("inverter_write_poll", run_inverter_write_poll_tests, "Inverter write-and-poll timing tests", False),
         ("givtcp_rest", run_givtcp_rest_tests, "GivTCP REST client write/retry/transport tests", False),
