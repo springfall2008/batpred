@@ -208,6 +208,11 @@ def _test_fetch_only_checks_live_plan():
     print("Test 13: fetch_sensor_data() only runs the check for the live plan, not compare.py's save=False runs")
     failed = False
     fresh = create_predbat()
+    # Configure the two sensors the stand-ins answer for, rather than relying on coverage/apps.yaml, and keep the
+    # load history off the GE Cloud path, which would bypass minute_data_load()
+    fresh.args["load_today"] = "sensor.test_load_today"
+    fresh.args["car_charging_energy"] = "sensor.test_car_charging_energy"
+    fresh.args.pop("ge_cloud_data", None)
     # Sensor history where the charger is evidently outside the load sensor. The test HA history carries no
     # last_updated, so the history readers are stood in for: load_today and car_charging_energy get these series,
     # everything else nothing.
