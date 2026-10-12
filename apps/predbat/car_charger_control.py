@@ -191,15 +191,16 @@ class CarChargerControl:
             # Not wired for this car - but the Octopus component may simply not have got there yet
             return None if self.charger_control_octopus_discovering() else False
         if car_n == 0 and self.charger_control_slots_claimed():
-            # Another charger component (Ohme) supplies the Intelligent slots from the charger itself
+            # Another charger component (Ohme) supplies car 0's Intelligent slots from the charger itself
             return True
         return self.charger_control_dispatch_is_charger(slot)
 
     def charger_control_slots_claimed(self):
-        """Has another charger component (Ohme) claimed car 0's Intelligent car slots.
+        """Has another charger component (Ohme) claimed car 0's Intelligent car wiring.
 
-        The claim is for car 0 alone, the car that component wires. Since #5443 the Octopus
-        component goes on wiring its own dispatch sensors under the claim, one per device, so a
+        The claim is for car 0 alone, the car that component wires. Since #5443 it covers only the
+        ready time and charge limit: the Ohme supplies the planned slots, and the Octopus component
+        goes on wiring its own dispatch sensors into octopus_intelligent_slot, one per device. So a
         second car has a sensor of its own and is judged on what that sensor says.
         """
         owner = getattr(self.base, "car_slot_owner", None)
