@@ -589,7 +589,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
     # GivEnergy's cloud applies a write some seconds after accepting it; the GEC and GEE rows wait 10
     WRITE_AND_POLL_SLEEP = 10
 
-    def initialize(self, ge_cloud_direct, api_key, automatic, automatic_evc=False, evc_control=None):
+    def initialize(self, ge_cloud_direct, api_key, automatic, automatic_evc=False, evc_control=False):
         """Initialise the GE Cloud Direct component"""
         self.api_key = api_key
         self.automatic = automatic
@@ -2100,16 +2100,14 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         own car's plan, and it is that configuration which establishes which charger is
         which car - without it, charger 1 could be told to follow a car it is not attached to.
 
-        ge_cloud_evc_control left unset turns control on with ge_cloud_automatic_evc, since
-        setting that is the user asking Predbat to plan for the car. False keeps it off.
+        Only an explicit ge_cloud_evc_control: true turns it on. ge_cloud_automatic_evc alone
+        does not, so an upgrade never starts driving a charger nobody asked Predbat to drive.
         """
         self.charger_control_active = False
-        if self.evc_control is False:
+        if not self.evc_control:
             return
         if not self.automatic_evc:
-            # Unset control just follows the automatic setting, so only an explicit request is worth a warning
-            if self.evc_control:
-                self.log("GECloud: Warn: ge_cloud_evc_control needs ge_cloud_automatic_evc to map each charger to a car, EV charger control is disabled")
+            self.log("GECloud: Warn: ge_cloud_evc_control needs ge_cloud_automatic_evc to map each charger to a car, EV charger control is disabled")
             return
         self.charger_control_active = True
         self.log("GECloud: Predbat-led EV charger control enabled")

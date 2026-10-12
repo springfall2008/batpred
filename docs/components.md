@@ -513,7 +513,7 @@ Connects directly to the GivEnergy Cloud to control your GivEnergy inverter and 
 | `api_key` | String | Yes | - | `ge_cloud_key` | Your GivEnergy Cloud API key |
 | `automatic` | Boolean | No | false | `ge_cloud_automatic` | Set to `true` to automatically configured Predbat to use GivEnergy Cloud direct (no additional apps.yaml changes required) |
 | `automatic_evc` | Boolean | No | false | `ge_cloud_automatic_evc` | Set to `true` to wire your GivEnergy EV chargers into `car_charging_energy`, `car_charging_planned` and `num_cars` — see [EV chargers](#ev-chargers-gecloud). Separate from `ge_cloud_automatic` because it registers a car |
-| `evc_control` | Boolean | No | unset | `ge_cloud_evc_control` | Lets Predbat start and stop your EV charger from its car charging plan — see [Charger control](#charger-control-gecloud). Unset follows `ge_cloud_automatic_evc`; `false` keeps it off |
+| `evc_control` | Boolean | No | false | `ge_cloud_evc_control` | Set to `true` to let Predbat start and stop your EV charger from its car charging plan — see [Charger control](#charger-control-gecloud). Needs `ge_cloud_automatic_evc` |
 | `load_today_ignore` | Boolean | No | false | `ge_cloud_load_today_ignore` | Set to `true` to ignore GE Cloud load_today data and use the `load_today` sensor from `apps.yaml` instead |
 | `automatic_shared_ct` | Boolean | No | false | `ge_cloud_automatic_shared_ct` | Set to `true` to force shared CT clamp mode — only the first inverter's grid and load readings are used, preventing double-counting on multi-inverter systems with a single shared CT |
 | `automatic_split_ct` | Boolean | No | false | `ge_cloud_automatic_split_ct` | Set to `true` to force split CT clamp mode — each inverter's readings are summed independently. Takes priority over `ge_cloud_automatic_shared_ct` if both are set |
@@ -592,8 +592,7 @@ connected and logged once, so please report the value from the log so it can be 
 
 #### Charger control (gecloud)
 
-With charger control on - `ge_cloud_evc_control` unset with `ge_cloud_automatic_evc` on, or set to
-`true` - Predbat drives each charger from its own car's plan: `start-charge` inside a planned charging window, `stop-charge` outside one. Charger N
+With `ge_cloud_evc_control` set to `true`, Predbat drives each charger from its own car's plan: `start-charge` inside a planned charging window, `stop-charge` outside one. Charger N
 follows car N, in the same serial order the automatic configuration uses, so the two cannot
 disagree about which charger is which car.
 
@@ -954,7 +953,7 @@ Predbat supports both of myenergi's APIs:
 | `automatic_eddi` | Boolean | No | true | `myenergi_automatic_eddi` | Set to `false` to wire only the Zappi half of the automatic configuration, leaving your Eddi out of `iboost_energy_today`. Separate from `automatic` so either device kind can be excluded on its own |
 | `enable_controls` | Boolean | No | true | `myenergi_enable_controls` | Set to `false` for monitor-only operation |
 | `poll_seconds` | Integer | No | 60 | `myenergi_poll_seconds` | Poll interval in seconds, rounded to the nearest whole multiple of 60, minimum 60 and maximum 1800 (a longer gap would make Predbat's own health check report the component as failed) |
-| `zappi_control` | Boolean | No | unset | `myenergi_zappi_control` | Lets Predbat drive your Zappi from its car charging plan — see [Zappi charge control](#zappi-charge-control-myenergi). Unset turns on only if you wrote `myenergi_automatic` or `myenergi_automatic_zappi` yourself; `false` keeps it off |
+| `zappi_control` | Boolean | No | false | `myenergi_zappi_control` | Set to `true` to let Predbat drive your Zappi from its car charging plan — see [Zappi charge control](#zappi-charge-control-myenergi) |
 
 The component only starts when at least one of `myenergi_api_key`, `myenergi_key` or `myenergi_token_hash`
 is set. That test is a plain any-of and does not look at `myenergi_auth_method`, so a credential belonging
@@ -1002,7 +1001,7 @@ Not implemented in this release: priority, minimum green level, phase setting, a
 
 #### Zappi charge control (myenergi)
 
-With Zappi control on, Predbat drives your Zappi from the car charging plan it has already worked out, instead of you scheduling the charge on the Zappi itself. Control is on with `myenergi_zappi_control: true`, or with it unset when you have written `myenergi_automatic` or `myenergi_automatic_zappi` into `apps.yaml` yourself. Both of those default on, so a Zappi user who never mentioned them is not switched over.
+With Zappi control on, Predbat drives your Zappi from the car charging plan it has already worked out, instead of you scheduling the charge on the Zappi itself. It is off unless you set `myenergi_zappi_control: true`.
 
 Inside a planned charging window Predbat puts the Zappi in **Fast**, and outside one it puts it in **Stopped**. Fast is used because the window was chosen for its electricity rate rather than for sunshine — Eco or Eco+ would only charge from surplus, and the car would not get what the plan assumed.
 
@@ -1016,15 +1015,15 @@ A `switch.predbat_myenergi_zappi_control` entity appears once Zappi control is o
 
 ##### When Predbat hands the Zappi back
 
-Predbat releases the Zappi when the control switch is turned off, or when Predbat itself is put in read only mode. Releasing restores the mode the Zappi was in before Predbat first changed it, falling back to **Eco+** when there is nothing saved — after a restart, for instance. It deliberately does not simply stop sending commands, because Predbat may have left the Zappi Stopped and walking away would leave the car unable to charge.
+Predbat releases the Zappi when the control switch is turned off, or when Predbat itself is put in read only mode. Releasing restores the mode the Zappi was in before Predbat first changed it, which is remembered across restarts, falling back to **Eco+** when there is nothing saved. It deliberately does not simply stop sending commands, because Predbat may have left the Zappi Stopped and walking away would leave the car unable to charge.
 
 ##### Two things to expect
 
-Charge control needs `myenergi_automatic` and `myenergi_automatic_zappi`, because it is that configuration which establishes which Zappi belongs to which car. It also needs `myenergi_enable_controls`. If any of them is off, Predbat leaves the Zappi alone, and logs which one when you set `myenergi_zappi_control: true`.
+Charge control needs `myenergi_automatic` and `myenergi_automatic_zappi`, because it is that configuration which establishes which Zappi belongs to which car. It also needs `myenergi_enable_controls`. If any of them is off, Predbat logs which one and leaves the Zappi alone.
 
 While Predbat is in control the Zappi is in Fast or Stopped, and myenergi only accepts a boost in Eco or Eco+ — so the manual boost switch will refuse for as long as control is on. Turn the control switch off if you want to boost by hand.
 
-Outside a planned window the Zappi is Stopped, which means it will not divert surplus solar to the car either. If you would rather keep solar diversion, set `myenergi_zappi_control: false` and let the Zappi run its own modes.
+Outside a planned window the Zappi is Stopped, which means it will not divert surplus solar to the car either. If you would rather keep solar diversion, leave `myenergi_zappi_control` off and let the Zappi run its own modes.
 
 #### Known limitation (myenergi)
 

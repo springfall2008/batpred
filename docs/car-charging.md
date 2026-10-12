@@ -569,23 +569,21 @@ When `gateway_evc_control` is enabled, Predbat checks once per minute whether th
 
 Predbat can start and stop a GivEnergy EV charger, an Ohme charger or a myenergi Zappi itself, following its own car charging plan. Each charger follows its own car: charger N follows car N.
 
-Each has a control setting. Left out of `apps.yaml`, control turns on with the automatic setup that maps the charger to its car, except for the Ohme:
+Each has a control setting, off unless you set it to `true` in `apps.yaml`. Control also needs the automatic setup that maps the charger to its car:
 
-| Charger | Setting | Left unset, control is on when |
-|---------|---------|--------------------------------|
-| GivEnergy EV charger | `ge_cloud_evc_control` | `ge_cloud_automatic_evc` is `true` |
-| Ohme | `ohme_control` | never - set it to `true`; left unset, Ohme's own schedule is the car plan |
-| myenergi Zappi | `myenergi_zappi_control` | you have written `myenergi_automatic` or `myenergi_automatic_zappi` into `apps.yaml` yourself |
+| Charger | Setting | Also needs |
+|---------|---------|------------|
+| GivEnergy EV charger | `ge_cloud_evc_control` | `ge_cloud_automatic_evc` set to `true` |
+| Ohme | `ohme_control` | `ohme_automatic` set to `true` |
+| myenergi Zappi | `myenergi_zappi_control` | `myenergi_automatic`, `myenergi_automatic_zappi` and `myenergi_enable_controls` (all on by default) |
 
-Set the control setting to `false` to keep Predbat's hands off the charger, or to `true` to ask for control explicitly - Predbat then also logs a warning if something it needs is missing.
+If something it needs is missing, Predbat logs a warning saying which and leaves the charger alone.
 
-The Ohme stays opt-in because, without control, Predbat already follows it: the charger's own schedule is taken as the car charging plan. Predbat control sets it to max charge, which overrides the target in the Ohme app, so with `ohme_control: true` also set the car's battery size and charge limit - left at their defaults (100 kWh, 100%) the car would be charged to full.
+Without `ohme_control`, Predbat already follows the Ohme: the charger's own schedule is taken as the car charging plan. Predbat control sets it to max charge, which overrides the target in the Ohme app, so with `ohme_control: true` also set the car's battery size and charge limit - left at their defaults (100 kWh, 100%) the car would be charged to full.
 
-The Zappi rule is narrower because `myenergi_automatic` and `myenergi_automatic_zappi` both default on: following their values alone would put every Zappi under Predbat's control. A Zappi Predbat controls is Stopped outside a planned window, so it no longer diverts surplus solar to the car - set `myenergi_zappi_control: false` if you would rather keep solar diversion.
+A Zappi Predbat controls is Stopped outside a planned window, so it no longer diverts surplus solar to the car - leave `myenergi_zappi_control` off if you would rather keep solar diversion.
 
-**Upgrading:** if you already had `ge_cloud_automatic_evc` on, or wrote `myenergi_automatic` into `apps.yaml`, Predbat now starts and stops that charger unless you set its control setting to `false`. Ohme users see no change.
-
-The GivEnergy Gateway's `gateway_evc_control` (above) is unchanged and stays opt-in.
+The GivEnergy Gateway's `gateway_evc_control` (above) works the same way: off unless you set it.
 
 ### Octopus Intelligent and charger control
 
@@ -593,7 +591,7 @@ On Octopus Intelligent (or E.ON/EDF SmartFlex through the Kraken component), wha
 
 - **Octopus drives the charger** - your charger is the Intelligent device, or that car's Intelligent slots come from the Ohme. Predbat leaves the charger alone, and hands it back if it was holding it, so the two do not fight. Handing back never starts a charge: a charger Predbat had stopped is left for Octopus to start, an Ohme has max charge turned off, and a Zappi goes back to its own mode (Eco+ in place of Fast).
 - **Octopus drives the car** - the car itself is the Intelligent device, so the car starts and stops its own charge. By default Predbat leaves the charger alone, and hands back a charger it was holding as usual, so one it had stopped is started again rather than left stopped. Turn on **switch.predbat_octopus_intelligent_charger_follows_car** (*expert mode*) to have Predbat drive the charger instead: on while a dispatch is running, off otherwise, so the car cannot charge outside the dispatches on its own timers. It follows both its plan and the dispatch times on the car's dispatch sensor, so a new dispatch starts the charger within a few minutes of Octopus announcing it rather than waiting for the next plan, and the charger stops when the dispatch ends.
-- **Predbat cannot tell** - for example the dispatch sensor comes from the Octopus Energy integration, which does not say, or Predbat's Octopus component has not discovered your devices yet. Predbat leaves the charger alone unless you have set its control setting to `true`, which tells Predbat your charger is not the Octopus device. A charger Predbat was holding is handed back as usual, so a charger it had stopped is started again rather than left stopped with nobody in charge. When the dispatch sensor does not say, Predbat logs a warning naming the setting to change; while it is only waiting for its Octopus or Kraken component to find your devices, it just notes that it is waiting and leaves the charger as it is. If that component has still not found your devices after 15 minutes, Predbat warns and treats it as not being able to tell.
+- **Predbat cannot tell** - for example the dispatch sensor comes from the Octopus Energy integration, which does not say, or Predbat's Octopus component has not discovered your devices yet. Setting the charger's control setting to `true` tells Predbat your charger is not the Octopus device, so Predbat drives the charger to its plan. If your charger is the Octopus device, leave its control setting off.
 
 **switch.predbat_octopus_intelligent_charging** only changes Predbat's own planning. With it off, a charger Octopus drives is still left to Octopus - Octopus goes on switching it either way - and a charger for a car Octopus drives follows Predbat's own plan, whether or not **switch.predbat_octopus_intelligent_charger_follows_car** is on.
 

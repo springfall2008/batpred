@@ -1193,32 +1193,25 @@ def _unset_control_component(apps_yaml, **overrides):
     return component
 
 
-def test_unset_control_follows_automatic_written_by_the_user():
-    """Unset myenergi_zappi_control turns on only when the user wrote the automatic setting.
+def test_unset_control_stays_off_whatever_automatic_says():
+    """Unset myenergi_zappi_control leaves the Zappi alone, even when the user wrote the automatic setting.
 
-    Both automatic settings default on, so without this check every Zappi user would be
-    switched to Predbat control on upgrade.
+    Control Stops a Zappi between windows, so it must be asked for and never arrive with an upgrade.
     """
-    assert _unset_control_component({}).charger_control_active is False, "Nothing written: Zappi control stays off"
-    assert _unset_control_component({"myenergi_automatic": True}).charger_control_active is True
-    assert _unset_control_component({"myenergi_automatic_zappi": True}).charger_control_active is True
-    # An explicit false still wins over automatic written by the user
-    assert _unset_control_component({"myenergi_automatic": True}, zappi_control=False).charger_control_active is False
-
-    # Following the automatic setting is not a request, so a missing prerequisite is not warned about
-    for overrides in ({"automatic": False}, {"automatic_zappi": False}, {"enable_controls": False}):
-        component = _unset_control_component({"myenergi_automatic": True}, **overrides)
-        assert component.charger_control_active is False, overrides
-        assert not any("Warn" in message for message in component.log_messages), (overrides, component.log_messages)
-    print("  ✓ Unset Zappi control follows myenergi_automatic only when the user wrote it")
+    for apps_yaml in ({}, {"myenergi_automatic": True}, {"myenergi_automatic_zappi": True}):
+        component = _unset_control_component(apps_yaml)
+        assert component.charger_control_active is False, apps_yaml
+        # Control that was never asked for is not warned about
+        assert not any("Warn" in message for message in component.log_messages), (apps_yaml, component.log_messages)
+    print("  ✓ Unset Zappi control stays off, whatever the automatic settings say")
 
 
 def test_control_setting_strings_are_read_as_booleans():
-    """myenergi_zappi_control has no default, so a quoted value must still read as the boolean it names."""
+    """A quoted or numeric myenergi_zappi_control must read as the boolean it names, and unset as off."""
     assert _make_component(zappi_control="false").zappi_control is False
     assert _make_component(zappi_control="true").zappi_control is True
     assert _make_component(zappi_control=0).zappi_control is False
-    assert _make_component().zappi_control is None
+    assert _make_component().zappi_control is False
     print("  ✓ Quoted and numeric myenergi_zappi_control values read as booleans")
 
 
@@ -1315,9 +1308,8 @@ def test_control_release_forgets_a_mode_saved_before_a_refused_command():
     print("  ✓ Release forgets modes saved ahead of refused commands")
 
 
-def test_control_never_releases_to_a_saved_stopped():
-    """A Zappi already Stopped when Predbat first moves it - Predbat's own hold, after a restart
-    lost the real snapshot - is released to Eco+, not back to Stopped where the car cannot charge."""
+def test_control_releases_to_a_saved_stopped():
+    """A Zappi the user had Stopped before Predbat took over goes back to Stopped, like any other mode."""
     component = _controlling_component(plans={0: [NIGHT_WINDOW]})
     component.devices = {"Z12345678": _zappi(12345678)}
     component.devices["Z12345678"].mode = "Stopped"
@@ -1326,8 +1318,68 @@ def test_control_never_releases_to_a_saved_stopped():
 
     component.charger_control_enabled = False
     run_async(component.charger_control_tick(IN_WINDOW))
-    assert component.transport.set_mode.await_args.args[1] == "Eco+", component.transport.set_mode.await_args
-    print("  ✓ A saved Stopped is released to Eco+")
+    assert component.transport.set_mode.await_args.args[1] == "Stopped", component.transport.set_mode.await_args
+    print("  ✓ A saved Stopped is restored on release")
+
+
+class _MemoryStorage:
+    """Minimal in-memory stand-in for the Storage component, served as base.components."""
+
+    def __init__(self):
+        """Start with nothing saved."""
+        self.saved = {}
+
+    async def save(self, module, filename, data, format="yaml", expiry=None):
+        """Record the saved payload."""
+        self.saved[(module, filename)] = data
+        return True
+
+    async def load(self, module, filename):
+        """Return a previously saved payload, or None."""
+        return self.saved.get((module, filename))
+
+    def get_component(self, name):
+        """Stand in for the component registry too, serving only storage."""
+        return self if name == "storage" else None
+
+
+def test_control_saved_modes_survive_a_restart():
+    """The mode a Zappi had before Predbat took over is persisted, so a restart while Predbat
+    holds it Stopped still releases it to that mode rather than to a fresh snapshot of Stopped."""
+    storage = _MemoryStorage()
+    component = _controlling_component(plans={0: [NIGHT_WINDOW]})
+    component.base.components = storage
+    component.devices["Z12345678"].mode = "Eco"
+    run_async(component.charger_control_tick(OUT_OF_WINDOW))
+    assert component.transport.set_mode.await_args.args[1] == "Stopped", component.transport.set_mode.await_args
+    assert storage.saved[("myenergi", "control_saved_modes")] == {"modes": {"Z12345678": "Eco"}}, storage.saved
+
+    # Restart: nothing in memory, and the Zappi is sitting in Predbat's own Stopped
+    restarted = _controlling_component(plans={0: [NIGHT_WINDOW]})
+    restarted.base.components = storage
+    restarted.devices["Z12345678"].mode = "Stopped"
+    run_async(restarted.load_control_modes())
+    run_async(restarted.charger_control_tick(OUT_OF_WINDOW))
+    assert restarted.control_saved_modes == {"Z12345678": "Eco"}, "The restored mode must not be replaced by a snapshot of Predbat's own Stopped"
+
+    restarted.charger_control_enabled = False
+    run_async(restarted.charger_control_tick(OUT_OF_WINDOW))
+    assert restarted.transport.set_mode.await_args.args[1] == "Eco", restarted.transport.set_mode.await_args
+    assert storage.saved[("myenergi", "control_saved_modes")] == {"modes": {}}, "A released Zappi's mode is forgotten in storage too"
+    print("  ✓ Saved Zappi modes survive a restart, and are forgotten once released")
+
+
+def test_control_saved_modes_are_dropped_when_control_is_off():
+    """Modes left in storage by an earlier session are dropped once control is off, so they
+    cannot be restored long after the user last chose the Zappi's mode."""
+    storage = _MemoryStorage()
+    storage.saved[("myenergi", "control_saved_modes")] = {"modes": {"Z12345678": "Eco"}}
+    component = _controlling_component(zappi_control=False)
+    component.base.components = storage
+    run_async(component.load_control_modes())
+    assert component.control_saved_modes == {}, component.control_saved_modes
+    assert storage.saved[("myenergi", "control_saved_modes")] == {"modes": {}}, storage.saved
+    print("  ✓ Stale saved Zappi modes are dropped when control is off")
 
 
 def test_control_releases_to_eco_plus_when_nothing_was_saved():
@@ -2705,11 +2757,13 @@ def test_myenergi(my_predbat=None):
     test_control_charge_ignores_eddis()
     test_control_charge_does_nothing_before_a_plan_exists()
     test_control_gating_refuses_with_a_reason()
-    test_unset_control_follows_automatic_written_by_the_user()
+    test_unset_control_stays_off_whatever_automatic_says()
     test_control_setting_strings_are_read_as_booleans()
     test_control_hand_to_octopus_never_fast()
     test_control_releases_to_the_saved_mode()
-    test_control_never_releases_to_a_saved_stopped()
+    test_control_releases_to_a_saved_stopped()
+    test_control_saved_modes_survive_a_restart()
+    test_control_saved_modes_are_dropped_when_control_is_off()
     test_control_releases_to_eco_plus_when_nothing_was_saved()
     test_control_release_retry_keeps_the_saved_mode()
     test_control_release_forgets_the_saved_mode()

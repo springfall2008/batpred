@@ -121,6 +121,8 @@ ZAPPI_MODE_RELEASE = "Eco+"
 # Where the control switch state is persisted, so turning control off survives a restart.
 MYENERGI_STORAGE_MODULE = "myenergi"
 MYENERGI_CONTROL_STATE = "control_state"
+# And each held Zappi's own mode, so a restart cannot lose where to put it back.
+MYENERGI_CONTROL_MODES = "control_saved_modes"
 
 # aiohttp only grew DigestAuthMiddleware and ClientSession(middlewares=...) in 3.12, and
 # the direct transport cannot authenticate without them. requirements.txt pins the floor,
@@ -761,7 +763,7 @@ MAX_POLL_SECONDS = 30 * 60
 class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
     """myenergi component providing Zappi and Eddi monitoring and boost control."""
 
-    def initialize(self, auth_method=None, hub_serial=None, api_key=None, key=None, token_expires_at=None, token_hash=None, automatic=True, enable_controls=True, poll_seconds=60, zappi_control=None, automatic_zappi=True, automatic_eddi=True):
+    def initialize(self, auth_method=None, hub_serial=None, api_key=None, key=None, token_expires_at=None, token_hash=None, automatic=True, enable_controls=True, poll_seconds=60, zappi_control=False, automatic_zappi=True, automatic_eddi=True):
         """Select a transport from the configured credentials and set up component state."""
         configured_auth_method = (auth_method or "direct").lower()
         self.hub_serial = hub_serial
@@ -776,7 +778,6 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         self.automatic_zappi = automatic_zappi
         self.automatic_eddi = automatic_eddi
         self.enable_controls = enable_controls
-        # Tri-state: None (unset) follows the automatic setup, see enable_control()
         self.zappi_control = parse_control_setting(zappi_control)
         # ComponentBase.start() calls run() on a fixed 60 second cadence, so the poll
         # interval can only be a whole number of those intervals.
@@ -879,49 +880,26 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
             self.log("Info: myenergi: setting iboost_energy_today to {}".format(eddi_entity))
             self.set_arg_auto("iboost_energy_today", eddi_entity)
 
-    def automatic_set_by_user(self):
-        """Did the user write myenergi's automatic setup into apps.yaml themselves.
-
-        myenergi_automatic and myenergi_automatic_zappi both default on, so their values alone
-        cannot tell a user who asked for automatic setup from one who never mentioned it.
-        """
-        raw_args = getattr(self.base, "args_from_apps_yaml", None) or {}
-        return any(raw_args.get(arg) is not None for arg in ("myenergi_automatic", "myenergi_automatic_zappi"))
-
     def enable_control(self):
         """Decide whether Predbat-led Zappi control should run, and say why when it will not.
 
         Control needs automatic configuration because a Zappi is driven from its own car's
         plan, and it is auto-config that establishes which Zappi is which car.
 
-        myenergi_zappi_control left unset turns control on only when the user wrote
-        myenergi_automatic or myenergi_automatic_zappi into apps.yaml themselves. False keeps
-        it off. Only an explicit true is worth a warning when it cannot run.
-
-        For review, to clear up later - the options considered for the unset case:
-        1. On whenever automatic setup runs, the same rule as GE and Ohme. Rejected: automatic
-           defaults on for myenergi, so every Zappi user would be switched over on upgrade,
-           and a Zappi held off between windows can no longer divert solar in Eco/Eco+.
-        2. On only when the user wrote the automatic setting themselves (this one).
-        3. Zappi control stays opt-in. Rejected: it leaves Zappi out of the automatic behaviour
-           the other chargers now get.
+        Only an explicit myenergi_zappi_control: true turns it on. myenergi_automatic defaults
+        on, and a Zappi Predbat controls is Stopped between windows and so stops diverting
+        solar in Eco/Eco+ - not something an upgrade should do to a user who never asked.
         """
-        if self.zappi_control is False:
-            return
-        explicit = self.zappi_control is True
-        if not explicit and not self.automatic_set_by_user():
+        if not self.zappi_control:
             return
         if not self.automatic:
-            if explicit:
-                self.log("Warn: myenergi: myenergi_zappi_control needs myenergi_automatic to map each Zappi to a car, Zappi control is disabled")
+            self.log("Warn: myenergi: myenergi_zappi_control needs myenergi_automatic to map each Zappi to a car, Zappi control is disabled")
             return
         if not self.automatic_zappi:
-            if explicit:
-                self.log("Warn: myenergi: myenergi_zappi_control needs myenergi_automatic_zappi to map each Zappi to a car, Zappi control is disabled")
+            self.log("Warn: myenergi: myenergi_zappi_control needs myenergi_automatic_zappi to map each Zappi to a car, Zappi control is disabled")
             return
         if not self.enable_controls:
-            if explicit:
-                self.log("Warn: myenergi: myenergi_zappi_control is ignored while myenergi_enable_controls is off")
+            self.log("Warn: myenergi: myenergi_zappi_control is ignored while myenergi_enable_controls is off")
             return
         self.charger_control_active = True
         self.log("Info: myenergi: Predbat-led Zappi charge control enabled")
@@ -956,41 +934,79 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         # Remember where the charger was before Predbat first moved it, so release can put it back
         if device.device_id not in self.control_saved_modes:
             self.control_saved_modes[device.device_id] = device.mode
+            await self.save_control_modes()
         self.log("Info: myenergi: setting {} to {} for car {}".format(device.name, wanted, car_n))
         await self.transport.set_mode(device, wanted)
+
+    async def save_control_modes(self):
+        """Persist each held Zappi's own mode, so a restart still knows where to put it back.
+
+        Without this a restart would snapshot the Zappi afresh while it sat in Predbat's own
+        Stopped, and a later release would put it "back" there, unable to charge.
+        Fails soft: no Storage component just means the modes do not survive a restart.
+        """
+        if self.storage is None:
+            return
+        try:
+            # Storage reports serialisation and I/O failures by returning False rather than raising
+            if await self.storage.save(MYENERGI_STORAGE_MODULE, MYENERGI_CONTROL_MODES, {"modes": dict(self.control_saved_modes)}) is False:
+                raise OSError("storage refused the save")
+        except Exception as exc:
+            self.log("Warn: myenergi: could not save the Zappi modes to restore on release, a restart may lose them: {}".format(exc))
+
+    async def load_control_modes(self):
+        """Restore the saved Zappi modes from storage - called once control has been decided.
+
+        With control off nothing is held, so modes left over from an earlier session are
+        dropped: restored months later they would no longer be where the user left the Zappi.
+        """
+        if self.storage is None:
+            return
+        try:
+            saved = await self.storage.load(MYENERGI_STORAGE_MODULE, MYENERGI_CONTROL_MODES)
+        except Exception as exc:
+            self.log("Warn: myenergi: could not read the Zappi modes to restore on release: {}".format(exc))
+            return
+        modes = saved.get("modes") if isinstance(saved, dict) else None
+        if not isinstance(modes, dict) or not modes:
+            return
+        if self.charger_control_active:
+            self.control_saved_modes = {str(device_id): mode for device_id, mode in modes.items()}
+        else:
+            await self.save_control_modes()
 
     async def charger_control_release_one(self, device, charge):
         """Hand a held Zappi back, restoring the mode it had before Predbat took over.
 
-        Falls back to Eco+ when nothing was saved - a restart, or a device that reported a
-        mode neither API accepts back - so a released Zappi always lands somewhere useful
-        rather than being left Stopped. A saved Stopped falls back too: it is most likely
-        Predbat's own hold, snapshotted after a restart lost the real one.
+        Falls back to Eco+ when nothing was saved, or a device reported a mode neither API
+        accepts back, so that Zappi lands somewhere useful rather than being left Stopped.
+        A saved Stopped is the user's own choice - the modes survive a restart, see
+        save_control_modes() - and is restored like any other.
         """
         # Read, not popped: if the command fails the release is retried next cycle, and must
         # still know where to put the Zappi back
         mode = self.control_saved_modes.get(device.device_id)
-        if mode not in ZAPPI_MODE_TO_CLOUD or mode == ZAPPI_MODE_STOPPED:
+        if mode not in ZAPPI_MODE_TO_CLOUD:
             mode = ZAPPI_MODE_RELEASE
         self.log("Info: myenergi: releasing {} back to {}".format(device.name, mode))
         await self.transport.set_mode(device, mode)
         # Only once it has gone through: a Zappi taken back later must snapshot its mode afresh
-        self.control_saved_modes.pop(device.device_id, None)
+        if self.control_saved_modes.pop(device.device_id, None) is not None:
+            await self.save_control_modes()
 
     async def charger_control_hand_to_octopus(self, device, charge):
-        """Hand a Zappi to Octopus in the mode it had before Predbat took over, but never Fast
-        or Stopped.
+        """Hand a Zappi to Octopus in the mode it had before Predbat took over, but never Fast.
 
-        Fast would start a grid charge outside Octopus's dispatches, and a saved Stopped is most
-        likely Predbat's own hold (see charger_control_release_one()). Eco+ in their place only
-        diverts surplus solar, so the Zappi is not left Stopped either.
+        Fast would start a grid charge outside Octopus's dispatches; Eco+ in its place only
+        diverts surplus solar.
         """
         mode = self.control_saved_modes.get(device.device_id)
-        if mode not in ZAPPI_MODE_TO_CLOUD or mode in (ZAPPI_MODE_CHARGING, ZAPPI_MODE_STOPPED):
+        if mode not in ZAPPI_MODE_TO_CLOUD or mode == ZAPPI_MODE_CHARGING:
             mode = ZAPPI_MODE_RELEASE
         self.log("Info: myenergi: handing {} to Octopus in {}".format(device.name, mode))
         await self.transport.set_mode(device, mode)
-        self.control_saved_modes.pop(device.device_id, None)
+        if self.control_saved_modes.pop(device.device_id, None) is not None:
+            await self.save_control_modes()
 
     async def charger_control_release(self):
         """Release every held Zappi, then forget every saved mode.
@@ -1000,7 +1016,9 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         command that was refused cannot outlive the release and block a fresh snapshot later.
         """
         await super().charger_control_release()
-        self.control_saved_modes = {}
+        if self.control_saved_modes:
+            self.control_saved_modes = {}
+            await self.save_control_modes()
 
     def boost_amount_for(self, device):
         """Return the currently selected boost amount for a device."""
@@ -1049,6 +1067,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
                     # on for a cycle and then flip, looking like Predbat taking control back
                     await self.charger_control_load_enabled()
                     self.enable_control()
+                    await self.load_control_modes()
                 await self.publish_data()
                 if self.automatic and not self._auto_configured:
                     self.automatic_config()
