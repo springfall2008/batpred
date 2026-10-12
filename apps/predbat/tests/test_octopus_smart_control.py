@@ -214,6 +214,31 @@ def run_octopus_smart_control_tests(my_predbat):
         items[SWITCH] = "off"
         kwh = _slots(my_predbat)
         failed |= _check("t10c charger plan kept", kwh == [5.0, 7.0], "kwh {}".format(kwh))
+        # Octopus is not dispatching it, so it is car load at the normal rate, not an off-peak slot
+        kept = [slot for slot in my_predbat.octopus_slots[0] if slot.get("charge_in_kwh") == 7.0]
+        failed |= _check("t10c re-tagged as charger schedule", kept and kept[0].get("source") == DISPATCH_SOURCE_CHARGER_SCHEDULE, "slots {}".format(my_predbat.octopus_slots[0]))
+        failed |= _check("t10c not off-peak", not my_predbat.dispatch_billed_off_peak(kept[0].get("source"), "AT_HOME", my_predbat.minutes_now + 120) if kept else False, "")
+        failed |= _check("t10c sensor state untouched", items[CUSTOM_SENSOR]["planned_dispatches"][0]["source"] == "smart-charge", "")
+        items[SWITCH] = "on"
+        kwh = _slots(my_predbat)
+        kept = [slot for slot in my_predbat.octopus_slots[0] if slot.get("charge_in_kwh") == 7.0]
+        failed |= _check("t10c switch on keeps its own source", kwh == [5.0, 7.0] and kept and kept[0].get("source") == "smart-charge", "slots {}".format(my_predbat.octopus_slots[0]))
+
+        print("Test 10d: a planned sensor that cannot be read leaves the slot sensor's plan, which Smart Control off still drops")
+        items[SWITCH] = "off"
+        real_get_state = my_predbat.get_state_wrapper
+
+        def _raise_for_planned(entity_id=None, *args, **kwargs):
+            if entity_id == CUSTOM_SENSOR:
+                raise ValueError("unreadable")
+            return real_get_state(entity_id, *args, **kwargs)
+
+        my_predbat.get_state_wrapper = _raise_for_planned
+        try:
+            kwh = _slots(my_predbat)
+        finally:
+            del my_predbat.get_state_wrapper
+        failed |= _check("t10d slot sensor plan dropped", kwh == [5.0], "kwh {}".format(kwh))
         my_predbat.args.pop("octopus_intelligent_planned_slot", None)
         _setup(my_predbat)
 

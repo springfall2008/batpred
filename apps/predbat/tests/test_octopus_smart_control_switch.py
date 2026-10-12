@@ -191,6 +191,22 @@ async def _run(my_predbat):
         api.automatic_config({})
         failed |= _check("t7 switch wired", my_predbat.args.get("octopus_intelligent_smart_control") == [active_switch], "args {}".format(my_predbat.args))
         failed |= _check("t7 slot wired alongside", len(my_predbat.args.get("octopus_intelligent_slot", [])) == 1, "args {}".format(my_predbat.args))
+        print("Test 7b: with another component owning the ready time and charge limit, the switch is still wired with the dispatch sensor")
+        saved_owner = getattr(my_predbat, "car_slot_owner", None)
+        try:
+            my_predbat.car_slot_owner = "ohme"
+            my_predbat.args["octopus_ready_time"] = "select.owner_target_time"
+            my_predbat.args["octopus_charge_limit"] = "number.owner_target_soc"
+            api.automatic_config({})
+            failed |= _check("t7b switch wired", my_predbat.args.get("octopus_intelligent_smart_control") == [active_switch], "args {}".format(my_predbat.args))
+            failed |= _check("t7b slot wired alongside", len(my_predbat.args.get("octopus_intelligent_slot", [])) == 1, "args {}".format(my_predbat.args))
+            failed |= _check(
+                "t7b owner's wiring left alone",
+                my_predbat.args.get("octopus_ready_time") == "select.owner_target_time" and my_predbat.args.get("octopus_charge_limit") == "number.owner_target_soc",
+                "args {}".format(my_predbat.args),
+            )
+        finally:
+            my_predbat.car_slot_owner = saved_owner
         api.intelligent_devices[ACTIVE_ID]["suspended"] = True
         api.automatic_config({})
         failed |= _check("t7 none when all suspended", my_predbat.args.get("octopus_intelligent_smart_control") == [], "args {}".format(my_predbat.args))

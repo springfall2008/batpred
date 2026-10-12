@@ -149,7 +149,7 @@ It holds the entity ID of the switch, not a value, so Predbat follows the switch
 If you set up `apps.yaml` before this item existed, add it to pick up the change. If the switch cannot be found, planned slots are used as normal.
 If `octopus_intelligent_slot` points at your charger's own integration (for example Ohme) rather than the Octopus Energy integration, comment out `octopus_intelligent_smart_control`,
 otherwise the charger's own planned slots are ignored whenever Octopus Smart Control is off.
-Planned slots taken from **octopus_intelligent_planned_slot** are the charger's own plan rather than Octopus's, so they are still used while Smart Control is off.
+Planned slots taken from **octopus_intelligent_planned_slot** are the charger's own plan rather than Octopus's, so they are still used while Smart Control is off, but as car charging at your normal rate rather than as cheap Octopus slots.
 For **multiple IOG-enrolled vehicles**, set this to a list with one switch per car.
 
 - **octopus_intelligent_planned_slot** - Optional, see [Taking planned slots from another sensor](#taking-planned-slots-from-another-sensor).

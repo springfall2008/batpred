@@ -1881,7 +1881,9 @@ class Fetch:
                             planned_completed = self.get_state_wrapper(entity_id=planned_entity_id, attribute="completed_dispatches") or self.get_state_wrapper(entity_id=planned_entity_id, attribute="completedDispatches")
                             completed = (completed or []) + (planned_completed or [])
                         except (ValueError, TypeError):
-                            self.log("Warn: Unable to get data from {} for car {} - octopus_intelligent_planned_slot may not be set correctly in apps.yaml".format(planned_entity_id, car_n))
+                            # planned still holds the slot sensor's own plan, so treat it as that below
+                            planned_entity_id = None
+                            self.log("Warn: Unable to get data from {} for car {} - octopus_intelligent_planned_slot may not be set correctly in apps.yaml".format(planned_entity_id_list[car_n], car_n))
                             self.record_status(message="Error: octopus_intelligent_planned_slot not set correctly in apps.yaml for car {}".format(car_n), had_errors=True)
 
                 # Completed and planned slots - merge from all cars
@@ -1891,10 +1893,20 @@ class Fetch:
                 # on it (#5339). Slots already delivered (completed) are real, so those are still counted above, as are
                 # the manual bump/boost charges the user asked for themselves. So is a charger's own schedule: the Ohme
                 # component wires that in when Octopus no longer drives the charger, and Smart Control has no say in it.
-                # Planned slots taken from octopus_intelligent_planned_slot are the charger's own plan too, not Octopus's
+                # Planned slots taken from octopus_intelligent_planned_slot are the charger's own plan, so they are kept
+                # as car load - but with Octopus no longer dispatching they are not off-peak, so they are re-tagged as a
+                # charger schedule (the Ohme component leaves them untagged while it follows Octopus's dispatches)
                 planned_used = planned
-                if not planned_entity_id and self.octopus_smart_control_off(car_n, save=save):
-                    planned_used = [slot for slot in (planned or []) if isinstance(slot, dict) and (slot.get("source") or (slot.get("meta") or {}).get("source")) in OCTOPUS_MANUAL_DISPATCH_SOURCES + (DISPATCH_SOURCE_CHARGER_SCHEDULE,)]
+                if self.octopus_smart_control_off(car_n, save=save):
+                    kept_sources = OCTOPUS_MANUAL_DISPATCH_SOURCES + (DISPATCH_SOURCE_CHARGER_SCHEDULE,)
+                    planned_used = []
+                    for slot in planned or []:
+                        if not isinstance(slot, dict):
+                            continue
+                        if (slot.get("source") or (slot.get("meta") or {}).get("source")) in kept_sources:
+                            planned_used.append(slot)
+                        elif planned_entity_id:
+                            planned_used.append(dict(slot, source=DISPATCH_SOURCE_CHARGER_SCHEDULE))
                 if planned_used and (not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n] or self.car_charging_now[car_n]):
                     # We only count planned slots if the car is plugged in or we are ignoring unplugged cars. A car
                     # charging now is plugged in, even before car_charging_planned catches up with an ad-hoc dispatch
