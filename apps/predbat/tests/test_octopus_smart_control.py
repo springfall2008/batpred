@@ -226,20 +226,74 @@ def run_octopus_smart_control_tests(my_predbat):
 
         print("Test 10d: a planned sensor that cannot be read leaves the slot sensor's plan, which Smart Control off still drops")
         items[SWITCH] = "off"
+        had_own_get_state = "get_state_wrapper" in my_predbat.__dict__
+        had_own_record_status = "record_status" in my_predbat.__dict__
         real_get_state = my_predbat.get_state_wrapper
+        real_record_status = my_predbat.record_status
+        statuses = []
+        failing = {}
 
         def _raise_for_planned(entity_id=None, *args, **kwargs):
-            if entity_id == CUSTOM_SENSOR:
+            """
+            Read state as normal, except that the attributes named in failing raise for the planned sensor.
+            """
+            if entity_id == CUSTOM_SENSOR and kwargs.get("attribute") in failing.get(entity_id, ()):
                 raise ValueError("unreadable")
             return real_get_state(entity_id, *args, **kwargs)
 
         my_predbat.get_state_wrapper = _raise_for_planned
+        # The error status would otherwise be left on the shared fixture for later tests
+        my_predbat.record_status = lambda message, *args, **kwargs: statuses.append(message)
         try:
+            failing[CUSTOM_SENSOR] = ("planned_dispatches",)
             kwh = _slots(my_predbat)
+            failed |= _check("t10d slot sensor plan dropped", kwh == [5.0], "kwh {}".format(kwh))
+            failed |= _check("t10d error reported", len(statuses) == 1 and "octopus_intelligent_planned_slot" in statuses[0], "statuses {}".format(statuses))
+            # The planned read works but the completed one does not: still the slot sensor's plan, not half of each
+            failing[CUSTOM_SENSOR] = ("completed_dispatches",)
+            kwh = _slots(my_predbat)
+            failed |= _check("t10d completed read fails", kwh == [5.0], "kwh {}".format(kwh))
+            items[SWITCH] = "on"
+            kwh = _slots(my_predbat)
+            failed |= _check("t10d completed read fails, switch on", kwh == [5.0, 10.0], "kwh {}".format(kwh))
+            items[SWITCH] = "off"
         finally:
-            del my_predbat.get_state_wrapper
-        failed |= _check("t10d slot sensor plan dropped", kwh == [5.0], "kwh {}".format(kwh))
+            if had_own_get_state:
+                my_predbat.get_state_wrapper = real_get_state
+            else:
+                del my_predbat.get_state_wrapper
+            if had_own_record_status:
+                my_predbat.record_status = real_record_status
+            else:
+                del my_predbat.record_status
+
+        print("Test 10e: what the planned sensor has seen finish is also costed as the charger's while Smart Control is off")
+        attributes = copy.deepcopy(items[CUSTOM_SENSOR])
+        finished_start = (my_predbat.now_utc - timedelta(hours=5)).strftime("%Y-%m-%dT%H:%M:%S%z")
+        finished_end = (my_predbat.now_utc - timedelta(hours=4)).strftime("%Y-%m-%dT%H:%M:%S%z")
+        attributes["completed_dispatches"] = [{"start": finished_start, "end": finished_end, "charge_in_kwh": 4.0, "location": "AT_HOME"}]
+        my_predbat.ha_interface.set_state(CUSTOM_SENSOR, "off", attributes=attributes)
+        items[SWITCH] = "off"
+        kwh = _slots(my_predbat)
+        sources = {slot.get("charge_in_kwh"): slot.get("source") for slot in my_predbat.octopus_slots[0]}
+        failed |= _check("t10e all kept", kwh == [4.0, 5.0, 7.0], "kwh {}".format(kwh))
+        failed |= _check("t10e charger's finished slot re-tagged", sources.get(4.0) == DISPATCH_SOURCE_CHARGER_SCHEDULE, "sources {}".format(sources))
+        failed |= _check("t10e Octopus's own completed slot untouched", sources.get(5.0) == "smart-charge", "sources {}".format(sources))
+        items[SWITCH] = "on"
+        _slots(my_predbat)
+        sources = {slot.get("charge_in_kwh"): slot.get("source") for slot in my_predbat.octopus_slots[0]}
+        failed |= _check("t10e switch on leaves it untagged", sources.get(4.0) is None, "sources {}".format(sources))
         my_predbat.args.pop("octopus_intelligent_planned_slot", None)
+        _setup(my_predbat)
+
+        print("Test 10f: a bump charge whose source is only under meta is kept with the source where the slot loader reads it")
+        attributes = copy.deepcopy(items[SLOT_SENSOR])
+        attributes["planned_dispatches"].append({"start": boost_start, "end": boost_end, "charge_in_kwh": 3.0, "location": "AT_HOME", "meta": {"source": "bump-charge"}})
+        my_predbat.ha_interface.set_state(SLOT_SENSOR, "off", attributes=attributes)
+        items[SWITCH] = "off"
+        kwh = _slots(my_predbat)
+        sources = {slot.get("charge_in_kwh"): slot.get("source") for slot in my_predbat.octopus_slots[0]}
+        failed |= _check("t10f bump kept", kwh == [3.0, 5.0] and sources.get(3.0) == "bump-charge", "kwh {} sources {}".format(kwh, sources))
         _setup(my_predbat)
 
         print("Test 11: the state is case-insensitive, and an odd state string is no evidence")
