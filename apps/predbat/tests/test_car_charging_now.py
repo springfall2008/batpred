@@ -66,6 +66,7 @@ STATE_FIELDS = (
     "car_charging_battery_size",
 )
 IOG_SENSOR = "binary_sensor.octopus_intelligent_slot_test"
+SAVED_ARGS = ("car_charging_now", "octopus_intelligent_slot", "car_charging_now_response")
 
 
 def _check(name, condition, detail=""):
@@ -377,23 +378,49 @@ def _run_power(my_predbat):
     return failed
 
 
+def _run_default_response(my_predbat):
+    """
+    With car_charging_now_response unset, a charger status sensor reading "Charging" (e.g. a Zappi's
+    plug_status) counts as charging. It did not before (GH#5335), so the Octopus Intelligent check
+    cancelled the car's dispatch while it charged and the house battery lost the dispatch rate.
+    """
+    failed = False
+    print("Test 23: the default car_charging_now_response accepts a charger's Charging status")
+    _car(my_predbat, False)
+    my_predbat.args.pop("car_charging_now_response", None)
+    for state, expected in (("Charging", True), ("EV Connected", False), ("on", True), ("off", False)):
+        _sensor(my_predbat, state)
+        my_predbat.get_car_charging_planned()
+        failed |= _check("t23 cycle {!r}".format(state), my_predbat.car_charging_now == [expected], "now {}".format(my_predbat.car_charging_now))
+        failed |= _check("t23 live {!r}".format(state), my_predbat.car_charging_now_reading(0) is expected, "")
+
+    print("Test 24: a car_charging_now_response set in apps.yaml replaces the default rather than adding to it")
+    my_predbat.args["car_charging_now_response"] = ["yes", "on", "true"]
+    _sensor(my_predbat, "Charging")
+    my_predbat.get_car_charging_planned()
+    failed |= _check("t24 Charging not in the set list", my_predbat.car_charging_now == [False], "now {}".format(my_predbat.car_charging_now))
+    _sensor(my_predbat, None)
+    return failed
+
+
 def test_car_charging_now(my_predbat):
     """
     car_charging_now holds the battery and feeds the model, but never adds a car slot.
     """
     print("*** Running test: car_charging_now")
     saved_state = {field: copy.deepcopy(getattr(my_predbat, field, None)) for field in STATE_FIELDS}
-    saved_args = {key: copy.deepcopy(my_predbat.args[key]) for key in ("car_charging_now", "octopus_intelligent_slot") if key in my_predbat.args}
+    saved_args = {key: copy.deepcopy(my_predbat.args[key]) for key in SAVED_ARGS if key in my_predbat.args}
     try:
         failed = _run_plan(my_predbat)
         failed |= _run_poll(my_predbat)
         failed |= _run_dynamic(my_predbat)
         failed |= _run_iog(my_predbat)
         failed |= _run_power(my_predbat)
+        failed |= _run_default_response(my_predbat)
     finally:
         for field, value in saved_state.items():
             setattr(my_predbat, field, value)
-        for key in ("car_charging_now", "octopus_intelligent_slot"):
+        for key in SAVED_ARGS:
             if key in saved_args:
                 my_predbat.args[key] = saved_args[key]
             else:

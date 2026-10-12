@@ -183,6 +183,7 @@ pred_bat:
     - 'yes'
     - 'on'
     - 'true'
+    - 'charging'
   #car_charging_battery_size:
   #  - 75
   #car_charging_limit:
@@ -276,4 +277,3 @@ pred_bat:
   #  - '{octopus_saving_session}'
   #  - '+[car_charging_planned]'
   #  - '+[car_charging_soc]'
-  #  - '{car_charging_now}'

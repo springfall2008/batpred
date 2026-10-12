@@ -1852,6 +1852,7 @@ INVERTER_DEF = {
         "can_span_midnight": True,
         "charge_discharge_with_rate": False,
         "target_soc_used_for_discharge": False,
+        "rate_step_percent_of_capacity": 1,
     },
     "GEC": {
         "name": "GivEnergy Cloud",
@@ -2530,7 +2531,15 @@ INVERTER_DEF = {
         "has_ge_inverter_mode": False,
         "time_button_press": False,
         "clock_time_format": "%H:%M:%S",
-        "write_and_poll_sleep": 2,
+        # The hub applies register writes one at a time and a single write can take 10-20s (longer
+        # under an EMS), so re-sending every couple of seconds only queues more work ahead of the
+        # read-back. Allow each attempt 10s to verify, give up after 3, and when a control keeps
+        # failing from one cycle to the next send it once, at most every few minutes (see
+        # INVERTER_WRITE_BACKOFF_FAILURES and INVERTER_WRITE_DEGRADED_INTERVAL). Only this row sets
+        # write_max_retry/write_backoff.
+        "write_and_poll_sleep": 10,
+        "write_max_retry": 3,
+        "write_backoff": True,
         "has_time_window": True,
         "support_charge_freeze": True,
         "support_discharge_freeze": True,
@@ -2768,6 +2777,11 @@ APPS_SCHEMA = {
     "myenergi_enable_controls": {"type": "boolean"},
     "myenergi_poll_seconds": {"type": "integer", "zero": False},
     "myenergi_zappi_control": {"type": "boolean"},
+    "wallbox_username": {"type": "string", "empty": False},
+    "wallbox_password": {"type": "string", "empty": False},
+    "wallbox_automatic": {"type": "boolean"},
+    "wallbox_control": {"type": "boolean"},
+    "wallbox_poll_seconds": {"type": "integer", "zero": False},
     "fox_key": {"type": "string", "empty": False},
     "fox_automatic": {"type": "boolean"},
     "fox_automatic_ignore_pv": {"type": "boolean"},
@@ -2825,6 +2839,7 @@ APPS_SCHEMA = {
     "enphase_automatic": {"type": "boolean"},
     "enphase_automatic_ignore_pv": {"type": "boolean"},
     "octopus_intelligent_slot": {"type": "sensor|sensor_list", "sensor_type": "boolean|action", "entries": "num_cars", "optional_entries": True},
+    "octopus_intelligent_planned_slot": {"type": "sensor|sensor_list", "sensor_type": "boolean", "entries": "num_cars", "optional_entries": True},
     "octopus_ready_time": {"type": "sensor|sensor_list", "sensor_type": "string", "entries": "num_cars", "optional_entries": True},
     "octopus_charge_limit": {"type": "sensor|sensor_list", "sensor_type": "float", "entries": "num_cars", "optional_entries": True},
     "octopus_slot_low_rate": {"type": "boolean"},
@@ -2883,10 +2898,13 @@ APPS_SCHEMA = {
     "enable_coarse_fine_levels": {"type": "boolean"},
     "load_power_fill_enable": {"type": "boolean"},
     "load_ml_enable": {"type": "boolean"},
+    "load_ml_retrain_interval_hours": {"type": "integer", "min": 1, "max": 48},
     "gateway_device_id": {"type": "string", "empty": False},
     "gateway_mqtt_host": {"type": "string", "empty": False},
     "gateway_mqtt_port": {"type": "integer", "zero": False},
     "gateway_mqtt_token": {"type": "string", "empty": False},
+    "gateway_shared_ct": {"type": "boolean"},
+    "gateway_integrate_power": {"type": "boolean"},
     # User-maintained log/debug redaction denylist (GH#4770): literal strings to mask wherever a
     # value appears in predbat.log or a debug dump, for anything Predbat cannot recognise as a
     # credential from its own config - an MPAN or account number surfaced by a third-party HA
