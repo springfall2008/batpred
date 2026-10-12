@@ -4397,6 +4397,37 @@ class Fetch:
             self.log("Warn: export_more_solar is enabled but has no effect, as it works by enabling Freeze Export on idle solar slots and " + reason)
         self.export_more_solar_warned_reason = reason
 
+    def apply_battery_max_soc_ceiling(self):
+        """
+        Cap best_soc_max by the per-inverter battery_max_soc settings.
+
+        Runs after fetch_inverter_data() has refreshed the inverters, because fetch_config_options()
+        reads best_soc_max before the inverters of this cycle exist.
+        """
+        # Device-side cap on usable energy. Fox exposes its Max SoC setting as battery_max_soc
+        # (default 100) per inverter. When any inverter caps below 100%, the planner ceiling is the
+        # capacity-weighted usable energy across all inverters, so charge targets and the prediction
+        # never model more stored energy than the hardware can reach. soc_max itself (the capacity)
+        # is left untouched - it stays the basis of soc_kwh, the reserve and the soc_percent maths.
+        if self.inverters:
+            device_ceiling = 0.0
+            any_capped = False
+            for inv in self.inverters:
+                inv_max = getattr(inv, "battery_max_soc", 100)
+                if inv_max and 0 < inv_max < 100:
+                    any_capped = True
+                else:
+                    inv_max = 100
+                inv_capacity = getattr(inv, "soc_max", None)
+                if inv_capacity:
+                    device_ceiling += inv_capacity * (inv_max / 100.0)
+            if any_capped:
+                if self.best_soc_max and self.best_soc_max > 0:
+                    self.best_soc_max = min(self.best_soc_max, device_ceiling)
+                else:
+                    self.best_soc_max = device_ceiling
+                self.log("Info: Capped best_soc_max to {:.3f} kWh by the per-inverter Max SoC settings".format(self.best_soc_max))
+
     def fetch_config_options(self):
         """
         Fetch all the configuration options
@@ -4551,6 +4582,7 @@ class Fetch:
         self.import_export_scaling = self.get_arg("import_export_scaling", 1.0)
         self.best_soc_min = self.get_arg("best_soc_min")
         self.best_soc_max = self.get_arg("best_soc_max")
+
         self.best_soc_keep = self.get_arg("best_soc_keep")
         self.best_soc_keep_weight = self.get_arg("best_soc_keep_weight")
         self.set_soc_minutes = self.plan_interval_minutes
