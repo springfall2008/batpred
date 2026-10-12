@@ -2604,7 +2604,7 @@ APPS_SCHEMA = {
     "db_primary": {"type": "boolean"},
     "threads": {"type": "string|integer", "allowed": ["auto", 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]},
     "prediction_kernel_enable": {"type": "boolean"},
-    "export_budget_mode": {"type": "string", "allowed": ["off", "pv_origin", "pv_equivalent"]},
+    "export_budget_mode": {"type": "string|boolean", "allowed": ["off", "pv_origin", "pv_equivalent"]},
     "export_budget_cap_kwh": {"type": "float", "zero": True},
     "log_count": {"type": "integer", "min": 2, "max": 100},
     "ha_url": {"type": "string", "empty": False},

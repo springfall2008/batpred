@@ -1756,7 +1756,8 @@ class Fetch:
                 clean_increment=False,
                 smoothing=False,
                 divide_by=1.0,
-                scale=soc_max / 100.0 if percent_sensor else 1.0,
+                # soc_kw is scaled by battery_scaling, as the live SoC is (Inverter.update_status)
+                scale=soc_max / 100.0 if percent_sensor else (getattr(inverter, "battery_scaling", 1.0) or 1.0),
                 required_unit="%" if percent_sensor else "kWh",
             )
             if not data:

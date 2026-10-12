@@ -737,12 +737,14 @@ Because the inverter exports at full power down to a window's target SoC, every 
 the target of the export running now to at least the measured SoC minus the energy the budget still
 allows (rounded up to a whole percent).
 
-Each cycle Predbat replays the last 7 days of `pv_today`, `export_today`, `import_today` and
-`load_today` history to find where the budget stands. For `pv_origin` it also reads 7 days of the
+Each cycle Predbat replays up to the last 7 days of `pv_today`, `export_today`, `import_today` and
+`load_today` history to find where the budget stands. It uses the history already loaded for load
+prediction, so the replay is shorter when [days_previous](apps-yaml.md#days_previous) covers fewer
+days (`history_steps` on the sensor shows how many 5 minute steps were replayed). For `pv_origin` it also reads 7 days of the
 battery's `soc_percent` (or `soc_kw`) history, so conversion losses are not mistaken for PV charge;
 without that history it estimates the battery flow and logs a warning. It publishes `predbat.export_budget`
 (exportable kWh now, with `planned_battery_export_kwh` and `noncompliant_export_kwh` - export in the
-last 7 days the rule would not have allowed). Its `results` attribute holds the budget over the
+replayed history the rule would not have allowed). Its `results` attribute holds the budget over the
 best plan in the same format as `predbat.soc_kw_best`, so it can be charted next to the planned SoC.
 
 This is a planning aid, not legal advice. Check the rules that apply to you.
