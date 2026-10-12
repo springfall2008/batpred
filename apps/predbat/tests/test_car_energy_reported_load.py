@@ -13,8 +13,7 @@ but car_charging_energy shows the load sensor cannot include the car charger - t
 where the low-load test cancelled Octopus Intelligent dispatches that were really charging.
 """
 
-import inspect
-import re
+from unittest.mock import patch
 
 HOUSE_KW = 0.3
 CAR_KW = 7.0
@@ -183,13 +182,42 @@ def test_car_energy_reported_load(my_predbat):
         _setup(my_predbat, load_includes_car=False, sessions=((70, 190),))
         windows = my_predbat.car_energy_exceeds_load_windows()
         check("t12 counts", windows == 5, "windows {}".format(windows))
-
-        print("Test 13: fetch_sensor_data() only runs the check for the live plan, not compare.py's save=False runs")
-        source = inspect.getsource(type(my_predbat).fetch_sensor_data)
-        check("t13 gated on save", re.search(r"if save:\n\s+self\.check_car_energy_reported_load\(\)", source) is not None, "fetch_sensor_data() no longer gates the check on save")
     finally:
         for field, value in saved.items():
             setattr(my_predbat, field, value)
 
+    failed |= _test_fetch_only_checks_live_plan()
+
     print("*** car_energy_reported_load mismatch warning test {}".format("FAILED" if failed else "PASSED"))
+    return failed
+
+
+def _test_fetch_only_checks_live_plan():
+    """
+    Test 13: fetch_sensor_data() runs the check for the live plan (save=True) but not for compare.py's per-tariff
+    re-fetches (save=False). A comparison tariff that turns car_energy_reported_load Off must not clear the live
+    warned flag, or the warning would re-arm and fire again every comparison cycle.
+
+    Drives the real fetch_sensor_data() on a fresh PredBat, so nothing it resets leaks into the shared fixture (#5079).
+    """
+    # Imported here: unit_test imports this module
+    from unit_test import create_predbat
+
+    print("Test 13: fetch_sensor_data() only runs the check for the live plan, not compare.py's save=False runs")
+    failed = False
+    fresh = create_predbat()
+    # The test HA history carries no last_updated, so stand in empty sensor history for the history readers
+    with patch.object(fresh, "minute_data_load", return_value=({}, 0)), patch.object(fresh, "minute_data_import_export", return_value={}), patch.object(fresh, "check_car_energy_reported_load", wraps=fresh.check_car_energy_reported_load) as checked:
+        # As a comparison tariff config with the switch Off would leave it, after the live cycle has warned
+        fresh.car_energy_reported_load = False
+        fresh.car_energy_reported_load_warned = True
+        fresh.fetch_sensor_data(save=False)
+        if checked.call_count != 0 or not fresh.car_energy_reported_load_warned:
+            print("ERROR: t13 save=False ran the check {} times, warned flag {}".format(checked.call_count, fresh.car_energy_reported_load_warned))
+            failed = True
+
+        fresh.fetch_sensor_data(save=True)
+        if checked.call_count != 1 or fresh.car_energy_reported_load_warned:
+            print("ERROR: t13 save=True ran the check {} times, warned flag {}".format(checked.call_count, fresh.car_energy_reported_load_warned))
+            failed = True
     return failed
