@@ -48,7 +48,7 @@ configuration revision, exact inverter identity and target provider. The source
 must close admission before returning evidence. Replayed, expired and mismatched
 receipts must be rejected. A fetched configuration revision is not evidence
 that the old writer stopped. Process restarts must reconstruct closed epochs
-rather than silently reverting to an ungated controller.
+rather than silently reverting to a controller with no gate.
 
 The Hub protocol must acknowledge an epoch/revision-bound physical fence after
 old commands have completed and old retained schedules have been invalidated.
