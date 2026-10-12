@@ -2437,11 +2437,11 @@ def _reconstruct_windows_from_status(my_predbat, status_for_stamp):
         captured["export_window_best"] = copy.deepcopy(my_predbat.export_window_best)
         captured["export_limits_best"] = copy.deepcopy(my_predbat.export_limits_best)
         captured["status_warnings"] = kwargs.get("status_warnings")
-        return ("", "{}")
+        return ("", {})
 
     my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
     my_predbat.get_history_wrapper = _history_with_status
-    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", {})
     my_predbat.publish_html_plan = _capture_publish_html_plan
     original_run_pred = my_predbat.run_prediction
     my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
