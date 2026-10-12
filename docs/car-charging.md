@@ -124,7 +124,7 @@ If you are on the Octopus Intelligent Tariff set the following entries in `apps.
 
 - **octopus_slot_low_rate** - Default is `true`, meaning any Octopus Intelligent Slot reported will be at the lowest rate if at home. If `false` the existing rates only will be used which is only suitable for tariffs other than IOG.
 
-- **octopus_slot_max** - Sets the maximum number of 30-minute cheap rate slots per 24-hour period. Slots beyond this limit will use standard rates.
+- **octopus_slot_max** - Sets the maximum cheap rate dispatch time per 24-hour period, in 30-minute slots (12 is 6 hours). It is counted in the minutes of each dispatch as Octopus reports them, so a 10-minute dispatch uses 10 minutes of it. Dispatches beyond this limit will use standard rates.
 If unset, Predbat defaults this to 12 (6 hours) automatically for tariffs that Octopus enforces the 6-hour Intelligent cap on (tariff codes containing `IOG-SMB`), and to 48 (disabled) for other tariffs such as the older `INTELLI-VAR`. Set this explicitly to override the automatic default in either direction.
 
 If you are using Octopus-led charging with the [Octopus Energy integration](energy-rates.md#octopus-energy-home-assistant-integration):
