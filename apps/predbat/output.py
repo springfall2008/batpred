@@ -132,6 +132,12 @@ class Output:
         """
         Publish the car charging plan
         """
+        # Fetch calls this before execution. Explicit joint apply must not leak
+        # the independently optimised legacy EV plan to the existing HA executor.
+        from joint_site_apply import publish_joint_ev
+
+        if publish_joint_ev(self):
+            return
         postfix = ""
         for car_n in range(self.num_cars):
             # A list of its own per car - shared, every car after the first also carried the windows of

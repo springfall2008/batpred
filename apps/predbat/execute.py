@@ -295,6 +295,14 @@ class Execute:
             inverter.adjust_discharge_rate(int(discharge_rate), notify=notify_discharge)
 
     def execute_plan(self):
+        # Joint apply owns this cycle only after an explicit opt-in. It dispatches
+        # exact current intents through the same Inverter entry point, rather than
+        # allowing legacy window merging to erase hold/charge transitions.
+        from joint_site_apply import execute_joint_site
+
+        joint_status = execute_joint_site(self)
+        if joint_status is not None:
+            return joint_status
         # Per-inverter detail segments, assembled into the status text after the headline status is
         # resolved - see build_status_extra() for why they can't be concatenated inline.
         status_extra_parts = []

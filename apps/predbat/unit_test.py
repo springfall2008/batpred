@@ -56,6 +56,8 @@ from tests.test_inverter import run_inverter_tests
 from tests import test_joint_site_core
 from tests.test_joint_site_native import run_joint_site_native_tests
 from tests.test_joint_site_limited import run_joint_site_limited_tests
+from tests.test_joint_site_apply import run_joint_site_apply_tests
+from tests.test_joint_site_entrypoints import run_joint_site_entrypoint_tests
 from tests.test_basic_rates import test_basic_rates
 from tests.test_clock import run_clock_tests
 from tests.test_rate_export_max_forward_calc import test_rate_export_max_forward_calc
@@ -421,6 +423,16 @@ def run_joint_site_native_tests_isolated(my_predbat):
     return run_joint_site_native_tests(create_predbat())
 
 
+def run_joint_site_apply_tests_isolated(my_predbat):
+    """Run opt-in execution checks without contaminating shared native fixtures."""
+    return run_joint_site_apply_tests(create_predbat())
+
+
+def run_joint_site_entrypoint_tests_isolated(my_predbat):
+    """Check actual publication/execution hooks with a fresh native fixture."""
+    return run_joint_site_entrypoint_tests(create_predbat())
+
+
 def run_joint_site_core_tests(my_predbat):
     """Run the pure scheduler's independent unittest suite."""
     suite = unittest.defaultTestLoader.loadTestsFromModule(test_joint_site_core)
@@ -475,6 +487,8 @@ def main():
         ("joint_site_core", run_joint_site_core_tests, "Joint site pure solver", False),
         ("joint_site_native", run_joint_site_native_tests_isolated, "Joint site native shadow adapter", False),
         ("joint_site_limited", run_joint_site_limited_tests, "Limited battery discharge and native step replay", False),
+        ("joint_site_apply", run_joint_site_apply_tests_isolated, "Joint site gated native execution", False),
+        ("joint_site_entrypoints", run_joint_site_entrypoint_tests_isolated, "Joint site actual native entry points", False),
         ("execute", run_execute_tests, "Execute tests", False),
         ("multi_inverter_status", test_multi_inverter_status, "Multi-inverter headline status resolution tests (#4446)", False),
         ("load_car_energy", test_load_car_energy_warns_when_configured_entity_has_no_data, "car_charging_energy configured-but-empty warning tests (#4458 follow-up)", False),

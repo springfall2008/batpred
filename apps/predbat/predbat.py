@@ -1191,7 +1191,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 self.log("Will not recompute the plan, it is {} minutes old and max age is {} minutes".format(dp1(plan_age_minutes), self.calculate_plan_every))
 
         # Notify listeners that plan has been executed (consumed by gateway, plugins, etc.)
-        if self.plugin_system:
+        from joint_site_apply import native_plan_hook_allowed
+
+        if self.plugin_system and native_plan_hook_allowed(self):
             self.plugin_system.call_hooks(
                 "on_plan_executed",
                 charge_windows=self.charge_window_best,

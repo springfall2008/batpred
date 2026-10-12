@@ -2,11 +2,12 @@
 type: design
 ---
 
-# Joint site energy planning (experimental shadow)
+# Joint site energy planning (experimental)
 
 This development branch belongs to the [personal fork](https://github.com/arturonaredo/batpred).
 It develops the behaviour requested in [issue #5490](https://github.com/springfall2008/batpred/issues/5490).
-It provides no executable joint controller, regardless of where its shadow runs.
+Shadow is isolated. Experimental execution is a separate, explicit opt-in for
+commissioned local DEYE controls; it is not enabled by installing this branch.
 
 The earlier import diagnostics remain a separate feature:
 [PR #5486](https://github.com/springfall2008/batpred/pull/5486) neither implements
@@ -19,29 +20,30 @@ an opt-in **shadow** integration with native forecast data. It does not just rep
 an existing plan's excessive import: it searches different EV start/stop times
 and home-battery demand/hold/charge sequences together.
 
-However, **it does not replace the executable native plan yet**. A fresh native
-`Prediction` replays the candidate in both the central and PV10 scenarios. The
-candidate is published only on the separate `predbat.joint_site_plan` entity;
-`execution_enabled` and `enforced` are always `false`. The existing EV-slot signal,
-inverter windows, active prediction object and kernel/cache are left untouched.
+In **shadow**, a fresh native `Prediction` replays the candidate in both the central
+and PV10 scenarios. The candidate is published only on the separate
+`predbat.joint_site_plan` entity; `execution_enabled` and `enforced` remain `false`.
+The existing EV-slot signal, inverter windows, active prediction object and
+kernel/cache are left untouched.
 
-This is intentional, not a claim of completed control integration. In particular,
-the native executor joins adjacent charge windows even when their targets differ.
-Prediction of a hold followed by charge is not enough to prove that the executor
-will preserve that transition. Window resolution, dwell time and actual inverter
-behaviour still need an independently tested executable mapping.
+Experimental **apply** stages a successful candidate and revalidates it inside
+the real `execute_plan` entry point. It dispatches the current command directly
+through `Inverter.adjust_charge_immediate`, not through legacy window merging
+which can join adjacent hold/charge targets. The legacy executor cannot run on top
+of that command. See [Execution contract](#execution-contract) for the independent
+hardware, freshness and permission gates; a successful replay does not satisfy them.
 
 ### Shadow inputs
 
 `joint_site` is an optional `apps.yaml` mapping. Omitted or `mode: off` preserves
-ordinary Predbat behaviour. Only `mode: shadow` is accepted; `mode: apply` is
-rejected rather than silently treated as an execution setting.
+ordinary Predbat behaviour. `mode: shadow` cannot actuate. `mode: apply` is an
+explicit execution request, not permission to skip commissioning or evidence gates.
 
 The mapping accepts:
 
 | Field | Meaning |
 | --- | --- |
-| `mode` | `off` or `shadow` |
+| `mode` | `off` (default), `shadow`, or explicitly commissioned `apply` |
 | `import_limit_w` | Positive whole-site import ceiling; may use the companion diagnostic's configured limit when installed |
 | `control_model` | `native` (default) or the explicitly hypothetical `deye_tou` shadow model |
 | `load_port_limit_w` | Explicit aggregate household + EV AC demand limit, distinct from `import_limit` |
@@ -59,11 +61,16 @@ The mapping accepts:
 | `connection_entity` / `connection_entity_states` | Optional connection observation and exact state allowlist, separate from energisation permission |
 | `permission_entity` | Optional schedule permission observation; only exact `on` is reported as granted |
 | `allow_stale_shadow_soc` | Optional, default false: analyse the last valid but aged SOC as an explicitly labelled scenario; freshness remains an activation blocker |
+| `apply_verified` | Boolean, default false; operator attestation that the particular hardware, limits, topology and sole EV executor have been commissioned |
+| `ev_executor_lease_verified` | Boolean, default false; separate attestation that the sole external EV executor rejects expired or invalid version-1 leases even when Predbat stops |
+| `connection_observed_at_entity` | Apply requires an offset-aware timestamp of the physical connection observation, not an unrelated vehicle message |
+| `soc_observed_at_entity` | Apply requires an offset-aware timestamp of the actual EV SOC observation, not a cache access time |
 
 Capacity, present domestic battery energy, charge/discharge limits, losses, EV
 rate/capacity/target, tariffs and load/PV forecasts come from the native model.
 The site import ceiling must be positive for this search, but neither shadow nor
-the companion diagnostic enforces anything on hardware. This PR can run without
+the companion diagnostic enforces anything on hardware. Even apply remains a
+planner, not instantaneous electrical protection. This PR can run without
 the diagnostic PR: native replay then uses the upper rounding bound of saved
 grid-power readings (0.5 W conservatism), not a claimed exact raw peak. No rate band is excluded
 merely for being more expensive. A dated session expires: it is not a recurring
@@ -116,7 +123,7 @@ The solver uses an AC-equivalent model; hybrid PV conversion, power curves and
 other native details can therefore reject a candidate during the independent
 native replay. Such a rejection is **not** proof that no feasible plan exists.
 
-`control_model: deye_tou` is an explicit counterfactual scenario for commissioning:
+In shadow, `control_model: deye_tou` is an explicit counterfactual scenario for commissioning:
 it models full-rate charge, battery-first demand and hold with PV charging allowed
 on an isolated copy. It does **not** change SK's capability flags or claim a hold
 has been demonstrated on the installed firmware. Reports mark
@@ -172,7 +179,7 @@ currency unit; subtracting one from another is **not** a measured saving.
 ### Report states
 
 - `candidate`: a schedule was found and passed both native forecast checks; still
-  **not authorised or implemented for execution**.
+  **not dispatched**. In apply it may be staged for the separately gated executor.
 - `native_rejected`: the candidate failed a native import, reserve or EV-threshold
   check. Proposed windows are retained for analysis, never for control.
 - `no_plan_found`: bounded search did not find a complete plan; not a mathematical
@@ -184,10 +191,80 @@ currency unit; subtracting one from another is **not** a measured saving.
   renewal. A later SOC observation is not proof the target was reached on time;
   departure-time evidence must come from the recorded history.
 
-No trustworthy connection sensor is invented by this feature. A future execution
-path will need a separate real connection/session permission gate, including
-staleness and disconnection handling. Expected arrival alone must never enable
-the existing EV-slot signal.
+No trustworthy connection sensor is invented by this feature. Apply requires
+separate real connection/session permission evidence, including staleness and
+disconnection handling. Expected arrival alone cannot enable the existing EV-slot
+signal.
+
+### Execution contract
+
+Apply currently requires the **separate local DEYE adapter**. The joint PR remains
+independent and can be tested without that adapter; missing support blocks execution.
+SK, Deye Cloud and generic inverter capability overrides do not become DEYE merely
+because the hypothetical model worked in shadow.
+
+- A candidate must pass complete nominal and PV10 native replay. Conditional stale
+  scenarios are forbidden in apply. Every calculation first discards old staging.
+- The actual DEYE adapter must have `control: true` and `hold_verified: true` after
+  explicit commissioning. Its real table, operating mode and telemetry must pass
+  validation without sorting times or changing capabilities in memory.
+- Both field-specific EV observation timestamps must be fresh (at most 180 seconds)
+  and not future-dated. A dated expected session, cached connection value, predicted
+  manual EV SOC, or unrelated vehicle update is not a substitute.
+- Connection must match its configured allowlist, permission must be exactly `on`,
+  and the actual relay state and transition time must be available. The executor
+  rechecks domestic SOC, restart hysteresis and minimum OFF time before granting
+  an EV slot. It does not send EV switch services itself.
+- Commands are dated and short-lived. Changed limits, manual constraints, stale
+  plans, expired departure, unavailable observations and failed/pending inverter
+  commands withdraw the joint EV signal rather than reverting to independent EV
+  scheduling. Read-only, calibration and unsupported manual modes remain gates.
+- Fetch-time `publish_car_plan` cannot leak the legacy EV schedule before the
+  joint command is checked. Only the current accepted command can permit EV
+  publication; a future candidate window alone has no execution authority.
+- When the next action requires EV OFF, publication withdraws permission first
+  and waits for the observed relay to be OFF before changing battery support.
+- The physical write route is the real native inverter entry point. Standing
+  charge/discharge current ceilings, reserve, shutdown, ToU times and work-mode
+  settings are not raised or rewritten by the joint executor.
+- Octopus Intelligent EV dispatch and registered native-plan consumers such as
+  a gateway are unsupported in apply, rather than allowed to compete with it.
+  The legacy `on_plan_executed` broadcast is suppressed in apply, including
+  blocked cycles. Off/shadow continue their normal broadcasts.
+
+Adapter success means **HA observations match**, not hardware confirmation. Reports
+retain `ready_to_activate: false`; neither a boolean attestation nor software tests
+establish electrical safety. The existing single HA EV executor and independent
+protections must remain in charge of physical EV switching. This version must be
+commissioned and reviewed before any authorised live migration; it is not a
+production recommendation or proof of reaching a departure target.
+
+The ordinary native best-plan graphs remain the independent baseline; the joint
+report identifies the candidate and execution receipt. They must not be represented
+as measurements or as a fully unified dashboard of the applied joint trajectory.
+
+#### External EV lease requirement
+
+The existing EV executor must also understand `source: joint_site_apply` and
+`lease_version: 1` on the EV-slot binary sensor. It must require offset-aware
+`valid_from <= now < valid_until`, with a positive duration no greater than
+300 seconds, and preserve every existing grid, SOC, cooldown, connection and
+manual-ownership guard. It must re-evaluate expiry independently of Predbat
+publishing another state, including when Predbat has stopped. A cached `on`
+or a fresh generic native status alone is not authority. Missing or invalid
+lease attributes must fail closed for joint apply; legacy off/shadow slot
+publication is unchanged.
+
+This branch **does not install or replace that external automation**. Keep
+`ev_executor_lease_verified: false` until its expiry behaviour and maximum
+timer delay have been tested in the particular installation. Publishing expiry
+metadata is not a promise of instantaneous physical OFF. Native status-age
+watchdogs and electrical protections remain independent backstops.
+
+Blocked apply makes no speculative recovery writes to the inverter: its last
+accepted ToU controls can remain in force. The observed six-row commands are
+not hardware leases. Commissioning must verify the inverter's safe persistence
+and recovery behaviour; software receipt expiry is **not** inverter rollback.
 
 ## Objective
 

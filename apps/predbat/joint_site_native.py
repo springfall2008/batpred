@@ -1,13 +1,11 @@
-"""Opt-in joint scheduling against native forecasts, isolated from executable plans.
+"""Opt-in joint scheduling with isolated shadow and separately gated execution.
 
-The solver makes real coupled EV/battery decisions, then a fresh native Prediction
-replays them. This first fork integration is deliberately shadow-only: the native
-window executor coalesces adjacent targets, and a mathematical availability window
-is not positive evidence that an actual charger is connected. No schedule produced
-here is assigned to car_charging_slots or to the inverter's *_best controls.
+The solver makes coupled EV/battery decisions, then a fresh native Prediction
+replays them. Shadow never changes executable controls. Explicit apply stages a
+candidate for the native executor; staging alone cannot energise an EV or inverter.
 """
 
-from copy import copy
+from copy import copy, deepcopy
 from datetime import datetime, timezone
 import math
 
@@ -134,19 +132,32 @@ def _options(base):
         "import_limit_w",
         "control_model",
         "allow_stale_shadow_soc",
+        "apply_verified",
+        "ev_executor_lease_verified",
+        "connection_observed_at_entity",
+        "soc_observed_at_entity",
     }
     if set(settings) - allowed:
         raise ValueError("Unknown joint_site option")
     mode = settings.get("mode", "off")
     if mode == "off":
         return None
-    if mode != "shadow":
-        raise ValueError("joint_site supports only off or shadow; execution is not implemented")
+    if mode not in ("shadow", "apply"):
+        raise ValueError("joint_site mode must be off, shadow or apply")
     control_model = settings.get("control_model", "native")
     if control_model not in ("native", "deye_tou"):
         raise ValueError("Unsupported joint-site control model")
     if type(settings.get("allow_stale_shadow_soc", False)) is not bool:
         raise ValueError("allow_stale_shadow_soc must be boolean")
+    if type(settings.get("apply_verified", False)) is not bool:
+        raise ValueError("apply_verified must be boolean")
+    if type(settings.get("ev_executor_lease_verified", False)) is not bool:
+        raise ValueError("ev_executor_lease_verified must be boolean")
+    if mode == "apply" and (control_model != "deye_tou" or settings.get("allow_stale_shadow_soc", False)):
+        raise ValueError("Apply requires real DEYE controls and cannot use stale SOC assumptions")
+    for name in ("connection_observed_at_entity", "soc_observed_at_entity"):
+        if settings.get(name) is not None and (not isinstance(settings[name], str) or not settings[name]):
+            raise ValueError("Observation timestamp entities must be non-empty strings")
     _number(base.soc_max, "soc_max", 0.001)
     _number(base.reserve, "reserve", 0, base.soc_max)
     session = settings.get("session")
@@ -200,6 +211,10 @@ def _options(base):
     soc_observed_at = None
     soc_age_minutes = None
     entity_blockers = []
+    if mode == "apply" and (manual_target_active or soc_entity is None):
+        # The native manual SOC can advance from prediction; it is not a fresh
+        # vehicle observation, even when another vehicle timestamp is recent.
+        entity_blockers.append("measured_ev_soc_required")
     if manual_target_kwh is not None:
         ev_soc = _number(manual_target_kwh, "manual_ev_soc", 0, base.car_charging_battery_size[0])
         ev_soc_source = "manual_soc_target"
@@ -226,8 +241,19 @@ def _options(base):
                 entity_blockers.append("soc_entity_out_of_bounds")
             else:
                 soc_max_age = _number(settings.get("soc_max_age_minutes", 60), "soc_max_age_minutes", 1, 1440)
-                soc_age_minutes = (observed_now - soc_payload["last_updated"]).total_seconds() / 60
-                soc_observed_at = soc_payload["last_updated"].isoformat()
+                observed = soc_payload["last_updated"]
+                if mode == "apply":
+                    # Unchanged values need not change HA last_updated. Apply
+                    # requires the independent field-specific observation time.
+                    stamp_payload = _read_entity_state(base, settings.get("soc_observed_at_entity"))
+                    if stamp_payload is None:
+                        raise ValueError("Apply requires a physical SOC observation timestamp")
+                    observed = _parse_entity_timestamp(stamp_payload["state"], "physical_soc_observation")
+                    soc_max_age = min(soc_max_age, 3)
+                    if soc_payload["last_updated"] > observed_now:
+                        entity_blockers.append("soc_entity_timestamp_future")
+                soc_age_minutes = (observed_now - observed).total_seconds() / 60
+                soc_observed_at = observed.isoformat()
                 if soc_age_minutes < 0 or soc_age_minutes > soc_max_age:
                     entity_blockers.append("soc_entity_stale_or_future")
                     if soc_age_minutes > soc_max_age:
@@ -286,6 +312,8 @@ def _options(base):
     permission_granted = permission_state == "on"
     permission_observed = permission_state is not None
     return {
+        "mode": mode,
+        "settings": deepcopy(settings) if mode == "apply" else None,
         "arrival": start_offset,
         "control_model": control_model,
         "deadline": end_offset,
@@ -541,7 +569,7 @@ def _empty_report(status):
     """Build fresh, deliberately non-executable output; no stale schedule survives a failed run."""
     return {
         "status": status,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": _observation_clock().isoformat(),
         "ready_to_activate": False,
         "execution_enabled": False,
         "enforced": False,
@@ -574,7 +602,11 @@ def _publish_report(base, report, publish):
 
 
 def evaluate_joint_site(base, publish=True):
-    """Evaluate and optionally publish a shadow candidate, never the actuator-facing EV sensor."""
+    """Evaluate a candidate; only explicit apply may stage it for later native execution."""
+    settings = base.args.get("joint_site")
+    if (isinstance(settings, dict) and settings.get("mode") == "apply") or getattr(base, "joint_site_pending", None) is not None:
+        # A previous successful candidate cannot survive a failed calculation.
+        base.joint_site_pending = None
     report = _empty_report("invalid_input")
     stage = "configuration"
     try:
@@ -587,7 +619,7 @@ def evaluate_joint_site(base, publish=True):
         stage = "evidence"
         model_base = base
         execution_requirements = []
-        if options["control_model"] == "deye_tou":
+        if options["control_model"] == "deye_tou" and options["mode"] == "shadow":
             # A counterfactual MODEL, never a capability override on the actual
             # inverter. The separate DEYE adapter defines these ToU actions;
             # its commissioning and native command equivalence remain gates.
@@ -607,7 +639,8 @@ def evaluate_joint_site(base, publish=True):
             },
             "ready_to_activate": False,
             "control_model": options["control_model"],
-            "counterfactual_controls": options["control_model"] != "native",
+            "counterfactual_controls": options["control_model"] != "native" and options["mode"] == "shadow",
+            "requested_mode": options["mode"],
             "activation_requirements": execution_requirements,
             "manual_domestic_floor_slots": len(base.all_active_keep),
             "model_export_limit_w": model_base.export_limit * 60000,
@@ -618,7 +651,7 @@ def evaluate_joint_site(base, publish=True):
             "planning_alignment_seconds": options["planning_alignment_seconds"],
         }
         blockers = _collect_blockers(model_base, options)
-        stale_hypothesis = options["allow_stale_shadow_soc"] and options["stale_soc"] is not None and blockers == ["soc_entity_stale_or_future"] and not options["departure_passed"]
+        stale_hypothesis = options["mode"] == "shadow" and options["allow_stale_shadow_soc"] and options["stale_soc"] is not None and blockers == ["soc_entity_stale_or_future"] and not options["departure_passed"]
         if stale_hypothesis:
             # Preserve the freshness failure. This is a separately labelled
             # mathematical scenario, not a replacement live observation.
@@ -680,7 +713,16 @@ def evaluate_joint_site(base, publish=True):
             command_steps = []
             for action, slot in zip(result.actions, slots):
                 power = discharge_limit_w(model_base, action)
-                command_steps.append({"start": model_base.minutes_now + slot.start_min, "target_soc": 100 if action.battery_mode == "charge" else 0, "freeze": action.battery_mode == "hold", "power_w": power})
+                command_steps.append(
+                    {
+                        "start": model_base.minutes_now + slot.start_min,
+                        "end": model_base.minutes_now + slot.start_min + slot.duration_min,
+                        "target_soc": 100 if action.battery_mode == "charge" else 0,
+                        "freeze": action.battery_mode == "hold",
+                        "power_w": power,
+                        "ev_on": action.ev_action == "on",
+                    }
+                )
                 if power is not None:
                     power_limits.append({"start": model_base.minutes_now + slot.start_min, "end": model_base.minutes_now + slot.start_min + slot.duration_min, "power_w": power})
             command_check = {"available": False, "passed": False, "reason": "Optional local DEYE adapter/mapping is not installed"}
@@ -721,6 +763,18 @@ def evaluate_joint_site(base, publish=True):
                 bounded_search=True,
                 execution_blockers=list(blockers),
             )
+            if options["mode"] == "apply" and report["status"] == "candidate":
+                from joint_site_apply import execution_fingerprint
+
+                report["apply_candidate_staged"] = True
+                base.joint_site_pending = {
+                    "report": deepcopy(report),
+                    "options": deepcopy(options),
+                    "commands": deepcopy(command_steps),
+                    "ev_windows": deepcopy(windows[0]),
+                    "initial_battery_soc_kwh": base.soc_kw,
+                    "fingerprint": execution_fingerprint(base),
+                }
     except UnsupportedJointSite as exc:
         report = _empty_report("unsupported")
         report["reason"] = str(exc)
