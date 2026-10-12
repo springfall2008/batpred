@@ -75,11 +75,19 @@ current engine lease and reservation; expired reports cannot be accepted.
 Shutdown and startup exceptions seal before stopping components, without a
 success report in cleanup.
 
-Current engine arguments do not expose their loaded configuration revision.
-The worker pins the service-issued revision and fences all supported provider
-transports, but this is not evidence that local arguments applied that revision.
-The image wrapper must bind emitted configuration and exact inverter identity
-before any target readiness or write release is authorised.
+Enrolled engine arguments must include `saas_config_version`, emitted from the
+SaaS response revision by the operator or legacy image wrapper. Before claiming
+a boot, startup rejects an absent or malformed revision. After attaching, it
+requires that loaded revision to equal the service-issued revision before
+starting the worker or constructing components. Stale configuration therefore
+leaves startup's admission sentinel closed. Ordinary, unenrolled startup does
+not require this field.
+
+This comparison binds the loaded revision number, not a configuration content
+hash or the physical inverter identity. Exact inverter identity and target
+readiness still require independent evidence before any write release is
+authorised. The paired operator and image-wrapper changes must be deployed
+before explicit enrollment; this feature remains disabled by default.
 
 Enrollment requires the selected supported writer to be configured. Every actual
 `Components.initialize`, including restarts, rejects eligible unsupported inverter

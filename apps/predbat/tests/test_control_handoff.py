@@ -416,7 +416,7 @@ class ControlServiceTests(unittest.TestCase):
     def setUp(self):
         """Use a deterministic monotonic clock and synthetic service credentials."""
         self.now = 100.0
-        self.base = SimpleNamespace(args={"control_handoff": {"enabled": True}, "user_id": self.instance, "ge_cloud_direct": True, "ge_cloud_key": "synthetic-inverter-key"}, log=lambda *_: None)
+        self.base = SimpleNamespace(args={"control_handoff": {"enabled": True}, "saas_config_version": 7, "user_id": self.instance, "ge_cloud_direct": True, "ge_cloud_key": "synthetic-inverter-key"}, log=lambda *_: None)
         self.service = ControlHandoffService(self.base, self.instance, self.boot, "https://service.invalid", "synthetic-service-key", clock=lambda: self.now)
 
     def active(self, **changes):
@@ -436,6 +436,35 @@ class ControlServiceTests(unittest.TestCase):
         data = self.active(state="closing", transition_id=self.transition)
         data.pop("lease_for_s")
         return data
+
+    def test_loaded_revision_is_required_before_claiming_a_boot(self):
+        """An absent or malformed emitted revision cannot make a service request."""
+        for value in (None, True, False, 0, -1, "7", 7.0, 2147483648):
+            self.base.args["saas_config_version"] = value
+            with patch("control_handoff.requests.post") as post, self.assertRaises(ControlAttachFailed):
+                self.service.attach()
+            post.assert_not_called()
+            self.assertIsNone(self.service.gate)
+
+    def test_stale_loaded_revision_cannot_start_components(self):
+        """A server epoch at another revision leaves startup's sentinel sealed."""
+        from datetime import datetime, timezone
+        import predbat as predbat_module
+
+        self.base.update_time = lambda **_kwargs: None
+        self.base.now_utc_real = datetime.now(timezone.utc)
+        self.base.reset = lambda: None
+        self.base.record_status = lambda *_args, **_kwargs: None
+        environment = {"SUPABASE_URL": "https://service.invalid", "SUPABASE_KEY": "synthetic-service-key"}
+        with patch.dict("os.environ", environment), patch("control_handoff.uuid.uuid4", return_value=self.boot), patch("control_handoff.requests.post", return_value=ServiceResponse(self.active(config_version=8))), patch(
+            "control_handoff.ControlHandoffService.start"
+        ) as worker, patch.object(predbat_module, "Components") as components, self.assertRaises(ControlAttachFailed):
+            predbat_module.PredBat.initialize(self.base)
+        worker.assert_not_called()
+        components.assert_not_called()
+        self.assertTrue(self.base.control_write_gate.snapshot()["closed"])
+        with self.assertRaises(ControlWriteBlocked):
+            self.base.control_write_gate.admit("givenergy")
 
     def test_attach_uses_service_credentials_and_exact_boot(self):
         """Bind only the service-issued epoch and never follow credential redirects."""

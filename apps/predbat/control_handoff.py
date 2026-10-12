@@ -276,9 +276,14 @@ class ControlHandoffService:
 
     def attach(self):
         """Claim the pre-enrolled epoch before any component can be constructed."""
+        loaded_version = self.base.args.get("saas_config_version")
+        if type(loaded_version) is not int or not 1 <= loaded_version <= 2147483647:
+            raise ControlAttachFailed("Loaded controller configuration revision unavailable")
         started, data, status = self._request("attach")
         if status != 200 or not self._binding(data) or data.get("state") != "active":
             raise ControlAttachFailed("Controller service attach unavailable")
+        if data["config_version"] != loaded_version:
+            raise ControlAttachFailed("Loaded controller configuration revision changed")
         lease = data.get("lease_for_s")
         if type(lease) is not int or not 1 <= lease <= 90 or started + lease <= self._clock():
             raise ControlAttachFailed("Controller service attach lease invalid")
