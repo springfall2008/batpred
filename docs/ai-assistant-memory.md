@@ -11,7 +11,7 @@ Two MCP servers are used in Predbat development. They do different jobs:
 
 | Server | What it is | What it remembers |
 |--------|------------|-------------------|
-| [agent-memory-mcp](https://github.com/adamrdrew/agent-memory-mcp) (`@adamrdrew/agent-memory-mcp`) | A local memory store with hybrid keyword and vector search, backed by LanceDB | What you are working on and what you have learnt: task status, root causes, design decisions |
+| [agent-memory-mcp](https://github.com/adamrdrew/agent-memory-mcp) (Fixed fork)| A local memory store with hybrid keyword and vector search, backed by LanceDB | What you are working on and what you have learnt: task status, root causes, design decisions |
 | [GitNexus](https://github.com/abhigyanpatwari/GitNexus) | A code knowledge graph: symbols, call graph, execution flows, impact analysis | The structure of the code. The repository `CLAUDE.md` already tells Claude how to use it |
 
 This page covers **agent-memory-mcp**, the store that the `CLAUDE.md` guidance below relies on.
