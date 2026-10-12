@@ -2632,6 +2632,7 @@ class GatewayMQTT(ComponentBase):
             f"binary_sensor.{self.prefix}_gateway_display_online",
             state="on" if online else "off",
             attributes={"friendly_name": "PredBat Hub display online", "device_class": "connectivity"},
+            app="gateway",
         )
         # A disconnected desk display cannot make the working inverter provider
         # fail its run or liveness probe. Components still checks the owning
