@@ -382,3 +382,81 @@ def test_actual_hub_pending_publish_survives_cancel_without_draining_or_affectin
         assert not gate.wait_drained(gate.epoch, gate.config_version, "synthetic-transition", 0)
 
     asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("limit", [None, 1500, 0])
+@pytest.mark.parametrize("site_limit", [None, 3600])
+def test_cloud_preserved_export_limit_reaches_actual_inverter(limit, site_limit):
+    """Real auto-config and inverter refresh must retain the user's export cap."""
+    from types import MethodType
+
+    with patch("sys.frozen", True, create=True):
+        import predbat  # noqa: F401
+    from userinterface import UserInterface
+    from inverter import Inverter
+    from inverter import MINUTE_WATT
+
+    base, _runtime, _owners = make_base([route("givenergy", A, "givenergy", ("predbat_gateway",))])
+    base.args["set_reserve_min"] = 4
+    base.args_from_apps_yaml = {}
+    if limit is not None:
+        base.args["export_limit"] = [limit]
+        base.args_from_apps_yaml["export_limit"] = [limit]
+    base.apps_yaml_override_warned = set()
+    base.get_arg = MethodType(UserInterface.get_arg, base)
+    base.resolve_arg = MethodType(UserInterface.resolve_arg, base)
+    base.set_arg = MethodType(UserInterface.set_arg, base)
+    base.get_ha_config = lambda _name, default: (None, default)
+    base.get_manual_api = lambda _name: []
+    base._invalidate_log_secret_pattern = lambda: None
+    base.set_reserve_enable = False
+    base.num_inverters = 1
+    base.forecast_minutes = 2880
+    cloud = cloud_for(base)
+    cloud.site_export_limit = site_limit
+    cloud.site_id = "synthetic"
+    asyncio.run(cloud.async_automatic_config(devices(A)))
+    hub_for(base, [A]).automatic_config()
+    expected_limit = limit if limit is not None else site_limit if site_limit is not None else 99999
+    composed_limit = copy.deepcopy(base.args.get("export_limit"))
+    if site_limit is not None:
+        base.entities[f"sensor.predbat_gecloud_{A.lower()}_export_limit"] = {"state": site_limit}
+    # Capacity tracking and dummy HA entities are unrelated to the limit read.
+    # The actual refresh/get_arg/resolve_arg path performs all configuration reads.
+    with patch.object(Inverter, "battery_size_tracking"), patch.object(Inverter, "create_entity", return_value="sensor.synthetic_dummy"):
+        inverter = Inverter(base, 0, quiet=True)
+        inverter.refresh_config(quiet=True)
+    assert inverter.export_limit * MINUTE_WATT == expected_limit
+    if limit is not None:
+        assert composed_limit == [limit]
+    elif site_limit is not None:
+        assert composed_limit == [f"sensor.predbat_gecloud_{A.lower()}_export_limit"]
+    else:
+        assert "export_limit" not in base.args
+    expected_args = copy.deepcopy(base.args)
+    asyncio.run(cloud.async_automatic_config(devices(A)))
+    assert base.args == expected_args
+
+
+def test_optional_absence_and_explicit_removal_are_distinct():
+    """Missing optional keys keep defaults; emitted None clears stale bindings."""
+    base, _runtime, _owners = make_base([route("givenergy", A, "givenergy", ("predbat_gateway",))])
+    base.args.update(pause_mode=["select.stale_hub_pause"], charge_rate_percent=["number.stale_hub_rate"], idle_start_time=["00:02:00"])
+    configure(base, [A], [A])
+    assert "export_limit" not in base.args
+    assert "pause_mode" not in base.args
+    assert "charge_rate_percent" not in base.args
+    assert base.args["idle_start_time"] == ["00:02:00"]
+
+
+def test_mixed_gateway_optional_default_uses_global_slot():
+    """An absent Cloud cap retains its slot while Hub supplies its own cap."""
+    base, _runtime, _owners = make_base([route("givenergy", A, "givenergy", ("predbat_gateway",)), route("givenergy", B, "predbat_gateway", ("givenergy",))])
+    base.args["export_limit"] = [1500, 2500]
+    cloud, hub = configure(base, [B, A], [B, A])
+    assert base.args["export_limit"][0] == 1500
+    assert B[-6:].lower() in base.args["export_limit"][1]
+    expected = copy.deepcopy(base.args)
+    asyncio.run(cloud.async_automatic_config(devices(A, B)))
+    hub.automatic_config()
+    assert base.args == expected

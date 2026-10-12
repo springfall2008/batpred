@@ -170,13 +170,26 @@ class InverterGatewayRuntime:
                 self._contributions[provider] = contribution
                 if any(self.primary_provider(route) in self._failed or route.identity not in self._contributions.get(self.primary_provider(route), {}) for route in self.routes):
                     return False
-                output = {name: [self._contributions[self.primary_provider(route)][route.identity].get(name) for route in self.routes] for name in _SLOT_KEYS}
+                selected = [self._contributions[self.primary_provider(route)][route.identity] for route in self.routes]
+                # Absence means the provider deliberately left configuration alone
+                # (for example set_arg_auto(overwrite=False)); explicit None means
+                # set_arg would remove the mapping. Do not collapse these cases.
+                output = {}
+                for name in set().union(*(slot.keys() for slot in selected)):
+                    fallback = (self._config or {}).get(name, self.base.args.get(name))
+                    slots = []
+                    for index, slot in enumerate(selected):
+                        existing = fallback
+                        if isinstance(fallback, list):
+                            existing = fallback[index] if index < len(fallback) else None
+                        slots.append(copy.deepcopy(slot[name] if name in slot else existing))
+                    output[name] = None if all(value is None for value in slots) else slots
                 output.update(num_inverters=len(self.routes), givtcp_rest=None)
                 if self._config is not None and output != self._config:
                     raise ValueError("Loaded inverter bindings changed, a new boot is required")
                 # Atomic dictionary replacement prevents a half-published mapping. Slots
                 # never change after this first composition, even on rediscovery.
-                self.base.args = {**self.base.args, **output}
+                self.base.args = {name: value for name, value in {**self.base.args, **output}.items() if name not in output or value is not None}
                 self._config = copy.deepcopy(output)
                 return True
         except BaseException:
