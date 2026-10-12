@@ -209,6 +209,75 @@ class TestGatewayDisplayOnly:
         assert not comps.is_all_alive()
         assert asyncio.run(web.html_api_ping(None)).status == 500
 
+    def test_offline_display_startup_does_not_wait_or_fail_cloud_health(self):
+        """An optional display starts before its first successful MQTT connection."""
+        from component_base import ComponentBase
+        from components import Components
+        from predbat import PredBat
+        from web import WebInterface
+
+        gw = self._make_gateway()
+        gw._mqtt_connected = False
+        gw._load_discovery = AsyncMock()
+        gw._mqtt_loop = AsyncMock()
+        gw._startup_wait = AsyncMock(return_value=0)
+        gw.update_success_timestamp = lambda: ComponentBase.update_success_timestamp(gw)
+        comps = Components.__new__(Components)
+        comps.components = {"gateway": gw}
+        comps.component_tasks = {"gateway": SimpleNamespace(is_alive=lambda: True)}
+        comps.component_errors = {}
+        base = gw.base
+        base.components = comps
+        base.prefix = "predbat"
+        base.stop_thread = False
+        base.fatal_error = False
+        base.had_errors = False
+        base.get_state_wrapper.side_effect = lambda entity, attribute=None, default=None: False if attribute == "error" else datetime.datetime.now(datetime.timezone.utc).isoformat()
+        base.is_running.side_effect = lambda: PredBat.is_running(base)
+        web = WebInterface.__new__(WebInterface)
+        web.base = base
+        web.log = base.log
+
+        async def exercise():
+            try:
+                assert await gw.run(0, True)
+                assert gw.api_started
+                gw._startup_wait.assert_not_awaited()
+                assert comps.is_all_alive()
+                assert (await web.html_api_ping(None)).status == 200
+                PredBat.record_final_run_status(base, "Charging", "")
+                assert base.record_status.call_args.args[0] == "Charging"
+                assert not gw._auto_configured
+                assert gw._last_status is None
+                display_call = next(call for call in reversed(base.dashboard_item.call_args_list) if call.args[0] == "binary_sensor.predbat_gateway_display_online")
+                assert display_call.args[1] == "off"
+            finally:
+                gw._mqtt_task.cancel()
+                await asyncio.gather(gw._mqtt_task, return_exceptions=True)
+
+        with patch("gateway.HAS_AIOMQTT", True):
+            asyncio.run(exercise())
+
+    def test_control_startup_still_waits_for_connection_and_configuration(self):
+        """The optional-display fast path cannot relax real inverter startup."""
+        gw = self._make_gateway(False)
+        gw._load_discovery = AsyncMock()
+        gw._mqtt_loop = AsyncMock()
+        gw._startup_wait = AsyncMock(return_value=0)
+
+        async def exercise():
+            try:
+                assert await gw.run(0, True)
+                assert gw._startup_wait.await_count == 2
+                assert not gw.api_started
+                assert not gw._auto_configured
+            finally:
+                gw._mqtt_task.cancel()
+                await asyncio.gather(gw._mqtt_task, return_exceptions=True)
+
+        with patch("gateway.HAS_AIOMQTT", True):
+            asyncio.run(exercise())
+
     def test_control_transport_outage_still_fails_health(self):
         """Optional display health cannot relax the active controller's checks."""
         gw = self._make_gateway(False)
