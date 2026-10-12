@@ -190,16 +190,28 @@ class CarChargerControl:
         if not slot:
             # Not wired for this car - but the Octopus component may simply not have got there yet
             return None if self.charger_control_octopus_discovering() else False
-        owner = getattr(self.base, "car_slot_owner", None)
-        if owner and owner != "octopus":
-            # Another charger component (Ohme) supplies the Intelligent slots from the charger itself
-            return True
+        is_charger = self.charger_control_dispatch_is_charger(slot)
+        if is_charger is None:
+            owner = getattr(self.base, "car_slot_owner", None)
+            if owner and owner != "octopus":
+                # Another charger component (Ohme) wired its own sensor as the Intelligent slots, which
+                # does not say - but it only does so for the charger Octopus drives. Asked only once the
+                # sensor is silent: since #5443 Octopus's own dispatch sensors stay wired under the
+                # claim, and those say per car, so a second car's device may well not be the charger
+                return True
+        return is_charger
+
+    def charger_control_dispatch_is_charger(self, slot):
+        """What a dispatch sensor says about whether its Intelligent device is the charger: True, False or None.
+
+        None for a sensor that does not say - not published yet, one that never does (the Octopus
+        Energy HA integration, an Ohme slot sensor), or one that has lost its value, which is not
+        the same as "not the charger".
+        """
         is_charger = self.get_state_wrapper(slot, attribute="is_charger")
         if is_charger is None:
-            # Not published yet, or a sensor that does not say (the Octopus Energy HA integration)
             return None
         if isinstance(is_charger, str) and is_charger.strip().lower() in ("unknown", "unavailable", "none", ""):
-            # A sensor that has lost its value does not say, which is not the same as "not the charger"
             return None
         return parse_control_setting(is_charger)
 
@@ -214,10 +226,9 @@ class CarChargerControl:
         slot = self.charger_control_dispatch_sensor(car_n)
         if not slot:
             return False
-        owner = getattr(self.base, "car_slot_owner", None)
-        if owner and owner != "octopus":
-            return False
-        return parse_control_setting(self.get_state_wrapper(slot, attribute="is_charger")) is False
+        # Not short-cut on car_slot_owner: since #5443 Octopus's dispatch sensors stay wired while Ohme
+        # holds the claim, so a second car's sensor can say its device is the car itself
+        return self.charger_control_dispatch_is_charger(slot) is False
 
     def charger_control_octopus_discovering(self):
         """Is the Octopus or Kraken component still to wire its Intelligent devices into the car slots?

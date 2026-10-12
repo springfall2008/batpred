@@ -771,6 +771,37 @@ def test_octopus_rule_per_car():
     assert component.commands == [("b", "off", 1)], component.commands
 
 
+def test_octopus_rule_other_slot_owner_second_car():
+    """Since #5443 Octopus's own dispatch sensors stay wired while Ohme holds the car slot claim, so
+    a second car is judged on what its own sensor says rather than handed to Octopus with the Ohme."""
+    component = FakeComponent([FakeCharger("a"), FakeCharger("b")])
+    component.base.num_cars = 2
+    component.base.components = FakeComponents(None)
+    component.base.car_slot_owner = "ohme"
+    dispatch_b = "binary_sensor.predbat_octopus_intelligent_dispatch_b"
+    component.args["octopus_intelligent_slot"] = [DISPATCH, dispatch_b]
+    component.sensors = {DISPATCH: {"is_charger": True}, dispatch_b: {"is_charger": False}}
+    assert component.charger_control_octopus_drives_charger(0) is True
+    assert component.charger_control_octopus_drives_charger(1) is False
+    assert component.charger_control_octopus_drives_car(0) is False
+    assert component.charger_control_octopus_drives_car(1) is True
+
+    # The Ohme's own slot sensor does not say, and the claim still means Octopus drives that charger
+    component.sensors = {DISPATCH: {}, dispatch_b: {"is_charger": "unknown"}}
+    assert component.charger_control_octopus_drives_charger(0) is True
+    assert component.charger_control_octopus_drives_car(0) is False
+    # A sensor that has lost its value is not the car either
+    assert component.charger_control_octopus_drives_car(1) is False
+
+    # Following the car, Predbat drives the second car's charger to its dispatches and leaves the Ohme's alone
+    component.sensors = {DISPATCH: {"is_charger": True}, dispatch_b: {"is_charger": False}}
+    component.args["octopus_intelligent_charger_follows_car"] = True
+    _plan(component, 0, [])
+    _plan(component, 1, [])
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("b", "off", 1)], component.commands
+
+
 def test_unpublished_plan_dispatch_charge_stops_when_the_dispatch_ends():
     """A dispatch starts a car whose plan is not published yet; when the dispatch ends the charger
     Predbat now holds is stopped, not left running with nobody in control."""
@@ -931,6 +962,7 @@ def run_car_charger_control_tests(my_predbat=None):
     test_octopus_rule_unmatched_regex_is_not_a_sensor()
     test_octopus_rule_other_slot_owner_hands_off()
     test_octopus_rule_per_car()
+    test_octopus_rule_other_slot_owner_second_car()
     test_unpublished_plan_dispatch_charge_stops_when_the_dispatch_ends()
     test_plan_that_goes_missing_keeps_its_last_windows()
     test_guest_charging_releases_and_resumes()
