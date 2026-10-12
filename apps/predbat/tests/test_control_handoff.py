@@ -764,6 +764,45 @@ class ControlServiceTests(unittest.TestCase):
             self.assertTrue(self.base.control_write_gate.snapshot()["closed"])
 
 
+class TestControlDebugExport(unittest.TestCase):
+    """Live controller objects must never enter shared debug/state serialization."""
+
+    def test_actual_debug_export_excludes_live_control_objects(self):
+        """Keep debug downloads usable without traversing locks or credentials."""
+        from datetime import datetime, timezone
+        from tempfile import TemporaryDirectory
+
+        import yaml
+        from userinterface import UserInterface
+        from utils import is_debug_excluded_key
+
+        with TemporaryDirectory() as root:
+            base = SimpleNamespace(
+                now_utc=datetime.now(timezone.utc),
+                config_root=root,
+                config_root_p=root,
+                inverters=[],
+                CONFIG_ITEMS=[],
+                components=None,
+                args={},
+                minutes_now=42,
+                log=lambda *_args: None,
+            )
+            gate = make_gate()
+            service = ControlHandoffService(base, "synthetic-instance", "synthetic-boot", "https://example.invalid", "synthetic-private-service-credential")
+            service.gate = gate
+            base.control_write_gate = gate
+            base.control_handoff_service = service
+            text = UserInterface.create_debug_yaml(base, write_file=False)
+            debug = yaml.safe_load(text)
+            self.assertEqual(debug["minutes_now"], 42)
+            for name in ("control_write_gate", "control_handoff_service"):
+                self.assertTrue(is_debug_excluded_key(name))
+                self.assertNotIn(name, debug)
+            self.assertNotIn("synthetic-private-service-credential", text)
+            self.assertNotIn("python/object", text)
+
+
 def run_control_handoff_tests(_predbat=None):
     """Run through Predbat's normal unit-test registry as well as unittest."""
     suite = unittest.defaultTestLoader.loadTestsFromModule(__import__(__name__, fromlist=["_"]))
