@@ -25,6 +25,7 @@ from const import (
     CLOUD_WINDOW_MINUTES,
     DYNAMIC_LOAD_CAR_CONFIRM_MINUTES,
     DYNAMIC_LOAD_CAR_LOAD_MINUTES,
+    DYNAMIC_LOAD_CAR_LOW_FACTOR,
     DYNAMIC_LOAD_CAR_SENSOR_MINUTES,
     DYNAMIC_LOAD_CAR_START_MINUTES,
     PREDICT_STEP,
@@ -60,6 +61,7 @@ from utils import (
     is_entity_id,
     round_out_to_period,
 )
+from config import INVERTER_DEF
 from prediction import Prediction
 from prediction_kernel import kernel_status_summary, set_window_start
 from predbat_metrics import metrics
@@ -367,19 +369,62 @@ class Plan:
     def dynamic_load_classify(self):
         """
         Classify load_last_period as "high" (above the battery's discharge rate), "low" (below both the
-        battery rate and the car charging threshold, so no car can be charging) or "baseline".
+        battery rate and the car's low-load cut-off, so no car can be charging) or "baseline".
 
         Shared by dynamic_load(), which runs after the inverter fetch, and dynamic_load_car_check(), which
         runs before it and so uses the previous cycle's battery_rate_max_discharge - it barely moves
         between cycles, and the car grace period spans several of them.
         """
         threshold_battery = self.battery_rate_max_discharge * MINUTE_WATT / 1000
-        threshold_car = self.car_charging_threshold_kw()
         if self.load_last_period >= threshold_battery:
             return "high"
-        if (self.load_last_period < (threshold_battery * 0.9)) and (self.load_last_period < (threshold_car * 0.9)):
+        if (self.load_last_period < (threshold_battery * 0.9)) and (self.load_last_period < self.dynamic_load_car_low_kw()):
             return "low"
         return "baseline"
+
+    def dynamic_load_car_low_kw(self):
+        """
+        The load in kW under which no car can be charging: DYNAMIC_LOAD_CAR_LOW_FACTOR of car_charging_threshold.
+        """
+        return self.car_charging_threshold_kw() * DYNAMIC_LOAD_CAR_LOW_FACTOR
+
+    def dynamic_load_car_live_load(self):
+        """
+        The live house load from the load_power sensors, as (configured, kW): the total across inverters,
+        or None when any of them has no reading ("unknown", "unavailable", missing from HA) - part of the
+        load is not the load. configured is False when load_power is not set at all.
+
+        Summed as Inverter.update_status() sums it: load_power plus the inverter type's extra load_power_N
+        sensors (Solis reports the bypass load on load_power_1), where one left out of apps.yaml counts as
+        nothing, then load_power_invert.
+
+        Read from the sensors rather than the inverters: dynamic_load_car_check() runs before
+        fetch_inverter_data(), where their load_power is still the previous cycle's.
+        """
+        entities = self.args.get("load_power", None)
+        if not entities:
+            return False, None
+        if not isinstance(entities, list):
+            entities = [entities]
+        total = 0.0
+        for inverter_n in range(len(entities)):
+            inverter_type = self.get_arg("inverter_type", "GE", indirect=False, index=inverter_n)
+            num_load_entities = INVERTER_DEF.get(inverter_type, {}).get("num_load_entities", 1)
+            power = 0.0
+            for arg in ["load_power"] + ["load_power_{}".format(extra_n) for extra_n in range(1, num_load_entities)]:
+                value = self.args.get(arg, None)
+                if isinstance(value, list):
+                    value = value[inverter_n] if inverter_n < len(value) else None
+                if not value:
+                    continue
+                try:
+                    power += float(self.resolve_arg(arg, value, default=None, quiet=True, required_unit="W"))
+                except (ValueError, TypeError):
+                    return True, None
+            if self.get_arg("load_power_invert", default=False, index=inverter_n):
+                power = -power
+            total += power
+        return True, total / 1000.0
 
     def dynamic_load_car_evidence(self, car_n, minute, now, dispatch_start, dispatch_end):
         """
@@ -399,6 +444,11 @@ class Plan:
         averages the PREDICT_STEP minutes up to minutes_now, so it only counts when that whole window lies
         inside the dispatch, and the grace is timed on that 5 minute grid. It is skipped just after
         midnight, when the load_today sensor resets, and without load history.
+
+        A low load_last_period alone is not enough where load_power is set: it lags a car that is still
+        ramping up, and a cloud inverter's late readings, so a car at full power can read low (GH#5461).
+        The live load has to be low too. Live load that is not low, or has no reading, makes a low window
+        no evidence either way - it neither cancels the car nor resumes it.
         """
         if car_n in self.dynamic_load_car_sensors:
             charging = self.car_charging_now_reading(car_n)
@@ -417,7 +467,18 @@ class Plan:
                 return None, DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
             if self.minutes_now - PREDICT_STEP < dispatch_start or self.minutes_now > dispatch_end:
                 return None, DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
-            return self.dynamic_load_classify() == "low", DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
+            if self.dynamic_load_classify() != "low":
+                return False, DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
+            live_configured, live_load = self.dynamic_load_car_live_load()
+            live_low = not live_configured or (live_load is not None and live_load < self.dynamic_load_car_low_kw())
+            self.log(
+                "Octopus Intelligent: car {} load last period {:.2f}kW is low (under {:.2f}kW), live load {} - {}".format(
+                    car_n, self.load_last_period, self.dynamic_load_car_low_kw(), "{:.2f}kW".format(live_load) if live_load is not None else ("unavailable" if live_configured else "not configured"), "not charging" if live_low else "no evidence"
+                )
+            )
+            if not live_low:
+                return None, DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
+            return True, DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
         return None, DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
 
     def car_charging_now_reading(self, car_n):
@@ -4113,10 +4174,12 @@ class Plan:
                                 set_window_start(self.export_window_best[window_n_target], self.export_window_best[window_n_target]["end"] - (window_length + window_length_target))
                                 is_combined = True
                             elif export_mode_of(export_limit_target) == EXPORT_MODE_TARGET and window_length_target < orig_length_target:
-                                # Partial combine
+                                # Partial combine - move export time from this window into the target, so
+                                # this window shrinks by what the target gains. Growing it instead pushed
+                                # its start back into the slot before, through any manual override there (#5423)
                                 amount_to_move = min(orig_length_target - window_length_target, window_length)
                                 window_length_target_new = amount_to_move + window_length_target
-                                window_length_new = amount_to_move + window_length
+                                window_length_new = window_length - amount_to_move
                                 self.export_limits_best[window_n] = min(export_limit, export_limit_target, key=export_limit_sort_key)
                                 set_window_start(self.export_window_best[window_n], self.export_window_best[window_n]["end"] - window_length_new)
                                 set_window_start(self.export_window_best[window_n_target], self.export_window_best[window_n_target]["end"] - window_length_target_new)
@@ -5978,6 +6041,11 @@ class Plan:
                 new_slot = {}
                 new_slot["start"] = start
                 new_slot["end"] = end
+                # start is clamped to minutes_now above so the kWh maths only counts time the car
+                # can still charge for, but that makes an in-progress window's start walk forward
+                # by plan_interval_minutes every cycle. Keep the window's real start for display
+                # and for anything driving a charger off the published plan (issue #269).
+                new_slot["start_orig"] = window["start"]
                 new_slot["kwh"] = dp3(kwh)
                 new_slot["average"] = window["average"]
                 new_slot["cost"] = dp2(new_slot["average"] * kwh)

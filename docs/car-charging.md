@@ -177,6 +177,13 @@ With it set:
 It is only read for a car that also has **octopus_intelligent_slot** set, and not when `octopus_intelligent_slot_action_config` is in use.
 For multiple cars, set it to a list with one sensor per car.
 
+- Predbat also looks up your enrolled charger's power, or your enrolled car's battery size, in Octopus's catalogue of chargers and cars, by make and model.
+A battery size found there is used in place of **car_charging_battery_size**, so that setting can't change it.
+A charger power found there is used if it is higher than **input_number.predbat_car_charging_rate** (or **input_number.predbat_car_charging_rate_1** etc. for further cars), but never to lower it.
+Some makes and models are listed more than once with different values (myenergi's "zappi (all models)" is listed at both 7.4 and 22 kW), and the name alone can't tell them apart.
+For those, Predbat takes the lowest of the charger powers listed and the largest of the battery sizes, and logs a warning naming the values the catalogue gave.
+As the car is planned at whichever is higher of that charger power and **input_number.predbat_car_charging_rate**, set **input_number.predbat_car_charging_rate** to your charger's rate.
+
 If you are using Predbat-led charging:
 
 The following entries are pre-configured in the `apps.yaml` template:
@@ -650,6 +657,11 @@ Octopus schedules dispatches to the minute, and Predbat checks them against thei
 |---|---|---|
 | **car_charging_now** | from 3 minutes into the dispatch, while the car and charger wake up, and it must last 2 minutes | 5 minutes after the dispatch starts |
 | House load | only for a 5-minute load reading taken entirely inside the dispatch, and two in a row must be too low for a car to be charging | 10 minutes after the dispatch starts |
+
+The house load is too low for a car to be charging when it is under 85% of **car_charging_threshold** (5.1kW with the default of 6kW).
+Where **load_power** is set in `apps.yaml`, the live load has to be under that figure as well as the 5-minute reading: the 5-minute reading lags a car that is still ramping up,
+and an inverter whose data arrives late, so on its own it can read low while the car is charging at full power.
+A low 5-minute reading with a live load that is not low, or is unavailable, is ignored - it neither cancels the slots nor brings them back.
 
 A reading that shows the car charging counts straight away, and an "unknown" or "unavailable" sensor is ignored rather than taken as not charging.
 With **car_charging_now**, Predbat checks the sensor every 15 seconds between plan updates, so it reacts within seconds of these times.

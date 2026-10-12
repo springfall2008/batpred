@@ -29,6 +29,8 @@ from tests.test_infra import run_async, MockStorageComponents, make_test_storage
 
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 SENSOR = "binary_sensor.car_charging_now_test"
+LOAD_POWER = ["sensor.load_power_test_0", "sensor.load_power_test_1"]
+LOAD_POWER_EXTRA = "sensor.load_power_test_bypass"
 
 STATE_FIELDS = (
     "num_cars",
@@ -984,7 +986,7 @@ def _run_confirmed_half_hour(my_predbat):
         _reset(my_predbat)
         _sensor(my_predbat, None)
         my_predbat.car_energy_reported_load = True
-        # 2.8 kW: not low (the car threshold here is 3 kW, low is under 90% of it) - a cooker, not a car
+        # 2.8 kW: not low (the car threshold here is 3 kW, low is under 85% of it) - a cooker, not a car
         my_predbat.load_last_period = 2.8
         _cycle(my_predbat, 400, slots=long_slots)
         failed |= _check("t44 trusted", not my_predbat.dynamic_load_car_cancelled.get(0, False) and _kwh(my_predbat) == [6.0], "kwh {}".format(_kwh(my_predbat)))
@@ -1222,15 +1224,192 @@ def _run_persistence(my_predbat):
     return failed
 
 
+def _load_power(my_predbat, states):
+    """
+    Point load_power at one entity per state (in watts), or remove it when states is None.
+    """
+    for entity in LOAD_POWER:
+        my_predbat.ha_interface.dummy_items.pop(entity, None)
+    if states is None:
+        my_predbat.args.pop("load_power", None)
+        return
+    my_predbat.args["load_power"] = LOAD_POWER[: len(states)]
+    for entity, state in zip(LOAD_POWER, states):
+        my_predbat.ha_interface.dummy_items[entity] = state
+
+
+def _run_live_load(my_predbat):
+    """
+    The low-load test also needs the live load_power to be low before it counts as "not charging": the
+    5 minute figure lags a car that is ramping up, and a cloud inverter's late readings (GH#5461).
+    """
+    failed = False
+    dispatch = [{"start": 840, "end": 900, "kwh": 7.0, "octopus": True}]
+    had_inverter_type = "inverter_type" in my_predbat.args
+    saved_inverter_type = my_predbat.args.get("inverter_type", None)
+    try:
+        print("Test 60: a low 5 minute figure with live load at the car's rate does not cancel")
+        _reset(my_predbat)
+        _sensor(my_predbat, None)
+        my_predbat.car_energy_reported_load = True
+        my_predbat.car_charging_threshold = 6.0 / 60.0
+        my_predbat.battery_rate_max_discharge = 8.0 / 60.0
+        # GH#5461: last period 4.80kW against a 6kW threshold, inverter load power 7410W
+        my_predbat.load_last_period = 4.8
+        _load_power(my_predbat, [7410])
+        _cycle(my_predbat, 845, slots=dispatch)
+        changed = _cycle(my_predbat, 850, slots=dispatch)
+        failed |= _check("t60 not cancelled", (not changed) and _kwh(my_predbat) == [7.0], "changed {} kwh {}".format(changed, _kwh(my_predbat)))
+        failed |= _check("t60 no clock", my_predbat.dynamic_load_car_since.get(0) is None, "since {}".format(my_predbat.dynamic_load_car_since.get(0)))
+        _cycle(my_predbat, 855, slots=dispatch)
+        failed |= _check("t60 still not cancelled", _kwh(my_predbat) == [7.0], "kwh {}".format(_kwh(my_predbat)))
+
+        print("Test 61: a low 5 minute figure and low live load cancels")
+        _reset(my_predbat)
+        _sensor(my_predbat, None)
+        my_predbat.car_energy_reported_load = True
+        my_predbat.car_charging_threshold = 6.0 / 60.0
+        my_predbat.battery_rate_max_discharge = 8.0 / 60.0
+        my_predbat.load_last_period = 0.6
+        _load_power(my_predbat, [650])
+        _cycle(my_predbat, 845, slots=dispatch)
+        changed = _cycle(my_predbat, 850, slots=dispatch)
+        failed |= _check("t61 cancelled", changed and _kwh(my_predbat) == [0], "changed {} kwh {}".format(changed, _kwh(my_predbat)))
+
+        print("Test 62: live load is summed across inverters")
+        _reset(my_predbat)
+        _sensor(my_predbat, None)
+        my_predbat.car_energy_reported_load = True
+        my_predbat.car_charging_threshold = 6.0 / 60.0
+        my_predbat.battery_rate_max_discharge = 8.0 / 60.0
+        my_predbat.load_last_period = 0.6
+        _load_power(my_predbat, [3700, 3700])
+        _cycle(my_predbat, 845, slots=dispatch)
+        _cycle(my_predbat, 850, slots=dispatch)
+        failed |= _check("t62 not cancelled", _kwh(my_predbat) == [7.0], "kwh {}".format(_kwh(my_predbat)))
+
+        print("Test 63: an unavailable load_power is no evidence, and restarts the grace")
+        _reset(my_predbat)
+        _sensor(my_predbat, None)
+        my_predbat.car_energy_reported_load = True
+        my_predbat.load_last_period = 0.5
+        _load_power(my_predbat, [300])
+        _cycle(my_predbat, 845, slots=dispatch)
+        _load_power(my_predbat, ["unavailable"])
+        changed = _cycle(my_predbat, 850, slots=dispatch)
+        failed |= _check("t63 not cancelled", (not changed) and _kwh(my_predbat) == [7.0], "changed {} kwh {}".format(changed, _kwh(my_predbat)))
+        failed |= _check("t63 clock cleared", my_predbat.dynamic_load_car_since.get(0) is None, "since {}".format(my_predbat.dynamic_load_car_since.get(0)))
+        # One inverter of two unreadable is no total either
+        _load_power(my_predbat, [300, "unknown"])
+        _cycle(my_predbat, 855, slots=dispatch)
+        failed |= _check("t63 partial reading", my_predbat.dynamic_load_car_since.get(0) is None, "since {}".format(my_predbat.dynamic_load_car_since.get(0)))
+        # An entity HA does not have
+        _load_power(my_predbat, [300])
+        my_predbat.ha_interface.dummy_items.pop(LOAD_POWER[0], None)
+        _cycle(my_predbat, 860, slots=dispatch)
+        failed |= _check("t63 missing entity", my_predbat.dynamic_load_car_since.get(0) is None and _kwh(my_predbat) == [7.0], "since {}".format(my_predbat.dynamic_load_car_since.get(0)))
+
+        print("Test 64: without load_power the 5 minute figure decides alone")
+        _reset(my_predbat)
+        _sensor(my_predbat, None)
+        my_predbat.car_energy_reported_load = True
+        my_predbat.load_last_period = 0.5
+        _load_power(my_predbat, None)
+        _cycle(my_predbat, 845, slots=dispatch)
+        changed = _cycle(my_predbat, 850, slots=dispatch)
+        failed |= _check("t64 cancelled", changed and _kwh(my_predbat) == [0], "changed {} kwh {}".format(changed, _kwh(my_predbat)))
+
+        print("Test 65: live load at the car's rate does not resume a cancelled car while the 5 minute figure is low")
+        _load_power(my_predbat, [7400])
+        changed = _cycle(my_predbat, 855, slots=dispatch)
+        failed |= _check("t65 stays cancelled", (not changed) and _kwh(my_predbat) == [0], "changed {} kwh {}".format(changed, _kwh(my_predbat)))
+
+        print("Test 66: low is under 85% of the car charging threshold")
+        _reset(my_predbat)
+        _sensor(my_predbat, None)
+        _load_power(my_predbat, None)
+        my_predbat.car_energy_reported_load = True
+        my_predbat.car_charging_threshold = 6.0 / 60.0
+        my_predbat.battery_rate_max_discharge = 8.0 / 60.0
+        my_predbat.load_last_period = 5.2
+        failed |= _check("t66 5.2kW is not low", my_predbat.dynamic_load_classify() == "baseline", "status {}".format(my_predbat.dynamic_load_classify()))
+        _cycle(my_predbat, 845, slots=dispatch)
+        _cycle(my_predbat, 850, slots=dispatch)
+        failed |= _check("t66 not cancelled", _kwh(my_predbat) == [7.0], "kwh {}".format(_kwh(my_predbat)))
+        my_predbat.load_last_period = 5.0
+        failed |= _check("t66 5.0kW is low", my_predbat.dynamic_load_classify() == "low", "status {}".format(my_predbat.dynamic_load_classify()))
+        # ...and the live figure is judged against the same cut-off
+        _load_power(my_predbat, [5200])
+        _cycle(my_predbat, 855, slots=dispatch)
+        _cycle(my_predbat, 860, slots=dispatch)
+        failed |= _check("t66 live 5.2kW holds the slots", _kwh(my_predbat) == [7.0], "kwh {}".format(_kwh(my_predbat)))
+        _load_power(my_predbat, [5000])
+        _cycle(my_predbat, 865, slots=dispatch)
+        _cycle(my_predbat, 870, slots=dispatch)
+        failed |= _check("t66 live 5.0kW cancels", _kwh(my_predbat) == [0], "kwh {}".format(_kwh(my_predbat)))
+
+        # Solis splits the house load across load_power (main) and load_power_1 (bypass/backup), and the
+        # inverter sums the two - a car on the bypass side shows only on the second (#5462 review)
+        print("Test 67: an inverter's extra load_power_1 sensor is part of the live load")
+        _reset(my_predbat)
+        _sensor(my_predbat, None)
+        my_predbat.car_energy_reported_load = True
+        my_predbat.car_charging_threshold = 6.0 / 60.0
+        my_predbat.battery_rate_max_discharge = 8.0 / 60.0
+        my_predbat.load_last_period = 0.6
+        my_predbat.args["inverter_type"] = "GS"
+        my_predbat.args["load_power_1"] = [LOAD_POWER_EXTRA]
+        _load_power(my_predbat, [400])
+        my_predbat.ha_interface.dummy_items[LOAD_POWER_EXTRA] = 7200
+        _cycle(my_predbat, 845, slots=dispatch)
+        changed = _cycle(my_predbat, 850, slots=dispatch)
+        failed |= _check("t67 not cancelled", (not changed) and _kwh(my_predbat) == [7.0], "changed {} kwh {}".format(changed, _kwh(my_predbat)))
+        failed |= _check("t67 total", my_predbat.dynamic_load_car_live_load() == (True, 7.6), "live {}".format(my_predbat.dynamic_load_car_live_load()))
+        # An unreadable extra sensor leaves no total
+        my_predbat.ha_interface.dummy_items[LOAD_POWER_EXTRA] = "unavailable"
+        failed |= _check("t67 unavailable extra", my_predbat.dynamic_load_car_live_load() == (True, None), "live {}".format(my_predbat.dynamic_load_car_live_load()))
+        _cycle(my_predbat, 855, slots=dispatch)
+        failed |= _check("t67 no evidence", my_predbat.dynamic_load_car_since.get(0) is None and _kwh(my_predbat) == [7.0], "since {}".format(my_predbat.dynamic_load_car_since.get(0)))
+        # Both low cancels
+        my_predbat.ha_interface.dummy_items[LOAD_POWER_EXTRA] = 100
+        _cycle(my_predbat, 860, slots=dispatch)
+        _cycle(my_predbat, 865, slots=dispatch)
+        failed |= _check("t67 both low cancels", _kwh(my_predbat) == [0], "kwh {}".format(_kwh(my_predbat)))
+        # The extra sensor left out of apps.yaml counts as nothing, as the inverter reads it
+        my_predbat.args.pop("load_power_1", None)
+        failed |= _check("t67 extra not set", my_predbat.dynamic_load_car_live_load() == (True, 0.4), "live {}".format(my_predbat.dynamic_load_car_live_load()))
+        # An inverter type with one load sensor does not read load_power_1 at all
+        my_predbat.args["load_power_1"] = [LOAD_POWER_EXTRA]
+        my_predbat.ha_interface.dummy_items[LOAD_POWER_EXTRA] = 7200
+        my_predbat.args["inverter_type"] = "GE"
+        failed |= _check("t67 single load sensor type", my_predbat.dynamic_load_car_live_load() == (True, 0.4), "live {}".format(my_predbat.dynamic_load_car_live_load()))
+    finally:
+        _load_power(my_predbat, None)
+        my_predbat.args.pop("load_power_1", None)
+        my_predbat.ha_interface.dummy_items.pop(LOAD_POWER_EXTRA, None)
+        if had_inverter_type:
+            my_predbat.args["inverter_type"] = saved_inverter_type
+        else:
+            my_predbat.args.pop("inverter_type", None)
+    return failed
+
+
 def test_dynamic_load_car_not_charging(my_predbat):
     """
     Dynamic load cancels the car slots, and their cheap rate, while a car in its slot is not charging.
     """
     print("*** Running test: Dynamic load car not charging")
     saved_state = {field: copy.deepcopy(getattr(my_predbat, field, None)) for field in STATE_FIELDS}
+    # The fixture's apps.yaml sets load_power, which the load test would read live: the scenarios that
+    # want it set it themselves (_run_live_load()), the rest judge the 5 minute figure alone
+    had_load_power = "load_power" in my_predbat.args
+    saved_load_power = my_predbat.args.pop("load_power", None)
     try:
         failed = _run(my_predbat)
+        failed |= _run_live_load(my_predbat)
     finally:
+        if had_load_power:
+            my_predbat.args["load_power"] = saved_load_power
         for field, value in saved_state.items():
             setattr(my_predbat, field, value)
     print("*** Dynamic load car not charging test {}".format("FAILED" if failed else "PASSED"))
