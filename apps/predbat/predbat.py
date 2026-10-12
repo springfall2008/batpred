@@ -34,7 +34,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v9.3.3"
+THIS_VERSION = "v9.3.8"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
 from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, DEFAULT_PREDBAT_REPOSITORY
@@ -65,6 +65,7 @@ else:
     print("Running in compiled mode; skipping local file checks and auto-update.")
 
 from const import (
+    REPEAT_FULL_LOG_SECONDS,
     TIME_FORMAT,
     PREDICT_STEP,
     RUN_EVERY,
@@ -77,6 +78,7 @@ from const import (
 from config import APPS_SCHEMA, CONFIG_ITEMS
 import debug_history
 from utils import (
+    RepeatLogGate,
     minutes_since_yesterday,
     minutes_since_midnight,
     dp1,
@@ -426,6 +428,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.rate_gas = {}
         self.rate_slots = []
         self.low_rates = []
+        self.low_rates_tariff = []
         self.high_export_rates = []
         self.cost_today_sofar = 0
         self.carbon_today_sofar = 0
@@ -456,8 +459,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.rate_max = 0
         self.rate_max_minute = 0
         self.rate_max_base = 0
+        self.rate_import_tariff_max = 0
         self.rate_export_cost_threshold = 99
         self.rate_import_cost_threshold = 99
+        self.rate_import_pre_event_end = None
+        self.rate_import_pre_event_threshold = None
         self.rate_best_cost_threshold_charge = None
         self.rate_best_cost_threshold_export = None
         self.rate_average = 0
@@ -491,6 +497,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.car_charging_power = 0
         self.car_charging_power_configured = False
         self.io_adjusted = {}
+        # Repeated Intelligent slot lists are logged briefly between full logs (rate_add_io_slots)
+        self.io_slot_log_gate = RepeatLogGate(REPEAT_FULL_LOG_SECONDS)
         self.current_charge_limit = 0.0
         self.current_charge_limit_kwh = 0.0
         self.inverter_limit = 0.0
@@ -528,10 +536,12 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.car_charging_energy = {}
         self.car_charging_energy_warned = False
         self.car_energy_reported_load_warned = False
-        # Which component's automatic_config() owns octopus_intelligent_slot/ready_time/charge_limit.
-        # Both OctopusAPI and OhmeAPI can wire the car slots, and Octopus re-runs its automatic_config
+        # Which component's automatic_config() owns octopus_ready_time/octopus_charge_limit.
+        # Both OctopusAPI and OhmeAPI can wire them, and Octopus re-runs its automatic_config
         # whenever the tariff or intelligent device set moves - without a claim it silently takes the
-        # args back off Ohme part way through a run. None means nobody has claimed them.
+        # args back off Ohme part way through a run. None means nobody has claimed them. The claim
+        # does not cover octopus_intelligent_slot: Octopus goes on wiring its dispatch sensor there
+        # as the record of completed dispatches, and Ohme adds octopus_intelligent_planned_slot (#5413).
         self.car_slot_owner = None
         self.octopus_intelligent_charging = False
         self.octopus_intelligent_ignore_unplugged = False
@@ -556,9 +566,12 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.dynamic_load_car_warned_iog_off = False
         self.dynamic_load_car_warned_dynamic_off = False
         self.dynamic_load_car_run = {}
+        self.dynamic_load_car_confirmed = {}
+        self.dynamic_load_car_saved = {}
         self.dynamic_load_car_sensors = {}
         self.dynamic_load_car_effective = {}
         self.dynamic_load_car_stripped = 0
+        self.octopus_surplus = set()
         self.battery_capacity_nominal = False
         self.battery_scaling_auto = False
         self.releases = {}
@@ -600,10 +613,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.carbon_yesterday = 0.0
         self.rate_import = {}
         self.rate_import_replicated = {}
+        self.rate_import_saving_minutes = set()
+        self.rate_import_pre_saving = {}
         self.rate_export = {}
         self.rate_export_replicated = {}
+        self.rate_export_saving_minutes = set()
+        self.rate_export_pre_saving = {}
         self.rate_slots = []
         self.low_rates = []
+        self.low_rates_tariff = []
         self.high_export_rates = []
         self.axle_sessions = []
         self.cost_today_sofar = 0
@@ -647,6 +665,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.count_inverter_writes = {}
         self.rate_slots = []
         self.low_rates = []
+        self.low_rates_tariff = []
         self.high_export_rates = []
         self.octopus_slots = [[] for _ in range(8)]
         self.cost_today_sofar = 0
@@ -1058,6 +1077,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                         soc_next = min(soc_next, self.car_charging_limit[car_n])
                     self.expose_config("car_charging_manual_soc_kwh" + car_postfix, dp3(soc_next))
 
+    def run_comparison(self):
+        """Run the tariff comparison, clearing compare_active afterwards even if it raises (#5472)."""
+        # Without the finally, a crashed comparison leaves compare_active on and re-triggers itself every cycle
+        self.expose_config("compare_active", True)
+        try:
+            self.comparison.run_all()
+        finally:
+            self.expose_config("compare_active", False)
+
     def update_pred(self, scheduled=True):
         """
         Update the prediction state, everything is called from here right now
@@ -1101,6 +1129,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.record_status("Error: Failed to fetch inverter data, not able to compute a plan", had_errors=True)
             return
         self.check_export_more_solar_effective()
+        self.log_replay_state()
+        self.log_replay_inverter()
 
         # Check if we have valid import rates
         if self.rate_min == self.rate_max == 0:
@@ -1419,9 +1449,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         if self.comparison:
             if (scheduled and self.minutes_now < RUN_EVERY) or self.get_arg("compare_active", False):
                 # Compare tariffs either when triggered or daily at midnight
-                self.expose_config("compare_active", True)
-                self.comparison.run_all()
-                self.expose_config("compare_active", False)
+                self.run_comparison()
             else:
                 # Otherwise just update HA sensors to prevent then expiring
                 self.comparison.publish_only()
@@ -2082,6 +2110,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
             # Restore the last saved plan so it is immediately active before the first calculation
             self.load_plan()
+            # And the Octopus Intelligent dispatch state, so a restart part-way through a dispatch carries on from it
+            self.dynamic_load_car_load()
 
         except Exception as e:
             self.log("Error: Exception raised {}".format(e))

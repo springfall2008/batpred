@@ -19,6 +19,7 @@ Assistant entity writes with polling validation.
 
 import math
 import os
+import re
 import time
 import pytz
 from datetime import datetime, timedelta
@@ -53,6 +54,16 @@ TIME_FORMAT_HMS = "%H:%M:%S"
 # might use - including None, which adjust_charge_window() can legitimately produce for an unset
 # window time.
 _NOT_COMMITTED = object()
+
+
+def within_fuzzy(value, target, fuzzy, fuzzy_below=None):
+    """
+    Whether a numeric read counts as target: within fuzzy either side, or within fuzzy_below when it is
+    short of target and fuzzy_below is given - for a value the device rounds down (#5324).
+    """
+    if fuzzy_below is not None and value < target:
+        return target - value <= fuzzy_below
+    return abs(value - target) <= fuzzy
 
 
 class Inverter:
@@ -319,6 +330,40 @@ class Inverter:
             # then looked up as one.
             self.base.args[arg] = self.base.args[arg] + [None] * (self.id + 1 - len(self.base.args[arg]))
 
+    def user_configured_entity(self, arg):
+        """
+        The entity id the user gave this inverter for arg in apps.yaml, or None.
+
+        "Set in apps.yaml" is judged from args_from_apps_yaml, the snapshot taken before Predbat's
+        own defaulting touches args: apps.yaml must name an entity (or a re: pattern) for this
+        inverter. The entity itself is read from the live args, which by now has any re: pattern
+        resolved, and is never Predbat's own dummy for this slot - so a dummy written on an earlier
+        refresh never counts, even behind a pattern that matched nothing. A bare placeholder such as
+        '00:00:00', an unmatched pattern, or a malformed value gives None.
+        """
+        raw = (getattr(self.base, "args_from_apps_yaml", None) or {}).get(arg)
+        if isinstance(raw, list):
+            # Per inverter: a list naming inverter 0 only says nothing about inverter 1, whose live
+            # slot may by now hold the dummy an earlier refresh wrote there
+            raw = raw[self.id] if self.id < len(raw) else None
+        elif self.id > 0:
+            # A single value is inverter 0's, as create_missing_arg() has always treated it
+            raw = None
+        # Judged on what apps.yaml itself says, not just that it said something: a placeholder such as
+        # Sofar's '00:00:00' is set, but the live slot holds Predbat's own dummy from the first cycle on
+        if not (isinstance(raw, str) and (is_entity_id(raw) or raw.startswith("re:"))):
+            return None
+        value = self.base.args.get(arg)
+        if isinstance(value, list):
+            value = value[self.id] if self.id < len(value) else None
+        if not is_entity_id(value) or value.startswith("re:"):
+            return None
+        # A re: pattern that matched nothing leaves the slot empty, so from the second cycle on it holds
+        # the dummy Predbat wrote there - under whichever inverter type was current at the time
+        if re.fullmatch(r"sensor\.{}_.+_{}_{}".format(re.escape(self.base.prefix), self.id, re.escape(arg)), value):
+            return None
+        return value
+
     def __init__(self, base, id=0, quiet=False):
         """
         Inverter class
@@ -469,6 +514,8 @@ class Inverter:
         if "inverter" in self.base.args:
             if self.inverter_type not in INVERTER_DEF:
                 INVERTER_DEF[self.inverter_type] = INVERTER_DEF["GE"].copy()
+                # GivEnergy's rate quantisation is a fact about its hardware, not a default for other inverters
+                INVERTER_DEF[self.inverter_type].pop("rate_step_percent_of_capacity", None)
 
             inverter_def = self.base.args["inverter"]
             if isinstance(inverter_def, list):
@@ -523,6 +570,17 @@ class Inverter:
         self.inv_charge_discharge_with_rate = INVERTER_DEF[self.inverter_type].get("charge_discharge_with_rate", False)
         self.inv_target_soc_used_for_discharge = INVERTER_DEF[self.inverter_type].get("target_soc_used_for_discharge", True)
         self.inv_has_solis_energy_control = INVERTER_DEF[self.inverter_type].get("has_solis_energy_control", False)
+        # The charge_rate entity can carry the step itself, for a type that covers more than one brand: the
+        # hub is GWMQTT whatever it drives, and marks only its GivEnergy inverters. The row's value stands otherwise
+        self.inv_rate_step_percent_of_capacity = INVERTER_DEF[self.inverter_type].get("rate_step_percent_of_capacity", 0)
+        rate_entity = self.base.get_arg("charge_rate", indirect=False, index=self.id)
+        if rate_entity:
+            try:
+                rate_step = float(self.base.get_state_wrapper(rate_entity, attribute="step_percent_of_capacity"))
+            except (ValueError, TypeError):
+                rate_step = 0
+            if 0 < rate_step <= 100:
+                self.inv_rate_step_percent_of_capacity = rate_step
 
         # If it's not a GE inverter then turn Quiet off
         if self.inverter_type != "GE":
@@ -748,11 +806,19 @@ class Inverter:
             self.base.args["inverter_mode"][self.id] = self.create_entity("inverter_mode", "Eco")
 
         if self.inv_charge_time_format != "HH:MM:SS":
+            # Some formats (H M) decompose the write into separate hour/minute entities and never
+            # expect the user to set this directly; others (no time window at all) ship a bare
+            # placeholder string. Either way Predbat needs somewhere to read/write for its own window
+            # bookkeeping. But if the user has genuinely pointed this at a real entity - a custom
+            # inverter definition using a non-HH:MM:SS format together with a real time window, e.g.
+            # #4738 - that's the one to use, not a self-created dummy that silently discards it.
             for x in ["charge", "discharge"]:
                 for y in ["start", "end"]:
                     entity_name = f"{x}_{y}_time"
+                    # Read before create_missing_arg(), which turns a single value into a list of defaults
+                    configured = self.user_configured_entity(entity_name)
                     self.create_missing_arg(entity_name, "23:59:00")
-                    self.base.args[entity_name][self.id] = self.create_entity(entity_name, "23:59:00")
+                    self.base.args[entity_name][self.id] = configured if configured else self.create_entity(entity_name, "23:59:00")
 
         # Create dummy idle time entities
         if not self.inv_has_idle_time:
@@ -2078,6 +2144,30 @@ class Inverter:
 
         return current_rate
 
+    def rate_tolerances(self, rate_max):
+        """
+        (fuzzy, fuzzy_below) in watts for checking a charge/discharge rate read-back against the rate written.
+
+        fuzzy is 5% of rate_max - the rate ceiling, battery_rate_max_charge/discharge per minute. On an
+        inverter that stores the rate coarsely, fuzzy_below widens a read-back SHORT of the rate to one
+        hardware step. GivEnergy holds it as a whole percent of nominal battery capacity, rounded down:
+        1300W on a 13.41kWh battery reads back 1206W, a 94W miss that a 1300W ceiling's 65W tolerance
+        rejected - re-writing it ten times every cycle (#5324). A read-back over the rate is never that
+        rounding, so it keeps fuzzy: a rate held one step up (134W) is still written down to a 0W hold.
+
+        Deliberately relaxed rather than predicting the exact read-back, which would need Predbat's
+        capacity to match the inverter's to the watt. The cost is a ~1W boundary: a short read-back can
+        miss by just under one step plus 1W of read-back truncation, so a request landing exactly one step
+        above the held rate is taken as already set and the rate stays one step low - the same error the
+        rounding makes anyway. The step is only as right as nominal_capacity; GivTCP supplies its own.
+        """
+        fuzzy = rate_max * MINUTE_WATT / 20
+        fuzzy_below = None
+        if self.inv_rate_step_percent_of_capacity and self.nominal_capacity:
+            step = self.nominal_capacity * 1000 * self.inv_rate_step_percent_of_capacity / 100
+            fuzzy_below = max(fuzzy, step + 1)
+        return fuzzy, fuzzy_below
+
     def adjust_charge_rate(self, new_rate, notify=True):
         """
         Adjust charging rate
@@ -2102,10 +2192,18 @@ class Inverter:
         new_rate = int(new_rate + 0.5)
         current_rate = self.get_current_charge_rate()
 
-        if abs(current_rate - new_rate) > (self.battery_rate_max_charge * MINUTE_WATT / 20):
+        fuzzy, fuzzy_below = self.rate_tolerances(self.battery_rate_max_charge)
+        if not within_fuzzy(current_rate, new_rate, fuzzy, fuzzy_below):
             self.base.log("Inverter {} current charge rate is {}W and new target is {}W".format(self.id, current_rate, new_rate))
             if "charge_rate" in self.base.args:
-                self.write_and_poll_value("charge_rate", self.base.get_arg("charge_rate", indirect=False, index=self.id, required_unit="W"), new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 20), required_unit="W")
+                self.write_and_poll_value(
+                    "charge_rate",
+                    self.base.get_arg("charge_rate", indirect=False, index=self.id, required_unit="W"),
+                    new_rate,
+                    fuzzy=fuzzy,
+                    required_unit="W",
+                    fuzzy_below=fuzzy_below,
+                )
             if "charge_rate_percent" in self.base.args:
                 self.write_and_poll_value("charge_rate_percent", self.base.get_arg("charge_rate_percent", indirect=False, index=self.id, required_unit="%"), min(int(new_rate / self.battery_rate_max_raw * 100), 100), fuzzy=5, required_unit="%")
 
@@ -2143,10 +2241,18 @@ class Inverter:
         new_rate = int(new_rate + 0.5)
         current_rate = self.get_current_discharge_rate()
 
-        if abs(current_rate - new_rate) > (self.battery_rate_max_discharge * MINUTE_WATT / 20):
+        fuzzy, fuzzy_below = self.rate_tolerances(self.battery_rate_max_discharge)
+        if not within_fuzzy(current_rate, new_rate, fuzzy, fuzzy_below):
             self.base.log("Inverter {} current discharge rate is {}W and new target is {}W".format(self.id, current_rate, new_rate))
             if "discharge_rate" in self.base.args:
-                self.write_and_poll_value("discharge_rate", self.base.get_arg("discharge_rate", indirect=False, index=self.id), new_rate, fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 20), required_unit="W")
+                self.write_and_poll_value(
+                    "discharge_rate",
+                    self.base.get_arg("discharge_rate", indirect=False, index=self.id),
+                    new_rate,
+                    fuzzy=fuzzy,
+                    required_unit="W",
+                    fuzzy_below=fuzzy_below,
+                )
             if "discharge_rate_percent" in self.base.args:
                 self.write_and_poll_value("discharge_rate_percent", self.base.get_arg("discharge_rate_percent", indirect=False, index=self.id, required_unit="%"), min(int(new_rate / self.battery_rate_max_raw * 100), 100), fuzzy=5, required_unit="%")
 
@@ -2411,9 +2517,10 @@ class Inverter:
             self._write_backoff_result(name, entity_id, new_value, False)
             return False
 
-    def write_and_poll_value(self, name, entity_id, new_value, fuzzy=0, ignore_fail=False, required_unit=None):
+    def write_and_poll_value(self, name, entity_id, new_value, fuzzy=0, ignore_fail=False, required_unit=None, fuzzy_below=None):
         # Modified to cope with sensor entities and writing strings
         # Re-written to minimise writes
+        # fuzzy_below, when given, replaces fuzzy for a read short of new_value - for a value the device rounds down
         if not self.check_write_entity("write_and_poll_value", name, entity_id, new_value):
             return False
         domain, entity_name = entity_id.split(".")
@@ -2443,7 +2550,7 @@ class Inverter:
             state = value_state(state)
             if isinstance(new_value, str):
                 return state == new_value
-            return abs(state - new_value) <= fuzzy
+            return within_fuzzy(state, new_value, fuzzy, fuzzy_below)
 
         raw_state = self.base.get_state_wrapper(entity_id, required_unit=required_unit)
         current_state = value_state(raw_state, warn=True)

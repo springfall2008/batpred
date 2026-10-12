@@ -64,7 +64,7 @@ Once you get everything working please share the configuration as a GitHub issue
    | [SunSynk](#sunsynk) | [Sunsynk](https://github.com/kellerza/sunsynk) | [sunsynk.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sunsynk.yaml) |
    | [Tesla Powerwall](#tesla-powerwall) | [Tesla Fleet](https://www.home-assistant.io/integrations/tesla_fleet) or [Teslemetry](https://www.home-assistant.io/integrations/teslemetry) | [tesla_powerwall.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/tesla_powerwall.yaml) |
    | [Tesla Powerwall via Teslemetry component (beta)](#teslemetry-component-beta) | Predbat built-in | [teslemetry.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/teslemetry.yaml) |
-   | [Victron](#victron) | [Victron MQTT](https://github.com/tomer-w/victron_mqtt) | [victron.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/victron.yaml) |
+   | [Victron](#victron) | [Victron GX](https://www.home-assistant.io/integrations/victron_gx/) | [victron.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/victron.yaml) |
 
 Note that support for all these inverters is in various stages of development. Please expect things to fail and report them as Issues on GitHub.
 
@@ -994,7 +994,7 @@ modbus:
 alias: Predbat Charge / Discharge Control
 description: ""
 triggers:
-    - trigger: state
+  - trigger: state
     entity_id:
       - input_boolean.charge_start_service
     to:
@@ -1004,17 +1004,17 @@ triggers:
       hours: 0
       minutes: 0
       seconds: 5
-    - trigger: state
+  - trigger: state
     entity_id:
       - input_boolean.discharge_start_service
     to: "on"
     id: Discharge
-    - trigger: state
+  - trigger: state
     entity_id:
       - input_boolean.charge_freeze_service
     to: "on"
     id: Charge freeze
-    - trigger: state
+  - trigger: state
     entity_id:
       - input_boolean.discharge_freeze_service
     to: "on"
@@ -1401,23 +1401,23 @@ description: >
   Controls AC charging during Predbat freeze charge mode. Arms and triggers
   freeze subsystems and watchdog via freeze guard.
 triggers:
-    - entity_id: automation.luxpower_freeze_charge
+  - entity_id: automation.luxpower_freeze_charge
     from: "off"
     to: "on"
     id: freeze_enabled
     trigger: state
-    - entity_id: binary_sensor.solar_compare_home
+  - entity_id: binary_sensor.solar_compare_home
     to: "on"
     for: "00:00:10"
     id: solar_on
     trigger: state
-    - entity_id: binary_sensor.solar_compare_home
+  - entity_id: binary_sensor.solar_compare_home
     to: "off"
     for: "00:00:10"
     id: solar_off
     trigger: state
 conditions:
-    - condition: state
+  - condition: state
     entity_id: input_boolean.predbat_ready
     state: "on"
 actions:
@@ -1543,70 +1543,77 @@ mode: single
 alias: LuxPower Freeze Charge Exit
 description: Cleanup when Predbat leaves Freeze charging.
 triggers:
-  - entity_id: predbat.status
-    trigger: state
+- entity_id: predbat.status
+  trigger: state
 conditions:
-  - condition: state
-    entity_id: input_boolean.freeze_charge_guard
-    state: "on"
-  - condition: template
-    value_template: |
-      {% set new = trigger.to_state.state | default('') %} {{
-        new not in ['unknown','unavailable'] and
-        not new.startswith('Warn:') and
-        not new.startswith('Error:') and
-        'Freeze charging' not in new
-      }}
+- condition: state
+  entity_id: input_boolean.freeze_charge_guard
+  state: "on"
+- condition: template
+  value_template: |
+    {% set new = trigger.to_state.state | default('') %} {{
+      new not in ['unknown','unavailable'] and
+      not new.startswith('Warn:') and
+      not new.startswith('Error:') and
+      'Freeze charging' not in new
+    }}
 actions:
-  - target:
+- action: automation.turn_off
+  target:
     entity_id:
       - automation.luxpower_freeze_charge
       - automation.luxpower_freeze_charge_predbat_override
       - automation.luxpower_freeze_charge_watchdog
-    action: automation.turn_off
-  - target:
+
+- action: input_boolean.turn_off
+  target:
     entity_id: input_boolean.freeze_charge_guard
-    action: input_boolean.turn_off
-  - choose:
-    - conditions:
-        - condition: template
-          value_template: |
-            {{ trigger.to_state.state.startswith('Charging')
-               or trigger.to_state.state == 'Hold charging' }}
-      sequence:
-        - target:
-            entity_id: switch.lux_ac_charge_enable
-          action: switch.turn_on
-      default:
-        - target:
-            entity_id: switch.lux_ac_charge_enable
-          action: switch.turn_off
-    - choose:
-      - conditions:
-        - condition: template
-          value_template: |
-            {{ trigger.to_state.state.startswith('Charging') }}
-          sequence:
-            - target:
-                entity_id: number.lux_ac_battery_charge_level
-              data:
-                value: "{{ states('number.lux_system_charge_soc_limit') | int(0) }}"
-              action: number.set_value
-        - conditions:
-          - condition: template
-            value_template: |
-              {{ trigger.to_state.state == 'Hold charging' }}
-            sequence:
-              - target:
-                  entity_id: number.lux_ac_battery_charge_level
-                data:
-                  value: >-
-                    {{ states('number.lux_on_grid_discharge_cut_off_soc') | int(0)
-                    }}
-                action: number.set_value
-              - target:
-                  entity_id: automation.luxpower_freeze_charge_exit
-                action: automation.turn_off
+
+- choose:
+  - conditions:
+      - condition: template
+        value_template: |
+          {{ trigger.to_state.state.startswith('Charging')
+             or trigger.to_state.state == 'Hold charging' }}
+    sequence:
+      - action: switch.turn_on
+        target:
+          entity_id: switch.lux_ac_charge_enable
+
+  default:
+    - action: switch.turn_off
+      target:
+        entity_id: switch.lux_ac_charge_enable
+
+- choose:
+  - conditions:
+    - condition: template
+      value_template: |
+        {{ trigger.to_state.state.startswith('Charging') }}
+    sequence:
+      - action: number.set_value
+        target:
+          entity_id: number.lux_ac_battery_charge_level
+        data:
+          value: "{{ states('number.lux_system_charge_soc_limit') | int(0) }}"
+
+  - conditions:
+      - condition: template
+        value_template: |
+          {{ trigger.to_state.state == 'Hold charging' }}
+    sequence:
+      - action: number.set_value
+        target:
+          entity_id: number.lux_ac_battery_charge_level
+        data:
+          value: >-
+            {{ states('number.lux_on_grid_discharge_cut_off_soc') | int(0)
+            }}
+
+      - action: automation.turn_off
+        target:
+          entity_id: automation.luxpower_freeze_charge_exit
+
 mode: single
 ```
 
@@ -1622,119 +1629,92 @@ description: >
   Cancels freeze charge if Predbat does not commit to Freeze charging. Triggered
   by freeze guard Boolean; self-disarms after execution.
 triggers:
-
-- entity_id: input_boolean.freeze_charge_guard
-    from: "off"
-    to: "on"
+  - entity_id: input_boolean.freeze_charge_guard
+    from: 'off'
+    to: 'on'
     trigger: state
-  conditions: []
-  actions:
-
-- alias: "Watchdog: Grace period"
-    delay: "00:00:30"
-
-- alias: "Watchdog: Abort if no Freeze charging"
+conditions: []
+actions:
+  - alias: 'Watchdog: Grace period'
+    delay: '00:00:30'
+  - alias: 'Watchdog: Abort if no Freeze charging'
     if:
-
-    - condition: template
-      value_template: |
-
-        {{ not states('predbat.status').startswith('Freeze charging') }}
-
+      - condition: template
+        value_template: |
+          {{ not states('predbat.status').startswith('Freeze charging') }}
     then:
-    - alias: "Watchdog: Trace cancellation"
-      action: system_log.write
-      data:
-
-        level: warning
-        message: >
-          Predbat never entered Freeze charging (status="{{
-          states('predbat.status') }}") → cancelling freeze
-    - alias: "Watchdog: Disable freeze automations"
-      action: automation.turn_off
-      target:
-
-        entity_id:
-          - automation.luxpower_freeze_charge
-          - automation.luxpower_freeze_charge_predbat_override
-          - automation.luxpower_freeze_charge_exit
-    - alias: "Watchdog: Reset guard Boolean"
-      action: input_boolean.turn_off
-      target:
-
-        entity_id: input_boolean.freeze_charge_guard
-    - alias: "Watchdog: AC handling"
-      choose:
-        - conditions:
-            - condition: template
-          value_template: |
-
-            {{ states('predbat.status').startswith('Charging')
-               or states('predbat.status') == 'Hold charging' }}
-
-        sequence:
-            - if:
-                - condition: state
-            entity_id: switch.lux_ac_charge_enable
-            state: "off"
-          then:
-                - action: switch.turn_on
-            target:
-
-              entity_id: switch.lux_ac_charge_enable
-
-          default:
-        - if:
+      - alias: 'Watchdog: Trace cancellation'
+        action: system_log.write
+        data:
+          level: warning
+          message: >
+            Predbat never entered Freeze charging (status="{{
+            states('predbat.status') }}") → cancelling freeze
+      - alias: 'Watchdog: Disable freeze automations'
+        action: automation.turn_off
+        target:
+          entity_id:
+            - automation.luxpower_freeze_charge
+            - automation.luxpower_freeze_charge_predbat_override
+            - automation.luxpower_freeze_charge_exit
+      - alias: 'Watchdog: Reset guard Boolean'
+        action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.freeze_charge_guard
+      - alias: 'Watchdog: AC handling'
+        choose:
+          - conditions:
+              - condition: template
+                value_template: |
+                  {{ states('predbat.status').startswith('Charging')
+                     or states('predbat.status') == 'Hold charging' }}
+            sequence:
+              - if:
+                  - condition: state
+                    entity_id: switch.lux_ac_charge_enable
+                    state: 'off'
+                then:
+                  - action: switch.turn_on
+                    target:
+                      entity_id: switch.lux_ac_charge_enable
+        default:
+          - if:
             - condition: state
-          entity_id: switch.lux_ac_charge_enable
-          state: "on"
-        then:
-            - action: switch.turn_off
-          target:
-
-            entity_id: switch.lux_ac_charge_enable
-    - alias: "Watchdog: Restore SOC limits"
-      choose:
-        - conditions:
-            - condition: template
-          value_template: |
-
-            {{ states('predbat.status').startswith('Charging') }}
-
-        sequence:
-            - action: number.set_value
-          target:
-
-            entity_id: number.lux_ac_battery_charge_level
-
-          data:
-
-            value: "{{ states('number.lux_system_charge_soc_limit') | int(0) }}"
-        - conditions:
-            - condition: template
-          value_template: |
-
-            {{ states('predbat.status') == 'Hold charging' }}
-
-        sequence:
-            - action: number.set_value
-          target:
-
-            entity_id: number.lux_ac_battery_charge_level
-
-          data:
-
-            value: >-
-              {{ states('number.lux_on_grid_discharge_cut_off_soc') |
-              int(0) }}
-
-- alias: "Watchdog: Disarm self"
-    action: automation.turn_off
-    target:
-
-      entity_id: automation.luxpower_freeze_charge_watchdog
-
-  mode: single
+              entity_id: switch.lux_ac_charge_enable
+              state: "on"
+            then:
+              - action: switch.turn_off
+                target:
+                  entity_id: switch.lux_ac_charge_enable
+      - alias: 'Watchdog: Restore SOC limits'
+        choose:
+          - conditions:
+              - condition: template
+                value_template: |
+                  {{ states('predbat.status').startswith('Charging') }}
+            sequence:
+              - action: number.set_value
+                target:
+                  entity_id: number.lux_ac_battery_charge_level
+                data:
+                  value: '{{ states(''number.lux_system_charge_soc_limit'') | int(0) }}'
+          - conditions:
+              - condition: template
+                value_template: |
+                  {{ states('predbat.status') == 'Hold charging' }}
+            sequence:
+              - action: number.set_value
+                target:
+                  entity_id: number.lux_ac_battery_charge_level
+                data:
+                  value: >-
+                    {{ states('number.lux_on_grid_discharge_cut_off_soc') |
+                    int(0) }}
+      - alias: 'Watchdog: Disarm self'
+        action: automation.turn_off
+        target:
+          entity_id: automation.luxpower_freeze_charge_watchdog
+mode: single
 ```
 
 **Enable Freeze Charging**
@@ -1788,14 +1768,14 @@ description: >
   charge last switches, and reset discharge current limit. Marks Predbat ready
   only after HA and Lux are stable.
 triggers:
-    - event: start
+  - event: start
     trigger: homeassistant
 actions:
-    - alias: "StartupReset: Mark Predbat NOT ready"
+  - alias: "StartupReset: Mark Predbat NOT ready"
     target:
       entity_id: input_boolean.predbat_ready
     action: input_boolean.turn_off
-    - alias: "StartupReset: Wait for Lux entities"
+  - alias: "StartupReset: Wait for Lux entities"
     wait_template: |
       {{ states('switch.lux_ac_charge_enable') not in ['unknown','unavailable']
          and states('switch.lux_charge_last') not in ['unknown','unavailable']
@@ -1803,7 +1783,7 @@ actions:
          and states('number.lux_discharge_current_limit') not in ['unknown','unavailable'] }}
     timeout: "00:02:00"
     continue_on_timeout: true
-    - alias: "StartupReset: Disable freeze/override/watchdog"
+  - alias: "StartupReset: Disable freeze/override/watchdog"
     target:
       entity_id:
         - automation.luxpower_freeze_charge
@@ -1811,15 +1791,15 @@ actions:
         - automation.luxpower_freeze_charge_exit
         - automation.luxpower_freeze_charge_watchdog
     action: automation.turn_off
-    - alias: "StartupReset: Reset guard boolean"
+  - alias: "StartupReset: Reset guard boolean"
     target:
       entity_id: input_boolean.freeze_charge_guard
     action: input_boolean.turn_off
-    - alias: "StartupReset: Wait for battery voltage to be > 0"
+  - alias: "StartupReset: Wait for battery voltage to be > 0"
     wait_template: "{{ states('sensor.lux_battery_voltage_live') | float(0) > 0 }}"
     timeout: "00:01:00"
     continue_on_timeout: true
-    - alias: "StartupReset: Set discharge current limit from battery_rate_max"
+  - alias: "StartupReset: Set discharge current limit from battery_rate_max"
     target:
       entity_id: number.lux_discharge_current_limit
     data:
@@ -1828,7 +1808,7 @@ actions:
             / states('sensor.lux_battery_voltage_live') | float(1))
             | round(0) }}
     action: number.set_value
-    - alias: "StartupReset: Turn off AC if on"
+  - alias: "StartupReset: Turn off AC if on"
     if:
       - condition: state
         entity_id: switch.lux_ac_charge_enable
@@ -1837,7 +1817,7 @@ actions:
       - target:
           entity_id: switch.lux_ac_charge_enable
         action: switch.turn_off
-    - alias: "StartupReset: Turn off charge last if on"
+  - alias: "StartupReset: Turn off charge last if on"
     if:
       - condition: state
         entity_id: switch.lux_charge_last
@@ -1846,7 +1826,7 @@ actions:
       - target:
           entity_id: switch.lux_charge_last
         action: switch.turn_off
-    - alias: "StartupReset: Turn off force discharge if on"
+  - alias: "StartupReset: Turn off force discharge if on"
     if:
       - condition: state
         entity_id: switch.lux_force_discharge_enable
@@ -1855,13 +1835,13 @@ actions:
       - target:
           entity_id: switch.lux_force_discharge_enable
         action: switch.turn_off
-    - alias: "StartupReset: Final settle delay"
+  - alias: "StartupReset: Final settle delay"
     delay: "00:01:30"
-    - alias: "StartupReset: Mark Predbat ready"
+  - alias: "StartupReset: Mark Predbat ready"
     target:
       entity_id: input_boolean.predbat_ready
     action: input_boolean.turn_on
-    - alias: "StartupReset: Log completion"
+  - alias: "StartupReset: Log completion"
     data:
       level: debug
       message: "StartupReset: cleanup complete, watchdog and guard OFF, Predbat ready"
@@ -2275,50 +2255,50 @@ Please see this ticket in Github for ongoing discussions: <https://github.com/sp
 
 ```yaml
 template:
-    - sensor:
-      - name: "Solar Panel Production W"
-        unique_id: solar_panel_production_w
-        unit_of_measurement: "W"
-        icon: mdi:solar-power
-        state: >
-          {% set i1_dc_power = states('sensor.solaredge_i1_dc_power') | float(0) %}
-          {% set b1_dc_power = states('sensor.solaredge_b1_dc_power') | float(0) %}
-          {% if (i1_dc_power + b1_dc_power <= 0) %}
-            0
-          {% else %}
-            {{ (i1_dc_power + b1_dc_power) }}
-          {% endif %}
-        availability: >
-          {{ states('sensor.solaredge_i1_dc_power') | is_number and states('sensor.solaredge_b1_dc_power') | is_number }}
+  - sensor:
+    - name: "Solar Panel Production W"
+      unique_id: solar_panel_production_w
+      unit_of_measurement: "W"
+      icon: mdi:solar-power
+      state: >
+        {% set i1_dc_power = states('sensor.solaredge_i1_dc_power') | float(0) %}
+        {% set b1_dc_power = states('sensor.solaredge_b1_dc_power') | float(0) %}
+        {% if (i1_dc_power + b1_dc_power <= 0) %}
+          0
+        {% else %}
+          {{ (i1_dc_power + b1_dc_power) }}
+        {% endif %}
+      availability: >
+        {{ states('sensor.solaredge_i1_dc_power') | is_number and states('sensor.solaredge_b1_dc_power') | is_number }}
 
-      - name: "Solar House Consumption W"
-        unique_id: solar_house_consumption_w
-        unit_of_measurement: "W"
-        icon: mdi:home
-        state: >
-          {% set i1_ac_power = states('sensor.solaredge_i1_ac_power') | float(0) %}
-          {% set m1_ac_power = states('sensor.solaredge_m1_ac_power') | float(0) %}
-          {% if (i1_ac_power - m1_ac_power <= 0) %}
-            0
-          {% else %}
-            {{ (i1_ac_power - m1_ac_power) }}
-          {% endif %}
-        availability: >
-          {{ states('sensor.solaredge_i1_ac_power') | is_number and states('sensor.solaredge_m1_ac_power') | is_number }}
+    - name: "Solar House Consumption W"
+      unique_id: solar_house_consumption_w
+      unit_of_measurement: "W"
+      icon: mdi:home
+      state: >
+        {% set i1_ac_power = states('sensor.solaredge_i1_ac_power') | float(0) %}
+        {% set m1_ac_power = states('sensor.solaredge_m1_ac_power') | float(0) %}
+        {% if (i1_ac_power - m1_ac_power <= 0) %}
+          0
+        {% else %}
+          {{ (i1_ac_power - m1_ac_power) }}
+        {% endif %}
+      availability: >
+        {{ states('sensor.solaredge_i1_ac_power') | is_number and states('sensor.solaredge_m1_ac_power') | is_number }}
 
-sensor:
+  - sensor:
     - platform: integration
-    source: sensor.solar_panel_production_w
-    method: left
-    unit_prefix: k
-    name: solar_panel_production_kwh
+      source: sensor.solar_panel_production_w
+      method: left
+      unit_prefix: k
+      name: solar_panel_production_kwh
 
-sensor:
+  - sensor:
     - platform: integration
-    source: sensor.solar_house_consumption_w
-    method: left
-    unit_prefix: k
-    name: solar_house_consumption_kwh
+      source: sensor.solar_house_consumption_w
+      method: left
+      unit_prefix: k
+      name: solar_house_consumption_kwh
 ```text
 
 If you have multiple batteries connected to your SolarEdge inverter and are using the SolarEdge Modbus Multi integration, this enumerates the multiple batteries as b1, b2, b3, etc with separate entities per battery.
@@ -2343,7 +2323,7 @@ You will need to make a number of changes to the solaredge `apps.yaml`, replacin
 - And add the following additional template sensors to `configuration.yaml` after the existing 'template:' line (from the earlier template sensor definitions):
 
 ```yaml
-    - sensor:
+  - sensor:
     # Template sensor for Max Battery Charge rate
     # This is the sum of all three batteries charge rate as the max charge rate can be higher than inverter capacity (e.g. 8k) when charging from AC+Solar
     # Returns 5000W as the minimum max value, the single battery charge/discharge limit to ensure at least one battery can always be charged if one or more batteries have 'gone offline' to modbus
@@ -2453,7 +2433,7 @@ fields:
     default: 28800
     required: false
 sequence:
-    - variables:
+  - variables:
       defaultPower: "{{ 200 }}"
       mode: |-
         {% set map = {
@@ -2476,27 +2456,27 @@ sequence:
            'Freeze Charge': 0,
            'Freeze Discharge': 0} %}
         {{ map.get( operation, 0 ) }}
-    - action: number.set_value
+  - action: number.set_value
     data:
       value: "{{ activeP }}"
     target:
       entity_id: number.solax_remotecontrol_active_power
-    - action: number.set_value
+  - action: number.set_value
     data:
       value: "60"
     target:
       entity_id: number.solax_remotecontrol_duration
-    - action: number.set_value
+  - action: number.set_value
     data:
       value: "{{ duration if duration is defined else 28800 }}"
     target:
       entity_id: number.solax_remotecontrol_autorepeat_duration
-    - action: select.select_option
+  - action: select.select_option
     data:
       option: "{{ mode if mode is defined else Disabled }}"
     target:
       entity_id: select.solax_remotecontrol_power_control
-    - action: button.press
+  - action: button.press
     data: {}
     target:
       entity_id: button.solax_remotecontrol_trigger
@@ -2547,7 +2527,7 @@ fields:
         max: 86400
     default: 28800
 sequence:
-    - variables:
+  - variables:
       maxPvPower: "{{ 12000 }}"
       defaultPower: "{{ 200 }}"
       mode: |-
@@ -2568,42 +2548,42 @@ sequence:
            'Freeze Charge': 0,
            'Freeze Discharge': 0} %}
         {{ map.get( operation, 0 ) }}
-    - action: number.set_value
+  - action: number.set_value
     data:
       value: "{{ activeP }}"
     target:
       entity_id: number.solax_remotecontrol_push_mode_power_8_9
-    - action: number.set_value
+  - action: number.set_value
     data:
       value: "{{ maxPvPower }}"
     target:
       entity_id: number.solax_remotecontrol_pv_power_limit
-    - action: number.set_value
+  - action: number.set_value
     data:
       value: "30"
     target:
       entity_id: number.solax_remotecontrol_duration
-    - action: number.set_value
+  - action: number.set_value
     data:
       value: "300"
     target:
       entity_id: number.solax_remotecontrol_timeout
-    - action: number.set_value
+  - action: number.set_value
     data:
       value: "{{ duration if duration is defined else 28800 }}"
     target:
       entity_id: number.solax_remotecontrol_autorepeat_duration
-    - action: select.select_option
+  - action: select.select_option
     data:
       option: VPP Off
     target:
       entity_id: select.solax_inverter_remotecontrol_timeout_next_motion_mode_1_9
-    - action: select.select_option
+  - action: select.select_option
     data:
       option: "{{ mode if mode is defined else Disabled }}"
     target:
       entity_id: select.solax_remotecontrol_power_control_mode
-    - action: button.press
+  - action: button.press
     data: {}
     enabled: true
     target:
@@ -2795,22 +2775,22 @@ See the components documentation for details: [Components - Sunsynk Cloud API](c
 alias: Predbat Charge / Discharge Control
 description: "Turn SunSynk charge/discharge on/off to mirror Predbat"
 trigger:
-    - platform: state
+  - platform: state
     entity_id:
       - binary_sensor.predbat_charging
     to: "on"
     id: predbat_charge_on
-    - platform: state
+  - platform: state
     entity_id:
       - binary_sensor.predbat_charging
     to: "off"
     id: predbat_charge_off
-    - platform: state
+  - platform: state
     entity_id:
       - binary_sensor.predbat_exporting
     to: "on"
     id: predbat_discharge_on
-    - platform: state
+  - platform: state
     entity_id:
       - binary_sensor.predbat_exporting
     to: "off"
@@ -2910,13 +2890,13 @@ mode: single
 alias: PredBat - Copy Charge Limit
 description: Copy Battery SoC to all timezone (time) slots
 trigger:
-    - platform: state
+  - platform: state
     entity_id:
       - number.sunsynk_set_soc_timezone1
     to: null
 condition: []
 action:
-    - service: number.set_value
+  - service: number.set_value
     data_template:
       entity_id:
         - number.sunsynk_set_soc_timezone2
@@ -3200,7 +3180,7 @@ Create the following automation using the HA UI or by adding to `configuration.y
 
 ```yaml
 automation:
-    - alias: "Update Tesla Energy Site ID"
+  - alias: "Update Tesla Energy Site ID"
     trigger:
       - platform: homeassistant
         event: start
@@ -3496,11 +3476,328 @@ rest_command:
 
 ## Victron
 
-This is at an early stage of development, see GitHub discussion [#789](https://github.com/springfall2008/batpred/discussions/798) and [#2846](https://github.com/springfall2008/batpred/issues/2846)
+There is no Victron inverter type in Predbat yet. A Victron MultiPlus-II or Quattro with a Cerbo GX (Venus OS) running the ESS assistant can still be controlled, using Home Assistant to translate what Predbat wants into Cerbo settings.
+Background and the discussion behind this section: [#798](https://github.com/springfall2008/batpred/discussions/798) and [#2846](https://github.com/springfall2008/batpred/issues/2846).
 
-The Victron inverter type is configured with `has_charge_enable_time: false` and `has_discharge_enable_time: false` (only `has_target_soc: true`) - Predbat has no way to enable or disable a charge/discharge window on a Victron/Cerbo system, in any Predbat mode. All it can do is write a target SoC percentage.
+Three working routes have been described by users. Pick one:
 
-This means Predbat can only actually cause charging or discharging if a charge/discharge schedule is already permanently enabled on the Victron/Cerbo side (e.g. covering all day, or whatever hours you want available) - Predbat then just moves the target SoC up or down within that always-open window: raising the target causes charging, lowering it causes discharging, and leaving it at the current SoC holds. There's currently no way to have Predbat also switch a schedule on and off for you.
+| Route | What Predbat drives | Predbat sees | Suits |
+| ----- | ------------------- | ------------ | ----- |
+| [A. Target SoC](#victron-route-a-target-soc) (template [victron.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/victron.yaml)) | ESS minimum SoC and max charge current, via two helpers | SK base type, target SoC in %, charge rate in A | the simplest set-up; no forced battery export |
+| [B. Grid setpoint and ESS limits](#victron-route-b-grid-setpoint-and-ess-limits) | AC power setpoint, ESS max charge and inverter power | a custom type with charge/discharge services | full charge, discharge and freeze modes |
+| [C. Follow predbat.status](#victron-route-c-follow-predbatstatus) | AC setpoint, max charge current, max inverter power | its own status, mirrored by Node-RED | those who prefer Node-RED flows |
+
+The idea behind freeze export is the same in all three: **block battery charging and leave everything else open.** The battery then covers the house load, while solar surplus goes to the grid instead of into the battery. Routes A and C do this with the ESS max charge current, route B with the ESS max charge power limit (see the note under route A on why the current may be the safer choice).
+
+Route A is the one the template implements, and is described in full below. Routes B and C were contributed in [#2846](https://github.com/springfall2008/batpred/issues/2846) by their users and are summarised from there.
+
+### Victron: before you start (all routes)
+
+- **ESS mode: Optimised (without BatteryLife)** - `select.gx_device_ess_mode` = `optimized_no_battery_life`. In *Optimised with BatteryLife* the minimum SoC you write is only a lower bound: the Cerbo keeps its own, moving **Active SoC limit** next to it and that is what applies. Your written value reads back unchanged, so nothing looks wrong, but the battery may stop discharging at 75-80% in the evening. Put the Active SoC limit sensor next to the ESS minimum SoC on a dashboard: as long as the two move together, Predbat is in control.
+- **Dynamic ESS off** (`select.gx_device_dess_mode`), otherwise two optimisers fight over the same settings.
+- **Predbat mode: *Control charge* or *Control charge & discharge*** - not *Control SOC only*. With no charge window to open, *Control SOC only* never sets a charge target and nothing charges ([#4337](https://github.com/springfall2008/batpred/issues/4337)). *Control charge & discharge* is needed for freeze export.
+- **Load sensor**: Venus OS assumes the MultiPlus is on L1. On a multi-phase supply with the MultiPlus on another phase, the Victron per-phase consumption figures are wrong (totals are right). Give Predbat a `load_power` you calculate yourself, e.g. grid + PV + battery AC power.
+- **Settings stay written.** Whatever Home Assistant writes to the Cerbo stays there when Predbat or Home Assistant stops: a minimum SoC left at 80% means no discharging, a charge current left at 0 means no charging from solar, a setpoint left at 24,000 W means charging from the grid all day. Whichever route you choose, build in a fallback to a safe state when Predbat stops calculating (route A below shows one).
+
+### Victron route A: target SoC
+
+On a Victron ESS the **minimum SoC is also the charge target**. Raise it above the current SoC and the MultiPlus charges from the grid up to that level and holds it; lower it and the battery may discharge again. No charge schedule needs to be enabled on the Cerbo for this. Predbat only has to write one percentage, plus a charge current of 0 for freeze export.
+
+#### Victron route A: apps.yaml
+
+Copy [victron.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/victron.yaml) over your `apps.yaml` and edit it for your system. The key points:
+
+- `inverter_type: SK` - borrowed because the Sunsynk capability profile matches a Victron ESS (no charge or discharge window, target SoC only, charge control in amps). It does not mean Predbat thinks you have a Sunsynk.
+- An `inverter:` block that turns **`support_charge_freeze` and `support_discharge_freeze`** back on. The SK profile has both disabled, and Predbat then switches freeze charge and freeze export off every cycle, whatever you set in Home Assistant. The only trace is in the log: *Inverter does not support discharge freeze - disabled*. Check the log for that line after every Predbat update.
+- `charge_limit`, `timed_charge_current` and `timed_discharge_current` point at **helpers, not at the Cerbo**. Predbat's `reset_inverter()` writes a target of 100% on every start and every change of `select.predbat_mode` or `switch.predbat_set_read_only`. On most inverters that means "may charge to 100%"; on a Victron it means "never go below 100%". Predbat overwrites it within the same cycle, so with a short delay in between it never reaches the Cerbo.
+- `battery_min_soc` set to the same floor as your ESS settings. Predbat clamps every target to it; the default is 4%.
+- Power limits (`battery_rate_max`, `inverter_limit`) as literal watts.
+
+Create these helpers (Settings, Devices & services, Helpers, Number):
+
+| Helper | Range | Step | Written by | Read by |
+| ------ | ----- | ---- | ---------- | ------- |
+| `input_number.predbat_target_soc` | 0-100 | 1 | Predbat (`charge_limit`) | the target SoC automation below |
+| `input_number.predbat_charge_current_request` | 0-200 | 1 | Predbat (`timed_charge_current`) | the charge current automation below |
+| `input_number.predbat_discharge_current_request` | 0-200 | 1 | Predbat (`timed_discharge_current`) | nothing, it only has to exist |
+
+#### Victron route A: is Predbat running?
+
+The automations below only pass Predbat's values to the Cerbo while Predbat is actually calculating, and fall back to a safe state otherwise. Create a template sensor helper (Settings, Devices & services, Helpers, Template, Sensor) called **Predbat state**, giving `sensor.predbat_state`:
+
+```jinja
+{%- set s = states.predbat.status -%}
+{%- set ls = as_datetime(states('predbat.last_started')) -%}
+{%- if s is none or ls is none -%}unknown
+{%- elif s.last_updated < ls -%}{{ 'stalled' if (now() - ls).total_seconds() > 900 else 'restarting' }}
+{%- elif (now() - s.last_updated).total_seconds() > 900 -%}stalled
+{%- else -%}ready
+{%- endif -%}
+```
+
+- **ready** - `predbat.status` was updated after the last start (the first cycle has finished) and is less than 15 minutes old. It is updated every cycle (5 minutes), so 15 minutes is three missed cycles.
+- **restarting** - Predbat has started but not finished a cycle.
+- **stalled** - no update for 15 minutes, or a restart that has not finished a cycle within 15 minutes.
+- **unknown** - the `predbat.*` entities do not exist. Predbat creates them over the API, so they are missing for a short while after a Home Assistant restart.
+
+#### Victron route A: target SoC to ESS minimum SoC
+
+Copies the target to the Cerbo once it has been stable for a minute, which keeps the transient 100% from `reset_inverter()` away. It rewrites the value every 5 minutes (writing the same value is harmless), so a missed trigger or a restart cannot leave a wrong value behind. Clamped between 10 and 100: change both numbers to your own floor.
+
+```yaml
+alias: Predbat target SoC to Victron ESS minimum SoC
+description: Translates Predbat's target SoC into the Cerbo ESS minimum SoC, with a safe state when Predbat is not running
+mode: queued
+max: 10
+triggers:
+  - trigger: state
+    entity_id: input_number.predbat_target_soc
+    for:
+      minutes: 1
+  - trigger: time_pattern
+    minutes: /5
+  - trigger: state
+    entity_id: sensor.predbat_state
+    to:
+      - restarting
+      - stalled
+      - unavailable
+      - unknown
+  - trigger: state
+    entity_id: sensor.predbat_state
+    to: ready
+    for:
+      minutes: 1
+  - trigger: state
+    entity_id: sensor.predbat_state
+    to: unknown
+    for:
+      minutes: 15
+actions:
+  - choose:
+      - alias: Predbat entities missing for 15 minutes - release the battery
+        conditions:
+          - condition: state
+            entity_id: sensor.predbat_state
+            state: unknown
+            for:
+              minutes: 15
+        sequence:
+          - action: number.set_value
+            target:
+              entity_id: number.gx_device_ess_min_soc_limit
+            data:
+              value: 10
+      - alias: Predbat entities not back yet (e.g. after an HA restart) - keep the last value
+        conditions:
+          - condition: state
+            entity_id: sensor.predbat_state
+            state: unknown
+        sequence:
+          - stop: Waiting for Predbat
+      - alias: Predbat restarting or stalled - release the battery
+        conditions:
+          - condition: not
+            conditions:
+              - condition: state
+                entity_id: sensor.predbat_state
+                state: ready
+        sequence:
+          - action: number.set_value
+            target:
+              entity_id: number.gx_device_ess_min_soc_limit
+            data:
+              value: 10
+      - alias: Ready for less than a minute, or target not yet stable - wait
+        conditions:
+          - condition: or
+            conditions:
+              - condition: not
+                conditions:
+                  - condition: state
+                    entity_id: sensor.predbat_state
+                    state: ready
+                    for:
+                      minutes: 1
+              - condition: template
+                value_template: "{{ (now() - states.input_number.predbat_target_soc.last_changed).total_seconds() < 60 }}"
+        sequence:
+          - stop: Not stable yet
+    default:
+      - action: number.set_value
+        target:
+          entity_id: number.gx_device_ess_min_soc_limit
+        data:
+          value: "{{ [[states('input_number.predbat_target_soc') | float(10) | round(0) | int, 10] | max, 100] | min }}"
+```
+
+If your ESS is not in *Optimised (without BatteryLife)*, the Cerbo may silently ignore values that are not a multiple of 5. Fix the ESS mode rather than rounding (see above).
+
+#### Victron route A: freeze export through the charge current
+
+During a freeze slot Predbat writes 0 to `timed_charge_current`. This automation sets `number.gx_device_ess_max_charge_current` to 0 for that, and to -1 (unlimited) for any other value. The amp value itself is deliberately not passed on: Predbat derives it from `battery_rate_max` and the battery voltage, which would throttle normal charging slightly below what the charger can do.
+
+Why the charge **current** and not `number.gx_device_ess_max_charge_power_limit`: on the system this was tested on (AC-coupled PV), the charge power limit at 0 still let the battery take 285 W of solar surplus; the charge current limit at 0 brought it down to 26 W within a minute. Check with a meter on your own system.
+
+```yaml
+alias: Predbat charge current to Victron max charge current
+description: Translates Predbat's freeze (charge current 0) into the Cerbo max charge current, with a safe state when Predbat is not running
+mode: queued
+max: 10
+triggers:
+  - trigger: state
+    entity_id: input_number.predbat_charge_current_request
+    for:
+      seconds: 30
+  - trigger: time_pattern
+    minutes: /5
+  - trigger: state
+    entity_id: sun.sun
+    to: below_horizon
+    id: sunset
+  - trigger: state
+    entity_id: sensor.predbat_state
+    to:
+      - restarting
+      - stalled
+      - unavailable
+      - unknown
+  - trigger: state
+    entity_id: sensor.predbat_state
+    to: ready
+    for:
+      seconds: 30
+  - trigger: state
+    entity_id: sensor.predbat_state
+    to: unknown
+    for:
+      minutes: 15
+actions:
+  - choose:
+      - alias: Sunset - always release (daily safety net)
+        conditions:
+          - condition: trigger
+            id: sunset
+        sequence:
+          - action: number.set_value
+            target:
+              entity_id: number.gx_device_ess_max_charge_current
+            data:
+              value: -1
+      - alias: Predbat entities missing for 15 minutes - release
+        conditions:
+          - condition: state
+            entity_id: sensor.predbat_state
+            state: unknown
+            for:
+              minutes: 15
+        sequence:
+          - action: number.set_value
+            target:
+              entity_id: number.gx_device_ess_max_charge_current
+            data:
+              value: -1
+      - alias: Predbat entities not back yet - keep the last value
+        conditions:
+          - condition: state
+            entity_id: sensor.predbat_state
+            state: unknown
+        sequence:
+          - stop: Waiting for Predbat
+      - alias: Predbat restarting or stalled - release
+        conditions:
+          - condition: not
+            conditions:
+              - condition: state
+                entity_id: sensor.predbat_state
+                state: ready
+        sequence:
+          - action: number.set_value
+            target:
+              entity_id: number.gx_device_ess_max_charge_current
+            data:
+              value: -1
+      - alias: Ready for less than 30 seconds, or value not yet stable - wait
+        conditions:
+          - condition: or
+            conditions:
+              - condition: not
+                conditions:
+                  - condition: state
+                    entity_id: sensor.predbat_state
+                    state: ready
+                    for:
+                      seconds: 30
+              - condition: template
+                value_template: "{{ (now() - states.input_number.predbat_charge_current_request.last_changed).total_seconds() < 30 }}"
+        sequence:
+          - stop: Not stable yet
+      - alias: Freeze - block charging
+        conditions:
+          - condition: numeric_state
+            entity_id: input_number.predbat_charge_current_request
+            below: 1
+        sequence:
+          - action: number.set_value
+            target:
+              entity_id: number.gx_device_ess_max_charge_current
+            data:
+              value: 0
+      - alias: No freeze - unlimited
+        conditions:
+          - condition: numeric_state
+            entity_id: input_number.predbat_charge_current_request
+            above: 0
+        sequence:
+          - action: number.set_value
+            target:
+              entity_id: number.gx_device_ess_max_charge_current
+            data:
+              value: -1
+```
+
+Measured end to end (Predbat v9.3.3, 1 October 2026): Predbat entered *Freeze exporting* at 10:05:14, the max charge current went to 0 at 10:06:00; Predbat returned to *Demand* at 10:25:13 and the current went back to -1 at 10:25:43.
+
+#### Victron route A: Predbat settings
+
+- To plan freeze export: *Control charge & discharge*, **switch.predbat_set_export_freeze** on, and optionally **switch.predbat_export_more_solar** on.
+- To prevent forced battery export (for example when your export tariff only pays a bonus on solar): set **input_number.predbat_metric_min_improvement_export** high (e.g. 50) and keep **input_number.predbat_metric_min_improvement_export_freeze** low (e.g. 0.1). Forced export then has to gain more than that per slot before it is planned. This is an economic threshold, not a lock.
+- **Do not use switch.predbat_set_read_only** on this route: entering read-only runs `reset_inverter()`, which writes a 100% target ([#5303](https://github.com/springfall2008/batpred/issues/5303)). To stop Predbat steering, turn the two automations off instead.
+
+#### Victron route A: known limitations
+
+- [#5303](https://github.com/springfall2008/batpred/issues/5303) - `reset_inverter()` writes a 100% target, which on a Victron is a minimum. The one-minute delay in the automation above keeps it from the Cerbo.
+- [#5302](https://github.com/springfall2008/batpred/issues/5302) - freeze export with the battery at exactly 100% calls `discharge_stop_service` instead of `discharge_freeze_service`. This route does not use the services, so it is not affected (the charge current of 0 is written as normal); it matters if you build a route on the freeze services.
+- Predbat cannot write the ESS minimum SoC as a reserve; `reserve` in `apps.yaml` only tells Predbat where the floor is.
+- `sensor.gx_device_dc_battery_state` flips between charging and idle every few seconds around zero power; do not use it as a "battery is charging" indicator.
+
+### Victron route B: grid setpoint and ESS limits
+
+Described by @Lanmate in [#2846](https://github.com/springfall2008/batpred/issues/2846) (Cerbo GX, MultiPlus-II 48/15000, AC-coupled PV, Victron GX entity names) and reported working in all modes. Predbat uses a custom inverter type with `charge_start_service`, `charge_stop_service`, `charge_freeze_service`, `discharge_start_service`, `discharge_stop_service` and `discharge_freeze_service`, each calling a script or automation that sets three values. Inverter mode stays *On* and the ESS mode *Optimised (without BatteryLife)* throughout.
+
+| Mode | Service | `number.gx_device_ac_power_setpoint` | `..._ess_max_charge_power_limit` | `..._ess_max_inverter_power_limit` |
+| ---- | ------- | ------------------------------------ | -------------------------------- | ---------------------------------- |
+| Demand | charge / discharge stop | 0 (or a small positive value) | -1 | -1 |
+| Charging | charge start | your supply limit, e.g. 24000 | -1 | -1 |
+| Exporting | discharge start | minus your export limit, e.g. -8500 | -1 | -1 |
+| Freeze charging | charge freeze | 0 | -1 | 0 |
+| Freeze exporting | discharge freeze | 0 | 0 | -1 |
+
+Avoid switching the inverter mode to *Charger only* or *Inverter only* for these modes: *Charger only* leaves the house without power if the grid fails, and each mode change switches relays in the inverter. For freeze exporting, see the note under route A about charge current versus charge power: on some systems a max charge **power** of 0 does not stop charging from AC-coupled solar.
+
+### Victron route C: follow predbat.status
+
+Described by @WesSec in [#2846](https://github.com/springfall2008/batpred/issues/2846): Predbat writes nothing to the inverter, and a Node-RED flow reads `predbat.status` and sets three values. This route does not touch the ESS minimum SoC.
+
+| predbat.status | AC setpoint | Max charge current | Max inverter power |
+| -------------- | ----------- | ------------------ | ------------------ |
+| Charging | e.g. 24000 W | charge limit | 0 |
+| Hold battery | e.g. 50 W | charge limit | 0 |
+| Exporting | minus export limit | 0 | discharge limit |
+| Freeze exporting | e.g. 50 W | 0 | discharge limit |
+| Demand / anything else | e.g. 50 W | charge limit | discharge limit |
+
+Charging is not stopped at a target SoC; Predbat's next calculation changes the status instead. This route allows for more extensive integration, for instance lowering the charge and discharge limits on battery temperature and passing them to Predbat through the [manual API](manual-api.md), so the plan matches the real limits.
 
 ## I want to add an unsupported inverter to Predbat
 
@@ -3836,5 +4133,10 @@ Defines the units of the SoC setting (currently not used), it defaults to "%".
 ### write_and_poll_sleep
 
 Sets the number of seconds between polls of inverter settings.
+
+### rate_step_percent_of_capacity
+
+Optional, defaults to 0. Set it when the inverter stores its charge and discharge rates in steps of this percentage of nominal battery capacity (the built-in GivEnergy `GE` type uses 1).
+Predbat then accepts a rate read-back up to one step *below* the rate it wrote, rather than re-writing it every cycle. A read-back above the rate written still has to be within 5% of the rate ceiling, so this suits an inverter that rounds its rates down.
 
 <!-- markdownlint-enable MD046 -->

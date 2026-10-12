@@ -143,7 +143,7 @@ Higher numbers will reduce battery cycles at the expense of using higher energy 
 In theory, if you have a 9.5kWh battery and think it will last say 6000 complete cycles and it cost you £4000, then each full charge and discharge cycle is 19kWh
 and so the cost per complete cycle is £4000 / 19 / 6000 = 3.5p.
 
-Taking the 3.5p per cycle example, if you set predbat_metric_battery_cycle to 1.75 (half of 3.5) then Predbat will apply the "virtual cost" of 1.75p
+Taking this full cycle example, if you set predbat_metric_battery_cycle to 3.5 then Predbat will apply the "virtual cost" of 3.5p
 to every kWh of charge and discharge of the battery.
 This cost will be included in Predbat's cost optimisation plan when it decides whether to charge, discharge the battery or let the house run on grid import.<BR>
 _NB: For clarity and to re-emphasise, the "virtual cost" will be applied to BOTH the cost calculation for charging AND for discharging the battery._
@@ -189,8 +189,9 @@ This setting will not impact the real calculated costs and is only used for plan
 **switch.predbat_metric_dynamic_load_adjust** (default False) is a toggle that when enabled allows Predbat to take into account your energy consumption within the last 5 minutes.
 If the load is above what your battery can deliver the plan is updated to predict this load will continue during the current slot, thus preventing forced export in the plan.
 If the load remains high for two checks in a row, this prediction is extended into the following slot too, so the plan stays up to date across the slot boundary.
-Checking Octopus Intelligent slots against whether the car is actually charging is a separate switch, **switch.predbat_octopus_intelligent_dynamic** - see [Checking Intelligent dispatches against the car](car-charging.md#checking-intelligent-dispatches-against-the-car).
-Whether or not this switch is On, if **car_charging_now** reports your car charging but no charging slot covers the current time, Predbat predicts the car's load at **input_number.predbat_car_charging_rate** until the end of the current slot, with the battery held for the car (unless **switch.predbat_car_charging_from_battery** is On) and no export planned over it. With the switch On, that load is also taken out of the recent-load reading above, so it is not counted twice.
+
+Checking Octopus Intelligent slots against whether the car is actually charging is a separate switch, **switch.predbat_octopus_intelligent_dynamic** - see [Checking Intelligent dispatches against the car](car-charging.md#checking-intelligent-dispatches-against-the-car).<BR>
+Whether or not this switch is On, if **car_charging_now** reports your car charging but no charging slot covers the current time, Predbat predicts the car's load at **input_number.predbat_car_charging_rate** until the end of the current slot, with the battery held for the car (unless **switch.predbat_car_charging_from_battery** is On) and no export planned over it. With the switch On, that load is also taken out of the recent-load reading above, so it is not counted twice.<BR>
 This is used only for the plan; it is never added as a car charging slot, so it does not turn on **binary_sensor.predbat_car_charging_slot**.
 
 **input_number.predbat_battery_rate_max_scaling** is a percentage factor to adjust your maximum charge rate from that reported by the inverter.
@@ -418,6 +419,22 @@ and determine the threshold above which a slot can be considered a potential exp
 If rate_high_threshold is set to a non-zero value this will set the threshold above future average export rates as the minimum export rate to consider exporting for,
 e.g. setting to 1.2 = 20% above average rate.<BR>
 If you set this too high you might not get any export slots. If it's too low you might get too many in the 24-hour period.
+
+Both thresholds, automatic or set by you, ignore an event price that is above the tariff's own rate (an Octopus saving session
+or Axle event reward): those slots count at the tariff's own rate when the thresholds are worked out, so the event does not
+stretch the range and pull ordinary-price slots in or out. A free or discounted import session still counts as a cheap slot,
+and a rate override you put on an event slot (rates_import_override, rates_export_override or a manual rate) is kept.
+The event rates themselves are still used when planning.
+
+In automatic mode (rate_low_threshold 0), when a saving session or Axle event pays more for export, or charges more for
+import, than the tariff's most expensive import rate, the plan is also offered every import slot priced no higher than that
+rate before the last such event starts. The battery can then be charged ahead of the event to export into it or to cover the
+house through it. The low rate sensors (`binary_sensor.predbat_low_rate_slot` and the `predbat.low_rate_*` sensors) and
+car charging plans still use only the tariff's own cheap slots.
+
+Predbat does not widen a rate_low_threshold you set for an event. With a manual threshold it will not charge the battery
+above that threshold ahead of an event, even when doing so would make money. Set rate_low_threshold to 0 (automatic) if
+you want those pre-event charges.
 
 **input_number.predbat_metric_future_rate_offset_import** (_expert mode_) Default 0p/kWh. Sets a pence per kWh offset to apply to future import energy rates that are
 not yet published, best used for variable rate tariffs such as Agile import where the rates are not published until 4pm.
