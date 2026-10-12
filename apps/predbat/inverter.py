@@ -502,6 +502,14 @@ class Inverter:
         self.battery_scaling_config = self.battery_scaling
 
         self.inverter_type = self.base.get_arg("inverter_type", "GE", indirect=False, index=self.id)
+        if self.inverter_type == "DEYE":
+            from deye_local import DeyeLocal
+
+            if not getattr(self, "deye_local", None):
+                self.deye_local = DeyeLocal(self)
+            self.deye_local.prepare()
+        else:
+            self.deye_local = None
         # An assumed type is not a chosen one. The user-facing "source returned no data" warnings
         # must not name it as though the user had picked it (#4990); those messages re-derive the
         # fact at message time (inverter_type_is_assumed) because discovery can set the type later.
@@ -553,6 +561,8 @@ class Inverter:
         self.inv_soc_units = INVERTER_DEF[self.inverter_type]["soc_units"]
         self.inv_time_button_press = INVERTER_DEF[self.inverter_type]["time_button_press"]
         self.inv_support_charge_freeze = INVERTER_DEF[self.inverter_type]["support_charge_freeze"]
+        if self.deye_local:
+            self.inv_support_charge_freeze = self.deye_local.settings.get("hold_verified", False)
         self.inv_support_discharge_freeze = INVERTER_DEF[self.inverter_type]["support_discharge_freeze"]
         # True only for inverters whose Freeze Export really is a "Feed-in First" mode (load, then
         # export, then battery) - most just disable charging, so PV above the export limit is clipped
@@ -826,6 +836,9 @@ class Inverter:
             self.create_missing_arg("idle_end_time", "00:00:00")
             self.base.args["idle_start_time"][self.id] = self.create_entity("idle_start_time", "00:00:00")
             self.base.args["idle_end_time"][self.id] = self.create_entity("idle_end_time", "00:00:00")
+
+        if self.deye_local:
+            self.deye_local.validate_limits()
 
     def battery_size_tracking(self):
         # Battery size determination: fused auto-scaling + find_battery_size logic
@@ -3387,6 +3400,15 @@ class Inverter:
         """
         Adjust from charging or not charging based on passed target soc
         """
+        if self.base.args.get("deye_shadow") is not None:
+            try:
+                from deye_local_shadow import preview_deye_local
+
+                preview_deye_local(self, target_soc, freeze)
+            except Exception:
+                self.log("Warn: DEYE shadow preview failed; native inverter control continues unchanged")
+        if getattr(self, "deye_local", None):
+            return self.deye_local.apply(target_soc, freeze=freeze)
         # A Solis with a target SoC (FB00) has its Energy Storage Control Switch driven from here on every cycle
         # that is not exporting. It stays on Backup/Reserve - Self-Use with the Battery Reserve bit, which makes the
         # reserve Predbat writes (the Reserved SOC) a real discharge floor, so the existing reserve holds work.
@@ -3436,6 +3458,11 @@ class Inverter:
         """
         Adjust from exporting or not exporting based on passed target soc
         """
+        if getattr(self, "deye_local", None):
+            if target_soc < 100 or freeze:
+                self.base.record_status("Error: DEYE local does not support forced export or export freeze", had_errors=True)
+            # Idle export must not reset the charge/hold just applied this cycle.
+            return
         # FB00's Energy Storage Control Switch on an exporting cycle: Feed-in priority - No Grid Charging for a freeze
         # export (PV goes to the load then the grid ahead of the battery, which still covers the load - the plugin
         # offers no Feed-in priority with the Battery Reserve bit, so the inverter's own minimum SoC is the floor), and

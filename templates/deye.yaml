@@ -1,0 +1,51 @@
+# Experimental LOCAL Solarman control fragment, not a complete apps.yaml.
+# Merge into an existing, working configuration; retain its telemetry, tariffs,
+# battery capacity and independently verified charge/discharge limits.
+---
+pred_bat:
+  module: predbat
+  class: PredBat
+  prefix: predbat
+  template: true  # Remove only after configuring and reviewing the entire file.
+  num_inverters: 1
+  inverter_type: DEYE
+
+  # No generic charge_limit, charge_start/end_time, reserve, rate/current output
+  # mappings or *_service templates: DEYE creates virtual native controls.
+  deye_local:
+    control: false
+    hold_verified: false
+    # Existing inverter clock, updated through NORMAL Solarman polling.
+    # Its timestamp must be within 180 seconds (30 seconds of future skew).
+    telemetry_time: datetime.example_inverter_time
+    time_of_use: select.example_time_of_use
+    work_mode: select.example_work_mode
+    energy_pattern: select.example_energy_pattern
+    # EXAMPLE ONLY. Set to the site's existing, verified per-period ceiling.
+    # The adapter also clamps to Predbat's existing inverter discharge limit.
+    max_discharge_power_w: 2000
+    programs:
+      - time: time.example_program_1_time
+        soc: number.example_program_1_soc
+        power: number.example_program_1_power
+        charging: select.example_program_1_charging
+      - time: time.example_program_2_time
+        soc: number.example_program_2_soc
+        power: number.example_program_2_power
+        charging: select.example_program_2_charging
+      - time: time.example_program_3_time
+        soc: number.example_program_3_soc
+        power: number.example_program_3_power
+        charging: select.example_program_3_charging
+      - time: time.example_program_4_time
+        soc: number.example_program_4_soc
+        power: number.example_program_4_power
+        charging: select.example_program_4_charging
+      - time: time.example_program_5_time
+        soc: number.example_program_5_soc
+        power: number.example_program_5_power
+        charging: select.example_program_5_charging
+      - time: time.example_program_6_time
+        soc: number.example_program_6_soc
+        power: number.example_program_6_power
+        charging: select.example_program_6_charging

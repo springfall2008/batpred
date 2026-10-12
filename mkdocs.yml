@@ -9,6 +9,7 @@ nav:
     - 'Install summary': installation-summary.md
     - 'Install details': install.md
     - inverter-setup.md
+    - deye-local.md
     - apps-yaml.md
     - energy-rates.md
     - components.md
