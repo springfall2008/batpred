@@ -196,9 +196,11 @@ def _test_fetch_only_checks_live_plan():
     """
     Test 13: fetch_sensor_data() runs the check for the live plan (save=True) but not for compare.py's per-tariff
     re-fetches (save=False). A comparison tariff that turns car_energy_reported_load Off must not clear the live
-    warned flag, or the warning would re-arm and fire again every comparison cycle.
+    warned flag, or the warning would re-arm and be logged again after every comparison run.
 
-    Drives the real fetch_sensor_data() on a fresh PredBat, so nothing it resets leaks into the shared fixture (#5079).
+    Drives the real fetch_sensor_data() on a fresh PredBat, so the attributes it resets do not leak into the shared
+    fixture (#5079). It does still set the process-wide metrics() gauges (load/import/export/PV today, data age), as
+    every fetch does; the metrics tests set their own values before reading them.
     """
     # Imported here: unit_test imports this module
     from unit_test import create_predbat
@@ -206,18 +208,44 @@ def _test_fetch_only_checks_live_plan():
     print("Test 13: fetch_sensor_data() only runs the check for the live plan, not compare.py's save=False runs")
     failed = False
     fresh = create_predbat()
-    # The test HA history carries no last_updated, so stand in empty sensor history for the history readers
-    with patch.object(fresh, "minute_data_load", return_value=({}, 0)), patch.object(fresh, "minute_data_import_export", return_value={}), patch.object(fresh, "check_car_energy_reported_load", wraps=fresh.check_car_energy_reported_load) as checked:
-        # As a comparison tariff config with the switch Off would leave it, after the live cycle has warned
-        fresh.car_energy_reported_load = False
-        fresh.car_energy_reported_load_warned = True
-        fresh.fetch_sensor_data(save=False)
-        if checked.call_count != 0 or not fresh.car_energy_reported_load_warned:
-            print("ERROR: t13 save=False ran the check {} times, warned flag {}".format(checked.call_count, fresh.car_energy_reported_load_warned))
+    # Sensor history where the charger is evidently outside the load sensor. The test HA history carries no
+    # last_updated, so the history readers are stood in for: load_today and car_charging_energy get these series,
+    # everything else nothing.
+    _setup(fresh, load_includes_car=False)
+    load_series = dict(fresh.load_minutes)
+    car_series = dict(fresh.car_charging_energy)
+    logged = []
+
+    def minute_data_load(now_utc, entity_name, *args, **kwargs):
+        """
+        Stand-in for minute_data_load(): the load series for load_today, nothing for anything else.
+        """
+        return (dict(load_series) if entity_name == "load_today" else {}), 0
+
+    def minute_data_import_export(max_days_previous, now_utc, key, *args, **kwargs):
+        """
+        Stand-in for minute_data_import_export(): the car series for car_charging_energy, nothing for anything else.
+        """
+        return dict(car_series) if key == "car_charging_energy" else {}
+
+    def step(name, save, switch, calls, warnings, warned):
+        """
+        Run one fetch with the switch as given and check the running totals of check calls and warnings, and the flag.
+        """
+        nonlocal failed
+        fresh.car_energy_reported_load = switch
+        fresh.fetch_sensor_data(save=save)
+        result = (checked.call_count, len(_warnings(logged)), fresh.car_energy_reported_load_warned)
+        if result != (calls, warnings, warned):
+            print("ERROR: t13 {} gave (check calls, warnings, warned flag) {}, expected {}".format(name, result, (calls, warnings, warned)))
             failed = True
 
-        fresh.fetch_sensor_data(save=True)
-        if checked.call_count != 1 or fresh.car_energy_reported_load_warned:
-            print("ERROR: t13 save=True ran the check {} times, warned flag {}".format(checked.call_count, fresh.car_energy_reported_load_warned))
-            failed = True
+    with patch.object(fresh, "minute_data_load", side_effect=minute_data_load), patch.object(fresh, "minute_data_import_export", side_effect=minute_data_import_export), patch.object(
+        fresh, "log", side_effect=lambda message, *args, **kwargs: logged.append(message)
+    ), patch.object(fresh, "check_car_energy_reported_load", wraps=fresh.check_car_energy_reported_load) as checked:
+        fresh.car_energy_reported_load_warned = False
+        step("live cycle", save=True, switch=True, calls=1, warnings=1, warned=True)
+        # A comparison tariff whose config turns the switch Off
+        step("comparison run", save=False, switch=False, calls=1, warnings=1, warned=True)
+        step("next live cycle", save=True, switch=True, calls=2, warnings=1, warned=True)
     return failed
