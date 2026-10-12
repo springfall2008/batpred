@@ -1,6 +1,8 @@
 """Display-only gateway isolation and lifecycle regressions."""
 
 import asyncio
+import datetime
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -15,6 +17,7 @@ class TestGatewayDisplayOnly:
         """Build the real gateway state with an in-memory MQTT client."""
         gw = GatewayMQTT.__new__(GatewayMQTT)
         gw.base = MagicMock()
+        gw.prefix = "predbat"
         gw.args = {}
         gw.log = MagicMock()
         gw.initialize(gateway_device_id="pbgw_test", mqtt_host="mqtt.test", gateway_display_only=display)
@@ -152,3 +155,67 @@ class TestGatewayDisplayOnly:
         gw = self._make_gateway(False)
         asyncio.run(gw._publish_raw(gw.topic_command, b"control"))
         gw._mqtt_client.publish.assert_awaited_once()
+
+    def test_display_outage_preserves_cloud_run_and_ping(self):
+        """Connection loss is visible without failing a healthy Cloud run or liveness probe."""
+        from component_base import ComponentBase
+        from components import Components
+        from predbat import PredBat
+        from web import WebInterface
+
+        gw = self._make_gateway()
+        gw.api_started = True
+        gw.update_success_timestamp = lambda: ComponentBase.update_success_timestamp(gw)
+        gw._check_token_refresh = AsyncMock()
+        comps = Components.__new__(Components)
+        comps.components = {"gateway": gw}
+        comps.component_tasks = {"gateway": SimpleNamespace(is_alive=lambda: True)}
+        comps.component_errors = {}
+        base = gw.base
+        base.components = comps
+        base.prefix = "predbat"
+        base.stop_thread = False
+        base.fatal_error = False
+        base.had_errors = False
+        base.get_state_wrapper.side_effect = lambda entity, attribute=None, default=None: False if attribute == "error" else datetime.datetime.now(datetime.timezone.utc).isoformat()
+        base.is_running.side_effect = lambda: PredBat.is_running(base)
+        web = WebInterface.__new__(WebInterface)
+        web.base = base
+        web.log = base.log
+
+        # A disconnected broker, an offline Hub and an online-but-stale Hub are
+        # all display outages. The selected Cloud provider remains healthy.
+        for connected, online in ((False, False), (True, False), (True, True)):
+            gw._mqtt_connected = connected
+            gw._gateway_online = online
+            gw._last_telemetry_time = time.time() - 7200
+            gw.last_success_timestamp = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=2)
+            with patch("gateway.HAS_AIOMQTT", True):
+                assert asyncio.run(gw.run(60, False))
+            assert comps.is_all_alive()
+            assert asyncio.run(web.html_api_ping(None)).status == 200
+            PredBat.record_final_run_status(base, "Charging", "")
+            assert base.record_status.call_args.args[0] == "Charging"
+            display_call = next(call for call in reversed(base.dashboard_item.call_args_list) if call.args[0] == "binary_sensor.predbat_gateway_display_online")
+            assert display_call.args[1] == "off"
+
+        gw._mqtt_connected = True
+        gw._gateway_online = True
+        gw._last_telemetry_time = time.time()
+        gw._update_display_health()
+        assert base.dashboard_item.call_args.args[1] == "on"
+        # A stopped component thread remains a real process-health failure.
+        comps.component_tasks["gateway"] = SimpleNamespace(is_alive=lambda: False)
+        assert not comps.is_all_alive()
+        assert asyncio.run(web.html_api_ping(None)).status == 500
+
+    def test_control_transport_outage_still_fails_health(self):
+        """Optional display health cannot relax the active controller's checks."""
+        gw = self._make_gateway(False)
+        gw.api_started = True
+        gw._mqtt_connected = False
+        assert not gw.is_alive()
+        gw._mqtt_connected = True
+        gw._gateway_online = True
+        gw._last_telemetry_time = time.time() - 121
+        assert not gw.is_alive()

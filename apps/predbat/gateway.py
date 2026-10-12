@@ -661,6 +661,7 @@ class GatewayMQTT(ComponentBase):
                 await self._startup_wait(ticks, lambda: self.api_started)
                 if not self.api_started and not self.api_stop:
                     self.log("Warn: GatewayMQTT: No display telemetry received, continuing startup")
+                self._update_display_health()
                 return True
             # The auto-config wait runs even when the first attempt failed: the MQTT loop
             # retries with backoff in the background, so a transient broker failure at
@@ -688,6 +689,7 @@ class GatewayMQTT(ComponentBase):
                 if self._mqtt_connected and self._last_status is not None:
                     await self._publish_predbat_data()
                 await self._check_token_refresh()
+                self._update_display_health()
                 return True
 
             # Publish any queued plan from on_plan_executed hook
@@ -2623,6 +2625,19 @@ class GatewayMQTT(ComponentBase):
         else:
             await self._mqtt_client.publish(topic, payload, qos=1, retain=retain)
 
+    def _update_display_health(self):
+        """Report optional display connectivity separately from the component loop's health."""
+        online = self._mqtt_connected and self._gateway_online and self._last_telemetry_time > 0 and time.time() - self._last_telemetry_time < _TELEMETRY_STALE_THRESHOLD
+        self.dashboard_item(
+            f"binary_sensor.{self.prefix}_gateway_display_online",
+            state="on" if online else "off",
+            attributes={"friendly_name": "PredBat Hub display online", "device_class": "connectivity"},
+        )
+        # A disconnected desk display cannot make the working inverter provider
+        # fail its run or liveness probe. Components still checks the owning
+        # thread and timestamp; a stopped component thread remains unhealthy.
+        self.update_success_timestamp()
+
     def is_alive(self):
         """Check if the gateway component is alive and receiving data.
 
@@ -2630,9 +2645,14 @@ class GatewayMQTT(ComponentBase):
         offline (LWT says so — we're still connected, just no data) OR
         we've received telemetry within the last 2 minutes.
 
+        In display mode only the component must be started: optional transport
+        availability is reported separately by _update_display_health().
+
         Returns:
             bool: True if healthy, False otherwise.
         """
+        if self.gateway_display_only:
+            return self.api_started
         if not self._mqtt_connected:
             return False
 
