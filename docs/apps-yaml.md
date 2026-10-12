@@ -1150,10 +1150,6 @@ If you don't have any PV panels, comment or delete this line out of `apps.yaml`.
 
 **Note:**: these '_today' entity names must all be *energy* sensors recording electricity measured over a time period, NOT *power* sensors which measure instantaneous power.  They must increase during the day and not have any gaps or reduce in value (other than at midnight).
 
-The **load_power_fill_enable** feature helps to improve the accuracy of historical load data by using instantaneous power readings to fill gaps and smooth
-out load_today sensors that update infrequently (e.g., sensors that increment in kWh units may only update every hour). This preprocessing happens before
-the main load data analysis and can significantly improve prediction accuracy, especially for systems with coarse-grained energy sensors.
-
 See the [Workarounds](#workarounds) section below for configuration settings for scaling these if required.
 
 If you have multiple inverters then you may find that the **load_today** figures are incorrect as the inverters share the house load between them.
@@ -1256,6 +1252,19 @@ the lowest day's historical load will be discarded.
 
 - **load_filter_threshold** - Sets the number of minutes of zero load data to be considered a gap (that's filled with average data), the default is 30.
 To disable, set it to 1440.
+
+- **load_power_fill_enable** (default true) helps to improve the accuracy of historical load data by using instantaneous power readings to fill gaps and smooth
+out load_today sensors that update infrequently (e.g., sensors that increment in kWh units may only update every hour). This preprocessing happens before
+the main load data analysis and can significantly improve prediction accuracy, especially for systems with coarse-grained energy sensors. Set to 'false' to turn this feature off.
+
+e.g.
+
+```yaml
+  load_filter_threshold: 60
+  load_power_fill_enable: false
+```
+
+See [Load filtering warning in FAQ's](faq.md#i-see-repeated-log-messages-warn-found-1-periods-of-zero-load-with-power-data-filling-using-power-integration).
 
 ## iBoost energy
 

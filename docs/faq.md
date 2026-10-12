@@ -117,6 +117,25 @@ To reverse the direction of your [grid power entity](apps-yaml.md#power-data) in
 
 If this is your situation, create a template sensor in Home Assistant that combines the two into one signed value (e.g. `export - import`, or `-import` when only importing) and point **grid_power** at that combined template instead of either sensor directly.
 
+## I see repeated log messages "Warn: Found 1 periods of zero load with power data, filling using power integration"
+
+This is often normal behaviour for coarse or infrequently changing house energy load sensors!
+
+With the Predbat configuration **load_power_fill_enable** set to the default value of 'true', on every 5 minute Predbat cycle it scans your historic house load sensor for stretches of at least **load_filter_threshold** duration (default = plan_interval_minutes = 30 minutes) where the house load didn't move while load_power recorded consumption.
+When predbat finds a period where there is no change in house load energy it fills those stretches by integrating the house load power sensor to fill the gap, and logs the above warning every time it finds one.
+
+The log line immediately after the warning names the exact window: "Zero load period starting at *timestamp* (N minutes) for M minutes with base value V" and you can check your load_today helper's history at that time to confirm this behaviour.
+
+There are two scenarios where these warnings are often logged:
+
+- A long region with base value 0.0 — the part of the history window before/around when you first setup Predbat or your house load helper started counting. This is normal for a fresh counter; it ages out as days_previous history accumulates in Home Assistant.
+- ~30-40 minute flat plateaus (e.g. "for 34 minutes with base value 1.9"): a daily load energy counter that steps in 0.1 kWh increments only moves that often at low load — at 200 W base load overnight for example, one 0.1kWh step takes 30 minutes, so the counter reads constant for half an hour while the power sensor shows the real draw.
+
+What you can do
+
+Doing nothing is fine: the fill reconstructs the missing consumption and the plan is using it, so it is self-healing rather than an error.
+If you want the log file to be quiet: set load_power_fill_enable: false in apps.yaml or increase load_filter_threshold.  See [load filtering in apps.yaml](apps-yaml.md#load-filtering) for more details. The trade-off is that genuine gaps in your load_today sensor will no longer be auto-filled.
+
 ## I have a second solar array that Predbat doesn't manage as an inverter - how do I include its generation?
 
 The [Power Data](apps-yaml.md#power-data) **pv_power**/**pv_today** lists take one entry per inverter Predbat is actually configured to manage (`num_inverters`) - you can't just add an extra line for a second array that has no corresponding managed inverter (e.g. a separate FIT-metered string, or a second hybrid system Predbat isn't controlling), Predbat will still only look for as many sensors as it has inverters defined.

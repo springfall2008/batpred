@@ -15,6 +15,11 @@ It's recommended to watch the [YouTube video on Energy tariff comparison](https:
 
 Keep in mind this is an approximation of costs for the following 24-hour period and the reality could be different. In particular, car charging costs are unlikely to reflect the true picture as it will only be planned after you plug in.
 Smart tariffs like Octopus Intelligent Go can give you extra cheap car slots, and Octopus Intelligent Flux where Octopus controls the charging/discharging, mean these tariffs cannot be predicted as accurately.
+
+Solar Generation and House Load are by their nature forecast predictions and whilst Predbat tries to allow for the unknown variability in those predictions, the actual generation and house load will vary and so Predbat's plan for that day will in all likelihood be different.
+
+Standing charge is by design not included in the comparison amd nor is there a mechanism to include the standing charge for each tariff in the [comparison configuration](#configuring-the-tariffs-to-compare). In most cases standing charges are usually quite similar across tariffs and will make little difference to the comparison anyway.
+
 When changing tariffs, you should use your judgment, the Predbat Compare data is only a helpful guide.
 
 ## Configuring the tariff's to compare
