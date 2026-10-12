@@ -13,6 +13,9 @@ but car_charging_energy shows the load sensor cannot include the car charger - t
 where the low-load test cancelled Octopus Intelligent dispatches that were really charging.
 """
 
+import inspect
+import re
+
 HOUSE_KW = 0.3
 CAR_KW = 7.0
 
@@ -180,6 +183,10 @@ def test_car_energy_reported_load(my_predbat):
         _setup(my_predbat, load_includes_car=False, sessions=((70, 190),))
         windows = my_predbat.car_energy_exceeds_load_windows()
         check("t12 counts", windows == 5, "windows {}".format(windows))
+
+        print("Test 13: fetch_sensor_data() only runs the check for the live plan, not compare.py's save=False runs")
+        source = inspect.getsource(type(my_predbat).fetch_sensor_data)
+        check("t13 gated on save", re.search(r"if save:\n\s+self\.check_car_energy_reported_load\(\)", source) is not None, "fetch_sensor_data() no longer gates the check on save")
     finally:
         for field, value in saved.items():
             setattr(my_predbat, field, value)

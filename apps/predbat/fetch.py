@@ -1379,7 +1379,10 @@ class Fetch:
 
         # Car charging hold - when enabled battery is held during car charging in simulation
         self.car_charging_energy = self.load_car_energy(self.now_utc)
-        self.check_car_energy_reported_load()
+        # Only the live plan's view: compare.py re-runs this fetch per candidate tariff (save=False), and a tariff
+        # config that turns car_energy_reported_load Off would otherwise clear the warned flag and re-arm the warning
+        if save:
+            self.check_car_energy_reported_load()
 
         # Log current values
         self.log("Current data so far today: load {}kWh, import {}kWh, export {}kWh, PV {}kWh".format(dp2(self.load_minutes_now), dp2(self.import_today_now), dp2(self.export_today_now), dp2(self.pv_today_now)))
