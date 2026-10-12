@@ -195,7 +195,8 @@ class Prediction(PredictionBatch):
             self.rate_import = base.rate_import
             self.rate_export = base.rate_export
             self.io_adjusted = base.io_adjusted
-            self.rate_max = base.rate_max
+            # The tariff's own highest import rate, without event rewards - the floor for a dispatch that goes away
+            self.rate_max = base.rate_import_tariff_max
             self.pv_forecast_minute_step = pv_forecast_minute_step
             self.pv_forecast_minute10_step = pv_forecast_minute10_step
             self.load_minutes_step = load_minutes_step
@@ -738,7 +739,8 @@ class Prediction(PredictionBatch):
             dispatch_rate = import_rate
             dispatch_gone = io_adjusted.get(minute_absolute, 0) and pv_scenario == PV_SCENARIO_PV10 and minute > 30
             if dispatch_gone:
-                import_rate = self.rate_max  # Assume in worst case that slot goes away and max rate applies
+                # Worst case the slot goes away: the tariff's highest rate, or the slot's own if an event makes it dearer
+                import_rate = max(self.rate_max, import_rate)
             export_rate = rate_export.get(minute_absolute, 0)
 
             # Alert?

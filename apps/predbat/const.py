@@ -33,6 +33,9 @@ PREDICT_STEP = 5
 DYNAMIC_LOAD_CAR_SENSOR_MINUTES = 2
 DYNAMIC_LOAD_CAR_START_MINUTES = 3
 DYNAMIC_LOAD_CAR_LOAD_MINUTES = 5
+# The load test reads "low" - no car can be charging - under this fraction of car_charging_threshold. The
+# margin below the threshold allows for a load sensor that under-reads while the battery is charging (GH#5461)
+DYNAMIC_LOAD_CAR_LOW_FACTOR = 0.85
 # A car_charging_now reading only confirms the half hour it is in (keeping that half hour cheap once the car
 # stops, GH#5316) from this many minutes into it: the sensor can lag a car that stopped just before the boundary
 DYNAMIC_LOAD_CAR_CONFIRM_MINUTES = 2
@@ -168,3 +171,7 @@ PREDBAT_MODE_CONTROL_CHARGEDISCHARGE = 3
 # need the same answer to "which of these two states is the more significant one to show".
 CHARGE_STATE_PRECEDENCE = ["Charging", "Freeze charging", "Hold charging"]
 EXPORT_STATE_PRECEDENCE = ["Exporting", "Freeze exporting", "Hold exporting"]
+
+# A log text that repeats (an API response, an Intelligent slot list) is logged in full again after this long, so
+# the full text is never only in a rotated-out log file; in between it is logged as one short line
+REPEAT_FULL_LOG_SECONDS = 3600
