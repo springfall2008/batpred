@@ -1817,6 +1817,157 @@ def test_battery_size_tracking_fallback_non_sticky(my_predbat):
     return failed
 
 
+def test_battery_max_soc_ceiling_single_inverter(my_predbat):
+    """
+    Test best_soc_max is capped to the device ceiling for a single capped inverter
+
+    With one inverter at battery_max_soc below 100 the planner ceiling in kWh is the
+    inverter's soc_max (capacity) scaled by that percentage. soc_max itself is the
+    capacity and must stay unchanged - it remains the basis of soc_kwh, the reserve
+    and the soc_percent maths.
+    """
+    print("*** Running test: battery_max_soc_ceiling_single_inverter ***")
+    failed = False
+
+    my_predbat.battery_scaling_auto = False
+    my_predbat.set_arg("soc_max", 10.0, index=0)
+    my_predbat.set_arg("battery_max_soc", 80, index=0)
+    my_predbat.set_arg("best_soc_max", 0)  # 0 means no user cap, so the ceiling is used
+    setup_predbat(my_predbat)
+    remove_test_history_data(my_predbat)
+
+    try:
+        inv = Inverter(my_predbat, 0)
+        my_predbat.inverters = [inv]
+        my_predbat.fetch_config_options()
+        my_predbat.apply_battery_max_soc_ceiling()
+        expected_ceiling = 10.0 * 80 / 100.0  # 8.0
+        if abs(my_predbat.best_soc_max - expected_ceiling) > 0.001:
+            print("ERROR: best_soc_max expected {:.3f}, got {:.3f}".format(expected_ceiling, my_predbat.best_soc_max))
+            failed = True
+        else:
+            print("SUCCESS: best_soc_max capped to {:.3f} for a single capped inverter".format(my_predbat.best_soc_max))
+        if abs(inv.soc_max - 10.0) > 0.001:
+            print("ERROR: soc_max should be unchanged at 10.0, got {:.3f}".format(inv.soc_max))
+            failed = True
+        else:
+            print("SUCCESS: soc_max unchanged at {:.3f}".format(inv.soc_max))
+    except Exception as e:
+        print("ERROR: test_battery_max_soc_ceiling_single_inverter raised exception: {}".format(e))
+        import traceback
+
+        traceback.print_exc()
+        failed = True
+
+    my_predbat.battery_scaling_auto = False
+    return failed
+
+
+def test_battery_max_soc_ceiling_two_inverters(my_predbat):
+    """
+    Test best_soc_max is capped to the summed device ceiling for two inverters
+
+    With two inverters the planner ceiling is the sum of each inverter's usable
+    capacity, where an inverter at battery_max_soc of 100 contributes its full
+    soc_max and a capped one contributes soc_max scaled by its percentage.
+    """
+    print("*** Running test: battery_max_soc_ceiling_two_inverters ***")
+    failed = False
+
+    my_predbat.battery_scaling_auto = False
+    my_predbat.set_arg("soc_max", 10.0, index=0)
+    my_predbat.set_arg("battery_max_soc", 80, index=0)
+    my_predbat.set_arg("soc_max", 5.0, index=1)
+    my_predbat.set_arg("battery_max_soc", 100, index=1)
+    my_predbat.set_arg("best_soc_max", 0)  # 0 means no user cap, so the ceiling is used
+    setup_predbat(my_predbat)
+    remove_test_history_data(my_predbat)
+
+    try:
+        inv0 = Inverter(my_predbat, 0)
+        inv1 = Inverter(my_predbat, 1)
+        my_predbat.inverters = [inv0, inv1]
+        my_predbat.fetch_config_options()
+        my_predbat.apply_battery_max_soc_ceiling()
+        expected_ceiling = 10.0 * 80 / 100.0 + 5.0 * 100 / 100.0  # 8.0 + 5.0 = 13.0
+        if abs(my_predbat.best_soc_max - expected_ceiling) > 0.001:
+            print("ERROR: best_soc_max expected {:.3f}, got {:.3f}".format(expected_ceiling, my_predbat.best_soc_max))
+            failed = True
+        else:
+            print("SUCCESS: best_soc_max capped to {:.3f} for two inverters".format(my_predbat.best_soc_max))
+        if abs(inv0.soc_max - 10.0) > 0.001:
+            print("ERROR: inv0 soc_max should be unchanged at 10.0, got {:.3f}".format(inv0.soc_max))
+            failed = True
+        if abs(inv1.soc_max - 5.0) > 0.001:
+            print("ERROR: inv1 soc_max should be unchanged at 5.0, got {:.3f}".format(inv1.soc_max))
+            failed = True
+        if not failed:
+            print("SUCCESS: both inverter soc_max values unchanged")
+    except Exception as e:
+        print("ERROR: test_battery_max_soc_ceiling_two_inverters raised exception: {}".format(e))
+        import traceback
+
+        traceback.print_exc()
+        failed = True
+
+    my_predbat.battery_scaling_auto = False
+    return failed
+
+
+def test_battery_max_soc_default_100_leaves_best_soc_max(my_predbat):
+    """
+    Test the default battery_max_soc of 100 leaves best_soc_max as before
+
+    With no inverter capping below 100 the planner ceiling is unchanged, so a user
+    best_soc_max value must survive fetch_config_options untouched.
+    """
+    print("*** Running test: battery_max_soc_default_100_leaves_best_soc_max ***")
+    failed = False
+
+    my_predbat.battery_scaling_auto = False
+    my_predbat.set_arg("soc_max", 10.0, index=0)
+    my_predbat.set_arg("battery_max_soc", 100, index=0)
+
+    # Direct get_arg through the ceiling logic so the raw user best_soc_max round-trips,
+    # independent of the test harness's HA config_index value for the input_number.
+    def mock_get_arg(arg, *a, **k):
+        if arg == "best_soc_max":
+            return 12.0
+        return orig_get_arg(arg, *a, **k)
+
+    orig_get_arg = my_predbat.get_arg
+    my_predbat.get_arg = mock_get_arg
+    setup_predbat(my_predbat)
+    remove_test_history_data(my_predbat)
+
+    try:
+        inv = Inverter(my_predbat, 0)
+        my_predbat.inverters = [inv]
+        my_predbat.fetch_config_options()
+        my_predbat.apply_battery_max_soc_ceiling()
+        if abs(my_predbat.best_soc_max - 12.0) > 0.001:
+            print("ERROR: best_soc_max expected unchanged at 12.0, got {:.3f}".format(my_predbat.best_soc_max))
+            failed = True
+        else:
+            print("SUCCESS: best_soc_max unchanged at {:.3f} with default battery_max_soc".format(my_predbat.best_soc_max))
+        if abs(inv.soc_max - 10.0) > 0.001:
+            print("ERROR: soc_max should be unchanged at 10.0, got {:.3f}".format(inv.soc_max))
+            failed = True
+        else:
+            print("SUCCESS: soc_max unchanged at {:.3f}".format(inv.soc_max))
+    except Exception as e:
+        print("ERROR: test_battery_max_soc_default_100_leaves_best_soc_max raised exception: {}".format(e))
+        import traceback
+
+        traceback.print_exc()
+        failed = True
+    finally:
+        my_predbat.get_arg = orig_get_arg
+
+    my_predbat.battery_scaling_auto = False
+    return failed
+
+
 def run_find_battery_size_tests(my_predbat):
     """
     Run all find_battery_size tests
@@ -1955,6 +2106,18 @@ def run_find_battery_size_tests(my_predbat):
         return failed
 
     failed |= test_battery_size_tracking_fallback_non_sticky(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_battery_max_soc_ceiling_single_inverter(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_battery_max_soc_ceiling_two_inverters(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_battery_max_soc_default_100_leaves_best_soc_max(my_predbat)
     if failed:
         return failed
 
