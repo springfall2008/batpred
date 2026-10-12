@@ -3797,6 +3797,8 @@ Described by @WesSec in [#2846](https://github.com/springfall2008/batpred/issues
 | Freeze exporting | e.g. 50 W | 0 | discharge limit |
 | Demand / anything else | e.g. 50 W | charge limit | discharge limit |
 
+Match each status by its start, not exactly: a run that raised a warning records its state followed by the warning, for example `Charging, Warn: ...`, and an exact match would fall through to *anything else*.
+
 Charging is not stopped at a target SoC; Predbat's next calculation changes the status instead. This route allows for more extensive integration, for instance lowering the charge and discharge limits on battery temperature and passing them to Predbat through the [manual API](manual-api.md), so the plan matches the real limits.
 
 ## I want to add an unsupported inverter to Predbat
