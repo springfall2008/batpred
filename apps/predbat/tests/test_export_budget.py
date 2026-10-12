@@ -401,6 +401,18 @@ def test_config_parse(my_predbat):
             failed = True
     my_predbat.args.pop("export_budget_mode", None)
     my_predbat.args.pop("export_budget_cap_kwh", None)
+    # `export_budget_mode: off` unquoted is YAML false: it means off and must pass apps.yaml validation
+    my_predbat.args["export_budget_mode"] = False
+    saved_arg_errors = my_predbat.arg_errors
+    my_predbat.arg_errors = {}
+    try:
+        my_predbat.validate_config()
+        if "export_budget_mode" in my_predbat.arg_errors:
+            print("ERROR: export_budget_mode false failed validation: {}".format(my_predbat.arg_errors["export_budget_mode"]))
+            failed = True
+    finally:
+        my_predbat.arg_errors = saved_arg_errors
+        my_predbat.args.pop("export_budget_mode", None)
     my_predbat.fetch_config_options()
     return failed
 
@@ -436,6 +448,7 @@ def test_soc_history_fetch(my_predbat):
     now = my_predbat.now_utc
     records = [{"last_updated": (now - timedelta(minutes=60)).isoformat(), "state": "50"}, {"last_updated": (now - timedelta(minutes=30)).isoformat(), "state": "60"}]
     saved_soc_max = [inverter.__dict__.get("soc_max", "missing") for inverter in my_predbat.inverters]
+    saved_scaling = [inverter.__dict__.get("battery_scaling", "missing") for inverter in my_predbat.inverters]
     for inverter in my_predbat.inverters:
         inverter.soc_max = 10.0
     my_predbat.args["soc_percent"] = "sensor.test_battery_soc"
@@ -447,17 +460,35 @@ def test_soc_history_fetch(my_predbat):
         if not history or abs(history.get(0, -1) - 0.6 * total) > 1e-6 or abs(history.get(45, -1) - 0.5 * total) > 1e-6:
             print("ERROR: export_budget SoC history now {} 45 minutes ago {} expected {} / {}".format(history.get(0) if history else None, history.get(45) if history else None, 0.6 * total, 0.5 * total))
             failed = True
+        # A soc_kw sensor is scaled by battery_scaling, as the live SoC is (inverter.py)
+        my_predbat.args.pop("soc_percent", None)
+        my_predbat.args["soc_kw"] = "sensor.test_battery_soc_kw"
+        for inverter in my_predbat.inverters:
+            inverter.battery_scaling = 0.8
+        kw_records = [{"last_updated": (now - timedelta(minutes=60)).isoformat(), "state": "5"}, {"last_updated": (now - timedelta(minutes=30)).isoformat(), "state": "6"}]
+        my_predbat.get_history_wrapper = lambda entity_id, days=30, required=True, tracked=True: [kw_records]
+        history = my_predbat.fetch_export_budget_soc_history()
+        expect_now, expect_45 = 0.8 * 6 * len(my_predbat.inverters), 0.8 * 5 * len(my_predbat.inverters)
+        if not history or abs(history.get(0, -1) - expect_now) > 1e-6 or abs(history.get(45, -1) - expect_45) > 1e-6:
+            print("ERROR: export_budget soc_kw history now {} 45 minutes ago {} expected {} / {}".format(history.get(0) if history else None, history.get(45) if history else None, expect_now, expect_45))
+            failed = True
         my_predbat.get_history_wrapper = lambda entity_id, days=30, required=True, tracked=True: []
         if my_predbat.fetch_export_budget_soc_history():
             print("ERROR: export_budget SoC history should be empty without sensor history")
             failed = True
     finally:
         del my_predbat.get_history_wrapper
-        for inverter, soc_max in zip(my_predbat.inverters, saved_soc_max):
+        my_predbat.args.pop("soc_kw", None)
+        my_predbat.args["soc_percent"] = "sensor.test_battery_soc"
+        for inverter, soc_max, scaling in zip(my_predbat.inverters, saved_soc_max, saved_scaling):
             if soc_max == "missing":
                 del inverter.soc_max
             else:
                 inverter.soc_max = soc_max
+            if scaling == "missing":
+                inverter.__dict__.pop("battery_scaling", None)
+            else:
+                inverter.battery_scaling = scaling
     return failed
 
 
