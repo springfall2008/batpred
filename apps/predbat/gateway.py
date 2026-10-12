@@ -22,6 +22,7 @@ import pytz as _pytz
 
 from component_base import ComponentBase
 from control_handoff import control_gate_for, gated_mqtt_publish
+from inverter_gateways import capture_arg, capture_inverter_config, hub_direct_scope, publish_routed_hub, runtime_for
 
 try:
     import gateway_status_pb2 as pb
@@ -1923,6 +1924,12 @@ class GatewayMQTT(ComponentBase):
         if unread:
             self.non_fatal_error_occurred()
 
+    def set_arg(self, arg, value):
+        """Keep this gateway's mappings separate from other configured gateways."""
+        if not capture_arg(self, arg, value):
+            return super().set_arg(arg, value)
+
+    @capture_inverter_config("predbat_gateway", hub_direct_scope)
     def automatic_config(self):
         """Register gateway entities with PredBat's inverter model.
 
@@ -2212,7 +2219,7 @@ class GatewayMQTT(ComponentBase):
                 if ("ac" in model) or ("aio" in model) or ("all-in-one" in model):
                     ac_coupled = True
                     break
-        if model_name:
+        if model_name and runtime_for(self) is None:
             hybrid_entity = f"switch.{self.prefix}_inverter_hybrid"
             self.set_state_wrapper(hybrid_entity, "off" if ac_coupled else "on")
             self.log(f"Info: GatewayMQTT: model '{model_name}' -> ac_coupled={ac_coupled}, set {hybrid_entity} {'off' if ac_coupled else 'on'}")
@@ -2467,6 +2474,11 @@ class GatewayMQTT(ComponentBase):
         carries no inverter serial. Gated only on an active MQTT connection — it does not
         depend on auto-config, so the state is established as early as possible.
         """
+        if runtime_for(self) is not None:
+            # Whole-Hub mode/reset and executable-plan authority belongs to the
+            # coordinator, never to a discovery or primary preference update.
+            return
+
         if not self._mqtt_connected:
             # Force a re-send after reconnect (command is not retained).
             self._last_read_only = None
@@ -2510,6 +2522,11 @@ class GatewayMQTT(ComponentBase):
         not yet run, or set_read_only is active. Each serial is reset at most once per
         process lifetime (tracked in _inverter_reset_done).
         """
+        if runtime_for(self) is not None:
+            # Whole-Hub mode/reset and executable-plan authority belongs to the
+            # coordinator, never to a discovery or primary preference update.
+            return
+
         if self.get_arg("set_read_only", False):
             self._inverter_reset_done.clear()  # allow re-send if read-only is later disabled
             return
@@ -2536,15 +2553,19 @@ class GatewayMQTT(ComponentBase):
         if not isinstance(inverters, (list, tuple)):
             return {}
         caps = {}
+        runtime = runtime_for(self)
+        slot_count = len(runtime.routes) if runtime is not None else len(self._inverter_slot_serials)
         for inverter in inverters:
             slot = getattr(inverter, "id", None)
-            if getattr(inverter, "inverter_type", None) != "GWMQTT" or not isinstance(slot, int) or not 0 <= slot < len(self._inverter_slot_serials):
+            if getattr(inverter, "inverter_type", None) != "GWMQTT" or not isinstance(slot, int) or not 0 <= slot < slot_count:
                 continue
             charge_cap_w = int(round((inverter.battery_rate_max_charge or 0) * MINUTE_WATT))
             discharge_cap_w = int(round((inverter.battery_rate_max_discharge or 0) * MINUTE_WATT))
             if charge_cap_w <= 0 or discharge_cap_w <= 0:
                 continue
-            caps[self._inverter_slot_serials[slot]] = (charge_cap_w, discharge_cap_w)
+            serial = runtime.serial_for_slot("predbat_gateway", slot) if runtime is not None else self._inverter_slot_serials[slot]
+            if serial is not None:
+                caps[serial] = (charge_cap_w, discharge_cap_w)
         return caps
 
     async def _check_rate_caps(self):
@@ -2594,6 +2615,11 @@ class GatewayMQTT(ComponentBase):
             plan_entries: List of plan entry dicts.
             timezone_str: IANA timezone string (e.g. "Europe/London").
         """
+        if runtime_for(self) is not None:
+            # Whole-Hub mode/reset and executable-plan authority belongs to the
+            # coordinator, never to a discovery or primary preference update.
+            return
+
         if self.gateway_display_only:
             return
         if not self._plan_changed(plan_entries):
@@ -2629,6 +2655,11 @@ class GatewayMQTT(ComponentBase):
         stale. The version is left unchanged because the plan content has not changed.
         Gated on an active MQTT connection and a previously built plan.
         """
+        if runtime_for(self) is not None:
+            # Whole-Hub mode/reset and executable-plan authority belongs to the
+            # coordinator, never to a discovery or primary preference update.
+            return
+
         if self._last_plan_entries is None or self._last_plan_timezone is None or not self._mqtt_connected:
             return
         if time.time() - self._last_plan_publish_time <= _PLAN_REPUBLISH_INTERVAL:
@@ -2687,6 +2718,9 @@ class GatewayMQTT(ComponentBase):
             self.log(f"Warn: GatewayMQTT: Display mode blocked publish to {topic}")
             return
         if not (self._mqtt_client and self._mqtt_connected):
+            return
+
+        if await publish_routed_hub(self, topic, payload, retain):
             return
 
         gate = control_gate_for(getattr(self, "base", None))

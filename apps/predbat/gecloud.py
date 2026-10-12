@@ -26,6 +26,7 @@ from component_base import ComponentBase
 from coordinator import inverter_record
 from mock_base import MockBase as SharedMockBase
 from control_handoff import control_mutation
+from inverter_gateways import capture_arg, capture_inverter_config, cloud_direct_scope, route_cloud_mutation, runtime_for
 
 """
 GE Cloud data download
@@ -1295,6 +1296,10 @@ class GECloudDirect(ComponentBase):
 
     async def enable_default_options(self, device, registers):
         """Enable default options for the device."""
+        runtime = runtime_for(self)
+        if runtime is not None and not runtime.selected("givenergy", device):
+            return
+
         changed = False
         # When both a direct power register and its percentage equivalent exist, the power register
         # is used as the rate control, so the percentage register must be left at 100% to avoid it
@@ -1529,6 +1534,12 @@ class GECloudDirect(ComponentBase):
                 self.dashboard_item(entity_id, state="on" if state else "off", attributes=attributes, app="gecloud")
                 self.register_entity_map[entity_id] = {"device": device, "key": key}
 
+    def set_arg(self, arg, value):
+        """Keep battery discovery local when physical gateway routing is attached."""
+        if not capture_arg(self, arg, value):
+            return super().set_arg(arg, value)
+
+    @capture_inverter_config("givenergy", cloud_direct_scope)
     async def async_automatic_config(self, devices):
         """
         Automatically configure predbat using GE Cloud auto-detected devices.
@@ -1771,7 +1782,8 @@ class GECloudDirect(ComponentBase):
                     break
         entity_id = "switch.{}_inverter_hybrid".format(self.prefix)
         self.log("GECloud: Detected inverter model {} indicates ac_coupled={}, setting {} to {}".format(model_name, ac_coupled, entity_id, "off" if ac_coupled else "on"))
-        await self.set_state_external(entity_id, not ac_coupled)
+        if runtime_for(self) is None:
+            await self.set_state_external(entity_id, not ac_coupled)
 
         self.log("GECloud: Automatic configuration complete")
 
@@ -3281,6 +3293,11 @@ class GECloudDirect(ComponentBase):
             self.log("GECloud: Warn: Failed to get data from {}".format(endpoint))
         return data
 
+    @route_cloud_mutation(
+        GE_API_INVERTER_WRITE_SETTING,
+        definitive_result=ge_write_response_definitive,
+        definitive_error=lambda error: isinstance(error, GECloudTerminalError) and error.code in (-3, -4, -7),
+    )
     @control_mutation(
         "givenergy",
         GE_API_INVERTER_WRITE_SETTING,
