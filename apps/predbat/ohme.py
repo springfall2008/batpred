@@ -28,6 +28,7 @@ from datetime import timedelta, timezone
 from const import TIME_FORMAT_HA, DISPATCH_SOURCE_CHARGER_SCHEDULE
 from component_base import ComponentBase
 from predbat_metrics import record_api_call
+from utils import parse_car_plan_windows, in_car_plan_window
 
 GOOGLE_API_KEY = "AIzaSyC8ZeZngm33tpOXLpbXeKfwtyZ1WrkbdBY"  # cspell:disable-line
 VERSION = "1.5.1"
@@ -94,9 +95,6 @@ CAR_DISCOVERY_ENTITY_SPEC = {
     "octopus_ready_time": {"entity_id": "select.predbat_ohme_target_time", "domain": "select", "access": "rw"},
     "octopus_charge_limit": {"entity_id": "number.predbat_ohme_target_percent", "domain": "number", "access": "rw"},
 }
-
-# Format Predbat writes its planned car charging windows in - see PredBat.time_abs_str()
-PLAN_TIME_FORMAT = "%m-%d %H:%M:%S"
 
 # Longest gap between power readings we will still integrate over. The charge session is polled
 # every 120 seconds, so a longer gap means Predbat stalled or was restarted and we have no evidence
@@ -247,6 +245,10 @@ class OhmeAPI(ComponentBase):
         # The mode the args were last wired for. Kept apart from slot_mode so that a wiring change
         # lost to a failed poll is still owed, and made on the next one
         self.slot_mode_applied = None
+        # On Octopus Intelligent, the sensor Octopus's own record of the dispatches is read from, None
+        # when there is not one and Ohme's slots are all there is - see octopus_dispatch_sensor()
+        self.slot_source = None
+        self.slot_source_applied = None
         # Ohme's own schedule is Predbat's car charging plan, as load only - see charger_slots_wanted()
         self.charger_slots = False
         # The reason charger_slots_wanted() last stood down, so it is only logged when it changes
@@ -313,9 +315,10 @@ class OhmeAPI(ComponentBase):
         # After the publish, so the slots already read the new way when the args move. Compared
         # against what was last wired rather than done on the change alone: if the session fetch or
         # the publish above fails, this is skipped, and has to still be owed on the next poll
-        if poll and self.client.serial and self.slot_mode != self.slot_mode_applied:
+        if poll and self.client.serial and (self.slot_mode != self.slot_mode_applied or self.slot_source != self.slot_source_applied):
             await self.apply_slot_mode()
             self.slot_mode_applied = self.slot_mode
+            self.slot_source_applied = self.slot_source
 
         # Unconditional and outside the "if first and self.client.serial:" block above, so a
         # transient failure on that one-shot cycle is retried rather than lost - see
@@ -391,30 +394,16 @@ class OhmeAPI(ComponentBase):
         if planned is None:
             return False
 
-        now = self.now_utc_exact
-        windows = []
-        for window in planned:
-            try:
-                start = self.local_tz.localize(datetime.datetime.strptime(window["start"], PLAN_TIME_FORMAT).replace(year=now.year))
-                end = self.local_tz.localize(datetime.datetime.strptime(window["end"], PLAN_TIME_FORMAT).replace(year=now.year))
-            except (KeyError, TypeError, ValueError):
-                continue
-            # The plan carries no year, so rebuild it around now for windows that cross New Year
-            if start < now - timedelta(hours=23):
-                start = start.replace(year=start.year + 1)
-                end = end.replace(year=end.year + 1)
-            elif end < start:
-                end = end.replace(year=end.year + 1)
-            windows.append((start, end))
-        self.control_windows = windows
+        # The plan carries no year - parse_car_plan_windows() (shared with myenergi and GivEnergy
+        # EVC) rebuilds it around now, whichever side of New Year it is read (#269)
+        self.control_windows = parse_car_plan_windows(planned, self.now_utc_exact, self.local_tz)
         return True
 
     def should_charge_now(self):
         """
         Is now inside one of Predbat's planned charging windows.
         """
-        now = self.now_utc_exact
-        return any(start <= now < end for start, end in self.control_windows)
+        return in_car_plan_window(self.control_windows, self.now_utc_exact)
 
     def control_drifted(self, should_charge):
         """
@@ -596,6 +585,38 @@ class OhmeAPI(ComponentBase):
             slot_mode = None
         self.charger_slots = slot_mode == SLOT_MODE_CHARGER
         self.slot_mode = slot_mode
+        # Asked on every poll, like the mode: the Octopus component wires its dispatch sensor when it
+        # finds a device and clears it when the last one goes, and the Ohme wiring has to follow
+        slot_source = self.octopus_dispatch_sensor() if slot_mode == SLOT_MODE_INTELLIGENT else None
+        if slot_mode == SLOT_MODE_INTELLIGENT and (slot_source != self.slot_source or self.slot_mode_applied != SLOT_MODE_INTELLIGENT):
+            if slot_source:
+                self.log("Info: Ohme API: Taking the planned car slots from Ohme and the completed dispatches from {}".format(slot_source))
+            else:
+                self.log("Info: Ohme API: No Octopus dispatch sensor is set in octopus_intelligent_slot, so the completed car slots come from Ohme too - they are only kept until the car is unplugged")
+        self.slot_source = slot_source
+
+    def octopus_dispatch_sensor(self):
+        """
+        The sensor holding Octopus's own record of the car's dispatches, or None when there is not one.
+
+        Ohme knows the charge that is planned sooner and better than Octopus reports it, but only for
+        the session in progress: unplug the car and every slot it charged in is gone, and with them
+        the off-peak rate those minutes were billed at (#5413). Octopus keeps its completed dispatches,
+        so where octopus_intelligent_slot already points at a sensor of Octopus's - wired by the
+        Octopus component, or set in apps.yaml to the Octopus Energy integration's - that sensor is
+        left as the record of what has been dispatched and Ohme supplies the plan beside it.
+
+        An Ohme sensor is not such a record, whether ours or the Ohme integration's. Nor is an
+        unmatched regex from the apps.yaml default, still its literal "re:" string at this point.
+        """
+        existing = self.get_arg("octopus_intelligent_slot", default=None, indirect=False)
+        if isinstance(existing, list):
+            existing = existing[0] if existing else None
+        if not existing or not isinstance(existing, str) or existing.startswith("re:"):
+            return None
+        if existing == SLOT_ACTIVE_ENTITY or existing.split(".")[-1].startswith("ohme_"):
+            return None
+        return existing
 
     async def apply_slot_mode(self):
         """
@@ -604,9 +625,10 @@ class OhmeAPI(ComponentBase):
         if self.slot_mode == SLOT_MODE_INTELLIGENT:
             await self.automatic_config_octopus_intelligent()
             return
-        # Only the Intelligent wiring holds the car slots against the Octopus component
+        # Only the Intelligent wiring holds the ready time and charge limit against the Octopus component
         if self.base.car_slot_owner == "ohme":
             self.base.car_slot_owner = None
+        self.clear_planned_slots()
         if self.slot_mode == SLOT_MODE_CHARGER:
             await self.automatic_config_charger_slots()
         else:
@@ -634,7 +656,7 @@ class OhmeAPI(ComponentBase):
             existing = existing[0]
         # An unmatched regex from the apps.yaml default is still its literal "re:" string at this
         # point, as it is for car_charging_energy in automatic_config() - that is not a real entity
-        if existing and existing != SLOT_ACTIVE_ENTITY and not (isinstance(existing, str) and existing.startswith("re:")):
+        if existing and existing != SLOT_ACTIVE_ENTITY and not (isinstance(existing, str) and existing.startswith("re:")) and not self.dispatch_sensor_spent(existing):
             # Asked on every poll, so only said when it changes
             if existing != self.charger_slots_blocked:
                 self.log("Info: Ohme API: Leaving octopus_intelligent_slot set to {} rather than taking the car charging plan from Ohme".format(existing))
@@ -687,13 +709,36 @@ class OhmeAPI(ComponentBase):
         """
         Automatically set the predbat entities to take the Intelligent car slots from Ohme.
 
-        Claims the car slot args so OctopusAPI.automatic_config() stops re-wiring them to its own
-        dispatch entities - it re-runs whenever the tariff or intelligent device set moves, which
-        would otherwise silently undo this part way through a run.
+        Claims the car slot args so OctopusAPI.automatic_config() stops re-wiring the ready time and
+        charge limit to its own entities - it re-runs whenever the tariff or intelligent device set
+        moves, which would otherwise silently undo this part way through a run. The claim does not
+        cover octopus_intelligent_slot, which the Octopus component goes on wiring to its dispatch
+        sensor: where there is one it stays as the record of the completed dispatches, and Ohme
+        supplies only the planned ones - see octopus_dispatch_sensor().
         """
         self.log("Info: Ohme API: Setting Predbat to use Ohme")
         self.base.car_slot_owner = "ohme"
-        self.wire_car_slots()
+        if self.slot_source:
+            self.wire_planned_slots()
+        else:
+            self.wire_car_slots()
+
+    def dispatch_sensor_spent(self, entity_id):
+        """
+        Is this the Octopus dispatch sensor Ohme's planned slots were last read beside, now with nothing more to give.
+
+        On Octopus Intelligent that sensor is left in octopus_intelligent_slot as the record of the
+        completed dispatches. Once Intelligent no longer schedules anything - the tariff has gone, or
+        every device is suspended - it is not a plan of anyone's, and left there it would keep the
+        car on dispatches that never come. Not so while Octopus drives another device, whose
+        dispatches that sensor is about to carry.
+
+        Takes octopus_intelligent_slot as it is set, so a list of several cars as well as one sensor:
+        octopus_dispatch_sensor() reads the first of the list, and the rest are Octopus's dispatch
+        sensors for the same account, spent along with it.
+        """
+        entities = entity_id if isinstance(entity_id, list) else [entity_id]
+        return bool(self.slot_source_applied) and self.slot_source_applied in entities and not self.octopus_intelligent and not self.octopus_other_device
 
     async def automatic_config_charger_slots(self):
         """
@@ -729,13 +774,51 @@ class OhmeAPI(ComponentBase):
         self.set_arg("octopus_ready_time", [])
         self.set_arg("octopus_charge_limit", [])
 
+    def clear_planned_slots(self):
+        """
+        Take the planned slot arg, and the ready time and charge limit wired with it, back off the Ohme entities.
+
+        For leaving the wiring wire_planned_slots() made, where octopus_intelligent_slot was never
+        Ohme's and so clear_car_slots() finds nothing to do. Anything since pointed elsewhere is left.
+        """
+        existing = self.get_arg("octopus_intelligent_planned_slot", default=None, indirect=False)
+        if isinstance(existing, list) and len(existing) == 1:
+            existing = existing[0]
+        if existing != SLOT_ACTIVE_ENTITY:
+            return
+        self.set_arg("octopus_intelligent_planned_slot", [])
+        slot = self.get_arg("octopus_intelligent_slot", default=None, indirect=False)
+        if isinstance(slot, list) and len(slot) == 1:
+            slot = slot[0]
+        if self.dispatch_sensor_spent(slot):
+            self.set_arg("octopus_intelligent_slot", [])
+        for arg in ("octopus_ready_time", "octopus_charge_limit"):
+            current = self.get_arg(arg, default=None, indirect=False)
+            if isinstance(current, list) and len(current) == 1:
+                current = current[0]
+            if current == CAR_DISCOVERY_ENTITY_SPEC[arg]["entity_id"]:
+                self.set_arg(arg, [])
+
     def wire_car_slots(self):
         """
         Point the car slot args at the Ohme entities.
         """
         self.set_arg("octopus_intelligent_slot", SLOT_ACTIVE_ENTITY)
-        self.set_arg("octopus_ready_time", "select.predbat_ohme_target_time")
-        self.set_arg("octopus_charge_limit", "number.predbat_ohme_target_percent")
+        # The slot sensor now carries the planned slots as well, nothing is read beside it
+        self.set_arg("octopus_intelligent_planned_slot", [])
+        self.set_arg("octopus_ready_time", CAR_DISCOVERY_ENTITY_SPEC["octopus_ready_time"]["entity_id"])
+        self.set_arg("octopus_charge_limit", CAR_DISCOVERY_ENTITY_SPEC["octopus_charge_limit"]["entity_id"])
+
+    def wire_planned_slots(self):
+        """
+        Point the planned slot arg at the Ohme slots, leaving octopus_intelligent_slot on Octopus's sensor.
+
+        The ready time and charge limit are Ohme's either way: they are set on the charger, which is
+        what Octopus is scheduling.
+        """
+        self.set_arg("octopus_intelligent_planned_slot", [SLOT_ACTIVE_ENTITY])
+        self.set_arg("octopus_ready_time", CAR_DISCOVERY_ENTITY_SPEC["octopus_ready_time"]["entity_id"])
+        self.set_arg("octopus_charge_limit", CAR_DISCOVERY_ENTITY_SPEC["octopus_charge_limit"]["entity_id"])
 
     def _discovery_vehicle(self):
         """
