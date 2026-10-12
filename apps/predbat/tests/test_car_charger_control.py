@@ -772,7 +772,7 @@ def test_octopus_rule_per_car():
 
 
 def test_octopus_rule_other_slot_owner_second_car():
-    """Since #5443 Octopus's own dispatch sensors stay wired while Ohme holds the car slot claim, so
+    """Since #5443 Octopus's own dispatch sensors stay wired while Ohme holds car 0's slot claim, so
     a second car is judged on what its own sensor says rather than handed to Octopus with the Ohme."""
     component = FakeComponent([FakeCharger("a"), FakeCharger("b")])
     component.base.num_cars = 2
@@ -786,11 +786,13 @@ def test_octopus_rule_other_slot_owner_second_car():
     assert component.charger_control_octopus_drives_car(0) is False
     assert component.charger_control_octopus_drives_car(1) is True
 
-    # The Ohme's own slot sensor does not say, and the claim still means Octopus drives that charger
-    component.sensors = {DISPATCH: {}, dispatch_b: {"is_charger": "unknown"}}
+    # The claim alone settles car 0, whatever its sensor says - the Ohme's own slot sensor says
+    # nothing, and the claim may be forced on with ohme_automatic_octopus_intelligent
+    component.sensors = {DISPATCH: {"is_charger": False}, dispatch_b: {"is_charger": "unknown"}}
     assert component.charger_control_octopus_drives_charger(0) is True
     assert component.charger_control_octopus_drives_car(0) is False
-    # A sensor that has lost its value is not the car either
+    # A second car whose sensor has lost its value cannot be told, rather than handed to Octopus with the Ohme
+    assert component.charger_control_octopus_drives_charger(1) is None
     assert component.charger_control_octopus_drives_car(1) is False
 
     # Following the car, Predbat drives the second car's charger to its dispatches and leaves the Ohme's alone

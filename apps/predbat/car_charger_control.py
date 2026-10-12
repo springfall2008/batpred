@@ -190,16 +190,20 @@ class CarChargerControl:
         if not slot:
             # Not wired for this car - but the Octopus component may simply not have got there yet
             return None if self.charger_control_octopus_discovering() else False
-        is_charger = self.charger_control_dispatch_is_charger(slot)
-        if is_charger is None:
-            owner = getattr(self.base, "car_slot_owner", None)
-            if owner and owner != "octopus":
-                # Another charger component (Ohme) wired its own sensor as the Intelligent slots, which
-                # does not say - but it only does so for the charger Octopus drives. Asked only once the
-                # sensor is silent: since #5443 Octopus's own dispatch sensors stay wired under the
-                # claim, and those say per car, so a second car's device may well not be the charger
-                return True
-        return is_charger
+        if car_n == 0 and self.charger_control_slots_claimed():
+            # Another charger component (Ohme) supplies the Intelligent slots from the charger itself
+            return True
+        return self.charger_control_dispatch_is_charger(slot)
+
+    def charger_control_slots_claimed(self):
+        """Has another charger component (Ohme) claimed car 0's Intelligent car slots.
+
+        The claim is for car 0 alone, the car that component wires. Since #5443 the Octopus
+        component goes on wiring its own dispatch sensors under the claim, one per device, so a
+        second car has a sensor of its own and is judged on what that sensor says.
+        """
+        owner = getattr(self.base, "car_slot_owner", None)
+        return bool(owner and owner != "octopus")
 
     def charger_control_dispatch_is_charger(self, slot):
         """What a dispatch sensor says about whether its Intelligent device is the charger: True, False or None.
@@ -226,8 +230,8 @@ class CarChargerControl:
         slot = self.charger_control_dispatch_sensor(car_n)
         if not slot:
             return False
-        # Not short-cut on car_slot_owner: since #5443 Octopus's dispatch sensors stay wired while Ohme
-        # holds the claim, so a second car's sensor can say its device is the car itself
+        if car_n == 0 and self.charger_control_slots_claimed():
+            return False
         return self.charger_control_dispatch_is_charger(slot) is False
 
     def charger_control_octopus_discovering(self):
