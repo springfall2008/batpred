@@ -1070,6 +1070,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                         soc_next = min(soc_next, self.car_charging_limit[car_n])
                     self.expose_config("car_charging_manual_soc_kwh" + car_postfix, dp3(soc_next))
 
+    def run_comparison(self):
+        """Run the tariff comparison, clearing compare_active afterwards even if it raises (#5472)."""
+        # Without the finally, a crashed comparison leaves compare_active on and re-triggers itself every cycle
+        self.expose_config("compare_active", True)
+        try:
+            self.comparison.run_all()
+        finally:
+            self.expose_config("compare_active", False)
+
     def update_pred(self, scheduled=True):
         """
         Update the prediction state, everything is called from here right now
@@ -1431,9 +1440,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         if self.comparison:
             if (scheduled and self.minutes_now < RUN_EVERY) or self.get_arg("compare_active", False):
                 # Compare tariffs either when triggered or daily at midnight
-                self.expose_config("compare_active", True)
-                self.comparison.run_all()
-                self.expose_config("compare_active", False)
+                self.run_comparison()
             else:
                 # Otherwise just update HA sensors to prevent then expiring
                 self.comparison.publish_only()

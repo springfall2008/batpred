@@ -841,6 +841,60 @@ async def test_octopus_intelligent_devices(my_predbat):
     else:
         print("PASS: A never-seen device gets no planned dispatches when the dispatch query fails")
 
+    # ------------------------------------------------------------------
+    # Test 15: Octopus can answer the dispatch query but fail the planned dispatches alone - an error
+    # (KT-CT-4340, "Unable to fetch planned dispatches") with flexPlannedDispatches null beside the rest
+    # of the data. That is a failed fetch of the planned list, kept as in Test 14, and not a statement
+    # that there are none: read as an empty list it dropped the car's plan until the next poll (#5492).
+    # The completed dispatches in the same answer are still good. An empty list is Octopus saying there
+    # are no planned dispatches, and still clears them.
+    # ------------------------------------------------------------------
+    print("\n*** Test 15: A dispatch answer with the planned dispatches null keeps the last known ones ***")
+    completed_start = (ref_now - timedelta(minutes=180)).strftime(DATE_TIME_STR_FORMAT)
+    completed_end = (ref_now - timedelta(minutes=150)).strftime(DATE_TIME_STR_FORMAT)
+    dispatch_answer = {
+        "devices": [{"id": "device-abc", "status": {"currentState": "SMART_CONTROL_IN_PROGRESS"}}],
+        "flexPlannedDispatches": None,
+        "completedDispatches": [{"start": completed_start, "end": completed_end, "delta": "-3.5", "meta": {"source": "smart-charge", "location": "AT_HOME"}}],
+    }
+
+    async def mock_query_planned_null(query, context, ignore_errors=False, returns_data=True):
+        if "get-intelligent-devices" in context:
+            return device_data
+        elif "get-intelligent-dispatches" in context:
+            return dispatch_answer
+        elif "get-intelligent-settings" in context:
+            return {"devices": [{"id": "device-abc", "status": {"isSuspended": False}, "chargingPreferences": {}}]}
+        return None
+
+    api = make_api()
+    api.intelligent_devices = {"device-abc": {"device_id": "device-abc", "suspended": False, "completed_dispatches": [], "planned_dispatches": cached_planned}}
+    api.async_graphql_query = AsyncMock(side_effect=mock_query_planned_null)
+    result = await api.async_get_intelligent_devices("test-account", "device-abc")
+    device_result = result.get("device-abc", {})
+    if device_result.get("planned_dispatches") != known_planned:
+        print(f"ERROR: Expected the last known planned dispatches kept when Octopus returns them as null, got {device_result.get('planned_dispatches')}")
+        failed += 1
+    elif cached_planned != cached_copy:
+        print(f"ERROR: Reusing the cached planned dispatches must not modify them in place, got {cached_planned}")
+        failed += 1
+    elif [x.get("start") for x in device_result.get("completed_dispatches", [])] != [completed_start]:
+        print(f"ERROR: Expected the completed dispatches in the same answer still taken, got {device_result.get('completed_dispatches')}")
+        failed += 1
+    else:
+        print("PASS: Planned dispatches returned as null keep the last known ones - ended dropped, running re-trimmed, completed still taken")
+
+    dispatch_answer["flexPlannedDispatches"] = []
+    api = make_api()
+    api.intelligent_devices = {"device-abc": {"device_id": "device-abc", "suspended": False, "completed_dispatches": [], "planned_dispatches": cached_planned}}
+    api.async_graphql_query = AsyncMock(side_effect=mock_query_planned_null)
+    result = await api.async_get_intelligent_devices("test-account", "device-abc")
+    if result.get("device-abc", {}).get("planned_dispatches") != []:
+        print(f"ERROR: An empty planned list from Octopus means no dispatches, got {result.get('device-abc', {}).get('planned_dispatches')}")
+        failed += 1
+    else:
+        print("PASS: An empty planned list from Octopus still clears the planned dispatches")
+
     if failed == 0:
         print("\n**** All Octopus intelligent devices tests PASSED ****")
     else:

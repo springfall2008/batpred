@@ -2601,8 +2601,11 @@ class OctopusAPI(ComponentBase):
                                         break
                                 if not found:
                                     completed.append(dispatch)
-                        else:
-                            # The dispatch query failed (e.g. rate limited). Keep the last known planned dispatches,
+                        if not dispatch_result or dispatch_result.get("flexPlannedDispatches") is None:
+                            # The dispatch query failed (e.g. rate limited), or Octopus answered it without the planned
+                            # dispatches: an error on that field (KT-CT-4340, "Unable to fetch planned dispatches") comes
+                            # back as null beside the rest of the data, where no dispatches is an empty list (#5492).
+                            # Keep the last known planned dispatches,
                             # as a failed settings query keeps its settings: publishing an empty list dropped the car's
                             # slots and dispatch rates until the next poll, and the change requested a replan without them.
                             # Planned dispatches are never pruned, so drop any that have ended since, and re-trim the one
