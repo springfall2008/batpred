@@ -19,8 +19,8 @@ import requests
 import re
 from datetime import datetime, timedelta, timezone
 from predbat_metrics import record_api_call
-from const import TIME_FORMAT, TIME_FORMAT_OCTOPUS, DISPATCH_SOURCE_CHARGER_SCHEDULE
-from utils import str2time, minutes_to_time, dp1, dp2, dp4, minute_data, round_out_to_period, filter_payment_method, is_edge_block_body, token_mint_backoff_seconds, TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS
+from const import TIME_FORMAT, TIME_FORMAT_OCTOPUS, DISPATCH_SOURCE_CHARGER_SCHEDULE, REPEAT_FULL_LOG_SECONDS
+from utils import RepeatLogGate, str2time, minutes_to_time, dp1, dp2, dp4, minute_data, round_out_to_period, filter_payment_method, is_edge_block_body, token_mint_backoff_seconds, TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS
 from component_base import ComponentBase
 from mock_base import MockBase as SharedMockBase
 import aiohttp
@@ -711,6 +711,8 @@ class OctopusAPI(ComponentBase):
         # API request metrics for monitoring
         self.requests_total = 0
         self.failures_total = 0
+        # Repeated GraphQL requests and responses, and skipped Happy Hours, are logged briefly between full logs
+        self.log_gate = RepeatLogGate(REPEAT_FULL_LOG_SECONDS)
 
         # In-memory cache for product info (keyed by product_code) to avoid repeated API calls
         self._product_info_cache = {}
@@ -1420,7 +1422,8 @@ class OctopusAPI(ComponentBase):
             # v19.0.1 for the same reason; match that. The reward/code/type maps are populated above
             # first, because a joined Happy Hour takes its event type from this list.
             if event.get("eventType", None) == "WEEKEND_HAPPY_HOUR":
-                self.log("OctopusAPI: Not offering Weekend Happy Hour event code {} as available - it cannot be joined through the API".format(code))
+                # Logged once an hour per event (by id, so events with no code are told apart): the event list is re-read every poll
+                self.log_gate.log(self.log, "happy-hour", (event_id, code), ["OctopusAPI: Not offering Weekend Happy Hour event code {} as available - it cannot be joined through the API".format(code)], None)
                 continue
             target_regions = [region.get("regionId") for region in (event.get("targetRegion", None) or []) if region]
             if target_regions and account_region_id not in target_regions:
@@ -1710,7 +1713,6 @@ class OctopusAPI(ComponentBase):
         if response_data is None:
             return self.saving_sessions
         else:
-            self.log("OctopusAPI: Fetched saving sessions data from GraphQL API: {}".format(response_data))
             savingSessions = response_data.get("savingSessions", {})
             if savingSessions is None:
                 savingSessions = {}
@@ -2392,6 +2394,29 @@ class OctopusAPI(ComponentBase):
             if returns_data:
                 self.log(f"Warn: OctopusAPI: Failed to retrieve data from graphql query {request_context} - token refresh failed")
             return None
+        # Whether the request was logged in full, and its full line, so a failure can show the request beside it
+        request_logged = [True, None]
+
+        def log_request_beside_failure():
+            """Log the full request beside a failure when it was only logged briefly ("as logged in full at ...").
+
+            Not on a retry: only a failure causes one, and that failure has just logged the request in full."""
+            if not request_logged[0] and request_logged[1] and _retry_count == 0:
+                # Through the gate, so it records this full log: later brief lines name this time, and the hourly re-log counts from it
+                self.log_gate.log(self.log, ("request", request_context), query, [request_logged[1]], None, always_full=True)
+                request_logged[0] = True
+
+        def log_response(status, text, always_full):
+            """Log a response in full when new, due again or always_full, else as one line naming when it was last logged in full."""
+            self.log_gate.log(
+                self.log,
+                ("response", request_context),
+                "{} {}".format(status, text),
+                ["OctopusAPI: GraphQL response for {} (status {}): {}".format(request_context, status, text)],
+                lambda when: "OctopusAPI: GraphQL response for {} (status {}) same as logged in full at {}, {} characters".format(request_context, status, when, len(text)),
+                always_full=always_full,
+            )
+
         try:
             self.requests_total += 1
             client = await self.api.async_create_client_session()
@@ -2402,13 +2427,17 @@ class OctopusAPI(ComponentBase):
             headers = {"Authorization": f"{auth_prefix}{self.graphql_token}", integration_context_header: request_context}
             # Redact the Authorization header so the JWT token is never written to the log
             log_headers = {**headers, "Authorization": f"{auth_prefix}<redacted>"}
-            self.log("OctopusAPI: Making GraphQL request to {} payload {} headers {}".format(url, payload, log_headers))
+            request_line = "OctopusAPI: Making GraphQL request to {} payload {} headers {}".format(url, payload, log_headers)
+            request_logged[0] = self.log_gate.log(self.log, ("request", request_context), query, [request_line], lambda when: "OctopusAPI: Making GraphQL request {} to {} (query as logged in full at {})".format(request_context, url, when))
+            request_logged[1] = request_line
             async with client.post(url, json=payload, headers=headers) as response:
                 # Check for HTTP-level 401/403 (transport-level auth failure) and retry once.
                 # This handles cases where the JWT has been revoked server-side and the server
                 # returns a bare 401/403 status rather than a GraphQL error body — which would
                 # otherwise loop forever without ever refreshing the token. The one exception is
                 # a 403 carrying a CDN/WAF block page, handled immediately below.
+                if response.status in [401, 403]:
+                    log_request_beside_failure()
                 if response.status in [401, 403] and _retry_count == 0:
                     # A CDN/WAF block is rate limiting, not an auth failure. Re-minting a token
                     # here would be rejected by the same block, leaving the component permanently
@@ -2416,7 +2445,12 @@ class OctopusAPI(ComponentBase):
                     # Only 403 is treated this way: Kraken reports genuine auth problems as HTTP
                     # 200 with a GraphQL errorCode, or as a 401, so a 403 carrying a non-JSON
                     # body comes from the edge rather than the API.
-                    if response.status == 403 and is_edge_block_body(await response.text()):
+                    # Log the response in full first: the WAF return and the retry below both leave before the
+                    # response logger further down. A second-attempt 401/403 is not logged here: its body is logged
+                    # by async_read_response_retry below
+                    error_text = await response.text()
+                    log_response(response.status, error_text, always_full=True)
+                    if response.status == 403 and is_edge_block_body(error_text):
                         self.consecutive_edge_blocks += 1
                         if self.consecutive_edge_blocks <= EDGE_BLOCK_REFRESH_AFTER:
                             record_api_call("octopus", False, "rate_limit")
@@ -2442,7 +2476,13 @@ class OctopusAPI(ComponentBase):
 
                 # Process response (which reads the text)
                 response_body = await self.async_read_response_retry(response, url, ignore_errors=ignore_errors)
-                self.log("OctopusAPI: GraphQL response for {} (status {}): {}".format(request_context, response.status, response_body))
+                body_text = str(response_body)
+                # Logged in full with its request: a bad status, a body that is missing (unreadable JSON, a rate limit)
+                # or has no data, or any errors key - even a partial error returned with data when ignore_errors is set
+                failed = response.status != 200 or not isinstance(response_body, dict) or "errors" in response_body or response_body.get("data") is None
+                if failed:
+                    log_request_beside_failure()
+                log_response(response.status, body_text, always_full=failed)
 
                 # Check for auth errors and retry once
                 if response_body and "errors" in response_body and _retry_count == 0:
@@ -2483,6 +2523,7 @@ class OctopusAPI(ComponentBase):
                     return None
         except TimeoutError:
             self.failures_total += 1
+            log_request_beside_failure()
             self.log(f"Warn: OctopusAPI: Failed to connect, timeout exceeded.")
             record_api_call("octopus", False, "connection_error")
 
@@ -3903,6 +3944,7 @@ class Octopus:
         slots_added_set = set()
         plan_interval_minutes = self.plan_interval_minutes
         saved_slots = set()  # For logging purposes, track which slots we actually applied as low rate
+        slot_lines = []  # One log line per half hour of each slot, logged after the loop only when the list changes
         # Dynamic load has seen this car in its slot but not charging: none of its dispatches from now
         # on get the cheap rate (see dynamic_load_car_check()). Elapsed minutes keep theirs - they record
         # what the tariff charged, and today's cost is built from them. None when the car is not cancelled.
@@ -3997,11 +4039,15 @@ class Octopus:
                                 rates[minute] = assumed_price
 
                         if minute % 30 == 0 and start_minutes > -24 * 60:
-                            self.log(
+                            slot_lines.append(
                                 "Octopus: Intelligent slot at {}-{}, assumed price {}, amount {}, kWh location {}, source {}, octopus_slot_low_rate {}".format(
                                     self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), dp2(assumed_price), dp2(kwh), location, source, octopus_slot_low_rate
                                 )
                             )
+
+        # The slot list is re-derived every plan but rarely changes, so log it only when it does, and at least hourly
+        if slot_lines:
+            self.io_slot_log_gate.log(self.log, ("slots", car_n), "\n".join(slot_lines), slot_lines, lambda when: "Octopus: Intelligent slots for car {} same as logged in full at {}, {} half-hour slot lines".format(car_n, when, len(slot_lines)))
 
         # Log daily slot counts for debugging
         for day_offset in sorted(slots_per_day.keys()):

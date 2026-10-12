@@ -250,7 +250,7 @@ total size budget - `truncated_reason` says which of the two ended it. A cut lin
 its number, and passing that back as `line_number` returns it in full:
 
 ```text
-2026-08-30 09:58:11: OctopusAPI: Fetched saving sessions... [+19069 chars, get_log line_number=26793]
+2026-08-30 09:58:11: OctopusAPI: GraphQL response for get-saving-sessions (status 200): {'data': {'savingSessions': {'events': ... [+19069 chars, get_log line_number=26793]
 ```
 
 Line numbers count from the start of the previous (rotated) log through the current one, so they
