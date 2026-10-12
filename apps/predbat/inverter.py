@@ -3396,7 +3396,7 @@ class Inverter:
         # transient failure would silently downgrade a freeze into a stop rather than retrying it.
         return True
 
-    def adjust_charge_immediate(self, target_soc, freeze=False):
+    def adjust_charge_immediate(self, target_soc, freeze=False, discharge_power_w=None):
         """
         Adjust from charging or not charging based on passed target soc
         """
@@ -3404,11 +3404,13 @@ class Inverter:
             try:
                 from deye_local_shadow import preview_deye_local
 
-                preview_deye_local(self, target_soc, freeze)
+                preview_deye_local(self, target_soc, freeze, discharge_power_w=discharge_power_w)
             except Exception:
                 self.log("Warn: DEYE shadow preview failed; native inverter control continues unchanged")
         if getattr(self, "deye_local", None):
-            return self.deye_local.apply(target_soc, freeze=freeze)
+            return self.deye_local.apply(target_soc, freeze=freeze, discharge_power_w=discharge_power_w)
+        if discharge_power_w is not None:
+            raise ValueError("Explicit ToU discharge power requires a DEYE local inverter")
         # A Solis with a target SoC (FB00) has its Energy Storage Control Switch driven from here on every cycle
         # that is not exporting. It stays on Backup/Reserve - Self-Use with the Battery Reserve bit, which makes the
         # reserve Predbat writes (the Reserved SOC) a real discharge floor, so the existing reserve holds work.

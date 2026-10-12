@@ -34,6 +34,14 @@ down to its target, matching `set_discharge_during_charge` on this profile.
 The charge rate must already be set and correctly modelled by the installation;
 this adapter does not modulate it or raise current limits.
 
+An explicit `discharge_power_w` request can narrow the per-period discharge
+ceiling, without changing global current limits or the EV's fixed charging rate.
+Battery-first demand then supplies up to that ceiling and the grid supplies the
+remaining load. The requested watts must be finite whole units between zero and
+the already configured ceiling. Active native manual SOC floors are preserved;
+fractional floors round upward to the hardware's whole-percent control. Neither
+a per-period ceiling nor a forecast is an instantaneous site-import guarantee.
+
 The hold contract must be commissioned on the actual inverter before setting
 `hold_verified: true`. Only then is charge freeze advertised to the planner for
 this instance. This does not change the `SK` capability declaration. If a hold is
@@ -84,6 +92,13 @@ When the observed six starts are distinct but out of order, the real result stay
 same times sorted **only in the private copy**. This shows the proposed commands
 after a possible migration; it neither repairs the physical table nor fulfils
 the activation precondition. Duplicate or invalid times are not guessed.
+
+The joint-planning companion can also check a whole candidate through the same
+`Inverter.adjust_charge_immediate` entry point, including explicit discharge-watt
+ceilings and time-local manual SOC floors. This uses only copied observations and
+simulated acknowledgements. Any sorted timetable or commissioned hold used in the
+check is labelled as a hypothesis, never applied to the actual instance. Global
+current limits and hardware behaviour still require an operational preflight.
 
 ### Selecting the experimental controller
 

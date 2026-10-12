@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from deye_local_shadow import preview_deye_local
+from deye_local_shadow import preview_deye_local, check_joint_deye_commands, DeyeShadowState
 from inverter import Inverter
 from const import MINUTE_WATT
 
@@ -135,6 +135,45 @@ def run_deye_shadow_tests(my_predbat):
             if reference is None:
                 reference = calls
             assert calls == reference and calls
+            tests += 1
+
+        source = ShadowSource()
+        source.reserve = 1
+        source.soc_max = 10
+        source.battery_rate_max_discharge = 3000 / MINUTE_WATT
+        source.all_active_keep = {125: 30.25}
+        source.minutes_now = 120
+        before = deepcopy((source.states, source.args, source.all_active_keep))
+        rows = source.args["deye_shadow"]["programs"]
+        source.states[rows[2]["time"]]["state"] = "23:55:00"
+        before = deepcopy((source.states, source.args, source.all_active_keep))
+        steps = [
+            {"start": 120, "target_soc": 100, "freeze": False, "power_w": None},
+            {"start": 125, "target_soc": 0, "freeze": False, "power_w": 1500},
+            {"start": 130, "target_soc": 0, "freeze": True, "power_w": None},
+            {"start": 135, "target_soc": 0, "freeze": False, "power_w": 1800},
+        ]
+        calls = []
+        original_call = DeyeShadowState.call_service_wrapper
+
+        def record_command(simulated, service, **data):
+            """Observe every simulated command without providing real service authority."""
+            calls.append((service, dict(data)))
+            return original_call(simulated, service, **data)
+
+        with patch.object(DeyeShadowState, "call_service_wrapper", new=record_command):
+            checked = check_joint_deye_commands(source, steps)
+        assert checked["passed"] and checked["checked_steps"] == 4, checked
+        assert len(checked["hypotheses"]) == 2 and not checked["hardware_confirmed"]
+        assert before == (source.states, source.args, source.all_active_keep)
+        for row in rows:
+            assert ("number/set_value", {"entity_id": row["soc"], "value": 31}) in calls
+            assert ("number/set_value", {"entity_id": row["power"], "value": 1500}) in calls
+        tests += 1
+        for bad_power in (-1, 2001, 1500.5, float("nan"), True):
+            checked = check_joint_deye_commands(source, [{**steps[1], "power_w": bad_power}])
+            assert not checked["passed"] and checked["checked_steps"] == 0, checked
+            assert before == (source.states, source.args, source.all_active_keep)
             tests += 1
         print("DEYE shadow: {} isolation checks passed".format(tests))
         return False

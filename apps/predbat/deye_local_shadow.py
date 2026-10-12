@@ -13,9 +13,12 @@ class DeyeShadowState:
     def __init__(self, base, settings):
         """Copy the required observations once; never retain the real base object."""
         self.prefix = base.prefix
+        self.args = {}
         self.set_read_only = False
         self.set_read_only_axle = False
         self.manual_soc_max_keep = deepcopy(base.manual_soc_max_keep)
+        self.all_active_keep = deepcopy(getattr(base, "all_active_keep", {}))
+        self.minutes_now = getattr(base, "minutes_now", 0)
         self.timezone = base.get_arg("timezone", "Europe/London")
         self.states = {}
         self.writes = []
@@ -54,7 +57,7 @@ class DeyeShadowState:
         self.report = {"state": state, **attributes}
 
 
-def preview_deye_local(inverter, target_soc, freeze=False):
+def preview_deye_local(inverter, target_soc, freeze=False, discharge_power_w=None):
     """Publish a non-executing trace alongside the unchanged native controller.
 
     Success means the translator completed against simulated acknowledgements,
@@ -73,6 +76,7 @@ def preview_deye_local(inverter, target_soc, freeze=False):
         "hardware_confirmed": False,
         "target_soc": target_soc,
         "freeze": bool(freeze),
+        "discharge_power_w": discharge_power_w,
         "native_inverter_type": inverter.inverter_type,
         "simulated_acknowledgements": True,
         "proposed_writes": [],
@@ -92,7 +96,7 @@ def preview_deye_local(inverter, target_soc, freeze=False):
         )
         adapter = DeyeLocal(fake_inverter)
         adapter.settings = settings
-        success = adapter.apply(target_soc, freeze)
+        success = adapter.apply(target_soc, freeze, discharge_power_w=discharge_power_w)
         state = "simulated" if success else "blocked"
         report["reason"] = simulated.report.get("reason", "Physical commissioning and executable integration remain required")
         report["mode"] = simulated.report.get("mode", "none")
@@ -110,7 +114,7 @@ def preview_deye_local(inverter, target_soc, freeze=False):
                 for row, stamp in zip(settings["programs"], ordered):
                     simulated.states[row["time"]]["state"] = stamp
                 simulated.writes.clear()
-                repaired_success = adapter.apply(target_soc, freeze)
+                repaired_success = adapter.apply(target_soc, freeze, discharge_power_w=discharge_power_w)
                 report["table_repair_hypothesis"] = {
                     "physical_table_changed": False,
                     "required_before_activation": True,
@@ -122,4 +126,59 @@ def preview_deye_local(inverter, target_soc, freeze=False):
         # A preview must never interrupt SK's actual charge/stop action.
         report["reason"] = str(exc) if isinstance(exc, ValueError) else "DEYE shadow input or simulation error"
     base.dashboard_item(base.prefix + ".deye_shadow", state=state, attributes=report)
+    return report
+
+
+def check_joint_deye_commands(base, steps):
+    """Translate a whole candidate through the real Inverter entry point in memory.
+
+    A repaired timetable and a commissioned hold can be explicit hypotheses in
+    this check. They never change the actual configuration or count as fulfilled
+    activation gates. Only copied HA states are writable by the simulated base.
+    """
+    from inverter import Inverter
+
+    report = {"available": True, "passed": False, "hardware_confirmed": False, "actuator_signals_modified": False, "hypotheses": [], "checked_steps": 0}
+    try:
+        original = base.args.get("deye_shadow")
+        if not isinstance(original, dict) or original.get("control", False) is not False:
+            raise ValueError("A disabled deye_shadow mapping is required for command replay")
+        settings = DeyeLocal.validate_settings({**original, "control": True})
+        simulated = DeyeShadowState(base, settings)
+        inverter = Inverter.__new__(Inverter)
+        inverter.base = simulated
+        inverter.id = 0
+        inverter.inverter_type = "DEYE"
+        inverter.reserve_percent = int(round(base.reserve / base.soc_max * 100))
+        inverter.battery_rate_max_discharge = base.battery_rate_max_discharge
+        inverter.inv_write_and_poll_sleep = 0
+        inverter.count_register_writes = 0
+        inverter.deye_local = DeyeLocal(inverter)
+        inverter.deye_local.settings = settings
+        try:
+            inverter.deye_local.snapshot()
+        except ValueError as exc:
+            if "boundaries must be strictly increasing" not in str(exc):
+                raise
+            rows = settings["programs"]
+            times = [simulated.states[row["time"]]["state"] for row in rows]
+            minutes = [int(stamp[:2]) * 60 + int(stamp[3:5]) for stamp in times]
+            if len(set(minutes)) != 6:
+                raise ValueError("Duplicate ToU times cannot be repaired by sorting") from None
+            for row, stamp in zip(rows, [stamp for _, stamp in sorted(zip(minutes, times))]):
+                simulated.states[row["time"]]["state"] = stamp
+            report["hypotheses"].append("physical_timetable_must_be_normalised_before_activation")
+        if not settings.get("hold_verified", False):
+            settings["hold_verified"] = True
+            report["hypotheses"].append("hold_contract_still_requires_physical_commissioning")
+        for step in steps:
+            simulated.minutes_now = step["start"]
+            if not inverter.adjust_charge_immediate(step["target_soc"], freeze=step["freeze"], discharge_power_w=step["power_w"]):
+                raise ValueError(simulated.report.get("reason", "DEYE command replay did not complete"))
+            report["checked_steps"] += 1
+        report["passed"] = True
+        report["simulated_service_count"] = len(simulated.writes)
+        report["single_initial_observation_set"] = True
+    except Exception as exc:
+        report["reason"] = str(exc) if isinstance(exc, ValueError) else "DEYE command replay error"
     return report

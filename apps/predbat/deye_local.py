@@ -246,13 +246,15 @@ class DeyeLocal:
             attrs["reason"] = reason
         self.base.dashboard_item(self.base.prefix + ".deye_local_control", state=status, attributes=attrs)
 
-    def apply(self, target_soc, freeze=False):
+    def apply(self, target_soc, freeze=False, discharge_power_w=None):
         """Apply one native intent with grid-source interlock and no global-limit writes."""
         mode = "invalid"
         if self.base.set_read_only or getattr(self.base, "set_read_only_axle", False):
             self._report("read_only", "none")
             return False
         try:
+            if type(freeze) is not bool:
+                raise ValueError("DEYE freeze must be boolean")
             target = self._number(target_soc, 0, 100, "target SOC")
             mode = "hold" if freeze else "charge" if target > 0 else "demand"
             if not self.settings.get("control", False):
@@ -263,9 +265,17 @@ class DeyeLocal:
             if self.base.manual_soc_max_keep:
                 raise ValueError("DEYE local cannot enforce a manual solar charge ceiling")
             floor = self._number(self.inverter.reserve_percent, 0, 100, "reserve")
+            floors = getattr(self.base, "all_active_keep", {})
+            if not isinstance(floors, dict):
+                raise ValueError("Invalid DEYE manual SOC floor map")
+            manual_floor = floors.get(getattr(self.base, "minutes_now", 0), 0)
+            if isinstance(manual_floor, bool) or not isinstance(manual_floor, (int, float)) or not math.isfinite(manual_floor) or not 0 <= manual_floor <= 100:
+                raise ValueError("Invalid DEYE manual SOC floor")
+            floor = max(floor, math.ceil(manual_floor - 1e-9))
             soc = 100 if freeze else max(target, floor)
             cap = min(self.settings["max_discharge_power_w"], int(round(self.inverter.battery_rate_max_discharge * MINUTE_WATT)))
-            power = 0 if freeze else cap
+            requested_power = cap if discharge_power_w is None else self._number(discharge_power_w, 0, cap, "period discharge power")
+            power = 0 if freeze else requested_power
             source = "Grid" if mode == "charge" else "Disabled"
             rows = self.settings["programs"]
             numbers = {row[field]: value for row in rows for field, value in (("power", power), ("soc", soc))}
