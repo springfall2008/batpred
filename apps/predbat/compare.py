@@ -27,6 +27,65 @@ import copy
 # 3. Consider Octopus API key to access current tariff info and switch links
 
 
+# An empty 'config:' line means no overrides; any other non-mapping value can't be applied
+EMPTY_COMPARE_CONFIG = (None, "", [], {})
+
+
+def check_compare_list(compare_list):
+    """Split compare_list into the entries that can be compared and a message per skipped entry (#5472).
+
+    Each kept entry is a copy with its id and name as stripped strings, and its config either a
+    mapping of overrides or absent, so run_all() and fetch_config() can rely on that shape.
+    """
+    if not compare_list:
+        return [], []
+    if not isinstance(compare_list, list):
+        return [], ["compare_list must be a list of tariffs, each with an id and a name"]
+
+    valid = []
+    problems = []
+    seen_ids = set()
+    for index, entry in enumerate(compare_list):
+        problem = None
+        entry_id = ""
+        if not isinstance(entry, dict):
+            problem = "must be a dictionary with an id and a name"
+        else:
+            # Results, sensor names and the web page are all keyed by the id as a string, so an
+            # unquoted numeric id in apps.yaml must not reach them as an int
+            entry_id = "" if entry.get("id") is None else str(entry["id"]).strip()
+            # A numeric name would likewise break publish_data() building the friendly name
+            entry_name = "" if entry.get("name") is None else str(entry["name"]).strip()
+            if not entry_id:
+                problem = "requires a non-empty 'id'"
+            elif entry_id in seen_ids:
+                problem = "has a duplicate id '{}'".format(entry_id)
+            elif not entry_name:
+                problem = "('{}') requires a non-empty 'name'".format(entry_id)
+            elif entry.get("config") not in EMPTY_COMPARE_CONFIG and not isinstance(entry["config"], dict):
+                # run_all() and fetch_config() look overrides up by key; a list of them raised TypeError
+                # there and ended the whole comparison, and any other value was never a usable override
+                problem = "('{}') has a 'config' that isn't a set of 'setting: value' overrides".format(entry_id)
+        if problem:
+            problems.append("compare_list entry {} {}".format(index + 1, problem))
+            continue
+        seen_ids.add(entry_id)
+        checked = dict(entry, id=entry_id, name=entry_name)
+        if checked.get("config") in EMPTY_COMPARE_CONFIG:
+            checked.pop("config", None)
+        valid.append(checked)
+    return valid, problems
+
+
+def valid_compare_list(compare_list, log=None):
+    """Return the compare_list entries that can be compared, logging a warning for each one skipped (#5472)."""
+    valid, problems = check_compare_list(compare_list)
+    if log:
+        for problem in problems:
+            log("Warn: Compare, {}, skipping it".format(problem))
+    return valid
+
+
 class Compare:
     """Tariff comparison engine.
 
@@ -483,12 +542,14 @@ class Compare:
                 try:
                     data = yaml.safe_load(f)
                     if data:
-                        self.comparisons = data.get("comparisons", {})
+                        # str() keys: a numeric id saved before ids were normalised (#5472) would
+                        # otherwise break publish_data() and never match its compare_list entry again
+                        self.comparisons = {str(tariff_id): result for tariff_id, result in (data.get("comparisons") or {}).items()}
                 except yaml.YAMLError as exc:
                     self.log("Error loading comparisons: {}".format(exc))
 
         if self.comparisons:
-            compare_list = self.pb.get_arg("compare_list", [])
+            compare_list = valid_compare_list(self.pb.get_arg("compare_list", []))
             self.select_best(compare_list, self.comparisons)
             self.publish_data()
 
@@ -512,7 +573,8 @@ class Compare:
 
             if result:
                 cost = result.get("cost", 0)
-                name = result.get("name", "")
+                # str(): a numeric name saved before names were normalised (#5472) must not crash startup
+                name = str(result.get("name", ""))
                 attributes = {
                     "friendly_name": "Compare " + name,
                     "state_class": "measurement",
@@ -539,7 +601,7 @@ class Compare:
         """
         Update HA sensors only
         """
-        compare_list = self.pb.get_arg("compare_list", [])
+        compare_list = valid_compare_list(self.pb.get_arg("compare_list", []))
         if not compare_list:
             return
 
@@ -597,7 +659,7 @@ class Compare:
         Compare a comparison in prices across multiple energy tariffs and report results
         take care not to destroy the state of the system for the primary settings
         """
-        compare_list = self.pb.get_arg("compare_list", [])
+        compare_list = valid_compare_list(self.pb.get_arg("compare_list", []), log=self.log)
         if not compare_list:
             return
 
@@ -672,7 +734,8 @@ class Compare:
 
         try:
             for tariff in compare_list:
-                prior = results.get(tariff["id"], {})
+                tariff_id = tariff["id"]
+                prior = results.get(tariff_id, {})
                 if prior:
                     prior_date = prior.get("date", "")[:10]
                     if prior_date == today_date:
@@ -684,11 +747,11 @@ class Compare:
                 else:
                     # First ever run for this tariff: start from actual midnight SoC
                     start_soc = soc_midnight_fallback
-                self.log("Compare tariff {} starting SoC: {:.2f} kWh".format(tariff.get("id", ""), start_soc))
+                self.log("Compare tariff {} starting SoC: {:.2f} kWh".format(tariff_id, start_soc))
                 try:
                     result_data = self.run_single(tariff, rate_import_base, rate_export_base, end_record, debug=debug, fetch_sensor=fetch_sensor, car_charging_slots=save_car_charging_slots, start_soc=start_soc, io_adjusted_base=io_adjusted_base)
                     if result_data is not None:
-                        results[tariff["id"]] = result_data
+                        results[tariff_id] = result_data
                 finally:
                     # Restore hardware settings after each tariff so overrides don't bleed into the next tariff;
                     # in a finally so a raised run_single() can't leave compare values applied to the live instance
