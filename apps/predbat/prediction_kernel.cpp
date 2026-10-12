@@ -50,7 +50,8 @@
 // ABI 7: export limits are packed as PkExportLimit structs (array-of-structs) rather than those
 // three arrays. Same three fields, but one buffer and one stride, with the (99.0, 100.0) gap gone
 // because mode is explicit (GH#4914).
-#define PK_ABI_VERSION 7
+// ABI 8: PkContext gained export_budget_mode, export_budget_cap and the export budget seed at the end.
+#define PK_ABI_VERSION 8
 // Parity 14: the explicit (mode, target, power) fields replace the packed double throughout the hot
 // loop (see the ABI 6 note); the floor a target exports to now reads the target field, matching
 // prediction.py.
@@ -61,7 +62,9 @@
 // across cars, which counted the first car once per car (GH#5313).
 // Parity 17: a dispatch assumed gone pays the greater of rate_max (now the tariff's own highest import
 // rate, without saving session or Axle rewards) and the slot's own rate (#5163).
-#define PK_PARITY_REVISION 17
+// Parity 18: optional export energy budget (export_budget_mode) caps forced battery export, mirroring
+// export_budget.py; a capped step recomputes the grid balance before the iBoost solar excess.
+#define PK_PARITY_REVISION 18
 #define PK_MAX_CARS 8
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
 #define PK_EXPORT_MODE_TARGET 0 // const.py EXPORT_MODE_TARGET
@@ -83,6 +86,61 @@ struct PkExportLimit {
 };
 
 inline bool pk_export_is_idle(int32_t mode) { return mode == PK_EXPORT_MODE_IDLE; }
+
+// Export energy budget - mirror of export_budget.py (export_budget_battery_export_allowed / export_budget_update)
+#define PK_EXPORT_BUDGET_PV_ORIGIN 1
+#define PK_EXPORT_BUDGET_PV_EQUIVALENT 2
+
+inline double pk_export_budget_house_from_battery(int32_t mode, double battery_out, double load, double pv)
+{
+    if (mode == PK_EXPORT_BUDGET_PV_ORIGIN) {
+        return std::min(battery_out, std::max(load, 0.0));
+    }
+    return std::min(battery_out, std::max(load - pv, 0.0));
+}
+
+inline double pk_export_budget_allowed(int32_t mode, double bucket, double pv_part, double grid_part, double pv_now, double pv_direct_export, double house_from_battery_ac, double stored_to_ac)
+{
+    if (mode == PK_EXPORT_BUDGET_PV_EQUIVALENT) {
+        return std::max(bucket + pv_now - pv_direct_export, 0.0);
+    }
+    const double house_stored = stored_to_ac > 0 ? house_from_battery_ac / stored_to_ac : 0.0;
+    const double pv_left = std::max(pv_part - std::max(house_stored - grid_part, 0.0), 0.0);
+    return pv_left * stored_to_ac;
+}
+
+inline void pk_export_budget_update(int32_t mode, double &bucket, double &pv_part, double &grid_part, double soc_before, double soc_after, double charge_kwh, double pv_now, double house_frac, double export_kwh, double cap)
+{
+    if (mode == PK_EXPORT_BUDGET_PV_EQUIVALENT) {
+        bucket = std::min(std::max(bucket + pv_now - export_kwh, 0.0), cap);
+        return;
+    }
+    const double delta = soc_after - soc_before;
+    if (delta > 0) {
+        const double pv_frac = charge_kwh > 0 ? std::min(charge_kwh, pv_now) / charge_kwh : 0.0;
+        pv_part += delta * pv_frac;
+        grid_part += delta * (1.0 - pv_frac);
+    } else if (delta < 0) {
+        const double removed = -delta;
+        const double removed_house = removed * house_frac;
+        const double removed_export = removed - removed_house;
+        const double from_grid = std::min(grid_part, removed_house);
+        grid_part -= from_grid;
+        pv_part = std::max(pv_part - (removed_house - from_grid), 0.0);
+        const double from_pv = std::min(pv_part, removed_export);
+        pv_part -= from_pv;
+        grid_part = std::max(grid_part - (removed_export - from_pv), 0.0);
+    }
+    const double total = pv_part + grid_part;
+    if (total > 0) {
+        const double scale = soc_after / total;
+        pv_part *= scale;
+        grid_part *= scale;
+    } else {
+        pv_part = 0.0;
+        grid_part = soc_after;
+    }
+}
 inline bool pk_export_is_freeze(int32_t mode) { return mode == PK_EXPORT_MODE_FREEZE; }
 
 
@@ -265,6 +323,10 @@ struct PkContext {
     int32_t iboost_on_export;
     int32_t has_rate_gas;
     int32_t has_iboost_plan;
+    int32_t export_budget_mode;           // 0 off, 1 pv_origin, 2 pv_equivalent
+    double export_budget_cap;             // kWh, resolved (soc_max when not configured)
+    double export_budget_seed_bucket;     // pv_equivalent bucket at minutes_now
+    double export_budget_seed_pv_share;   // pv_origin share of the stored energy that is PV
 };
 
 // Per-scenario inputs; field order MUST match the ctypes Structure in prediction_kernel.py.
@@ -765,11 +827,21 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
     const double *pv_step = is_pv10 ? c->pv10 : (is_pv90 ? c->pv90 : c->pv);
     const double *load_step = is_pv10 ? c->load10 : (is_pv90 ? c->load90 : c->load);
 
+
+    // Export energy budget state - prediction.py run_prediction budget block
+    const int32_t budget_mode = c->export_budget_mode;
+    const double budget_cap = c->export_budget_cap;
+    double budget_bucket = budget_mode ? c->export_budget_seed_bucket : 0.0;
+    double budget_pv_part = budget_mode ? soc * c->export_budget_seed_pv_share : 0.0;
+    double budget_grid_part = soc - budget_pv_part;
+    const double budget_stored_to_ac = battery_loss_discharge * inverter_loss;
+
     // Simulate each forward step - prediction.py:570-1200
     for (int32_t k = 0; k < n_steps; k++) {
         const int32_t minute = k * step;
         const int32_t minute_absolute = minute + c->minutes_now;
         double reserve_expected = reserve;
+        bool budget_forced = false;
 
         // Rates - prediction.py:577-580
         double import_rate = c->rate_import[k];
@@ -1026,6 +1098,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         // engine already asks the mode here (prediction.py:918), so this also ends a real divergence
         // between the two: the comment claiming bit-parity on this line was already out of date.
         if (!c->set_export_freeze_only && export_window_active && export_mode_now == PK_EXPORT_MODE_TARGET && (soc > discharge_min)) {
+            budget_forced = true;
             // Force export - prediction.py:795-902
             double export_rate_adjust = 1.0;
             if (c->set_export_low_power) {
@@ -1291,6 +1364,25 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             pv_ac = std::max(pv_ac - over_limit, 0.0);
         }
 
+        // Export energy budget - cap forced battery export (prediction.py)
+        double budget_house_frac = 1.0;
+        if (budget_mode && battery_draw > 0) {
+            double battery_ac = battery_draw * inverter_loss;
+            const double house_from_battery_ac = pk_export_budget_house_from_battery(budget_mode, battery_ac, load_yesterday, pv_ac);
+            const double battery_export_ac = battery_ac - house_from_battery_ac;
+            if (budget_forced && battery_export_ac > 0) {
+                const double allowed = pk_export_budget_allowed(budget_mode, budget_bucket, budget_pv_part, budget_grid_part, pv_now, std::max(pv_ac - load_yesterday, 0.0), house_from_battery_ac, budget_stored_to_ac);
+                if (battery_export_ac > allowed) {
+                    battery_draw -= (battery_export_ac - allowed) / inverter_loss;
+                    battery_ac = battery_draw * inverter_loss;
+                    // The iBoost solar excess below must only see the export left after the cap
+                    diff = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp);
+                }
+            }
+            budget_house_frac = battery_ac > 0 ? house_from_battery_ac / battery_ac : 1.0;
+        }
+        const double budget_soc_before = soc;
+
         // Adjust battery soc - prediction.py:1060-1064
         if (battery_draw > 0) {
             soc = std::max(soc - battery_draw / battery_loss_discharge, reserve_expected);
@@ -1342,6 +1434,14 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         if (car_gone_kwh != 0) {
             // The car in a dispatch that has gone away is met by the grid (or PV surplus), never the battery
             diff += car_gone_kwh;
+        }
+
+        if (budget_mode) {
+            double budget_export = 0.0;
+            if (diff < 0) {
+                budget_export = !c->car_energy_reported_load ? std::max(0.0, -diff - car_load_energy_bypass) : -diff;
+            }
+            pk_export_budget_update(budget_mode, budget_bucket, budget_pv_part, budget_grid_part, budget_soc_before, soc, std::max(-battery_draw, 0.0), pv_now, budget_house_frac, budget_export, budget_cap);
         }
 
         // Metric keep - prediction.py:1100-1102

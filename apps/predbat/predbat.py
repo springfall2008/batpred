@@ -708,6 +708,14 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.github_url_cache_loaded = False
         self.load_forecast_history = False
         self.prediction_kernel_enable = False
+        self.export_budget_mode = 0
+        self.export_budget_cap_kwh = 0.0
+        self.export_budget_seed = None
+        self.export_budget_noncompliant_kwh = 0.0
+        self.export_budget_replay_steps = 0
+        self.export_budget_planned_battery_export = 0.0
+        self.export_budget_capped_minutes = []
+        self.predict_export_budget = {}
 
         for root in CONFIG_ROOTS:
             if os.path.exists(root):
@@ -1128,6 +1136,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.record_status("Error: Failed to fetch inverter data, not able to compute a plan", had_errors=True)
             return
         self.check_export_more_solar_effective()
+        self.update_export_budget_seed()
         self.log_replay_state()
         self.log_replay_inverter()
 

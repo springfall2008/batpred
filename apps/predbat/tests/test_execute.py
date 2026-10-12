@@ -3373,6 +3373,32 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
+    # Export energy budget: a kept plan's export to 0% must be raised to the measured floor before it reaches the
+    # inverter - 9 kWh stored, 10% of it PV (0.9 kWh exportable), so the target is 81%
+    saved_budget = (my_predbat.export_budget_mode, my_predbat.export_budget_seed)
+    my_predbat.export_budget_mode = 1
+    my_predbat.export_budget_seed = (0.0, 0.1)
+    try:
+        failed |= run_execute_test(
+            my_predbat,
+            "export_budget_floor",
+            export_window_best=[{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 1}],
+            export_limits_best=[0],
+            assert_force_export=True,
+            set_charge_window=True,
+            set_export_window=True,
+            soc_kw=9,
+            assert_status="Exporting",
+            assert_immediate_soc_target=81,
+            assert_discharge_start_time_minutes=my_predbat.minutes_now,
+            assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,
+            update_plan=True,
+        )
+    finally:
+        my_predbat.export_budget_mode, my_predbat.export_budget_seed = saved_budget
+    if failed:
+        return failed
+
     # Test inverter_limit_export: discharge rate during forced export should be capped to battery_max_export_rate (500) not battery_max_rate (1000)
     failed |= run_execute_test(
         my_predbat,

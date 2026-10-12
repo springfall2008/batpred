@@ -23,6 +23,7 @@ from datetime import timedelta, timezone
 from predbat import THIS_VERSION_DISPLAY
 from const import TIME_FORMAT, PREDICT_STEP, RUN_EVERY, EXPORT_LIMIT_IDLE, MINUTE_WATT, FULL_EXPORT_POWER, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
 from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state, find_charge_rate, export_mode_of, export_target_of, export_power_of, export_limit_sort_key, pack_export_limit, export_limit_from_stored
+from export_budget import EXPORT_BUDGET_PV_EQUIVALENT, EXPORT_BUDGET_MODE_NAMES
 from prediction import Prediction
 
 # Per-slot plan "why" reason templates. Keyed by a stable reason code, each template is
@@ -2363,6 +2364,47 @@ class Output:
             )
         return day_cost, carbon_g
 
+    def publish_export_budget(self):
+        """Publish <prefix>.export_budget: battery energy the export energy budget lets Predbat export now, with the plan's forecast in results"""
+        if not self.export_budget_mode:
+            return
+        mode_name = [name for name, value in EXPORT_BUDGET_MODE_NAMES.items() if value == self.export_budget_mode][0]
+        cap = self.export_budget_cap_kwh if self.export_budget_cap_kwh > 0 else self.soc_max
+        seed = self.export_budget_seed
+        attributes = {
+            "friendly_name": "Export energy budget",
+            "state_class": "measurement",
+            "unit_of_measurement": "kWh",
+            "icon": "mdi:transmission-tower-export",
+            "mode": mode_name,
+            "cap": dp2(cap),
+            "planned_battery_export_kwh": dp2(self.export_budget_planned_battery_export),
+            "noncompliant_export_kwh": dp2(self.export_budget_noncompliant_kwh),
+            "history_steps": self.export_budget_replay_steps,
+        }
+        if self.export_budget_mode == EXPORT_BUDGET_PV_EQUIVALENT:
+            state = seed[0] if seed else 0.0
+        else:
+            pv_part = self.soc_kw * (seed[1] if seed else 0.0)
+            state = pv_part
+            attributes["pv_part_kwh"] = dp2(pv_part)
+            attributes["grid_part_kwh"] = dp2(self.soc_kw - pv_part)
+        # Forecast from the best plan: the budget now, then the budget at the end of each step
+        forecast = {(self.midnight_utc + timedelta(minutes=self.minutes_now)).strftime(TIME_FORMAT): dp2(state)}
+        for minute, value in self.predict_export_budget.items():
+            forecast[(self.midnight_utc + timedelta(minutes=self.minutes_now + minute + PREDICT_STEP)).strftime(TIME_FORMAT)] = dp2(value)
+        attributes["results"] = self.filtered_times(forecast)
+        self.dashboard_item(self.prefix + ".export_budget", state=dp2(state), attributes=attributes)
+        self.log(
+            "Export energy budget ({}): {} kWh exportable now, planned battery export {} kWh, non-compliant export in the last {} days {} kWh".format(
+                mode_name, dp2(state), dp2(self.export_budget_planned_battery_export), dp1(self.export_budget_replay_steps * 5 / (24 * 60)), dp2(self.export_budget_noncompliant_kwh)
+            )
+        )
+        capped = set(self.export_budget_capped_minutes)
+        for window in self.export_window_best:
+            if window["start"] in self.manual_export_times and any(window["start"] <= minute < window["end"] for minute in capped):
+                self.log("Export energy budget capped manual export {} - {}: the budget does not allow the full export".format(self.time_abs_str(window["start"]), self.time_abs_str(window["end"])))
+
     def publish_export_limit(self, export_window, export_limits, best):
         """
         Create entity to chart export limit
@@ -3386,6 +3428,7 @@ class Output:
         midnight_utc = self.midnight_utc
         forecast_minutes = self.forecast_minutes
         cost_today_sofar = self.cost_today_sofar
+        export_budget_seed = self.export_budget_seed
         import_today_now = self.import_today_now
         export_today_now = self.export_today_now
         pv_today_now = self.pv_today_now
@@ -3408,6 +3451,7 @@ class Output:
         # Fake to yesterday state
         self.minutes_now = 0
         self.cost_today_sofar = 0
+        self.export_budget_seed = None
         self.import_today_now = 0
         self.export_today_now = 0
         self.carbon_today_sofar = 0
@@ -3785,6 +3829,7 @@ class Output:
         self.midnight_utc = midnight_utc
         self.forecast_minutes = forecast_minutes
         self.cost_today_sofar = cost_today_sofar
+        self.export_budget_seed = export_budget_seed
         self.import_today_now = import_today_now
         self.export_today_now = export_today_now
         self.carbon_today_sofar = carbon_today_sofar
