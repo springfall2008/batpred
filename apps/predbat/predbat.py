@@ -96,6 +96,7 @@ from octopus import Octopus
 from energydataservice import Energidataservice
 from stromligning import Stromligning
 from components import Components, COMPONENT_LIST
+from control_handoff import start_control_handoff
 from execute import Execute
 from marginal import Marginal
 from plan import Plan
@@ -2030,6 +2031,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.reset()
             self.update_time(print=False)
 
+            # Attach the enrolled write fence before constructing any component.
+            # A refused attach aborts startup and keeps its sentinel gate closed.
+            self.control_handoff_service = start_control_handoff(self)
+
             # Start all sub-components
             self.components = Components(self)
             self.components.initialize(phase=0)
@@ -2098,6 +2103,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.dynamic_load_car_load()
 
         except Exception as e:
+            service = self.__dict__.get("control_handoff_service")
+            if service is not None:
+                service.stop()
             self.log("Error: Exception raised {}".format(e))
             self.log("Error: " + traceback.format_exc())
             self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc(), had_errors=True)
@@ -2138,6 +2146,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         Called once each time the app terminates
         """
         self.log("Predbat terminating")
+        service = self.__dict__.get("control_handoff_service")
+        if service is not None:
+            await asyncio.to_thread(service.stop)
         self.stop_thread = True
         if self.components:
             await self.components.stop()
