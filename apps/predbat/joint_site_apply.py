@@ -139,7 +139,6 @@ def _evidence(base):
     options = _options(base)
     _require(options is not None and options["mode"] == "apply" and options["control_model"] == "deye_tou", "real_deye_controls_required")
     _require(not _collect_blockers(base, options), "native_inputs_or_overrides_blocked")
-    _require(not options["departure_passed"], "departure_passed")
     _require(not base.set_read_only and not getattr(base, "set_read_only_axle", False), "read_only")
     _require(not any(getattr(base, name, False) for name in ("inverter_needs_reset", "had_errors", "fatal_error")), "native_state_not_ready")
     _require(not base.get_arg("template", False), "template_mode")
@@ -177,6 +176,7 @@ def _ev_permitted(base, options, relay, now, on):
     """Check hysteresis and exact elapsed OFF seconds independently of battery mode."""
     if not on:
         return
+    _require(not options["departure_passed"], "departure_passed")
     _require(base.soc_kw > options["pause"] * base.soc_max / 100, "ev_pause_threshold")
     _require(options["ev_soc"] < base.car_charging_limit[0], "ev_target_already_reached")
     session = options["settings"]["session"]
@@ -209,12 +209,15 @@ def _candidate(base, pending, inverter, now, minute):
     _require(all(check.get("passed") is True and check.get("checked_minutes") == base.forecast_minutes for check in checks.values()), "native_checks_failed")
     _require(0 <= (now - _stamp(report["generated_at"])).total_seconds() <= RECEIPT_TTL_SECONDS, "candidate_stale_or_future")
     _require(pending.get("fingerprint") == execution_fingerprint(base), "configuration_changed")
+    closed = now >= _stamp(base.args["joint_site"]["session"]["departure"])
+    _require(report.get("session_closed", False) is closed, "session_phase_changed")
     _require(_finite(pending.get("initial_battery_soc_kwh"), base.reserve, base.soc_max), "initial_domestic_soc_missing")
     _require(base.soc_kw >= pending["initial_battery_soc_kwh"] - 0.002, "domestic_soc_fell_since_planning")
     commands = pending["commands"]
     _require(isinstance(commands, list) and len(commands) == base.forecast_minutes // PREDICT_STEP, "incomplete_command_horizon")
     for index, command in enumerate(commands):
         _intent(command, inverter)
+        _require(not closed or not command["ev_on"], "closed_session_ev_command")
         _require(type(command.get("start")) is int and type(command.get("end")) is int, "invalid_command_time")
         _require(command.get("start") == base.minutes_now + index * PREDICT_STEP and command.get("end") == command["start"] + PREDICT_STEP, "command_timeline_mismatch")
     command = commands[0]
@@ -315,9 +318,12 @@ def execute_joint_site(base):
         # Permission, clocks and protection inputs can change while writes settle.
         options, inverter, relay, now, minute = _evidence(base)
         _require(pending["fingerprint"] == execution_fingerprint(base), "configuration_changed_during_dispatch")
+        _require(pending["report"].get("session_closed", False) is options["departure_passed"], "session_phase_changed")
         _require(command["start"] <= minute < command["end"], "command_expired_during_dispatch")
         _ev_permitted(base, options, relay, now, command["ev_on"])
-        expires = min(base.midnight_utc + timedelta(minutes=run["end"]), now + timedelta(seconds=RECEIPT_TTL_SECONDS), _stamp(options["settings"]["session"]["departure"]))
+        expires = min(base.midnight_utc + timedelta(minutes=run["end"]), now + timedelta(seconds=RECEIPT_TTL_SECONDS))
+        if command["ev_on"]:
+            expires = min(expires, _stamp(options["settings"]["session"]["departure"]))
         base.joint_site_execution = {
             "generated_at": now.isoformat(),
             "expires_at": expires.isoformat(),

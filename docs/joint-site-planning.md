@@ -266,6 +266,22 @@ accepted ToU controls can remain in force. The observed six-row commands are
 not hardware leases. Commissioning must verify the inverter's safe persistence
 and recovery behaviour; software receipt expiry is **not** inverter rollback.
 
+#### After the EV departure
+
+Shadow still reports `departure_passed` for a closed dated session. Explicit
+apply may instead calculate and independently replay a **new house-only plan**
+over the complete horizon, including battery replenishment and future manual
+domestic floors. It keeps the real measured EV SOC, requests no further EV energy,
+and forbids every EV ON command. It does not renew the session, roll its dates
+into tomorrow, or claim that a later observation proves the departure target.
+
+All existing apply evidence, permission, connection, commissioning and safety
+gates remain required. This is not a fallback for stale data or a disconnected
+vehicle. With an observed ON relay, the executor first withdraws the EV signal
+and waits for observed OFF before changing battery support. A candidate made
+before departure cannot silently become a house-only plan at expiry: new native
+nominal and PV10 replays are required. Off/shadow and legacy control are unchanged.
+
 ## Objective
 
 Choose EV charging and home-battery charging/holding/demand operation together,

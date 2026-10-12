@@ -1,7 +1,7 @@
 """Exercise joint staging and the real native execution/publication entry points."""
 
 from copy import deepcopy
-from datetime import timedelta
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -195,6 +195,157 @@ def test_apply_blocks_competing_plan_consumers(base):
         assert native_plan_hook_allowed(base) is True
 
 
+def _expired_apply_inputs(base, relay="off"):
+    """Keep real evidence fresh while closing, never renewing, the dated EV session."""
+    _apply_inputs(base)
+    session = base.args["joint_site"]["session"]
+    session["available_from"] = (base.now_utc - timedelta(hours=2)).isoformat()
+    session["departure"] = (base.now_utc - timedelta(minutes=5)).isoformat()
+    base.soc_kw = base.reserve + 0.05
+    base.args["joint_site"]["terminal_min_percent"] = 15
+    base.all_active_keep[base.minutes_now + 5] = base.soc_kw / base.soc_max * 100 + 0.25
+    for name in ("pv_forecast_minute_step", "pv_forecast_minute10_step"):
+        setattr(base, name, {minute: 0.0 for minute in getattr(base, name)})
+    _set_entity(base, "binary_sensor.test_relay", relay, last_changed=base.now_utc - timedelta(minutes=10))
+    _set_entity(base, "sensor.test_ev_soc", "1")
+
+
+def test_expired_apply_replenishes_home_without_renewing_ev(base):
+    """The real solver, both replays and Execute continue domestic charging with EV OFF."""
+    from tests.test_joint_site_apply import _make_adapter, _make_inverter
+
+    _expired_apply_inputs(base)
+    session = deepcopy(base.args["joint_site"]["session"])
+    report = evaluate_joint_site(base, publish=False)
+    assert report["status"] == "candidate", report
+    assert report["session_closed"] is True
+    assert report["target_met_by_departure"] is None
+    assert report["ev_session_renewed"] is False
+    assert report["ev_initial_state"]["ev_soc_kwh"] == 1
+    assert all(check["passed"] and check["checked_minutes"] == base.forecast_minutes for check in report["native_checks"].values())
+    assert not report["proposed_ev_windows"]
+    assert all(not step["ev_on"] for step in base.joint_site_pending["commands"])
+    assert base.joint_site_pending["commands"][0]["target_soc"] == 100
+    adapter, _ = _make_adapter()
+    _, spy = _make_inverter(base, adapter)
+    assert base.execute_plan()[0] == "Charging", base.joint_site_report
+    assert spy["args"]
+    assert datetime.fromisoformat(base.joint_site_execution["expires_at"]) > base.now_utc
+    base.publish_car_plan()
+    assert base.dashboard_values["binary_sensor." + base.prefix + "_car_charging_slot"]["state"] == "off"
+    assert base.args["joint_site"]["session"] == session
+
+
+def test_expired_apply_waits_for_observed_ev_off(base):
+    """Expiry first withdraws the EV lease, without speculatively removing battery support."""
+    from tests.test_joint_site_apply import _make_adapter, _make_inverter
+
+    _expired_apply_inputs(base, relay="on")
+    assert evaluate_joint_site(base, publish=False)["status"] == "candidate"
+    adapter, _ = _make_adapter()
+    _, spy = _make_inverter(base, adapter)
+    assert base.execute_plan() == ("Joint blocked", "waiting_for_ev_relay_off")
+    assert not spy["args"]
+    assert base.dashboard_values["binary_sensor." + base.prefix + "_car_charging_slot"]["state"] == "off"
+
+
+def test_expired_apply_rejects_any_future_ev_command(base):
+    """Even a later injected EV window cannot escape the closed-session contract."""
+    from tests.test_joint_site_apply import _make_adapter, _make_inverter
+
+    _expired_apply_inputs(base)
+    assert evaluate_joint_site(base, publish=False)["status"] == "candidate"
+    base.joint_site_pending["commands"][-1]["ev_on"] = True
+    adapter, _ = _make_adapter()
+    _, spy = _make_inverter(base, adapter)
+    assert base.execute_plan() == ("Joint blocked", "closed_session_ev_command")
+    assert not spy["args"]
+
+
+def test_expired_apply_retains_all_evidence_and_ownership_gates(base):
+    """Domestic continuation is not an exemption from existing commissioning or safety guards."""
+    from tests.test_joint_site_apply import _make_adapter, _make_inverter
+
+    for guard in ("stale", "permission", "connection", "read_only", "manual_floor", "commissioning"):
+        _expired_apply_inputs(base)
+        assert evaluate_joint_site(base, publish=False)["status"] == "candidate"
+        adapter, _ = _make_adapter()
+        _, spy = _make_inverter(base, adapter)
+        if guard == "stale":
+            _set_entity(base, "sensor.test_soc_observed_at", (base.now_utc - timedelta(seconds=181)).isoformat())
+        elif guard == "permission":
+            _set_entity(base, "switch.test_permission", "off")
+        elif guard == "connection":
+            _set_entity(base, "sensor.test_charger_state", "disconnected")
+        elif guard == "read_only":
+            base.set_read_only = True
+        elif guard == "manual_floor":
+            base.all_active_keep[base.minutes_now] = 50
+        else:
+            base.args["joint_site"]["apply_verified"] = False
+        assert base.execute_plan()[0] == "Joint blocked", (guard, base.joint_site_report)
+        assert not spy["args"], guard
+
+
+def test_crossing_departure_requires_new_domestic_candidate(base):
+    """A pre-departure candidate cannot turn into a house-only plan without new native replays."""
+    from tests.test_joint_site_apply import _make_adapter, _make_inverter
+
+    _apply_inputs(base)
+    base.car_charging_limit[0] = 0
+    base.args["joint_site"]["session"]["departure"] = (base.now_utc + timedelta(seconds=30)).isoformat()
+    assert evaluate_joint_site(base, publish=False)["status"] == "candidate"
+    adapter, _ = _make_adapter()
+    _, spy = _make_inverter(base, adapter)
+    with patch("joint_site_native._observation_clock", return_value=base.now_utc + timedelta(seconds=31)):
+        assert base.execute_plan() == ("Joint blocked", "session_phase_changed")
+    assert not spy["args"]
+
+
+def test_crossing_departure_during_dispatch_revokes_authority(base):
+    """An observed write that settles across expiry is not a newly accepted house-only plan."""
+    from tests.test_joint_site_apply import _make_adapter, _make_inverter
+
+    _apply_inputs(base)
+    base.car_charging_limit[0] = 0
+    base.args["joint_site"]["session"]["departure"] = (base.now_utc + timedelta(seconds=30)).isoformat()
+    assert evaluate_joint_site(base, publish=False)["status"] == "candidate"
+    adapter, _ = _make_adapter()
+    inverter, spy = _make_inverter(base, adapter)
+    dispatch = inverter.adjust_charge_immediate
+    clock = {"now": base.now_utc}
+
+    def settle_after_expiry(*args, **kwargs):
+        """Advance only the synthetic observation clock while retaining the real spy."""
+        result = dispatch(*args, **kwargs)
+        clock["now"] += timedelta(seconds=31)
+        return result
+
+    with patch("joint_site_native._observation_clock", side_effect=lambda: clock["now"]), patch.object(inverter, "adjust_charge_immediate", side_effect=settle_after_expiry):
+        assert base.execute_plan() == ("Joint blocked", "session_phase_changed")
+    assert len(spy["args"]) == 1
+    assert base.joint_site_execution is None
+    assert base.joint_site_report["hardware_confirmed"] is False
+    assert base.dashboard_values["binary_sensor." + base.prefix + "_car_charging_slot"]["state"] == "off"
+
+
+def test_expiry_boundary_and_next_day_never_renew_ev(base):
+    """The exact departure and a fresh next-day observation both retain a closed EV session."""
+    for age in (0, 25 * 60):
+        _expired_apply_inputs(base)
+        session = base.args["joint_site"]["session"]
+        departure = base.now_utc - timedelta(minutes=age)
+        session.update(available_from=(departure - timedelta(hours=2)).isoformat(), departure=departure.isoformat())
+        before = deepcopy(session)
+        report = evaluate_joint_site(base, publish=False)
+        assert report["status"] == "candidate", report
+        assert report["session_closed"] is True
+        assert report["target_met_by_departure"] is None
+        assert not report["proposed_ev_windows"]
+        assert not any(step["ev_on"] for step in base.joint_site_pending["commands"])
+        assert session == before
+
+
 def run_joint_site_entrypoint_tests(base):
     """Run real entry-point regressions in the isolated unit-test environment."""
     for test in (
@@ -208,6 +359,13 @@ def run_joint_site_entrypoint_tests(base):
         test_ev_off_is_observed_before_battery_support_changes,
         test_apply_requires_separate_ev_executor_lease_commissioning,
         test_apply_blocks_competing_plan_consumers,
+        test_expired_apply_replenishes_home_without_renewing_ev,
+        test_expired_apply_waits_for_observed_ev_off,
+        test_expired_apply_rejects_any_future_ev_command,
+        test_expired_apply_retains_all_evidence_and_ownership_gates,
+        test_crossing_departure_requires_new_domestic_candidate,
+        test_crossing_departure_during_dispatch_revokes_authority,
+        test_expiry_boundary_and_next_day_never_renew_ev,
     ):
         with patch("joint_site_native._observation_clock", side_effect=lambda: base.now_utc):
             test(base)

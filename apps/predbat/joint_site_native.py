@@ -318,6 +318,7 @@ def _options(base):
         "control_model": control_model,
         "deadline": end_offset,
         "departure_passed": departure <= observed_now,
+        "house_only": mode == "apply" and departure <= observed_now,
         "planning_reference_at": now.isoformat(),
         "observations_checked_at": observed_now.isoformat(),
         "planning_alignment_seconds": (observed_now - now).total_seconds(),
@@ -446,7 +447,7 @@ def build_candidate(base, options):
     ev = EVConfig(
         battery_kwh=base.car_charging_battery_size[0],
         start_soc_kwh=options["ev_soc"],
-        stop_soc_kwh=base.car_charging_limit[0],
+        stop_soc_kwh=options["ev_soc"] if options.get("house_only") else base.car_charging_limit[0],
         rate_kw=base.car_charging_rate[0],
         efficiency=base.car_charging_loss,
         deadline_min=options["deadline"],
@@ -550,7 +551,8 @@ def _replay(base, options, result, slots, windows, scenario):
             reasons.append("load_port_exceeded")
         off_minutes = 0 if on else (0 if previous_on else off_minutes) + slot.duration_min
         previous_on = on
-    if pred.final_car_soc[0] < base.car_charging_limit[0] - 0.002:
+    ev_target = options["ev_soc"] if options.get("house_only") else base.car_charging_limit[0]
+    if pred.final_car_soc[0] < ev_target - 0.002:
         reasons.append("ev_target_not_met")
     return {
         "passed": not reasons,
@@ -649,7 +651,14 @@ def evaluate_joint_site(base, publish=True):
             "soc_observed_at": options["soc_observed_at"],
             "soc_observation_age_minutes": options["soc_observation_age_minutes"],
             "planning_alignment_seconds": options["planning_alignment_seconds"],
+            "session_closed": options["departure_passed"],
+            "ev_session_renewed": False,
         }
+        if options["departure_passed"]:
+            # A house-only continuation is not evidence of an EV deadline met.
+            # Keep the actual measured SOC; never invent a full/zero EV value.
+            evidence["observed_ev_target_met"] = None if options["ev_soc"] is None else options["ev_soc"] >= base.car_charging_limit[0]
+            evidence["target_met_by_departure"] = None
         blockers = _collect_blockers(model_base, options)
         stale_hypothesis = options["mode"] == "shadow" and options["allow_stale_shadow_soc"] and options["stale_soc"] is not None and blockers == ["soc_entity_stale_or_future"] and not options["departure_passed"]
         if stale_hypothesis:
@@ -664,7 +673,7 @@ def evaluate_joint_site(base, publish=True):
         # gate the solver. Missing optional entities are reported explicitly
         # instead of being silently assumed away.
         entity_observations = options.get("entity_observations", {})
-        if options["departure_passed"]:
+        if options["departure_passed"] and not options["house_only"]:
             report = _empty_report("departure_passed")
             report.update(evidence)
             report["observed_ev_target_met"] = None if options["ev_soc"] is None else options["ev_soc"] >= base.car_charging_limit[0]
