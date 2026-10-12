@@ -2598,6 +2598,7 @@ SOLAX_SOLIS_MODES_FB00 = {
 # Apps.yaml validation schema
 APPS_SCHEMA = {
     "control_handoff": {"type": "dict"},
+    "saas_config_version": {"type": "integer", "min": 1},
     "currency_symbols": {"type": "string|string_list"},
     "db_enable": {"type": "boolean"},
     "db_days": {"type": "integer"},
