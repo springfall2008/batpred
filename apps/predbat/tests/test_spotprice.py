@@ -1817,6 +1817,8 @@ def test_spotprice_octopus_de_auth_and_errors(my_predbat=None):
             assert "Token has expired" in str(e)
         assert recorded[-1] == ("octopus_de", False, "auth_error")
 
+        malformed_agreement = octopus_de_agreement()
+        malformed_agreement["data"]["account"]["properties"][0]["electricityMalos"][0]["agreements"][0]["validTo"] = "not-a-date"
         cases = [
             ("token", kraken_error("KT-CT-1139", "Authentication failed."), "rejected the API key", "auth_error"),
             ("token", kraken_error("KT-CT-1199", "Too many requests."), "rate limit", "rate_limit"),
@@ -1825,6 +1827,7 @@ def test_spotprice_octopus_de_auth_and_errors(my_predbat=None):
             ("agreements", kraken_error("KT-CT-4123", "Unauthorized."), "agreements query failed", "client_error"),
             ("agreements", (200, octopus_de_agreement(active=False)), "no active electricity agreement", "client_error"),
             ("agreements", (200, {"data": {"account": None}}), "account not found", "client_error"),
+            ("agreements", (200, malformed_agreement), "response could not be read", "decode_error"),
         ]
         for operation, reply, phrase, reason in cases:
             api, fake = make_octopus_de(octopus_de_api_key="sk_live_secret")
@@ -1862,6 +1865,9 @@ def test_spotprice_octopus_de_inference_and_config(my_predbat=None):
     assert make_api(provider=None, entsoe_token=None, zone=None, octopus_de_api_key="k").provider == "octopus_de"
     both = make_api(provider=None, entsoe_token=None, zone=None, octopus_de_api_key="k", tibber_token="t")
     assert "tibber, octopus_de" in both.config_error
+    combined = make_api(provider=None, entsoe_token=None, zone="IE-SEM", octopus_de_api_key="k", tibber_token="t")
+    assert "Energy-Charts does not publish zone IE-SEM" in combined.config_error and "credentials for several suppliers (tibber, octopus_de)" in combined.config_error, combined.config_error
+    assert [line for line in combined.base.logs if line.startswith("Error:")] == ["Error: SpotPrice: {}".format(combined.config_error)], combined.base.logs
     assert make_api(provider="octopus_de", entsoe_token=None, zone=None, octopus_de_api_key="k", tibber_token="t").config_error is None
     assert make_api(provider="octopus_de", entsoe_token=None, zone=None).config_error == "spotprice_octopus_de_api_key is required for provider octopus_de"
     assert jwt_expiry(make_jwt(dt("2025-05-02T09:00Z"))) == dt("2025-05-02T09:00Z")
@@ -2158,6 +2164,7 @@ def test_spotprice_octopus_de_forecast_time_of_use(my_predbat=None):
 
 def test_spotprice_octopus_de_dynamic_without_forecast(my_predbat=None):
     """A dynamic agreement with no forecast publishes nothing - never its flat unitRateInformation - and keeps re-polling with an error."""
+    import spotprice as spotprice_module
     from spotprice import octopus_de_is_dynamic, parse_octopus_de_agreement
 
     dynamic = octopus_de_agreement(product="DYNAMIC-OCTOPUS-24M")
@@ -2168,7 +2175,20 @@ def test_spotprice_octopus_de_dynamic_without_forecast(my_predbat=None):
     fake.agreements = dynamic
     now = dt("2025-05-02T08:00Z")
     pin_now(api, now)
-    assert run(api.refresh(now)) is False
+    original_parser = spotprice_module.parse_octopus_de_agreement
+    parse_calls = []
+
+    def counted_parser(*args, **kwargs):
+        """Record each agreement parse before delegating to the real parser."""
+        parse_calls.append(args[0].get("id"))
+        return original_parser(*args, **kwargs)
+
+    spotprice_module.parse_octopus_de_agreement = counted_parser
+    try:
+        assert run(api.refresh(now)) is False
+    finally:
+        spotprice_module.parse_octopus_de_agreement = original_parser
+    assert parse_calls == ["4711"], parse_calls
     assert "has no forecast prices yet" in api.last_error and api.supplier_intervals == []
     api.publish(now)
     assert "sensor.predbat_spotprice_import_rates" not in api.base.entities
@@ -2431,7 +2451,10 @@ def test_spotprice_octopus_de_flat_only_when_explicit(my_predbat=None):
 
 def test_spotprice_octopus_de_autumn_repeated_hour(my_predbat=None):
     """On the autumn change a 02:00-03:00 rule covers both 02:00-03:00 hours (00:00Z-02:00Z), the first included, with no gap or overlap."""
-    from spotprice import parse_octopus_de_agreement
+    from spotprice import _localize, parse_octopus_de_agreement
+
+    assert _localize(datetime(2025, 10, 26, 2), BERLIN) == dt("2025-10-26T00:00Z")
+    assert _localize(datetime(2025, 10, 26, 3), BERLIN) == dt("2025-10-26T02:00Z")
 
     info = {
         "__typename": "TimeOfUseProductUnitRateInformation",

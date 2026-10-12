@@ -195,6 +195,10 @@ class SpotPriceError(Exception):
         self.status = status
 
 
+class SpotPriceDecodeError(SpotPriceError):
+    """A price-source response could not be decoded or had an unexpected shape."""
+
+
 def parse_iso_duration_minutes(text):
     """Parse an ISO 8601 time duration such as PT15M, PT60M or PT1H into minutes, or None."""
     match = ISO_DURATION_RE.match((text or "").strip())
@@ -285,7 +289,7 @@ def parse_errors_as(source):
             except SpotPriceError:
                 raise
             except Exception as e:
-                raise SpotPriceError("{} response could not be read ({}: {})".format(source, type(e).__name__, e))
+                raise SpotPriceDecodeError("{} response could not be read ({}: {})".format(source, type(e).__name__, e)) from e
 
         return wrapper
 
@@ -728,6 +732,7 @@ def jwt_expiry(token):
         return None
 
 
+@parse_errors_as("Octopus Energy Germany")
 def select_octopus_de_agreements(data, malo=None):
     """Pick the market location to price and return (malo number, its agreements in date order).
 
@@ -1177,12 +1182,11 @@ class SpotPriceAPI(ComponentBase):
                 self.config_error = "spotprice_entsoe_token is required for zone {}".format(zone_name)
             else:
                 self.config_error = "Energy-Charts does not publish zone {}, use spotprice_provider entsoe with spotprice_entsoe_token".format(zone_name)
-            if self.config_error:
-                self.log("Error: SpotPrice: {}".format(self.config_error))
-        if not self.config_error:
-            self.config_error = ambiguous or self.supplier_config_error()
-            if self.config_error:
-                self.log("Error: SpotPrice: {}".format(self.config_error))
+        supplier_config_error = ambiguous or self.supplier_config_error()
+        if supplier_config_error:
+            self.config_error = "; ".join(error for error in (self.config_error, supplier_config_error) if error)
+        if self.config_error:
+            self.log("Error: SpotPrice: {}".format(self.config_error))
 
         # Raw source data, cached to storage. Spot intervals are per-MWh in EUR as published;
         # Tibber intervals are end-user totals in major currency units per kWh; supplier intervals
@@ -1784,18 +1788,25 @@ class SpotPriceAPI(ComponentBase):
         body = await self.octopus_de_query(OCTOPUS_DE_AGREEMENTS_QUERY, {"accountNumber": self.octopus_de_account}, "agreements query")
         try:
             malo, chain = select_octopus_de_agreements(body, self.octopus_de_malo)
+        except SpotPriceDecodeError:
+            record_api_call("octopus_de", False, "decode_error")
+            raise
         except SpotPriceError:
             record_api_call("octopus_de", False, "client_error")
             raise
         self.note_supplier_identity("octopus_de:{}:{}".format(self.octopus_de_account, malo))
         intervals = []
+        active_intervals = []
         try:
-            for agreement in chain:
-                intervals.extend(parse_octopus_de_agreement(agreement, start, end))
+            for index, agreement in enumerate(chain):
+                agreement_intervals = parse_octopus_de_agreement(agreement, start, end)
+                if index == 0:
+                    active_intervals = agreement_intervals
+                intervals.extend(agreement_intervals)
         except SpotPriceError:
             record_api_call("octopus_de", False, "decode_error")
             raise
-        if octopus_de_is_dynamic(chain[0]) and not parse_octopus_de_agreement(chain[0], start, end):
+        if octopus_de_is_dynamic(chain[0]) and not active_intervals:
             # Never stand a flat rate in for a dynamic tariff: fail (keeping the last prices held) and retry
             record_api_call("octopus_de", False, "client_error")
             raise SpotPriceError("Octopus Energy Germany dynamic agreement {} has no forecast prices yet".format(chain[0].get("id")))
