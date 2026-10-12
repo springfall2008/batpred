@@ -2739,7 +2739,7 @@ def _test_ohme_run_iog_dispatch_sensor_followed(my_predbat=None):
     api.ohme_control = True
     api.args["octopus_intelligent_slot"] = [OCTOPUS_DISPATCH_ENTITY]
     _ohme_run_poll(api, first=True)
-    assert api.control_active is False, "Expected Predbat-led control ignored on Intelligent with the completed dispatches from Octopus"
+    assert api.charger_control_active is False, "Expected Predbat-led control ignored on Intelligent with the completed dispatches from Octopus"
 
     print("PASS: the Octopus dispatch sensor coming and going was followed")
     return 0
@@ -2773,7 +2773,7 @@ def _test_ohme_run_leaving_intelligent_clears_planned(my_predbat=None):
     api = start(control=True)
     _ohme_set_tariff(api, "E-1R-COSY-22-12-08-A")
     _ohme_run_poll(api, seconds=120)
-    assert api.control_active is True and api.slot_mode is None, f"Expected Predbat-led control with no slot wiring, got {api.control_active} {api.slot_mode}"
+    assert api.charger_control_active is True and api.slot_mode is None, f"Expected Predbat-led control with no slot wiring, got {api.charger_control_active} {api.slot_mode}"
     for arg in ("octopus_intelligent_slot", "octopus_intelligent_planned_slot", "octopus_ready_time", "octopus_charge_limit"):
         assert api.args[arg] == [], f"Expected {arg} cleared for Predbat-led control, got {api.args[arg]}"
 
@@ -2820,7 +2820,7 @@ def _test_ohme_run_leaving_intelligent_clears_planned(my_predbat=None):
     api = start_two_cars(control=True)
     _ohme_set_tariff(api, "E-1R-COSY-22-12-08-A")
     _ohme_run_poll(api, seconds=120)
-    assert api.control_active is True and api.slot_mode is None, f"Expected Predbat-led control with no slot wiring, got {api.control_active} {api.slot_mode}"
+    assert api.charger_control_active is True and api.slot_mode is None, f"Expected Predbat-led control with no slot wiring, got {api.charger_control_active} {api.slot_mode}"
     for arg in ("octopus_intelligent_slot", "octopus_intelligent_planned_slot", "octopus_ready_time", "octopus_charge_limit"):
         assert api.args[arg] == [], f"Expected {arg} cleared for Predbat-led control with two cars wired, got {api.args[arg]}"
 
