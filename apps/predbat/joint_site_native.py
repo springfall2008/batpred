@@ -103,6 +103,11 @@ def _parse_soc_raw(state, unit, capacity_kwh):
     return value
 
 
+def _observation_clock():
+    """Read wall time, never replace an entity's actual observation timestamp."""
+    return datetime.now(timezone.utc)
+
+
 def _options(base):
     """Read a dated expected session and entity-driven evidence without treating them as permission to switch."""
     settings = base.args.get("joint_site")
@@ -175,6 +180,10 @@ def _options(base):
     soc_payload = _read_entity_state(base, soc_entity) if soc_entity else None
     connection_payload = _read_entity_state(base, connection_entity) if connection_entity else None
     permission_payload = _read_entity_state(base, permission_entity) if permission_entity else None
+    # Predbat's forecast reference is floored to five minutes. A real observation
+    # later in that block is NOT future-dated. Read the observation clock after
+    # the cached states so a concurrent HA update is compared with current time.
+    observed_now = _aware(_observation_clock(), "observation_clock")
     manual_target_active = bool(getattr(base, "car_charging_manual_soc", None) and base.car_charging_manual_soc and base.car_charging_manual_soc[0])
     manual_target_kwh = None
     if manual_target_active:
@@ -192,7 +201,7 @@ def _options(base):
         # No live entity configured: dated session is the only source.
         observed = _aware(session["soc_observed_at"], "soc_observed_at") if isinstance(session["soc_observed_at"], datetime) else _parse_entity_timestamp(session["soc_observed_at"], "soc_observed_at")
         max_age = _number(settings.get("soc_max_age_minutes", 60), "soc_max_age_minutes", 1, 1440)
-        age = (now - observed).total_seconds() / 60
+        age = (observed_now - observed).total_seconds() / 60
         if age < 0 or age > max_age:
             raise ValueError("EV SoC observation is stale or future-dated")
         ev_soc = _number(session["soc_kwh"], "soc_kwh", 0, base.car_charging_battery_size[0])
@@ -211,7 +220,7 @@ def _options(base):
                 entity_blockers.append("soc_entity_out_of_bounds")
             else:
                 soc_max_age = _number(settings.get("soc_max_age_minutes", 60), "soc_max_age_minutes", 1, 1440)
-                soc_age_minutes = (now - soc_payload["last_updated"]).total_seconds() / 60
+                soc_age_minutes = (observed_now - soc_payload["last_updated"]).total_seconds() / 60
                 if soc_age_minutes < 0 or soc_age_minutes > soc_max_age:
                     entity_blockers.append("soc_entity_stale_or_future")
                 else:
@@ -239,7 +248,7 @@ def _options(base):
         raise ValueError("relay_entity state must be 'on' or 'off'")
     relay_last_changed = relay_payload["last_changed"] if relay_payload else None
     if relay_last_changed is not None:
-        elapsed_seconds = (now - relay_last_changed).total_seconds()
+        elapsed_seconds = (observed_now - relay_last_changed).total_seconds()
         if elapsed_seconds < 0:
             entity_blockers.append("relay_timestamp_future")
             elapsed_minutes_floor = 0
@@ -271,7 +280,10 @@ def _options(base):
         "arrival": start_offset,
         "control_model": control_model,
         "deadline": end_offset,
-        "departure_passed": departure <= now,
+        "departure_passed": departure <= observed_now,
+        "planning_reference_at": now.isoformat(),
+        "observations_checked_at": observed_now.isoformat(),
+        "planning_alignment_seconds": (observed_now - now).total_seconds(),
         "ev_soc": ev_soc,
         "ev_soc_source": ev_soc_source,
         "load_cap": _number(settings.get("load_port_limit_w"), "load_port_limit_w", 1) / 1000,
@@ -570,6 +582,9 @@ def evaluate_joint_site(base, publish=True):
             "counterfactual_controls": options["control_model"] != "native",
             "activation_requirements": execution_requirements,
             "manual_domestic_floor_slots": len(base.all_active_keep),
+            "planning_reference_at": options["planning_reference_at"],
+            "observations_checked_at": options["observations_checked_at"],
+            "planning_alignment_seconds": options["planning_alignment_seconds"],
         }
         blockers = _collect_blockers(model_base, options)
         # Always surface the entity observations even when topology blockers

@@ -687,6 +687,22 @@ def test_closed_session_does_not_roll_to_tomorrow(base):
     assert _controls(base) == before and report["ready_to_activate"] is False
 
 
+def test_observations_after_rounded_plan_time_are_not_future(base):
+    """Reproduce a mid-slot live startup without accepting truly future data."""
+    _setup(base)
+    actual_now = base.now_utc + timedelta(minutes=2)
+    _set_entity(base, "sensor.test_ev_soc", "53", last_updated=base.now_utc + timedelta(seconds=90))
+    _set_entity(base, "binary_sensor.test_relay", "off", last_changed=actual_now - timedelta(seconds=59), last_updated=actual_now)
+    base.args["joint_site"].update(soc_entity="sensor.test_ev_soc", soc_entity_unit="%", relay_entity="binary_sensor.test_relay")
+    with patch("joint_site_native._observation_clock", return_value=actual_now):
+        options = _options(base)
+        assert not options["entity_blockers"], options
+        assert options["ev_soc"] == 13.25 and options["initial_off_minutes"] == 0
+        assert options["planning_alignment_seconds"] == 120
+        _set_entity(base, "sensor.test_ev_soc", "53", last_updated=actual_now + timedelta(seconds=1))
+        assert "soc_entity_stale_or_future" in _options(base)["entity_blockers"]
+
+
 def run_joint_site_native_tests(base):
     """Run native integration cases without a live HA connection or inverter writes."""
     for test in (
@@ -724,7 +740,9 @@ def run_joint_site_native_tests(base):
         test_real_ha_timestamp_cache_and_elapsed_cooldown,
         test_deye_counterfactual_preserves_native_capabilities_and_manual_floor,
         test_closed_session_does_not_roll_to_tomorrow,
+        test_observations_after_rounded_plan_time_are_not_future,
     ):
-        test(base)
+        with patch("joint_site_native._observation_clock", side_effect=lambda: base.now_utc):
+            test(base)
         print("PASS:", test.__name__)
     return False

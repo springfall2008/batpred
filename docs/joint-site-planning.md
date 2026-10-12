@@ -91,6 +91,12 @@ HA's `last_updated` separately from `last_changed` avoids equating an unchanged
 value with an old observation. Cached HA freshness still does not prove physical
 device freshness or connection, and no hardware refresh or service is requested.
 
+Freshness and elapsed relay-OFF time use a wall clock read after the cached
+observations, not Predbat's rounded five-minute forecast reference. Otherwise a
+valid observation inside the current block would appear future-dated at startup.
+Reports expose both references and their alignment difference. Entity timestamps
+are never replaced with the time at which the cache was read.
+
 The initial integration supports one metered EV and one inverter, full-rate charge
 and charge-freeze controls, no iBoost, and no manual mode/ceiling overrides. Domestic
 manual minimum targets are retained as time-local SOC constraints and checked in
