@@ -102,6 +102,22 @@ COMPARE_PLAN_STATE = (
     "plan_last_updated_minutes",
     "rate_best_cost_threshold_charge",
     "rate_best_cost_threshold_export",
+    "clipping_amplification",
+    "clipping_auto_amp",
+    "clipping_auto_end_offset",
+    "clipping_auto_start_offset",
+    "clipping_buffer_end",
+    "clipping_buffer_end_offset",
+    "clipping_buffer_forecast_kwh",
+    "clipping_buffer_kwh",
+    "clipping_buffer_start",
+    "clipping_buffer_start_offset",
+    "clipping_last_tune_day",
+    "clipping_limit_effective",
+    "clipping_limit_mode",
+    "clipping_mode",
+    "clipping_remaining_today",
+    "clipping_tomorrow",
 )
 # Battery and inverter values a tariff can override, reset after each tariff as well as at the end
 COMPARE_HARDWARE_STATE = ("soc_max", "battery_rate_max_charge", "battery_rate_max_charge_dc", "battery_rate_max_discharge", "battery_rate_max_export", "inverter_limit")
@@ -126,6 +142,8 @@ COMPARE_RESTORED_STATE = (
         "export_today_now",
         "octopus_intelligent_charging",
         "soc_kw",
+        "clipping_allocated_today",
+        "clipping_allocated_today_date",
     )
 )
 # Car state the comparison rebuilds per tariff, deep-copied as the lists are changed in place
