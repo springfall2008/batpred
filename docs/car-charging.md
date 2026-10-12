@@ -155,28 +155,6 @@ If you are using Octopus-led charging with the [Octopus direct connection](energ
 
 - Predbat gets its Octopus charging slot information direct from the Octopus API, so comment out or delete octopus_intelligent_slot, octopus_ready_time and octopus_charge_limit from `apps.yaml`.
 
-#### Taking planned slots from another sensor
-
-**octopus_intelligent_planned_slot** is optional. It names a second sensor, per car, that Predbat takes the planned charging slots from, while **octopus_intelligent_slot**
-goes on supplying the completed ones.
-
-It is for a charger that knows the charge still to come better than Octopus reports it, but keeps no lasting record of the slots already used.
-The [Ohme direct integration](#ohme-car-charger-direct-integration) sets it for you; you would only set it by hand for another charger whose sensor has a `planned_dispatches` attribute:
-
-```yaml
-  octopus_intelligent_slot: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_intelligent_dispatching)'
-  octopus_intelligent_planned_slot: 'binary_sensor.my_charger_slots'
-```
-
-With it set:
-
-- Completed slots, which decide the off-peak rate shown for charging already done, come from **octopus_intelligent_slot**.
-- Planned slots come from **octopus_intelligent_planned_slot**. Any planned slots on **octopus_intelligent_slot** are ignored for that car.
-- Slots the planned sensor reports as already finished are also used, until **octopus_intelligent_slot** lists them as completed.
-
-It is only read for a car that also has **octopus_intelligent_slot** set, and not when `octopus_intelligent_slot_action_config` is in use.
-For multiple cars, set it to a list with one sensor per car.
-
 - Predbat also looks up your enrolled charger's power, or your enrolled car's battery size, in Octopus's catalogue of chargers and cars, by make and model.
 A battery size found there is used in place of **car_charging_battery_size**, so that setting can't change it.
 A charger power found there is used if it is higher than **input_number.predbat_car_charging_rate** (or **input_number.predbat_car_charging_rate_1** etc. for further cars), but never to lower it.
@@ -282,6 +260,28 @@ If you have [multiple electric cars](#multiple-electric-cars) then car_charging_
     - 'sensor.tsunami_battery'
     - 'sensor.toyota_XXX_battery_level'
 ```
+
+#### Taking planned slots from another sensor
+
+**octopus_intelligent_planned_slot** is optional. It names a second sensor, per car, that Predbat takes the planned charging slots from, while **octopus_intelligent_slot**
+goes on supplying the completed ones.
+
+It is for a charger that knows the charge still to come better than Octopus reports it, but keeps no lasting record of the slots already used.
+The [Ohme direct integration](#ohme-car-charger-direct-integration) sets it for you; you would only set it by hand for another charger whose sensor has a `planned_dispatches` attribute:
+
+```yaml
+  octopus_intelligent_slot: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_intelligent_dispatching)'
+  octopus_intelligent_planned_slot: 'binary_sensor.my_charger_slots'
+```
+
+With it set:
+
+- Completed slots, which decide the off-peak rate shown for charging already done, come from **octopus_intelligent_slot**.
+- Planned slots come from **octopus_intelligent_planned_slot**. Any planned slots on **octopus_intelligent_slot** are ignored for that car.
+- Slots the planned sensor reports as already finished are also used, until **octopus_intelligent_slot** lists them as completed.
+
+It is only read for a car that also has **octopus_intelligent_slot** set, and not when `octopus_intelligent_slot_action_config` is in use.
+For multiple cars, set it to a list with one sensor per car.
 
 ### Multiple Electric Cars
 
