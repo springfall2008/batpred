@@ -14,6 +14,7 @@ import sys
 import glob
 import argparse
 import random
+import unittest
 from datetime import timedelta
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -52,6 +53,8 @@ from tests.test_new_install_detection import test_new_install_detection
 from tests.test_config_json_format import test_config_json_format
 from tests.test_history_attribute import test_history_attribute
 from tests.test_inverter import run_inverter_tests
+from tests import test_joint_site_core
+from tests.test_joint_site_native import run_joint_site_native_tests
 from tests.test_basic_rates import test_basic_rates
 from tests.test_clock import run_clock_tests
 from tests.test_rate_export_max_forward_calc import test_rate_export_max_forward_calc
@@ -412,6 +415,17 @@ def run_window_cache_tests_isolated(my_predbat):
     return run_window_cache_tests(create_predbat())
 
 
+def run_joint_site_native_tests_isolated(my_predbat):
+    """Keep synthetic joint forecasts out of the shared suite state."""
+    return run_joint_site_native_tests(create_predbat())
+
+
+def run_joint_site_core_tests(my_predbat):
+    """Run the pure scheduler's independent unittest suite."""
+    suite = unittest.defaultTestLoader.loadTestsFromModule(test_joint_site_core)
+    return not unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful()
+
+
 def create_predbat():
     my_predbat = PredBat()
     my_predbat.states = {}
@@ -457,6 +471,8 @@ def main():
         ("kernel_parity", run_kernel_parity_tests, "C++ prediction kernel vs Python engine parity tests", False),
         ("prediction_batch", run_prediction_batch_tests, "Batched prediction fan-out tests", False),
         ("inverter", run_inverter_tests, "Inverter tests", False),
+        ("joint_site_core", run_joint_site_core_tests, "Joint site pure solver", False),
+        ("joint_site_native", run_joint_site_native_tests_isolated, "Joint site native shadow adapter", False),
         ("execute", run_execute_tests, "Execute tests", False),
         ("multi_inverter_status", test_multi_inverter_status, "Multi-inverter headline status resolution tests (#4446)", False),
         ("load_car_energy", test_load_car_energy_warns_when_configured_entity_has_no_data, "car_charging_energy configured-but-empty warning tests (#4458 follow-up)", False),

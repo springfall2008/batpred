@@ -2405,6 +2405,12 @@ class Plan:
                     self.log(line)
                 self.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, self.end_record)
 
+        # The personal-fork joint optimiser uses these forecasts in isolation. It
+        # never replaces the executable battery/EV plan or its Prediction object.
+        from joint_site_native import evaluate_joint_site
+
+        evaluate_joint_site(self, publish=publish)
+
         # Record planning duration for SLO metrics
         self.plan_last_duration_seconds = time.time() - plan_start_time
         metrics().planning_duration_seconds.observe(self.plan_last_duration_seconds)

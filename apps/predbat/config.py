@@ -2604,6 +2604,7 @@ SOLAX_SOLIS_MODES_FB00 = {
 
 # Apps.yaml validation schema
 APPS_SCHEMA = {
+    "joint_site": {"type": "dict"},
     "currency_symbols": {"type": "string|string_list"},
     "db_enable": {"type": "boolean"},
     "db_days": {"type": "integer"},
