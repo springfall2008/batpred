@@ -2127,15 +2127,16 @@ def test_octopus_automatic_config_clears_removed_devices(my_predbat):
 
 def test_octopus_automatic_config_respects_slot_claim(my_predbat):
     """
-    Test that automatic_config leaves the car slot args alone when another component owns them.
+    Test that automatic_config leaves the car ready time and charge limit alone when another component owns them.
 
-    The Ohme component can be configured to take the Intelligent slots from the charger instead,
-    and claims the args when it does. automatic_config() re-runs whenever the tariff or the live
-    device set moves, so without honouring the claim it silently takes them back part way through
-    a run and the wiring flip-flops between the two components.
+    The Ohme component takes the planned Intelligent slots, the ready time and the charge limit from
+    the charger, and claims the args when it does. automatic_config() re-runs whenever the tariff or
+    the live device set moves, so without honouring the claim it silently takes them back part way
+    through a run and the wiring flip-flops between the two components. The dispatch sensor is not
+    part of the claim: it stays wired as the record of the completed dispatches (#5413).
 
     Tests:
-    - Test 1: A claim by another component leaves the slot args untouched
+    - Test 1: A claim by another component leaves the ready time and charge limit untouched, and still wires the dispatch sensor
     - Test 2: The rest of automatic_config still runs while claimed
     - Test 3: No claim, or Octopus's own claim, wires the slots as normal
     """
@@ -2145,15 +2146,21 @@ def test_octopus_automatic_config_respects_slot_claim(my_predbat):
     original_args = dict(my_predbat.args)
     original_owner = getattr(my_predbat, "car_slot_owner", None)
 
-    print("\n*** Test 1: A claim by another component leaves the slot args untouched ***")
+    print("\n*** Test 1: A claim by another component leaves the ready time and charge limit untouched ***")
     my_predbat.args["octopus_intelligent_slot"] = "binary_sensor.predbat_ohme_slot_active"
+    my_predbat.args["octopus_ready_time"] = "select.predbat_ohme_target_time"
+    my_predbat.args["octopus_charge_limit"] = "number.predbat_ohme_target_percent"
     my_predbat.car_slot_owner = "ohme"
     api = OctopusAPI(my_predbat, key="test-api-key", account_id="test-account", automatic=False)
     api.intelligent_devices = {"device-aaa1": {"suspended": False}}
     api.automatic_config(["import"])
 
-    if my_predbat.args.get("octopus_intelligent_slot") != "binary_sensor.predbat_ohme_slot_active":
-        print(f"ERROR: Expected the Ohme wiring to survive, got {my_predbat.args.get('octopus_intelligent_slot')}")
+    if my_predbat.args.get("octopus_ready_time") != "select.predbat_ohme_target_time" or my_predbat.args.get("octopus_charge_limit") != "number.predbat_ohme_target_percent":
+        print(f"ERROR: Expected the Ohme ready time and charge limit to survive, got {my_predbat.args.get('octopus_ready_time')} {my_predbat.args.get('octopus_charge_limit')}")
+        failed = True
+    own_slot = api.get_entity_name("binary_sensor", "intelligent_dispatch", index=api.device_id_to_index_suffix("device-aaa1"))
+    if my_predbat.args.get("octopus_intelligent_slot") != [own_slot]:
+        print(f"ERROR: Expected the dispatch sensor wired to {own_slot} while claimed, got {my_predbat.args.get('octopus_intelligent_slot')}")
         failed = True
 
     print("\n*** Test 2: The rest of automatic_config still runs while claimed ***")

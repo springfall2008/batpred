@@ -14,12 +14,13 @@ semantics for multi-pod deployments.
 """
 
 import asyncio
+import math
 import requests
 import re
 from datetime import datetime, timedelta, timezone
 from predbat_metrics import record_api_call
-from const import TIME_FORMAT, TIME_FORMAT_OCTOPUS, DISPATCH_SOURCE_CHARGER_SCHEDULE
-from utils import str2time, minutes_to_time, dp1, dp2, dp4, minute_data, round_out_to_period, filter_payment_method, is_edge_block_body, token_mint_backoff_seconds, TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS
+from const import TIME_FORMAT, TIME_FORMAT_OCTOPUS, DISPATCH_SOURCE_CHARGER_SCHEDULE, REPEAT_FULL_LOG_SECONDS
+from utils import RepeatLogGate, str2time, minutes_to_time, dp1, dp2, dp4, minute_data, round_out_to_period, filter_payment_method, is_edge_block_body, token_mint_backoff_seconds, TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS
 from component_base import ComponentBase
 from mock_base import MockBase as SharedMockBase
 import aiohttp
@@ -56,6 +57,18 @@ OCTOPUS_MAX_RETRIES = 5
 # The EV/charge-point catalogue is static reference data, so it is refreshed daily
 CATALOGUE_FRESH_MINUTES = 24 * 60
 CATALOGUE_STALE_MINUTES = 25 * 60
+# Logged by log_catalogue_ambiguity() when the catalogue gives a make and model more than one value (issue #5438).
+# A charge point's power only ever raises input_number.{prefix}_car_charging_rate (fetch.py), so that is what decides
+# the rate; a vehicle's battery size from Octopus replaces car_charging_battery_size, so there is no setting to change.
+# {prefix} is the entity prefix in use (apps.yaml prefix, "predbat" by default).
+CATALOGUE_AMBIGUOUS_CHARGER = (
+    "Octopus's catalogue lists charge point {device} at more than one power ({values} {unit}) and Predbat can't tell which yours is,"
+    " so it uses the lowest, {value} {unit}, unless input_number.{prefix}_car_charging_rate (_1, _2 for further cars) is higher. Set that to your charger's rate"
+)
+CATALOGUE_AMBIGUOUS_VEHICLE = (
+    "Octopus's catalogue lists vehicle {device} with more than one battery size ({values} {unit}) and Predbat can't tell which yours is,"
+    " so it plans with the largest, {value} {unit}. A battery size from Octopus is used in place of car_charging_battery_size, so that setting can't change it"
+)
 OCTOPUS_SLOT_MAX_DEFAULT = 48  # 24 hours with 30-minute slots
 OCTOPUS_SLOT_MAX_CAPPED = 12  # 6 hours with 30-minute slots
 IO_RATE_TOLERANCE = 0.01  # A dispatch lowers a rate by pence; anything closer is rate_min_base's dp2 rounding against the unrounded tariff feed (#5392)
@@ -88,6 +101,49 @@ def is_active(now_utc, activeFrom, activeTo):
     if now_utc > activeTo:
         return False
     return True
+
+
+def catalogue_value(entries, make, model, field, pick):
+    """
+    Look up one make and model's value in an Octopus catalogue list (chargePointVariants or electricVehicles).
+
+    The catalogue's names aren't unique: the same make and model can be listed more than once with
+    different values - myenergi's "zappi (all models)" is there at both 7.4 and 22 kW - and the name is
+    all a device record gives to match on (issue #5438). Taking whichever match came last planned a
+    7.4 kW zappi at 22 kW. So when the matches disagree, pick chooses between them, deliberately rather
+    than by catalogue order: min for a charge point's power (the most every variant can do), max for a
+    vehicle's battery size (so the car's remaining charge is over- rather than under-estimated).
+
+    GraphQL returns these figures as strings ("22.000"), so they are converted to float here. Entries
+    whose value is missing, not a number, not finite, or not above zero are ignored.
+
+    Args:
+        entries (list): The catalogue list, each entry {"make": ..., "models": [{"model": ..., field: ...}]}
+        make (str): The device's make
+        model (str): The device's model
+        field (str): The value to read from each matching model, e.g. "powerInKw" or "batterySize"
+        pick (callable): Chooses one value from the list when the matches disagree, e.g. min or max
+
+    Returns:
+        tuple: (value, values) - value is the matches' value as a float (pick's choice when they
+        disagree), or None if nothing usable matched; values is the sorted list of the distinct values
+        the matches gave, so more than one means the catalogue was ambiguous.
+    """
+    values = set()
+    for entry in entries or []:
+        if entry.get("make", None) != make:
+            continue
+        for info in entry.get("models", None) or []:
+            if info.get("model", None) != model:
+                continue
+            try:
+                value = float(info.get(field, None))
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(value) and value > 0:
+                values.add(value)
+    values = sorted(values)
+    return (pick(values) if values else None), values
 
 
 def parse_date(dt_str):
@@ -628,6 +684,9 @@ class OctopusAPI(ComponentBase):
         self.saving_sessions = {}
         self.saving_sessions_to_join = []
         self.intelligent_devices = {}
+        # (message, make, model) the catalogue gave conflicting values for and that have been logged, so the
+        # warning is given once rather than on every device poll (see catalogue_value())
+        self.catalogue_ambiguity_logged = set()
         # Signature of the dispatches last published, so a poll that changes them can request a replan
         self.intelligent_dispatch_signature = None
         # Active device IDs automatic_config() last wired the car slots to - None until it has run.
@@ -652,6 +711,8 @@ class OctopusAPI(ComponentBase):
         # API request metrics for monitoring
         self.requests_total = 0
         self.failures_total = 0
+        # Repeated GraphQL requests and responses, and skipped Happy Hours, are logged briefly between full logs
+        self.log_gate = RepeatLogGate(REPEAT_FULL_LOG_SECONDS)
 
         # In-memory cache for product info (keyed by product_code) to avoid repeated API calls
         self._product_info_cache = {}
@@ -1361,7 +1422,8 @@ class OctopusAPI(ComponentBase):
             # v19.0.1 for the same reason; match that. The reward/code/type maps are populated above
             # first, because a joined Happy Hour takes its event type from this list.
             if event.get("eventType", None) == "WEEKEND_HAPPY_HOUR":
-                self.log("OctopusAPI: Not offering Weekend Happy Hour event code {} as available - it cannot be joined through the API".format(code))
+                # Logged once an hour per event (by id, so events with no code are told apart): the event list is re-read every poll
+                self.log_gate.log(self.log, "happy-hour", (event_id, code), ["OctopusAPI: Not offering Weekend Happy Hour event code {} as available - it cannot be joined through the API".format(code)], None)
                 continue
             target_regions = [region.get("regionId") for region in (event.get("targetRegion", None) or []) if region]
             if target_regions and account_region_id not in target_regions:
@@ -1459,10 +1521,12 @@ class OctopusAPI(ComponentBase):
         # Another component may have claimed the car slots - the Ohme component does when it is
         # set to take the Intelligent slots from the charger instead. This method re-runs whenever
         # the tariff or device set moves, so without this check it would quietly take them back.
+        # The claim is on the ready time and charge limit only. The dispatch sensor is still wired
+        # here: it is Octopus's record of what was dispatched, which the other component reads its
+        # completed slots from while supplying the planned ones itself (#5413).
         slot_owner = getattr(self.base, "car_slot_owner", None)
-        if slot_owner and slot_owner != "octopus":
-            self.log("OctopusAPI: Car slots are wired by the {} component, leaving them alone".format(slot_owner))
-        elif devices or self.intelligent_config_devices:
+        other_owner = bool(slot_owner and slot_owner != "octopus")
+        if devices or self.intelligent_config_devices:
             # Suspended devices (e.g. an old/decommissioned charger still linked to the Octopus
             # account) aren't actively charging, so exclude them from the entity lists and from
             # the num_cars count below - otherwise a stale suspended device can silently push
@@ -1490,8 +1554,11 @@ class OctopusAPI(ComponentBase):
                 self.log("OctopusAPI: No active intelligent devices, and the car slot wiring is not from here - leaving it alone")
             else:
                 self.set_arg("octopus_intelligent_slot", slot_list)
-                self.set_arg("octopus_ready_time", ready_list)
-                self.set_arg("octopus_charge_limit", limit_list)
+                if other_owner:
+                    self.log("OctopusAPI: Car ready time and charge limit are wired by the {} component, leaving them alone".format(slot_owner))
+                else:
+                    self.set_arg("octopus_ready_time", ready_list)
+                    self.set_arg("octopus_charge_limit", limit_list)
                 self.intelligent_config_slots = slot_list
                 # Increase number of cars if we have more active devices than the current limit to ensure all devices can be configured
                 num_cars = self.get_arg("num_cars", 0)
@@ -1646,7 +1713,6 @@ class OctopusAPI(ComponentBase):
         if response_data is None:
             return self.saving_sessions
         else:
-            self.log("OctopusAPI: Fetched saving sessions data from GraphQL API: {}".format(response_data))
             savingSessions = response_data.get("savingSessions", {})
             if savingSessions is None:
                 savingSessions = {}
@@ -2328,6 +2394,29 @@ class OctopusAPI(ComponentBase):
             if returns_data:
                 self.log(f"Warn: OctopusAPI: Failed to retrieve data from graphql query {request_context} - token refresh failed")
             return None
+        # Whether the request was logged in full, and its full line, so a failure can show the request beside it
+        request_logged = [True, None]
+
+        def log_request_beside_failure():
+            """Log the full request beside a failure when it was only logged briefly ("as logged in full at ...").
+
+            Not on a retry: only a failure causes one, and that failure has just logged the request in full."""
+            if not request_logged[0] and request_logged[1] and _retry_count == 0:
+                # Through the gate, so it records this full log: later brief lines name this time, and the hourly re-log counts from it
+                self.log_gate.log(self.log, ("request", request_context), query, [request_logged[1]], None, always_full=True)
+                request_logged[0] = True
+
+        def log_response(status, text, always_full):
+            """Log a response in full when new, due again or always_full, else as one line naming when it was last logged in full."""
+            self.log_gate.log(
+                self.log,
+                ("response", request_context),
+                "{} {}".format(status, text),
+                ["OctopusAPI: GraphQL response for {} (status {}): {}".format(request_context, status, text)],
+                lambda when: "OctopusAPI: GraphQL response for {} (status {}) same as logged in full at {}, {} characters".format(request_context, status, when, len(text)),
+                always_full=always_full,
+            )
+
         try:
             self.requests_total += 1
             client = await self.api.async_create_client_session()
@@ -2338,13 +2427,17 @@ class OctopusAPI(ComponentBase):
             headers = {"Authorization": f"{auth_prefix}{self.graphql_token}", integration_context_header: request_context}
             # Redact the Authorization header so the JWT token is never written to the log
             log_headers = {**headers, "Authorization": f"{auth_prefix}<redacted>"}
-            self.log("OctopusAPI: Making GraphQL request to {} payload {} headers {}".format(url, payload, log_headers))
+            request_line = "OctopusAPI: Making GraphQL request to {} payload {} headers {}".format(url, payload, log_headers)
+            request_logged[0] = self.log_gate.log(self.log, ("request", request_context), query, [request_line], lambda when: "OctopusAPI: Making GraphQL request {} to {} (query as logged in full at {})".format(request_context, url, when))
+            request_logged[1] = request_line
             async with client.post(url, json=payload, headers=headers) as response:
                 # Check for HTTP-level 401/403 (transport-level auth failure) and retry once.
                 # This handles cases where the JWT has been revoked server-side and the server
                 # returns a bare 401/403 status rather than a GraphQL error body — which would
                 # otherwise loop forever without ever refreshing the token. The one exception is
                 # a 403 carrying a CDN/WAF block page, handled immediately below.
+                if response.status in [401, 403]:
+                    log_request_beside_failure()
                 if response.status in [401, 403] and _retry_count == 0:
                     # A CDN/WAF block is rate limiting, not an auth failure. Re-minting a token
                     # here would be rejected by the same block, leaving the component permanently
@@ -2352,7 +2445,12 @@ class OctopusAPI(ComponentBase):
                     # Only 403 is treated this way: Kraken reports genuine auth problems as HTTP
                     # 200 with a GraphQL errorCode, or as a 401, so a 403 carrying a non-JSON
                     # body comes from the edge rather than the API.
-                    if response.status == 403 and is_edge_block_body(await response.text()):
+                    # Log the response in full first: the WAF return and the retry below both leave before the
+                    # response logger further down. A second-attempt 401/403 is not logged here: its body is logged
+                    # by async_read_response_retry below
+                    error_text = await response.text()
+                    log_response(response.status, error_text, always_full=True)
+                    if response.status == 403 and is_edge_block_body(error_text):
                         self.consecutive_edge_blocks += 1
                         if self.consecutive_edge_blocks <= EDGE_BLOCK_REFRESH_AFTER:
                             record_api_call("octopus", False, "rate_limit")
@@ -2378,7 +2476,13 @@ class OctopusAPI(ComponentBase):
 
                 # Process response (which reads the text)
                 response_body = await self.async_read_response_retry(response, url, ignore_errors=ignore_errors)
-                self.log("OctopusAPI: GraphQL response for {} (status {}): {}".format(request_context, response.status, response_body))
+                body_text = str(response_body)
+                # Logged in full with its request: a bad status, a body that is missing (unreadable JSON, a rate limit)
+                # or has no data, or any errors key - even a partial error returned with data when ignore_errors is set
+                failed = response.status != 200 or not isinstance(response_body, dict) or "errors" in response_body or response_body.get("data") is None
+                if failed:
+                    log_request_beside_failure()
+                log_response(response.status, body_text, always_full=failed)
 
                 # Check for auth errors and retry once
                 if response_body and "errors" in response_body and _retry_count == 0:
@@ -2419,10 +2523,36 @@ class OctopusAPI(ComponentBase):
                     return None
         except TimeoutError:
             self.failures_total += 1
+            log_request_beside_failure()
             self.log(f"Warn: OctopusAPI: Failed to connect, timeout exceeded.")
             record_api_call("octopus", False, "connection_error")
 
         return None
+
+    def log_catalogue_ambiguity(self, message, make, model, values, value, unit):
+        """
+        Warn, once per make and model, when the catalogue lists a device more than once with different values.
+
+        The log line is the only sign a user gets that catalogue_value() had to choose, so it names the
+        values the catalogue gave and the one Predbat is using.
+
+        Args:
+            message (str): What was looked up and what the user can do about it, formatted with the
+                device ({device}), the values ({values}), the one in use ({value}), the unit ({unit}) and
+                the entity prefix in use ({prefix})
+            make (str): The device's make
+            model (str): The device's model
+            values (list): The distinct values the catalogue gave, from catalogue_value()
+            value (float): The value catalogue_value() chose
+            unit (str): The values' unit
+        """
+        if len(values) < 2:
+            return
+        key = (message, make, model)
+        if key in self.catalogue_ambiguity_logged:
+            return
+        self.catalogue_ambiguity_logged.add(key)
+        self.log("Warn: OctopusAPI: " + message.format(device="{} '{}'".format(make, model), values=", ".join("{:g}".format(v) for v in values), value="{:g}".format(value), unit=unit, prefix=self.prefix))
 
     async def async_get_vehicle_catalogue(self):
         """
@@ -2526,19 +2656,11 @@ class OctopusAPI(ComponentBase):
                                         device_setting_result[setting_key] = cached_device[setting_key]
 
                         if isCharger:
-                            for charger in chargePointVariants:
-                                if charger.get("make", None) == make:
-                                    models = charger.get("models", [])
-                                    for charger_info in models:
-                                        if charger_info.get("model", None) == model:
-                                            chargePointPowerInKw = charger_info.get("powerInKw", None)
+                            chargePointPowerInKw, values = catalogue_value(chargePointVariants, make, model, "powerInKw", min)
+                            self.log_catalogue_ambiguity(CATALOGUE_AMBIGUOUS_CHARGER, make, model, values, chargePointPowerInKw, "kW")
                         else:
-                            for vehicle in electricVehicles:
-                                if vehicle.get("make", None) == make:
-                                    models = vehicle.get("models", [])
-                                    for vehicle_info in models:
-                                        if vehicle_info.get("model", None) == model:
-                                            vehicleBatterySizeInKwh = vehicle_info.get("batterySize", None)
+                            vehicleBatterySizeInKwh, values = catalogue_value(electricVehicles, make, model, "batterySize", max)
+                            self.log_catalogue_ambiguity(CATALOGUE_AMBIGUOUS_VEHICLE, make, model, values, vehicleBatterySizeInKwh, "kWh")
 
                         intelligent_device = {
                             "deviceType": deviceType,
@@ -2601,8 +2723,11 @@ class OctopusAPI(ComponentBase):
                                         break
                                 if not found:
                                     completed.append(dispatch)
-                        else:
-                            # The dispatch query failed (e.g. rate limited). Keep the last known planned dispatches,
+                        if not dispatch_result or dispatch_result.get("flexPlannedDispatches") is None:
+                            # The dispatch query failed (e.g. rate limited), or Octopus answered it without the planned
+                            # dispatches: an error on that field (KT-CT-4340, "Unable to fetch planned dispatches") comes
+                            # back as null beside the rest of the data, where no dispatches is an empty list (#5492).
+                            # Keep the last known planned dispatches,
                             # as a failed settings query keeps its settings: publishing an empty list dropped the car's
                             # slots and dispatch rates until the next poll, and the change requested a replan without them.
                             # Planned dispatches are never pruned, so drop any that have ended since, and re-trim the one
@@ -3819,6 +3944,7 @@ class Octopus:
         slots_added_set = set()
         plan_interval_minutes = self.plan_interval_minutes
         saved_slots = set()  # For logging purposes, track which slots we actually applied as low rate
+        slot_lines = []  # One log line per half hour of each slot, logged after the loop only when the list changes
         # Dynamic load has seen this car in its slot but not charging: none of its dispatches from now
         # on get the cheap rate (see dynamic_load_car_check()). Elapsed minutes keep theirs - they record
         # what the tariff charged, and today's cost is built from them. None when the car is not cancelled.
@@ -3913,11 +4039,15 @@ class Octopus:
                                 rates[minute] = assumed_price
 
                         if minute % 30 == 0 and start_minutes > -24 * 60:
-                            self.log(
+                            slot_lines.append(
                                 "Octopus: Intelligent slot at {}-{}, assumed price {}, amount {}, kWh location {}, source {}, octopus_slot_low_rate {}".format(
                                     self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), dp2(assumed_price), dp2(kwh), location, source, octopus_slot_low_rate
                                 )
                             )
+
+        # The slot list is re-derived every plan but rarely changes, so log it only when it does, and at least hourly
+        if slot_lines:
+            self.io_slot_log_gate.log(self.log, ("slots", car_n), "\n".join(slot_lines), slot_lines, lambda when: "Octopus: Intelligent slots for car {} same as logged in full at {}, {} half-hour slot lines".format(car_n, when, len(slot_lines)))
 
         # Log daily slot counts for debugging
         for day_offset in sorted(slots_per_day.keys()):

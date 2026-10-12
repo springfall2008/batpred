@@ -30,7 +30,7 @@ The ML Load Prediction component uses a lightweight multi-layer perceptron (MLP)
 - Deep neural network with 3 hidden layers [512, 256, 64 neurons]
 - Optimised with He initialisation and AdamW weight decay for robust training
 - Automatically trains on historical data (requires at least 1 day, recommended 7+ days; fetches up to `load_ml_max_days_history` days from HA and accumulates up to `load_ml_database_days` days in the on-disk database)
-- Fine-tunes periodically (every 2 hours) using full dataset to adapt to changing patterns
+- Fine-tunes periodically (every 2 hours by default) using full dataset to adapt to changing patterns
 - Time-weighted training prioritizes recent data while learning from historical patterns
 - Model persists across restarts
 - Falls back gracefully if predictions are unreliable
@@ -207,12 +207,21 @@ predbat:
 
   # Optional: Number of days of history to accumulate in the on-disk database (default: 90)
   # load_ml_database_days: 90
+
+  # Optional: Retrain once a day instead of every 2 hours
+  # load_ml_retrain_interval_hours: 24
 ```
 
 **Configuration Parameter Details:**
 
 - `load_ml_enable`: Enables the ML component (required), defaults to false.
 - `load_ml_source`: When `true`, Predbat uses ML predictions for battery planning. Set to `false` (the default) to test predictions without affecting battery control
+- `load_ml_retrain_interval_hours`: Hours between training cycles, measured from the model's last training time
+    - **Default**: 2 hours
+    - **Range**: Whole hours from 1 to 48; out-of-range values are clamped to these limits because models become stale after 48 hours
+    - **Example**: Set to `24` for daily retraining to reduce how often training uses CPU
+    - **Unchanged behaviour**: Initial training still runs after startup once enough data is available; predictions still update every 30 minutes
+    - **Apply changes**: Restart Predbat after editing `apps.yaml`; no additional Home Assistant entity is created
 - `load_ml_max_days_history`: Optional maximum days of historical data to fetch from Home Assistant on each poll (every 30 minutes)
     - **Default**: 28 days
     - **Minimum**: 7 days
@@ -383,7 +392,7 @@ Good predictions require:
 4. **Energy Rate Data**: Automatically included - helps model learn consumption patterns based on time-of-use tariffs
 5. **PV Generation Data**: If you have solar panels, include `pv_today` sensor for better correlation
 6. **Clean Data**: Avoid gaps or incorrect readings in historical data
-7. **Recent Training**: Model retrains every 2 hours using full dataset with time-weighted sampling to adapt to changing patterns
+7. **Recent Training**: Model retrains every `load_ml_retrain_interval_hours` (default 2 hours) using full dataset with time-weighted sampling to adapt to changing patterns
 
 ### Understanding MAE (Mean Absolute Error)
 

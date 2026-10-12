@@ -755,8 +755,10 @@ class UserInterface:
             if item.get("save", True):
                 if item.get("value", None) is not None:
                     save_array[item["name"]] = item["value"]
+        # One setting per line, so the file can be read and diffed (e.g. kept in git)
         with open(filepath, "w") as file:
-            json.dump(save_array, file)
+            json.dump(save_array, file, indent=2)
+            file.write("\n")
         self.log("Saved current settings to {}".format(filepath_p))
 
     async def async_save_settings_yaml(self, filename=None):

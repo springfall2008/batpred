@@ -171,6 +171,43 @@ async def test_octopus_waf_block(my_predbat):
     else:
         print("PASS: edge block honoured ignore_errors")
 
+    # Test 6: a first-attempt 401/403 response is logged in full, even though the WAF branch returns and the
+    # auth branch retries before the response logger. The retry's own 401 body is logged by the response reader,
+    # so the first-attempt line appears once.
+    print("\n*** Test 6: first-attempt 401/403 response body is logged ***")
+    api6 = _make_api(my_predbat, _make_response(403, CLOUDFRONT_403_BODY))
+    api6.graphql_token = "token"
+    api6.async_refresh_token = AsyncMock(return_value="token")
+    lines6 = []
+    api6.log = lambda message: lines6.append(str(message))
+    await api6.async_graphql_query("query { test }", "test-query")
+    if not any("GraphQL response for test-query (status 403):" in line and "Request blocked." in line for line in lines6):
+        print("ERROR: the edge block response body was not logged, got {}".format(lines6))
+        failed = True
+    else:
+        print("PASS: edge block response body logged")
+
+    body_401 = '{"errors":[{"message":"Unauthorized first attempt"}]}'
+    api6b = _make_api(my_predbat, _make_response(401, body_401))
+    api6b.graphql_token = "token"
+    api6b.async_refresh_token = AsyncMock(return_value="token")
+    lines6b = []
+    api6b.log = lambda message: lines6b.append(str(message))
+    await api6b.async_graphql_query("query { test }", "test-query")
+    first_attempt = [line for line in lines6b if line == "OctopusAPI: GraphQL response for test-query (status 401): {}".format(body_401)]
+    if len(first_attempt) != 1:
+        print("ERROR: the first-attempt 401 response should be logged in full once, got {}".format(lines6b))
+        failed = True
+    else:
+        print("PASS: first-attempt 401 response body logged once")
+    # The retry's own 401 must not log the full request again: the first attempt has just logged it in full
+    full_requests = [line for line in lines6b if line.startswith("OctopusAPI: Making GraphQL request to ")]
+    if len(full_requests) != 1:
+        print("ERROR: a 401 then a failed retry should log the full request once, got {}".format(full_requests))
+        failed = True
+    else:
+        print("PASS: full request logged once across a failed retry")
+
     if failed:
         print("**** Octopus WAF/CloudFront 403 tests FAILED ****")
     else:
