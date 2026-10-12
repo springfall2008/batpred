@@ -62,6 +62,7 @@ Once you get everything working please share the configuration as a GitHub issue
    | [Solis Hybrid inverters (Firmware FB00 and later)](#solis-inverters-fb00-or-later) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) | [ginlong_solis_fb00.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis_fb00.yaml) |
    | [Sunsynk Cloud](#sunsynk-cloud) | Predbat | See [apps.yaml](apps-yaml.md#sunsynk-cloud-api) |
    | [SunSynk](#sunsynk) | [Sunsynk](https://github.com/kellerza/sunsynk) | [sunsynk.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sunsynk.yaml) |
+   | [Deye / Solarman (local)](#deye-solarman-local) | [ha-solarman](https://github.com/davidrapan/ha-solarman) `deye_hybrid` profile | [deye_solarman.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/deye_solarman.yaml) |
    | [Tesla Powerwall](#tesla-powerwall) | [Tesla Fleet](https://www.home-assistant.io/integrations/tesla_fleet) or [Teslemetry](https://www.home-assistant.io/integrations/teslemetry) | [tesla_powerwall.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/tesla_powerwall.yaml) |
    | [Tesla Powerwall via Teslemetry component (beta)](#teslemetry-component-beta) | Predbat built-in | [teslemetry.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/teslemetry.yaml) |
    | [Victron](#victron) | [Victron GX](https://www.home-assistant.io/integrations/victron_gx/) | [victron.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/victron.yaml) |
@@ -2791,6 +2792,37 @@ To run PredBat with Solis hybrid inverters with firmware level FB00 or later (yo
 
 7. Ensure the correct entity IDs are used for your specific inverter setup. These entries should correspond to the buttons exposed by your Home Assistant Solis integration.
 
+## Deye Solarman local
+
+**Experimental - grid charging and ordinary self-consumption only; not field commissioned.**
+
+Use the shared [deye_solarman.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/deye_solarman.yaml) with [ha-solarman](https://github.com/davidrapan/ha-solarman). Its entity names and options follow the integration's [deye_hybrid profile](https://github.com/davidrapan/ha-solarman/blob/main/custom_components/solarman/inverter_definitions/deye_hybrid.yaml); verify compatibility with your exact model and firmware. This is a custom `DeyeSolarman` profile defined in `apps.yaml`, not a new built-in inverter type or a Deye Cloud connection.
+
+The template applies the **current intent to all six physical ToU rows** using [verified service sequences](#verified-service-sequences):
+
+| Intent | Ordered actions |
+| ------ | --------------- |
+| Grid charge | Observe all six `Program N Charging` selects as `Disabled`; set and observe all six `Program N SOC` numbers at `{target_soc}`; then select `Grid` on all six rows |
+| Demand | Observe all six sources as `Disabled`; set all six SOC numbers to `{reserve_soc}`, the effective domestic minimum rounded up |
+
+`Disabled` disables those rows' grid/generator charging sources; it is **not** an export-disable or a battery hold command. Generator / Both sources are never enabled. Physical ToU boundaries, ToU enable, Program Power, work mode, global currents, shutdown and BMS/protection controls are not written.
+
+With `charge_time_format: "S"` and no mapped physical time entities, Predbat creates private sensors for its own start/end bookkeeping. Those sensors are **not** the six physical boundaries. Do not map two native start/end controls onto that six-row table. This template does not upload a future six-period schedule: it relies on Predbat continuing to run and changing the current intent.
+
+### Deye setup and commissioning boundaries
+
+1. Configure Solarman using its installation instructions. In **Monitor**, check every sensor/number/select, its units and direction. Set `deye_entity_prefix` to your actual entity prefix and adapt individual mappings where names differ.
+2. Merge the template into your own `apps.yaml`, preserving [tariffs](energy-rates.md), forecasts and load history. Replace example `soc_max`, `battery_rate_max`, `inverter_limit_charge`, `inverter_limit_discharge` and `inverter_limit` values with verified installation values. These are modelling inputs in watts, **not enforced hardware limits**. The inverter AC rating is not the site's grid-import limit. Keep `battery_min_soc` distinct from the emergency shutdown SOC.
+3. Before control, verify the exact firmware/model, Capacity/SOC mode, Zero Export To CT setup, an enabled all-day six-period ToU schedule (including its overnight wrap), and the existing global grid-charge/current limits. Do not raise limits to make a plan work. If these prerequisites are unknown, stay in Monitor.
+4. Establish one automatic writer before commissioning: Deye Cloud, alternative inverter controllers and automations writing these same registers must not compete with Predbat. The template does not disable other writers for you.
+5. Keep `template: true` while editing. Before removing it, select Monitor and review any persisted Predbat settings. Use **Control charge only after site-specific commissioning**, not merely after a successful software test or an elapsed observation period. Never select Control charge & discharge with this template.
+
+Unsupported: forced export, charge/export freeze, hold/pause, low-power or per-cycle rate control, solar SOC ceilings and car/iBoost battery holds. Keep those features off. A Predbat status such as *Hold charging* describes intent, not measured battery behaviour; this template cannot guarantee that hold.
+
+In the [SUN-12/16K-SG01LP1-EU manual](https://www.deyeinverter.com/deyeinverter/2026/05/19/rand/5060/%E3%80%90b%E3%80%91manual_sun-12-16k-sg01lp1-eu_20260519_en.pdf), §5.7 describes ToU **Power** as a discharge limit in **Selling First**. That does not establish an equivalent limit in Zero Export To CT. This template neither writes Program Power nor switches work mode to obtain that behaviour.
+
+**Failure and shutdown:** sources and SOC values persist in the inverter when Predbat or HA stops. There is no watchdog or automatic rollback here. Commission site-specific failure/recovery behaviour separately; do not assume a generic restore script is safe. HA observations can be cached or optimistic and do not confirm physical inverter operation.
+
 ## Sunsynk Cloud
 
 **Experimental**
@@ -3900,6 +3932,7 @@ Charging is not stopped at a target SoC; Predbat's next calculation changes the 
 - You **must** set [inverter_type in apps.yaml](apps-yaml.md#inverter_type) with a custom name ('MINE' in the example below) - if you do not do this then Predbat will assume you have a GivEnergy inverter
   and will apply inverter limits for that inverter (e.g. max charge/discharge of 2600W)
 - Configure Predbat with the appropriate Home Assistant services to start charges and discharges, etc.
+- Share reusable configurations in `templates/`, as in the [Deye/Solarman example](#deye-solarman-local). The `inverter:` block automatically defines a custom type; no `INVERTER_DEF` edit is needed. Use [verified service sequences](#verified-service-sequences) when later writes must wait for earlier HA observations.
 - If your inverter doesn't expose a sensor for its power limits, set them as **literal watt values** in `apps.yaml` (e.g. `inverter_limit: 5000` not `inverter_limit: 5`). Predbat's unit auto-conversion only fires for sensor references — literal values are taken as watts regardless. See [Inverter control configurations](apps-yaml.md#inverter-control-configurations) for the full list of affected keys.
 
 The following template can be used as a starting point:
@@ -4043,6 +4076,44 @@ If however, you want the service to be called on each Predbat run then you shoul
       repeat: True
 ```
 
+### Verified service sequences
+
+Existing service templates retain their acceptance-based repeat suppression. To opt into **HA state observation**, put `verify: true` on every step. If any step contains `verify`, all steps must use the literal boolean `true`; mixed lists are rejected before writing.
+
+- Supported direct services: `number.set_value`, `input_number.set_value`, `select.select_option`, `input_select.select_option`, and `turn_on` / `turn_off` for `switch` / `input_boolean`.
+- Allowed keys: `service`, `entity_id`, `verify`, plus `value` for numbers or `option` for selects. `entity_id` is a string, optionally comma-separated for a group. A YAML list selects one such string per inverter, as in ordinary templates; it is not a group. `repeat`, `always`, nested `target`, device/area targets and other keys are rejected.
+- The **whole list** is resolved and validated before any write: entity-ID syntax/domain, available states, select options and finite numbers within published `min`/`max`/`step`. Missing metadata, unsupported options and invalid values fail rather than being guessed or clamped. This does not check the HA device registry or physical wiring.
+- The final value for each entity is compared first (last occurrence wins). If all final values already match, no writes occur. Otherwise steps run in order, skipping an already-matching step and requiring every entity in a group to match before advancing. Earlier observations are checked again for divergence.
+- A rejected service, exception or missing observation stops the remaining steps and records an error. Each changed entity uses `write_and_poll_sleep` as its observation timeout; the first timeout aborts the sequence. Later cycles check again instead of caching service acceptance as success.
+
+Put interdependent writes in the **same** service list; observation barriers do not span separate hooks. There is no compensating rollback or atomic group transaction. Part of a group may apply before a failure. Cached or optimistic HA states can mislead observation, which is **not hardware confirmation**, a freshness guarantee or a shutdown watchdog.
+
+Verified entries can also use `{reserve_soc}`: the current inverter's effective minimum (`reserve_percent`) rounded **up** to a whole percentage. Values are in the target entity's native units. Existing `{target_soc}`, `{power}` and time substitutions remain available where the calling hook supplies them.
+
+The internal return value still means **configured/handled**, not success: a failed configured freeze must not silently fall back to another command. An explicit `[]` is a handled no-op, unlike an absent/null hook. The Deye template uses `discharge_stop_service: []` so stopping a non-existent forced export does not fall back to stopping an active charge.
+
+For example, disable charging, set its target, then enable it only after observing the target:
+
+```yaml
+  charge_start_service:
+    - service: switch.turn_off
+      entity_id: switch.predbat_charge_guard
+      verify: True
+    - service: number.set_value
+      entity_id: number.predbat_charge_target_soc
+      value: "{target_soc}"
+      verify: True
+    - service: switch.turn_on
+      entity_id: switch.predbat_charge_guard
+      verify: True
+  charge_stop_service:
+    - service: switch.turn_off
+      entity_id: switch.predbat_charge_guard
+      verify: True
+```
+
+See [Deye Solarman local](#deye-solarman-local) for a six-row example and its commissioning limitations.
+
 #### charge_start_service
 
 Called to start a charge
@@ -4057,7 +4128,7 @@ The default options passed in are:
 
 #### charge_freeze_service
 
-If defined will be called for freeze charge, otherwise, charge_start_service is used for freeze charge also.
+If defined, called for freeze charge. An explicit freeze request without this hook falls back to `charge_stop_service`, not a new charge. Reaching the target without an explicit freeze request retains the normal charge-start fallback.
 
 Note that **switch.predbat_set_charge_freeze** must be turned on for Predbat to plan Freeze Charge activity, and as this is an expert mode option, Predbat's [Expert Mode](customisation.md#expert-mode) must be turned on first.
 
@@ -4079,7 +4150,7 @@ The default options passed in are:
 
 #### discharge_freeze_service
 
-If defined will be called for Discharge freeze, otherwise, discharge_start_service is used for freeze discharge also.
+If defined, called for an explicit discharge freeze; otherwise `discharge_stop_service` is used, not a new forced export.
 
 #### discharge_stop_service
 
@@ -4179,7 +4250,7 @@ When True, the inverter has an idle time register which must be set to the start
 
 ### has_time_window
 
-Not currently used by Predbat.
+Not currently used by Predbat. Setting this flag to False does not disable writes to mapped physical time entities.
 
 ### charge_time_format
 
@@ -4224,7 +4295,7 @@ Defines the units of the SoC setting (currently not used), it defaults to "%".
 
 ### write_and_poll_sleep
 
-Sets the number of seconds between polls of inverter settings.
+Maximum observation wait in seconds after a write attempt. Predbat reads HA state repeatedly during this interval and returns early when it matches; this does not change the integration's hardware polling interval. Ordinary write helpers may retry separately. In a [verified service sequence](#verified-service-sequences), each changed entity has this timeout and the first failure aborts the remaining steps; it is not an overall transaction deadline.
 
 ### rate_step_percent_of_capacity
 

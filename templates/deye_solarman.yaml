@@ -1,0 +1,118 @@
+# Shared local Deye/Solarman example. Read the Deye section of inverter-setup.md first.
+# Experimental charge/demand only; not a commissioned hold or power-limiting controller.
+# Merge the inverter section into your own apps.yaml; keep your tariffs and forecasts.
+---
+pred_bat:
+  module: predbat
+  class: PredBat
+  prefix: predbat
+  timezone: Europe/London
+  template: true
+  threads: auto
+
+  # Replace with your actual HA entity prefix. Check every entity and its units/sign.
+  deye_entity_prefix: your_inverter
+  num_inverters: 1
+  inverter_type: DeyeSolarman
+  inverter:
+    name: "Deye / Solarman local"
+    has_rest_api: false
+    has_mqtt_api: false
+    has_service_api: true
+    output_charge_control: "none"
+    charge_control_immediate: false
+    charge_discharge_with_rate: false
+    has_charge_enable_time: false
+    has_discharge_enable_time: false
+    has_target_soc: false
+    target_soc_used_for_discharge: false
+    has_reserve_soc: false
+    has_timed_pause: false
+    support_charge_freeze: false
+    support_discharge_freeze: false
+    support_feedin_first: false
+    has_ge_inverter_mode: false
+    has_ge_eco_toggle: false
+    has_idle_time: false
+    time_button_press: false
+    # S + no mapped time entities gives Predbat private bookkeeping sensors.
+    # Never map the six physical ToU boundaries to charge_start_time/end_time.
+    charge_time_format: "S"
+    charge_time_entity_is_option: false
+    can_span_midnight: true
+    clock_time_format: "%Y-%m-%d %H:%M:%S"
+    soc_units: "%"
+    num_load_entities: 1
+    write_and_poll_sleep: 10
+
+  load_today: ["sensor.{deye_entity_prefix}_today_load_consumption"]
+  import_today: ["sensor.{deye_entity_prefix}_today_energy_import"]
+  export_today: ["sensor.{deye_entity_prefix}_today_energy_export"]
+  pv_today: ["sensor.{deye_entity_prefix}_today_production"]
+  battery_power: ["sensor.{deye_entity_prefix}_battery_power"]
+  battery_voltage: ["sensor.{deye_entity_prefix}_battery_voltage"]
+  battery_temperature: ["sensor.{deye_entity_prefix}_battery_temperature"]
+  pv_power: ["sensor.{deye_entity_prefix}_pv_power"]
+  load_power: ["sensor.{deye_entity_prefix}_load_power"]
+  grid_power: ["sensor.{deye_entity_prefix}_grid_power"]
+  soc_percent: ["sensor.{deye_entity_prefix}_battery"]
+
+  # Examples ONLY: replace with verified installed usable capacity and limits.
+  # battery_min_soc is the domestic discharge floor, NOT the emergency shutdown SOC.
+  soc_max: [10]
+  battery_min_soc: [10]
+  battery_rate_max: [3000]
+  inverter_limit_charge: [3000]
+  inverter_limit_discharge: [3000]
+  inverter_limit: [5000]
+  export_limit: [0]
+  # These model power in W; they do not write or enforce inverter/site current limits.
+  # Keep manual global/grid-charge currents, BMS limits and protections unchanged.
+
+  # All six rows receive the CURRENT intent, not a six-period forecast schedule.
+  # Prerequisites (manual): Capacity mode, Zero Export To CT, valid all-day ToU,
+  # commissioned grid charging and no other automatic writer (including Deye Cloud).
+  # Each phase must be observed in HA before the next is attempted. HA observation
+  # is not hardware confirmation; cached/optimistic states need commissioning.
+  charge_start_service:
+    - &disable_sources
+      service: select.select_option
+      entity_id: >-
+        select.{deye_entity_prefix}_program_1_charging,
+        select.{deye_entity_prefix}_program_2_charging,
+        select.{deye_entity_prefix}_program_3_charging,
+        select.{deye_entity_prefix}_program_4_charging,
+        select.{deye_entity_prefix}_program_5_charging,
+        select.{deye_entity_prefix}_program_6_charging
+      option: "Disabled"
+      verify: true
+    - &set_targets
+      service: number.set_value
+      entity_id: >-
+        number.{deye_entity_prefix}_program_1_soc,
+        number.{deye_entity_prefix}_program_2_soc,
+        number.{deye_entity_prefix}_program_3_soc,
+        number.{deye_entity_prefix}_program_4_soc,
+        number.{deye_entity_prefix}_program_5_soc,
+        number.{deye_entity_prefix}_program_6_soc
+      value: "{target_soc}"
+      verify: true
+    - <<: *disable_sources
+      option: "Grid"
+
+  # Demand: no grid/generator charging; ordinary self-consumption above the floor.
+  # {reserve_soc} follows the effective Predbat minimum, rounded UP to whole %.
+  charge_stop_service:
+    - *disable_sources
+    - <<: *set_targets
+      value: "{reserve_soc}"
+
+  # No forced export exists here. Explicit [] prevents the generic fallback from
+  # stopping a charge when there is no discharge to stop. Do not add a work-mode write.
+  discharge_stop_service: []
+
+  # No physical time, Program Power, global current, reserve/shutdown or mode outputs.
+  # Start in Monitor. After commissioning use Control charge only; freeze, low-power,
+  # reserve holds, solar SOC ceilings and car/iBoost battery holds are unsupported.
+  # Stopping Predbat/HA does NOT undo persistent ToU writes or provide a watchdog.
+  # Configure your own rates, load history and PV forecasts as documented in apps-yaml.md.
