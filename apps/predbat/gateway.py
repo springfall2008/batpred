@@ -21,6 +21,7 @@ from const import EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, MINUTE_WATT
 import pytz as _pytz
 
 from component_base import ComponentBase
+from control_handoff import control_gate_for, gated_mqtt_publish
 
 try:
     import gateway_status_pb2 as pb
@@ -2615,6 +2616,14 @@ class GatewayMQTT(ComponentBase):
             self.log(f"Warn: GatewayMQTT: Display mode blocked publish to {topic}")
             return
         if not (self._mqtt_client and self._mqtt_connected):
+            return
+
+        gate = control_gate_for(getattr(self, "base", None))
+        # Battery control only. EV commands are an independent control role.
+        if gate is not None and topic in {f"{self._topic_base}/command", f"{self._topic_base}/schedule"}:
+            # Includes retained schedules and owner-loop futures, not just
+            # ad-hoc commands. No queued plan can bypass a closed epoch later.
+            await gated_mqtt_publish(gate, "predbat_gateway", lambda: self._mqtt_client.publish(topic, payload, qos=1, retain=retain), self._loop)
             return
 
         if self._loop is not None and self._loop is not asyncio.get_running_loop():

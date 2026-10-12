@@ -103,6 +103,7 @@ from tests.test_ge_cloud import test_ge_cloud
 from tests.test_teslemetry import test_teslemetry
 from tests.test_compare import test_compare
 from tests.test_gateway import run_gateway_tests
+from tests.test_control_handoff import run_control_handoff_tests
 from tests.test_axle import test_axle
 from tests.test_db_manager import test_db_manager
 from tests.test_hahistory import run_hahistory_tests
@@ -753,6 +754,7 @@ def main():
         ("load_today_comparison", test_load_today_comparison, "load_today_comparison None-guard regression test", False),
         ("compare", test_compare, "Compare tariff engine tests (hardware overrides, bleed isolation)", False),
         ("gateway", run_gateway_tests, "GatewayMQTT component tests (protobuf, plan serialization, commands, telemetry)", False),
+        ("control_handoff", run_control_handoff_tests, "Epoch-bound transport fencing and drain races (Cloud and Gateway)", False),
         ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", False),
         ("trim_export", run_trim_export_tests, "Export trim ordering (buffer from cheapest slot) tests", False),
         ("plan_tiebreak", run_plan_tiebreak_tests, "Plan fragmentation near-tie tie-break tests", False),
