@@ -247,6 +247,8 @@ class ControlHandoffService:
     def _request(self, action, evidence=None):
         """Call the fixed service endpoint with redirects and exception logging off."""
         payload = {"action": action, "instance_id": self.instance_id, "boot_id": self.boot_id}
+        if action == "attach":
+            payload["loaded_config_version"] = self.base.args.get("saas_config_version")
         if self.gate is not None:
             payload["epoch"] = self.gate.epoch
         if evidence is not None:
