@@ -10,7 +10,7 @@ This is a single-EV AC-equivalent search model, not a hardware controller or a
 proof of global optimality. Expected availability never establishes connection.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 from typing import Optional, Sequence, Tuple
 
@@ -18,6 +18,7 @@ STATUS_FEASIBLE = "feasible"
 STATUS_BOUNDED_NO_PLAN = "bounded_no_plan"
 BATTERY_DEMAND, BATTERY_HOLD, BATTERY_CHARGE = "demand", "hold", "charge"
 BATTERY_MODES = (BATTERY_DEMAND, BATTERY_HOLD, BATTERY_CHARGE)
+BATTERY_LIMITED_DEMAND = "limited_demand"
 EV_OFF, EV_ON = "off", "on"
 EPSILON = 1e-9
 
@@ -101,6 +102,7 @@ class PlannerConfig:
     time_step_minutes: int = 5
     beam_width: Optional[int] = 128
     soc_bucket_kwh: float = 0.05
+    allow_limited_discharge: bool = False
 
 
 @dataclass(frozen=True)
@@ -147,6 +149,7 @@ class SlotAction:
     slot_cost: float
     ev_on_minutes: float
     segments: Tuple[FlowSegment, ...]
+    discharge_limit_kw: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -201,6 +204,8 @@ def _validate(slots, ev, battery, site, planner):
         raise PlannerInputError("Unsupported planning step")
     if planner.beam_width is not None and (type(planner.beam_width) is not int or not 1 <= planner.beam_width <= 4096):
         raise PlannerInputError("beam_width must be an integer in 1..4096 or None")
+    if type(planner.allow_limited_discharge) is not bool:
+        raise PlannerInputError("allow_limited_discharge must be boolean")
     _require_finite("soc_bucket_kwh", planner.soc_bucket_kwh, 1e-6)
     if not slots or len(slots) > 576 or (planner.beam_width is None and len(slots) > 12):
         raise PlannerInputError("Horizon must have 1..576 slots (at most 12 for exhaustive search)")
@@ -312,18 +317,28 @@ def _segment(duration, house_kw, ev_kw, pv_kw, soc, mode, battery, ev, site):
 def _resolve_action(slot, ev_on, mode, node, battery, ev, site):
     """Compute a complete physical step, never a partially served household/EV load."""
     on_minutes = 0.0
+    discharge_limit = None
     if ev_on:
         if not _ev_is_available(ev, slot.index) or slot.start_min >= ev.deadline_min or node.ev_kwh >= ev.stop_soc_kwh - EPSILON:
             return None
         if not node.on and (node.off_minutes + EPSILON < ev.min_off_minutes or node.battery_kwh + EPSILON < battery.capacity_kwh * ev.restart_battery_percent / 100):
             return None
         on_minutes = min(slot.duration_min, ev.deadline_min - slot.start_min, (ev.stop_soc_kwh - node.ev_kwh) / ev.efficiency / ev.rate_kw * 60)
+    flow_mode = mode
+    if mode == BATTERY_LIMITED_DEMAND:
+        # Still battery-first, but under a reproducible per-period power ceiling.
+        # The fixed ceiling remains in place after a partly completed EV step;
+        # it is not a fictitious continuously modulating grid-first controller.
+        net_kw = (slot.ac_load_kwh - slot.pv_kwh) * 60 / slot.duration_min + (ev.rate_kw if on_minutes else 0)
+        discharge_limit = min(battery.max_discharge_kw, max(0, math.ceil((net_kw - site.import_cap_kw) * 1000 + 2) / 1000))
+        battery = replace(battery, max_discharge_kw=discharge_limit)
+        flow_mode = BATTERY_DEMAND
     segments = []
     soc = node.battery_kwh
     for duration, ev_kw in ((on_minutes, ev.rate_kw), (slot.duration_min - on_minutes, 0)):
         if duration <= 1e-10:
             continue
-        result = _segment(duration, slot.ac_load_kwh * 60 / slot.duration_min, ev_kw, slot.pv_kwh * 60 / slot.duration_min, soc, mode, battery, ev, site)
+        result = _segment(duration, slot.ac_load_kwh * 60 / slot.duration_min, ev_kw, slot.pv_kwh * 60 / slot.duration_min, soc, flow_mode, battery, ev, site)
         if result is None:
             return None
         parts, soc = result
@@ -363,6 +378,7 @@ def _resolve_action(slot, ev_on, mode, node, battery, ev, site):
         cost,
         on_minutes,
         tuple(segments),
+        discharge_limit,
     )
 
 
@@ -396,6 +412,25 @@ def _bounded_no_plan(deadline_idx, transitions, max_frontier, reason):
     return PlanResult(STATUS_BOUNDED_NO_PLAN, None, (), (), (), (), (), (), diagnostic, deadline_idx)
 
 
+def _reachable_floor_envelope(slots, battery, site):
+    """Optimistic charging bound that preserves time-local floors during pruning.
+
+    Assume the EV is off and any grid/PV headroom can charge the battery, even
+    where an actual discrete action could not use all that headroom. This only
+    rejects states unable to reach a future floor under the most favourable
+    charging assumption; it does not claim a feasible continuation exists.
+    """
+    required_end = [0.0] * len(slots)
+    required = battery.end_min_kwh
+    for slot in reversed(slots):
+        required = max(required, slot.battery_min_kwh, battery.reserve_kwh)
+        required_end[slot.index] = required
+        headroom = max(0, site.import_cap_kw + (slot.pv_kwh - slot.ac_load_kwh) * 60 / slot.duration_min)
+        gain = min(battery.max_charge_kw, headroom) * slot.duration_min / 60 * battery.charge_efficiency
+        required = max(slot.battery_min_kwh, battery.reserve_kwh, required - gain)
+    return required_end
+
+
 def plan(slots: Sequence[Slot], ev: EVConfig, battery: BatteryConfig, site: SiteConfig, planner: Optional[PlannerConfig] = None) -> PlanResult:
     """Jointly search all eligible prices, EV decisions and executable-mode physics.
 
@@ -405,6 +440,8 @@ def plan(slots: Sequence[Slot], ev: EVConfig, battery: BatteryConfig, site: Site
     """
     planner = planner if planner is not None else PlannerConfig()
     _validate(slots, ev, battery, site, planner)
+    modes = BATTERY_MODES + (BATTERY_LIMITED_DEMAND,) if planner.allow_limited_discharge else BATTERY_MODES
+    required_end = _reachable_floor_envelope(slots, battery, site)
     deadline_idx = _deadline_slot_index(slots, ev.deadline_min)
     future = [0.0] * (len(slots) + 1)
     for i in range(len(slots) - 1, -1, -1):
@@ -420,11 +457,13 @@ def plan(slots: Sequence[Slot], ev: EVConfig, battery: BatteryConfig, site: Site
     for i, slot in enumerate(slots):
         next_states = {}
         for node in frontier:
-            for mode in BATTERY_MODES:
+            for mode in modes:
                 for on in (False, True):
                     transitions += 1
                     action = _resolve_action(slot, on, mode, node, battery, ev, site)
                     if action is None:
+                        continue
+                    if action.battery_soc_kwh_end < required_end[i] - EPSILON:
                         continue
                     if action.ev_soc_kwh_end + future[i + 1] < ev.stop_soc_kwh - EPSILON:
                         continue
@@ -464,7 +503,7 @@ def plan(slots: Sequence[Slot], ev: EVConfig, battery: BatteryConfig, site: Site
         ev_stop_target_met=True,
         battery_end_min_met=True,
         ev_on_slot_count=sum(a.ev_action == EV_ON for a in actions),
-        mode_counts=tuple((mode, sum(a.battery_mode == mode for a in actions)) for mode in BATTERY_MODES),
+        mode_counts=tuple((mode, sum(a.battery_mode == mode for a in actions)) for mode in modes),
         notes=notes,
         transitions_evaluated=transitions,
         max_frontier_size=max_frontier,

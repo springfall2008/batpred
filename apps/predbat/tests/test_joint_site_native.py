@@ -703,6 +703,32 @@ def test_observations_after_rounded_plan_time_are_not_future(base):
         assert "soc_entity_stale_or_future" in _options(base)["entity_blockers"]
 
 
+def test_stale_soc_scenario_retains_freshness_blocker(base):
+    """An optional stale-value scenario is labelled and never promoted to a live candidate."""
+    _setup(base)
+    old_stamp = base.now_utc - timedelta(hours=2)
+    _set_entity(base, "sensor.test_ev_soc", "0", last_updated=old_stamp, last_changed=old_stamp)
+    base.args["joint_site"].update(soc_entity="sensor.test_ev_soc", soc_entity_unit="kWh")
+    before = _controls(base)
+    assert evaluate_joint_site(base)["status"] == "unsupported"
+    base.args["joint_site"]["allow_stale_shadow_soc"] = True
+    report = evaluate_joint_site(base)
+    assert report["status"] == "conditional_candidate", report
+    assert report["execution_blockers"] == ["soc_entity_stale_or_future"]
+    assert report["input_blockers"] == ["soc_entity_stale_or_future"]
+    assert report["soc_observed_at"] == old_stamp.astimezone(timezone.utc).isoformat()
+    assert report["soc_observation_age_minutes"] == 120
+    assert report["ev_initial_state"]["ev_soc_source"] == "stale_entity_assumption"
+    assert not report["ready_to_activate"] and not report["execution_enabled"]
+    assert "fresh_ev_soc_observation" in report["activation_requirements"]
+    assert _controls(base) == before
+    # Unknown values and truly future observations never become assumptions.
+    _set_entity(base, "sensor.test_ev_soc", "unknown", last_updated=old_stamp)
+    assert evaluate_joint_site(base)["status"] == "unsupported"
+    _set_entity(base, "sensor.test_ev_soc", "0", last_updated=base.now_utc + timedelta(seconds=1))
+    assert evaluate_joint_site(base)["status"] == "unsupported"
+
+
 def run_joint_site_native_tests(base):
     """Run native integration cases without a live HA connection or inverter writes."""
     for test in (
@@ -741,6 +767,7 @@ def run_joint_site_native_tests(base):
         test_deye_counterfactual_preserves_native_capabilities_and_manual_floor,
         test_closed_session_does_not_roll_to_tomorrow,
         test_observations_after_rounded_plan_time_are_not_future,
+        test_stale_soc_scenario_retains_freshness_blocker,
     ):
         with patch("joint_site_native._observation_clock", side_effect=lambda: base.now_utc):
             test(base)

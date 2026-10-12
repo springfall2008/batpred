@@ -133,6 +133,7 @@ def _options(base):
         "connection_entity_states",
         "import_limit_w",
         "control_model",
+        "allow_stale_shadow_soc",
     }
     if set(settings) - allowed:
         raise ValueError("Unknown joint_site option")
@@ -144,6 +145,8 @@ def _options(base):
     control_model = settings.get("control_model", "native")
     if control_model not in ("native", "deye_tou"):
         raise ValueError("Unsupported joint-site control model")
+    if type(settings.get("allow_stale_shadow_soc", False)) is not bool:
+        raise ValueError("allow_stale_shadow_soc must be boolean")
     _number(base.soc_max, "soc_max", 0.001)
     _number(base.reserve, "reserve", 0, base.soc_max)
     session = settings.get("session")
@@ -193,6 +196,9 @@ def _options(base):
             manual_target_kwh = None
     ev_soc = None
     ev_soc_source = None
+    stale_soc = None
+    soc_observed_at = None
+    soc_age_minutes = None
     entity_blockers = []
     if manual_target_kwh is not None:
         ev_soc = _number(manual_target_kwh, "manual_ev_soc", 0, base.car_charging_battery_size[0])
@@ -221,8 +227,11 @@ def _options(base):
             else:
                 soc_max_age = _number(settings.get("soc_max_age_minutes", 60), "soc_max_age_minutes", 1, 1440)
                 soc_age_minutes = (observed_now - soc_payload["last_updated"]).total_seconds() / 60
+                soc_observed_at = soc_payload["last_updated"].isoformat()
                 if soc_age_minutes < 0 or soc_age_minutes > soc_max_age:
                     entity_blockers.append("soc_entity_stale_or_future")
+                    if soc_age_minutes > soc_max_age:
+                        stale_soc = ev_soc_kwh
                 else:
                     ev_soc = ev_soc_kwh
                     ev_soc_source = "entity_cache"
@@ -286,6 +295,10 @@ def _options(base):
         "planning_alignment_seconds": (observed_now - now).total_seconds(),
         "ev_soc": ev_soc,
         "ev_soc_source": ev_soc_source,
+        "stale_soc": stale_soc,
+        "allow_stale_shadow_soc": settings.get("allow_stale_shadow_soc", False),
+        "soc_observed_at": soc_observed_at,
+        "soc_observation_age_minutes": soc_age_minutes,
         "load_cap": _number(settings.get("load_port_limit_w"), "load_port_limit_w", 1) / 1000,
         "import_limit_w": _number(settings.get("import_limit_w", getattr(base, "import_limit", 0)), "import_limit_w", 1),
         "pause": pause,
@@ -378,20 +391,23 @@ def build_candidate(base, options):
     from joint_site import BatteryConfig, EVConfig, PlannerConfig, SiteConfig, Slot, plan
 
     slots = []
+    conservative = options.get("forecast_basis") == "envelope"
     for index, minute in enumerate(range(0, base.forecast_minutes, PREDICT_STEP)):
         absolute = base.minutes_now + minute
         import_rate = sum(base.rate_import[m] for m in range(absolute, absolute + PREDICT_STEP)) / PREDICT_STEP
         export_rate = sum(base.rate_export[m] for m in range(absolute, absolute + PREDICT_STEP)) / PREDICT_STEP
-        pv_ac = base.pv_forecast_minute_step[minute] * (base.inverter_loss if base.inverter_hybrid else 1)
+        pv_step = min(base.pv_forecast_minute_step[minute], base.pv_forecast_minute10_step[minute]) if conservative else base.pv_forecast_minute_step[minute]
+        load_step = max(base.load_minutes_step[minute], base.load_minutes_step10[minute]) if conservative else base.load_minutes_step[minute]
+        pv_ac = pv_step * (base.inverter_loss if base.inverter_hybrid else 1)
         if not base.inverter_hybrid and base.pv_ac_limit > 0:
             pv_ac = min(pv_ac, base.pv_ac_limit * PREDICT_STEP)
         floor_percent = max(base.all_active_keep.get(m, 0) for m in range(absolute, absolute + PREDICT_STEP))
-        slots.append(Slot(index, minute, PREDICT_STEP, base.load_minutes_step[minute], pv_ac, import_rate, export_rate, floor_percent * base.soc_max / 100))
+        slots.append(Slot(index, minute, PREDICT_STEP, load_step, pv_ac, import_rate, export_rate, floor_percent * base.soc_max / 100))
     battery = BatteryConfig(
         capacity_kwh=base.soc_max,
         initial_kwh=base.soc_kw,
         reserve_kwh=base.reserve,
-        max_charge_kw=min(base.battery_rate_max_charge, base.inverter_limit) * 60 * base.battery_rate_max_scaling / base.inverter_loss,
+        max_charge_kw=min(base.battery_rate_max_charge, base.inverter_limit) * 60 * base.battery_rate_max_scaling / base.inverter_loss * (min(base.charge_scaling10, 1) if conservative else 1),
         max_discharge_kw=min(base.battery_rate_max_discharge, base.inverter_limit) * 60 * base.battery_rate_max_scaling_discharge * base.inverter_loss,
         charge_efficiency=base.battery_loss * base.inverter_loss,
         discharge_efficiency=base.battery_loss_discharge * base.inverter_loss,
@@ -414,7 +430,7 @@ def build_candidate(base, options):
         initial_off_minutes=options["initial_off_minutes"],
     )
     site = SiteConfig(options["import_limit_w"] / 1000, base.export_limit * 60, options["load_cap"])
-    result = plan(slots, ev, battery, site, PlannerConfig(beam_width=options["beam"]))
+    result = plan(slots, ev, battery, site, PlannerConfig(beam_width=options["beam"], allow_limited_discharge=options["control_model"] == "deye_tou"))
     return result, slots
 
 
@@ -431,7 +447,7 @@ def _native_windows(base, result, slots):
         if action.ev_action == "on":
             energy = base.car_charging_rate[0] * slot.duration_min / 60
             ev_windows.append({"start": start, "end": end, "kwh": energy, "average": slot.import_price, "cost": energy * slot.import_price, "octopus": False})
-        if action.battery_mode != "demand":
+        if action.battery_mode in ("charge", "hold"):
             target = base.soc_max if action.battery_mode == "charge" else base.reserve
             if charge_windows and charge_windows[-1]["end"] == start and limits[-1] == target:
                 charge_windows[-1]["end"] = end
@@ -453,8 +469,15 @@ def _replay(base, options, result, slots, windows, scenario):
     model.prediction_kernel_enable = False
     model.debug_enable = False
     model.metric_standing_charge = 0
-    pred = Prediction(model, base.pv_forecast_minute_step, base.pv_forecast_minute10_step, base.load_minutes_step, base.load_minutes_step10)
-    pred.run_prediction(limits, charge_windows, [], [], scenario, end_record=base.forecast_minutes, save="test")
+    model.import_limit = options["import_limit_w"]
+    limited = any(getattr(action, "discharge_limit_kw", None) is not None for action in result.actions)
+    if limited:
+        from joint_site_replay import replay_discharge_limits
+
+        pred = replay_discharge_limits(model, result, slots, scenario)
+    else:
+        pred = Prediction(model, base.pv_forecast_minute_step, base.pv_forecast_minute10_step, base.load_minutes_step, base.load_minutes_step10)
+        pred.run_prediction(limits, charge_windows, [], [], scenario, end_record=base.forecast_minutes, save="test")
     diagnostic = getattr(pred, "import_limit_diagnostics", None)
     if not diagnostic or getattr(base, "import_limit", None) != options["import_limit_w"]:
         # This PR is independent of the import-diagnostic PR. Native saved grid
@@ -469,18 +492,20 @@ def _replay(base, options, result, slots, windows, scenario):
     elif diagnostic["minutes_over"]:
         reasons.append("site_import_exceeded")
     trace = pred.predict_soc
+    rounding = getattr(pred, "rounding_bound_kwh", 0)
     reserve_min = min(list(trace.values()) + [pred.final_soc])
     if reserve_min < base.reserve - 0.002:
         reasons.append("domestic_reserve")
-    if pred.final_soc < max(options["terminal_min"], base.reserve) - 0.002:
+    terminal_rounding = rounding if options["terminal_min"] > base.reserve + 0.002 else 0
+    if pred.final_soc - terminal_rounding < max(options["terminal_min"], base.reserve) - 0.002:
         reasons.append("terminal_reserve")
     previous_on = options["initially_on"]
     previous_off_minutes = options["initial_off_minutes"]
     off_minutes = previous_off_minutes
-    for action, slot in zip(result.actions, slots):
+    for slot_index, (action, slot) in enumerate(zip(result.actions, slots)):
         on = action.ev_action == "on"
-        start_soc = trace[slot.start_min]
-        end_soc = trace.get(slot.start_min + slot.duration_min, pred.final_soc)
+        start_soc = trace[slot.start_min] - (slot_index * 0.00005 if limited else 0)
+        end_soc = trace.get(slot.start_min + slot.duration_min, pred.final_soc) - ((slot_index + 1) * 0.00005 if limited else 0)
         if min(start_soc, end_soc) < getattr(slot, "battery_min_kwh", 0) - 0.002:
             reasons.append("domestic_manual_floor")
         if on and min(start_soc, end_soc) <= options["pause"] * base.soc_max / 100 + 0.002:
@@ -507,7 +532,8 @@ def _replay(base, options, result, slots, windows, scenario):
         "final_battery_kwh": pred.final_soc,
         "minimum_battery_kwh": reserve_min,
         "horizon_energy_cost": pred.final_metric - base.cost_today_sofar,
-        "model": "native_python_full_power_ev_envelope",
+        "model": "native_python_segmented_rate_replay" if limited else "native_python_full_power_ev_envelope",
+        "soc_rounding_bound_kwh": rounding,
     }
 
 
@@ -523,6 +549,7 @@ def _empty_report(status):
         "proposed_ev_windows": [],
         "proposed_charge_windows": [],
         "proposed_charge_limits": [],
+        "proposed_discharge_power_limits": [],
         "native_checks": {},
     }
 
@@ -568,7 +595,8 @@ def evaluate_joint_site(base, publish=True):
             model_base.set_charge_freeze = True
             model_base.set_discharge_during_charge = True
             model_base.set_charge_low_power = False
-            execution_requirements = ["deye_hardware_commissioning", "native_executor_equivalence", "connection_and_session_permission", "tou_table_validation"]
+            model_base.export_limit = 0
+            execution_requirements = ["deye_hardware_commissioning", "standing_hardware_current_limits", "native_executor_equivalence", "connection_and_session_permission", "tou_table_validation"]
         evidence = {
             "ev_initial_state": {
                 "initially_on": options["initially_on"],
@@ -582,11 +610,23 @@ def evaluate_joint_site(base, publish=True):
             "counterfactual_controls": options["control_model"] != "native",
             "activation_requirements": execution_requirements,
             "manual_domestic_floor_slots": len(base.all_active_keep),
+            "model_export_limit_w": model_base.export_limit * 60000,
             "planning_reference_at": options["planning_reference_at"],
             "observations_checked_at": options["observations_checked_at"],
+            "soc_observed_at": options["soc_observed_at"],
+            "soc_observation_age_minutes": options["soc_observation_age_minutes"],
             "planning_alignment_seconds": options["planning_alignment_seconds"],
         }
         blockers = _collect_blockers(model_base, options)
+        stale_hypothesis = options["allow_stale_shadow_soc"] and options["stale_soc"] is not None and blockers == ["soc_entity_stale_or_future"] and not options["departure_passed"]
+        if stale_hypothesis:
+            # Preserve the freshness failure. This is a separately labelled
+            # mathematical scenario, not a replacement live observation.
+            options = {**options, "ev_soc": options["stale_soc"], "ev_soc_source": "stale_entity_assumption"}
+            evidence["uses_stale_soc_assumption"] = True
+            evidence["input_blockers"] = list(blockers)
+            evidence["activation_requirements"] = [*evidence["activation_requirements"], "fresh_ev_soc_observation"]
+            evidence["ev_initial_state"] = {**evidence["ev_initial_state"], "ev_soc_kwh": options["ev_soc"], "ev_soc_source": options["ev_soc_source"]}
         # Always surface the entity observations even when topology blockers
         # gate the solver. Missing optional entities are reported explicitly
         # instead of being silently assumed away.
@@ -599,7 +639,7 @@ def evaluate_joint_site(base, publish=True):
             report["reason"] = "Dated session closed; a later SOC reading cannot prove the departure target was met on time"
             _publish_report(base, report, publish)
             return report
-        if blockers:
+        if blockers and not stale_hypothesis:
             report = _empty_report("unsupported")
             report["execution_blockers"] = list(blockers)
             report["reason"] = "Shadow planner is not configured for the current evidence set"
@@ -613,20 +653,55 @@ def evaluate_joint_site(base, publish=True):
         stage = "solver"
         result, slots = build_candidate(model_base, options)
         if not result.actions:
-            report["status"] = "no_plan_found"
-            report["execution_blockers"] = []
+            report["status"] = "conditional_no_plan_found" if stale_hypothesis else "no_plan_found"
+            report["execution_blockers"] = list(blockers)
             report["entity_observations"] = entity_observations
             report["initial_execution_state_assumption"] = "relay_value_and_elapsed_off_time" if options["entity_config"]["relay_entity"] else "assumed_off_for_minimum_cooldown_no_relay"
         else:
             stage = "native_replay"
             windows = _native_windows(model_base, result, slots)
             checks = {"nominal": _replay(model_base, options, result, slots, windows, 0), "pv10": _replay(model_base, options, result, slots, windows, 1)}
+            attempts = [{"forecast_basis": "nominal", "solver_status": result.status, "native_passed": all(check["passed"] for check in checks.values())}]
+            if options["control_model"] == "deye_tou" and not attempts[0]["native_passed"]:
+                # One bounded retry uses the forecast envelope and PV10 charge
+                # delivery assumption. Native nominal AND PV10 still validate
+                # the same full-rate commands; this is not charge modulation.
+                retry_options = {**options, "forecast_basis": "envelope"}
+                retry_result, retry_slots = build_candidate(model_base, retry_options)
+                retry_checks = {}
+                if retry_result.actions:
+                    retry_windows = _native_windows(model_base, retry_result, retry_slots)
+                    retry_checks = {"nominal": _replay(model_base, retry_options, retry_result, retry_slots, retry_windows, 0), "pv10": _replay(model_base, retry_options, retry_result, retry_slots, retry_windows, 1)}
+                    result, slots, windows, checks = retry_result, retry_slots, retry_windows, retry_checks
+                attempts.append({"forecast_basis": "envelope", "solver_status": retry_result.status, "native_passed": bool(retry_checks) and all(check["passed"] for check in retry_checks.values())})
+            from joint_site_replay import discharge_limit_w
+
+            power_limits = []
+            command_steps = []
+            for action, slot in zip(result.actions, slots):
+                power = discharge_limit_w(model_base, action)
+                command_steps.append({"start": model_base.minutes_now + slot.start_min, "target_soc": 100 if action.battery_mode == "charge" else 0, "freeze": action.battery_mode == "hold", "power_w": power})
+                if power is not None:
+                    power_limits.append({"start": model_base.minutes_now + slot.start_min, "end": model_base.minutes_now + slot.start_min + slot.duration_min, "power_w": power})
+            command_check = {"available": False, "passed": False, "reason": "Optional local DEYE adapter/mapping is not installed"}
+            if options["control_model"] == "deye_tou" and base.args.get("deye_shadow"):
+                try:
+                    from deye_local_shadow import check_joint_deye_commands
+
+                    command_check = check_joint_deye_commands(base, command_steps)
+                except ImportError as exc:
+                    command_check["reason"] = "Local DEYE command-check module is unavailable or incompatible"
+                    command_check["error_type"] = type(exc).__name__
             report.update(
-                status="candidate" if all(check["passed"] for check in checks.values()) else "native_rejected",
+                status=("conditional_" if stale_hypothesis else "") + ("candidate" if all(check["passed"] for check in checks.values()) else "native_rejected"),
                 proposed_ev_windows=windows[0],
                 proposed_charge_windows=windows[1],
                 proposed_charge_limits=windows[2],
                 native_checks=checks,
+                search_attempts=attempts,
+                proposed_discharge_power_limits=power_limits,
+                deye_command_check=command_check,
+                solver_forecast_basis=attempts[-1]["forecast_basis"] if attempts[-1]["solver_status"] == "feasible" else "nominal",
                 solver_objective=result.total_cost,
                 solver_grid_cost=sum(action.grid_import_kwh * action.import_price - action.grid_export_kwh * action.export_price for action in result.actions),
                 cost_unit=base.currency_symbols[1],
@@ -642,8 +717,9 @@ def evaluate_joint_site(base, publish=True):
                 },
                 entity_observations=entity_observations,
                 solver_ev_ac_kwh=result.diagnostics.ev_delivered_total_kwh,
+                solver_pv_curtailed_kwh=result.diagnostics.pv_curtailed_total_kwh,
                 bounded_search=True,
-                execution_blockers=[],
+                execution_blockers=list(blockers),
             )
     except UnsupportedJointSite as exc:
         report = _empty_report("unsupported")

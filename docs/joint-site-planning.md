@@ -58,6 +58,7 @@ The mapping accepts:
 | `relay_entity` | Actual HA relay state; `last_changed` determines elapsed OFF time |
 | `connection_entity` / `connection_entity_states` | Optional connection observation and exact state allowlist, separate from energisation permission |
 | `permission_entity` | Optional schedule permission observation; only exact `on` is reported as granted |
+| `allow_stale_shadow_soc` | Optional, default false: analyse the last valid but aged SOC as an explicitly labelled scenario; freshness remains an activation blocker |
 
 Capacity, present domestic battery energy, charge/discharge limits, losses, EV
 rate/capacity/target, tariffs and load/PV forecasts come from the native model.
@@ -97,6 +98,14 @@ valid observation inside the current block would appear future-dated at startup.
 Reports expose both references and their alignment difference. Entity timestamps
 are never replaced with the time at which the cache was read.
 
+For a parked vehicle that stops publishing SOC, `allow_stale_shadow_soc: true`
+permits a **last-known-value assumption only in shadow**. The original observation
+time and age remain visible, `soc_entity_stale_or_future` remains in the blocker
+lists, and results are named `conditional_candidate`, `conditional_native_rejected`
+or `conditional_no_plan_found`. An unavailable, malformed or genuinely future
+observation is never substituted. This neither refreshes the vehicle nor proves
+its present SOC/connection; it cannot authorise activation.
+
 The initial integration supports one metered EV and one inverter, full-rate charge
 and charge-freeze controls, no iBoost, and no manual mode/ceiling overrides. Domestic
 manual minimum targets are retained as time-local SOC constraints and checked in
@@ -115,6 +124,42 @@ has been demonstrated on the installed firmware. Reports mark
 physical commissioning, coherent ToU configuration, executor equivalence and real
 connection/permission as activation requirements. A successful hypothetical plan
 is not evidence those requirements have been satisfied.
+
+The DEYE scenario also considers **limited battery discharge**: a fixed battery
+power ceiling for each interval, with the remaining load supplied by the grid.
+The EV is still either off or at its configured full rate. The ceiling remains
+fixed even if the EV completes partway through an interval; this is not an
+invented continuously modulating grid-first mode. Whole-watt conversion includes
+a small numerical rounding allowance, not a physical protection margin.
+
+Time-local domestic SOC floors have a backwards reachability bound. A beam search
+must retain states that can prepare for a future manual target rather than keep
+only cheap low-SOC states and discover the target too late. The bound assumes
+optimistic future charging and therefore only prunes states that cannot catch up;
+it is not a replacement standing reserve.
+
+If a nominal candidate fails the two native checks, one additional bounded search
+uses maximum nominal/PV10 load, minimum PV and PV10 charge-delivery assumptions.
+Both native scenarios still check the resulting full-rate commands. Reports label
+the chosen `solver_forecast_basis` and `search_attempts`; a conservative search
+objective must not be presented as measured savings or a proof of global minimum.
+This DEYE scenario assumes zero export and reports curtailment explicitly, without
+changing the installation's export configuration.
+
+`proposed_discharge_power_limits` contains native DC-watt ceilings for limited
+intervals; ordinary demand uses the existing full ceiling outside those intervals.
+For these candidates, replay uses one fresh native Python `Prediction` per step,
+setting its current-rate input while preserving the original SOC/temperature
+curve maximum. The hot loop and kernel ABI are unchanged. The accumulated SOC
+rounding bound is reported and considered at EV/manual thresholds. Existing
+non-limited candidates still use whole-horizon native replay.
+
+With the separate local DEYE PR and a `deye_shadow` mapping installed,
+`deye_command_check` also translates every candidate step through the real
+inverter entry point against copied HA states. It reports table-repair and hold
+commissioning hypotheses separately. Success proves only software translation
+under those hypotheses: it does not confirm physical writes, current-limit
+availability, firmware behaviour or automatic activation readiness.
 
 The report separates `solver_grid_cost` from `solver_objective` (grid cost plus
 the configured cycle-cost surrogate, less terminal stored-energy credit).
