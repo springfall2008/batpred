@@ -96,6 +96,7 @@ from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA, MANUAL_RATE_MA
 from predbat import THIS_VERSION_DISPLAY
 from component_base import ComponentBase
 from config import APPS_SCHEMA
+from compare import check_compare_list
 import debug_history
 from web_annual import AnnualPage
 from web_chat import WebChat
@@ -2693,7 +2694,7 @@ chart.render();
         text += get_plan_css()
 
         # Add warning/error divs
-        text += '<div id="staleWarning" style="display:none; padding:10px; background:#fff3cd; color:#856404; border:1px solid #ffc107; margin-bottom:10px;">&#9888;&#65039; Plan data is stale (last updated >15 minutes ago)</div>'
+        text += '<div id="staleWarning" style="display:none; padding:10px; background:#fff3cd; color:#856404; border:1px solid #ffc107; margin-bottom:10px;">&#9888;&#65039; Plan data is stale</div>'
         text += '<div id="planError" style="display:none; padding:10px; background:#fee; color:#c00; border:1px solid #c00; margin-bottom:10px;"></div>'
 
         # Add view switcher buttons
@@ -4241,23 +4242,13 @@ chart.render();
     def _validate_compare_list(self, compare_list):
         """
         Check every compare_list profile still has the unique id and non-empty name that
-        compare.py indexes results by, raising ValueError if a batch has left one without
+        compare.py indexes results by, raising ValueError if a batch has left one without.
+        Uses compare.py's own rules, so the editor refuses exactly what a comparison would skip,
+        and names every problem at once so they can all be fixed in one go.
         """
-        if not compare_list:
-            return
-
-        seen_ids = set()
-        for entry in compare_list:
-            if not isinstance(entry, dict):
-                raise ValueError("Each compare_list entry must be a dictionary with an id and a name")
-            entry_id = entry.get("id")
-            if not entry_id:
-                raise ValueError("Each compare_list entry requires a non-empty 'id'")
-            if entry_id in seen_ids:
-                raise ValueError(f"Duplicate compare_list id '{entry_id}'")
-            seen_ids.add(entry_id)
-            if not entry.get("name"):
-                raise ValueError(f"compare_list entry '{entry_id}' requires a non-empty 'name'")
+        _, problems = check_compare_list(compare_list)
+        if problems:
+            raise ValueError("; ".join(problems))
 
     async def html_apps_post(self, request):
         """
@@ -4612,7 +4603,9 @@ chart.render();
         else:
             cost_yesterday_no_car = cost_yesterday_hist
 
-        compare_list = self.get_arg("compare_list", [])
+        # Same entries, with the same string ids, as the comparison itself ran on (#5472)
+        configured_compare_list = self.get_arg("compare_list", [])
+        compare_list, compare_problems = check_compare_list(configured_compare_list)
         compare_hist = {}
         for item in compare_list:
             id = item.get("id", None)
@@ -4624,8 +4617,6 @@ chart.render();
                     compare_hist[id]["cost"] = history_attribute(entity_hist, daily=True, pounds=True)
                     compare_hist[id]["metric"] = history_attribute(entity_hist, state_key="metric", attributes=True, daily=True, pounds=True)
                     compare_hist[id]["cost_1am"] = self.history_daily_at_hour(entity_hist)
-
-        compare_list = self.get_arg("compare_list", [])
 
         for compare in compare_list:
             name = compare.get("name", "")
@@ -4686,6 +4677,10 @@ chart.render();
 
         text += "</table>\n"
 
+        # The comparison only logs skipped entries when it runs, so say why a configured tariff is missing here
+        for problem in compare_problems:
+            text += "<p><b>Skipped:</b> {} - fix it in apps.yaml</p>\n".format(html_module.escape(problem))
+
         # Charts
         text += '<div id="chart"></div>'
         series_data = []
@@ -4701,9 +4696,9 @@ chart.render();
 
         if compare_hist:
             text += self.render_chart(series_data, self.currency_symbols[0], "Tariff Comparison - True cost", now_str, daily_chart=False)
-        elif not compare_list:
+        elif not configured_compare_list:
             text += '<br><h2>No tariffs configured yet - see <a href="https://springfall2008.github.io/batpred/compare/" target="_blank" rel="noopener noreferrer">Comparing Energy Tariffs</a> for how to add some to apps.yaml</h2><br>'
-        else:
+        elif compare_list:
             text += "<br><h2>Loading chart (please wait)...</h2><br>"
 
         # 7-day rolling average chart
@@ -4720,7 +4715,7 @@ chart.render();
         if series_7d:
             text += self.render_chart(series_7d, self.currency_symbols[0], "Tariff Comparison - 7 day rolling average", now_str, tagname="chart7d", daily_chart=False)
         elif not compare_list:
-            pass  # Already explained by the "No tariffs configured" message above
+            pass  # Already explained above, by "No tariffs configured" or the skipped entries
         else:
             text += "<br><h2>7 day rolling average chart loading (please wait)...</h2><br>"
 
