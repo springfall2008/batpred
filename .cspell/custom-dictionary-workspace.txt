@@ -241,6 +241,7 @@ foxess
 foxesscloud
 freephase
 fromisoformat
+fromlist
 fronius
 funcs
 futurerate
@@ -536,6 +537,7 @@ pypi
 pyproject
 pytest
 pythonhashseed
+PYTHONPATH
 pytz
 Quattro
 Qwen

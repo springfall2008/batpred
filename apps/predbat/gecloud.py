@@ -25,6 +25,7 @@ import random
 from component_base import ComponentBase
 from coordinator import inverter_record
 from mock_base import MockBase as SharedMockBase
+from control_handoff import control_mutation
 
 """
 GE Cloud data download
@@ -52,6 +53,22 @@ GE_API_EVC_SEND_COMMAND = "ev-charger/{uuid}/commands/{command}"
 GE_API_EVC_SESSIONS = "ev-charger/{uuid}/charging-sessions?start_time={start_time}&end_time={end_time}&pageSize=32"
 
 GE_REGISTER_BATTERY_CUTOFF_LIMIT = 75
+
+
+def ge_write_response_definitive(result):
+    """Accept only documented single-device success with a valid setting value.
+
+    GivEnergy's Remote Control Codes contract describes this as the device's
+    resulting value. This is provider completion evidence, never an exclusive
+    controller handoff acknowledgement. Optimistic pending_writes is not used.
+    """
+    if not isinstance(result, dict) or result.get("success") is not True:
+        return False
+    value = result.get("value")
+    if isinstance(value, bool):
+        return True
+    return isinstance(value, (int, float)) and math.isfinite(value) and value >= 0
+
 
 # How long the cached customer account details stay valid for before they are fetched again
 ACCOUNT_MAX_AGE_MINUTES = 24 * 60
@@ -3264,6 +3281,12 @@ class GECloudDirect(ComponentBase):
             self.log("GECloud: Warn: Failed to get data from {}".format(endpoint))
         return data
 
+    @control_mutation(
+        "givenergy",
+        GE_API_INVERTER_WRITE_SETTING,
+        definitive_result=ge_write_response_definitive,
+        definitive_error=lambda error: isinstance(error, GECloudTerminalError) and error.code in (-3, -4, -7),
+    )
     async def async_get_inverter_data(self, endpoint, serial="", setting_id="", post=False, datain=None, uuid="", meter_ids="", start_time="", end_time="", command="", measurands=""):
         """
         Basic API call to GE Cloud
