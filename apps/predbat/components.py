@@ -728,6 +728,8 @@ COMPONENT_LIST = {
             "mqtt_token": {"required": True, "secret": True, "config": "gateway_mqtt_token"},
             "gateway_inverter_serial": {"required": False, "config": "gateway_inverter_serial", "default": None},
             "gateway_display_only": {"required": False, "config": "gateway_display_only", "default": False},
+            "gateway_live_display": {"required": False, "config": "gateway_live_display", "default": False},
+            "gateway_live_display_binding": {"required": False, "config": "gateway_live_display_binding", "default": None},
             "gateway_evc_automatic": {"required": False, "config": "gateway_evc_automatic", "default": False},
             "gateway_evc_control": {"required": False, "config": "gateway_evc_control", "default": False},
             "gateway_shared_ct": {"required": False, "config": "gateway_shared_ct", "default": True},

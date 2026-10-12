@@ -7405,6 +7405,17 @@ def run_gateway_tests(my_predbat=None):
     """Run all GatewayMQTT tests. Returns True on failure, False on success."""
     from tests.test_gateway_token_refresh import TestIsAuthFailure, TestApplyRefreshResponse, TestMaybeRefreshOnAuthError
     from tests.test_gateway_display import TestGatewayDisplayOnly
+    from tests.test_live_display import run_live_display_tests
+
+    try:
+        run_live_display_tests()
+        print("  OK: measured live display provider/publisher contract")
+    except Exception as error:
+        import traceback
+
+        print(f"  FAIL: measured live display contract: {error}")
+        traceback.print_exc()
+        return True
 
     test_classes = [
         TestGatewayDisplayOnly,

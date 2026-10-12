@@ -11,6 +11,7 @@ import datetime
 import json
 import math
 import os
+import re
 import ssl
 import threading
 import time
@@ -22,6 +23,7 @@ import pytz as _pytz
 
 from component_base import ComponentBase
 from control_handoff import control_gate_for, gated_mqtt_publish
+from live_display import live_display_payload, validated_binding
 
 try:
     import gateway_status_pb2 as pb
@@ -287,6 +289,11 @@ class GatewayMQTT(ComponentBase):
             **kwargs: Additional keyword arguments (ignored).
         """
         self.gateway_device_id = gateway_device_id
+        self.gateway_live_display = kwargs.get("gateway_live_display", False) is True
+        self.gateway_live_display_binding = kwargs.get("gateway_live_display_binding")
+        self._last_live_display_publish = 0
+        self._last_live_binding = None
+        self._last_live_binding_publish = 0
         if isinstance(gateway_display_only, str):
             value = gateway_display_only.strip().lower()
             if value not in ("true", "false", "1", "0", "yes", "no", "on", "off"):
@@ -688,8 +695,10 @@ class GatewayMQTT(ComponentBase):
             if self.gateway_display_only:
                 # The JSON display topic is separate from the executable schedule. Never
                 # refresh schedules, release read-only, reset inverters or control EVs here.
-                if self._mqtt_connected and self._last_status is not None:
-                    await self._publish_predbat_data()
+                if self._mqtt_connected:
+                    await self._publish_display_binding()
+                    if self._last_status is not None:
+                        await self._publish_predbat_data()
                 await self._check_token_refresh()
                 self._update_display_health()
                 return True
@@ -762,6 +771,7 @@ class GatewayMQTT(ComponentBase):
                     self._first_connection_attempted = True
                     backoff = 5  # Reset backoff on successful connection
                     self.log(f"Info: GatewayMQTT: Connected to {self.mqtt_host}:{self.mqtt_port}")
+                    await self._publish_display_binding(force=True)
 
                     # Subscribe to status and LWT topics
                     await client.subscribe(self.topic_status, qos=1)
@@ -2369,16 +2379,38 @@ class GatewayMQTT(ComponentBase):
                 "export_rate": (rate_anchors or {}).get("export_rate"),
             }
 
-            # Only publish if data changed
-            if payload == self._last_predbat_data:
+            live_enabled = getattr(self, "gateway_display_only", False) and getattr(self, "gateway_live_display", False)
+            if live_enabled:
+                payload["live_display"] = live_display_payload(self.base, self.gateway_device_id, self.gateway_inverter_serial, int(time.time()))
+                if not self._live_display_binding()["enabled"]:
+                    payload["live_display"] = {"v": 1, "enabled": True, "device_id": self.gateway_device_id, "available": False}
+                # Bound existing optional strings/matrices too: predbat_data's
+                # MQTT decoder receives a single chunk, not a reassembled blob.
+                payload["predbat_status"] = str(payload["predbat_status"])[:31]
+                payload["predbat_status_detail"] = str(payload["predbat_status_detail"])[:63]
+                payload["block_state"] = str(payload["block_state"])[:15]
+
+            # Live readings need a heartbeat even at genuine zero/unchanged SOC.
+            if payload == self._last_predbat_data and (not live_enabled or time.time() - self._last_live_display_publish < 60):
                 return
 
-            self._last_predbat_data = dict(payload)  # store copy without timestamp so dedup works next cycle
+            dedup_payload = dict(payload)
             payload["timestamp"] = int(time.time())
-            payload_json = json.dumps(payload)
             topic = f"{self._topic_base}/predbat_data"
+            payload_json = json.dumps(payload, separators=(",", ":")) if live_enabled else json.dumps(payload)
+            # Include UTF-8 topic bytes and a conservative MQTT header budget.
+            if live_enabled and len(payload_json.encode()) + len(topic.encode()) + 16 > 1400:
+                payload["marginal_costs"] = []
+                payload["marginal_time_labels"] = []
+                payload_json = json.dumps(payload, separators=(",", ":"))
+                if len(payload_json.encode()) + len(topic.encode()) + 16 > 1400:
+                    self.log("Warn: Live Hub display packet exceeds 1400-byte limit; not published")
+                    return
 
             await self._publish_raw(topic, payload_json.encode(), retain=True)
+            self._last_predbat_data = dedup_payload  # store after the publish call completes
+            if live_enabled:
+                self._last_live_display_publish = time.time()
             self.log(f"Info: Published predbat_data: price={payload['current_price']}p avg={payload['avg_price']}p cost=£{payload['total_cost']}")
 
         except Exception as e:
@@ -2594,6 +2626,41 @@ class GatewayMQTT(ComponentBase):
             self.log(f"Info: GatewayMQTT: Published command: {command} payload={cmd_json}")
         else:
             self.log(f"Warn: GatewayMQTT: Not connected — cannot publish command: {command}")
+
+    def _live_display_binding(self):
+        """Validate only the server-issued binding for this selected display role."""
+        return validated_binding(getattr(self, "gateway_live_display_binding", None), self.gateway_device_id, self.gateway_inverter_serial, getattr(self, "gateway_live_display", False))
+
+    async def _publish_display_binding(self, force=False):
+        """Publish whitelist-only display metadata, never general config or control.
+
+        The existing raw publisher remains restricted to predbat_data in display
+        mode. This private path constructs its topic and every payload field,
+        validates the read-only display role, and cannot carry bus/control config.
+        """
+        if self.gateway_display_only is not True or not self._mqtt_connected or self._mqtt_client is None:
+            return
+        if not re.fullmatch(r"pbgw_[a-f0-9]{12}", self.gateway_device_id) or self._topic_base != f"predbat/devices/{self.gateway_device_id}":
+            return
+        binding = self._live_display_binding()
+        now = time.time()
+        if not force and binding == self._last_live_binding and now - self._last_live_binding_publish < 60:
+            return
+        topic = f"{self._topic_base}/config"
+        payload = json.dumps({"live_display": binding}, separators=(",", ":")).encode()
+        if len(topic.encode()) + len(payload) + 16 > 1400:
+            return
+        try:
+            if self._loop is not None and self._loop is not asyncio.get_running_loop():
+                future = asyncio.run_coroutine_threadsafe(self._mqtt_client.publish(topic, payload, qos=1, retain=False), self._loop)
+                await asyncio.wrap_future(future)
+            else:
+                await self._mqtt_client.publish(topic, payload, qos=1, retain=False)
+        except Exception as error:
+            self.log(f"Warn: GatewayMQTT: Display binding publish failed: {error}")
+            return
+        self._last_live_binding = binding
+        self._last_live_binding_publish = now
 
     async def _publish_raw(self, topic, payload, retain=False):
         """Publish raw bytes to an MQTT topic.
