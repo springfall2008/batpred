@@ -39,6 +39,7 @@ import asyncio
 import os
 
 from coordinator import Coordinator
+from control_handoff import validate_control_component
 
 
 def load_component_class(component_info):
@@ -839,6 +840,9 @@ class Components:
                     have_all_args = False
                     required_or_config = [component_info["args"][arg]["config"] for arg in required_or]
             if have_all_args:
+                # Refuse uncovered physical writers before importing/constructing them.
+                # This remains outside the optional-component exception fallback.
+                validate_control_component(self.base, component_info, arg_dict)
                 try:
                     component_class = load_component_class(component_info)
                     self.log(f"Initialising {component_info['name']} interface")
