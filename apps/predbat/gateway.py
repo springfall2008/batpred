@@ -103,6 +103,8 @@ PLAN_MODE_DISCHARGE = 2
 # GivEnergy holds the charge and discharge rates as a whole percent of nominal battery capacity,
 # rounded down - 1300W on a 13.41kWh battery reads back 1206W (#5324)
 GIVENERGY_RATE_STEP_PERCENT_OF_CAPACITY = 1
+# What the hub's model name carries for a GivEnergy 3-phase unit, lower case
+GIVENERGY_3PH_MODEL_TOKEN = "3ph"
 GIVENERGY_INVERTER_TYPES = (pb.INVERTER_TYPE_GIVENERGY, pb.INVERTER_TYPE_GIVENERGY_EMS, pb.INVERTER_TYPE_GIVENERGY_GATEWAY)
 # Coordinators: a Plant EMS or a GivEnergy Gateway manages battery inverters and has no battery of its own
 GATEWAY_COORDINATOR_TYPES = (pb.INVERTER_TYPE_GIVENERGY_EMS, pb.INVERTER_TYPE_GIVENERGY_GATEWAY)
@@ -1367,6 +1369,11 @@ class GatewayMQTT(ComponentBase):
         if inv.type in GIVENERGY_INVERTER_TYPES:
             charge_rate_attributes["step_percent_of_capacity"] = GIVENERGY_RATE_STEP_PERCENT_OF_CAPACITY
             discharge_rate_attributes["step_percent_of_capacity"] = GIVENERGY_RATE_STEP_PERCENT_OF_CAPACITY
+            # A 3-phase unit ("Hybrid 3ph", "AC 3ph") has no Battery Pause, so the hub carries a zero charge
+            # rate as the percentage charge limit, which only limits charging from the grid. Marked so that
+            # PredBat does not plan a Freeze Export it cannot carry out (#5082)
+            if GIVENERGY_3PH_MODEL_TOKEN in (inv.model or "").lower():
+                charge_rate_attributes["grid_charge_only"] = True
         self.dashboard_item(f"number.{pfx}_charge_rate", control.charge_rate_w, attributes=charge_rate_attributes, app="gateway")
         self.dashboard_item(f"number.{pfx}_discharge_rate", control.discharge_rate_w, attributes=discharge_rate_attributes, app="gateway")
         # The reserve ceiling is per-inverter, so it overrides the table's 100: GivEnergy

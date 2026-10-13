@@ -19,9 +19,9 @@ schedules, rate window sensors, and financial metric summaries.
 import math
 import copy
 from html import escape as escape_html
-from datetime import timedelta
+from datetime import timedelta, timezone
 from predbat import THIS_VERSION_DISPLAY
-from const import TIME_FORMAT, PREDICT_STEP, EXPORT_LIMIT_IDLE, MINUTE_WATT, FULL_EXPORT_POWER, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
+from const import TIME_FORMAT, PREDICT_STEP, RUN_EVERY, EXPORT_LIMIT_IDLE, MINUTE_WATT, FULL_EXPORT_POWER, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
 from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state, find_charge_rate, export_mode_of, export_target_of, export_power_of, export_limit_sort_key, pack_export_limit, export_limit_from_stored
 from prediction import Prediction
 
@@ -132,9 +132,11 @@ class Output:
         """
         Publish the car charging plan
         """
-        plan = []
         postfix = ""
         for car_n in range(self.num_cars):
+            # A list of its own per car - shared, every car after the first also carried the windows of
+            # the cars before it, and a charger driven from its car's plan would charge in them
+            plan = []
             if car_n > 0:
                 postfix = "_" + str(car_n)
             if not self.car_charging_slots[car_n]:
@@ -1939,6 +1941,8 @@ class Output:
         raw_plan["timestamp"] = self.now_utc_real.isoformat()
 
         if publish:
+            # The live plan is republished on every re-plan; the web page's stale check reads this
+            raw_plan["refresh_minutes"] = self.calculate_plan_every
             self.dashboard_item(self.prefix + ".plan_html", state="", attributes={"text": self.text_plan, "html": html, "raw": raw_plan, "friendly_name": "Plan in HTML", "icon": "mdi:web-box"})
 
         return html, raw_plan
@@ -3193,18 +3197,38 @@ class Output:
             held = sum(PREDICT_STEP for minute in range(minute_start, minute_end, PREDICT_STEP) if (minute - self.minutes_now) in self.predict_car_hold_best)
         return held * 2 >= minute_end - minute_start
 
+    def history_slot(self, when):
+        """Which plan slot the plan history rebuild at when counts towards, as (date, slot number from midnight, UTC offset).
+
+        Slots are plan_interval_minutes long, shifted one run (RUN_EVERY) later: the run at a slot boundary
+        writes predbat.cost_today seconds before calculate_yesterday() reads its history back from Home
+        Assistant, so the slot just finished is rebuilt on the next run, once that value is recorded. This only
+        helps when that next run re-plans; with calculate_plan_every at or above the slot length, re-plans can
+        fall on boundaries and the rebuild then happens there.
+
+        The UTC offset keeps the hour repeated when the clocks go back as separate slots, and the run is
+        stepped back in UTC so the step itself lands on the right side of the change.
+        """
+        when = (when.astimezone(timezone.utc) - timedelta(minutes=RUN_EVERY)).astimezone(when.tzinfo)
+        return when.date(), (when.hour * 60 + when.minute) // self.plan_interval_minutes, when.utcoffset()
+
+    def history_refresh_minutes(self):
+        """The longest the plan history should go between rebuilds: a slot, the run it waits, and up to one re-plan interval."""
+        return self.plan_interval_minutes + RUN_EVERY + self.calculate_plan_every
+
     def calculate_yesterday(self):
         """
         Calculate the base plan for yesterday
         """
 
-        # Check  savings_last_updated timestamp, we don't need to re-compute this one every iteration, once an hour or when the day rolls over is enough
-        if self.savings_last_updated:
-            # savings_last_update is a timestamp object, compare age and date
-            age = self.now_utc - self.savings_last_updated
-            if age < timedelta(minutes=59) and self.savings_last_updated.date() == self.now_utc.date():
-                # Less than an hour old and already updated today
-                return
+        # Recompute once per completed plan slot rather than every iteration: the plan history (the web page's
+        # History view) shows each slot from what actually happened, so rebuilding as soon as a slot ends keeps the
+        # last finished slot on show - the live Plan view starts at the current slot, so an hourly rebuild left the
+        # slots since it in neither view. Each rebuild takes under a second, and it waits one run past the boundary
+        # (see history_slot) so the boundary run's own writes are recorded. A day rolling over rebuilds straight away,
+        # on the midnight re-plan, so the *_yesterday sensors move on to the day just ended without waiting a re-plan.
+        if self.savings_last_updated and self.savings_last_updated.date() == self.now_utc.date() and self.history_slot(self.savings_last_updated) == self.history_slot(self.now_utc):
+            return
 
         # Everything below is anchored on yesterday's recorded cost, so fetch that before doing any of
         # the expensive work - when Home Assistant isn't recording predbat.cost_today there is nothing
@@ -3212,7 +3236,7 @@ class Output:
         cost_today_data = self.get_history_wrapper(entity_id=self.prefix + ".cost_today", days=2, required=False)
         if not cost_today_data:
             self.log("Warn: Calculate yesterday: No history for {}.cost_today, so the savings and plan history can not be computed - check that Home Assistant is recording this entity (see the recorder notes in the FAQ)".format(self.prefix))
-            # Record the attempt so this is retried on the normal hourly cadence rather than every cycle
+            # Record the attempt so this is retried in the next slot rather than every cycle
             self.savings_last_updated = self.now_utc
             return
 
@@ -3256,7 +3280,7 @@ class Output:
         # Assume user might charge at the lowest rate only, for fixed tariff
         # Only use yesterday's rate range (k < end_record) for the threshold to prevent today's rates
         # (which are added progressively as minutes_now increases) from changing the baseline charge
-        # windows on each hourly recalculation and causing savings_yesterday to fluctuate.
+        # windows on each recalculation and causing savings_yesterday to fluctuate.
         charge_window_best = []
         rate_low = self.compute_rate_low_for_yesterday(past_rates, end_record)
         combine_charge = self.combine_charge_slots
@@ -3447,6 +3471,7 @@ class Output:
         self.export_limits_best = []
         self.export_window_best = []
         plan_html_baseline, plan_json_baseline = self.plan_write_debug(True, None, yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, end_record, prediction=self.prediction)
+        plan_json_baseline["refresh_minutes"] = self.history_refresh_minutes()
 
         # Now try to show what really happened yesterday
         self.charge_limit_best = []
@@ -3577,6 +3602,7 @@ class Output:
         plan_html_yesterday, plan_json_yesterday = self.publish_html_plan(
             yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, end_record + minutes_now, publish=False, prediction=self.prediction, car_hold_minutes=car_hold_minutes
         )
+        plan_json_yesterday["refresh_minutes"] = self.history_refresh_minutes()
         self.forecast_minutes = end_record
 
         # Restore state

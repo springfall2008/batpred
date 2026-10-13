@@ -531,6 +531,107 @@ def run_multi_car_iog_adhoc_dispatch_test(testname, my_predbat):
     return failed
 
 
+def run_planned_slot_sensor_test(testname, my_predbat):
+    """
+    Issue #5413: a charger such as Ohme knows the charge that is planned, but only for the session
+    in progress - unplug the car and its record of the slots already charged in is gone, and the
+    off-peak rate those minutes were billed at goes with it. octopus_intelligent_planned_slot names
+    a second sensor to take the planned dispatches from, leaving octopus_intelligent_slot as the
+    lasting record of the completed ones. This drives the real fetch_sensor_data_cars().
+    """
+    failed = False
+    print("**** Running Test: multi_car_iog {} ****".format(testname))
+
+    my_predbat.num_cars = 1
+    my_predbat.car_charging_planned = [True]
+    my_predbat.car_charging_now = [False]
+    my_predbat.car_charging_plan_smart = [False]
+    my_predbat.car_charging_plan_max_price = [0]
+    my_predbat.car_charging_plan_time = ["07:00:00"]
+    my_predbat.car_charging_battery_size = [100.0]
+    my_predbat.car_charging_limit = [100.0]
+    my_predbat.car_charging_rate = [7.4]
+    my_predbat.car_charging_slots = [[]]
+    my_predbat.car_charging_exclusive = [False]
+    my_predbat.car_charging_manual_soc = [False]
+    my_predbat.octopus_intelligent_charging = True
+    my_predbat.octopus_intelligent_ignore_unplugged = True
+    my_predbat.octopus_intelligent_consider_full = False
+
+    saved_clock = pin_test_clock(my_predbat)
+    saved_planned_arg = my_predbat.args.get("octopus_intelligent_planned_slot")
+
+    slot_entity = "binary_sensor.octopus_energy_intelligent_dispatching_5413"
+    planned_entity = "binary_sensor.predbat_ohme_slot_active_5413"
+    my_predbat.args["car_charging_loss"] = 0.0
+    my_predbat.args["car_charging_soc"] = [50.0]
+    my_predbat.args["car_charging_limit"] = [100.0]
+    my_predbat.args["octopus_intelligent_slot"] = [slot_entity]
+    my_predbat.args["octopus_intelligent_planned_slot"] = [planned_entity]
+
+    def stamp(minutes):
+        """A dispatch time this many minutes from now"""
+        return (my_predbat.now_utc + timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%S%z")
+
+    octopus_completed = {"start": stamp(-180), "end": stamp(-150), "charge_in_kwh": -3.5, "source": "smart-charge", "location": "AT_HOME"}
+    octopus_planned = {"start": stamp(300), "end": stamp(330), "charge_in_kwh": -3.5, "source": "smart-charge", "location": "AT_HOME"}
+    ohme_completed = {"start": stamp(-60), "end": stamp(-30), "energy": -3.7, "location": "AT_HOME"}
+    ohme_planned = {"start": stamp(60), "end": stamp(120), "energy": -7.4, "location": "AT_HOME"}
+
+    def fetch(ohme_attributes, plugged):
+        """Run the real fetch against the two sensors, returning the car's raw slots"""
+        my_predbat.ha_interface.set_state(slot_entity, "off", attributes={"completed_dispatches": [octopus_completed], "planned_dispatches": [octopus_planned]})
+        my_predbat.ha_interface.set_state(planned_entity, "off", attributes=ohme_attributes)
+        my_predbat.car_charging_planned = [plugged]
+        my_predbat.octopus_slots = [[]]
+        my_predbat.fetch_sensor_data_cars(save=False)
+        return my_predbat.octopus_slots[0]
+
+    # Plugged in: the plan is the charger's, and what it has seen finish stands in until the slot sensor lists it
+    slots = fetch({"completed_dispatches": [ohme_completed], "planned_dispatches": [ohme_planned]}, plugged=True)
+    if slots != [octopus_completed, ohme_completed, ohme_planned]:
+        print("ERROR: expected the slot sensor's completed dispatches then the planned sensor's slots, got {}".format(slots))
+        failed = True
+    if octopus_planned in slots:
+        print("ERROR: the slot sensor's own planned dispatches should give way to the planned sensor's, got {}".format(slots))
+        failed = True
+
+    # Unplugged: the charger's session is over and it reports no slots at all. The completed
+    # dispatch is still on the slot sensor, so the minutes it covered keep their off-peak rate
+    slots = fetch({}, plugged=False)
+    if slots != [octopus_completed]:
+        print("ERROR: expected the completed dispatch kept once the car is unplugged, got {}".format(slots))
+        failed = True
+
+    # The same sensor named twice is read once
+    my_predbat.args["octopus_intelligent_planned_slot"] = [slot_entity]
+    slots = fetch({}, plugged=True)
+    if slots != [octopus_completed, octopus_planned]:
+        print("ERROR: expected the slot sensor read once when it is also named as the planned sensor, got {}".format(slots))
+        failed = True
+
+    # An unmatched regex, or no entry for the car, leaves the slot sensor supplying both
+    for value in (["re:(binary_sensor.no_such_sensor)"], [], None):
+        my_predbat.args["octopus_intelligent_planned_slot"] = value
+        slots = fetch({"planned_dispatches": [ohme_planned]}, plugged=True)
+        if slots != [octopus_completed, octopus_planned]:
+            print("ERROR: expected the slot sensor's own dispatches with octopus_intelligent_planned_slot {}, got {}".format(value, slots))
+            failed = True
+
+    if saved_planned_arg is None:
+        my_predbat.args.pop("octopus_intelligent_planned_slot", None)
+    else:
+        my_predbat.args["octopus_intelligent_planned_slot"] = saved_planned_arg
+    restore_test_clock(my_predbat, saved_clock)
+
+    if failed:
+        print("Test: {} FAILED".format(testname))
+    else:
+        print("Test: {} PASSED".format(testname))
+
+    return failed
+
+
 def run_charger_schedule_plan_test(testname, my_predbat):
     """
     Issue #5399: off Octopus Intelligent, and with Predbat not controlling the charger, the Ohme
@@ -990,4 +1091,5 @@ def run_multi_car_iog_tests(my_predbat):
     failed |= run_iog_consider_full_predict_test("multi_car_iog_consider_full_predict_4967", my_predbat)
     failed |= run_update_car_manual_soc_cap_test("multi_car_iog_manual_soc_cap_4967", my_predbat)
     failed |= run_charger_schedule_plan_test("charger_schedule_is_the_car_plan_5399", my_predbat)
+    failed |= run_planned_slot_sensor_test("planned_slot_sensor_5413", my_predbat)
     return failed

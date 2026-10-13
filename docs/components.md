@@ -250,7 +250,7 @@ total size budget - `truncated_reason` says which of the two ended it. A cut lin
 its number, and passing that back as `line_number` returns it in full:
 
 ```text
-2026-08-30 09:58:11: OctopusAPI: Fetched saving sessions... [+19069 chars, get_log line_number=26793]
+2026-08-30 09:58:11: OctopusAPI: GraphQL response for get-saving-sessions (status 200): {'data': {'savingSessions': {'events': ... [+19069 chars, get_log line_number=26793]
 ```
 
 Line numbers count from the start of the previous (rotated) log through the current one, so they
@@ -592,14 +592,14 @@ connected and logged once, so please report the value from the log so it can be 
 
 #### Charger control (gecloud)
 
-With `ge_cloud_evc_control` set to `true`, Predbat drives each charger from its own car's
-plan: `start-charge` inside a planned charging window, `stop-charge` outside one. Charger N
+With `ge_cloud_evc_control` set to `true`, Predbat drives each charger from its own car's plan: `start-charge` inside a planned charging window, `stop-charge` outside one. Charger N
 follows car N, in the same serial order the automatic configuration uses, so the two cannot
 disagree about which charger is which car.
 
 `ge_cloud_automatic_evc` must also be on, since it is that configuration which establishes
-the charger to car mapping. Predbat says so in the log and leaves control off rather than
-guessing if you enable control without it.
+the charger to car mapping. If you set `ge_cloud_evc_control: true` without it, Predbat says so
+in the log and leaves control off rather than guessing. On Octopus Intelligent, see
+[Octopus Intelligent and charger control](car-charging.md#octopus-intelligent-and-charger-control).
 
 - A command is only sent when the wanted state actually changes, so a charger already
   charging inside a window is left alone rather than commanded every minute
@@ -899,7 +899,7 @@ Integrates with Ohme EV chargers to monitor charging sessions and coordinate cha
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `email` | String | Yes | - | `ohme_login` | Your Ohme account email address |
 | `password` | String | Yes | - | `ohme_password` | Your Ohme account password |
-| `ohme_automatic` | Boolean | No | `False` | `ohme_automatic` | Set to `true` to register the Ohme charger with Predbat as a car. Unless `ohme_control` is on, the car charging plan is taken from Ohme's own schedule |
+| `ohme_automatic` | Boolean | No | `False` | `ohme_automatic` | Set to `true` to register the Ohme charger with Predbat as a car. Unless Predbat controls the charger (`ohme_control`), the car charging plan is taken from Ohme's own schedule |
 | `ohme_control` | Boolean | No | `False` | `ohme_control` | Set to `true` to let Predbat start and stop the charger from its own plan. Requires `ohme_automatic`; released by read only mode |
 | `ohme_automatic_octopus_intelligent` | Boolean | No | unset (auto-detect) | `ohme_automatic_octopus_intelligent` | Take the Intelligent car slots from Ohme. Omit the setting entirely to auto-detect it when `ohme_automatic` is on (it is used when the Octopus Intelligent device is the Ohme charger, not when it is the car), or give it `true`/`false` to override. Do not write `auto` - any value other than `true`/`false` is read as true |
 
@@ -1001,7 +1001,7 @@ Not implemented in this release: priority, minimum green level, phase setting, a
 
 #### Zappi charge control (myenergi)
 
-With `myenergi_zappi_control: true` Predbat drives your Zappi from the car charging plan it has already worked out, instead of you scheduling the charge on the Zappi itself.
+With Zappi control on, Predbat drives your Zappi from the car charging plan it has already worked out, instead of you scheduling the charge on the Zappi itself. It is off unless you set `myenergi_zappi_control: true`.
 
 Inside a planned charging window Predbat puts the Zappi in **Fast**, and outside one it puts it in **Stopped**. Fast is used because the window was chosen for its electricity rate rather than for sunshine — Eco or Eco+ would only charge from surplus, and the car would not get what the plan assumed.
 
@@ -1011,11 +1011,11 @@ Predbat re-checks the Zappi every minute. If the mode is changed in the myenergi
 
 ##### The control switch
 
-A `switch.predbat_myenergi_zappi_control` entity appears once `myenergi_zappi_control` is set. It starts **on**, and turning it off hands your Zappi back without editing `apps.yaml`. The setting is remembered across restarts, so a restart will not quietly take control back.
+A `switch.predbat_myenergi_zappi_control` entity appears once Zappi control is on. It starts **on**, and turning it off hands your Zappi back without editing `apps.yaml`. The setting is remembered across restarts, so a restart will not quietly take control back.
 
 ##### When Predbat hands the Zappi back
 
-Predbat releases the Zappi when the control switch is turned off, or when Predbat itself is put in read only mode. Releasing restores the mode the Zappi was in before Predbat first changed it, falling back to **Eco+** when there is nothing saved — after a restart, for instance. It deliberately does not simply stop sending commands, because Predbat may have left the Zappi Stopped and walking away would leave the car unable to charge.
+Predbat releases the Zappi when the control switch is turned off, or when Predbat itself is put in read only mode. Releasing restores the mode the Zappi was in before Predbat first changed it, which is remembered across restarts, falling back to **Eco+** when there is nothing saved. It deliberately does not simply stop sending commands, because Predbat may have left the Zappi Stopped and walking away would leave the car unable to charge.
 
 ##### Two things to expect
 
@@ -1797,7 +1797,7 @@ This provides more accurate load predictions than simple averaging, especially f
 - Optionally incorporates PV generation and temperature forecast data
 - Trains a multi-layer neural network on your historical patterns
 - Makes autoregressive predictions for 48 hours ahead in 5-minute intervals
-- Fine-tunes periodically (every 2 hours) to adapt to changing patterns
+- Fine-tunes periodically (every 2 hours by default) to adapt to changing patterns
 - Validates predictions and falls back gracefully if accuracy is poor
 - Publishes predictions to `sensor.predbat_load_ml_forecast`
 
@@ -1813,6 +1813,7 @@ For a detailed explanation of how the neural network works and comprehensive con
 | `load_ml_source` | Boolean | No | false | `load_ml_source` | Set to `true` to use ML predictions in Predbat battery planning |
 | `load_ml_max_days_history` | Integer | No | 28 | `load_ml_max_days_history` | Maximum days of load history to fetch from HA on each poll (bounded by HA recorder retention) |
 | `load_ml_database_days` | Integer | No | 90 | `load_ml_database_days` | Days of history to accumulate in the on-disk database (`predbat_ml_history.npz`); set to 0 to disable the database |
+| `load_ml_retrain_interval_hours` | Integer | No | 2 | `load_ml_retrain_interval_hours` | Hours between training cycles (1–48); use 24 for daily retraining. Predictions still update every 30 minutes |
 
 Note: **load_today**, **pv_today** and **car_charging_energy** `apps.yaml` configuration items are also used, but these should already be set in Predbat.
 
@@ -1830,6 +1831,9 @@ predbat:
 
   # Optional: days of history to accumulate on disk for training (default 90)
   # load_ml_database_days: 90
+
+  # Optional: hours between training cycles (default 2, range 1-48)
+  # load_ml_retrain_interval_hours: 24
 
   # Optional but recommended: enable temperature forecasts
   temperature_enable: true
