@@ -183,7 +183,7 @@ def test_load_power_less_car_matches_chart(my_predbat):
 
     failed = False
     web_py = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web.py")
-    with open(web_py) as handle:
+    with open(web_py, "r", encoding="utf-8") as handle:
         source = handle.read()
 
     if "load_power_no_car = subtract_series(load_power, car_charging_power)" not in source:

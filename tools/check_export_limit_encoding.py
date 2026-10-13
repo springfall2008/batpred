@@ -39,7 +39,7 @@ ALLOWED_FILES = {
 SENTINEL_COMPARE = re.compile(r"(==|!=|<=|>=|<|>)\s*EXPORT_LIMIT_(FREEZE|IDLE)\b|\bEXPORT_LIMIT_(FREEZE|IDLE)\s*(==|!=|<=|>=|<|>)")
 
 # The bare numbers the sentinels stand for, compared against something that names an export limit.
-EXPORT_LIMIT_NAME = r"\b(export_limit|export_limits|limits|limit|this_export_limit|export_limit_now|peak_limit|best_export)\w*(\[[^\]]*\])?"
+EXPORT_LIMIT_NAME = r"\b(export_limit|export_limits|exp_limit|exp_limits|limits|limit|this_export_limit|export_limit_now|peak_limit|best_export)\w*(\[[^\]]*\])?"
 BARE_NUMBER_COMPARE = re.compile(r"({}\s*(==|!=|<=|>=|<|>)\s*(99|100)(\.\d+)?\b|\b(99|100)(\.\d+)?\s*(==|!=|<=|>=|<|>)\s*{})".format(EXPORT_LIMIT_NAME, EXPORT_LIMIT_NAME))
 
 

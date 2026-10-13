@@ -40,6 +40,7 @@ def main():
     failed |= check("a sentinel comparison is rejected", "if limit == EXPORT_LIMIT_FREEZE:\n    pass\n", True)
     failed |= check("a reversed sentinel comparison is rejected", "if EXPORT_LIMIT_IDLE <= limit:\n    pass\n", True)
     failed |= check("a bare 99 comparison is rejected", "if export_limits[n] >= 99:\n    pass\n", True)
+    failed |= check("a bare exp_limit comparison is rejected", "if exp_limit < 99.0:\n    pass\n", True)
     failed |= check("a bare 100 comparison is rejected", "if this_export_limit == 100.0:\n    pass\n", True)
     failed |= check("a reversed bare-number comparison is rejected", "if 99 == limits[n]:\n    pass\n", True)
 
