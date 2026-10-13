@@ -1246,11 +1246,6 @@ class Execute:
                 self.charge_window = inverter.charge_window
                 self.export_window = inverter.export_window
                 self.export_limits = inverter.export_limits
-                if not inverter.inv_support_discharge_freeze:
-                    # Force off unsupported feature
-                    self.log("Note: Inverter does not support discharge freeze - disabled")
-                    self.set_export_freeze = False
-                    self.set_export_freeze_only = False
                 if not inverter.inv_support_charge_freeze:
                     # Force off unsupported feature
                     self.log("Note: Inverter does not support charge freeze - disabled")
@@ -1260,6 +1255,14 @@ class Execute:
                     self.set_reserve_enable = False
                     self.set_reserve_hold = False
                     self.set_discharge_during_charge = True
+            # Fleet-wide like the capability below, and for the same reason: the prediction models one
+            # combined battery, so a single inverter that keeps charging from solar through a Freeze
+            # Export means the plan's hold does not happen (#5082).
+            if not inverter.inv_support_discharge_freeze:
+                # Force off unsupported feature
+                self.log("Note: Inverter {} does not support discharge freeze - disabled".format(inverter.id))
+                self.set_export_freeze = False
+                self.set_export_freeze_only = False
             # Unlike the first-inverter-only settings above this is a fleet-wide capability: the
             # prediction models one combined battery, so a single inverter that just disables
             # charging during Freeze Export means the fleet as a whole cannot recapture PV.
