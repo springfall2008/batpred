@@ -8904,6 +8904,28 @@ def _test_settings_read_backoff(my_predbat):
             if sorted(call[1] for call in ge.read_calls[before:]) != [17, 120] or ge.settings["inv001"][120]["value"] != "04:00":
                 print("ERROR: Registers not read on the first refresh after an outage: {}".format(ge.read_calls[before:]))
                 failed += 1
+
+        # An EMS member inverter is only re-read once an hour: a register that keeps failing there is still read on
+        # every one of those refreshes, as the backoff never keeps a register unread for more than an hour
+        ge = _make_isolation_ge_cloud()
+        ge.device_list = ["inv001"]
+        ge.pending_writes = {"inv001": []}
+        with patch("gecloud.RETRIES", 1), patch("gecloud.RETRY_FACTOR", 0):
+            ge.settings["inv001"] = await ge.async_get_inverter_settings("inv001", previous={})
+            ge.read_values[120] = None
+            last_read = ge.now_utc_exact
+            longest_gap = timedelta(0)
+            for _ in range(8):
+                ge._now_utc_exact += timedelta(minutes=SETTING_READ_BACKOFF_MAX_MINUTES)
+                before = len(ge.read_calls)
+                ge.settings["inv001"] = await ge.async_get_inverter_settings("inv001", previous=ge.settings["inv001"], backoff=True)
+                if any(call[1] == 120 for call in ge.read_calls[before:]):
+                    longest_gap = max(longest_gap, ge.now_utc_exact - last_read)
+                    last_read = ge.now_utc_exact
+            longest_gap = max(longest_gap, ge.now_utc_exact - last_read)
+            if longest_gap > timedelta(minutes=SETTING_READ_BACKOFF_MAX_MINUTES) or ge.setting_read_backoff["inv001"][120]["failures"] != 8:
+                print("ERROR: Hourly refreshed register went {} unread: {}".format(longest_gap, ge.setting_read_backoff))
+                failed += 1
         return failed
 
     return run_async(test())
@@ -8962,9 +8984,15 @@ def _test_settings_refresh_follow_ups(my_predbat):
                 print("ERROR: Default options did not run on the fresh settings: {}".format(option_calls))
                 failed += 1
 
-            # A refresh that raises fails the cycle, with the traceback logged, and the next cycle is clean
+            # A refresh that raises fails the cycle, with the traceback logged, and the next cycle is clean.
+            # The default options pass is due, but must not run on the settings the failed refresh left behind
             ge = _make_isolation_ge_cloud()
+            option_calls = []
+            ge.enable_default_options = record_options
             await ge.run(seconds=0, first=True)
+            option_calls.clear()
+            ge._read_only = False
+            ge.default_options_stamp = ge.now_utc_exact - timedelta(hours=25)
 
             async def broken(*args, **kwargs):
                 raise ValueError("bad register list")
@@ -8973,6 +9001,9 @@ def _test_settings_refresh_follow_ups(my_predbat):
             result = await asyncio.wait_for(ge.run(seconds=600, first=False), 5)
             if result is not False or not any("Traceback" in message for message in ge.log_messages):
                 print("ERROR: A failed background refresh was not reported: result {}".format(result))
+                failed += 1
+            if option_calls:
+                print("ERROR: Default options ran on stale settings after the refresh failed: {}".format(option_calls))
                 failed += 1
             if await ge.run(seconds=660, first=False) is not True:
                 print("ERROR: The cycle after a reported refresh failure should succeed")

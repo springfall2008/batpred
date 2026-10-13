@@ -2497,6 +2497,9 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                     self.settings_refresh_detached = True
                     settings_fresh = False
                     self.log("GECloud: Settings refresh of {} is taking longer than {} seconds, carrying on with live data while it completes".format(refresh_devices, SETTINGS_REFRESH_WAIT_SECONDS))
+                elif self.settings_refresh_error:
+                    # It failed, so the settings are the old ones: leave the defaults to a cycle with fresh settings
+                    settings_fresh = False
 
             # Run at startup, and again whenever the periodic device check finds the hardware has changed
             if first or devices_changed:
