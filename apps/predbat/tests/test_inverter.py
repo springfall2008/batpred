@@ -1109,6 +1109,51 @@ def test_custom_inverter_def_drops_rate_step(test_name, my_predbat, ha):
     return failed
 
 
+def test_grid_charge_only_disables_discharge_freeze(test_name, my_predbat, ha):
+    """
+    A charge rate entity marked grid_charge_only turns Freeze Export support off for that inverter: the GivEnergy
+    3-phase units have no pause register and their charge rate only limits grid charging, so a zero rate leaves
+    solar filling the battery (#5082). The hub marks its charge_rate entity, GE Cloud its percentage one.
+
+    Building an Inverter writes args and publishes entities on the shared fixture, so both are restored whole (#5079).
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+    saved_args = copy.deepcopy(my_predbat.args)
+    saved_items = copy.deepcopy(ha.dummy_items)
+    try:
+        # inverter type, the arg the rate entity is bound to, the entity, expected Freeze Export support
+        for inverter_type, rate_arg, entity, expect in (
+            ("GWMQTT", "charge_rate", {"state": 1100, "grid_charge_only": True}, False),
+            ("GWMQTT", "charge_rate", {"state": 1100, "grid_charge_only": "true"}, False),
+            ("GWMQTT", "charge_rate", {"state": 1100, "grid_charge_only": False}, True),
+            ("GWMQTT", "charge_rate", {"state": 1100, "step_percent_of_capacity": 1}, True),
+            ("GWMQTT", "charge_rate", 1100, True),
+            ("GEC", "charge_rate_percent", {"state": 100, "grid_charge_only": True}, False),
+            ("GEC", "charge_rate_percent", {"state": 100, "unit_of_measurement": "%"}, True),
+            ("GEC", "charge_rate", {"state": 1100, "max": 6000}, True),
+        ):
+            my_predbat.args.pop("charge_rate", None)
+            my_predbat.args.pop("charge_rate_percent", None)
+            my_predbat.args[rate_arg] = "number.rate_under_test"
+            my_predbat.args["inverter_type"] = [inverter_type]
+            ha.dummy_items["number.rate_under_test"] = entity
+            inv = Inverter(my_predbat, 0, quiet=True)
+            if inv.inv_support_discharge_freeze is not expect:
+                print("ERROR: {} type {} {} {} expected Freeze Export support {} got {}".format(test_name, inverter_type, rate_arg, entity, expect, inv.inv_support_discharge_freeze))
+                failed = True
+        for inverter_type in ("GWMQTT", "GEC"):
+            if INVERTER_DEF[inverter_type]["support_discharge_freeze"] is not True:
+                print("ERROR: {} the {} row must keep Freeze Export, only a marked inverter loses it".format(test_name, inverter_type))
+                failed = True
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        ha.dummy_items.clear()
+        ha.dummy_items.update(saved_items)
+    return failed
+
+
 def test_rate_step_from_charge_rate_entity(test_name, my_predbat, ha):
     """
     The charge_rate entity's step_percent_of_capacity attribute sets the rate step per inverter, for a type that
@@ -5492,6 +5537,7 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_rate_tolerances("rate_tolerances", inv)
     failed |= test_custom_inverter_def_drops_rate_step("custom_inverter_def_drops_rate_step", my_predbat, ha)
     failed |= test_rate_step_from_charge_rate_entity("rate_step_from_charge_rate_entity", my_predbat, ha)
+    failed |= test_grid_charge_only_disables_discharge_freeze("grid_charge_only_disables_discharge_freeze", my_predbat, ha)
     failed |= test_rate_write_quantised("rate_write_quantised_charge", ha, inv, 2600, 1300, 1, 1206)
     failed |= test_rate_write_quantised("rate_write_quantised_charge_settled", ha, inv, 1206, 1300, 0, 1206)
     failed |= test_rate_write_quantised("rate_write_quantised_charge_next_step", ha, inv, 1206, 1350, 1, 1341)

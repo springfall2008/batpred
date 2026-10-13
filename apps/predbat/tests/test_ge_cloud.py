@@ -323,7 +323,9 @@ def test_ge_cloud(my_predbat=None):
         ("publish_registers_bracketed_options", _test_publish_registers_bracketed_options, "Publish registers with bracketed or unparseable option validation"),
         ("publish_evc_data", _test_publish_evc_data, "Publish EVC data"),
         ("automatic_config", _test_async_automatic_config, "Automatic config"),
+        ("grid_charge_only", _test_grid_charge_only, "Charge rate marked grid_charge_only on the 3-phase register set"),
         ("discovery_direct", _test_build_discovery_battery_only_direct, "build_discovery: single battery, direct composition"),
+        ("discovery_grid_charge_only", _test_build_discovery_grid_charge_only, "build_discovery: no Freeze Export on the 3-phase register set"),
         ("discovery_gateway", _test_build_discovery_gateway_composition, "build_discovery: gateway fronting multiple batteries"),
         ("discovery_ems", _test_build_discovery_ems_composition, "build_discovery: EMS composition"),
         ("discovery_pv_only", _test_build_discovery_pv_only_devices, "build_discovery: sensor-only PV devices"),
@@ -5540,6 +5542,93 @@ def _discovery_component(devices, settings=None, info=None, automatic=True):
     ge.async_automatic_config = mock_automatic_config
     ge.enable_default_options = mock_enable_default_options
     return ge
+
+
+# What a 3-phase GIV-3HY lists (#5082): percentage rates, no battery charge power and no Battery Pause
+GRID_CHARGE_ONLY_REGISTERS = {
+    1: {"name": "Charge Power Rate", "validation_rules": ["between:1,100"], "validation": "", "value": 100},
+    2: {"name": "Discharge Power Rate", "validation_rules": ["between:1,100"], "validation": "", "value": 100},
+    3: {"name": "Enable Force Discharge", "validation_rules": ["boolean"], "validation": "", "value": False},
+}
+
+
+def _test_grid_charge_only(my_predbat):
+    """The percentage charge rate entity is marked grid_charge_only only when the device has neither Battery Pause nor a battery charge power register (#5082)."""
+    from gecloud import charge_rate_grid_only
+
+    for names, expect in (
+        (["charge_power_rate", "discharge_power_rate"], True),
+        (["inverter_charge_power_percentage"], True),
+        # "discharge_power_rate" contains "charge_power_rate" and is not a charge rate
+        (["discharge_power_rate"], False),
+        (["charge_power_rate", "battery_charge_power"], False),
+        (["charge_power_rate", "pause_battery"], False),
+        (["battery_charge_power", "pause_battery"], False),
+        ([], False),
+    ):
+        if charge_rate_grid_only(names) is not expect:
+            print("ERROR: charge_rate_grid_only({}) expected {}".format(names, expect))
+            return 1
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        registers = copy.deepcopy(GRID_CHARGE_ONLY_REGISTERS)
+        ge_cloud.settings["test123"] = registers
+        await ge_cloud.publish_registers("test123", registers)
+        charge = ge_cloud.dashboard_items["number.predbat_gecloud_test123_charge_power_rate"]["attributes"]
+        discharge = ge_cloud.dashboard_items["number.predbat_gecloud_test123_discharge_power_rate"]["attributes"]
+        if charge.get("grid_charge_only") is not True or charge.get("unit_of_measurement") != "%":
+            print("ERROR: expected the percentage charge rate to be marked grid_charge_only, got {}".format(charge))
+            return 1
+        if "grid_charge_only" in discharge:
+            print("ERROR: the discharge rate must not be marked grid_charge_only, got {}".format(discharge))
+            return 1
+
+        # A single register refresh still sees the whole device, so the mark survives it
+        ge_cloud.dashboard_items.clear()
+        await ge_cloud.publish_registers("test123", registers, select_key=1)
+        charge = ge_cloud.dashboard_items["number.predbat_gecloud_test123_charge_power_rate"]["attributes"]
+        if charge.get("grid_charge_only") is not True:
+            print("ERROR: expected the mark to survive a single register refresh, got {}".format(charge))
+            return 1
+
+        # With Battery Pause the freeze is carried by the pause, so the rate is not marked
+        ge_cloud = MockGECloudDirect()
+        registers = copy.deepcopy(GRID_CHARGE_ONLY_REGISTERS)
+        registers[4] = {"name": "Pause Battery", "validation_rules": ["in:0,1,2,3"], "validation": "", "value": 0}
+        ge_cloud.settings["test123"] = registers
+        await ge_cloud.publish_registers("test123", registers)
+        charge = ge_cloud.dashboard_items["number.predbat_gecloud_test123_charge_power_rate"]["attributes"]
+        if "grid_charge_only" in charge:
+            print("ERROR: a device with Battery Pause must not be marked grid_charge_only, got {}".format(charge))
+            return 1
+        return 0
+
+    return run_async(test())
+
+
+def _test_build_discovery_grid_charge_only(my_predbat):
+    """The discovery record drops support_discharge_freeze for a device whose registers cannot hold a Freeze Export, and keeps it once Battery Pause is there (#5082)."""
+    devices = {"ems": None, "gateway": None, "battery": ["battery001"], "pv": [], "battery_meters": {}}
+    info = {"battery001": {"info": {"model": "GIV-3HY-11", "max_charge_rate": 11000, "battery": {"nominal_capacity": 100, "nominal_voltage": 51.2}}, "firmware_version": {"ARM": 616, "DSP": 616}}}
+    for extra, expect in (({}, False), ({4: {"name": "Pause Battery"}}, True)):
+        settings = {"battery001": copy.deepcopy(GRID_CHARGE_ONLY_REGISTERS)}
+        settings["battery001"].update(extra)
+        ge = _discovery_component(devices, settings=settings, info=info)
+        reports = []
+        ge.report_discovery = lambda report: reports.append(report)
+
+        result = run_async(ge.run(seconds=0, first=True))
+
+        assert result is True, "run() should succeed"
+        capabilities = reports[0]["inverters"][0]["capabilities"]
+        assert len(capabilities) == 7 and capabilities["support_discharge_freeze"] is expect, (extra, capabilities)
+        assert capabilities["support_charge_freeze"] is True, capabilities
+    # The override is on a copy of the type's row
+    from gecloud import GE_CLOUD_CAPABILITIES
+
+    assert GE_CLOUD_CAPABILITIES["GEC"]["support_discharge_freeze"] is True
+    return 0
 
 
 def _test_build_discovery_battery_only_direct(my_predbat):

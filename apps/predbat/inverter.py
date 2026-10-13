@@ -581,6 +581,16 @@ class Inverter:
                 rate_step = 0
             if 0 < rate_step <= 100:
                 self.inv_rate_step_percent_of_capacity = rate_step
+        # The rate entity can also say that its rate only limits charging from the grid, as on the GivEnergy
+        # 3-phase units: with no pause register either, a zero charge rate leaves PV filling the battery, so
+        # Freeze Export cannot be carried out and must not be planned (#5082)
+        for rate_arg in ["charge_rate", "charge_rate_percent"]:
+            grid_only_entity = self.base.get_arg(rate_arg, indirect=False, index=self.id)
+            if grid_only_entity and str(self.base.get_state_wrapper(grid_only_entity, attribute="grid_charge_only")).lower() in ["true", "on", "1"]:
+                if self.inv_support_discharge_freeze:
+                    self.log("Inverter {} charge rate only limits grid charging and cannot stop solar charging - Freeze Export is not supported".format(self.id))
+                self.inv_support_discharge_freeze = False
+                break
 
         # If it's not a GE inverter then turn Quiet off
         if self.inverter_type != "GE":
