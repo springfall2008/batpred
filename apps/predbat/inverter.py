@@ -3001,6 +3001,13 @@ class Inverter:
             self.base.record_status(message, had_errors=True)
         return verified
 
+    def gateway_discharge_window_refused(self, new_start, new_end):
+        """Whether the Hub explicitly refused this exact paired discharge window just now."""
+        entities = [self.base.get_arg(name, indirect=False, index=self.id) for name in ("discharge_start_time", "discharge_end_time")]
+        components = getattr(self.base, "components", None)
+        gateway = components.get_component("gateway") if components else None
+        return gateway is not None and gateway.discharge_window_refused(*entities, new_start, new_end)
+
     def adjust_force_export(self, force_export, new_start_time=None, new_end_time=None):
         """
         Adjust force export on/off and set the time window correctly
@@ -3105,11 +3112,17 @@ class Inverter:
         if (new_start and new_start != old_start) or (new_end and new_end != old_end):
             gateway_window = self.write_and_poll_gateway_discharge_window(new_start or old_start, new_end or old_end)
             if gateway_window is False:
-                if force_export and old_discharge_enable and not getattr(self.base, "set_read_only", False):
-                    # The previous window is still armed: leaving it would keep exporting on a
-                    # schedule the plan has moved away from, so stop exporting until a write lands.
-                    # (Without force_export the schedule was already turned off above.)
-                    self.log("Warn: Inverter {} Hub discharge window write failed, turning off scheduled export".format(self.id))
+                refused = self.gateway_discharge_window_refused(new_start or old_start, new_end or old_end)
+                if force_export and old_discharge_enable and refused and not getattr(self.base, "set_read_only", False):
+                    # The Hub refused the move, so the previous window is still armed: leaving it
+                    # would keep exporting on a schedule the plan has moved away from, so stop
+                    # exporting until a write lands. Only an explicit refusal does this - a write
+                    # that is merely not confirmed yet (slow ACK, telemetry lag) may well have
+                    # applied, and the plan still wants to export, so it is left running and the
+                    # pending commit retries it. (Without force_export the schedule was already
+                    # turned off above.) The caller is not told: execute.py still reports
+                    # "Exporting" for this cycle, and the next cycle retries the window.
+                    self.log("Warn: Inverter {} Hub refused the discharge window, turning off scheduled export".format(self.id))
                     self.write_and_poll_switch("scheduled_discharge_enable", self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id), False)
                     self.adjust_inverter_mode(False)
                 self.record_commit("export_window", (new_start, new_end, force_export), False)
