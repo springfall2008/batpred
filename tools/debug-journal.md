@@ -6,6 +6,10 @@ Every entry is an observation from a past investigation, not a statement about c
 
 ## Replay the reporter's debug file
 
+- **A Deye grid-charge request can coincide with actual battery discharge.** With peak-shaving active, recorded house/EV load above the grid setting can defer domestic charging and draw only the deficit from the battery, even below the ToU SOC target. A model offering only full-rate charge or battery-first demand can wrongly exclude this regime and fragment EV charging. The opt-in shared shadow model and independent native Python replay cover this flow; keep shortages visible, and do not infer a hard grid clamp or a new physical control capability. See [grid-charge sharing model](../docs/joint-site-planning.md#optional-grid-charge-sharing-model).
+
+- **A flat native SOC is not the joint shadow trajectory.** A native charge window targeting 20% can hold the battery there and assign house/EV demand to grid import, even above the configured ceiling. When displaying a joint candidate in the existing web Plan table, use its own nominal/PV10 native-replay SOC, costs and five-minute grid peaks, not copied native rows or the solver's simplified SOC. Label it as a non-editable simulation; never replace the executable HA plan or hide stale-SOC blockers. See [joint preview boundary](../docs/joint-site-planning.md#reading-the-plan-and-battery-forecast).
+
 The most useful attachment on a bug report is `predbat_debug.yaml` — a full state dump the test harness can replay against current main:
 
 ```bash

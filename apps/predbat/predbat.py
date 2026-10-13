@@ -2180,6 +2180,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.check_entity_refresh()
         self.validate_config_check_retry()
         if not self.prediction_started:
+            from joint_site_apply import refresh_joint_ev_lease
+
+            refresh_joint_ev_lease(self)
             # A car's charging slots cancelled or resumed by dynamic load - replan now, not in 5 minutes
             self.dynamic_load_car_poll()
             # A car starting or stopping charging - apply or release "Hold for car" now, not in 5 minutes

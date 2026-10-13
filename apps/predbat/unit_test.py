@@ -61,6 +61,18 @@ from tests.test_joint_site_entrypoints import run_joint_site_entrypoint_tests
 from tests.test_joint_site_capabilities import run_joint_site_capabilities_tests
 from tests.test_joint_site_template import run_joint_site_template_tests
 from tests.test_joint_site_combined import run_joint_site_combined_tests
+from tests.test_joint_site_preview import run_joint_site_preview_tests
+from tests.test_joint_site_preview_integration import run_joint_site_preview_integration_tests
+from tests.test_joint_site_single_table import run_joint_site_single_table_tests
+from tests.test_joint_site_targets import run_joint_site_targets_tests
+from tests.test_joint_site_economic import run_joint_site_economic_tests
+from tests.test_joint_site_partial import run_joint_site_partial_tests
+from tests.test_joint_site_grid_support import run_joint_site_grid_support_tests
+from tests.test_prediction_grid_support import run_prediction_grid_support_tests
+from tests.test_joint_site_actual import run_joint_site_actual_tests
+from tests.test_joint_site_session import run_joint_site_session_tests
+from tests.test_joint_site_partial_apply import run_joint_site_partial_apply_tests
+from tests.test_joint_site_applied_view import run_joint_site_applied_view_tests
 from tests.test_basic_rates import test_basic_rates
 from tests.test_clock import run_clock_tests
 from tests.test_rate_export_max_forward_calc import test_rate_export_max_forward_calc
@@ -442,6 +454,21 @@ def run_joint_site_core_tests(my_predbat):
     return not unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful()
 
 
+def run_joint_site_grid_support_tests_isolated(my_predbat):
+    """Keep shadow support settings and entity fixtures out of unrelated native tests."""
+    return run_joint_site_grid_support_tests(create_predbat())
+
+
+def run_prediction_grid_support_tests_isolated(my_predbat):
+    """Validate optional replay physics without contaminating the shared suite state."""
+    return run_prediction_grid_support_tests(create_predbat())
+
+
+def run_joint_site_actual_tests_isolated(my_predbat):
+    """Exercise actual joint dispatch without leaving session fixtures in other tests."""
+    return run_joint_site_actual_tests(create_predbat())
+
+
 def create_predbat():
     my_predbat = PredBat()
     my_predbat.states = {}
@@ -495,6 +522,18 @@ def main():
         ("joint_site_capabilities", run_joint_site_capabilities_tests, "Joint solver capability subsets", False),
         ("joint_site_template", run_joint_site_template_tests, "Verified shared-template joint dispatch", False),
         ("joint_site_combined", run_joint_site_combined_tests, "Three-PR integration through the real template", False),
+        ("joint_site_preview", run_joint_site_preview_tests, "Read-only joint replay presentation", False),
+        ("joint_site_preview_integration", run_joint_site_preview_integration_tests, "Joint preview actual replay and web routes", False),
+        ("joint_site_single_table", run_joint_site_single_table_tests, "Joint candidate in the existing read-only web table", False),
+        ("joint_site_targets", run_joint_site_targets_tests, "Real replay-derived charge ceilings and rejection reasons", False),
+        ("joint_site_economic", run_joint_site_economic_tests, "Bounded economic search diversity and exact short-horizon comparison", False),
+        ("joint_site_partial", run_joint_site_partial_tests, "Truthful paired-safe partial EV shadow plan with unchanged requested target", False),
+        ("joint_site_grid_support", run_joint_site_grid_support_tests_isolated, "Opt-in grid charge support without actuator authority", False),
+        ("prediction_grid_support", run_prediction_grid_support_tests_isolated, "Independent charge-request grid support replay", False),
+        ("joint_site_actual", run_joint_site_actual_tests_isolated, "Confirmed sessions and exact native charge ceilings", False),
+        ("joint_site_session", run_joint_site_session_tests, "Native domestic handback and durable session evidence", False),
+        ("joint_site_partial_apply", run_joint_site_partial_apply_tests, "Authorised partial targets through paired replay and dispatch", False),
+        ("joint_site_applied_view", run_joint_site_applied_view_tests, "Truthful applied plan and execution receipt presentation", False),
         ("execute", run_execute_tests, "Execute tests", False),
         ("multi_inverter_status", test_multi_inverter_status, "Multi-inverter headline status resolution tests (#4446)", False),
         ("load_car_energy", test_load_car_energy_warns_when_configured_entity_has_no_data, "car_charging_energy configured-but-empty warning tests (#4458 follow-up)", False),

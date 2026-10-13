@@ -70,7 +70,7 @@ def _read_entity_state(base, entity_id):
         last_updated_aware = _parse_entity_timestamp(last_updated, "last_updated") if isinstance(last_updated, str) else _aware(last_updated, "last_updated")
     except ValueError:
         return None
-    return {"state": state, "last_changed": last_changed_aware, "last_updated": last_updated_aware}
+    return {"state": state, "last_changed": last_changed_aware, "last_updated": last_updated_aware, "attributes": deepcopy(payload.get("attributes", {}))}
 
 
 def _parse_soc_raw(state, unit, capacity_kwh):
@@ -136,6 +136,14 @@ def _options(base):
         "ev_executor_lease_verified",
         "connection_observed_at_entity",
         "soc_observed_at_entity",
+        "grid_charge_support",
+        "confirmed_session",
+        "execution_authorised",
+        "connection_error_acknowledgement",
+        "ev_charging_priority",
+        "household_fallback",
+        "home_entity",
+        "ev_partial_target_authorised",
     }
     if set(settings) - allowed:
         raise ValueError("Unknown joint_site option")
@@ -147,12 +155,24 @@ def _options(base):
     control_model = settings.get("control_model", "native")
     if control_model not in ("native", "deye_tou", "deye_solarman"):
         raise ValueError("Unsupported joint-site control model")
+    ev_priority = settings.get("ev_charging_priority", "cost")
+    if ev_priority not in ("cost", "asap"):
+        raise ValueError("EV charging priority must be cost or asap")
+    if ev_priority == "asap" and (control_model != "deye_solarman" or not settings.get("grid_charge_support")):
+        raise ValueError("ASAP charging requires shared grid-support controls")
     if type(settings.get("allow_stale_shadow_soc", False)) is not bool:
         raise ValueError("allow_stale_shadow_soc must be boolean")
     if type(settings.get("apply_verified", False)) is not bool:
         raise ValueError("apply_verified must be boolean")
     if type(settings.get("ev_executor_lease_verified", False)) is not bool:
         raise ValueError("ev_executor_lease_verified must be boolean")
+    if type(settings.get("execution_authorised", False)) is not bool:
+        raise ValueError("execution_authorised must be boolean")
+    for name in ("household_fallback", "ev_partial_target_authorised"):
+        if type(settings.get(name, False)) is not bool:
+            raise ValueError("Joint routing and partial authorisation must be boolean")
+    if settings.get("home_entity") is not None and (not isinstance(settings["home_entity"], str) or not settings["home_entity"].startswith("device_tracker.")):
+        raise ValueError("home_entity must be a vehicle device tracker")
     if mode == "apply" and (control_model not in ("deye_tou", "deye_solarman") or settings.get("allow_stale_shadow_soc", False)):
         raise ValueError("Apply requires supported real controls and cannot use stale SOC assumptions")
     for name in ("connection_observed_at_entity", "soc_observed_at_entity"):
@@ -211,11 +231,41 @@ def _options(base):
     soc_observed_at = None
     soc_age_minutes = None
     entity_blockers = []
-    if mode == "apply" and (manual_target_active or soc_entity is None):
+    support_w = 0.0
+    support = settings.get("grid_charge_support")
+    if support is not None:
+        if control_model != "deye_solarman" or not isinstance(support, dict) or set(support) != {"enabled_entity", "limit_entity"}:
+            raise ValueError("Grid charge support requires explicit cached entities and shared controls")
+        if any(not isinstance(value, str) or not value for value in support.values()):
+            raise ValueError("Grid charge support entities must be non-empty strings")
+        enabled = _read_entity_state(base, support["enabled_entity"])
+        limit = _read_entity_state(base, support["limit_entity"])
+        try:
+            if enabled is None or enabled["state"] != "on" or limit is None or isinstance(limit["state"], bool):
+                raise ValueError("Grid support unavailable")
+            support_w = _number(float(limit["state"]), "grid_charge_support_w", 1, _number(settings.get("import_limit_w", getattr(base, "import_limit", 0)), "import_limit_w", 1))
+            if enabled["last_updated"] > observed_now or limit["last_updated"] > observed_now:
+                raise ValueError("Future grid support observation")
+        except (TypeError, ValueError):
+            support_w = 0.0
+            entity_blockers.append("grid_charge_support_unavailable")
+    confirmed_observation = None
+    if settings.get("confirmed_session") is not None:
+        from joint_site_observation import confirmed_session_observation
+
+        if control_model != "deye_solarman" or manual_target_active:
+            raise ValueError("Confirmed session cannot override a manual SOC target")
+        confirmed_observation = confirmed_session_observation(base, settings, observed_now)
+    if mode == "apply" and not confirmed_observation and (manual_target_active or soc_entity is None):
         # The native manual SOC can advance from prediction; it is not a fresh
         # vehicle observation, even when another vehicle timestamp is recent.
         entity_blockers.append("measured_ev_soc_required")
-    if manual_target_kwh is not None:
+    if confirmed_observation:
+        ev_soc = confirmed_observation["ev_soc"]
+        ev_soc_source = confirmed_observation["ev_soc_source"]
+        soc_observed_at = confirmed_observation["soc_observed_at"]
+        soc_age_minutes = confirmed_observation["soc_observation_age_minutes"]
+    elif manual_target_kwh is not None:
         ev_soc = _number(manual_target_kwh, "manual_ev_soc", 0, base.car_charging_battery_size[0])
         ev_soc_source = "manual_soc_target"
     elif soc_entity is None:
@@ -316,6 +366,8 @@ def _options(base):
         "settings": deepcopy(settings) if mode == "apply" else None,
         "arrival": start_offset,
         "control_model": control_model,
+        "grid_charge_support_w": support_w,
+        "ev_charging_priority": ev_priority,
         "deadline": end_offset,
         "departure_passed": departure <= observed_now,
         "house_only": mode == "apply" and departure <= observed_now,
@@ -328,6 +380,7 @@ def _options(base):
         "allow_stale_shadow_soc": settings.get("allow_stale_shadow_soc", False),
         "soc_observed_at": soc_observed_at,
         "soc_observation_age_minutes": soc_age_minutes,
+        "confirmed_observation": confirmed_observation,
         "load_cap": _number(settings.get("load_port_limit_w"), "load_port_limit_w", 1) / 1000,
         "import_limit_w": _number(settings.get("import_limit_w", getattr(base, "import_limit", 0)), "import_limit_w", 1),
         "pause": pause,
@@ -476,9 +529,30 @@ def build_candidate(base, options):
         initially_on=options["initially_on"],
         initial_off_minutes=options["initial_off_minutes"],
     )
-    site = SiteConfig(options["import_limit_w"] / 1000, base.export_limit * 60, options["load_cap"])
+    support_w = _number(options.get("grid_charge_support_w", 0), "grid_charge_support_w", 0, options["import_limit_w"])
+    if support_w and (options.get("mode") not in ("shadow", "apply") or options["control_model"] != "deye_solarman"):
+        raise ValueError("Grid charge support requires the shared control model")
+    block = options.get("ev_continuous_block")
+    if block is not None:
+        from dataclasses import replace
+
+        if not support_w or len(block) != 2 or any(type(value) is not int or value % PREDICT_STEP for value in block) or not options["arrival"] <= block[0] < block[1] <= options["deadline"]:
+            raise ValueError("Invalid shadow continuous EV block")
+        ev = replace(ev, availability=tuple(index for index in ev.availability if block[0] <= slots[index].start_min < block[1]))
+    site = SiteConfig(options["import_limit_w"] / 1000, base.export_limit * 60, options["load_cap"], support_w / 1000 if support_w else None)
     modes = ("demand", "charge") if options["control_model"] == "deye_solarman" else ("demand", "hold", "charge")
-    result = plan(slots, ev, battery, site, PlannerConfig(beam_width=options["beam"], allow_limited_discharge=options["control_model"] == "deye_tou", allowed_battery_modes=modes))
+    result = plan(
+        slots,
+        ev,
+        battery,
+        site,
+        PlannerConfig(
+            beam_width=options["beam"],
+            allow_limited_discharge=options["control_model"] == "deye_tou",
+            allowed_battery_modes=modes,
+            economic_diversity=options.get("mode") == "shadow" and options["control_model"] == "deye_solarman" and options.get("economic_diversity", True),
+        ),
+    )
     return result, slots
 
 
@@ -522,9 +596,14 @@ def _replay(base, options, result, slots, windows, scenario):
     model.car_charging_limit_model = [full_slot_target] * PREDBAT_MAX_CARS
     model.car_charging_slots = [ev_windows] + [[] for _ in range(PREDBAT_MAX_CARS - 1)]
     model.prediction_kernel_enable = False
+    support_w = _number(options.get("grid_charge_support_w", 0), "grid_charge_support_w", 0, options["import_limit_w"])
+    if support_w and (options.get("mode") not in ("shadow", "apply") or options["control_model"] != "deye_solarman"):
+        raise ValueError("Grid charge support replay requires shared controls")
+    model.joint_grid_charge_support_w = support_w
     model.debug_enable = False
     model.metric_standing_charge = 0
     model.import_limit = options["import_limit_w"]
+    model.joint_preview_charge_limits = {minute: limit * 100 / base.soc_max for window, limit in zip(charge_windows, limits) for minute in range(window["start"], window["end"], PREDICT_STEP)}
     limited = any(getattr(action, "discharge_limit_kw", None) is not None for action in result.actions)
     if limited:
         from joint_site_replay import replay_discharge_limits
@@ -534,7 +613,13 @@ def _replay(base, options, result, slots, windows, scenario):
         pred = Prediction(model, base.pv_forecast_minute_step, base.pv_forecast_minute10_step, base.load_minutes_step, base.load_minutes_step10)
         pred.run_prediction(limits, charge_windows, [], [], scenario, end_record=base.forecast_minutes, save="test")
     diagnostic = getattr(pred, "import_limit_diagnostics", None)
-    if not diagnostic or getattr(base, "import_limit", None) != options["import_limit_w"]:
+    if support_w:
+        evidence = getattr(pred, "joint_grid_support_import", None)
+        if not isinstance(evidence, dict) or set(evidence) != set(range(0, base.forecast_minutes, PREDICT_STEP)):
+            raise ValueError("Incomplete grid support replay evidence")
+        peaks = [_number(row[1], "grid_support_peak") for row in evidence.values()]
+        diagnostic = {"checked_minutes": len(peaks) * PREDICT_STEP, "peak_w": max(peaks, default=0), "minutes_over": sum(value - options["import_limit_w"] > 1e-6 for value in peaks) * PREDICT_STEP}
+    elif not diagnostic or getattr(base, "import_limit", None) != options["import_limit_w"]:
         # This PR is independent of the import-diagnostic PR. Native saved grid
         # power is rounded to 0.001 kW: use its upper rounding bound, not a false
         # exact measurement. When available, the companion raw diagnostic wins.
@@ -580,17 +665,144 @@ def _replay(base, options, result, slots, windows, scenario):
     ev_target = options["ev_soc"] if options.get("house_only") else base.car_charging_limit[0]
     if pred.final_car_soc[0] < ev_target - 0.002:
         reasons.append("ev_target_not_met")
-    return {
+    check = {
         "passed": not reasons,
         "reasons": sorted(set(reasons)),
         "checked_minutes": diagnostic["checked_minutes"] if diagnostic else 0,
         "peak_import_w": diagnostic["peak_w"] if diagnostic else None,
         "final_battery_kwh": pred.final_soc,
+        "final_ev_kwh": pred.final_car_soc[0],
+        "validated_ev_target_kwh": ev_target,
         "minimum_battery_kwh": reserve_min,
         "horizon_energy_cost": pred.final_metric - base.cost_today_sofar,
-        "model": "native_python_segmented_rate_replay" if limited else "native_python_full_power_ev_envelope",
+        "model": "native_python_grid_charge_support" if support_w else "native_python_segmented_rate_replay" if limited else "native_python_full_power_ev_envelope",
         "soc_rounding_bound_kwh": rounding,
+        "_charge_peak_kwh": [
+            max(_number(pred.final_soc if minute == base.forecast_minutes else trace[minute], "charge_window_soc") for minute in range(window["start"] - base.minutes_now, window["end"] - base.minutes_now + PREDICT_STEP, PREDICT_STEP))
+            for window in charge_windows
+        ],
     }
+    # Presentation consumes this exact independent replay, not the native best
+    # plan or the solver's simpler battery model. A preview failure must never
+    # change acceptance or interrupt the control cycle.
+    try:
+        from joint_site_preview import build_replay_preview
+
+        check["_preview_rows"] = build_replay_preview(model, pred, result, slots, scenario)
+    except Exception as exc:
+        check["preview_unavailable"] = True
+        _log_failure(base, "preview", exc)
+    return check
+
+
+def _replay_candidate(base, options, result, slots):
+    """Reduce shadow and opted-in grid-support ceilings to paired peaks plus one percent.
+
+    These are real candidate limits, not cosmetic row values. Replay both scenarios
+    again with the reduced limits and accept only their independent native checks.
+    A ceiling cannot override domestic minima, hardware rates or any execution gate.
+    """
+    windows = _native_windows(base, result, slots)
+    checks = {name: _replay(base, options, result, slots, windows, scenario) for name, scenario in (("nominal", 0), ("pv10", 1))}
+    peaks = {name: check.pop("_charge_peak_kwh", None) for name, check in checks.items()}
+    if (options.get("mode") == "shadow" or options.get("grid_charge_support_w")) and all(check["passed"] for check in checks.values()) and all(isinstance(value, list) and len(value) == len(windows[1]) for value in peaks.values()):
+        limits = []
+        for index, original in enumerate(windows[2]):
+            peak = max(peaks[name][index] for name in ("nominal", "pv10"))
+            target = min(100, math.ceil(peak * 100 / base.soc_max + 1)) * base.soc_max / 100
+            limits.append(target if original == base.soc_max else original)
+        windows = (windows[0], windows[1], limits)
+        checks = {name: _replay(base, options, result, slots, windows, scenario) for name, scenario in (("nominal", 0), ("pv10", 1))}
+        for check in checks.values():
+            check.pop("_charge_peak_kwh", None)
+    return windows, checks
+
+
+def _best_effort_shadow(base, options):
+    """Find a new paired-safe partial EV schedule without changing the requested target.
+
+    At most eight bounded searches prefer more EV delivery before cost. A search miss is
+    not infeasibility: the result is the best validated alternative found, never
+    a claim of maximum reachability. Apply requires separate explicit partial
+    authorisation and shared support; closed sessions cannot use it.
+    """
+    attempts = []
+    authorised = options.get("mode") == "apply" and base.args["joint_site"].get("ev_partial_target_authorised") is True and options.get("grid_charge_support_w")
+    if (options.get("mode") != "shadow" and not authorised) or options.get("control_model") != "deye_solarman" or options.get("house_only") or options.get("deadline", 0) <= 0:
+        return None, attempts
+    requested = base.car_charging_limit[0]
+    low, high = options["ev_soc"], requested
+    if requested <= low + 0.002:
+        return None, attempts
+    best = None
+    for _ in range(8):
+        # Native SOC values are rounded and EV reservations are full five-minute
+        # steps. One-percent target probes avoid chasing meaningless fractions;
+        # the actual delivered energy is still taken from both native replays.
+        step = base.car_charging_battery_size[0] / 100
+        target = step * math.floor((low + high) / (2 * step))
+        if target <= low + 0.002:
+            break
+        model = copy(base)
+        model.car_charging_limit = list(base.car_charging_limit)
+        model.car_charging_limit[0] = target
+        trial = {**options, "forecast_basis": "envelope"}
+        result, slots = build_candidate(model, trial)
+        _validate_candidate_modes(options, result)
+        passed = False
+        if result.actions:
+            windows, checks = _replay_candidate(model, trial, result, slots)
+            passed = all(check["passed"] and _number(check["final_ev_kwh"], "partial_ev_delivery") >= target - 0.002 for check in checks.values())
+            if passed:
+                delivered = min(check["final_ev_kwh"] for check in checks.values())
+                if best is None or delivered > best[5] + 0.002 or (abs(delivered - best[5]) <= 0.002 and result.total_cost < best[0].total_cost):
+                    best = (result, slots, windows, checks, target, delivered)
+        attempts.append({"forecast_basis": "envelope", "beam_width": trial["beam"], "planning_ev_target_kwh": target, "solver_status": result.status, "native_passed": passed})
+        if passed:
+            low = target
+        else:
+            high = target
+    return best, attempts
+
+
+def _continuous_grid_support_shadow(base, options):
+    """Prefer one paired-safe fixed-rate block within the finite departure horizon.
+
+    This is an explicit continuity preference, not a calibrated restart penalty or
+    global cost optimum. Rank valid blocks by the existing conservative solver
+    objective (including cycle cost and terminal energy). If none validate, retain
+    the ordinary search. An already active relay tries only a continuation from now;
+    it never needs a new OFF interval. Explicit ASAP instead checks five-minute
+    starts chronologically and accepts the first paired-safe block, before cost.
+    The search remains bounded; failure is not proof an earlier start is impossible.
+    Closed sessions cannot use this preference.
+    """
+    if not options.get("grid_charge_support_w") or options.get("mode") not in ("shadow", "apply") or options.get("control_model") != "deye_solarman" or options.get("house_only"):
+        return None, []
+    required = max(base.car_charging_limit[0] - options["ev_soc"], 0)
+    duration = math.ceil(required / (base.car_charging_rate[0] * base.car_charging_loss) * 60 / PREDICT_STEP - 1e-9) * PREDICT_STEP
+    first = 0 if options["initially_on"] else max(options["arrival"], math.ceil(max(options["off_minutes"] - options["initial_off_minutes"], 0) / PREDICT_STEP) * PREDICT_STEP)
+    last = options["deadline"] - duration
+    if duration <= 0 or last < first:
+        return None, []
+    asap = options.get("ev_charging_priority") == "asap"
+    starts = {0} if options["initially_on"] else set(range(first, last + 1, PREDICT_STEP if asap else 30)) | {last}
+    ranked = sorted(starts) if asap else sorted(starts, key=lambda start: (sum(base.rate_import[base.minutes_now + minute] for minute in range(start, start + duration)), start))[:12]
+    best, attempts = None, []
+    for start in ranked:
+        trial = {**options, "forecast_basis": "envelope", "ev_continuous_block": (start, start + duration)}
+        result, slots = build_candidate(base, trial)
+        passed = False
+        if result.actions:
+            _validate_candidate_modes(options, result)
+            windows, checks = _replay_candidate(base, trial, result, slots)
+            passed = all(check["passed"] for check in checks.values())
+            if passed and (best is None or result.total_cost < best[0].total_cost):
+                best = result, slots, windows, checks
+        attempts.append({"start_offset": start, "end_offset": start + duration, "solver_status": result.status, "native_passed": passed})
+        if asap and passed:
+            break
+    return best, attempts
 
 
 def _empty_report(status):
@@ -620,10 +832,23 @@ def _log_failure(base, stage, error):
 
 def _publish_report(base, report, publish):
     """A shadow sensor or logger failure must not abort the native control cycle."""
+    # The new per-run report owns its preview. Failed/disabled calculations
+    # cannot inherit an earlier trajectory, and checks retain their original
+    # validation schema rather than mixing presentation with acceptance.
+    preview = {}
+    for scenario, check in report.get("native_checks", {}).items():
+        rows = check.pop("_preview_rows", None)
+        if rows:
+            preview[scenario] = rows
+    if set(preview) == {"nominal", "pv10"}:
+        report["preview"] = preview
     base.joint_site_report = report
     if publish:
         try:
-            base.dashboard_item(base.prefix + ".joint_site_plan", state=report["status"], attributes=report)
+            # Keep the full replay in memory for the read-only web page, not
+            # duplicated into HA's recorder on every calculation.
+            attributes = {key: value for key, value in report.items() if key != "preview"}
+            base.dashboard_item(base.prefix + ".joint_site_plan", state=report["status"], attributes=attributes)
         except Exception as exc:
             report["publication_failed"] = True
             _log_failure(base, "publication", exc)
@@ -638,6 +863,14 @@ def evaluate_joint_site(base, publish=True):
     report = _empty_report("invalid_input")
     stage = "configuration"
     try:
+        from joint_site_session import household_reason
+
+        reason = household_reason(base)
+        if reason:
+            report = _empty_report("household_fallback")
+            report.update(execution_reason=reason, requested_mode="apply", ev_available=False, household_executor="native", ev_soc_not_required=True)
+            _publish_report(base, report, publish)
+            return report
         options = _options(base)
         if options is None:
             if getattr(base, "joint_site_report", None):
@@ -667,6 +900,10 @@ def evaluate_joint_site(base, publish=True):
             },
             "ready_to_activate": False,
             "control_model": options["control_model"],
+            "grid_charge_support_w": options["grid_charge_support_w"],
+            "ev_charging_priority": options["ev_charging_priority"],
+            "grid_charge_support_convention": "charge_request_with_load_priority_and_bounded_battery_support" if options["grid_charge_support_w"] else "disabled",
+            "confirmed_observation": options["confirmed_observation"],
             "counterfactual_controls": options["control_model"] == "deye_tou" and options["mode"] == "shadow",
             "requested_mode": options["mode"],
             "activation_requirements": execution_requirements,
@@ -683,7 +920,7 @@ def evaluate_joint_site(base, publish=True):
         if options["departure_passed"]:
             # A house-only continuation is not evidence of an EV deadline met.
             # Keep the actual measured SOC; never invent a full/zero EV value.
-            evidence["observed_ev_target_met"] = None if options["ev_soc"] is None else options["ev_soc"] >= base.car_charging_limit[0]
+            evidence["observed_ev_target_met"] = None if options["ev_soc"] is None or options["ev_soc_source"] == "closed_session_baseline" else options["ev_soc"] >= base.car_charging_limit[0]
             evidence["target_met_by_departure"] = None
         blockers = _collect_blockers(model_base, options)
         stale_hypothesis = options["mode"] == "shadow" and options["allow_stale_shadow_soc"] and options["stale_soc"] is not None and blockers == ["soc_entity_stale_or_future"] and not options["departure_passed"]
@@ -720,6 +957,14 @@ def evaluate_joint_site(base, publish=True):
         _forecast_inputs(model_base, options)
         stage = "solver"
         result, slots = build_candidate(model_base, options)
+        continuous = None
+        if options["grid_charge_support_w"]:
+            continuous, report["continuous_block_attempts"] = _continuous_grid_support_shadow(model_base, options)
+            if continuous is not None:
+                result, slots = continuous[:2]
+            report["ev_run_strategy"] = "single_continuous_block_preferred_no_restart_calibration" if continuous is not None else "ordinary_bounded_search"
+            if options["ev_charging_priority"] == "asap":
+                report["ev_run_strategy"] = "earliest_paired_continuous_block_found" if continuous is not None else "asap_search_missed_using_ordinary_bounded_search"
         if options["control_model"] == "deye_solarman":
             report["supported_battery_modes"] = ["demand", "charge"]
             report["search_beam_attempts"] = [{"beam_width": options["beam"], "solver_status": result.status}]
@@ -737,9 +982,9 @@ def evaluate_joint_site(base, publish=True):
             report["initial_execution_state_assumption"] = "relay_value_and_elapsed_off_time" if options["entity_config"]["relay_entity"] else "assumed_off_for_minimum_cooldown_no_relay"
         else:
             stage = "native_replay"
-            windows = _native_windows(model_base, result, slots)
-            checks = {"nominal": _replay(model_base, options, result, slots, windows, 0), "pv10": _replay(model_base, options, result, slots, windows, 1)}
-            attempts = [{"forecast_basis": "nominal", "solver_status": result.status, "native_passed": all(check["passed"] for check in checks.values())}]
+            windows, checks = continuous[2:] if continuous is not None else _replay_candidate(model_base, options, result, slots)
+            selected_basis = "envelope" if continuous is not None else "nominal"
+            attempts = [{"forecast_basis": selected_basis, "solver_status": result.status, "native_passed": all(check["passed"] for check in checks.values())}]
             if options["control_model"] in ("deye_tou", "deye_solarman") and not attempts[0]["native_passed"]:
                 # One bounded retry uses the forecast envelope and PV10 charge
                 # delivery assumption. Native nominal AND PV10 still validate
@@ -748,11 +993,37 @@ def evaluate_joint_site(base, publish=True):
                 retry_result, retry_slots = build_candidate(model_base, retry_options)
                 _validate_candidate_modes(options, retry_result)
                 retry_checks = {}
+                if options["control_model"] == "deye_solarman" and not retry_result.actions and retry_options["beam"] < 512:
+                    attempts.append({"forecast_basis": "envelope", "beam_width": retry_options["beam"], "solver_status": retry_result.status, "native_passed": False})
+                    retry_options = {**retry_options, "beam": 512}
+                    retry_result, retry_slots = build_candidate(model_base, retry_options)
+                    _validate_candidate_modes(options, retry_result)
                 if retry_result.actions:
-                    retry_windows = _native_windows(model_base, retry_result, retry_slots)
-                    retry_checks = {"nominal": _replay(model_base, retry_options, retry_result, retry_slots, retry_windows, 0), "pv10": _replay(model_base, retry_options, retry_result, retry_slots, retry_windows, 1)}
+                    retry_windows, retry_checks = _replay_candidate(model_base, retry_options, retry_result, retry_slots)
                     result, slots, windows, checks = retry_result, retry_slots, retry_windows, retry_checks
-                attempts.append({"forecast_basis": "envelope", "solver_status": retry_result.status, "native_passed": bool(retry_checks) and all(check["passed"] for check in retry_checks.values())})
+                    selected_basis = "envelope"
+                attempts.append({"forecast_basis": "envelope", "beam_width": retry_options["beam"], "solver_status": retry_result.status, "native_passed": bool(retry_checks) and all(check["passed"] for check in retry_checks.values())})
+                if options["mode"] == "shadow" and options["control_model"] == "deye_solarman" and not all(check["passed"] for check in checks.values()):
+                    # Different finite pruning orders can lose different valid paths.
+                    # Recover once with the established order; never relax replay gates.
+                    fallback_options = {**options, "forecast_basis": "envelope", "economic_diversity": False}
+                    fallback_result, fallback_slots = build_candidate(model_base, fallback_options)
+                    fallback_checks = {}
+                    if fallback_result.actions:
+                        _validate_candidate_modes(options, fallback_result)
+                        fallback_windows, fallback_checks = _replay_candidate(model_base, fallback_options, fallback_result, fallback_slots)
+                        if all(check["passed"] for check in fallback_checks.values()):
+                            result, slots, windows, checks = fallback_result, fallback_slots, fallback_windows, fallback_checks
+                            selected_basis = "envelope"
+                    attempts.append(
+                        {
+                            "forecast_basis": "envelope",
+                            "beam_width": options["beam"],
+                            "pruning_order": "established",
+                            "solver_status": fallback_result.status,
+                            "native_passed": bool(fallback_checks) and all(check["passed"] for check in fallback_checks.values()),
+                        }
+                    )
             from joint_site_replay import discharge_limit_w
 
             power_limits = []
@@ -763,7 +1034,12 @@ def evaluate_joint_site(base, publish=True):
                     {
                         "start": model_base.minutes_now + slot.start_min,
                         "end": model_base.minutes_now + slot.start_min + slot.duration_min,
-                        "target_soc": 100 if action.battery_mode == "charge" else 0,
+                        "target_soc": next(
+                            (round(limit * 100 / model_base.soc_max) for window, limit in zip(windows[1], windows[2]) if window["start"] <= model_base.minutes_now + slot.start_min < window["end"]),
+                            0,
+                        )
+                        if action.battery_mode == "charge"
+                        else 0,
                         "freeze": action.battery_mode == "hold",
                         "power_w": power,
                         "ev_on": action.ev_action == "on",
@@ -789,12 +1065,13 @@ def evaluate_joint_site(base, publish=True):
                 search_attempts=attempts,
                 proposed_discharge_power_limits=power_limits,
                 deye_command_check=command_check,
-                solver_forecast_basis=attempts[-1]["forecast_basis"] if attempts[-1]["solver_status"] == "feasible" else "nominal",
+                solver_forecast_basis=selected_basis,
                 solver_objective=result.total_cost,
                 solver_grid_cost=sum(action.grid_import_kwh * action.import_price - action.grid_export_kwh * action.export_price for action in result.actions),
                 cost_unit=base.currency_symbols[1],
                 cost_convention="solver_objective_includes_cycle_cost_and_terminal_credit; native_horizon_energy_cost_excludes_both_and_standing_charge",
                 ev_window_convention="full_step_power_reservation_not_partial_target_energy",
+                charge_limit_convention="paired_native_replay_window_peak_plus_one_percentage_point_revalidated" if options["mode"] == "shadow" or options["grid_charge_support_w"] else "native_full_capacity_ceiling",
                 initial_execution_state_assumption="relay_value_and_elapsed_off_time" if options["entity_config"]["relay_entity"] else "assumed_off_for_minimum_cooldown_no_relay",
                 ev_initial_state={
                     "initially_on": options["initially_on"],
@@ -809,8 +1086,21 @@ def evaluate_joint_site(base, publish=True):
                 bounded_search=True,
                 execution_blockers=list(blockers),
             )
+            if options["grid_charge_support_w"] and all(check["passed"] for check in checks.values()):
+                delivered = min(check["final_ev_kwh"] for check in checks.values())
+                requested = model_base.car_charging_limit[0]
+                report.update(
+                    requested_ev_target_kwh=requested,
+                    requested_ev_target_percent=requested * 100 / model_base.car_charging_battery_size[0],
+                    ev_departure_at=base.args["joint_site"]["session"]["departure"],
+                    planning_ev_target_kwh=requested,
+                    planned_ev_kwh_by_departure=min(delivered, model_base.car_charging_battery_size[0]),
+                    planned_ev_percent_by_departure=min(100, delivered * 100 / model_base.car_charging_battery_size[0]),
+                    requested_ev_target_met=delivered >= requested - 0.002,
+                    ev_target_shortfall_kwh=max(0, requested - delivered),
+                )
             if options["mode"] == "apply" and report["status"] == "candidate":
-                from joint_site_apply import execution_fingerprint
+                from joint_site_apply import execution_fingerprint, command_fingerprint
 
                 report["apply_candidate_staged"] = True
                 base.joint_site_pending = {
@@ -821,6 +1111,93 @@ def evaluate_joint_site(base, publish=True):
                     "initial_battery_soc_kwh": base.soc_kw,
                     "fingerprint": execution_fingerprint(base),
                 }
+                if options["grid_charge_support_w"]:
+                    base.joint_site_pending["command_fingerprint"] = command_fingerprint(command_steps)
+                    base.joint_site_pending["replay_inputs"] = deepcopy((result, slots, windows))
+        partial_authorised = options["mode"] == "apply" and settings.get("ev_partial_target_authorised") is True and bool(options["grid_charge_support_w"])
+        if (options["mode"] == "shadow" or partial_authorised) and report["status"] in ("no_plan_found", "conditional_no_plan_found", "native_rejected", "conditional_native_rejected"):
+            stage = "partial_shadow_search"
+            partial, partial_attempts = _best_effort_shadow(model_base, options)
+            report["partial_search_attempts"] = partial_attempts
+            if partial is not None:
+                result, slots, windows, checks, planning_target, delivered = partial
+                if partial_authorised and options["ev_charging_priority"] == "asap":
+                    partial_base = copy(model_base)
+                    partial_base.car_charging_limit = list(model_base.car_charging_limit)
+                    partial_base.car_charging_limit[0] = planning_target
+                    continuous, report["partial_continuous_block_attempts"] = _continuous_grid_support_shadow(partial_base, options)
+                    if continuous is not None:
+                        result, slots, windows, checks = continuous
+                        delivered = min(check["final_ev_kwh"] for check in checks.values())
+                        report["ev_run_strategy"] = "earliest_paired_partial_continuous_block_found"
+                requested = model_base.car_charging_limit[0]
+                target_met = delivered >= requested - 0.002
+                report.update(
+                    full_target_search_status=report["status"],
+                    status=("conditional_" if stale_hypothesis else "") + ("candidate" if target_met else "partial_candidate"),
+                    proposed_ev_windows=windows[0],
+                    proposed_charge_windows=windows[1],
+                    proposed_charge_limits=windows[2],
+                    native_checks=checks,
+                    proposed_discharge_power_limits=[],
+                    solver_forecast_basis="envelope",
+                    solver_objective=result.total_cost,
+                    solver_grid_cost=sum(action.grid_import_kwh * action.import_price - action.grid_export_kwh * action.export_price for action in result.actions),
+                    requested_ev_target_kwh=requested,
+                    requested_ev_target_percent=requested * 100 / model_base.car_charging_battery_size[0],
+                    ev_departure_at=base.args["joint_site"]["session"]["departure"],
+                    planning_ev_target_kwh=planning_target,
+                    planned_ev_kwh_by_departure=delivered,
+                    planned_ev_percent_by_departure=delivered * 100 / model_base.car_charging_battery_size[0],
+                    requested_ev_target_met=target_met,
+                    ev_target_shortfall_kwh=max(0, requested - delivered),
+                    partial_plan_convention="best_paired_validated_ev_delivery_found_not_maximum_reachability_proof",
+                    solver_ev_ac_kwh=result.diagnostics.ev_delivered_total_kwh,
+                    solver_pv_curtailed_kwh=result.diagnostics.pv_curtailed_total_kwh,
+                    bounded_search=True,
+                    execution_enabled=False,
+                    enforced=False,
+                    actuator_signals_modified=False,
+                    execution_blockers=list(blockers),
+                    ev_initial_state={**evidence["ev_initial_state"], "ev_soc_kwh": options["ev_soc"], "ev_soc_source": options["ev_soc_source"]},
+                    charge_limit_convention="paired_native_replay_window_peak_plus_one_percentage_point_revalidated",
+                    cost_unit=base.currency_symbols[1],
+                    cost_convention="solver_objective_includes_cycle_cost_and_terminal_credit; native_horizon_energy_cost_excludes_both_and_standing_charge",
+                    ev_window_convention="full_step_power_reservation_not_partial_target_energy",
+                    entity_observations=entity_observations,
+                )
+                if partial_authorised:
+                    from joint_site_session import partial_fingerprint, partial_metadata_valid
+                    from joint_site_apply import execution_fingerprint, command_fingerprint
+
+                    report["partial_target_authorised"] = True
+                    if not partial_metadata_valid(base, report):
+                        raise ValueError("Inconsistent partial replay evidence")
+                    commands = []
+                    for action, slot in zip(result.actions, slots):
+                        target = next((round(limit * 100 / base.soc_max) for window, limit in zip(windows[1], windows[2]) if window["start"] <= base.minutes_now + slot.start_min < window["end"]), 0)
+                        commands.append(
+                            {
+                                "start": base.minutes_now + slot.start_min,
+                                "end": base.minutes_now + slot.start_min + slot.duration_min,
+                                "target_soc": target if action.battery_mode == "charge" else 0,
+                                "freeze": False,
+                                "power_w": None,
+                                "ev_on": action.ev_action == "on",
+                            }
+                        )
+                    report["apply_candidate_staged"] = True
+                    base.joint_site_pending = {
+                        "report": deepcopy(report),
+                        "options": deepcopy(options),
+                        "commands": commands,
+                        "ev_windows": deepcopy(windows[0]),
+                        "initial_battery_soc_kwh": base.soc_kw,
+                        "fingerprint": execution_fingerprint(base),
+                        "command_fingerprint": command_fingerprint(commands),
+                        "replay_inputs": deepcopy((result, slots, windows)),
+                        "partial_fingerprint": partial_fingerprint(report),
+                    }
     except UnsupportedJointSite as exc:
         report = _empty_report("unsupported")
         report["reason"] = str(exc)

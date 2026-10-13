@@ -15,6 +15,78 @@ joint scheduling nor closes the new issue.
 
 ## Implemented boundary
 
+### Optional grid-charge sharing model
+
+For the shared Deye/Solarman model, `grid_charge_support` can name
+`enabled_entity` and `limit_entity` for the existing local peak-shaving setting.
+It is disabled by default; apply additionally requires the execution gates below. Missing, disabled, invalid
+or excessive cached settings block the candidate rather than silently falling
+back to an older simulation. These are cached configuration observations, not
+physical commissioning or a guaranteed instantaneous grid clamp.
+
+A charge **request** no longer necessarily means actual battery charging in this
+opt-in model: house and EV take precedence over domestic grid charging. Available
+grid/PV headroom charges the battery; above that headroom the battery can supply
+the deficit within its existing rate, energy and reserve limits. Insufficient
+support remains a real import violation, never a cosmetically clipped grid trace.
+The normal demand policy is unchanged. No hold, Program Power, current-limit or
+mode writes are introduced. Nominal and PV10 replay use an explicitly opted-in
+Python Prediction; unmodified kernel and ordinary native plans retain their
+existing semantics. EV power, deadline, pause/restart and cooldown still apply.
+
+The opt-in model also prefers a single continuous EV block when both native
+forecasts validate it. An already active relay tries only a continuation from now.
+With the default cost preference, at most twelve coupled
+battery searches compare blocks using the existing conservative cost objective,
+including cycle cost and terminal energy. If no block validates, the ordinary
+bounded search remains available. This is an explicit continuity preference, not
+a calibrated ramp/restart penalty or an optimality guarantee. Passing replay alone
+does not grant execution authority.
+
+For an earlier trip, `ev_charging_priority: asap` checks continuous starts across
+the finite departure horizon in chronological five-minute order and takes the first that passes
+both native forecasts, before considering cost. The default `cost` keeps the
+existing economic ordering. ASAP changes only scheduling preference: the fixed
+session, target, cooldown, domestic thresholds and executor guards remain intact.
+It neither invents a new departure nor renews the session. If this bounded search
+finds no safe continuous block, the report explicitly identifies the ordinary
+validated-search fallback; it does not claim the earliest physically possible start.
+
+### Independent household routing and authorised partial targets
+
+`household_fallback: true` opts into availability-first routing in apply mode.
+An optional `home_entity` is a vehicle device tracker; only `home` counts as present.
+Away, disconnected, unpermitted, unauthorised or expired sessions are evaluated
+**before** reading vehicle SOC or metered delivery. EV authority is withdrawn;
+only an observed relay OFF permits the original native household executor to run.
+While ON or unknown, existing inverter support is retained and no second writer
+runs. A rejected joint candidate uses the same handback. Reasons remain in Show Debug;
+ordinary absence does not set a global error or change read-only/manual controls.
+The household Plan retains its native rows, columns, precision and totals.
+
+For connected sessions this opt-in also persists SOC-contradiction invalidation
+through the Storage component. Age and restart cannot erase it; recovery needs
+a strictly newer explicit confirmation and reconciled baseline. Later home or
+idle connection transitions require renewed confirmation, never automatic reuse
+of the old session. A vehicle reading predating later legitimate meter growth
+is not treated as a new reading at the later time. Missing durable storage blocks
+EV authority, not household handback after OFF.
+
+`ev_partial_target_authorised: true` separately permits shared-support apply to
+stage a lower planning target when the requested target cannot be validated.
+The requested kWh/percentage stays unchanged. Both full-horizon native replays
+must pass for the lower target, which is bound to the exact staged commands and
+paired delivery evidence. Dispatch revalidates EV SOC and replays a domestic SOC
+drop against that same lower target. Missing, altered or inconsistent evidence
+fails closed. ASAP also seeks a continuous block for this partial target.
+The active status retains the achievable percentage and the unchanged request;
+neither a partial result nor deployment renews a session or proves physical delivery.
+
+This addresses the distinction between the requested command and observed power
+flow. The Deye [SG01LP1 manual, section 5.7](https://www.deyeinverter.com/deyeinverter/2026/05/19/rand/5060/%E3%80%90b%E3%80%91manual_sun-12-16k-sg01lp1-eu_20260519_en.pdf)
+also warns that peak-shaving can be exceeded when the available sources cannot
+serve the load. Model validation is not permission to disable physical guards.
+
 This branch contains a bounded joint scheduler, synthetic regression cases, and
 an opt-in **shadow** integration with native forecast data. It does not just report
 an existing plan's excessive import: it searches different EV start/stop times
@@ -25,6 +97,62 @@ and PV10 scenarios. The candidate is published only on the separate
 `predbat.joint_site_plan` entity; `execution_enabled` and `enforced` remain `false`.
 The existing EV-slot signal, inverter windows, active prediction object and
 kernel/cache are left untouched.
+
+### Reading the plan and battery forecast
+
+When joint planning is active, the existing **Plan** table displays the shadow
+candidate, with a compact **simulation only — not executed** status. There is no second
+table. The native HA plan and executable schedule remain untouched. For example,
+a native charge window targeting 20% can hold the battery there by assigning
+subsequent house and EV demand to grid import, even above the configured ceiling.
+The compact status retains partial EV targets, unconfirmed SOC and native grid
+violations; Show Debug explains each without repeating paragraphs above the table.
+The diagnostic explicitly identifies the native control-plan violation, not the
+displayed joint candidate. It is a forecast, not a physical outage or evidence
+that a limit was enforced.
+
+The existing table uses the exact native replay already checked for the joint
+candidate. Its columns, colours, state labels, ordinary SOC percentage/arrow,
+numeric precision and totals keep the original presentation. Additional interval,
+EV on-minute, nominal/PV10 start/end SOC and grid-peak fields belong to Dev's
+`joint_site_report`, not extra table columns (including in Show Debug).
+Detailed report metadata is hidden unless Show Debug is selected. House/PV energy is summed from
+the five-minute forecasts; EV energy is the conservative full-power reservation,
+not measured delivery. Half-hour rows preserve partial first/last intervals and
+five-minute peaks rather than averaging them away. No earlier trajectory is
+reused after a failed calculation, missing replay, stale report or fetch failure.
+Simulation rows cannot edit native overrides. Costs come from the candidate's
+native replay when available; unavailable metrics are not copied from the
+unrelated native schedule. Disabling joint planning restores the native view.
+
+An applied report replaces the simulation status with **Active plan** only while
+the executor's observed current-command receipt is valid and both replay traces
+remain complete. Future rows are still forecasts, revalidated before dispatch;
+neither inverter read-back nor an EV permission signal proves physical delivery.
+Missing, expired or blocked execution clears those rows. The independent native
+plan diagnostic stays in Show Debug and is not relabelled as the applied plan.
+
+In shadow, **Limit %** is an actual candidate charging ceiling, calculated from
+the highest native SOC within each continuous charge window across nominal and
+PV10, plus one percentage point and rounded upwards (capped at 100%). Both
+native scenarios are replayed again using those ceilings; the displayed SOC and
+costs come from that second replay. This is not a cosmetic replacement of 100,
+nor a change to manual domestic targets. Experimental apply retains its existing
+full-capacity mode contract unless grid-charge support is explicitly enabled;
+that path dispatches the same revalidated integer ceilings, strictly above reserve.
+A `Chrg` cell with an asterisk contains more than one
+five-minute battery mode; the SOC arrow describes the whole displayed interval.
+
+If a candidate is rejected, the banner identifies the failed forecast constraints
+instead of silently keeping the earlier schedule. A small-beam conservative search
+miss has the same reported retry at 512 as the nominal search. A bounded search
+miss is not proof of physical impossibility, and a passed candidate is not proof
+of globally minimum cost.
+
+Conditional stale-SOC candidates remain clearly labelled, regardless of their
+simulation checks. The preview does not change the active prediction, native
+HA table, inverter commands, EV slot, freshness or execution gates. A coherent
+simulated battery trajectory is not proof of real charging or departure success.
 
 Experimental **apply** stages a successful candidate and revalidates it inside
 the real `execute_plan` entry point. It dispatches the current command directly
@@ -54,6 +182,7 @@ The mapping accepts:
 | `soc_max_age_minutes` | Maximum age of the EV observation; default 60, maximum 1440 |
 | `ev_pause_percent` / `ev_restart_percent` | Domestic-battery EV thresholds; defaults 15 / 25 |
 | `min_off_minutes` | Minimum EV off interval; default 10 |
+| `ev_charging_priority` | `cost` (default) or `asap`, preferring the earliest paired-safe continuous block for shared grid-support controls |
 | `terminal_min_percent` | End-of-horizon battery floor; defaults to the configured domestic reserve |
 | `beam_width` | Bounded search size; default 128, maximum 512 |
 | `soc_entity` / `soc_entity_unit` | Optional current HA EV SOC entity and explicit `%` or `kWh` units |
@@ -65,6 +194,12 @@ The mapping accepts:
 | `ev_executor_lease_verified` | Boolean, default false; separate attestation that the sole external EV executor rejects expired or invalid version-1 leases even when Predbat stops |
 | `connection_observed_at_entity` | Apply requires an offset-aware timestamp of the physical connection observation, not an unrelated vehicle message |
 | `soc_observed_at_entity` | Apply requires an offset-aware timestamp of the actual EV SOC observation, not a cache access time |
+| `grid_charge_support` | Explicit cached peak-shaving `enabled_entity` and `limit_entity`; enables the bounded sharing model, not a hardware write |
+| `confirmed_session` | Optional explicit operator baseline: `confirmed_at`, the unchanged `departure`, `soc_kwh`, dedicated cumulative `energy_entity` / `energy_kwh`, and `power_entity` |
+| `execution_authorised` | Default false; explicit single-session experimental execution request for shared grid-support controls, separate from a claim that hardware commissioning has been verified |
+| `household_fallback` | Default false; revoke EV authority and hand back to native household execution only after observed relay OFF |
+| `home_entity` | Optional vehicle device tracker used before EV SOC; only `home` is available |
+| `ev_partial_target_authorised` | Default false; explicit permission for paired-safe partial shared-support apply, without reducing the requested target |
 
 Capacity, present domestic battery energy, charge/discharge limits, losses, EV
 rate/capacity/target, tariffs and load/PV forecasts come from the native model.
@@ -153,6 +288,17 @@ objective must not be presented as measured savings or a proof of global minimum
 This DEYE scenario assumes zero export and reports curtailment explicitly, without
 changing the installation's export configuration.
 
+Shared-template shadow search additionally tries stored-energy diversity within
+the same beam bound. It retains each bucket's cost leader and maximum-energy
+anchor; other head positions favour distinct stored-energy paths. If the native
+checks reject both search bases, one fresh conservative search with the established
+pruning order may recover a valid path. It must pass the same complete paired
+replay, including the actual reduced charging ceilings. Attempts are reported;
+rejection never exposes the previous simulation. This optimisation is shadow-only:
+apply and ordinary solver defaults retain their established ordering. Improvements
+must be compared on identical inputs and native replay costs, not assumed from a
+lower solver objective. Neither ordering proves optimality.
+
 `proposed_discharge_power_limits` contains native DC-watt ceilings for limited
 intervals; ordinary demand uses the existing full ceiling outside those intervals.
 For these candidates, replay uses one fresh native Python `Prediction` per step,
@@ -178,8 +324,32 @@ currency unit; subtracting one from another is **not** a measured saving.
 
 ### Report states
 
+In shared-template shadow, or explicitly authorised shared-support partial apply,
+a failed complete-target search is followed
+by at most eight partial-target searches on an isolated model copy. Each new
+schedule must pass both complete native replays, including attainable charge
+ceilings, grid power, domestic targets and EV pause/restart/cooldown/departure
+checks. The configured EV target remains unchanged. The report separates that
+requested target from the smaller planning target and the paired forecast of EV
+energy by departure. It explicitly records the shortfall. This is the best
+validated alternative found, not proof that the complete target is impossible or
+that the partial result is the maximum achievable. Apply without the separate
+partial opt-in and closed sessions cannot use this recovery. Old or rejected
+rows are still never reused.
+
 - `candidate`: a schedule was found and passed both native forecast checks; still
   **not dispatched**. In apply it may be staged for the separately gated executor.
+- `partial_candidate`: a newly calculated schedule passes both native
+  power/reserve/session checks for the reported partial EV delivery, but does
+  **not** meet the unchanged requested EV target. Its visible warning states
+  requested versus forecast SOC and departure. Apply requires the separate
+  `ev_partial_target_authorised` opt-in and exact paired-evidence binding.
+  With an explicitly allowed stale SOC assumption it is labelled
+  `conditional_partial_candidate`, retaining the freshness blocker.
+- `household_fallback`: EV authority is unavailable; the native household plan
+  is shown. Execution still requires slot revocation and observed relay OFF.
+- `household_waiting`: EV authority has been withdrawn but relay OFF has not
+  yet been observed; native handback must wait without withdrawing support.
 - `native_rejected`: the candidate failed a native import, reserve or EV-threshold
   check. Proposed windows are retained for analysis, never for control.
 - `no_plan_found`: bounded search did not find a complete plan; not a mathematical
@@ -244,6 +414,48 @@ production recommendation or proof of reaching a departure target.
 The ordinary native best-plan graphs remain the independent baseline; the joint
 report identifies the candidate and execution receipt. They must not be represented
 as measurements or as a fully unified dashboard of the applied joint trajectory.
+
+#### Operator-confirmed single session
+
+The shared grid-support path can use an explicitly recorded operator SOC/connection
+confirmation instead of rejecting unchanged Mercedes push fields solely because
+their HA value-change timestamps are old. This is **not fresh vehicle telemetry**:
+the original field timestamps remain unchanged. Until a coherent changed vehicle
+value is received, the dedicated cumulative AC meter and configured EV efficiency
+estimate delivery from the fixed baseline. Invalid values, reset/implausible
+counters, contradictory new SOC and a stalled meter during an energised request
+fail closed. The baseline and departure are not renewed automatically; after
+departure the model permits only household operation, without claiming EV success.
+
+An operator may explicitly attribute a retained Mercedes charging-error state to
+their own manual stop using `connection_error_acknowledgement`: the exact state
+`"4"`, its original `observed_at` (HA `last_updated`), `acknowledged_at` and the
+unchanged `departure`. Only that exact retained publication is accepted in the
+confirmed shared-support session. A later error publication, changed departure
+or missing confirmation is not covered. This neither adds error states to the
+connection allowlist nor disables vehicle, metering or electrical protections.
+
+With `execution_authorised: true`, this narrowly scoped path can be explicitly
+selected while `apply_verified` remains false. That distinguishes an authorised
+experimental run from verified physical commissioning. The independent executor
+lease check, permission, read-only, current/reserve caps, native-template validation,
+full paired replay and every EV guard still apply. It is not an alternative for
+the original local DEYE hold/discharge adapter or other control models.
+
+For this path, the existing 15-second Predbat timer may revalidate the already
+observed identical command from cached state without an inverter service or extra
+hardware poll. Each lease remains at most 300 seconds, never crosses its command
+boundary/departure, and cannot be renewed past ten minutes from the immutable plan
+generation time. A new plan is therefore required; a stopped planner cannot leave
+an indefinitely rolling EV permission. Partial writes withdraw permission and a
+restart must calculate and validate again before publishing a new lease.
+
+Leaving native read-only mode requests inverter reinitialisation. Only for this
+confirmed shared-support path, with the EV observed OFF, the joint executor fulfils
+that request through the exact paired-safe canonical source/SOC sequence. It clears
+the request only after every row matches and all gates are rechecked; it does not
+run the unrelated native plan or its global-rate/reserve reset. Failed writes retain
+the request, and other reset reasons remain blocked.
 
 #### External EV lease requirement
 
@@ -319,7 +531,8 @@ python ../apps/predbat/unit_test.py --test joint_site_capabilities --test joint_
 
 The joint-planning PR remains independently importable without the verified
 service-sequence core or YAML fixture from the shared-template PR. In that case,
-the two integration groups test the missing-core rejection and explicitly report
+the template, combined, actual, session and partial-apply integration groups
+test the missing-core rejection and explicitly report
 that real-template scenarios were skipped; this is not evidence of integration
 acceptance. Once the shared-template PR is present, set
 `PREDBAT_JOINT_TEMPLATE_REQUIRED=1` when running those groups (or the full suite)

@@ -89,6 +89,7 @@ class SiteConfig:
     import_cap_kw: float
     export_cap_kw: Optional[float] = None
     load_port_cap_kw: Optional[float] = None
+    charge_import_cap_kw: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -112,6 +113,7 @@ class PlannerConfig:
     soc_bucket_kwh: float = 0.05
     allow_limited_discharge: bool = False
     allowed_battery_modes: Tuple[str, ...] = BATTERY_MODES
+    economic_diversity: bool = False
 
 
 @dataclass(frozen=True)
@@ -269,6 +271,8 @@ def _validate(slots, ev, battery, site, planner):
     if ev.availability is not None and (not isinstance(ev.availability, tuple) or any(type(i) is not int or not 0 <= i < len(slots) for i in ev.availability)):
         raise PlannerInputError("Availability must contain original slot indices")
     _require_finite("import_cap_kw", site.import_cap_kw, 0)
+    if site.charge_import_cap_kw is not None:
+        _require_finite("charge_import_cap_kw", site.charge_import_cap_kw, 1e-6, site.import_cap_kw)
     for field in ("export_cap_kw", "load_port_cap_kw"):
         if getattr(site, field) is not None:
             _require_finite(field, getattr(site, field), 0)
@@ -314,6 +318,14 @@ def _segment(duration, house_kw, ev_kw, pv_kw, soc, mode, battery, ev, site):
         charge = discharge = 0.0
         if soc < battery.capacity_kwh - EPSILON:
             charge = battery.max_charge_kw if mode == BATTERY_CHARGE else min(max(pv_kw - demand, 0), battery.max_charge_kw)
+            if mode == BATTERY_CHARGE and site.charge_import_cap_kw is not None:
+                # A grid-charge REQUEST need not mean physical battery charging:
+                # house/EV loads take priority. Use headroom to charge, or supply
+                # the grid deficit from the battery. The site cap below still
+                # rejects insufficient support, including reserve exhaustion.
+                charge = min(charge, max(site.charge_import_cap_kw - demand + pv_kw, 0))
+                if soc > battery.reserve_kwh + EPSILON:
+                    discharge = min(max(demand - pv_kw - site.charge_import_cap_kw, 0), battery.max_discharge_kw)
         if mode == BATTERY_DEMAND and soc > battery.reserve_kwh + EPSILON:
             discharge = min(max(demand - pv_kw, 0), battery.max_discharge_kw)
         net = demand + charge - pv_kw - discharge
@@ -405,21 +417,48 @@ def _resolve_action(slot, ev_on, mode, node, battery, ev, site):
     )
 
 
-def _prune(nodes, width, bucket, terminal_value, preserve_battery=False):
-    """Preserve EV progress and optionally stored-energy resilience within the same beam bound."""
+def _prune(nodes, width, bucket, terminal_value, preserve_battery=False, economic_diversity=False):
+    """Preserve EV progress and optionally stored-energy resilience within the same beam bound.
+
+    The fixed beam budget often causes a small number of distinct EV-progress
+    buckets to share it with many near-duplicate cost-ranked candidates. With no
+    hold action, the cheapest label of a bucket may sit on a stored-energy path
+    that prematurely imports during the current band and forecloses a cheap
+    later pre-charge. Promoting only the highest-energy neighbour (the
+    previous behaviour) keeps one extreme but can still drop the intermediate
+    stored-energy trajectory that completes the cheaper plan.
+
+    When ``preserve_battery`` is true, the cost leader stays at position 0 of
+    its bucket (so the layer-by-layer budget picks it first across buckets).
+    With opt-in ``economic_diversity``, the positions up to ``width`` are re-sorted by stored
+    energy descending, so each per-bucket layer picks a different SoC level
+    instead of `width`-many near-duplicates. Beyond the head, ranking order
+    resumes unchanged. The frontier size and the per-slot evaluation budget
+    stay within ``width``; this is a within-bucket ordering change, never an
+    addition of new candidates. This remains bounded search, not an optimality proof.
+    """
     groups = {}
     for node in nodes:
         groups.setdefault(_bucket(node.ev_kwh, bucket), []).append(node)
     for group in groups.values():
         group.sort(key=lambda n: (n.cost - terminal_value * n.battery_kwh, n.switches))
-        if preserve_battery:
-            # With no hold action, the cheapest label can have too little stored
-            # energy to serve a later fixed-rate EV start. Keep the cost leader
-            # and highest-energy label before filling the remaining cost layers.
+        if preserve_battery and len(group) > 2:
+            # Cost leader stays at position 0; the next ``width - 1``
+            # candidates are re-ordered by stored energy descending so layer
+            # picks span SoC tiers instead of cost-ranked duplicates. Past
+            # the head, ranking order resumes so all cheap-end behaviour is
+            # unchanged.
+            leader = group[0]
             high = max(group, key=lambda n: n.battery_kwh)
-            if high is not group[0]:
+            if high is not leader:
                 group.remove(high)
                 group.insert(1, high)
+            if economic_diversity:
+                head_rest = list(group[1 : max(1, width)])
+                tail = list(group[max(1, width) :])
+                head_rest.sort(key=lambda n: -n.battery_kwh)
+                group.clear()
+                group.extend([leader] + head_rest + tail)
     ordered = [groups[key] for key in sorted(groups, reverse=True)]
     kept = []
     layer = 0
@@ -516,7 +555,7 @@ def plan(slots: Sequence[Slot], ev: EVConfig, battery: BatteryConfig, site: Site
             return _bounded_no_plan(deadline_idx, transitions, max_frontier, "no_complete_transition_at_slot_{}".format(i))
         frontier = list(next_states.values())
         if planner.beam_width is not None and len(frontier) > planner.beam_width:
-            frontier = _prune(frontier, planner.beam_width, planner.soc_bucket_kwh, battery.terminal_value_per_kwh, preserve_battery=BATTERY_HOLD not in base_modes)
+            frontier = _prune(frontier, planner.beam_width, planner.soc_bucket_kwh, battery.terminal_value_per_kwh, preserve_battery=BATTERY_HOLD not in base_modes, economic_diversity=planner.economic_diversity)
             pruned = True
         max_frontier = max(max_frontier, len(frontier))
     best = min(frontier, key=lambda n: (n.cost - battery.terminal_value_per_kwh * n.battery_kwh, n.switches))

@@ -140,6 +140,7 @@ deadbanding
 deadbeefdeadbeef
 dedup
 dedupe
+deepcopied
 dend
 denorm
 derate
@@ -282,6 +283,7 @@ hainterface
 halfhourly
 hanchu
 hanchuess
+handback
 hanres
 HAOS
 harvi
@@ -442,6 +444,8 @@ NODETAIL
 nodischarge
 nohup
 nonboolean
+nonfeasible
+nonfinal
 nonfinite
 noopener
 nord
@@ -563,6 +567,7 @@ replayer
 resetmidnight
 resultid
 resultmid
+retrievalstatus
 retryable
 reweight
 reweighted
@@ -712,6 +717,7 @@ unflushed
 unindexed
 unnormalised
 unparseable
+unpassed
 unpickled
 unpickles
 unpushed

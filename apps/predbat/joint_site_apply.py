@@ -4,7 +4,7 @@ Off and shadow are strict no-ops. HA observations are never hardware confirmatio
 This module neither sends EV switch services nor changes standing inverter limits.
 """
 
-from copy import deepcopy
+from copy import copy, deepcopy
 from datetime import datetime, timedelta
 import hashlib
 import json
@@ -13,6 +13,7 @@ import math
 from const import PREDBAT_MAX_CARS, PREDICT_STEP, MINUTE_WATT
 
 RECEIPT_TTL_SECONDS = 300
+PLAN_REVALIDATION_MAX_AGE_SECONDS = 600
 OBSERVATION_MAX_AGE_SECONDS = 180
 
 
@@ -118,6 +119,11 @@ def _cached(base, entity):
     return result
 
 
+def command_fingerprint(commands):
+    """Bind exact staged commands to the paired replay; a valid but different target is not accepted."""
+    return hashlib.sha256(json.dumps(commands, sort_keys=True, allow_nan=False).encode()).hexdigest()
+
+
 def _control_fingerprint(inverter):
     """Detect observed control drift without claiming read-back proves hardware state."""
     if getattr(inverter, "inverter_type", None) == "DeyeSolarman":
@@ -129,25 +135,55 @@ def _control_fingerprint(inverter):
     return hashlib.sha256(json.dumps(snapshot, sort_keys=True, allow_nan=False).encode()).hexdigest()
 
 
-def _evidence(base):
+def _acknowledged_stop_state(settings, connection, now):
+    """Accept only the exact retained error explicitly attributed to the operator's manual stop.
+
+    This is not an error-state allowlist. Any subsequent state/attribute publication,
+    changed departure or absent confirmation loses this exception; BMS, metering and
+    all other executor guards remain authoritative.
+    """
+    acknowledgement = settings.get("connection_error_acknowledgement")
+    if acknowledgement is None:
+        return False
+    _require(settings.get("control_model") == "deye_solarman" and settings.get("confirmed_session") and settings.get("grid_charge_support"), "stop_acknowledgement_scope")
+    _require(isinstance(acknowledgement, dict) and set(acknowledgement) == {"state", "observed_at", "acknowledged_at", "departure"}, "stop_acknowledgement_invalid")
+    _require(acknowledgement["state"] == "4", "stop_acknowledgement_invalid")
+    observed = _stamp(acknowledgement["observed_at"])
+    accepted = _stamp(acknowledgement["acknowledged_at"])
+    departure = _stamp(acknowledgement["departure"])
+    _require(_stamp(settings["session"]["available_from"]) <= observed <= accepted <= now, "stop_acknowledgement_invalid")
+    _require(departure == _stamp(settings["confirmed_session"]["departure"]) == _stamp(settings["session"]["departure"]), "stop_acknowledgement_invalid")
+    return now < departure and connection is not None and connection["state"] == "4" and connection["last_updated"] == observed
+
+
+def _evidence(base, allow_read_only_transition=False):
     """Revalidate actual capabilities, overrides and independent EV evidence before use."""
     from joint_site_native import _options, _collect_blockers
 
     settings = base.args["joint_site"]
-    _require(settings.get("apply_verified") is True, "apply_commissioning_required")
+    from joint_site_session import household_reason
+
+    _require(household_reason(base) is None, "ev_unavailable_for_joint_execution")
+    # Explicit experimental session authority is not a claim that the hardware
+    # commissioning attestation is true. All electrical/control gates below remain.
+    authorised_session = settings.get("execution_authorised") is True and settings.get("confirmed_session") is not None and settings.get("grid_charge_support") is not None and settings.get("control_model") == "deye_solarman"
+    _require(settings.get("apply_verified") is True or authorised_session, "apply_commissioning_required")
     _require(settings.get("ev_executor_lease_verified") is True, "ev_executor_lease_required")
     _require(not getattr(base, "octopus_intelligent_charging", False), "external_ev_scheduler_unsupported")
     _require(not base.get_arg("octopus_intelligent_slot", None, indirect=False), "external_ev_scheduler_unsupported")
     hooks = getattr(getattr(base, "plugin_system", None), "hooks", {})
     _require(not hooks.get("on_plan_executed"), "external_plan_consumer_unsupported")
-    stamps = [_stamp(_cached(base, settings.get(name))["state"]) for name in ("soc_observed_at_entity", "connection_observed_at_entity")]
-    now = _clock()
-    _require(all(0 <= (now - stamp).total_seconds() <= OBSERVATION_MAX_AGE_SECONDS for stamp in stamps), "physical_observation_stale_or_future")
+    if not settings.get("confirmed_session"):
+        stamps = [_stamp(_cached(base, settings.get(name))["state"]) for name in ("soc_observed_at_entity", "connection_observed_at_entity")]
+        now = _clock()
+        _require(all(0 <= (now - stamp).total_seconds() <= OBSERVATION_MAX_AGE_SECONDS for stamp in stamps), "physical_observation_stale_or_future")
     options = _options(base)
     _require(options is not None and options["mode"] == "apply" and options["control_model"] in ("deye_tou", "deye_solarman"), "real_deye_controls_required")
     _require(not _collect_blockers(base, options), "native_inputs_or_overrides_blocked")
     _require(not base.set_read_only and not getattr(base, "set_read_only_axle", False), "read_only")
-    _require(not any(getattr(base, name, False) for name in ("inverter_needs_reset", "had_errors", "fatal_error")), "native_state_not_ready")
+    transition = allow_read_only_transition and getattr(base, "inverter_needs_reset_force", "") == "set_read_only" and options["control_model"] == "deye_solarman" and options.get("grid_charge_support_w") and options.get("confirmed_observation")
+    _require(not getattr(base, "inverter_needs_reset", False) or transition, "native_state_not_ready")
+    _require(not any(getattr(base, name, False) for name in ("had_errors", "fatal_error")), "native_state_not_ready")
     _require(not base.get_arg("template", False), "template_mode")
     inverters = getattr(base, "inverters", None)
     _require(isinstance(inverters, list) and len(inverters) == 1, "single_inverter_required")
@@ -170,17 +206,20 @@ def _evidence(base):
     _require(not getattr(base, "manual_soc_max_keep", None), "manual_ceiling_unsupported")
     _require(base.export_limit == 0 and base.set_discharge_during_charge, "deye_dispatch_model_mismatch")
     _require(options["import_limit_w"] == getattr(base, "import_limit", options["import_limit_w"]), "import_limit_mismatch")
-    _require(options["ev_soc_source"] == "entity_cache", "measured_ev_soc_required")
+    _require(options["ev_soc_source"] == "entity_cache" or options.get("confirmed_observation") is not None, "measured_ev_soc_required")
     entities = options["entity_config"]
     relay = _cached(base, entities["relay_entity"])
     permission = _cached(base, entities["permission_entity"])
-    connection = _cached(base, entities["connection_entity"])
+    closed_confirmation = options["house_only"] and bool(options.get("confirmed_observation"))
+    connection = None if closed_confirmation else _cached(base, entities["connection_entity"])
     allowed = entities["connection_entity_states"]
-    _require(isinstance(allowed, (list, tuple)) and bool(allowed) and connection["state"] in allowed, "connection_not_confirmed")
+    acknowledged = _acknowledged_stop_state(settings, connection, _clock())
+    _require(closed_confirmation or acknowledged or (isinstance(allowed, (list, tuple)) and bool(allowed) and connection["state"] in allowed), "connection_not_confirmed")
+    options["connection_error_acknowledged"] = acknowledged
     _require(permission["state"] == "on", "permission_not_granted")
     _require(relay["state"] in ("on", "off"), "relay_state_invalid")
     now = _clock()
-    _require(all(payload["last_changed"] <= now and payload["last_updated"] <= now for payload in (relay, permission, connection)), "entity_timestamp_future")
+    _require(all(payload["last_changed"] <= now and payload["last_updated"] <= now for payload in (relay, permission, connection) if payload is not None), "entity_timestamp_future")
     _require(_finite(base.soc_max, 0.001) and _finite(base.soc_kw, base.reserve, base.soc_max), "domestic_soc_invalid")
     minute = (now - base.midnight_utc).total_seconds() / 60
     floor = max(base.reserve, base.all_active_keep.get(int(minute), 0) * base.soc_max / 100)
@@ -203,10 +242,12 @@ def _ev_permitted(base, options, relay, now, on):
         _require((now - relay["last_changed"]).total_seconds() >= options["off_minutes"] * 60, "ev_cooldown")
 
 
-def _intent(command, inverter):
+def _intent(command, inverter, charge_ceiling=False):
     """Validate exact bounded commands; do not clamp a rejected plan into another plan."""
     _require(isinstance(command, dict), "invalid_command")
-    _require(type(command.get("target_soc")) is int and command["target_soc"] in (0, 100), "invalid_target")
+    target = command.get("target_soc")
+    bounded = charge_ceiling and getattr(inverter, "inverter_type", None) == "DeyeSolarman" and type(target) is int and math.ceil(inverter.reserve_percent) < target <= 100
+    _require(type(target) is int and (target in (0, 100) or bounded), "invalid_target")
     _require(type(command.get("freeze")) is bool and type(command.get("ev_on")) is bool, "invalid_command_boolean")
     _require(not command["freeze"] or command["target_soc"] == 0, "invalid_hold_target")
     if getattr(inverter, "inverter_type", None) == "DeyeSolarman":
@@ -223,7 +264,15 @@ def _candidate(base, pending, inverter, now, minute):
     """Validate complete replay and select only the current first planned command."""
     _require(isinstance(pending, dict), "no_pending_candidate")
     report = pending["report"]
-    _require(report.get("status") == "candidate" and not report.get("counterfactual_controls") and not report.get("execution_blockers"), "candidate_not_accepted")
+    partial = report.get("status") == "partial_candidate"
+    _require(report.get("status") in ("candidate", "partial_candidate") and not report.get("counterfactual_controls") and not report.get("execution_blockers"), "candidate_not_accepted")
+    if partial:
+        from joint_site_session import partial_metadata_valid, partial_fingerprint
+
+        _require(partial_metadata_valid(base, report), "partial_target_not_authorised")
+        _require(pending.get("partial_fingerprint") == partial_fingerprint(report), "partial_evidence_changed")
+    else:
+        _require(not report.get("partial_target_authorised") and (report.get("planning_ev_target_kwh") in (None, base.car_charging_limit[0])), "partial_target_not_authorised")
     checks = report.get("native_checks", {})
     _require(set(checks) == {"nominal", "pv10"}, "native_checks_missing")
     _require(all(check.get("passed") is True and check.get("checked_minutes") == base.forecast_minutes for check in checks.values()), "native_checks_failed")
@@ -232,16 +281,40 @@ def _candidate(base, pending, inverter, now, minute):
     closed = now >= _stamp(base.args["joint_site"]["session"]["departure"])
     _require(report.get("session_closed", False) is closed, "session_phase_changed")
     _require(_finite(pending.get("initial_battery_soc_kwh"), base.reserve, base.soc_max), "initial_domestic_soc_missing")
-    _require(base.soc_kw >= pending["initial_battery_soc_kwh"] - 0.002, "domestic_soc_fell_since_planning")
+    soc_fell = base.soc_kw < pending["initial_battery_soc_kwh"] - 0.002
+    shared_support = bool(report.get("grid_charge_support_w"))
+    _require(not soc_fell or shared_support, "domestic_soc_fell_since_planning")
     commands = pending["commands"]
+    if shared_support:
+        _require(pending.get("command_fingerprint") == command_fingerprint(commands), "candidate_commands_changed")
     _require(isinstance(commands, list) and len(commands) == base.forecast_minutes // PREDICT_STEP, "incomplete_command_horizon")
     for index, command in enumerate(commands):
-        _intent(command, inverter)
+        _intent(command, inverter, bool(report.get("grid_charge_support_w")))
         _require(not closed or not command["ev_on"], "closed_session_ev_command")
         _require(type(command.get("start")) is int and type(command.get("end")) is int, "invalid_command_time")
         _require(command.get("start") == base.minutes_now + index * PREDICT_STEP and command.get("end") == command["start"] + PREDICT_STEP, "command_timeline_mismatch")
     command = commands[0]
     _require(command["start"] <= minute < command["end"], "current_command_expired")
+    if soc_fell:
+        # The ordinary native loop re-reads SOC after calculating. A lower value
+        # cannot be waived with a tolerance: replay the SAME controls from that
+        # value and require both complete forecasts again, without a new search.
+        from joint_site_native import _options, _replay, _publish_report
+
+        _require("replay_inputs" in pending, "replay_inputs_missing")
+        result, slots, windows = pending["replay_inputs"]
+        options = _options(base)
+        model = base
+        if partial:
+            model = copy(base)
+            model.car_charging_limit = list(base.car_charging_limit)
+            model.car_charging_limit[0] = report["planning_ev_target_kwh"]
+        checks = {name: _replay(model, options, result, slots, windows, scenario) for name, scenario in (("nominal", 0), ("pv10", 1))}
+        for check in checks.values():
+            check.pop("_charge_peak_kwh", None)
+        updated = {**deepcopy(base.joint_site_report), "native_checks": checks, "dispatch_soc_revalidated_kwh": base.soc_kw}
+        _publish_report(base, updated, False)
+        _require(all(check["passed"] and check["checked_minutes"] == base.forecast_minutes for check in checks.values()), "dispatch_replay_failed")
     # Only extend an accepted intent over consecutive identical actions; never
     # authorise a future start or a different power ceiling before dispatch.
     run = deepcopy(command)
@@ -291,7 +364,7 @@ def _report(base, status, enabled, reason=None, attempted=False):
     report["execution_observed_at"] = receipt.get("generated_at") if receipt else None
     report["execution_valid_until"] = receipt.get("expires_at") if receipt else None
     base.joint_site_report = report
-    base.dashboard_item(base.prefix + ".joint_site_plan", state=status, attributes=report)
+    base.dashboard_item(base.prefix + ".joint_site_plan", state=status, attributes={key: value for key, value in report.items() if key != "preview"})
 
 
 def _blocked(base, reason, attempted=False):
@@ -314,21 +387,52 @@ def _blocked(base, reason, attempted=False):
     return "Joint blocked", reason
 
 
+def _withdraw_for_household(base, reason, attempted=False):
+    """Withdraw EV authority, then require observed relay OFF before the sole native handback."""
+    base.joint_site_execution = None
+    base.joint_site_pending = None
+    base.car_charging_slots = [[] for _ in range(PREDBAT_MAX_CARS)]
+    try:
+        _publish_ev(base)
+        relay = _cached(base, base.args["joint_site"].get("relay_entity"))
+        now = _clock()
+        off = relay["state"] == "off" and relay["last_changed"] <= now and relay["last_updated"] <= now
+        _report(base, "household_fallback" if off else "household_waiting", False, reason, attempted)
+        base.joint_site_report.update(household_executor="native" if off else "waiting_for_ev_off", ev_available=False)
+        if off:
+            base.inverter_rate_intent = {}
+            return None
+        return "Joint waiting", "EV authority withdrawn; waiting for observed relay OFF"
+    except Exception:
+        # Missing relay or failed publication is not an OFF observation. Existing
+        # battery support must remain until the external executor is observed OFF.
+        return _blocked(base, "household_handback_unconfirmed", attempted)
+
+
 def execute_joint_site(base):
-    """Own explicit apply cycles inside the real native executor; never fall through on failure."""
+    """Execute joint intents or hand back only after revocation and observed EV OFF."""
     if not _requested(base):
         return None
     attempted = False
     try:
-        options, inverter, relay, now, minute = _evidence(base)
+        from joint_site_session import household_reason
+
+        reason = household_reason(base)
+        if reason:
+            return _withdraw_for_household(base, reason)
+        options, inverter, relay, now, minute = _evidence(base, allow_read_only_transition=True)
+        read_only_transition = bool(getattr(base, "inverter_needs_reset", False))
         pending = getattr(base, "joint_site_pending", None)
         command, run = _candidate(base, pending, inverter, now, minute)
+        if options.get("grid_charge_support_w"):
+            _require(abs(options["ev_soc"] - pending["options"]["ev_soc"]) <= 0.002, "dispatch_ev_soc_changed")
         _ev_permitted(base, options, relay, now, command["ev_on"])
+        _require(not read_only_transition or relay["state"] == "off", "waiting_for_ev_relay_off")
         if not command["ev_on"] and relay["state"] == "on":
             # Remove EV permission first, then wait for the sole EV executor's
             # actual OFF observation before withdrawing battery support.
             return _blocked(base, "waiting_for_ev_relay_off")
-        target, freeze, power = _intent(command, inverter)
+        target, freeze, power = _intent(command, inverter, bool(options.get("grid_charge_support_w")))
         base.inverter_rate_intent = {}
         # No call to the adapter directly: this is the same native entry point
         # whose optional DEYE implementation owns all physical service writes.
@@ -336,27 +440,42 @@ def execute_joint_site(base):
         if options["control_model"] == "deye_solarman":
             from joint_site_template import dispatch_template
 
-            observed = dispatch_template(inverter, target)
+            if options.get("grid_charge_support_w"):
+                observed = dispatch_template(inverter, target, charge_ceiling=True)
+            else:
+                observed = dispatch_template(inverter, target)
         else:
             observed = inverter.adjust_charge_immediate(target, freeze=freeze, discharge_power_w=power)
         _require(observed is True, "inverter_command_not_observed")
         # Permission, clocks and protection inputs can change while writes settle.
-        options, inverter, relay, now, minute = _evidence(base)
+        options, inverter, relay, now, minute = _evidence(base, allow_read_only_transition=True)
         _require(pending["fingerprint"] == execution_fingerprint(base), "configuration_changed_during_dispatch")
         _require(pending["report"].get("session_closed", False) is options["departure_passed"], "session_phase_changed")
         _require(command["start"] <= minute < command["end"], "command_expired_during_dispatch")
         _ev_permitted(base, options, relay, now, command["ev_on"])
+        if read_only_transition:
+            # The native read-only switch requests reinitialisation. The shared
+            # executor fulfils it by observing ALL canonical rows of this exact
+            # paired-safe intent, rather than running the unrelated native reset
+            # (which can rewrite standing power/reserve settings). Failures above
+            # leave the request pending; other reset reasons remain unsupported.
+            _require(base.inverter_needs_reset and base.inverter_needs_reset_force == "set_read_only", "reset_request_changed")
+            base.inverter_needs_reset = False
+            base.inverter_needs_reset_force = ""
         expires = min(base.midnight_utc + timedelta(minutes=run["end"]), now + timedelta(seconds=RECEIPT_TTL_SECONDS))
         if command["ev_on"]:
             expires = min(expires, _stamp(options["settings"]["session"]["departure"]))
         base.joint_site_execution = {
             "generated_at": now.isoformat(),
+            "plan_generated_at": pending["report"]["generated_at"],
             "expires_at": expires.isoformat(),
             "command": run,
             "fingerprint": execution_fingerprint(base),
             "control_fingerprint": _control_fingerprint(inverter),
             "observations_match": True,
             "hardware_confirmed": False,
+            "connection_error_acknowledged": options.get("connection_error_acknowledged", False),
+            "read_only_transition_observed": read_only_transition,
         }
         base.isCharging = target > 0 or freeze
         base.isExporting = False
@@ -364,15 +483,24 @@ def execute_joint_site(base):
         _report(base, "applied", True, "inverter_observed_not_hardware_confirmed", attempted=True)
         return "Freeze charging" if freeze else "Charging" if target > 0 else "Demand", "Joint site; HA observations only"
     except Exception as exc:
-        return _blocked(base, str(exc) if isinstance(exc, JointBlocked) else "execution_validation_failed", attempted)
+        reason = str(exc) if isinstance(exc, JointBlocked) else "execution_validation_failed"
+        if base.args["joint_site"].get("household_fallback") is True:
+            return _withdraw_for_household(base, reason, attempted)
+        return _blocked(base, reason, attempted)
 
 
-def publish_joint_ev(base):
+def publish_joint_ev(base, renew=False):
     """Prevent early native EV publication; revalidate a bounded receipt without actuating."""
     if not _requested(base):
         return False
+    receipt = getattr(base, "joint_site_execution", None)
     try:
-        receipt = getattr(base, "joint_site_execution", None)
+        from joint_site_session import household_reason
+
+        reason = household_reason(base)
+        if reason:
+            _withdraw_for_household(base, reason)
+            return True
         _require(isinstance(receipt, dict) and receipt.get("observations_match") is True, "no_execution_receipt")
         options, inverter, relay, now, minute = _evidence(base)
         _require(receipt["fingerprint"] == execution_fingerprint(base), "configuration_changed")
@@ -381,10 +509,24 @@ def publish_joint_ev(base):
         expires = _stamp(receipt["expires_at"])
         _require(now < expires, "command_authority_expired")
         command = receipt["command"]
-        _intent(command, inverter)
+        _intent(command, inverter, bool(options.get("grid_charge_support_w")))
         _require(command["start"] <= minute < command["end"], "command_authority_expired")
         _ev_permitted(base, options, relay, now, command["ev_on"])
+        if renew:
+            # Revalidate only the already observed, identical current intent.
+            # The immutable plan clock bounds renewal across one delayed calculation;
+            # it must never become an indefinitely rolling lease on an old forecast.
+            _require(options.get("grid_charge_support_w") and options.get("confirmed_observation"), "lease_renewal_not_supported")
+            plan_time = _stamp(receipt["plan_generated_at"])
+            _require(0 <= (now - plan_time).total_seconds() < PLAN_REVALIDATION_MAX_AGE_SECONDS, "plan_revalidation_expired")
+            expires = min(base.midnight_utc + timedelta(minutes=command["end"]), now + timedelta(seconds=RECEIPT_TTL_SECONDS), plan_time + timedelta(seconds=PLAN_REVALIDATION_MAX_AGE_SECONDS))
+            if command["ev_on"]:
+                expires = min(expires, _stamp(options["settings"]["session"]["departure"]))
+            receipt = {**receipt, "generated_at": now.isoformat(), "expires_at": expires.isoformat()}
+            base.joint_site_execution = receipt
         _publish_ev(base, command, now, expires)
+        if renew:
+            _report(base, "applied", True, "inverter_observed_not_hardware_confirmed", attempted=True)
     except Exception as exc:
         # Fetch-time absence of a receipt is normal at startup, not proof the
         # native planner is broken. It still revokes any old EV-slot signal.
@@ -397,3 +539,10 @@ def publish_joint_ev(base):
         except Exception:
             _blocked(base, str(exc) if isinstance(exc, JointBlocked) else "publication_failed")
     return True
+
+
+def refresh_joint_ev_lease(base):
+    """Use the existing cache-only timer to sustain an accepted intent, never to start a new one."""
+    settings = base.args.get("joint_site")
+    if _requested(base) and settings.get("grid_charge_support") and settings.get("confirmed_session") and getattr(base, "joint_site_execution", None):
+        publish_joint_ev(base, renew=True)

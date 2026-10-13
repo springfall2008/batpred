@@ -27,10 +27,9 @@ Three pure helpers - no HA service writes of the adapter's own:
   canonical row reaches the expected terminal state and
   ``base.had_errors`` stays ``False`` across the dispatch.
 
-Two intents only - ``demand(0, False)`` and ``charge(100, False)``.
-Anything else (including ``freeze=True`` or any ``discharge_power_w``
-not equal to ``None``) raises :class:`ValueError` BEFORE the
-inverter is called.
+Two default intents - ``demand(0, False)`` and ``charge(100, False)``.
+Explicit ``charge_ceiling=True`` additionally accepts replay-validated integer
+targets strictly above reserve. Freeze and discharge-power changes stay unsupported.
 
 The parent (``joint_site_apply``) owns commissioning, SOC/connection
 freshness (≤180 s), the 300 s lease TTL and the EV external executor.
@@ -240,12 +239,12 @@ def snapshot_template(inverter):
     }
 
 
-def dispatch_template(inverter, target_soc, freeze=False, discharge_power_w=None):
+def dispatch_template(inverter, target_soc, freeze=False, discharge_power_w=None, charge_ceiling=False):
     """Drive the verified shared template through :meth:`Inverter.adjust_charge_immediate`.
 
-    Two intents only - ``demand(0, False)`` and ``charge(100, False)``.
-    Anything else raises :class:`ValueError` BEFORE the inverter is
-    called. Native dispatch calls
+    Bounded intermediate charge targets require explicit ``charge_ceiling=True``;
+    defaults keep the demand/full-charge contract. Invalid intents fail before
+    the inverter is called. Native dispatch calls
     ``adjust_charge_immediate(target_soc, freeze=False)`` exactly once
     with no signature fallback.
 
@@ -259,7 +258,8 @@ def dispatch_template(inverter, target_soc, freeze=False, discharge_power_w=None
         raise ValueError("freeze_unsupported")
     if discharge_power_w is not None:
         raise ValueError("discharge_power_w_unsupported")
-    if type(target_soc) is not int or target_soc not in (0, 100):
+    bounded = charge_ceiling is True and type(target_soc) is int and math.ceil(inverter.reserve_percent) < target_soc <= 100
+    if type(target_soc) is not int or (target_soc not in (0, 100) and not bounded):
         raise ValueError("unsupported_target_soc")
     try:
         validate_template(inverter)
@@ -278,8 +278,8 @@ def dispatch_template(inverter, target_soc, freeze=False, discharge_power_w=None
         return False
 
     sources, targets = _expected_entities(base.args.get("deye_entity_prefix"))
-    if target_soc == 100:
-        expected_source, expected_target = ENABLE_ON_CHARGE_OPTION, 100.0
+    if target_soc > 0:
+        expected_source, expected_target = ENABLE_ON_CHARGE_OPTION, float(target_soc)
     else:
         reserve_percent = inverter.reserve_percent
         if not (isinstance(reserve_percent, (int, float)) and math.isfinite(reserve_percent)):
