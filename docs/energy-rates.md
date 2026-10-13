@@ -734,7 +734,8 @@ battery exports within such a rule. Set in `apps.yaml`:
   night with no PV, that energy would be grid part: it can run the house but is never force exported.
 - **pv_equivalent**: a credit bucket that all PV production fills (including PV the house uses) and
   every kWh exported drains. The battery may force export while the bucket has credit. Direct PV
-  surplus export is never limited; it only uses up credit. `export_budget_cap_kwh` (default the
+  surplus export is never limited and doesn't reduce the credit, because the PV it sends out is added
+  and removed in the same step; only battery export draws the credit down. `export_budget_cap_kwh` (default the
   battery size) caps how much credit is carried over. This can sell grid-charged energy when the
   bucket has credit, so it is the less strict reading.
 
