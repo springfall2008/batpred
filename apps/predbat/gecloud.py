@@ -1696,14 +1696,17 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         # The percentage rate registers only win as the control when the direct power register is
         # absent. When both a power register and its percentage equivalent exist, the power register
         # is the primary control and the percentage is left at 100% (reset by enable_default_options).
-        if has_charge_power_percent and not has_charge_rate:
-            self.set_arg("charge_rate_percent", build_entities("number", ["inverter_charge_power_percentage", "charge_power_rate"]))
-        else:
-            self.set_arg("charge_rate_percent", None)
-        if has_discharge_power_percent and not has_discharge_rate:
-            self.set_arg("discharge_rate_percent", build_entities("number", ["inverter_discharge_power_percentage", "discharge_power_rate"]))
-        else:
-            self.set_arg("discharge_rate_percent", None)
+        # Decided for each device on its own registers: a fleet can mix a unit with a power register
+        # and a 3-phase one with only the percentage, and each then gets the control it has (#5359).
+        def build_percent_entities(power_register, candidates):
+            """Per-device percentage rate entity IDs for the devices with no power register, or None if none qualify."""
+            entities = [None if power_register in register_names_by_device.get(device, set()) else first_existing_entity("number", device, candidates) for device in batteries]
+            if all(entity is None for entity in entities):
+                return None
+            return entities
+
+        self.set_arg("charge_rate_percent", build_percent_entities("battery_charge_power", ["inverter_charge_power_percentage", "charge_power_rate"]))
+        self.set_arg("discharge_rate_percent", build_percent_entities("battery_discharge_power", ["inverter_discharge_power_percentage", "discharge_power_rate"]))
 
         self.set_arg("givtcp_rest", None)
 
@@ -1800,9 +1803,10 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         The register features async_automatic_config() sniffs for, as this one device reports them.
 
         The same substrings as its sniffing loop, but scoped to this device's own settings rather
-        than ORed across the fleet: automatic_config() gates pause_mode, pause_start_time/end_time,
-        discharge_target_soc and the percentage rate controls for every device on what ANY device
-        reports, while a discovery record describes only its own device (spec D10).
+        than ORed across the fleet: automatic_config() gates pause_mode, pause_start_time/end_time
+        and discharge_target_soc for every device on what ANY device reports, while a discovery
+        record describes only its own device (spec D10). The percentage rate controls are bound
+        per device by both (#5359).
         """
         features = {"charge_rate": False, "discharge_rate": False, "charge_power_percent": False, "discharge_power_percent": False, "pause_start_time": False, "discharge_target_soc": False, "pause_battery": False}
         for register in self.settings.get(device, {}).values():

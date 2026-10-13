@@ -6095,8 +6095,9 @@ def _test_discovery_record_two_devices(my_predbat):
     """
     Two inverters give two records whose entity ids differ by device, each describing its own device
     (spec D10). automatic_config()'s "any device has it" gate binds the pause and discharge-target
-    entities on the second device although it has no such registers, and withholds its percentage
-    rate controls because the first device has a power register; the record does neither.
+    entities on the second device although it has no such registers; the record does not. The
+    percentage rate controls are bound per device by both: the second device has no power register,
+    so it gets its percentage rate while the first keeps its power register (#5359).
     """
     devices = {"ems": None, "gateway": None, "battery": ["battery001", "battery002"], "pv": [], "battery_meters": {"battery001": [1001], "battery002": [1002]}}
     settings = {
@@ -6115,9 +6116,11 @@ def _test_discovery_record_two_devices(my_predbat):
     assert not (_entity_ids(records[0]) & _entity_ids(records[1])), "the two records must not share an entity"
     captured = capture_automatic_config(ge)
     _agree_at(records[0], captured, 0)
-    _agree_at(records[1], captured, 1, missing=("pause_mode", "pause_start_time", "pause_end_time", "discharge_target_soc"), allowed_extra=("charge_rate_percent", "discharge_rate_percent"))
+    _agree_at(records[1], captured, 1, missing=("pause_mode", "pause_start_time", "pause_end_time", "discharge_target_soc"))
     assert captured["pause_mode"][1] == "select.predbat_gecloud_battery002_pause_battery", "automatic_config's fleet gate binds pause on the second device"
-    assert captured["charge_rate_percent"] is None, "automatic_config's fleet gate withholds the percentage rates"
+    assert captured["charge_rate_percent"] == [None, "number.predbat_gecloud_battery002_inverter_charge_power_percentage"], "the percentage charge rate is bound for the device with no power register only"
+    assert captured["discharge_rate_percent"] == [None, "number.predbat_gecloud_battery002_inverter_discharge_power_percentage"], "the percentage discharge rate likewise"
+    assert captured["charge_rate"][1] is None and captured["charge_rate"][0] is not None, "the power register is bound for the device that has it only"
     second = records[1]["entities"]
     assert second["reserve"]["entity_id"] == "number.predbat_gecloud_battery002_battery_reserve_percent", "the per-device candidate choice"
     assert second["scheduled_charge_enable"]["entity_id"] == "switch.predbat_gecloud_battery002_enable_ac_charge"

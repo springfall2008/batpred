@@ -1109,6 +1109,71 @@ def test_custom_inverter_def_drops_rate_step(test_name, my_predbat, ha):
     return failed
 
 
+def test_rate_control_is_per_inverter(test_name, my_predbat, ha):
+    """
+    An inverter reads and writes its rate through the control its own entry is bound to, whichever settings exist
+    for the fleet: a GE Cloud fleet mixing a unit with a power register and a 3-phase one with only the percentage
+    binds each setting for one inverter and leaves it empty for the other (#5359). It also means the 3-phase unit's
+    percentage entity is bound, so its grid_charge_only mark is seen in a mixed fleet (#5082).
+
+    Building an Inverter writes args and publishes entities on the shared fixture, so both are restored whole (#5079).
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+    saved_args = copy.deepcopy(my_predbat.args)
+    saved_items = copy.deepcopy(ha.dummy_items)
+    try:
+        my_predbat.args["inverter_type"] = ["GEC"]
+        # this inverter's entry in each setting, the rate it should read, the entities a new rate is written to
+        for watts_entity, percent_entity, expect_read, expect_writes in (
+            ("number.rate_watts", None, 1500, ["number.rate_watts"]),
+            (None, "number.rate_percent", 1300, ["number.rate_percent"]),
+            ("number.rate_watts", "number.rate_percent", 1300, ["number.rate_watts", "number.rate_percent"]),
+        ):
+            for rate_arg, read_rate, adjust_rate in (("charge_rate", "get_current_charge_rate", "adjust_charge_rate"), ("discharge_rate", "get_current_discharge_rate", "adjust_discharge_rate")):
+                for name in ("charge_rate", "charge_rate_percent", "discharge_rate", "discharge_rate_percent"):
+                    my_predbat.args.pop(name, None)
+                # Both settings exist for the fleet; only this inverter's entries differ
+                my_predbat.args[rate_arg] = [watts_entity]
+                my_predbat.args[rate_arg + "_percent"] = [percent_entity]
+                ha.dummy_items["number.rate_watts"] = 1500
+                ha.dummy_items["number.rate_percent"] = {"state": 50, "unit_of_measurement": "%", "grid_charge_only": True}
+                inv = Inverter(my_predbat, 0, quiet=True)
+                inv.battery_rate_max_raw = 2600
+                inv.battery_rate_max_charge = inv.battery_rate_max_discharge = 2600 / MINUTE_WATT
+                got = getattr(inv, read_rate)()
+                if got != expect_read:
+                    print("ERROR: {} {} watts {} percent {} expected to read {} got {}".format(test_name, rate_arg, watts_entity, percent_entity, expect_read, got))
+                    failed = True
+                written = []
+                call_service = ha.call_service
+
+                def recording_call_service(service, **kwargs):
+                    """Record which entity a rate write went to."""
+                    if service == "number/set_value":
+                        written.append(kwargs.get("entity_id"))
+                    return call_service(service, **kwargs)
+
+                ha.call_service = recording_call_service
+                try:
+                    getattr(inv, adjust_rate)(0)
+                finally:
+                    ha.call_service = call_service
+                if sorted(set(written)) != sorted(expect_writes):
+                    print("ERROR: {} {} watts {} percent {} expected writes to {} got {}".format(test_name, rate_arg, watts_entity, percent_entity, expect_writes, written))
+                    failed = True
+                # The mark on the percentage charge rate is seen whenever this inverter is bound to it
+                if rate_arg == "charge_rate" and inv.inv_support_discharge_freeze is not (percent_entity is None):
+                    print("ERROR: {} watts {} percent {} Freeze Export support is {}".format(test_name, watts_entity, percent_entity, inv.inv_support_discharge_freeze))
+                    failed = True
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        ha.dummy_items.clear()
+        ha.dummy_items.update(saved_items)
+    return failed
+
+
 def test_grid_charge_only_disables_discharge_freeze(test_name, my_predbat, ha):
     """
     A charge rate entity marked grid_charge_only turns Freeze Export support off for that inverter: the GivEnergy
@@ -5538,6 +5603,7 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_custom_inverter_def_drops_rate_step("custom_inverter_def_drops_rate_step", my_predbat, ha)
     failed |= test_rate_step_from_charge_rate_entity("rate_step_from_charge_rate_entity", my_predbat, ha)
     failed |= test_grid_charge_only_disables_discharge_freeze("grid_charge_only_disables_discharge_freeze", my_predbat, ha)
+    failed |= test_rate_control_is_per_inverter("rate_control_is_per_inverter", my_predbat, ha)
     failed |= test_rate_write_quantised("rate_write_quantised_charge", ha, inv, 2600, 1300, 1, 1206)
     failed |= test_rate_write_quantised("rate_write_quantised_charge_settled", ha, inv, 1206, 1300, 0, 1206)
     failed |= test_rate_write_quantised("rate_write_quantised_charge_next_step", ha, inv, 1206, 1350, 1, 1341)
