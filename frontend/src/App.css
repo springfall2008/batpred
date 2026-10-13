@@ -157,7 +157,8 @@
   margin-inline: 0;
 }
 
-@media (max-width: 700px) {
+/* Keep phone landscape in the same drawer-navigation layout as portrait. */
+@media (max-width: 700px), (max-width: 950px) and (max-height: 500px) and (orientation: landscape) {
   .app-shell {
     width: 100%;
     max-width: 100%;

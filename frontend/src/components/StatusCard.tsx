@@ -1,9 +1,15 @@
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
+import { faCircleArrowUp } from '@fortawesome/free-solid-svg-icons'
+
 import './StatusCard.css'
 
 type StatusCardProps = {
   status: string
   mode: string
   version: string
+  latestVersion: string | null
+  updateAvailable: boolean
+  updating: boolean
 
   lastUpdated: string | null
 
@@ -17,6 +23,7 @@ type StatusCardProps = {
   onActiveChange: (value: boolean) => void
   onReadOnlyChange: (value: boolean) => void
   onDebugChange: (value: boolean) => void
+  onUpdate: () => void
 }
 
 // Relative labels refresh when the parent supplies the next status poll.
@@ -67,6 +74,9 @@ function StatusCard({
   status,
   mode,
   version,
+  latestVersion,
+  updateAvailable,
+  updating,
   lastUpdated,
   configOk,
   active,
@@ -75,7 +85,8 @@ function StatusCard({
   onModeChange,
   onActiveChange,
   onReadOnlyChange,
-  onDebugChange
+  onDebugChange,
+  onUpdate
 }: StatusCardProps) {
   const statusHealth = getStatusHealth(status)
 
@@ -85,9 +96,23 @@ function StatusCard({
       <div className="status-card-header">
         <h2>Predbat Status</h2>
 
-        <span className="status-card-version">
-          Predbat {version}
-        </span>
+        <div className="status-card-version-row">
+          <span className="status-card-version">Predbat {version}</span>
+
+          {updateAvailable && (
+            <button
+              type="button"
+              className="status-card-update"
+              disabled={updating}
+              title={latestVersion ? `Install Predbat ${latestVersion}` : 'Install the latest Predbat update'}
+              aria-label={latestVersion ? `Update Predbat to ${latestVersion}` : 'Update Predbat'}
+              onClick={onUpdate}
+            >
+              <FontAwesomeIcon icon={faCircleArrowUp} aria-hidden="true" />
+              {updating ? 'Updating' : 'Update'}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Current status */}

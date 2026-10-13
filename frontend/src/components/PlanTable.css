@@ -230,7 +230,8 @@
 /*
  * Detailed action badges.
  */
-.plan-action {
+.plan-action,
+.plan-action-badge {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
@@ -240,6 +241,19 @@
   font-weight: 700;
   white-space: nowrap;
   cursor: help;
+}
+
+/* A split Predbat slot remains one editable control, with one badge per action. */
+.plan-action-multiple {
+  gap: 0.25rem;
+  padding: 0.1rem 0;
+  background: transparent;
+}
+
+.plan-action-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
 }
 
 /*
@@ -296,6 +310,18 @@
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
+}
+
+.plan-column-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 1em;
+  line-height: 1;
+}
+
+.plan-column-icon.is-blue {
+  color: var(--color-current);
 }
 
 .plan-column-label-mobile {
@@ -450,6 +476,49 @@
   display: inline-block;
 }
 
+.plan-action-tooltip {
+  position: absolute;
+  bottom: calc(100% + 0.6rem);
+  left: 50%;
+  z-index: 50;
+  display: block;
+  width: max-content;
+  max-width: calc(100vw - 1rem);
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--color-surface) 96%, var(--color-text) 4%);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--color-text) 16%, transparent);
+  color: var(--color-text-secondary);
+  font-size: 0.7rem;
+  font-weight: 400;
+  line-height: 1.4;
+  text-align: left;
+  text-transform: none;
+  letter-spacing: normal;
+  white-space: normal;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transform: translate(calc(-50% + var(--plan-action-tooltip-shift, 0px)), 4px);
+  transition:
+    opacity 0.12s ease,
+    transform 0.12s ease,
+    visibility 0.12s ease;
+}
+
+.plan-action-control:hover .plan-action-tooltip,
+.plan-action-control:focus-within .plan-action-tooltip {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(calc(-50% + var(--plan-action-tooltip-shift, 0px)), 0);
+}
+
+.plan-action-control.is-open .plan-action-tooltip {
+  opacity: 0;
+  visibility: hidden;
+}
+
 /*
  * The action is now both an explanation target and,
  * for current/future rows, the manual-override control.
@@ -537,11 +606,6 @@
  * Don't leave the explanation tooltip sitting over the menu
  * once the action has been clicked.
  */
-.plan-action-control.is-open .plan-tooltip-trigger::after {
-  opacity: 0 !important;
-  visibility: hidden !important;
-}
-
 /*
  * Manual action picker.
  */
@@ -551,11 +615,13 @@
   left: 0;
   z-index: 100;
   width: 240px;
+  max-width: calc(100vw - 1rem);
   padding: 0.35rem;
   border: 1px solid var(--color-border);
   border-radius: 8px;
   background: var(--color-surface);
   box-shadow: 0 10px 30px color-mix(in srgb, var(--color-text) 22%, transparent);
+  transform: translateX(var(--plan-action-menu-shift, 0));
 }
 
 .plan-action-menu-reason {
@@ -569,6 +635,15 @@
   height: 1px;
   margin: 0.3rem 0;
   background: var(--color-border);
+}
+
+.plan-action-menu-title {
+  padding: 0.1rem 0.5rem 0.3rem;
+  color: var(--color-text-muted);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .plan-action-menu button {
@@ -600,6 +675,14 @@
 .plan-action-menu button.is-selected {
   font-weight: 700;
   color: var(--color-text);
+}
+
+.plan-action-menu-icon.is-charge {
+  color: var(--color-flow-battery-charge);
+}
+
+.plan-action-menu-icon.is-export {
+  color: var(--color-flow-export);
 }
 
 .plan-action-menu-check {
@@ -641,12 +724,14 @@
   position: relative;
 }
 
-.plan-rate-control {
+.plan-rate-control,
+.plan-load-control {
   position: relative;
   display: inline-block;
 }
 
-.plan-rate-button {
+.plan-rate-button,
+.plan-load-button {
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
@@ -661,11 +746,14 @@
 }
 
 .plan-rate-button:hover,
-.plan-rate-button:focus-visible {
+.plan-rate-button:focus-visible,
+.plan-load-button:hover,
+.plan-load-button:focus-visible {
   background: color-mix(in srgb, var(--color-text) 6%, transparent);
 }
 
-.plan-rate-button.is-manual {
+.plan-rate-button.is-manual,
+.plan-load-button.is-manual {
   border-color: color-mix(in srgb, var(--color-text-muted) 35%, transparent);
 }
 
@@ -705,6 +793,14 @@
   font-weight: 700;
 }
 
+.plan-cell-popover-title {
+  color: var(--color-text-muted);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 .plan-rate-input {
   display: flex;
   align-items: center;
@@ -720,6 +816,7 @@
   background: var(--color-bg);
   color: var(--color-text);
   font: inherit;
+  text-align: right;
 }
 
 .plan-rate-input > span {
@@ -803,4 +900,82 @@
 .plan-car.is-charging {
   color: var(--color-car);
   font-weight: 700;
+}
+
+@keyframes plan-action-sheet-enter {
+  from {
+    transform: translateY(100%);
+  }
+
+  to {
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 700px) {
+  /* The bottom sheet already displays the explanation, so a hover tooltip adds no value. */
+  .plan-action-tooltip {
+    display: none;
+  }
+
+  .plan-action-menu {
+    position: fixed;
+    inset: auto 0 0;
+    width: auto;
+    max-width: none;
+    max-height: min(75dvh, 32rem);
+    padding: 0.7rem;
+    padding-bottom: max(0.7rem, env(safe-area-inset-bottom));
+    overflow-y: auto;
+    border-radius: 1rem 1rem 0 0;
+    box-shadow: 0 -12px 36px color-mix(in srgb, var(--color-text) 26%, transparent);
+    transform: none;
+    animation: plan-action-sheet-enter 0.18s ease-out;
+  }
+
+  .plan-action-menu-reason {
+    padding: 0.5rem 0.55rem 0.65rem;
+    font-size: 0.78rem;
+  }
+
+  .plan-action-menu-title {
+    padding: 0.2rem 0.55rem 0.45rem;
+    font-size: 0.7rem;
+  }
+
+  .plan-action-menu button {
+    min-height: 2.75rem;
+    padding: 0.65rem 0.6rem;
+    font-size: 0.84rem;
+  }
+
+  .plan-cell-popover {
+    position: fixed;
+    inset: auto 0 var(--plan-mobile-keyboard-offset, 0px);
+    z-index: 110;
+    width: auto;
+    max-width: none;
+    max-height: calc(100vh - var(--plan-mobile-keyboard-offset, 0px));
+    padding: 0.8rem;
+    padding-bottom: max(0.8rem, env(safe-area-inset-bottom));
+    border-radius: 1rem 1rem 0 0;
+    box-shadow: 0 -12px 36px color-mix(in srgb, var(--color-text) 26%, transparent);
+    transform: none;
+    animation: plan-action-sheet-enter 0.18s ease-out;
+  }
+
+  .plan-cell-popover-title {
+    font-size: 0.7rem;
+  }
+
+  .plan-cell-popover label {
+    gap: 0.45rem;
+    font-size: 0.82rem;
+  }
+
+  .plan-cell-popover button {
+    min-height: 2.75rem;
+    padding: 0.65rem;
+    font-size: 0.84rem;
+  }
 }

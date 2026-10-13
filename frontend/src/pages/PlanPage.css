@@ -230,7 +230,7 @@
   box-shadow: inset 3px 0 0 var(--color-export);
 }
 
-@media (max-width: 700px) {
+@media (max-width: 700px), (max-width: 950px) and (max-height: 500px) and (orientation: landscape) {
   .plan-view-tabs {
     align-self: center;
   }
@@ -246,16 +246,16 @@
   /* Size mobile columns from their content and scroll only when the data needs it. */
   .plan-table,
   .plan-table.is-debug {
-    width: max-content;
-    min-width: 100%;
+    width: 100%;
+    min-width: max-content;
     table-layout: auto;
-    font-size: clamp(0.5rem, 1.7vw, 0.68rem);
+    font-size: clamp(0.46rem, 1.55vw, 0.62rem);
   }
 
   .plan-table th {
     width: 1%;
-    padding: 0.35rem 0.18rem;
-    font-size: 0.5rem;
+    padding: 0.35rem 0.09rem;
+    font-size: 0.46rem;
     line-height: 1.1;
     letter-spacing: 0;
     text-align: center;
@@ -264,18 +264,38 @@
 
   .plan-table td {
     width: 1%;
-    padding: 0.35rem 0.18rem;
-    text-align: right;
+    padding: 0.35rem 0.09rem;
+    text-align: center;
   }
 
-  .plan-table th:first-child,
-  .plan-table td:first-child,
-  .plan-table th:nth-child(2),
-  .plan-table td:nth-child(2) {
+  .plan-table .plan-day-row td {
     text-align: left;
   }
 
+  /* These compact values need less surrounding space than action and time. */
+  .plan-table td.plan-rate-cell,
+  .plan-table td.plan-load,
+  .plan-table td.plan-target,
+  .plan-table td.plan-soc,
+  .plan-table td.plan-time,
+  .plan-table td:nth-child(2) {
+    padding-inline: 0.05rem;
+  }
+
+  .plan-table .plan-rate-button,
+  .plan-table .plan-target-button {
+    padding-inline: 0.18rem;
+  }
+
+  .plan-table th:first-child,
+  .plan-table td.plan-time,
   .plan-table .plan-time,
+  .plan-table .plan-time-column {
+    width: 2.8rem !important;
+    min-width: 2.8rem;
+    max-width: 2.8rem;
+  }
+
   .plan-table .plan-target-button {
     min-width: 0;
   }
@@ -304,12 +324,34 @@
     gap: 0;
   }
 
-  .plan-table .plan-column-heading > span:first-child,
+  .plan-table .plan-column-label,
   .plan-table .plan-column-heading .plan-tooltip-trigger {
     display: none;
   }
 
   .plan-table .plan-column-label-mobile {
-    display: inline;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 1em;
+    min-width: 0.8rem;
+    line-height: 1;
+  }
+
+  .plan-table .plan-column-label-mobile.is-blue {
+    color: var(--color-current);
+  }
+}
+
+/* In phone landscape there is room to share spare space across the data columns. */
+@media (max-width: 950px) and (max-height: 500px) and (orientation: landscape) {
+  .plan-table,
+  .plan-table.is-debug {
+    table-layout: fixed;
+  }
+
+  .plan-table th,
+  .plan-table td {
+    width: auto;
   }
 }

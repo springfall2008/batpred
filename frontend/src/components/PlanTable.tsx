@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useState, useRef, type CSSProperties } from 'react'
+import { flushSync } from 'react-dom'
 
 import {
   FontAwesomeIcon,
@@ -7,14 +8,22 @@ import {
 
 import {
   faArrowRight,
+  faArrowDown,
   faArrowUpFromBracket,
+  faArrowUp,
   faArrowTrendUp,
+  faBatteryThreeQuarters,
   faBan,
   faBolt,
   faCar,
   faCircleInfo,
+  faClock,
+  faCrosshairs,
+  faGaugeSimpleHigh,
   faHouse,
   faPause,
+  faPlay,
+  faSolarPanel,
   faSnowflake,
   faWater,
   faCheck,
@@ -28,6 +37,7 @@ import NordPoolIcon from './NordPoolIcon'
 
 import type { Plan, PlanOverrides } from '../types/plan'
 import { formatMajorCurrency, resolveCurrencySymbols } from '../utils/currency'
+import { getEffectivePlanState, hasCarHoldBeforeExport } from '../utils/plan'
 
 import './PlanTable.css'
 
@@ -112,6 +122,7 @@ const OVERRIDE_OPTIONS: {
   action: OverrideAction
   label: string
   icon: IconDefinition
+  tone?: 'charge' | 'export'
 }[] = [
     {
       action: 'Manual Demand',
@@ -121,22 +132,26 @@ const OVERRIDE_OPTIONS: {
     {
       action: 'Manual Charge',
       label: 'Charge',
-      icon: faBolt
+      icon: faBolt,
+      tone: 'charge'
     },
     {
       action: 'Manual Export',
       label: 'Export',
-      icon: faArrowUpFromBracket
+      icon: faArrowUpFromBracket,
+      tone: 'export'
     },
     {
       action: 'Manual Freeze Charge',
       label: 'Freeze Charge',
-      icon: faSnowflake
+      icon: faSnowflake,
+      tone: 'charge'
     },
     {
       action: 'Manual Freeze Export',
       label: 'Freeze Export',
-      icon: faSnowflake
+      icon: faSnowflake,
+      tone: 'export'
     }
   ]
 
@@ -228,6 +243,7 @@ function RateCell({
   const [error, setError] = useState<string | null>(null)
 
   const controlRef = useRef<HTMLDivElement | null>(null)
+  const inputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
     if (!open) {
@@ -268,9 +284,16 @@ function RateCell({
      * would unnecessarily reset its value.
      */
     if (!open) {
-      setValue(String(override?.rate ?? rate))
+      // The input must be focused within this tap gesture for mobile browsers
+      // to show their keyboard. Flush the sheet into the DOM first.
+      flushSync(() => {
+        setValue(String(override?.rate ?? rate))
+        setError(null)
+        onToggle()
+      })
+      inputRef.current?.focus()
 
-      setError(null)
+      return
     }
 
     onToggle()
@@ -415,6 +438,10 @@ function RateCell({
 
         {open && !isPast && (
           <form className="plan-cell-popover" onSubmit={setRate}>
+            <div className="plan-cell-popover-title">
+              {formatTime(row.time)} {type} rate override
+            </div>
+
             <label>
               <span>{type === 'import' ? 'Import rate' : 'Export rate'}</span>
 
@@ -425,7 +452,7 @@ function RateCell({
                   inputMode="decimal"
                   value={value}
                   onChange={(event) => setValue(event.target.value)}
-                  autoFocus
+                  ref={inputRef}
                   disabled={saving}
                 />
 
@@ -462,6 +489,186 @@ function RateCell({
   )
 }
 
+type LoadCellProps = {
+  row: PlanRow
+  overrides: PlanOverrides
+  isPast: boolean
+  debugEnabled: boolean
+  open: boolean
+  onToggle: () => void
+  onClose: () => void
+  onOverrideSubmitted: () => void
+}
+
+function LoadCell({
+  row,
+  overrides,
+  isPast,
+  debugEnabled,
+  open,
+  onToggle,
+  onClose,
+  onOverrideSubmitted
+}: LoadCellProps) {
+  const override = (overrides.manual_load_adjust ?? []).find((item) => item.minutes === row.slot_minute) ?? null
+  const [value, setValue] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const controlRef = useRef<HTMLDivElement | null>(null)
+  const inputRef = useRef<HTMLInputElement | null>(null)
+
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      if (controlRef.current && !controlRef.current.contains(event.target as Node)) {
+        onClose()
+      }
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        onClose()
+      }
+    }
+
+    document.addEventListener('pointerdown', handlePointerDown)
+    document.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [open, onClose])
+
+  function openEditor() {
+    if (isPast) {
+      return
+    }
+
+    if (!open) {
+      flushSync(() => {
+        setValue(String(override?.adjustment ?? row.load_forecast))
+        setError(null)
+        onToggle()
+      })
+      inputRef.current?.focus()
+
+      return
+    }
+
+    onToggle()
+  }
+
+  async function sendOverride(action: 'Set Load' | 'Clear Load', adjustment: number) {
+    setSaving(true)
+    setError(null)
+
+    const formData = new FormData()
+    formData.append('time', formatOverrideTime(row.time))
+    formData.append('action', action)
+    formData.append('rate', String(adjustment))
+
+    try {
+      const response = await fetch('./rate_override', {
+        method: 'POST',
+        body: formData
+      })
+      const result = (await response.json()) as { success?: boolean; message?: string }
+
+      if (!response.ok || result.success === false) {
+        throw new Error(result.message || `HTTP ${response.status}`)
+      }
+
+      onClose()
+      onOverrideSubmitted()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error'
+      setError(`Unable to update load forecast: ${message}`)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function setLoad(event: React.FormEvent) {
+    event.preventDefault()
+    const adjustment = Number(value)
+
+    if (!Number.isFinite(adjustment)) {
+      setError('Enter a valid load forecast.')
+      return
+    }
+
+    await sendOverride('Set Load', adjustment)
+  }
+
+  return (
+    <td
+      className={['plan-number', 'plan-load', row.load_color ? 'has-plan-cell-colour' : ''].filter(Boolean).join(' ')}
+      style={cellColour(row.load_color)}
+    >
+      <div ref={controlRef} className="plan-load-control">
+        <button
+          type="button"
+          className={['plan-load-button', override ? 'is-manual' : ''].filter(Boolean).join(' ')}
+          onClick={openEditor}
+          aria-disabled={isPast}
+          aria-label={override ? `Load forecast ${row.load_forecast.toFixed(2)} kWh, manually overridden` : `Load forecast ${row.load_forecast.toFixed(2)} kWh`}
+        >
+          <span className="plan-value-with-indicator">
+            {row.load_forecast > 0 && row.load_color && (
+              <span className="plan-value-indicator" style={{ backgroundColor: row.load_color }} aria-hidden="true" />
+            )}
+            <span>{row.load_forecast.toFixed(2)}</span>
+          </span>
+
+          {override && <span className="plan-rate-manual-dot" title="Manual load override" aria-hidden="true" />}
+        </button>
+
+        {debugEnabled && (row.load_forecast10 ?? 0) > 0 && (
+          <small className="plan-debug-value">({row.load_forecast10?.toFixed(2)})</small>
+        )}
+
+        {open && !isPast && (
+          <form className="plan-cell-popover" onSubmit={setLoad}>
+            <div className="plan-cell-popover-title">{formatTime(row.time)} load override</div>
+
+            <label>
+              <span>Load forecast</span>
+
+              <div className="plan-rate-input">
+                <input
+                  type="number"
+                  step="0.01"
+                  inputMode="decimal"
+                  value={value}
+                  onChange={(event) => setValue(event.target.value)}
+                  ref={inputRef}
+                  disabled={saving}
+                />
+
+                <span>kWh</span>
+              </div>
+            </label>
+
+            <button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Set override'}</button>
+
+            {override && (
+              <button type="button" className="plan-rate-clear" disabled={saving} onClick={() => void sendOverride('Clear Load', override.adjustment)}>
+                Use Predbat forecast
+              </button>
+            )}
+
+            {error && <div className="plan-rate-error" role="alert">{error}</div>}
+          </form>
+        )}
+      </div>
+    </td>
+  )
+}
+
 type TargetCellProps = {
   row: PlanRow
   overrides: PlanOverrides
@@ -484,6 +691,7 @@ function TargetCell({
   onOverrideSubmitted
 }: TargetCellProps) {
   const controlRef = useRef<HTMLDivElement | null>(null)
+  const inputRef = useRef<HTMLInputElement | null>(null)
 
   const [value, setValue] = useState('')
 
@@ -519,9 +727,14 @@ function TargetCell({
        */
       const initialValue = override?.target ?? plannedTarget ?? row.soc_percent
 
-      setValue(String(initialValue))
+      flushSync(() => {
+        setValue(String(initialValue))
+        setError(null)
+        onToggle()
+      })
+      inputRef.current?.focus()
 
-      setError(null)
+      return
     }
 
     onToggle()
@@ -655,6 +868,10 @@ function TargetCell({
 
         {open && !isPast && (
           <form className="plan-cell-popover" onSubmit={setTarget}>
+            <div className="plan-cell-popover-title">
+              {formatTime(row.time)} target override
+            </div>
+
             <label>
               <span>Target SOC</span>
 
@@ -667,7 +884,7 @@ function TargetCell({
                   inputMode="numeric"
                   value={value}
                   onChange={(event) => setValue(event.target.value)}
-                  autoFocus
+                  ref={inputRef}
                   disabled={saving}
                 />
 
@@ -748,6 +965,45 @@ function getActionType(state: string): ActionType {
     default:
       return 'unknown'
   }
+}
+
+/*
+ * A charge and export plan can share one half-hour slot. Predbat supplies
+ * the two display states separately for the legacy table; its `state` field
+ * contains only the final action, so use both labels when they are present.
+ */
+function getActionTypeFromDisplayState(state?: string | null): ActionType | null {
+  if (!state) {
+    return null
+  }
+
+  if (state.includes('FrzChrg')) return 'freeze-charge'
+  if (state.includes('HoldChrg')) return 'hold-charge'
+  if (state.includes('Chrg')) return 'charge'
+  if (state.includes('FrzExp')) return 'freeze-export'
+  if (state.includes('HoldExp')) return 'hold-export'
+  if (state.includes('Exp')) return 'export'
+
+  return null
+}
+
+function getPlannedActions(row: PlanRow): ActionType[] {
+  const hasCarHold = hasCarHoldBeforeExport(row)
+  const reasonActions: ActionType[] = hasCarHold ? ['hold-car'] : []
+  const splitActions = [row.state_text, row.state2_text]
+    .map(getActionTypeFromDisplayState)
+    .filter((action): action is ActionType => action !== null)
+
+  // Keep the final export visible even for an older response that lacks the
+  // legacy display strings but does include the structured split-slot reason.
+  const finalAction = hasCarHold ? [getActionType(row.state)] : []
+  const actions = [...new Set([...reasonActions, ...splitActions, ...finalAction])]
+
+  if (actions.length > 0) {
+    return actions
+  }
+
+  return [getActionType(getEffectivePlanState(row))]
 }
 
 /*
@@ -1006,15 +1262,37 @@ function findCurrentRowIndex(rows: Plan['rows']) {
 type ColumnHeadingProps = {
   label: string
   mobileLabel?: string
+  icon?: IconDefinition
+  mobileTone?: 'blue'
   help: string
 }
 
-function ColumnHeading({ label, mobileLabel, help }: ColumnHeadingProps) {
+function ColumnHeading({ label, mobileLabel, icon, mobileTone, help }: ColumnHeadingProps) {
+  const mobileName = mobileLabel ?? label
+
   return (
     <span className="plan-column-heading">
-      <span>{label}</span>
+      {icon && (
+        <span
+          className={['plan-column-icon', mobileTone ? `is-${mobileTone}` : ''].filter(Boolean).join(' ')}
+          aria-label={mobileName}
+          title={mobileName}
+        >
+          <FontAwesomeIcon icon={icon} aria-hidden="true" />
+        </span>
+      )}
 
-      <span className="plan-column-label-mobile">{mobileLabel ?? label}</span>
+      <span className="plan-column-label">{label}</span>
+
+      {!icon && (
+        <span
+          className={['plan-column-label-mobile', mobileTone ? `is-${mobileTone}` : ''].filter(Boolean).join(' ')}
+          aria-label={mobileName}
+          title={mobileName}
+        >
+          {mobileName}
+        </span>
+      )}
 
       <span className="plan-tooltip-trigger" data-tooltip={help} tabIndex={0} aria-label={help}>
         <FontAwesomeIcon icon={faCircleInfo} />
@@ -1052,6 +1330,95 @@ export default function PlanTable({
   const currentRowIndex = readOnly ? -1 : findCurrentRowIndex(rows)
 
   const [openCellEditor, setOpenCellEditor] = useState<string | null>(null)
+
+  useEffect(() => {
+    const visualViewport = window.visualViewport
+
+    if (!visualViewport) {
+      return
+    }
+
+    const viewport = visualViewport as VisualViewport
+    let baselineHeight = viewport.height + viewport.offsetTop
+
+    function updateKeyboardOffset() {
+      const visibleHeight = viewport.height + viewport.offsetTop
+
+      // Mobile browsers do not agree on whether innerHeight follows the
+      // keyboard. Comparing the current visual viewport with its unoccluded
+      // height works in both a browser tab and Home Assistant's iframe.
+      baselineHeight = Math.max(baselineHeight, visibleHeight)
+
+      const offset = Math.max(0, baselineHeight - visibleHeight)
+
+      document.documentElement.style.setProperty('--plan-mobile-keyboard-offset', `${offset}px`)
+    }
+
+    function updateAfterKeyboardAnimation() {
+      updateKeyboardOffset()
+      requestAnimationFrame(updateKeyboardOffset)
+      window.setTimeout(updateKeyboardOffset, 150)
+      window.setTimeout(updateKeyboardOffset, 350)
+    }
+
+    updateKeyboardOffset()
+    viewport.addEventListener('resize', updateKeyboardOffset)
+    viewport.addEventListener('scroll', updateKeyboardOffset)
+    document.addEventListener('focusin', updateAfterKeyboardAnimation)
+
+    return () => {
+      viewport.removeEventListener('resize', updateKeyboardOffset)
+      viewport.removeEventListener('scroll', updateKeyboardOffset)
+      document.removeEventListener('focusin', updateAfterKeyboardAnimation)
+      document.documentElement.style.removeProperty('--plan-mobile-keyboard-offset')
+    }
+  }, [])
+
+  function toggleCellEditor(key: string) {
+    setOpenOverrideTime(null)
+    setOverrideError(null)
+    setOpenCellEditor((current) => (current === key ? null : key))
+  }
+
+  function constrainFloatingElement(element: HTMLElement | null, shiftProperty: string) {
+    if (!element) {
+      return
+    }
+
+    requestAnimationFrame(() => {
+      if (!element.isConnected) {
+        return
+      }
+
+      // Measure from the unshifted position. Otherwise, a later measurement
+      // treats the previous correction as the starting point and can move the
+      // tooltip back outside the viewport.
+      element.style.removeProperty(shiftProperty)
+
+      const viewport = window.visualViewport
+      const viewportLeft = viewport?.offsetLeft ?? 0
+      const viewportWidth = viewport?.width ?? window.innerWidth
+      const bounds = element.getBoundingClientRect()
+      const safeInset = 8
+      const minimumLeft = viewportLeft + safeInset
+      const maximumLeft = Math.max(minimumLeft, viewportLeft + viewportWidth - bounds.width - safeInset)
+      const constrainedLeft = Math.min(maximumLeft, Math.max(minimumLeft, bounds.left))
+
+      element.style.setProperty(shiftProperty, `${constrainedLeft - bounds.left}px`)
+    })
+  }
+
+  function constrainActionMenu(menu: HTMLDivElement | null) {
+    constrainFloatingElement(menu, '--plan-action-menu-shift')
+  }
+
+  function constrainActionTooltip(tooltip: HTMLSpanElement | null) {
+    constrainFloatingElement(tooltip, '--plan-action-tooltip-shift')
+  }
+
+  function constrainActionTooltipForControl(control: HTMLElement) {
+    constrainActionTooltip(control.querySelector<HTMLSpanElement>('.plan-action-tooltip'))
+  }
 
   const [colourStyle, setColourStyle] = useState<'dots' | 'cells'>(() => {
     try {
@@ -1173,15 +1540,26 @@ export default function PlanTable({
 
       <div className="plan-table-scroll">
         <table className={['plan-table', debugEnabled ? 'is-debug' : '', colourCells ? 'is-cell-colours' : ''].filter(Boolean).join(' ')}>
+          <colgroup>
+            <col className="plan-time-column" />
+            {Array.from({ length: columnCount - 1 }, (_, index) => <col key={index} />)}
+          </colgroup>
+
           <thead>
             <tr>
               <th>
-                <ColumnHeading label="Time" help="The start time of this Predbat planning slot." />
+                <ColumnHeading
+                  label="Time"
+                  mobileLabel="Time"
+                  icon={faClock}
+                  help="The start time of this Predbat planning slot."
+                />
               </th>
 
               <th>
                 <ColumnHeading
                   label="Action"
+                  icon={faPlay}
                   help="What Predbat plans to do during this slot. Hover over the action icon for an explanation of why this action was chosen."
                 />
               </th>
@@ -1189,7 +1567,8 @@ export default function PlanTable({
               <th>
                 <ColumnHeading
                   label="Import"
-                  mobileLabel="IMP"
+                  mobileLabel="Import"
+                  icon={faArrowDown}
                   help={
                     debugEnabled
                       ? 'The tariff import rate, followed by the effective rate after conversion losses and battery cycling.'
@@ -1201,7 +1580,8 @@ export default function PlanTable({
               <th>
                 <ColumnHeading
                   label="Export"
-                  mobileLabel="EXP"
+                  mobileLabel="Export"
+                  icon={faArrowUp}
                   help={
                     debugEnabled
                       ? 'The tariff export rate, followed by the effective rate after conversion losses and battery cycling.'
@@ -1213,6 +1593,8 @@ export default function PlanTable({
               <th>
                 <ColumnHeading
                   label={debugEnabled ? 'PV (10%)' : 'PV'}
+                  mobileLabel="PV"
+                  icon={faSolarPanel}
                   help={
                     debugEnabled
                       ? 'The main solar forecast, followed by the lower 10% confidence forecast in brackets.'
@@ -1224,6 +1606,8 @@ export default function PlanTable({
               <th>
                 <ColumnHeading
                   label={debugEnabled ? 'Load (10%)' : 'Load'}
+                  mobileLabel="Load"
+                  icon={faHouse}
                   help={
                     debugEnabled
                       ? 'The main load forecast, followed by the lower 10% confidence forecast in brackets.'
@@ -1254,6 +1638,7 @@ export default function PlanTable({
                 <th>
                   <ColumnHeading
                     label="Car"
+                    icon={faCar}
                     help="Predicted energy used to charge the car during this plan slot."
                   />
                 </th>
@@ -1271,7 +1656,7 @@ export default function PlanTable({
               <th>
                 <ColumnHeading
                   label="Target"
-                  mobileLabel="TRGT"
+                  icon={faCrosshairs}
                   help="The battery target Predbat is aiming for during a charge or export action. Charge actions target an upper SOC; export actions target a lower SOC."
                 />
               </th>
@@ -1279,6 +1664,7 @@ export default function PlanTable({
               <th>
                 <ColumnHeading
                   label="SOC"
+                  icon={faBatteryThreeQuarters}
                   help="The predicted battery state of charge at this point in the plan."
                 />
               </th>
@@ -1286,6 +1672,7 @@ export default function PlanTable({
               <th>
                 <ColumnHeading
                   label="Cost"
+                  mobileLabel={currencyMajor}
                   help="The estimated change in energy cost during this plan slot."
                 />
               </th>
@@ -1293,7 +1680,8 @@ export default function PlanTable({
               <th>
                 <ColumnHeading
                   label="Total"
-                  mobileLabel="TOTL"
+                  mobileLabel={currencyMajor}
+                  mobileTone="blue"
                   help="Predbat's running estimated energy cost at the start of this slot."
                 />
               </th>
@@ -1303,7 +1691,8 @@ export default function PlanTable({
                   <th>
                     <ColumnHeading
                       label="CO₂ intensity"
-                      mobileLabel="CO2"
+                      mobileLabel="CO₂ intensity"
+                      icon={faGaugeSimpleHigh}
                       help="The forecast carbon intensity of grid electricity during this slot, in grams of CO₂ per kWh."
                     />
                   </th>
@@ -1311,7 +1700,9 @@ export default function PlanTable({
                   <th>
                     <ColumnHeading
                       label="CO₂ total"
-                      mobileLabel="CO2 TOTL"
+                      mobileLabel="CO₂ total"
+                      icon={faGaugeSimpleHigh}
+                      mobileTone="blue"
                       help="Predbat's running forecast of net carbon emissions at the start of this slot, in kilograms of CO₂."
                     />
                   </th>
@@ -1326,7 +1717,11 @@ export default function PlanTable({
 
               const newDay = !previousRow || getDateKey(previousRow.time) !== getDateKey(row.time)
 
-              const action = getActionType(row.state)
+              const actions = getPlannedActions(row)
+
+              const action = actions[0]
+
+              const hasMultipleActions = actions.length > 1
 
               const reason = getReasonText(plan, row)
 
@@ -1377,6 +1772,12 @@ export default function PlanTable({
                         className={['plan-action-control', menuOpen ? 'is-open' : '']
                           .filter(Boolean)
                           .join(' ')}
+                        onPointerEnter={(event) => {
+                          constrainActionTooltipForControl(event.currentTarget)
+                        }}
+                        onFocusCapture={(event) => {
+                          constrainActionTooltipForControl(event.currentTarget)
+                        }}
                         onPointerDown={(event) => {
                           event.stopPropagation()
                         }}
@@ -1385,13 +1786,11 @@ export default function PlanTable({
                           type="button"
                           className={[
                             'plan-action',
-                            'plan-tooltip-trigger',
-                            getActionClass(action),
+                            hasMultipleActions ? 'plan-action-multiple' : getActionClass(action),
                             manualOverride ? 'is-manual' : ''
                           ]
                             .filter(Boolean)
                             .join(' ')}
-                          data-tooltip={actionTooltip}
                           aria-expanded={menuOpen}
                           aria-haspopup={!isPast ? 'menu' : undefined}
                           aria-disabled={isPast}
@@ -1405,13 +1804,30 @@ export default function PlanTable({
                             }
 
                             setOverrideError(null)
-
+                            setOpenCellEditor(null)
                             setOpenOverrideTime(menuOpen ? null : row.time)
                           }}
                         >
-                          {getActionIcon(action)}
+                          {hasMultipleActions ? (
+                            <span className="plan-action-badges">
+                              {actions.map((plannedAction) => (
+                                <span
+                                  key={plannedAction}
+                                  className={['plan-action-badge', getActionClass(plannedAction)].join(' ')}
+                                >
+                                  {getActionIcon(plannedAction)}
 
-                          <span>{getActionLabel(action)}</span>
+                                  <span>{getActionLabel(plannedAction)}</span>
+                                </span>
+                              ))}
+                            </span>
+                          ) : (
+                            <>
+                              {getActionIcon(action)}
+
+                              <span>{getActionLabel(action)}</span>
+                            </>
+                          )}
 
                           {rateEvent && (
                             <span className={`plan-saving-session-badge is-${rateEvent.colour}`}>
@@ -1438,11 +1854,19 @@ export default function PlanTable({
                           )}
                         </button>
 
+                        <span ref={constrainActionTooltip} className="plan-action-tooltip" role="tooltip">
+                          {actionTooltip}
+                        </span>
+
                         {menuOpen && (
-                          <div className="plan-action-menu" role="menu">
-                            {reason && <div className="plan-action-menu-reason">{reason}</div>}
+                          <div ref={constrainActionMenu} className="plan-action-menu" role="menu">
+                            <div className="plan-action-menu-reason">{actionTooltip}</div>
 
                             <div className="plan-action-menu-divider" />
+
+                            <div className="plan-action-menu-title">
+                              {new Date(row.time).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })} override
+                            </div>
 
                             {OVERRIDE_OPTIONS.map((option) => {
                               const selected = manualOverride === option.action
@@ -1458,7 +1882,10 @@ export default function PlanTable({
                                     void setPlanOverride(row, option.action)
                                   }}
                                 >
-                                  <FontAwesomeIcon icon={option.icon} />
+                                  <FontAwesomeIcon
+                                    icon={option.icon}
+                                    className={option.tone ? `plan-action-menu-icon is-${option.tone}` : 'plan-action-menu-icon'}
+                                  />
 
                                   <span>{option.label}</span>
 
@@ -1518,7 +1945,7 @@ export default function PlanTable({
                       onToggle={() => {
                         const key = `rate:${row.time}:import`
 
-                        setOpenCellEditor((current) => (current === key ? null : key))
+                        toggleCellEditor(key)
                       }}
                       onClose={() => {
                         setOpenCellEditor(null)
@@ -1537,7 +1964,7 @@ export default function PlanTable({
                       onToggle={() => {
                         const key = `rate:${row.time}:export`
 
-                        setOpenCellEditor((current) => (current === key ? null : key))
+                        toggleCellEditor(key)
                       }}
                       onClose={() => {
                         setOpenCellEditor(null)
@@ -1559,26 +1986,20 @@ export default function PlanTable({
                       )}
                     </td>
 
-                    <td
-                      className={['plan-number', row.load_color ? 'has-plan-cell-colour' : ''].filter(Boolean).join(' ')}
-                      style={cellColour(row.load_color)}
-                    >
-                      <span className="plan-value-with-indicator">
-                        {row.load_forecast > 0 && row.load_color && (
-                          <span
-                            className="plan-value-indicator"
-                            style={{ backgroundColor: row.load_color }}
-                            aria-hidden="true"
-                          />
-                        )}
-                        <span>{row.load_forecast.toFixed(2)}</span>
-                      </span>
-                      {debugEnabled && (row.load_forecast10 ?? 0) > 0 && (
-                        <small className="plan-debug-value">
-                          ({row.load_forecast10?.toFixed(2)})
-                        </small>
-                      )}
-                    </td>
+                    <LoadCell
+                      row={row}
+                      overrides={overrides}
+                      isPast={isPast}
+                      debugEnabled={debugEnabled}
+                      onOverrideSubmitted={onOverrideSubmitted}
+                      open={openCellEditor === `load:${row.time}`}
+                      onToggle={() => {
+                        toggleCellEditor(`load:${row.time}`)
+                      }}
+                      onClose={() => {
+                        setOpenCellEditor(null)
+                      }}
+                    />
 
                     {debugEnabled && (
                       <td className="plan-number plan-debug-column">
@@ -1650,7 +2071,7 @@ export default function PlanTable({
                       onToggle={() => {
                         const key = `target:${row.time}`
 
-                        setOpenCellEditor((current) => (current === key ? null : key))
+                        toggleCellEditor(key)
                       }}
                       onClose={() => {
                         setOpenCellEditor(null)

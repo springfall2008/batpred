@@ -168,6 +168,16 @@
   border-radius: 2px;
 }
 
+.battery-chart-legend-item.is-hollow .battery-chart-legend-marker {
+  border: 2px solid var(--battery-chart-legend-colour);
+  background: transparent;
+}
+
+.battery-chart-legend-item.is-line.is-hollow .battery-chart-legend-marker {
+  height: 0.72rem;
+  border-radius: 50%;
+}
+
 .battery-chart-legend-item.is-line .battery-chart-legend-marker {
   width: 1.25rem;
   height: 3px;

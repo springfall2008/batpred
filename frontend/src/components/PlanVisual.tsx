@@ -19,6 +19,7 @@ import {
 
 import type { Plan } from '../types/plan'
 import { resolveCurrencySymbols } from '../utils/currency'
+import { getEffectivePlanState, hasCarHoldBeforeExport } from '../utils/plan'
 
 import './PlanVisual.css'
 
@@ -36,6 +37,7 @@ type TimelineAction =
   | 'hold-export'
   | 'freeze-export'
   | 'hold-car'
+  | 'hold-car-export'
   | 'hold-iboost'
   | 'no-charge'
   | 'demand'
@@ -56,6 +58,8 @@ type TimelineEvent = {
   endSoc: number
 
   carCharging: number
+
+  solarGeneration: number
 
   target: number | null
   targetSocStart: number | null
@@ -159,6 +163,9 @@ function getTimelineBlockLabel(action: TimelineAction, width: number): string | 
     case 'hold-car':
       return 'Car'
 
+    case 'hold-car-export':
+      return 'Car → Export'
+
     case 'hold-iboost':
       return 'iBoost'
 
@@ -219,6 +226,12 @@ function getTimelineAction(state: string): TimelineAction {
   }
 }
 
+function getTimelineActionForRow(row: PlanRow): TimelineAction {
+  return hasCarHoldBeforeExport(row)
+    ? 'hold-car-export'
+    : getTimelineAction(getEffectivePlanState(row))
+}
+
 function getActionLabel(action: TimelineAction) {
   switch (action) {
     case 'charge':
@@ -241,6 +254,9 @@ function getActionLabel(action: TimelineAction) {
 
     case 'hold-car':
       return 'Hold for Car'
+
+    case 'hold-car-export':
+      return 'Hold for Car → Export'
 
     case 'hold-iboost':
       return 'Hold for iBoost'
@@ -296,6 +312,7 @@ function getActionIcon(action?: TimelineAction) {
       return <FontAwesomeIcon icon={faSnowflake} />
 
     case 'hold-car':
+    case 'hold-car-export':
       return <FontAwesomeIcon icon={faCar} />
 
     case 'hold-iboost':
@@ -427,7 +444,7 @@ function buildTimelineEvents(
 
   let startIndex = 0
 
-  let currentAction = getTimelineAction(rows[0].state)
+  let currentAction = getTimelineActionForRow(rows[0])
 
   let currentRateEventType = getRateEventType(rows[0])
 
@@ -480,6 +497,11 @@ function buildTimelineEvents(
     const carbonChange = eventRows.reduce((total, row) => total + (row.carbon_change ?? 0), 0)
 
     const carCharging = eventRows.reduce((total, row) => total + (row.car_charging ?? 0), 0)
+
+    // Each timeline event can cover several plan slots. pv_forecast is the
+    // energy forecast for one slot, so summing it gives the useful total for
+    // the selected action window.
+    const solarGeneration = eventRows.reduce((total, row) => total + (row.pv_forecast ?? 0), 0)
 
     /*
      * Use the first reason as the event explanation.
@@ -555,6 +577,8 @@ function buildTimelineEvents(
 
       carCharging,
 
+      solarGeneration,
+
       explanation,
 
       rateEventType: currentRateEventType
@@ -562,7 +586,7 @@ function buildTimelineEvents(
   }
 
   for (let index = 1; index < rows.length; index += 1) {
-    const action = getTimelineAction(rows[index].state)
+    const action = getTimelineActionForRow(rows[index])
 
     const rateEventType = getRateEventType(rows[index])
 
@@ -595,6 +619,9 @@ function getEventTitle(event: TimelineEvent) {
 
     case 'hold-export':
       return event.target !== null ? `Hold Export at ${event.target}%` : 'Hold Export'
+
+    case 'hold-car-export':
+      return 'Hold for Car, then Export'
 
     case 'freeze-charge':
       return event.target !== null ? `Freeze Charge ${event.target}%` : 'Freeze Charge'
@@ -643,6 +670,7 @@ function getRelevantRate(event: TimelineEvent, currencyMinor: string) {
     case 'export':
     case 'hold-export':
     case 'freeze-export':
+    case 'hold-car-export':
       return formatRateRange(event.exportRateMin, event.exportRateMax, currencyMinor)
 
     default:
@@ -719,6 +747,15 @@ function formatEventRange(start: Date, end: Date) {
 // oxlint-disable-next-line react/only-export-components -- exported for the timeline spacing test
 export function buildTimeTicks(startMs: number, endMs: number): TimelineTick[] {
   const ticks: TimelineTick[] = []
+  const minimumDateLabelGap = 6 * 60 * 60 * 1000
+
+  function makeRoomForDateLabel(time: number) {
+    const previousDateTick = ticks.findLast((tick) => tick.dateLabel)
+
+    if (previousDateTick && time - previousDateTick.time < minimumDateLabelGap) {
+      previousDateTick.dateLabel = undefined
+    }
+  }
 
   const start = new Date(startMs)
 
@@ -752,6 +789,19 @@ export function buildTimeTicks(startMs: number, endMs: number): TimelineTick[] {
 
   while (cursor.getTime() < endMs) {
     const midnight = cursor.getHours() === 0
+    const dateLabel = midnight
+      ? cursor.toLocaleDateString('en-GB', {
+        weekday: 'short',
+
+        day: 'numeric',
+
+        month: 'short'
+      })
+      : undefined
+
+    if (dateLabel) {
+      makeRoomForDateLabel(cursor.getTime())
+    }
 
     ticks.push({
       time: cursor.getTime(),
@@ -762,15 +812,7 @@ export function buildTimeTicks(startMs: number, endMs: number): TimelineTick[] {
         minute: '2-digit'
       }),
 
-      dateLabel: midnight
-        ? cursor.toLocaleDateString('en-GB', {
-          weekday: 'short',
-
-          day: 'numeric',
-
-          month: 'short'
-        })
-        : undefined,
+      dateLabel,
 
       edge: 'middle'
     })
@@ -786,6 +828,20 @@ export function buildTimeTicks(startMs: number, endMs: number): TimelineTick[] {
   const lastTick = ticks[ticks.length - 1]
 
   if (!lastTick || endMs - lastTick.time > 60 * 60 * 1000) {
+    const dateLabel = end.getHours() === 0
+      ? end.toLocaleDateString('en-GB', {
+        weekday: 'short',
+
+        day: 'numeric',
+
+        month: 'short'
+      })
+      : undefined
+
+    if (dateLabel) {
+      makeRoomForDateLabel(endMs)
+    }
+
     ticks.push({
       time: endMs,
 
@@ -795,15 +851,7 @@ export function buildTimeTicks(startMs: number, endMs: number): TimelineTick[] {
         minute: '2-digit'
       }),
 
-      dateLabel: end.getHours() === 0
-        ? end.toLocaleDateString('en-GB', {
-          weekday: 'short',
-
-          day: 'numeric',
-
-          month: 'short'
-        })
-        : undefined,
+      dateLabel,
 
       edge: 'end'
     })
@@ -1114,6 +1162,14 @@ export default function PlanVisual({ plan }: PlanVisualProps) {
 
               <strong>{formatDuration(activeEvent.start, activeEvent.end)}</strong>
             </div>
+
+            {activeEvent.solarGeneration > 0 && (
+              <div className="plan-timeline-detail-value-solar">
+                <span>Solar generation</span>
+
+                <strong>{activeEvent.solarGeneration.toFixed(2)} kWh</strong>
+              </div>
+            )}
 
             {plan.carbon_enable && activeEvent.carbonIntensityMin !== null && (
               <div>

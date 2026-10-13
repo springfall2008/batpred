@@ -26,6 +26,43 @@
   color: var(--color-text-muted);
 }
 
+.status-card-version-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.6rem;
+}
+
+.status-card-update {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-height: 1.75rem;
+  padding: 0.25rem 0.55rem;
+  color: var(--color-success);
+  background: color-mix(in srgb, var(--color-success) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-success) 45%, transparent);
+  border-radius: 999px;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.status-card-update:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-success) 20%, transparent);
+}
+
+.status-card-update:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.status-card-update:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
 .status-card-label,
 .status-card-detail > span {
   font-size: 0.72rem;

@@ -2953,6 +2953,12 @@ APPS_SCHEMA = {
         "transient_ok": True,
         "description": "Home Assistant entity reporting the heat pump state, such as off, heating or hot_water.",
     },
+    "internal_temperature": {
+        "type": "sensor",
+        "sensor_type": "float",
+        "transient_ok": True,
+        "description": "Home Assistant indoor-temperature entity shown on the Overview ASHP card when PredHeat is not configured.",
+    },
     "heat_energy": {
         "type": "sensor",
         "sensor_type": "float",
@@ -3068,6 +3074,7 @@ APPS_SCHEMA = {
     "enphase_automatic": {"type": "boolean"},
     "enphase_automatic_ignore_pv": {"type": "boolean"},
     "octopus_intelligent_slot": {"type": "sensor|sensor_list", "sensor_type": "boolean|action", "entries": "num_cars", "optional_entries": True},
+    "octopus_intelligent_planned_slot": {"type": "sensor|sensor_list", "sensor_type": "boolean", "entries": "num_cars", "optional_entries": True},
     "octopus_ready_time": {"type": "sensor|sensor_list", "sensor_type": "string", "entries": "num_cars", "optional_entries": True},
     "octopus_charge_limit": {"type": "sensor|sensor_list", "sensor_type": "float", "entries": "num_cars", "optional_entries": True},
     "octopus_slot_low_rate": {"type": "boolean"},
@@ -3126,6 +3133,7 @@ APPS_SCHEMA = {
     "enable_coarse_fine_levels": {"type": "boolean"},
     "load_power_fill_enable": {"type": "boolean"},
     "load_ml_enable": {"type": "boolean"},
+    "load_ml_retrain_interval_hours": {"type": "integer", "min": 1, "max": 48},
     "gateway_device_id": {"type": "string", "empty": False},
     "gateway_mqtt_host": {"type": "string", "empty": False},
     "gateway_mqtt_port": {"type": "integer", "zero": False},

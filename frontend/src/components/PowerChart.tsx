@@ -14,6 +14,7 @@ import {
 } from 'chart.js'
 
 import type { PowerChartData } from '../types/charts'
+import { formatChartTimestamp } from '../utils/chartZoom'
 import type { Plan } from '../types/plan'
 import { useStoredState } from '../hooks/useStoredState'
 import { formatPlanAction, pointsInWindow, toChartPoints, type ChartPoint } from '../utils/batteryChart'
@@ -154,7 +155,7 @@ function powerDirection(key: PowerSeriesKey, value: number): string {
     return value < 0 ? 'charging' : value > 0 ? 'discharging' : 'idle'
   }
   if (key === 'grid') {
-    return value < 0 ? 'importing' : value > 0 ? 'exporting' : 'idle'
+    return value > 0 ? 'importing' : value < 0 ? 'exporting' : 'idle'
   }
   if (key === 'solar') {
     return 'generating'
@@ -212,7 +213,9 @@ export default function PowerChart({ data, plan }: PowerChartProps) {
 
     const datasets: ChartDataset<'line', ChartPoint[]>[] = visibleItems.map((item) => ({
       label: item.label,
-      data: points[item.key],
+      data: item.key === 'grid'
+        ? points.grid.map((point) => ({ ...point, y: -point.y }))
+        : points[item.key],
       borderColor: colours[item.key],
       backgroundColor: colours[item.key],
       borderWidth: item.key === 'solar' || item.key === 'load' ? 3 : 2,
@@ -241,11 +244,11 @@ export default function PowerChart({ data, plan }: PowerChartProps) {
               color: textColour,
               maxTicksLimit: 9,
               callback(value) {
-                return new Intl.DateTimeFormat(undefined, {
+                return formatChartTimestamp(value, {
                   weekday: 'short',
                   hour: '2-digit',
                   minute: '2-digit'
-                }).format(Number(value))
+                })
               }
             }
           },

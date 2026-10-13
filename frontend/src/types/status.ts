@@ -10,6 +10,8 @@ export type PredbatStatus = {
   last_started: string | null
 
   version: string
+  latest_version: string | null
+  update_available: boolean
 
   mode: string
   debug_enable: boolean

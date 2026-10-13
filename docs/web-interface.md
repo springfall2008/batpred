@@ -65,6 +65,9 @@ pred_bat:
   ashp_power: sensor.heat_pump_power
   ashp_status: sensor.heat_pump_status
 
+  # Optional indoor temperature in °C.
+  internal_temperature: sensor.living_room_temperature
+
   # Optional daily heat-pump electricity use in kWh.
   heat_energy: sensor.heat_pump_energy_today
 ```
@@ -86,6 +89,8 @@ ashp_status should point to an entity that returns `off` / `hot_water` / `heatin
 {% endif %}
 
 ```
+
+When PredHeat is configured in `pump` mode, Overview enables the ASHP card automatically. It reuses PredHeat's daily heating energy and indoor temperature from `predheat.internal_temperature`; no duplicate Overview setting is needed. PredHeat also publishes the calculated indoor temperature as `sensor.predheat_internal_temp` by default. Without PredHeat, set the top-level `internal_temperature` shown above and `ashp_enable: true` to show the ASHP card.
 
 Overview uses `predheat.weather` when PredHeat is configured. Otherwise it uses the top-level `weather` setting shown above. For compatibility with earlier test releases it will still try `weather.forecast_home` when neither is set. If the selected entity does not exist, Overview hides the weather reading, weather effects and their toggle.
 
@@ -190,6 +195,8 @@ The example below shows Predbat import and export rates charted for the last 7 d
 ### Charts View
 
 The Charts view provides an easy way of viewing a number of pre-created Predbat charts:
+
+All modern Chart.js charts can be explored directly: use the mouse wheel or a pinch gesture to zoom horizontally, drag to pan, and double-click a chart to restore its original range.
 
 - **Battery** - Shows the historic Battery SoC for today and the predicted SoC for the plan duration under the Base/Base10/Best and Best10 scenarios (see [explanation of these terms](what-does-predbat-do.md#basic-terminology).
 The chart also shows where charging is planned under the Base and Best scenarios and forced Export under the Best scenario

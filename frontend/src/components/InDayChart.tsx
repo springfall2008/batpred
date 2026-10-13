@@ -14,6 +14,7 @@ import {
 } from 'chart.js'
 
 import type { InDayChartData, InDayChartSeries } from '../types/charts'
+import { formatChartTimestamp } from '../utils/chartZoom'
 import { toChartPoints, type ChartPoint } from '../utils/batteryChart'
 import { finalValue, getInDayWindow, latestValueAt } from '../utils/inDayChart'
 
@@ -30,6 +31,7 @@ type InDayLegendItem = {
   label: string
   colour: string
   description: string
+  dashed?: boolean
 }
 
 const legendItems: InDayLegendItem[] = [
@@ -43,25 +45,27 @@ const legendItems: InDayLegendItem[] = [
     key: 'predicted',
     label: 'Day-ahead forecast',
     colour: '#0891b2',
+    dashed: true,
     description: 'Predbat’s original estimate of today’s cumulative home energy use, before it saw today’s actual usage.'
   },
   {
     key: 'adjusted',
     label: 'Adjusted forecast',
-    colour: 'var(--color-export)',
+    colour: 'var(--color-current)',
     description: 'Predbat’s updated estimate for the whole day, combining actual usage so far with an adjusted forecast for the remaining hours.'
   },
   {
     key: 'adjustment_factor',
     label: 'Adjustment',
     colour: '#7c3aed',
+    dashed: true,
     description: 'The percentage correction Predbat currently applies to the remaining load forecast. Positive means it expects more load than originally forecast.'
   }
 ]
 
 function InDayLegend({ item }: { item: InDayLegendItem }) {
   return (
-    <span className="battery-chart-legend-item" tabIndex={0}>
+    <span className={`battery-chart-legend-item ${item.dashed ? 'is-hollow' : ''}`} tabIndex={0}>
       <span
         className="battery-chart-legend-marker"
         style={{ '--battery-chart-legend-colour': item.colour } as React.CSSProperties}
@@ -160,7 +164,7 @@ export default function InDayChart({ data }: InDayChartProps) {
     const textColour = styles.getPropertyValue('--color-text-secondary').trim() || '#4b5563'
     const gridColour = styles.getPropertyValue('--color-border').trim() || '#e5e7eb'
     const actualColour = styles.getPropertyValue('--color-current').trim() || '#3b82f6'
-    const adjustedColour = styles.getPropertyValue('--color-export').trim() || '#7c3aed'
+    const adjustedColour = styles.getPropertyValue('--color-current').trim() || '#3b82f6'
     const nowColour = styles.getPropertyValue('--color-warning').trim() || '#f59e0b'
     const datasets: ChartDataset<'line', ChartPoint[]>[] = [
       {
@@ -185,7 +189,7 @@ export default function InDayChart({ data }: InDayChartProps) {
         data: adjustedPoints,
         borderColor: adjustedColour,
         backgroundColor: adjustedColour,
-        borderWidth: 3,
+        borderDash: [6, 4],
         pointRadius: 0
       }
     ]
@@ -224,7 +228,7 @@ export default function InDayChart({ data }: InDayChartProps) {
               color: textColour,
               maxTicksLimit: 9,
               callback(value) {
-                return new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' }).format(Number(value))
+                return formatChartTimestamp(value, { hour: '2-digit', minute: '2-digit' })
               }
             }
           },

@@ -66,7 +66,11 @@ export default function MetricsCharts({ metrics }: { metrics: DashboardMetrics }
         responsive: true,
         maintainAspectRatio: false,
         cutout: '72%',
-        plugins: { legend: { display: false }, tooltip: { enabled: false } }
+        plugins: {
+          legend: { display: false },
+          tooltip: { enabled: false },
+          zoom: { pan: { enabled: false }, zoom: { wheel: { enabled: false }, pinch: { enabled: false }, drag: { enabled: false } } }
+        }
       },
       plugins: [{
         id: 'metrics-battery-centre',
@@ -101,7 +105,8 @@ export default function MetricsCharts({ metrics }: { metrics: DashboardMetrics }
         indexAxis: 'y',
         plugins: {
           legend: { display: false },
-          tooltip: { callbacks: { label: (item) => `${Number(item.parsed.x).toFixed(2)} kW` } }
+          tooltip: { callbacks: { label: (item) => `${Number(item.parsed.x).toFixed(2)} kW` } },
+          zoom: { pan: { enabled: false }, zoom: { wheel: { enabled: false }, pinch: { enabled: false }, drag: { enabled: false } } }
         },
         scales: {
           x: {
@@ -128,7 +133,8 @@ export default function MetricsCharts({ metrics }: { metrics: DashboardMetrics }
         indexAxis: 'y',
         plugins: {
           legend: { display: false },
-          tooltip: { callbacks: { label: (item) => `${Number(item.parsed.x).toFixed(1)} kWh` } }
+          tooltip: { callbacks: { label: (item) => `${Number(item.parsed.x).toFixed(1)} kWh` } },
+          zoom: { pan: { enabled: false }, zoom: { wheel: { enabled: false }, pinch: { enabled: false }, drag: { enabled: false } } }
         },
         scales: {
           x: {

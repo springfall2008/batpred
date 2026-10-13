@@ -1,4 +1,5 @@
 import type { PlanRow } from '../types/plan'
+import { getEffectivePlanState, hasCarHoldBeforeExport } from './plan'
 
 export type OverviewAction = {
   label: string
@@ -37,6 +38,12 @@ export function formatOverviewAction(state: string): string {
   return ACTION_LABELS[state] ?? state ?? 'Unknown'
 }
 
+function formatOverviewRowAction(row: PlanRow): string {
+  return hasCarHoldBeforeExport(row)
+    ? 'Hold for Car → Export'
+    : formatOverviewAction(getEffectivePlanState(row))
+}
+
 /** Return the current plan action and the next distinct action. */
 export function getOverviewActions(rows: PlanRow[], now = new Date()): { current: OverviewAction; next: OverviewAction } {
   if (rows.length === 0) {
@@ -49,8 +56,8 @@ export function getOverviewActions(rows: PlanRow[], now = new Date()): { current
   const currentIndex = rows.findLastIndex((row) => new Date(row.time) <= now)
   const resolvedIndex = currentIndex >= 0 ? currentIndex : 0
   const currentRow = rows[resolvedIndex]
-  const currentLabel = formatOverviewAction(currentRow.state)
-  const nextOffset = rows.slice(resolvedIndex + 1).findIndex((row) => formatOverviewAction(row.state) !== currentLabel)
+  const currentLabel = formatOverviewRowAction(currentRow)
+  const nextOffset = rows.slice(resolvedIndex + 1).findIndex((row) => formatOverviewRowAction(row) !== currentLabel)
   const nextIndex = nextOffset >= 0 ? resolvedIndex + 1 + nextOffset : -1
   const nextRow = nextIndex >= 0 ? rows[nextIndex] : undefined
   const currentActionRows = nextIndex >= 0 ? rows.slice(resolvedIndex, nextIndex) : rows.slice(resolvedIndex)
@@ -70,9 +77,9 @@ export function getOverviewActions(rows: PlanRow[], now = new Date()): { current
     }
   }
 
-  const nextLabel = formatOverviewAction(nextRow.state)
+  const nextLabel = formatOverviewRowAction(nextRow)
   const followingRows = rows.slice(nextIndex)
-  const endOffset = followingRows.findIndex((row) => formatOverviewAction(row.state) !== nextLabel)
+  const endOffset = followingRows.findIndex((row) => formatOverviewRowAction(row) !== nextLabel)
   const actionRows = endOffset >= 0 ? followingRows.slice(0, endOffset) : followingRows
   const finalTarget = actionRows[actionRows.length - 1]?.state_target?.trim()
   const parsedLimit = finalTarget ? Number(finalTarget) : Number.NaN

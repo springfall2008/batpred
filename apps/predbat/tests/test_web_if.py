@@ -229,9 +229,13 @@ def run_test_web_if(my_predbat):
             print("ERROR: /api/browse allowed directory traversal")
             failed = 1
 
-        my_predbat.set_state_wrapper("update.predbat_version", "on", attributes={"in_progress": True})
-        if requests.get(base_url + "/api/status").json().get("updating") is not True:
+        my_predbat.set_state_wrapper("update.predbat_version", "on", attributes={"in_progress": True, "latest_version": "v99.0.0"})
+        update_status = requests.get(base_url + "/api/status").json()
+        if update_status.get("updating") is not True:
             print("ERROR: /api/status did not report an in-progress Predbat update")
+            failed = 1
+        if update_status.get("update_available") is not True or update_status.get("latest_version") != "v99.0.0":
+            print("ERROR: /api/status did not report the available Predbat update")
             failed = 1
         my_predbat.set_state_wrapper("update.predbat_version", "on", attributes={"in_progress": False})
 

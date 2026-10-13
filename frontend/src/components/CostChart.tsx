@@ -14,6 +14,7 @@ import {
 } from 'chart.js'
 
 import type { CostChartData, CostChartSeries } from '../types/charts'
+import { formatChartTimestamp } from '../utils/chartZoom'
 import type { Plan } from '../types/plan'
 import { useStoredState } from '../hooks/useStoredState'
 import {
@@ -279,11 +280,11 @@ export default function CostChart({ data, plan }: CostChartProps) {
               color: textColour,
               maxTicksLimit: 9,
               callback(value) {
-                return new Intl.DateTimeFormat(undefined, {
+                return formatChartTimestamp(value, {
                   weekday: 'short',
                   hour: '2-digit',
                   minute: '2-digit'
-                }).format(Number(value))
+                })
               }
             }
           },

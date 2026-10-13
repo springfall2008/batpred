@@ -1,5 +1,6 @@
 import type { Plan } from '../types/plan'
 import { formatRate, resolveCurrencySymbols } from '../utils/currency'
+import { getEffectivePlanState, hasCarHoldBeforeExport } from '../utils/plan'
 import './PlanSummary.css'
 
 import {
@@ -48,6 +49,7 @@ type ActionType =
   | 'hold-export'
   | 'freeze-export'
   | 'hold-car'
+  | 'hold-car-export'
   | 'hold-iboost'
   | 'no-charge'
   | 'demand'
@@ -98,6 +100,12 @@ function getActionType(state: string): ActionType {
   }
 }
 
+function getActionTypeForRow(row: Plan['rows'][number]): ActionType {
+  return hasCarHoldBeforeExport(row)
+    ? 'hold-car-export'
+    : getActionType(getEffectivePlanState(row))
+}
+
 /**
  * Human-readable label for each semantic action type.
  */
@@ -123,6 +131,9 @@ function getActionLabel(action: ActionType) {
 
     case 'hold-car':
       return 'Hold for Car'
+
+    case 'hold-car-export':
+      return 'Hold for Car → Export'
 
     case 'hold-iboost':
       return 'Hold for iBoost'
@@ -178,6 +189,7 @@ function getActionIcon(action?: ActionType) {
       return <FontAwesomeIcon icon={faSnowflake} />
 
     case 'hold-car':
+    case 'hold-car-export':
       return <FontAwesomeIcon icon={faCar} />
 
     case 'hold-iboost':
@@ -201,8 +213,9 @@ function getActionIcon(action?: ActionType) {
  * unchanged so that a newly-added Predbat state is still visible rather
  * than being hidden behind "Unknown".
  */
-function getStateLabel(state: string) {
-  const action = getActionType(state)
+function getStateLabel(row: Plan['rows'][number]) {
+  const state = getEffectivePlanState(row)
+  const action = getActionTypeForRow(row)
 
   return action === 'unknown' ? state : getActionLabel(action)
 }
@@ -234,6 +247,7 @@ function getActionClass(action?: ActionType) {
       return 'action-freeze-export'
 
     case 'hold-car':
+    case 'hold-car-export':
       return 'action-hold-car'
 
     case 'hold-iboost':
@@ -413,7 +427,7 @@ function PlanSummary({ plan, showPlanLink = true }: PlanSummaryProps) {
    * Hold Charge into Charge makes a period of flat SOC look
    * as though charging has failed.
    */
-  const currentActionType = getActionType(current.state)
+  const currentActionType = getActionTypeForRow(current)
 
   /*
    * Battery animation is only shown while energy is
@@ -433,13 +447,13 @@ function PlanSummary({ plan, showPlanLink = true }: PlanSummaryProps) {
    */
   const nextActionOffset = rows
     .slice(currentIndex + 1)
-    .findIndex((row) => getActionType(row.state) !== currentActionType)
+    .findIndex((row) => getActionTypeForRow(row) !== currentActionType)
 
   const nextActionRowIndex = nextActionOffset >= 0 ? currentIndex + 1 + nextActionOffset : -1
 
   const nextActionRow = nextActionRowIndex >= 0 ? rows[nextActionRowIndex] : undefined
 
-  const nextActionType = nextActionRow ? getActionType(nextActionRow.state) : undefined
+  const nextActionType = nextActionRow ? getActionTypeForRow(nextActionRow) : undefined
 
   const nextActionLabel = nextActionType ? getActionLabel(nextActionType) : 'No scheduled action'
 
@@ -466,7 +480,7 @@ function PlanSummary({ plan, showPlanLink = true }: PlanSummaryProps) {
      */
     const remainingRows = rows.slice(nextActionRowIndex)
 
-    const endOffset = remainingRows.findIndex((row) => getActionType(row.state) !== nextActionType)
+    const endOffset = remainingRows.findIndex((row) => getActionTypeForRow(row) !== nextActionType)
 
     const actionRows = endOffset >= 0 ? remainingRows.slice(0, endOffset) : remainingRows
 
@@ -570,7 +584,7 @@ function PlanSummary({ plan, showPlanLink = true }: PlanSummaryProps) {
           <strong className={`metric-value action-value ${getActionClass(currentActionType)}`}>
             {getActionIcon(currentActionType)}
 
-            <span>{getStateLabel(current.state)}</span>
+            <span>{getStateLabel(current)}</span>
           </strong>
 
           <span className="state-reason">

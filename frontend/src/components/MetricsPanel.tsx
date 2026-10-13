@@ -70,6 +70,7 @@ export default function MetricsPanel({ lastStarted }: { lastStarted: string | nu
   const services = Object.entries(metrics.api_services).sort(([first], [second]) => first.localeCompare(second))
   const conflicts = [...metrics.control_conflicts_events].reverse()
   const quotaPercent = metrics.solcast_api_limit > 0 ? Math.min(100, metrics.solcast_api_used / metrics.solcast_api_limit * 100) : 0
+  const metricsReady = metrics.last_update_timestamp > 0
 
   return (
     <section className="metrics-panel" aria-labelledby="metrics-heading">
@@ -85,7 +86,12 @@ export default function MetricsPanel({ lastStarted }: { lastStarted: string | nu
         <h3>System health</h3>
         <div className="metrics-grid">
           <MetricCard label="Predbat" value={Object.values(metrics.up).some(Boolean) ? 'Running' : 'Stopped'} detail={`Version ${metricVersion(metrics.up)}`} tone={Object.values(metrics.up).some(Boolean) ? 'good' : 'bad'} />
-          <MetricCard label="Configuration" value={metrics.config_valid ? 'Valid' : 'Invalid'} detail={metrics.config_warnings ? `${metrics.config_warnings} warnings` : 'No warnings'} tone={metrics.config_valid ? (metrics.config_warnings ? 'warning' : 'good') : 'bad'} />
+          <MetricCard
+            label="Configuration"
+            value={metricsReady ? (metrics.config_valid ? 'Valid' : 'Invalid') : 'Pending'}
+            detail={metricsReady ? (metrics.config_warnings ? `${metrics.config_warnings} warnings` : 'No warnings') : 'Awaiting first Predbat update'}
+            tone={metricsReady ? (metrics.config_valid ? (metrics.config_warnings ? 'warning' : 'good') : 'bad') : undefined}
+          />
           <MetricCard label="Plan" value={metrics.plan_valid ? 'Valid' : 'Stale'} detail={`${metrics.plan_age_minutes.toFixed(0)} minutes old`} tone={metrics.plan_valid ? 'good' : 'warning'} />
           <MetricCard label="Uptime" value={formatUptime(lastStarted, refreshedAt)} />
           <MetricCard label="Errors" value={errors.toFixed(0)} tone={errors ? 'warning' : 'good'} />

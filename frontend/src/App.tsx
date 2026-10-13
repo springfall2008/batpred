@@ -108,6 +108,14 @@ function App() {
    * consecutive failures before the user is told about it.
    */
   const [controlError, setControlError] = useState<string | null>(null)
+  const [updateRequested, setUpdateRequested] = useState(false)
+
+  useEffect(() => {
+    if (!updateRequested) return
+
+    const timeout = window.setTimeout(() => setUpdateRequested(false), 15_000)
+    return () => window.clearTimeout(timeout)
+  }, [updateRequested])
 
   /*
    * Consecutive failure count for each endpoint.
@@ -238,6 +246,7 @@ function App() {
     previousCalculatingRef.current = data.calculating
 
     setStatusData(data)
+    if (data.updating) setUpdateRequested(false)
 
     /*
      * Predbat has just completed a calculation.
@@ -315,6 +324,36 @@ function App() {
        * fetchStatus() already records/logs its own failure.
        */
     })
+  }
+
+  async function installLatestUpdate() {
+    setUpdateRequested(true)
+
+    try {
+      const response = await fetch('./api/service', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          service: 'update/install',
+          data: { entity_id: 'update.predbat_version' }
+        })
+      })
+
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+
+      const result = await response.json() as { result?: unknown } | null
+      if (result?.result === 'error') throw new Error('Home Assistant rejected the update request')
+
+      setControlError(null)
+      fetchStatus().catch(() => {
+        // Polling will retry if Predbat restarts before returning status.
+      })
+    } catch (error) {
+      console.error('Unable to start the Predbat update:', error)
+      const detail = error instanceof Error ? error.message : 'Unknown error'
+      setControlError(`Predbat could not start the update. ${detail}`)
+      setUpdateRequested(false)
+    }
   }
 
   /*
@@ -569,6 +608,9 @@ function App() {
                   status={statusData.status}
                   mode={statusData.mode}
                   version={statusData.version}
+                  latestVersion={statusData.latest_version}
+                  updateAvailable={statusData.update_available}
+                  updating={updating || updateRequested}
                   lastUpdated={statusData.last_updated}
                   configOk={statusData.config_ok}
 
@@ -583,6 +625,8 @@ function App() {
                   onReadOnlyChange={(value) => updateControl('set_read_only', value)}
 
                   onDebugChange={(value) => updateControl('debug_enable', value)}
+
+                  onUpdate={installLatestUpdate}
                 />
 
                 <PlanSummary plan={planData.plan} />

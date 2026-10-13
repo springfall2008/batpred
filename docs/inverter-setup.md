@@ -994,7 +994,7 @@ modbus:
 alias: Predbat Charge / Discharge Control
 description: ""
 triggers:
-    - trigger: state
+  - trigger: state
     entity_id:
       - input_boolean.charge_start_service
     to:
@@ -1004,17 +1004,17 @@ triggers:
       hours: 0
       minutes: 0
       seconds: 5
-    - trigger: state
+  - trigger: state
     entity_id:
       - input_boolean.discharge_start_service
     to: "on"
     id: Discharge
-    - trigger: state
+  - trigger: state
     entity_id:
       - input_boolean.charge_freeze_service
     to: "on"
     id: Charge freeze
-    - trigger: state
+  - trigger: state
     entity_id:
       - input_boolean.discharge_freeze_service
     to: "on"
@@ -1401,23 +1401,23 @@ description: >
   Controls AC charging during Predbat freeze charge mode. Arms and triggers
   freeze subsystems and watchdog via freeze guard.
 triggers:
-    - entity_id: automation.luxpower_freeze_charge
+  - entity_id: automation.luxpower_freeze_charge
     from: "off"
     to: "on"
     id: freeze_enabled
     trigger: state
-    - entity_id: binary_sensor.solar_compare_home
+  - entity_id: binary_sensor.solar_compare_home
     to: "on"
     for: "00:00:10"
     id: solar_on
     trigger: state
-    - entity_id: binary_sensor.solar_compare_home
+  - entity_id: binary_sensor.solar_compare_home
     to: "off"
     for: "00:00:10"
     id: solar_off
     trigger: state
 conditions:
-    - condition: state
+  - condition: state
     entity_id: input_boolean.predbat_ready
     state: "on"
 actions:
@@ -1543,70 +1543,77 @@ mode: single
 alias: LuxPower Freeze Charge Exit
 description: Cleanup when Predbat leaves Freeze charging.
 triggers:
-  - entity_id: predbat.status
-    trigger: state
+- entity_id: predbat.status
+  trigger: state
 conditions:
-  - condition: state
-    entity_id: input_boolean.freeze_charge_guard
-    state: "on"
-  - condition: template
-    value_template: |
-      {% set new = trigger.to_state.state | default('') %} {{
-        new not in ['unknown','unavailable'] and
-        not new.startswith('Warn:') and
-        not new.startswith('Error:') and
-        'Freeze charging' not in new
-      }}
+- condition: state
+  entity_id: input_boolean.freeze_charge_guard
+  state: "on"
+- condition: template
+  value_template: |
+    {% set new = trigger.to_state.state | default('') %} {{
+      new not in ['unknown','unavailable'] and
+      not new.startswith('Warn:') and
+      not new.startswith('Error:') and
+      'Freeze charging' not in new
+    }}
 actions:
-  - target:
+- action: automation.turn_off
+  target:
     entity_id:
       - automation.luxpower_freeze_charge
       - automation.luxpower_freeze_charge_predbat_override
       - automation.luxpower_freeze_charge_watchdog
-    action: automation.turn_off
-  - target:
+
+- action: input_boolean.turn_off
+  target:
     entity_id: input_boolean.freeze_charge_guard
-    action: input_boolean.turn_off
-  - choose:
-    - conditions:
-        - condition: template
-          value_template: |
-            {{ trigger.to_state.state.startswith('Charging')
-               or trigger.to_state.state == 'Hold charging' }}
-      sequence:
-        - target:
-            entity_id: switch.lux_ac_charge_enable
-          action: switch.turn_on
-      default:
-        - target:
-            entity_id: switch.lux_ac_charge_enable
-          action: switch.turn_off
-    - choose:
-      - conditions:
-        - condition: template
-          value_template: |
-            {{ trigger.to_state.state.startswith('Charging') }}
-          sequence:
-            - target:
-                entity_id: number.lux_ac_battery_charge_level
-              data:
-                value: "{{ states('number.lux_system_charge_soc_limit') | int(0) }}"
-              action: number.set_value
-        - conditions:
-          - condition: template
-            value_template: |
-              {{ trigger.to_state.state == 'Hold charging' }}
-            sequence:
-              - target:
-                  entity_id: number.lux_ac_battery_charge_level
-                data:
-                  value: >-
-                    {{ states('number.lux_on_grid_discharge_cut_off_soc') | int(0)
-                    }}
-                action: number.set_value
-              - target:
-                  entity_id: automation.luxpower_freeze_charge_exit
-                action: automation.turn_off
+
+- choose:
+  - conditions:
+      - condition: template
+        value_template: |
+          {{ trigger.to_state.state.startswith('Charging')
+             or trigger.to_state.state == 'Hold charging' }}
+    sequence:
+      - action: switch.turn_on
+        target:
+          entity_id: switch.lux_ac_charge_enable
+
+  default:
+    - action: switch.turn_off
+      target:
+        entity_id: switch.lux_ac_charge_enable
+
+- choose:
+  - conditions:
+    - condition: template
+      value_template: |
+        {{ trigger.to_state.state.startswith('Charging') }}
+    sequence:
+      - action: number.set_value
+        target:
+          entity_id: number.lux_ac_battery_charge_level
+        data:
+          value: "{{ states('number.lux_system_charge_soc_limit') | int(0) }}"
+
+  - conditions:
+      - condition: template
+        value_template: |
+          {{ trigger.to_state.state == 'Hold charging' }}
+    sequence:
+      - action: number.set_value
+        target:
+          entity_id: number.lux_ac_battery_charge_level
+        data:
+          value: >-
+            {{ states('number.lux_on_grid_discharge_cut_off_soc') | int(0)
+            }}
+
+      - action: automation.turn_off
+        target:
+          entity_id: automation.luxpower_freeze_charge_exit
+
 mode: single
 ```
 
@@ -1622,119 +1629,92 @@ description: >
   Cancels freeze charge if Predbat does not commit to Freeze charging. Triggered
   by freeze guard Boolean; self-disarms after execution.
 triggers:
-
-- entity_id: input_boolean.freeze_charge_guard
-    from: "off"
-    to: "on"
+  - entity_id: input_boolean.freeze_charge_guard
+    from: 'off'
+    to: 'on'
     trigger: state
-  conditions: []
-  actions:
-
-- alias: "Watchdog: Grace period"
-    delay: "00:00:30"
-
-- alias: "Watchdog: Abort if no Freeze charging"
+conditions: []
+actions:
+  - alias: 'Watchdog: Grace period'
+    delay: '00:00:30'
+  - alias: 'Watchdog: Abort if no Freeze charging'
     if:
-
-    - condition: template
-      value_template: |
-
-        {{ not states('predbat.status').startswith('Freeze charging') }}
-
+      - condition: template
+        value_template: |
+          {{ not states('predbat.status').startswith('Freeze charging') }}
     then:
-    - alias: "Watchdog: Trace cancellation"
-      action: system_log.write
-      data:
-
-        level: warning
-        message: >
-          Predbat never entered Freeze charging (status="{{
-          states('predbat.status') }}") → cancelling freeze
-    - alias: "Watchdog: Disable freeze automations"
-      action: automation.turn_off
-      target:
-
-        entity_id:
-          - automation.luxpower_freeze_charge
-          - automation.luxpower_freeze_charge_predbat_override
-          - automation.luxpower_freeze_charge_exit
-    - alias: "Watchdog: Reset guard Boolean"
-      action: input_boolean.turn_off
-      target:
-
-        entity_id: input_boolean.freeze_charge_guard
-    - alias: "Watchdog: AC handling"
-      choose:
-        - conditions:
-            - condition: template
-          value_template: |
-
-            {{ states('predbat.status').startswith('Charging')
-               or states('predbat.status') == 'Hold charging' }}
-
-        sequence:
-            - if:
-                - condition: state
-            entity_id: switch.lux_ac_charge_enable
-            state: "off"
-          then:
-                - action: switch.turn_on
-            target:
-
-              entity_id: switch.lux_ac_charge_enable
-
-          default:
-        - if:
+      - alias: 'Watchdog: Trace cancellation'
+        action: system_log.write
+        data:
+          level: warning
+          message: >
+            Predbat never entered Freeze charging (status="{{
+            states('predbat.status') }}") → cancelling freeze
+      - alias: 'Watchdog: Disable freeze automations'
+        action: automation.turn_off
+        target:
+          entity_id:
+            - automation.luxpower_freeze_charge
+            - automation.luxpower_freeze_charge_predbat_override
+            - automation.luxpower_freeze_charge_exit
+      - alias: 'Watchdog: Reset guard Boolean'
+        action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.freeze_charge_guard
+      - alias: 'Watchdog: AC handling'
+        choose:
+          - conditions:
+              - condition: template
+                value_template: |
+                  {{ states('predbat.status').startswith('Charging')
+                     or states('predbat.status') == 'Hold charging' }}
+            sequence:
+              - if:
+                  - condition: state
+                    entity_id: switch.lux_ac_charge_enable
+                    state: 'off'
+                then:
+                  - action: switch.turn_on
+                    target:
+                      entity_id: switch.lux_ac_charge_enable
+        default:
+          - if:
             - condition: state
-          entity_id: switch.lux_ac_charge_enable
-          state: "on"
-        then:
-            - action: switch.turn_off
-          target:
-
-            entity_id: switch.lux_ac_charge_enable
-    - alias: "Watchdog: Restore SOC limits"
-      choose:
-        - conditions:
-            - condition: template
-          value_template: |
-
-            {{ states('predbat.status').startswith('Charging') }}
-
-        sequence:
-            - action: number.set_value
-          target:
-
-            entity_id: number.lux_ac_battery_charge_level
-
-          data:
-
-            value: "{{ states('number.lux_system_charge_soc_limit') | int(0) }}"
-        - conditions:
-            - condition: template
-          value_template: |
-
-            {{ states('predbat.status') == 'Hold charging' }}
-
-        sequence:
-            - action: number.set_value
-          target:
-
-            entity_id: number.lux_ac_battery_charge_level
-
-          data:
-
-            value: >-
-              {{ states('number.lux_on_grid_discharge_cut_off_soc') |
-              int(0) }}
-
-- alias: "Watchdog: Disarm self"
-    action: automation.turn_off
-    target:
-
-      entity_id: automation.luxpower_freeze_charge_watchdog
-
-  mode: single
+              entity_id: switch.lux_ac_charge_enable
+              state: "on"
+            then:
+              - action: switch.turn_off
+                target:
+                  entity_id: switch.lux_ac_charge_enable
+      - alias: 'Watchdog: Restore SOC limits'
+        choose:
+          - conditions:
+              - condition: template
+                value_template: |
+                  {{ states('predbat.status').startswith('Charging') }}
+            sequence:
+              - action: number.set_value
+                target:
+                  entity_id: number.lux_ac_battery_charge_level
+                data:
+                  value: '{{ states(''number.lux_system_charge_soc_limit'') | int(0) }}'
+          - conditions:
+              - condition: template
+                value_template: |
+                  {{ states('predbat.status') == 'Hold charging' }}
+            sequence:
+              - action: number.set_value
+                target:
+                  entity_id: number.lux_ac_battery_charge_level
+                data:
+                  value: >-
+                    {{ states('number.lux_on_grid_discharge_cut_off_soc') |
+                    int(0) }}
+      - alias: 'Watchdog: Disarm self'
+        action: automation.turn_off
+        target:
+          entity_id: automation.luxpower_freeze_charge_watchdog
+mode: single
 ```
 
 **Enable Freeze Charging**
@@ -1788,14 +1768,14 @@ description: >
   charge last switches, and reset discharge current limit. Marks Predbat ready
   only after HA and Lux are stable.
 triggers:
-    - event: start
+  - event: start
     trigger: homeassistant
 actions:
-    - alias: "StartupReset: Mark Predbat NOT ready"
+  - alias: "StartupReset: Mark Predbat NOT ready"
     target:
       entity_id: input_boolean.predbat_ready
     action: input_boolean.turn_off
-    - alias: "StartupReset: Wait for Lux entities"
+  - alias: "StartupReset: Wait for Lux entities"
     wait_template: |
       {{ states('switch.lux_ac_charge_enable') not in ['unknown','unavailable']
          and states('switch.lux_charge_last') not in ['unknown','unavailable']
@@ -1803,7 +1783,7 @@ actions:
          and states('number.lux_discharge_current_limit') not in ['unknown','unavailable'] }}
     timeout: "00:02:00"
     continue_on_timeout: true
-    - alias: "StartupReset: Disable freeze/override/watchdog"
+  - alias: "StartupReset: Disable freeze/override/watchdog"
     target:
       entity_id:
         - automation.luxpower_freeze_charge
@@ -1811,15 +1791,15 @@ actions:
         - automation.luxpower_freeze_charge_exit
         - automation.luxpower_freeze_charge_watchdog
     action: automation.turn_off
-    - alias: "StartupReset: Reset guard boolean"
+  - alias: "StartupReset: Reset guard boolean"
     target:
       entity_id: input_boolean.freeze_charge_guard
     action: input_boolean.turn_off
-    - alias: "StartupReset: Wait for battery voltage to be > 0"
+  - alias: "StartupReset: Wait for battery voltage to be > 0"
     wait_template: "{{ states('sensor.lux_battery_voltage_live') | float(0) > 0 }}"
     timeout: "00:01:00"
     continue_on_timeout: true
-    - alias: "StartupReset: Set discharge current limit from battery_rate_max"
+  - alias: "StartupReset: Set discharge current limit from battery_rate_max"
     target:
       entity_id: number.lux_discharge_current_limit
     data:
@@ -1828,7 +1808,7 @@ actions:
             / states('sensor.lux_battery_voltage_live') | float(1))
             | round(0) }}
     action: number.set_value
-    - alias: "StartupReset: Turn off AC if on"
+  - alias: "StartupReset: Turn off AC if on"
     if:
       - condition: state
         entity_id: switch.lux_ac_charge_enable
@@ -1837,7 +1817,7 @@ actions:
       - target:
           entity_id: switch.lux_ac_charge_enable
         action: switch.turn_off
-    - alias: "StartupReset: Turn off charge last if on"
+  - alias: "StartupReset: Turn off charge last if on"
     if:
       - condition: state
         entity_id: switch.lux_charge_last
@@ -1846,7 +1826,7 @@ actions:
       - target:
           entity_id: switch.lux_charge_last
         action: switch.turn_off
-    - alias: "StartupReset: Turn off force discharge if on"
+  - alias: "StartupReset: Turn off force discharge if on"
     if:
       - condition: state
         entity_id: switch.lux_force_discharge_enable
@@ -1855,13 +1835,13 @@ actions:
       - target:
           entity_id: switch.lux_force_discharge_enable
         action: switch.turn_off
-    - alias: "StartupReset: Final settle delay"
+  - alias: "StartupReset: Final settle delay"
     delay: "00:01:30"
-    - alias: "StartupReset: Mark Predbat ready"
+  - alias: "StartupReset: Mark Predbat ready"
     target:
       entity_id: input_boolean.predbat_ready
     action: input_boolean.turn_on
-    - alias: "StartupReset: Log completion"
+  - alias: "StartupReset: Log completion"
     data:
       level: debug
       message: "StartupReset: cleanup complete, watchdog and guard OFF, Predbat ready"
@@ -2275,50 +2255,50 @@ Please see this ticket in Github for ongoing discussions: <https://github.com/sp
 
 ```yaml
 template:
-    - sensor:
-      - name: "Solar Panel Production W"
-        unique_id: solar_panel_production_w
-        unit_of_measurement: "W"
-        icon: mdi:solar-power
-        state: >
-          {% set i1_dc_power = states('sensor.solaredge_i1_dc_power') | float(0) %}
-          {% set b1_dc_power = states('sensor.solaredge_b1_dc_power') | float(0) %}
-          {% if (i1_dc_power + b1_dc_power <= 0) %}
-            0
-          {% else %}
-            {{ (i1_dc_power + b1_dc_power) }}
-          {% endif %}
-        availability: >
-          {{ states('sensor.solaredge_i1_dc_power') | is_number and states('sensor.solaredge_b1_dc_power') | is_number }}
+  - sensor:
+    - name: "Solar Panel Production W"
+      unique_id: solar_panel_production_w
+      unit_of_measurement: "W"
+      icon: mdi:solar-power
+      state: >
+        {% set i1_dc_power = states('sensor.solaredge_i1_dc_power') | float(0) %}
+        {% set b1_dc_power = states('sensor.solaredge_b1_dc_power') | float(0) %}
+        {% if (i1_dc_power + b1_dc_power <= 0) %}
+          0
+        {% else %}
+          {{ (i1_dc_power + b1_dc_power) }}
+        {% endif %}
+      availability: >
+        {{ states('sensor.solaredge_i1_dc_power') | is_number and states('sensor.solaredge_b1_dc_power') | is_number }}
 
-      - name: "Solar House Consumption W"
-        unique_id: solar_house_consumption_w
-        unit_of_measurement: "W"
-        icon: mdi:home
-        state: >
-          {% set i1_ac_power = states('sensor.solaredge_i1_ac_power') | float(0) %}
-          {% set m1_ac_power = states('sensor.solaredge_m1_ac_power') | float(0) %}
-          {% if (i1_ac_power - m1_ac_power <= 0) %}
-            0
-          {% else %}
-            {{ (i1_ac_power - m1_ac_power) }}
-          {% endif %}
-        availability: >
-          {{ states('sensor.solaredge_i1_ac_power') | is_number and states('sensor.solaredge_m1_ac_power') | is_number }}
+    - name: "Solar House Consumption W"
+      unique_id: solar_house_consumption_w
+      unit_of_measurement: "W"
+      icon: mdi:home
+      state: >
+        {% set i1_ac_power = states('sensor.solaredge_i1_ac_power') | float(0) %}
+        {% set m1_ac_power = states('sensor.solaredge_m1_ac_power') | float(0) %}
+        {% if (i1_ac_power - m1_ac_power <= 0) %}
+          0
+        {% else %}
+          {{ (i1_ac_power - m1_ac_power) }}
+        {% endif %}
+      availability: >
+        {{ states('sensor.solaredge_i1_ac_power') | is_number and states('sensor.solaredge_m1_ac_power') | is_number }}
 
-sensor:
+  - sensor:
     - platform: integration
-    source: sensor.solar_panel_production_w
-    method: left
-    unit_prefix: k
-    name: solar_panel_production_kwh
+      source: sensor.solar_panel_production_w
+      method: left
+      unit_prefix: k
+      name: solar_panel_production_kwh
 
-sensor:
+  - sensor:
     - platform: integration
-    source: sensor.solar_house_consumption_w
-    method: left
-    unit_prefix: k
-    name: solar_house_consumption_kwh
+      source: sensor.solar_house_consumption_w
+      method: left
+      unit_prefix: k
+      name: solar_house_consumption_kwh
 ```text
 
 If you have multiple batteries connected to your SolarEdge inverter and are using the SolarEdge Modbus Multi integration, this enumerates the multiple batteries as b1, b2, b3, etc with separate entities per battery.
@@ -2343,7 +2323,7 @@ You will need to make a number of changes to the solaredge `apps.yaml`, replacin
 - And add the following additional template sensors to `configuration.yaml` after the existing 'template:' line (from the earlier template sensor definitions):
 
 ```yaml
-    - sensor:
+  - sensor:
     # Template sensor for Max Battery Charge rate
     # This is the sum of all three batteries charge rate as the max charge rate can be higher than inverter capacity (e.g. 8k) when charging from AC+Solar
     # Returns 5000W as the minimum max value, the single battery charge/discharge limit to ensure at least one battery can always be charged if one or more batteries have 'gone offline' to modbus
@@ -2453,7 +2433,7 @@ fields:
     default: 28800
     required: false
 sequence:
-    - variables:
+  - variables:
       defaultPower: "{{ 200 }}"
       mode: |-
         {% set map = {
@@ -2476,27 +2456,27 @@ sequence:
            'Freeze Charge': 0,
            'Freeze Discharge': 0} %}
         {{ map.get( operation, 0 ) }}
-    - action: number.set_value
+  - action: number.set_value
     data:
       value: "{{ activeP }}"
     target:
       entity_id: number.solax_remotecontrol_active_power
-    - action: number.set_value
+  - action: number.set_value
     data:
       value: "60"
     target:
       entity_id: number.solax_remotecontrol_duration
-    - action: number.set_value
+  - action: number.set_value
     data:
       value: "{{ duration if duration is defined else 28800 }}"
     target:
       entity_id: number.solax_remotecontrol_autorepeat_duration
-    - action: select.select_option
+  - action: select.select_option
     data:
       option: "{{ mode if mode is defined else Disabled }}"
     target:
       entity_id: select.solax_remotecontrol_power_control
-    - action: button.press
+  - action: button.press
     data: {}
     target:
       entity_id: button.solax_remotecontrol_trigger
@@ -2547,7 +2527,7 @@ fields:
         max: 86400
     default: 28800
 sequence:
-    - variables:
+  - variables:
       maxPvPower: "{{ 12000 }}"
       defaultPower: "{{ 200 }}"
       mode: |-
@@ -2568,42 +2548,42 @@ sequence:
            'Freeze Charge': 0,
            'Freeze Discharge': 0} %}
         {{ map.get( operation, 0 ) }}
-    - action: number.set_value
+  - action: number.set_value
     data:
       value: "{{ activeP }}"
     target:
       entity_id: number.solax_remotecontrol_push_mode_power_8_9
-    - action: number.set_value
+  - action: number.set_value
     data:
       value: "{{ maxPvPower }}"
     target:
       entity_id: number.solax_remotecontrol_pv_power_limit
-    - action: number.set_value
+  - action: number.set_value
     data:
       value: "30"
     target:
       entity_id: number.solax_remotecontrol_duration
-    - action: number.set_value
+  - action: number.set_value
     data:
       value: "300"
     target:
       entity_id: number.solax_remotecontrol_timeout
-    - action: number.set_value
+  - action: number.set_value
     data:
       value: "{{ duration if duration is defined else 28800 }}"
     target:
       entity_id: number.solax_remotecontrol_autorepeat_duration
-    - action: select.select_option
+  - action: select.select_option
     data:
       option: VPP Off
     target:
       entity_id: select.solax_inverter_remotecontrol_timeout_next_motion_mode_1_9
-    - action: select.select_option
+  - action: select.select_option
     data:
       option: "{{ mode if mode is defined else Disabled }}"
     target:
       entity_id: select.solax_remotecontrol_power_control_mode
-    - action: button.press
+  - action: button.press
     data: {}
     enabled: true
     target:
@@ -2795,22 +2775,22 @@ See the components documentation for details: [Components - Sunsynk Cloud API](c
 alias: Predbat Charge / Discharge Control
 description: "Turn SunSynk charge/discharge on/off to mirror Predbat"
 trigger:
-    - platform: state
+  - platform: state
     entity_id:
       - binary_sensor.predbat_charging
     to: "on"
     id: predbat_charge_on
-    - platform: state
+  - platform: state
     entity_id:
       - binary_sensor.predbat_charging
     to: "off"
     id: predbat_charge_off
-    - platform: state
+  - platform: state
     entity_id:
       - binary_sensor.predbat_exporting
     to: "on"
     id: predbat_discharge_on
-    - platform: state
+  - platform: state
     entity_id:
       - binary_sensor.predbat_exporting
     to: "off"
@@ -2910,13 +2890,13 @@ mode: single
 alias: PredBat - Copy Charge Limit
 description: Copy Battery SoC to all timezone (time) slots
 trigger:
-    - platform: state
+  - platform: state
     entity_id:
       - number.sunsynk_set_soc_timezone1
     to: null
 condition: []
 action:
-    - service: number.set_value
+  - service: number.set_value
     data_template:
       entity_id:
         - number.sunsynk_set_soc_timezone2
@@ -3200,7 +3180,7 @@ Create the following automation using the HA UI or by adding to `configuration.y
 
 ```yaml
 automation:
-    - alias: "Update Tesla Energy Site ID"
+  - alias: "Update Tesla Energy Site ID"
     trigger:
       - platform: homeassistant
         event: start

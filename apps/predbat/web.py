@@ -99,6 +99,7 @@ from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA, MANUAL_RATE_MA
 from predbat import THIS_VERSION_DISPLAY
 from component_base import ComponentBase
 from config import APPS_SCHEMA, CONFIG_ITEMS
+from compare import check_compare_list
 import debug_history
 from web_annual import AnnualPage
 from web_chat import WebChat
@@ -3015,7 +3016,12 @@ chart.render();
 
             predbat_active, _ = self.get_ha_config("active", None)
 
-            updating = self.get_state_wrapper("update.predbat_version", attribute="in_progress", default=False) is True
+            update_entity = "update.predbat_version"
+            updating = self.get_state_wrapper(update_entity, attribute="in_progress", default=False) is True
+            update_available = self.get_state_wrapper(update_entity, default="off") == "on"
+            latest_version = self.get_state_wrapper(update_entity, attribute="latest_version", default=None)
+            if latest_version in (None, "", "unknown", "unavailable", "check HACS"):
+                latest_version = None
 
             # Configuration health
             config_errors = len(self.arg_errors)
@@ -3031,6 +3037,8 @@ chart.render();
                 "last_updated": last_updated,
                 "last_started": last_started,
                 "version": THIS_VERSION_DISPLAY,
+                "latest_version": latest_version,
+                "update_available": update_available,
                 # Predbat configuration
                 "mode": mode,
                 "debug_enable": debug_enable,
@@ -3163,12 +3171,14 @@ chart.render();
             if ashp_enabled:
                 ashp_power_entity = self.get_arg("ashp_power", default=None, indirect=False)
                 ashp_status_entity = self.get_arg("ashp_status", default=None, indirect=False)
+                internal_temperature_entity = self.get_arg("internal_temperature", default=None, indirect=False)
                 ashp_energy_entity = self.get_arg("heat_energy", default=None, indirect=False)
                 if not ashp_energy_entity:
                     ashp_energy_entity = self.get_arg("ashp_energy_today", default=None, indirect=False)
                 ashp_power = None
                 ashp_status = None
                 ashp_energy = None
+                internal_temperature = None
 
                 if ashp_power_entity:
                     ashp_power = _optional_float(self.get_state_wrapper(entity_id=ashp_power_entity, default=None, required_unit="W"))
@@ -3181,7 +3191,15 @@ chart.render();
                 elif predheat_is_pump:
                     ashp_energy = _optional_float(getattr(getattr(self.base, "predheat", None), "heat_energy_today", None))
 
-                ashp = {"power": ashp_power, "status": ashp_status, "energy_today": ashp_energy}
+                if predheat_is_pump:
+                    predheat_internal_temperature = getattr(getattr(self.base, "predheat", None), "internal_temperature", None)
+                    if isinstance(predheat_internal_temperature, dict):
+                        internal_temperature = _optional_float(predheat_internal_temperature.get(0))
+
+                if internal_temperature is None and internal_temperature_entity:
+                    internal_temperature = _optional_float(self.get_state_wrapper(entity_id=internal_temperature_entity, default=None))
+
+                ashp = {"power": ashp_power, "status": ashp_status, "energy_today": ashp_energy, "internal_temperature": internal_temperature}
 
             # Match the existing diagram's direction thresholds/sign conventions.
             grid_importing = grid_power <= -10
@@ -3391,7 +3409,7 @@ chart.render();
         text += get_plan_css()
 
         # Add warning/error divs
-        text += '<div id="staleWarning" style="display:none; padding:10px; background:#fff3cd; color:#856404; border:1px solid #ffc107; margin-bottom:10px;">&#9888;&#65039; Plan data is stale (last updated >15 minutes ago)</div>'
+        text += '<div id="staleWarning" style="display:none; padding:10px; background:#fff3cd; color:#856404; border:1px solid #ffc107; margin-bottom:10px;">&#9888;&#65039; Plan data is stale</div>'
         text += '<div id="planError" style="display:none; padding:10px; background:#fee; color:#c00; border:1px solid #c00; margin-bottom:10px;"></div>'
 
         # Add view switcher buttons
@@ -4150,9 +4168,19 @@ chart.render();
         now_str = self.now_utc.strftime(TIME_FORMAT)
         hourly_history = history_attribute(self.get_history_wrapper(self.prefix + ".ppkwh_hour", 2, required=False))
         today_history = history_attribute(self.get_history_wrapper(self.prefix + ".ppkwh_today", 2, required=False))
+
+        def rates_with_current_value(entity_id):
+            results = dict(self.get_entity_results(entity_id))
+            current = _optional_float(self.get_state_wrapper(entity_id=entity_id, default=None))
+            if current is not None:
+                results[now_str] = current
+            return results
+
         series = {
-            "import": self.get_entity_results(self.prefix + ".rates"),
-            "export": self.get_entity_results(self.prefix + ".rates_export"),
+            # `results` contains only tariff changes for flat tariffs. Adding
+            # the live state makes the active rate visible at Now as well.
+            "import": rates_with_current_value(self.prefix + ".rates"),
+            "export": rates_with_current_value(self.prefix + ".rates_export"),
             "gas": self.get_entity_results(self.prefix + ".rates_gas"),
             "actual_hourly": prune_today(hourly_history, self.now_utc, self.midnight_utc, prune=False, prune_future=False),
             "actual_today": prune_today(today_history, self.now_utc, self.midnight_utc, prune=False, prune_future=False),
@@ -4230,12 +4258,31 @@ chart.render();
     def get_savings_chart_data(self):
         """Return daily and cumulative savings history for the modern chart."""
         now_str = self.now_utc.strftime(TIME_FORMAT)
+        daily_predbat = history_attribute(self.get_history_wrapper(self.prefix + ".savings_yesterday_predbat", 28, required=False), daily=True, offset_days=-1, pounds=True, first=False)
+        daily_pv_battery = history_attribute(self.get_history_wrapper(self.prefix + ".savings_yesterday_pvbat", 28, required=False), daily=True, offset_days=-1, pounds=True, first=False)
+        total_predbat = history_attribute(self.get_history_with_now_attrs(self.prefix + ".savings_total_predbat", 28), daily=True, pounds=True, first=False)
+        total_pv_battery = history_attribute(self.get_history_with_now_attrs(self.prefix + ".savings_total_pvbat", 28), daily=True, pounds=True, first=False)
+
+        def running_total_when_unavailable(daily, total):
+            """Use daily savings until Predbat has published a cumulative total."""
+            if total and any(value != 0 for value in total.values()):
+                return total
+
+            running_total = 0
+            return {day: dp2(running_total := running_total + value) for day, value in daily.items()}
+
+        def latest_total(total):
+            latest_day = next(reversed(total), None)
+            return total.get(latest_day, 0)
+
+        total_predbat = running_total_when_unavailable(daily_predbat, total_predbat)
+        total_pv_battery = running_total_when_unavailable(daily_pv_battery, total_pv_battery)
         series = {
-            "daily_predbat": history_attribute(self.get_history_wrapper(self.prefix + ".savings_yesterday_predbat", 28, required=False), daily=True, offset_days=-1, pounds=True, first=False),
-            "daily_pv_battery": history_attribute(self.get_history_wrapper(self.prefix + ".savings_yesterday_pvbat", 28, required=False), daily=True, offset_days=-1, pounds=True, first=False),
+            "daily_predbat": daily_predbat,
+            "daily_pv_battery": daily_pv_battery,
             "daily_cost": history_attribute(self.get_history_wrapper(self.prefix + ".cost_yesterday", 28, required=False), daily=True, offset_days=-1, pounds=True, first=False),
-            "total_predbat": history_attribute(self.get_history_with_now_attrs(self.prefix + ".savings_total_predbat", 28), daily=True, pounds=True, first=False),
-            "total_pv_battery": history_attribute(self.get_history_with_now_attrs(self.prefix + ".savings_total_pvbat", 28), daily=True, pounds=True, first=False),
+            "total_predbat": total_predbat,
+            "total_pv_battery": total_pv_battery,
         }
 
         return {
@@ -4243,6 +4290,10 @@ chart.render();
             "ready": any(series.values()),
             "generated_at": now_str,
             "currency_symbol": self.currency_symbols[0],
+            "totals": {
+                "predbat": latest_total(total_predbat),
+                "pv_battery": latest_total(total_pv_battery),
+            },
             "series": series,
         }
 
@@ -5229,23 +5280,13 @@ chart.render();
     def _validate_compare_list(self, compare_list):
         """
         Check every compare_list profile still has the unique id and non-empty name that
-        compare.py indexes results by, raising ValueError if a batch has left one without
+        compare.py indexes results by, raising ValueError if a batch has left one without.
+        Uses compare.py's own rules, so the editor refuses exactly what a comparison would skip,
+        and names every problem at once so they can all be fixed in one go.
         """
-        if not compare_list:
-            return
-
-        seen_ids = set()
-        for entry in compare_list:
-            if not isinstance(entry, dict):
-                raise ValueError("Each compare_list entry must be a dictionary with an id and a name")
-            entry_id = entry.get("id")
-            if not entry_id:
-                raise ValueError("Each compare_list entry requires a non-empty 'id'")
-            if entry_id in seen_ids:
-                raise ValueError(f"Duplicate compare_list id '{entry_id}'")
-            seen_ids.add(entry_id)
-            if not entry.get("name"):
-                raise ValueError(f"compare_list entry '{entry_id}' requires a non-empty 'name'")
+        _, problems = check_compare_list(compare_list)
+        if problems:
+            raise ValueError("; ".join(problems))
 
     async def html_apps_post(self, request):
         """
@@ -5670,7 +5711,9 @@ chart.render();
         else:
             cost_yesterday_no_car = cost_yesterday_hist
 
-        compare_list = self.get_arg("compare_list", [])
+        # Same entries, with the same string ids, as the comparison itself ran on (#5472)
+        configured_compare_list = self.get_arg("compare_list", [])
+        compare_list, compare_problems = check_compare_list(configured_compare_list)
         compare_hist = {}
         for item in compare_list:
             id = item.get("id", None)
@@ -5682,8 +5725,6 @@ chart.render();
                     compare_hist[id]["cost"] = history_attribute(entity_hist, daily=True, pounds=True)
                     compare_hist[id]["metric"] = history_attribute(entity_hist, state_key="metric", attributes=True, daily=True, pounds=True)
                     compare_hist[id]["cost_1am"] = self.history_daily_at_hour(entity_hist)
-
-        compare_list = self.get_arg("compare_list", [])
 
         for compare in compare_list:
             name = compare.get("name", "")
@@ -5744,6 +5785,10 @@ chart.render();
 
         text += "</table>\n"
 
+        # The comparison only logs skipped entries when it runs, so say why a configured tariff is missing here
+        for problem in compare_problems:
+            text += "<p><b>Skipped:</b> {} - fix it in apps.yaml</p>\n".format(html_module.escape(problem))
+
         # Charts
         text += '<div id="chart"></div>'
         series_data = []
@@ -5759,9 +5804,9 @@ chart.render();
 
         if compare_hist:
             text += self.render_chart(series_data, self.currency_symbols[0], "Tariff Comparison - True cost", now_str, daily_chart=False)
-        elif not compare_list:
+        elif not configured_compare_list:
             text += '<br><h2>No tariffs configured yet - see <a href="https://springfall2008.github.io/batpred/compare/" target="_blank" rel="noopener noreferrer">Comparing Energy Tariffs</a> for how to add some to apps.yaml</h2><br>'
-        else:
+        elif compare_list:
             text += "<br><h2>Loading chart (please wait)...</h2><br>"
 
         # 7-day rolling average chart
@@ -5778,7 +5823,7 @@ chart.render();
         if series_7d:
             text += self.render_chart(series_7d, self.currency_symbols[0], "Tariff Comparison - 7 day rolling average", now_str, tagname="chart7d", daily_chart=False)
         elif not compare_list:
-            pass  # Already explained by the "No tariffs configured" message above
+            pass  # Already explained above, by "No tariffs configured" or the skipped entries
         else:
             text += "<br><h2>7 day rolling average chart loading (please wait)...</h2><br>"
 

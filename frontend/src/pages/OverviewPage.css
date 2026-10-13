@@ -137,8 +137,6 @@
    * uses the house image's 1500 x 1200 coordinates. These can be edited
    * directly in browser DevTools and remain attached when the image resizes.
    */
-  --overview-card-grid-x: 1450px;
-  --overview-card-grid-y: 720px;
   --overview-card-solar-x: 920px;
   --overview-card-solar-y: 355px;
   --overview-card-home-x: 765px;
@@ -149,14 +147,17 @@
   --overview-card-car-y: 705px;
   --overview-card-heat-pump-x: 1125px;
   --overview-card-heat-pump-y: 760px;
+  --overview-card-grid-x: 1430px;
+  --overview-card-grid-y: 480px;
   --overview-card-connector-bend: 98px;
+  --overview-card-grid-connector-bend: 98px;
   --overview-flow-solar-path: path("M 920 355 L 1180 500 L 1180 663");
   --overview-flow-battery-to-home-path: path("M 1180 690 L 1026 515 L 775 680");
-  --overview-flow-battery-to-grid-path: path("M 1450 720 L 1196 720 L 1450 720");
-  --overview-flow-grid-to-battery-path: path("M 1450 720 L 1196 720 L 1190 720");
+  --overview-flow-grid-battery-x: 1200px;
+  --overview-flow-grid-battery-y: 700px;
+  --overview-flow-grid-bend-x: 1430px;
+  --overview-flow-grid-bend-y: 700px;
   --overview-flow-car-path: path("M 1180 690 L 792 705 L 792 810");
-  --overview-grid-point-x: 1450px;
-  --overview-grid-point-y: 720px;
 
   position: relative;
   display: grid;
@@ -682,13 +683,6 @@
   fill: var(--color-surface);
   stroke: var(--color-flow-grid);
   stroke-width: 7;
-}
-
-.overview-grid-point text {
-  fill: var(--color-text);
-  font-size: 34px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
 }
 
 .overview-battery-icon {

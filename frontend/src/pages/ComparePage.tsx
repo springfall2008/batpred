@@ -19,6 +19,7 @@ import PlanTable from '../components/PlanTable'
 import type { Plan, PlanOverrides } from '../types/plan'
 import { formatMajorCurrency } from '../utils/currency'
 import { toChartPoints, type ChartPoint } from '../utils/batteryChart'
+import { formatChartTimestamp } from '../utils/chartZoom'
 
 import './ComparePage.css'
 
@@ -62,7 +63,7 @@ const colours = ['#2563eb', '#f59e0b', '#059669', '#dc2626', '#7c3aed', '#0891b2
 const emptyOverrides: PlanOverrides = {
   manual_charge_times: [], manual_export_times: [], manual_freeze_charge_times: [],
   manual_freeze_export_times: [], manual_demand_times: [], manual_import_rates: [],
-  manual_export_rates: [], manual_soc: []
+  manual_export_rates: [], manual_load_adjust: [], manual_soc: []
 }
 
 function value(value: number | null, suffix = '') {
@@ -114,7 +115,7 @@ function ComparisonChart({ data, rolling = false }: { data: CompareData, rolling
           x: {
             type: 'linear',
             grid: { color: gridColour },
-            ticks: { color: textColour, callback: (tick) => new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short' }).format(Number(tick)) }
+            ticks: { color: textColour, callback: (tick) => formatChartTimestamp(tick, { day: 'numeric', month: 'short' }) }
           },
           y: {
             grid: { color: gridColour },

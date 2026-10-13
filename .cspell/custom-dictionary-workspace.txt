@@ -484,6 +484,7 @@ overfitting
 oversizing
 overvoltage
 ownerapi
+pac
 parseable
 partlycloudy
 pbat
@@ -641,6 +642,7 @@ startswith
 startt
 stdlib
 stepline
+stevekirtley
 Storion
 Stromligning
 strptime

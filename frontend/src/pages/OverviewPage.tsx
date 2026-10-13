@@ -393,14 +393,14 @@ export default function OverviewPage({ plan, powerFlow }: OverviewPageProps) {
         const startsOnLeft = cardRect.left + cardRect.width / 2 < stageRect.left + stageRect.width / 2
         const startX = ((startsOnLeft ? cardRect.right : cardRect.left) - stageRect.left) * CARD_CONNECTOR_VIEWBOX.width / stageRect.width
         const startY = (cardRect.top + cardRect.height / 2 - stageRect.top) * CARD_CONNECTOR_VIEWBOX.height / stageRect.height
-        const bendX = startX + (startsOnLeft ? bendDistance : -bendDistance)
         const cssName = name === 'heatPump' ? 'heat-pump' : name
-        const imageTarget = {
-          x: cssNumber(`--overview-card-${cssName}-x`, HOUSE_IMAGE_VIEWBOX.width / 2),
-          y: cssNumber(`--overview-card-${cssName}-y`, HOUSE_IMAGE_VIEWBOX.height / 2)
-        }
+        const connectorBend = cssNumber(`--overview-card-${cssName}-connector-bend`, bendDistance)
+        const bendX = startX + (startsOnLeft ? connectorBend : -connectorBend)
         const target = mapOverviewImagePoint(
-          imageTarget,
+          {
+            x: cssNumber(`--overview-card-${cssName}-x`, HOUSE_IMAGE_VIEWBOX.width / 2),
+            y: cssNumber(`--overview-card-${cssName}-y`, HOUSE_IMAGE_VIEWBOX.height / 2)
+          },
           { x: HOUSE_IMAGE_VIEWBOX.width, y: HOUSE_IMAGE_VIEWBOX.height },
           sceneImageRect,
           stageRect,
@@ -418,18 +418,26 @@ export default function OverviewPage({ plan, powerFlow }: OverviewPageProps) {
       }
 
       setConnectorGeometry((current) => JSON.stringify(current) === JSON.stringify(nextGeometry) ? current : nextGeometry)
+      const nextGridPoint = {
+        x: cssNumber('--overview-card-grid-x', GRID_POINT.x),
+        y: cssNumber('--overview-card-grid-y', GRID_POINT.y)
+      }
+      const gridBattery = {
+        x: cssNumber('--overview-flow-grid-battery-x', 1165),
+        y: cssNumber('--overview-flow-grid-battery-y', 745)
+      }
+      const gridBend = {
+        x: cssNumber('--overview-flow-grid-bend-x', 1290),
+        y: cssNumber('--overview-flow-grid-bend-y', 900)
+      }
       const nextFlowPaths = {
         solarToBattery: cssPath('--overview-flow-solar-path', ENERGY_FLOW_PATHS.solarToBattery),
         batteryToHome: cssPath('--overview-flow-battery-to-home-path', ENERGY_FLOW_PATHS.batteryToHome),
-        batteryToGrid: cssPath('--overview-flow-battery-to-grid-path', ENERGY_FLOW_PATHS.batteryToGrid),
-        gridToBattery: cssPath('--overview-flow-grid-to-battery-path', ENERGY_FLOW_PATHS.gridToBattery),
+        batteryToGrid: `M ${gridBattery.x} ${gridBattery.y} L ${gridBend.x} ${gridBend.y} L ${nextGridPoint.x} ${nextGridPoint.y}`,
+        gridToBattery: `M ${nextGridPoint.x} ${nextGridPoint.y} L ${gridBend.x} ${gridBend.y} L ${gridBattery.x} ${gridBattery.y}`,
         toCar: cssPath('--overview-flow-car-path', ENERGY_FLOW_PATHS.toCar)
       }
       setFlowPaths((current) => JSON.stringify(current) === JSON.stringify(nextFlowPaths) ? current : nextFlowPaths)
-      const nextGridPoint = {
-        x: cssNumber('--overview-grid-point-x', GRID_POINT.x),
-        y: cssNumber('--overview-grid-point-y', GRID_POINT.y)
-      }
       setGridPoint((current) => current.x === nextGridPoint.x && current.y === nextGridPoint.y ? current : nextGridPoint)
     }
 
@@ -542,7 +550,6 @@ export default function OverviewPage({ plan, powerFlow }: OverviewPageProps) {
             <path className={`overview-flow overview-flow-grid ${gridExporting ? 'is-export is-active' : powerFlow.grid_importing ? 'is-import is-active' : 'is-idle'}`} d={gridExporting ? flowPaths.batteryToGrid : flowPaths.gridToBattery} markerEnd={gridExporting ? 'url(#overview-arrow-grid-export)' : 'url(#overview-arrow-grid-import)'} />
             <g className="overview-grid-point" transform={`translate(${gridPoint.x} ${gridPoint.y})`}>
               <circle r="13" />
-              <text x="-8" y="40" textAnchor="end">GRID</text>
             </g>
           </svg>
         </figure>
@@ -598,6 +605,7 @@ export default function OverviewPage({ plan, powerFlow }: OverviewPageProps) {
               mainTone={powerFlow.ashp.power === null ? '' : getOverviewPowerTone(powerFlow.ashp.power, powerFlow.ashp.power >= 10 ? 'is-home' : '')}
             >
               {powerFlow.ashp.status !== null && <Detail label="Status" value={formatOverviewStatus(powerFlow.ashp.status)} />}
+              {powerFlow.ashp.internal_temperature !== null && <Detail label="Indoor temperature" value={formatTemperature(powerFlow.ashp.internal_temperature, 'C')} />}
               {powerFlow.ashp.energy_today !== null && <Detail label="Energy today" value={formatEnergy(powerFlow.ashp.energy_today)} />}
             </OverviewCard>
           )}
