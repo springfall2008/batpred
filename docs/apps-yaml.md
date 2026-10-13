@@ -646,7 +646,7 @@ See [Components - GivEnergy Cloud Direct](components.md#ev-chargers-gecloud) for
 - **ge_cloud_evc_control** - Optional, defaults to false. When set to `true`, Predbat starts and stops your GivEnergy EV charger from its
 car charging plan, in the same way it can drive a myenergi Zappi or an Ohme charger. Charger N follows car N. Needs **ge_cloud_automatic_evc**,
 since it is that setting which maps each charger to a car.
-A `switch.predbat_gecloud_evc_control` entity appears when this is set, on by default, so you can hand the charger back without editing
+A `switch.predbat_gecloud_evc_control` entity appears when control is on, on by default, so you can hand the charger back without editing
 `apps.yaml`; releasing sends a start command if Predbat had stopped the charger, so a car is never left unable to charge.
 Read only mode releases the chargers in the same way.
 See [Components - Charger control](components.md#charger-control-gecloud) for the details.
@@ -1158,10 +1158,6 @@ If you don't have any PV panels, comment or delete this line out of `apps.yaml`.
 
 **Note:**: these '_today' entity names must all be *energy* sensors recording electricity measured over a time period, NOT *power* sensors which measure instantaneous power.  They must increase during the day and not have any gaps or reduce in value (other than at midnight).
 
-The **load_power_fill_enable** feature helps to improve the accuracy of historical load data by using instantaneous power readings to fill gaps and smooth
-out load_today sensors that update infrequently (e.g., sensors that increment in kWh units may only update every hour). This preprocessing happens before
-the main load data analysis and can significantly improve prediction accuracy, especially for systems with coarse-grained energy sensors.
-
 See the [Workarounds](#workarounds) section below for configuration settings for scaling these if required.
 
 If you have multiple inverters then you may find that the **load_today** figures are incorrect as the inverters share the house load between them.
@@ -1264,6 +1260,19 @@ the lowest day's historical load will be discarded.
 
 - **load_filter_threshold** - Sets the number of minutes of zero load data to be considered a gap (that's filled with average data), the default is 30.
 To disable, set it to 1440.
+
+- **load_power_fill_enable** (default true) helps to improve the accuracy of historical load data by using instantaneous power readings to fill gaps and smooth
+out load_today sensors that update infrequently (e.g., sensors that increment in kWh units may only update every hour). This preprocessing happens before
+the main load data analysis and can significantly improve prediction accuracy, especially for systems with coarse-grained energy sensors. Set to 'false' to turn this feature off.
+
+e.g.
+
+```yaml
+  load_filter_threshold: 60
+  load_power_fill_enable: false
+```
+
+See [Load filtering warning in FAQ's](faq.md#i-see-repeated-log-messages-warn-found-1-periods-of-zero-load-with-power-data-filling-using-power-integration).
 
 ## iBoost energy
 
@@ -2106,6 +2115,8 @@ Details of configuring `apps.yaml` for EV charging are described in [Configure a
 - **car_charging_power** - Live power drawn by your EV charger, used for display only
 - **octopus_intelligent_slot** - Octopus Energy integration 'intelligent dispatching' sensor that indicates
 whether you are within an Octopus Energy "smart charge" slot
+- **octopus_intelligent_planned_slot** - Optional second sensor to take the planned charging slots from, leaving **octopus_intelligent_slot** to supply the completed ones
+(see [car charging documentation](car-charging.md#taking-planned-slots-from-another-sensor))
 - **octopus_ready_time** - Octopus Energy integration sensor for when the car charging will be completed by
 - **octopus_charge_limit** - Octopus Energy integration sensor for car charging limit
 - **octopus_slot_low_rate** - Whether Octopus Intelligent Slots reported will be at the lowest rate if at home
@@ -2158,7 +2169,7 @@ no hub, use the serial of the device acting as one, which is the Zappi or Eddi t
 - **myenergi_automatic_eddi** - Set to `false` to wire only the Zappi half of the automatic configuration, leaving your Eddi out of **iboost_energy_today** (default: `true`). This is what to use if your hot water diversion is handled elsewhere but you still want your Zappis wired as cars
 - **myenergi_enable_controls** - Set to `false` for monitor-only operation (default: `true`)
 - **myenergi_poll_seconds** - Poll interval in seconds, rounded to the nearest whole multiple of 60, minimum 60 and maximum 1800 (default: `60`)
-- **myenergi_zappi_control** - Set to `true` to let Predbat drive your Zappi from its car charging plan: Fast inside a planned charging window, Stopped outside one (default: `false`). Needs **myenergi_automatic**, **myenergi_automatic_zappi** and **myenergi_enable_controls**, since it is automatic configuration that maps each Zappi to a car. A `switch.predbat_myenergi_zappi_control` entity appears when this is set, on by default, so you can hand the Zappi back without editing apps.yaml; releasing restores the mode the Zappi had before Predbat took over, or Eco+ when nothing was saved. Note the manual boost switch will refuse while control is on, as myenergi only accepts a boost in Eco or Eco+.
+- **myenergi_zappi_control** - Lets Predbat drive your Zappi from its car charging plan: Fast inside a planned charging window, Stopped outside one (default: `false`). Leave it off to keep Eco/Eco+ solar diversion between charging windows. Needs **myenergi_automatic**, **myenergi_automatic_zappi** and **myenergi_enable_controls**, since it is automatic configuration that maps each Zappi to a car. A `switch.predbat_myenergi_zappi_control` entity appears when control is on, on by default, so you can hand the Zappi back without editing apps.yaml; releasing restores the mode the Zappi had before Predbat took over, or Eco+ when nothing was saved. Note the manual boost switch will refuse while control is on, as myenergi only accepts a boost in Eco or Eco+.
 
 The component only starts when at least one of `myenergi_api_key`, `myenergi_key` or `myenergi_token_hash` is set. That test is a plain any-of and does not look at `myenergi_auth_method`, so a credential belonging to the transport you did not select still starts the component — it then logs which setting is missing rather than failing silently.
 

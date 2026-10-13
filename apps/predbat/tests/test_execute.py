@@ -3707,8 +3707,31 @@ def run_execute_tests(my_predbat):
         assert_immediate_soc_target=100,
         has_timed_pause=False,
         assert_pause_discharge=False,
-        assert_discharge_rate=0,
         assert_reserve=0,
+    )
+    # #5419: nor may it pin the discharge rate to 0 while charging - a charging battery cannot feed the car, and
+    # some GivEnergy inverters will not grid-charge at all with the rate at 0 and the SoC on the reserve. The
+    # scenario above asserts the rate staying at its maximum. Once the battery stops charging and holds instead,
+    # it can feed the car again, so the rate hold must still apply there:
+    failed |= run_execute_test(
+        my_predbat,
+        "car_charge2_no_pause",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best2,
+        soc_kw=10,
+        car_slot=charge_window_best_slot,
+        assert_charge_time_enable=False,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Hold charging, Hold for car",
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=-1,
+        assert_immediate_soc_target=50,
+        assert_soc_target=100,
+        assert_reserve=100,
+        has_timed_pause=False,
+        assert_pause_discharge=False,
+        assert_discharge_rate=0,
     )
     failed |= run_execute_test(
         my_predbat,
