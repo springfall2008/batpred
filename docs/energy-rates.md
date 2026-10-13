@@ -726,9 +726,11 @@ battery exports within such a rule. Set in `apps.yaml`:
   may be force exported. Every kWh that reaches the grid is PV, sent directly or stored first, and
   grid energy is only ever used on site. Use this where the rule is "only PV energy may be sold" and
   storing grid energy for your own use is allowed.
-- **pv_equivalent**: a bucket that PV production fills and every export (direct PV included) drains,
-  capped at the battery size. The battery may force export while the bucket has energy. This can sell
-  grid-charged energy when the bucket has credit, so it is the less strict reading.
+- **pv_equivalent**: a credit bucket that all PV production fills (including PV the house uses) and
+  every kWh exported drains. The battery may force export while the bucket has credit. Direct PV
+  surplus export is never limited; it only uses up credit. `export_budget_cap_kwh` (default the
+  battery size) caps how much credit is carried over. This can sell grid-charged energy when the
+  bucket has credit, so it is the less strict reading.
 
 Only battery-to-grid export is limited; PV surplus export and grid charging for your own use are not.
 When the budget runs out during an export window the battery keeps covering the house and only the
