@@ -1906,6 +1906,71 @@ def test_call_adjust_charge_immediate(test_name, my_predbat, ha, inv, dummy_item
     return failed
 
 
+def test_charge_target_overshoot_hold(my_predbat, ha, inv, dummy_items):
+    """An overshot software charge target should hold, preserving native targets and stop fallbacks."""
+    failed = False
+    original_args = dict(my_predbat.args)
+    original_soc = inv.soc_percent
+    original_native_target = inv.inv_has_target_soc
+    original_solis_control = inv.inv_has_solis_energy_control
+    original_rate = dummy_items["number.charge_rate"]
+    cases = [
+        ("software_overshoot", False, 20, False, True, "charge_freeze"),
+        ("software_overshoot_without_freeze", False, 20, False, False, "charge_stop"),
+        ("native_overshoot", True, 20, False, True, "charge_start"),
+        ("native_overshoot_without_freeze", True, 20, False, False, "charge_start"),
+        ("software_at_target", False, 22, False, True, "charge_freeze"),
+        ("software_at_target_without_freeze", False, 22, False, False, "charge_start"),
+        ("software_below_target", False, 25, False, True, "charge_start"),
+        ("explicit_freeze", False, 20, True, True, "charge_freeze"),
+        ("explicit_freeze_without_service", False, 20, True, False, "charge_stop"),
+        ("charge_ended", False, 0, False, True, "charge_stop"),
+    ]
+    try:
+        my_predbat.args.update({"charge_start_service": "charge_start", "charge_stop_service": "charge_stop", "discharge_stop_service": "discharge_stop", "charge_rate": "number.charge_rate", "device_id": "DID0"})
+        my_predbat.args.pop("charge_rate_percent", None)
+        dummy_items["number.charge_rate"] = 1101
+        inv.soc_percent = 22
+        inv.inv_has_solis_energy_control = False
+        ha.service_store_enable = True
+        for name, native_target, target, freeze, has_freeze, expected_service in cases:
+            print("**** Running Test: charge_target_{} ****".format(name))
+            inv.inv_has_target_soc = native_target
+            my_predbat.args["charge_freeze_service"] = "charge_freeze" if has_freeze else None
+            my_predbat.last_service_hash.pop("charge", None)
+            my_predbat.last_service_hash.pop("discharge", None)
+            ha.service_store = []
+            inv.adjust_charge_immediate(target, freeze=freeze)
+            expected = []
+            if target > 0:
+                expected.append(["discharge_stop", {"device_id": "DID0"}])
+            data = {"device_id": "DID0"}
+            if expected_service != "charge_stop":
+                data.update({"target_soc": target, "power": 1101})
+            expected.append([expected_service, data])
+            result = ha.get_service_store()
+            if result != expected:
+                print("ERROR: charge target {} expected {} got {}".format(name, expected, result))
+                failed = True
+            # Repeating the same hold must not issue another mode or power command.
+            ha.service_store = []
+            inv.adjust_charge_immediate(target, freeze=freeze)
+            result = ha.get_service_store()
+            if result:
+                print("ERROR: charge target {} repeated commands {}".format(name, result))
+                failed = True
+    finally:
+        my_predbat.args = original_args
+        inv.soc_percent = original_soc
+        inv.inv_has_target_soc = original_native_target
+        inv.inv_has_solis_energy_control = original_solis_control
+        dummy_items["number.charge_rate"] = original_rate
+        ha.service_store_enable = False
+        my_predbat.last_service_hash.pop("charge", None)
+        my_predbat.last_service_hash.pop("discharge", None)
+    return failed
+
+
 def test_call_adjust_export_immediate(test_name, my_predbat, ha, inv, dummy_items, soc, repeat=False, freeze=False, clear=False, charge_stop=False, discharge_start_time="00:00:00", discharge_end_time="23:55:00", no_freeze=False):
     """
     Tests;
@@ -5839,6 +5904,10 @@ charge_start_service:
         return failed
 
     failed |= test_press_and_poll_button_side_scoping(my_predbat, inv)
+    if failed:
+        return failed
+
+    failed |= test_charge_target_overshoot_hold(my_predbat, ha, inv, dummy_items)
     if failed:
         return failed
 
