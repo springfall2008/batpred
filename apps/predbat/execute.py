@@ -790,25 +790,32 @@ class Execute:
                         # Don't disable discharge during force charge/discharge slots but otherwise turn it off to prevent
                         # from draining the battery
                         if not isExporting:
-                            if inverter.inv_has_timed_pause:
-                                if resetPause:
-                                    inverter.adjust_pause_mode(pause_discharge=True)
-                                    pause_discharge_requested = True
-                                    resetPause = False
+                            # Not while this inverter is actually charging, unless it can pause: the battery is being
+                            # filled from the grid, so it cannot be feeding the car. A discharge rate of 0 adds nothing
+                            # then, and some GivEnergy inverters will not grid-charge at all with it at 0 and the SoC on
+                            # the reserve (#5419); pinning reserve just above a rising SoC costs a write for every 1% of
+                            # the climb (#3899). Both are left to reset below for the duration, and applied once charging
+                            # stops - which is the point the inverter returns to demand and the hold starts to mean
+                            # something. A timed pause is one latched write that blocks only discharge, so it stays on
+                            # through the charge, covering the moments the inverter reaches its target before Predbat
+                            # sees it. The sibling iBoost hold below already sits out a charge for the same reason.
+                            hold_deferred = (not inverter.inv_has_timed_pause) and status_per_inverter.get(inverter.id) == "Charging"
+                            if hold_deferred:
+                                self.log("Inverter {} is charging, so the hold for car {} leaves the discharge rate and reserve alone until charging stops".format(inverter.id, car_n))
                             else:
-                                if discharge_rate is None:
-                                    discharge_rate = 0
-                                # Not while actually charging: the battery is being filled from the grid, so it
-                                # cannot be feeding the car, and pinning reserve just above a rising SoC costs a
-                                # write for every 1% of the climb (#3899). Left to reset below for the duration,
-                                # and latched at the SoC reached once charging stops - which is the point the
-                                # inverter returns to demand and the hold starts to mean something. The sibling
-                                # iBoost hold below already sits out a charge for the same reason.
-                                if self.set_reserve_enable and status != "Charging":
-                                    inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
-                                    resetReserve = False
+                                if inverter.inv_has_timed_pause:
+                                    if resetPause:
+                                        inverter.adjust_pause_mode(pause_discharge=True)
+                                        pause_discharge_requested = True
+                                        resetPause = False
+                                else:
+                                    if discharge_rate is None:
+                                        discharge_rate = 0
+                                    if self.set_reserve_enable:
+                                        inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
+                                        resetReserve = False
+                                self.log("Disabling battery discharge whilst car {} is charging".format(car_n))
                             carHolding = True
-                            self.log("Disabling battery discharge whilst car {} is charging".format(car_n))
                             if ("Hold for car" not in status) and (status_hold_car == ""):
                                 if status == "Demand":
                                     status = "Hold for car"
