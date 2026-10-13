@@ -49,8 +49,9 @@ pred_bat:
   # inverter's nominal power (poinv). Set this if you know your pack's real limit.
   #alphaess_battery_rate_max: 3600
 
-  # Optional pacing. AlphaESS advise a minimum 10-second polling interval, and both write
-  # endpoints are documented as writable once per 24 hours.
+  # Optional pacing. AlphaESS advise a minimum 10-second polling interval.
+  # The periodic schedule API supports repeated writes, not a once-per-day limit.
+  # alphaess_min_write_interval is Predbat's local pacing, not an API-imposed daily limit.
   #alphaess_api_delay: 2
   #alphaess_min_write_interval: 300
   # Wait 5 minutes after Predbat starts before sending schedules. Monitoring continues.

@@ -2022,10 +2022,105 @@ def test_alphaess_shutdown_force_mode_is_accepted():
     assert client.shutdown_mode == "self_consumption_force"
 
 
+def test_alphaess_readback_grace_expires_by_time_on_the_first_config_poll():
+    """A first read half an hour after a write must detect a disabled schedule immediately."""
+    for direction in ("charge", "discharge", "periodic"):
+        client = _writable()
+        field = {"charge": "gridCharge", "discharge": "ctrDis", "periodic": "gridChargeCycle"}[direction]
+        client.applied_payload["AL70"] = {direction: {field: 1}}
+        client.last_write_time[("AL70", direction)] = 1000.0
+        with patch("alphaess.time.time", return_value=2800.0):
+            client.note_external_change("AL70", direction, {field: 0})
+        assert direction not in client.applied_payload["AL70"], "A stale schedule was still cached as applied after 30 minutes"
+        assert any("no longer match" in message for message in client.log_messages)
+
+
+def test_alphaess_readback_grace_protects_the_full_five_minutes():
+    """Frequent early reads cannot spend the settling grace before the inverter catches up."""
+    client = _writable()
+    client.applied_payload["AL70"] = {"charge": {"gridCharge": 1}}
+    client.last_write_time[("AL70", "charge")] = 1000.0
+    for elapsed in (1, 60, 120, 180, 299):
+        with patch("alphaess.time.time", return_value=1000.0 + elapsed):
+            client.note_external_change("AL70", "charge", {"gridCharge": 0})
+        assert "charge" in client.applied_payload["AL70"], "A pending write was treated as interference before five minutes"
+    with patch("alphaess.time.time", return_value=1300.0):
+        client.note_external_change("AL70", "charge", {"gridCharge": 0})
+    assert "charge" not in client.applied_payload["AL70"]
+
+
+def test_alphaess_periodic_cycle_type_change_is_detected():
+    """Switching a daily schedule to weekly changes its meaning even when its times match."""
+    client = _writable()
+    payload = client.build_periodic_payload("AL70", _schedule())
+    client.applied_payload["AL70"] = {"periodic": payload}
+    client.last_write_time[("AL70", "periodic")] = 1000.0
+    with patch("alphaess.time.time", return_value=2800.0):
+        client.note_external_change("AL70", "periodic", dict(payload, executeCycleType=1))
+    assert "periodic" not in client.applied_payload["AL70"], "A daily schedule changed to weekly without being detected"
+
+
+def test_alphaess_control_readback_uses_five_minutes_only_while_driving():
+    """Active control checks settings sooner; monitoring and read-only retain the normal TTL."""
+    for active, enabled, read_only, interval in ((True, True, False, 300), (False, True, False, 1800), (True, False, False, 1800), (True, True, True, 1800)):
+        client = _client()
+        client.control_active = {"AL70"} if active else set()
+        client.control_enable = enabled
+        client.state["switch.predbat_set_read_only"] = "on" if read_only else "off"
+        client._tier_refreshed = {tier: 1000.0 for tier in ("static", "config", "power", "energy")}
+        with (
+            patch.object(client, "refresh_config", new_callable=AsyncMock, return_value=True) as refresh,
+            patch.object(client, "refresh_power", new_callable=AsyncMock, return_value=True),
+            patch.object(client, "refresh_energy", new_callable=AsyncMock, return_value=True),
+            patch.object(client, "_reconcile_control", new_callable=AsyncMock),
+            patch.object(client, "refresh_discovery"),
+        ):
+            with patch("alphaess.time.time", return_value=1000.0 + interval - 1):
+                assert run_async_local(client.run(0, False))
+            assert refresh.await_count == 0, "Config read ran before its TTL expired"
+            with patch("alphaess.time.time", return_value=1000.0 + interval):
+                assert run_async_local(client.run(0, False))
+            assert refresh.await_count == 1, "Config read did not run when its TTL expired"
+
+
+def test_alphaess_reverted_schedule_after_restart_is_reapplied_after_startup_delay():
+    """An old persisted write cannot hide a reversion, and recovery still obeys startup delay."""
+    from tests.test_alphaess_storage import FakeStorage, StoredAlphaESS
+
+    store = FakeStorage()
+    client = StoredAlphaESS(store=store)
+    client._periodic_ok["AL70"] = True
+    client.control_active.add("AL70")
+    client.local_schedule["AL70"] = _schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "05:00:00"})
+    payload = client.build_periodic_payload("AL70", client.local_schedule["AL70"])
+    client.applied_payload["AL70"] = {"periodic": payload}
+    client.last_write_time[("AL70", "periodic")] = 1000.0
+    run_async_local(client.save_config())
+    run_async_local(client.save_control())
+
+    restored = StoredAlphaESS(store=store, startup_write_delay=300)
+    run_async_local(restored.restore_state())
+    restored._post = AsyncMock(return_value=(200, None))
+    with patch("alphaess.time.time", return_value=2800.0):
+        restored.note_external_change("AL70", "periodic", dict(payload, gridChargeCycle=0, executeCycleType=1))
+        assert "periodic" not in restored.applied_payload["AL70"], "Restart granted a fresh multi-poll grace to an old write"
+        run_async_local(restored._reconcile_control("AL70"))
+        restored._post.assert_not_awaited()
+        restored.startup_write_ready_at = 0
+        run_async_local(restored._reconcile_control("AL70"))
+    restored._post.assert_awaited_once_with("set_time_charge", body=payload)
+    assert restored.applied_payload["AL70"]["periodic"] == payload
+
+
 def run_alphaess_control_tests(my_predbat):
     """Run all AlphaESS control-logic tests."""
     failed = False
     for name, fn in [
+        ("readback_elapsed_grace", test_alphaess_readback_grace_expires_by_time_on_the_first_config_poll),
+        ("readback_full_grace", test_alphaess_readback_grace_protects_the_full_five_minutes),
+        ("periodic_cycle_type_change", test_alphaess_periodic_cycle_type_change_is_detected),
+        ("active_control_readback_ttl", test_alphaess_control_readback_uses_five_minutes_only_while_driving),
+        ("restart_reversion_startup_delay", test_alphaess_reverted_schedule_after_restart_is_reapplied_after_startup_delay),
         ("entities_round_trip", test_alphaess_control_entities_round_trip),
         ("reserve_unclamped", test_alphaess_reserve_entity_is_published_unclamped),
         ("entity_routing", test_alphaess_entity_routing_does_not_confuse_prefixed_serials),

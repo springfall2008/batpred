@@ -80,6 +80,7 @@ from alphaess_const import (
     ALPHAESS_HOLD_SOC,
     ALPHAESS_HOLD_POWER,
     ALPHAESS_SETTLE_POLLS,
+    ALPHAESS_CONFIG_SETTLE_SECONDS,
     ALPHAESS_WRITE_SETTLE_SECONDS,
     ALPHAESS_WRITE_BURST_MAX,
     ALPHAESS_STORAGE_MODULE,
@@ -89,6 +90,7 @@ from alphaess_const import (
     ALPHAESS_CACHE_CONTROL,
     ALPHAESS_TTL_STATIC,
     ALPHAESS_TTL_CONFIG,
+    ALPHAESS_TTL_CONTROL_CONFIG,
     ALPHAESS_TTL_ENERGY,
 )
 
@@ -1435,7 +1437,7 @@ class AlphaESSAPI(ComponentBase):
         if direction == "charge":
             return ("gridCharge", "timeChaf1", "timeChae1", "timeChaf2", "timeChae2", "batHighCap")
         if direction == "periodic":
-            return ("gridChargeCycle", "ctrDisCycle", "chargeTimeList", "dischargeTimeList")
+            return ("executeCycleType", "gridChargeCycle", "ctrDisCycle", "chargeTimeList", "dischargeTimeList")
         return ("ctrDis", "timeDisf1", "timeDise1", "timeDisf2", "timeDise2", "batUseCap")
 
     # chargeTimeList/dischargeTimeList entries carry fields Predbat never writes (the API
@@ -1503,10 +1505,12 @@ class AlphaESSAPI(ComponentBase):
     def note_external_change(self, sn, direction, observed):
         """Report when a Predbat-owned field no longer matches what Predbat last wrote.
 
-        Suppressed for the first ALPHAESS_SETTLE_POLLS reads after a write, because
+        Suppressed for ALPHAESS_CONFIG_SETTLE_SECONDS after a write, because
         settings only reach the inverter on its next cloud poll - typically one to five
         minutes later - so an immediate read-back legitimately shows the old values.
-        Without that window every single write would raise a false alarm.
+        Count-based grace is only a fallback for old cached intent with no write timestamp.
+        Config reads can be thirty minutes apart, so counting those polls for a timestamped
+        write would hide a real overwrite for up to two hours, including after a restart.
 
         Does nothing before Predbat has written anything for this serial and direction:
         with no recorded intent there is nothing to have been overwritten, and what the
@@ -1518,7 +1522,11 @@ class AlphaESSAPI(ComponentBase):
         key = (sn, direction)
         polls = self.settle_count.get(key, 0) + 1
         self.settle_count[key] = polls
-        if polls <= ALPHAESS_SETTLE_POLLS:
+        last_write = self.last_write_time.get(key)
+        if last_write is not None:
+            if (time.time() - last_write) < ALPHAESS_CONFIG_SETTLE_SECONDS:
+                return
+        elif polls <= ALPHAESS_SETTLE_POLLS:
             return
         differing = [field for field in self._owned_fields(direction) if field in observed and self._field_differs(direction, field, observed.get(field), applied.get(field))]
         if not differing:
@@ -2145,7 +2153,10 @@ class AlphaESSAPI(ComponentBase):
         if not self.device_list:
             self.log("Warn: AlphaESS found no battery systems on this account")
             return False
-        if self.tier_expired("config", ALPHAESS_TTL_CONFIG):
+        config_ttl = ALPHAESS_TTL_CONFIG
+        if self.control_active.intersection(self.device_list) and self.control_enable and not self._is_read_only():
+            config_ttl = ALPHAESS_TTL_CONTROL_CONFIG
+        if self.tier_expired("config", config_ttl):
             await self.refresh_config()
         live_ok = True
         if self.tier_expired("power", self.power_tier_ttl()):
