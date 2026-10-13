@@ -16,7 +16,7 @@ import signal
 import aiohttp
 import pytz
 from contextlib import redirect_stdout
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import MagicMock, AsyncMock, patch
 from sunsynk import SunsynkAPI, test_sunsynk_api as run_sunsynk_cli_once
 from sunsynk_const import SUNSYNK_REGIONS, SUNSYNK_ENDPOINTS, SUNSYNK_RETRIES, SUNSYNK_MAX_DISCOVERY_PAGES
@@ -51,6 +51,9 @@ class MockSunsynk(SunsynkAPI):
         self._tier_refreshed = {}
         self._cache_restored = False
         self._soc_floor_warned = set()
+        self._stack_size_warned = set()
+        self._discovery_battery_ratings = {}
+        self._discovery_sensors = {}
         # Most recent body-level API failure message (the `msg` field only, never a
         # credential) and whether the last discovery attempt actually reached the API -
         # mirrors the two attributes initialize() sets on the real component.
@@ -60,11 +63,26 @@ class MockSunsynk(SunsynkAPI):
         self.local_tz = pytz.timezone("Europe/London")
         self.base = MagicMock()
         self.base.args = {"user_id": "test-sunsynk-1"}
-        self.base.midnight_utc = datetime.now(pytz.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        self.base.minutes_now = 0  # local minutes-since-midnight; tests set this for time-aware control
+        # A real clock on the mock base, not a MagicMock attribute: ComponentBase.minutes_now
+        # derives from base.now_utc (GH#4804), and MagicMock would answer that arithmetic with a
+        # value of its own rather than failing. Tests wanting a particular time of day call
+        # set_mock_clock(); writing base.minutes_now alone does nothing.
+        self.base.now_utc = datetime.now(pytz.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        self.base.midnight_utc = self.base.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        self.base.minutes_now = 0
         # Straight through, like the component: _init_oauth owns self.auth_method, so
         # collapsing the modes here would hide password_legacy from fetch_token.
         self._init_oauth(auth_method, "test-token", None, "sunsynk")
+
+    def set_mock_clock(self, minutes_now):
+        """Move the mock base's clock to minutes_now past midnight.
+
+        ComponentBase.minutes_now is derived from base.now_utc, so a test that wants a particular
+        time of day moves the clock rather than writing base.minutes_now (GH#4804). Both are set
+        so a direct base.minutes_now read stays honest too.
+        """
+        self.base.now_utc = self.base.midnight_utc + timedelta(minutes=minutes_now)
+        self.base.minutes_now = minutes_now
 
     def log(self, message):
         """Capture logs."""
@@ -690,6 +708,41 @@ def test_nominal_pack_voltage_variants():
     assert not failed, "test_nominal_pack_voltage_variants"
 
 
+def test_nominal_pack_voltage_warns_once_per_unmatched_charge_volt():
+    """A chargeVolt that fits no LiFePO4 stack is warned about once per value, not on every call.
+
+    battery_capacity() and battery_rate_max() both reach nominal_pack_voltage() every cycle, and the
+    discovery reporter reads battery_capacity() too, so an unchanging chargeVolt would otherwise log
+    the same Warn several times a cycle.
+    """
+    failed = False
+    s = MockSunsynk()
+
+    def stack_warnings():
+        return [message for message in s.log_messages if "cannot infer a LiFePO4 stack size" in message]
+
+    # 40V fits no stack: 8 cells charge to 27.2-30V and 15 cells to 51-56.25V
+    for _ in range(3):
+        if s.nominal_pack_voltage(40.0) != 0.0:
+            print("ERROR: a chargeVolt that fits no stack must still give no voltage")
+            failed = True
+    if len(stack_warnings()) != 1:
+        print(f"ERROR: expected one warning for a repeated chargeVolt, got {stack_warnings()}")
+        failed = True
+    # A different value that fits no stack is new information and is warned about
+    s.nominal_pack_voltage(70.0)
+    if len(stack_warnings()) != 2 or "70.0" not in stack_warnings()[-1]:
+        print(f"ERROR: a new chargeVolt that fits no stack must be warned about, got {stack_warnings()}")
+        failed = True
+    # Neither a placeable value nor one already warned about logs again
+    s.nominal_pack_voltage(56.8)
+    s.nominal_pack_voltage(40.0)
+    if len(stack_warnings()) != 2:
+        print(f"ERROR: no further warnings expected, got {stack_warnings()}")
+        failed = True
+    assert not failed, "test_nominal_pack_voltage_warns_once_per_unmatched_charge_volt"
+
+
 def test_battery_capacity_amp_hours_to_kwh():
     """Amp-hour capacity becomes kWh using the inferred pack voltage."""
     failed = False
@@ -1184,6 +1237,7 @@ def run_sunsynk_api_tests(my_predbat):
         ("grid_power_sign", test_grid_power_sign_matches_the_live_export_sample),
         ("telemetry_absent", test_fetch_device_data_absent_fields_are_not_invented),
         ("nominal_pack_voltage", test_nominal_pack_voltage_variants),
+        ("nominal_pack_voltage_warns_once", test_nominal_pack_voltage_warns_once_per_unmatched_charge_volt),
         ("capacity_ah_to_kwh", test_battery_capacity_amp_hours_to_kwh),
         ("battery_rate_max", test_battery_rate_max_from_charge_current),
         ("rate_max_field_priority", test_battery_rate_max_prefers_a_populated_current_field),

@@ -9,6 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 
 from tests.test_infra import reset_rates, reset_inverter, update_rates_export
+from utils import unpack_export_limit
 from prediction import Prediction
 
 
@@ -74,7 +75,8 @@ def run_optimise_solar(
     my_predbat.charge_window_best = charge_window_best
     my_predbat.charge_limit_best = charge_limit_best
     my_predbat.export_window_best = export_window_best
-    my_predbat.export_limits_best = list(export_limits_best)
+    # Callers pass the packed percentages these tests have always used - normalise on the way in
+    my_predbat.export_limits_best = [unpack_export_limit(limit) for limit in export_limits_best]
 
     # Baseline metric of the current plan
     best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export = my_predbat.run_prediction_metric(charge_limit_best, charge_window_best, export_window_best, my_predbat.export_limits_best, end_record=end_record)
@@ -90,7 +92,9 @@ def run_optimise_solar(
             # None means "don't care" - used where the re-optimised value is not deterministic
             if expect_export_limit[n] is None:
                 continue
-            if expect_export_limit[n] != my_predbat.export_limits_best[n]:
+            # Expectations are written as the packed percentages these tests have always used;
+            # normalise them to instructions so the comparison is between like and like
+            if unpack_export_limit(expect_export_limit[n]) != my_predbat.export_limits_best[n]:
                 print("ERROR: Expected export limit {} is {} but got {}".format(n, expect_export_limit[n], my_predbat.export_limits_best[n]))
                 failed = True
 

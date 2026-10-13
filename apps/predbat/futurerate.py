@@ -31,7 +31,6 @@ class FutureRate:
         self.log = base.log
         self.get_arg = base.get_arg
         self.set_arg = base.set_arg
-        self.midnight = base.midnight
         self.midnight_utc = base.midnight_utc
         self.forecast_days = base.forecast_days
         self.minutes_now = base.minutes_now
@@ -341,10 +340,13 @@ class FutureRate:
         """
         Clean up futurerate data
         """
+        # The host's naive clock, matching how the stamps below are written - and how they were
+        # written by earlier versions, whose cache is loaded back from storage on upgrade.
+        midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         current_keys = list(self.futurerate_url_cache.keys())
         for url in current_keys[:]:
             stamp = self.futurerate_url_cache[url]["stamp"]
-            if stamp < self.midnight:
+            if stamp < midnight:
                 del self.futurerate_url_cache[url]
 
     def download_futurerate_data(self, url):
@@ -357,11 +359,12 @@ class FutureRate:
 
         # Check the cache first
         now = datetime.now()
+        midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
         if url in self.futurerate_url_cache:
             stamp = self.futurerate_url_cache[url]["stamp"]
             pdata = self.futurerate_url_cache[url]["data"]
-            update_time_since_midnight = stamp - self.midnight
-            now_since_midnight = now - self.midnight
+            update_time_since_midnight = stamp - midnight
+            now_since_midnight = now - midnight
             age = now - stamp
             needs_update = False
 

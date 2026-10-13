@@ -23,6 +23,7 @@ from annual_costs import build_costs, build_payback, resolve_costs
 from annual_interpolate import ANCHOR_MONTHS, FAST_MODE_MAX_RATE_CV, build_interpolated_rows, rate_variability
 from annual_load import build_load_forecast, OctopusConsumptionLoadProfile, SyntheticLoadProfile
 from annual_tariff import AnnualTariff
+from utils import mask_secret_args
 from annual_weather import AnnualWeather, resolve_postcode
 from const import MINUTE_WATT, PREDICT_STEP
 from prediction import Prediction
@@ -77,9 +78,6 @@ MINIMUM_YEAR = 1940
 # arrive here and be rejected.
 WEATHER_ARCHIVE_LAG_DAYS = 8
 
-# Substrings that mark a config value as secret and therefore scrubbable
-SECRET_MARKERS = ["_key", "password", "token", "secret"]
-
 
 class AnnualConfigError(ValueError):
     """Raised when the annual prediction config is invalid or self-contradictory."""
@@ -88,20 +86,15 @@ class AnnualConfigError(ValueError):
 def scrub_secrets(config):
     """Return a deep copy of the config with secret-looking values replaced by "xxx".
 
-    Mirrors the redaction ``create_debug_yaml()`` applies, so a results document or
-    debug dump can never carry an API key.
+    Delegates to utils.mask_secret_args() - the one redaction implementation
+    create_debug_yaml(), web.py and the MCP config routes all share - rather than keeping a
+    second, independent credential-key list here. This used to duplicate that list
+    (SECRET_MARKERS) with only the original four substrings and no access to the growable
+    per-component "secret": True registry (account numbers, serial numbers, etc, GH#4770) that
+    list has since grown into; a key the registry newly flags would have kept leaking through
+    this path even after being fixed everywhere else.
     """
-    if isinstance(config, dict):
-        scrubbed = {}
-        for key, value in config.items():
-            if any(marker in str(key).lower() for marker in SECRET_MARKERS):
-                scrubbed[key] = "xxx"
-            else:
-                scrubbed[key] = scrub_secrets(value)
-        return scrubbed
-    if isinstance(config, list):
-        return [scrub_secrets(item) for item in config]
-    return config
+    return mask_secret_args(config)
 
 
 def _require_number(value, field, minimum=None, maximum=None, integer=False, exclusive_minimum=False):
@@ -752,6 +745,7 @@ def reset_sample_state(predbat):
     handled by ``configure_offline_mode()``, not per-sample leaks.
     """
     predbat.dynamic_load_baseline = {}
+    predbat.car_charging_now_slots = []
 
     predbat.soc_kw = 0.0
 
@@ -794,6 +788,12 @@ def reset_sample_state(predbat):
     predbat.rate_min = 0
     predbat.rate_max = 0
     predbat.rate_average = 0
+    # set_rate_thresholds() reads these alongside the rates. _apply_rates() clears them too, since
+    # _run_scenarios() installs a second tariff without coming back through here.
+    predbat.rate_import_saving_minutes = set()
+    predbat.rate_export_saving_minutes = set()
+    predbat.rate_import_pre_saving = {}
+    predbat.rate_export_pre_saving = {}
 
     predbat.load_inday_adjustment = 1.0
     predbat.load_scaling_dynamic = None
@@ -1194,6 +1194,13 @@ def _apply_rates(predbat, rate_import, rate_export):
     predbat.rate_export = rate_export
     predbat.rate_low_threshold = 0
     predbat.rate_high_threshold = 0
+    # A prior live cycle's saving-session minutes are absolute offsets into that cycle's own rate
+    # tables - stale and meaningless against this simulated tariff, and set_rate_thresholds() would
+    # otherwise exclude whatever unrelated minutes happen to sit at the same positions here.
+    predbat.rate_import_saving_minutes = set()
+    predbat.rate_export_saving_minutes = set()
+    predbat.rate_import_pre_saving = {}
+    predbat.rate_export_pre_saving = {}
 
     if predbat.rate_import:
         predbat.rate_scan(predbat.rate_import, print=False)
@@ -1375,7 +1382,7 @@ def _capture_plan(predbat, pv_step, pv_step10, load_step, load_step10, end_recor
 
     ``publish_html_plan()`` unconditionally reads ``predict_soc_best``/
     ``predict_clipped_best``/``predict_iboost_best``/``predict_carbon_best``/
-    ``predict_metric_best`` off ``predbat``, which ``run_prediction()`` only populates
+    ``predict_metric_best``/``predict_car_hold_best`` off ``predbat``, which ``run_prediction()`` only populates
     when called with ``save="best"`` (or ``"compare"``/``"yesterday"`` - see
     ``plan.py``). This function therefore re-runs the prediction once more, purely to
     populate that state, rather than asking the BILLED run (``_billed_result()``) to

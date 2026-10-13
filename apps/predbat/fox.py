@@ -17,6 +17,7 @@ Feedin), real-time monitoring, and device settings via the Fox ESS Cloud API.
 import asyncio
 from datetime import datetime, timedelta, timezone
 import os
+import yaml
 import time
 import hashlib
 from predbat_metrics import record_api_call
@@ -25,9 +26,10 @@ import json
 import argparse
 import random
 from component_base import ComponentBase
+from coordinator import inverter_record
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
-from utils import dp2
+from utils import dp2, load_apps_yaml
 
 # Define TIME_FORMAT_HA locally to avoid dependency issues
 TIME_FORMAT_HA = "%Y-%m-%dT%H:%M:%S%z"
@@ -326,6 +328,20 @@ def validate_schedule(new_schedule, reserve, fdPwr_max, target_count=0, baseline
     return pad_schedule(result_schedule, target_count, reserve, fdPwr_max)
 
 
+# The behaviour a driven Fox Cloud inverter has, as the discovery record's capabilities - the seven
+# coordinator.CAPABILITY_KEYS, with the values INVERTER_DEF["FoxCloud"] (config.py) holds. A literal,
+# never read back from the row: the record has to rebuild the row on its own, and reading the row here
+# would make that test prove nothing.
+FOX_CAPABILITIES = {
+    "support_charge_freeze": True,
+    "support_discharge_freeze": True,
+    "support_feedin_first": True,
+    "can_span_midnight": False,
+    "charge_discharge_with_rate": False,
+    "charge_control_immediate": False,
+    "target_soc_used_for_discharge": True,
+}
+
 # Group fields that the v3 scheduler API nests inside 'extraParam'
 V3_EXTRA_PARAM_KEYS = ["minSocOnGrid", "fdSoc", "fdPwr", "maxSoc", "importLimit", "exportLimit", "pvLimit", "reactivePower"]
 
@@ -596,6 +612,18 @@ class FoxAPI(ComponentBase, OAuthMixin):
         # Publish to HA whenever we have refreshed data (or on first start to populate entities)
         if first or settings_refresh or production_refresh or realtime_refresh:
             await self.publish_data()
+
+        # Unconditional, once per cycle and outside any one-shot gate, so a transient failure is
+        # retried rather than lost - see ComponentBase.refresh_discovery(), which owns the
+        # compare/guard loop, and never raises. Placed after the device poll and publish_data()
+        # above so it describes what this cycle actually read.
+        #
+        # Deliberately BEFORE automatic_config() below, as GivTCP's run() does: automatic_config()
+        # raises when no device qualifies as a battery inverter (a battery with no scheduler, say),
+        # and that exception leaves run() every retry. Called after it, the report would never be
+        # filed on exactly the installs whose debug dump most needs to say why. automatic_config()
+        # reads nothing this call writes, so it still runs, and still raises, exactly as before.
+        self.refresh_discovery()
 
         # Automatic configuration on first run
         if first and self.automatic:
@@ -2379,6 +2407,250 @@ class FoxAPI(ComponentBase, OAuthMixin):
         if len(batteries):
             self.set_arg("battery_temperature_history", f"sensor.{self.prefix}_fox_{batteries[0]}_battemperature")
 
+    @staticmethod
+    def _device_setting(settings, name):
+        """
+        The device's setting entry called name, or None. Matched case-insensitively, as
+        automatic_config() matches ExportLimit when it sets hasExportLimit.
+        """
+        for key, entry in settings.items():
+            if str(key).lower() == name.lower():
+                return entry if isinstance(entry, dict) else {}
+        return None
+
+    @staticmethod
+    def _setting_number(entry):
+        """A setting entry's value when it is a number of watts Fox reports (not negative, not a bool), else None."""
+        value = (entry or {}).get("value")
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
+            return value
+        return None
+
+    def _fox_entity(self, serial, entity_domain, suffix, access="r", **extra):
+        """
+        One discovery descriptor for an entity Fox publishes for this device, its id formed exactly as
+        automatic_config() forms its per-device list element (f"<domain>.{self.prefix}_fox_{sn.lower()}_<suffix>").
+        extra holds descriptor fields (domain, format, unit, invert).
+        """
+        return dict({"entity_id": f"{entity_domain}.{self.prefix}_fox_{serial.lower()}_{suffix}", "access": access}, **extra)
+
+    def _discovery_pv_entities(self, serial, has_pv, third_party):
+        """
+        pv_today and pv_power for one device, as automatic_config() binds them for it: the device's own
+        PV sensors when it has PV, otherwise a metered third-party generator's, otherwise 0 - the [0]
+        stand-in automatic_config() sets when nothing on the site has PV.
+
+        fox_automatic_ignore_pv is the user's opt-out, not a fact about the device, so it does not
+        remove them (spec D11); the coordinator applies it.
+        """
+        if has_pv:
+            return {"pv_today": self._fox_entity(serial, "sensor", "pvenergytotal_today"), "pv_power": self._fox_entity(serial, "sensor", "pvpower")}
+        if third_party:
+            return {"pv_today": self._fox_entity(serial, "sensor", "feedin2"), "pv_power": self._fox_entity(serial, "sensor", "meterpower2")}
+        return {"pv_today": {"value": 0, "access": "r"}, "pv_power": {"value": 0, "access": "r"}}
+
+    def _discovery_entities(self, serial, has_pv, third_party, has_export_limit, first):
+        """
+        The discovery record's entities for one inverter Fox drives: one descriptor per setting
+        automatic_config() binds for it, each entity id formed as automatic_config() forms it (see
+        _fox_entity()), so the agreement tests that run the real automatic_config() pin the two together.
+
+        access is "rw" for the settings Predbat writes (the schedule, reserve and the write
+        button) and "r" for what it only reads. grid_power_invert becomes invert on grid_power.
+        export_limit is automatic_config()'s 99999 ("no cap") stand-in when the device has no
+        ExportLimit setting. PV is _discovery_pv_entities().
+
+        battery_temperature_history is a single site-wide entity automatic_config() binds to the
+        first driven device's sensor, so only that device's record (first) carries it (spec D15).
+        """
+        time_select = {"domain": "select", "format": "HH:MM:SS"}
+        entities = {
+            "load_today": self._fox_entity(serial, "sensor", "loads"),
+            "import_today": self._fox_entity(serial, "sensor", "gridconsumption"),
+            "export_today": self._fox_entity(serial, "sensor", "feedin"),
+            "battery_rate_max": self._fox_entity(serial, "sensor", "battery_rate_max"),
+            "battery_power": self._fox_entity(serial, "sensor", "invbatpower"),
+            "grid_power": self._fox_entity(serial, "sensor", "meterpower", invert=True),
+            "load_power": self._fox_entity(serial, "sensor", "loadspower"),
+            "soc_percent": self._fox_entity(serial, "sensor", "soc", unit="%"),
+            "soc_max": self._fox_entity(serial, "sensor", "battery_capacity"),
+            "reserve": self._fox_entity(serial, "number", "battery_schedule_reserve", "rw"),
+            "battery_min_soc": self._fox_entity(serial, "sensor", "battery_reserve_min"),
+            "charge_start_time": self._fox_entity(serial, "select", "battery_schedule_charge_start_time", "rw", **time_select),
+            "charge_end_time": self._fox_entity(serial, "select", "battery_schedule_charge_end_time", "rw", **time_select),
+            "charge_limit": self._fox_entity(serial, "number", "battery_schedule_charge_soc", "rw"),
+            "scheduled_charge_enable": self._fox_entity(serial, "switch", "battery_schedule_charge_enable", "rw"),
+            "charge_rate": self._fox_entity(serial, "number", "battery_schedule_charge_power", "rw", unit="W"),
+            "scheduled_discharge_enable": self._fox_entity(serial, "switch", "battery_schedule_discharge_enable", "rw"),
+            "discharge_target_soc": self._fox_entity(serial, "number", "battery_schedule_discharge_soc", "rw"),
+            "discharge_start_time": self._fox_entity(serial, "select", "battery_schedule_discharge_start_time", "rw", **time_select),
+            "discharge_end_time": self._fox_entity(serial, "select", "battery_schedule_discharge_end_time", "rw", **time_select),
+            "discharge_rate": self._fox_entity(serial, "number", "battery_schedule_discharge_power", "rw", unit="W"),
+            "battery_temperature": self._fox_entity(serial, "sensor", "battemperature"),
+            "inverter_limit": self._fox_entity(serial, "sensor", "inverter_capacity"),
+            "battery_scaling": self._fox_entity(serial, "sensor", "battery_soh"),
+            "schedule_write_button": self._fox_entity(serial, "switch", "battery_schedule_charge_write", "rw"),
+            "export_limit": self._fox_entity(serial, "number", "setting_exportlimit") if has_export_limit else {"value": 99999, "access": "r"},
+        }
+        entities.update(self._discovery_pv_entities(serial, has_pv, third_party))
+        if first:
+            entities["battery_temperature_history"] = self._fox_entity(serial, "sensor", "battemperature")
+        return entities
+
+    def build_discovery(self):
+        """
+        Describe the discovered Fox devices for the discovery catalogue.
+
+        Reads only what automatic_config() already gathers - self.device_list, self.device_detail
+        and self.device_settings - so this adds no API calls and cannot change what Fox does.
+        Reporting is independent of self.automatic: the catalogue records what hardware is there,
+        not whether this component wired apps.yaml to it, which is what the report's own
+        "automatic" flag is for.
+
+        functions says what a device physically has ("solar", "battery"); inverter_type says
+        whether Predbat would drive it. inverter_type is "FoxCloud" - the INVERTER_DEF key
+        automatic_config() itself writes - on exactly the devices automatic_config() counts as
+        inverters: hasBattery AND function.scheduler AND a positive capacity. Any other device,
+        a PV-only one or a battery automatic_config() refuses (no scheduler, say), carries no
+        inverter_type but still shows its battery in functions, which is precisely what a dump
+        from an install whose auto-config fails needs to show. That predicate is duplicated here
+        rather than shared, because sharing it means changing automatic_config(), a control path;
+        automatic_config() is the source of truth, and a test runs it to pin this copy to it.
+
+        Only a driven device carries capabilities (FOX_CAPABILITIES, the FoxCloud row's behaviour)
+        and its full entities (what automatic_config() binds for it - see _discovery_entities()).
+        automatic_config() builds its per-device lists over the driven devices in device_list
+        order, so the Nth driven record here is index N of those lists. A PV-only device (hasPV,
+        no battery - the devices automatic_config() takes as PV sources) carries just its
+        pv_power and pv_today (spec D12), so its generation is not lost when the coordinator
+        configures from records. Any other device - a battery automatic_config() refuses, or one
+        whose detail has not been read yet - claims no entities.
+
+        A third-party generator this inverter meters is topology, not something the inverter can
+        do, so it is a flag.
+
+        ratings are figures the device reports, keyed by Predbat setting name. inverter_limit goes
+        through capacity_watts(), never capacity * 1000: Fox reports a half-kW model's capacity
+        truncated (a KH10.5 says 10), and capacity_watts() is what restores the 500 W. For a
+        battery device that is also the value of the _inverter_capacity sensor publish_data()
+        publishes; for a PV-only device publish_data() sets that sensor to 0, while the catalogue
+        still reports the device's own rating. export_limit and import_limit are the ExportLimit
+        and ImportLimit settings' configured values in W, when the device has the setting and it
+        holds a number.
+
+        stationName, stationID and moduleSN are deliberately not reported. stationName is
+        user-authored free text that can hold a street address (get_device_list()'s own sample
+        holds one), and the info container's guards - a length cap and no "@" - would let an
+        address straight into a debug dump users post publicly. Neither identifier describes the
+        hardware; a station ID, if one is ever wanted, belongs in account_ids, which is
+        pseudonymised.
+
+        No battery capacity is reported. A real batteryList mixes control units that carry no
+        capacity (bcu, ivu) with bmu entries carrying one in Wh, and publish_data() sums every
+        entry that carries one - a known live bug (GH#4919): an AIO ESS reports its one pack as
+        four bmu entries, each claiming the whole pack and all carrying the inverter's own
+        serial, so the sum is 4x the truth. Publishing it would put a knowingly-wrong soc_max
+        in every affected dump. Two ratings are reported instead, named for what the API returned
+        rather than as the spec's "modules", since the vendor figure is known to be wrong:
+        battery_capacity_entries, how many entries publish_data() sums, and
+        battery_capacity_serials, how many distinct batterySN those entries carry. A healthy
+        four-module stack reports four and four; four entries against one serial is the GH#4919
+        signature. Neither len(batteryList) nor the entry count alone can tell them apart - each
+        reads the same for the bug as for that healthy stack. Deliberately not gated on hasBattery:
+        a battery list on a device that says it has no battery is itself worth seeing.
+
+        Returns None when nothing has been discovered yet, which refresh_discovery() treats as
+        "nothing to report, ask again next cycle".
+        """
+        if not self.device_list:
+            return None
+
+        inverters = []
+        driven_count = 0
+        for device in self.device_list:
+            serial = device.get("deviceSN")
+            if not serial:
+                continue
+            detail = self.device_detail.get(serial, {}) or {}
+            has_battery = bool(detail.get("hasBattery", False))
+            has_pv = bool(detail.get("hasPV", False))
+            has_scheduler = bool((detail.get("function") or {}).get("scheduler", False))
+            third_party = bool(detail.get("thirdPartyGen", False))
+
+            functions = []
+            if has_pv:
+                functions.append("solar")
+            if has_battery:
+                functions.append("battery")
+
+            flags = []
+            if third_party:
+                flags.append("third_party_gen")
+
+            info = {}
+            device_type = detail.get("deviceType")
+            if device_type:
+                info["model"] = str(device_type)
+            product_type = detail.get("productType")
+            if product_type:
+                info["product_type"] = str(product_type)
+            # Fox reports a firmware version per board; info takes only strings, so they are
+            # flattened into one, board names in sorted order - as GE Cloud's
+            # _device_info_and_ratings() does with its firmware_version dict
+            boards = [(board, detail.get(board + "Version")) for board in ("manager", "master", "slave")]
+            firmware = " ".join("{} {}".format(board, version.strip()) for board, version in boards if isinstance(version, str) and version.strip())
+            if firmware:
+                info["firmware"] = firmware
+
+            # capacity_watts() multiplies the raw field, so only a positive number reaches it -
+            # the same test drives_it applies below. Anything else drops the rating, not the report.
+            capacity = detail.get("capacity", 0)
+            capacity_is_rating = isinstance(capacity, (int, float)) and capacity > 0
+            ratings = {}
+            if capacity_is_rating:
+                ratings["inverter_limit"] = self.capacity_watts(detail)
+            settings = self.device_settings.get(serial, {}) or {}
+            export_setting = self._device_setting(settings, "ExportLimit")
+            for rating, entry in (("export_limit", export_setting), ("import_limit", self._device_setting(settings, "ImportLimit"))):
+                value = self._setting_number(entry)
+                if value is not None:
+                    ratings[rating] = value
+            battery_list = detail.get("batteryList") or []
+            summed = [entry for entry in battery_list if isinstance(entry, dict) and "capacity" in entry] if isinstance(battery_list, list) else []
+            if summed:
+                ratings["battery_capacity_entries"] = len(summed)
+                ratings["battery_capacity_serials"] = len({entry.get("batterySN") for entry in summed if entry.get("batterySN")})
+
+            # automatic_config() is the source of truth for which devices are inverters Predbat
+            # drives: it configures one only when hasBattery, function.scheduler and capacity > 0
+            # all hold. Duplicated here, not shared, so this observer does not touch that control
+            # path; test_fox_build_discovery_sets_inverter_type_only_where_automatic_config_would
+            # runs the real automatic_config() to keep the two in step.
+            drives_it = has_battery and has_scheduler and capacity_is_rating
+            entities = None
+            if drives_it:
+                entities = self._discovery_entities(serial, has_pv, third_party, export_setting is not None, driven_count == 0)
+                driven_count += 1
+            elif has_pv and not has_battery:
+                entities = self._discovery_pv_entities(serial, has_pv, third_party)
+
+            inverters.append(
+                inverter_record(
+                    "fox:{}".format(serial),
+                    inverter_type="FoxCloud" if drives_it else None,
+                    composition="direct",
+                    functions=functions,
+                    capabilities=FOX_CAPABILITIES if drives_it else None,
+                    flags=flags,
+                    hardware_ids={"serial": serial},
+                    info=info,
+                    ratings=ratings,
+                    entities=entities,
+                )
+            )
+
+        return {"automatic": self.automatic, "inverters": inverters}
+
 
 async def test_write_schedule(sn, api_key, token_hash, token_expires, supabase_url, supabase_key, user_id):  # pragma: no cover
     """
@@ -2480,6 +2752,75 @@ async def test_fox_api(sn, api_key, token_hash, token_expires, supabase_url, sup
     print("Calling run() once...")
     await fox_api.run(seconds=0, first=True)
     print("Run completed successfully")
+
+
+# Fox credentials as they appear in apps.yaml, mapped to the command line fields they stand in
+# for, so --config can supply them instead. Written out by hand rather than read from
+# COMPONENT_LIST: components.py pulls predbat in behind it, and fox.py is imported by components
+# itself. test_fox_cli_credential_keys_match_component keeps this in step with what the component
+# actually declares.
+FOX_CLI_CREDENTIAL_KEYS = {
+    "api_key": "fox_key",
+    "token_hash": "fox_token_hash",
+    "token_expires": "fox_token_expires_at",
+    "serial": "fox_inverter_sn",
+}
+
+# The OAuth refresh settings, which are not Fox component args: oauth_mixin reads
+# SUPABASE_URL/SUPABASE_KEY from the environment and user_id from base.args. Without them an
+# OAuth run cannot refresh its token and every request comes back 401, so --config reads them
+# too rather than making the caller export environment variables alongside the file.
+FOX_CLI_OAUTH_KEYS = {
+    "user_id": "user_id",
+    "supabase_url": "supabase_url",
+    "supabase_key": "supabase_key",
+}
+
+
+def merge_fox_credentials(cli, config, report=False):
+    """
+    Fill in any Fox credential not given on the command line from an apps.yaml-format config
+
+    An explicit command line value always wins, so a one-off run against a different key or
+    inverter does not mean editing apps.yaml.
+
+    A config carrying both an API key and an OAuth token hash is ambiguous, so fox_auth_method
+    decides - the same field the component itself uses to pick between them. With neither
+    declared, whatever is present is used, preferring the key (the component's own default).
+
+    With report=True, returns (merged, used) where used lists the config keys actually taken, so
+    the caller can show them - a key the CLI does not look for otherwise fails silently, with a
+    401 several lines later as its only symptom.
+    """
+    merged = dict(cli)
+    used = []
+
+    auth_method = config.get("fox_auth_method")
+    skip = set()
+    if auth_method == "oauth":
+        skip.add("api_key")
+    elif auth_method == "api_key":
+        skip.add("token_hash")
+        skip.add("token_expires")
+    elif config.get("fox_key") and config.get("fox_token_hash"):
+        skip.add("token_hash")
+        skip.add("token_expires")
+
+    for mapping in (FOX_CLI_CREDENTIAL_KEYS, FOX_CLI_OAUTH_KEYS):
+        for cli_name, config_key in mapping.items():
+            if merged.get(cli_name) or cli_name in skip:
+                continue
+            value = config.get(config_key)
+            # fox_inverter_sn is "string|string_list" in APPS_SCHEMA, but the CLI drives one device
+            if isinstance(value, list):
+                value = value[0] if value else None
+            if value:
+                merged[cli_name] = value
+                used.append(config_key)
+
+    if report:
+        return merged, used
+    return merged
 
 
 async def _await_schedule(fox_api, serial, expected, timeout=90, interval=5):  # pragma: no cover
@@ -2708,9 +3049,14 @@ def main():  # pragma: no cover
     """
     parser = argparse.ArgumentParser(description="Test Fox API")
     parser.add_argument("--serial", action="store", default=None, help="Fox API serial number")
-    auth_group = parser.add_mutually_exclusive_group(required=True)
+    auth_group = parser.add_mutually_exclusive_group()
     auth_group.add_argument("--api-key", help="Fox API key")
     auth_group.add_argument("--token-hash", action="store", help="Fox API OAuth token hash")
+    parser.add_argument(
+        "--config",
+        action="store",
+        help="Load credentials from an apps.yaml-format file instead of passing them here, resolving !secret as Predbat does. Reads fox_key, fox_auth_method, fox_token_hash, fox_token_expires_at, fox_inverter_sn, and for an OAuth refresh supabase_url, supabase_key and user_id. Anything also given on the command line wins",
+    )
     parser.add_argument("--token-expires", action="store", help="Fox API OAuth token expiry timestamp")
     parser.add_argument("--supabase-url", action="store", help="Supabase URL for OAuth token refresh")
     parser.add_argument("--supabase-key", action="store", help="Supabase anon key for OAuth token refresh")
@@ -2728,6 +3074,29 @@ def main():  # pragma: no cover
     supabase_url = args.supabase_url
     supabase_key = args.supabase_key
     user_id = args.user_id
+
+    if args.config:
+        try:
+            config, _ = load_apps_yaml(args.config)
+        except (yaml.YAMLError, KeyError, OSError) as exc:
+            parser.error(f"could not read Fox credentials from {args.config}: {exc}")
+        cli_values = {"api_key": api_key, "token_hash": token_hash, "token_expires": token_expires, "serial": serial, "user_id": user_id, "supabase_url": supabase_url, "supabase_key": supabase_key}
+        credentials, used = merge_fox_credentials(cli_values, config, report=True)
+        api_key = credentials["api_key"]
+        token_hash = credentials["token_hash"]
+        token_expires = credentials["token_expires"]
+        serial = credentials["serial"]
+        user_id = credentials["user_id"]
+        supabase_url = credentials["supabase_url"]
+        supabase_key = credentials["supabase_key"]
+        # Name what was taken: a key the CLI does not look for leaves its credential unset, and
+        # the only other symptom is a 401 much further down
+        print("Read from {}: {}".format(args.config, ", ".join(used) if used else "nothing - no keys the CLI looks for"))
+        if token_hash and not (supabase_url and supabase_key):
+            print("Warning: an OAuth token cannot be refreshed without supabase_url and supabase_key - expect 401s once it expires")
+
+    if not api_key and not token_hash:
+        parser.error("no Fox credentials: pass --api-key or --token-hash, or --config pointing at an apps.yaml holding fox_key or fox_token_hash")
 
     # Run the test
     if args.write_schedule:

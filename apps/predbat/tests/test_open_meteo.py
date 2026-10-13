@@ -56,37 +56,55 @@ def _make_ensemble_response(times=None, members=None):
 # ============================================================================
 
 
-def test_ensemble_returns_p10_values(my_predbat):
+def test_ensemble_returns_band_ratios(my_predbat):
     """
-    download_open_meteo_ensemble_data should return a dict of ts→kW10
-    where each value is the 10th-percentile GTI across members, converted to kW.
+    download_open_meteo_ensemble_data should return a dict of ts -> (p10_ratio, p90_ratio),
+    the 10th and 90th percentile GTI across members relative to the ensemble's own median.
+    Hours with a zero median have no ratio and are left out, and the P90 ratio is capped.
     """
-    print("  - test_ensemble_returns_p10_values")
+    print("  - test_ensemble_returns_band_ratios")
     failed = False
 
     test_api = create_test_solar_api()
     try:
         test_api.solar.open_meteo_forecast_max_age = 1.0
-        ensemble_data = _make_ensemble_response()
+        ensemble_data = _make_ensemble_response(
+            times=["2025-06-15T04:00", "2025-06-15T05:00", "2025-06-15T12:00", "2025-06-15T13:00"],
+            members={
+                "global_tilted_irradiance_member01": [0.0, 1.0, 400.0, 300.0],
+                "global_tilted_irradiance_member02": [0.0, 2.0, 450.0, None],
+                "global_tilted_irradiance_member03": [5.0, 40.0, 480.0, 500.0],
+            },
+        )
         test_api.set_mock_response("ensemble-api.open-meteo.com", ensemble_data)
 
         def create_mock_session(*args, **kwargs):
             return test_api.mock_aiohttp_session()
 
-        kwp = 3.0
-        system_loss = 0.0  # simplify: 0% loss so kW = GTI_kWm2 * kwp
         with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
-            result = run_async(test_api.solar.download_open_meteo_ensemble_data(51.5, -0.1, 35, 0, kwp, system_loss))
+            result = run_async(test_api.solar.download_open_meteo_ensemble_data(51.5, -0.1, 35, 0))
 
-        # For 3 members at 2025-06-15T12:00: [400, 450, 480] sorted
-        # p10_idx = max(0, int(3 * 0.1) - 1) = 0  -> gti_p10 = 400
-        # kW = (400 / 1000) * 3.0 * (1 - 0.0) = 1.2
-        expected_12 = round((400.0 / 1000.0) * kwp * (1.0 - system_loss), 4)
+        # Three members sorted: P10 is the lowest, the median the middle and P90 the highest.
+        # 12:00 -> [400, 450, 480]: 400/450 and 480/450
+        expected_12 = (round(400.0 / 450.0, 4), round(480.0 / 450.0, 4))
         if "2025-06-15T12:00" not in result:
             print("ERROR: Expected key '2025-06-15T12:00' in ensemble result")
             failed = True
-        elif abs(result["2025-06-15T12:00"] - expected_12) > 0.001:
-            print(f"ERROR: ensemble p10 at 12:00: expected {expected_12}, got {result['2025-06-15T12:00']}")
+        elif abs(result["2025-06-15T12:00"][0] - expected_12[0]) > 0.001 or abs(result["2025-06-15T12:00"][1] - expected_12[1]) > 0.001:
+            print(f"ERROR: ensemble ratios at 12:00: expected {expected_12}, got {result['2025-06-15T12:00']}")
+            failed = True
+        # 04:00 -> [0, 0, 5]: the median is zero, so there is no ratio to take
+        if "2025-06-15T04:00" in result:
+            print(f"ERROR: an hour with a zero ensemble median should be left out, got {result['2025-06-15T04:00']}")
+            failed = True
+        # 05:00 -> [1, 2, 40]: 40/2 = 20x is capped at 2.0
+        if result.get("2025-06-15T05:00") != (0.5, 2.0):
+            print(f"ERROR: ensemble ratios at 05:00: expected (0.5, 2.0) with the P90 ratio capped, got {result.get('2025-06-15T05:00')}")
+            failed = True
+        # 13:00 -> [300, 500] with one member missing: an even count has no middle member, so the
+        # median is the mean of the two middle values (400), not the lower of them
+        if result.get("2025-06-15T13:00") != (0.75, 1.25):
+            print(f"ERROR: ensemble ratios at 13:00: expected (0.75, 1.25) against a true median of 400, got {result.get('2025-06-15T13:00')}")
             failed = True
     finally:
         test_api.cleanup()
@@ -112,7 +130,7 @@ def test_ensemble_empty_on_no_members(my_predbat):
             return test_api.mock_aiohttp_session()
 
         with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
-            result = run_async(test_api.solar.download_open_meteo_ensemble_data(51.5, -0.1, 35, 0, 3.0, 0.14))
+            result = run_async(test_api.solar.download_open_meteo_ensemble_data(51.5, -0.1, 35, 0))
 
         if result != {}:
             print(f"ERROR: Expected empty dict, got {result}")
@@ -139,7 +157,7 @@ def test_ensemble_empty_on_http_failure(my_predbat):
             return test_api.mock_aiohttp_session()
 
         with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
-            result = run_async(test_api.solar.download_open_meteo_ensemble_data(51.5, -0.1, 35, 0, 3.0, 0.14))
+            result = run_async(test_api.solar.download_open_meteo_ensemble_data(51.5, -0.1, 35, 0))
 
         if result != {}:
             print(f"ERROR: Expected empty dict on HTTP failure, got {result}")
@@ -746,7 +764,7 @@ def run_open_meteo_tests(my_predbat):
     print("Running Open-Meteo solar forecast tests...")
     failed = False
 
-    failed |= test_ensemble_returns_p10_values(my_predbat)
+    failed |= test_ensemble_returns_band_ratios(my_predbat)
     failed |= test_ensemble_empty_on_no_members(my_predbat)
     failed |= test_ensemble_empty_on_http_failure(my_predbat)
     failed |= test_download_open_meteo_data_basic(my_predbat)

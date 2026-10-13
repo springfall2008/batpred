@@ -1057,8 +1057,11 @@ class EnphaseAPI(ComponentBase):
         dtg_limit = max(export_soc, int(local.get("reserve", 0)))
         return {
             "cfg": {"enabled": bool(charge.get("enable")), "start": ha_time_to_enphase(charge.get("start_time", "00:00:00")), "end": ha_time_to_enphase(charge.get("end_time", "00:00:00")), "limit": charge.get("soc", 100)},
-            "dtg": {"enabled": export_enabled and export_soc < EXPORT_LIMIT_FREEZE, "start": export_start, "end": export_end, "limit": dtg_limit},
-            "rbd": {"enabled": export_enabled and export_soc == EXPORT_LIMIT_FREEZE, "start": export_start, "end": export_end, "limit": None},
+            # encoding-ok: export_soc is a plain SoC percentage the gateway has already decoded out
+            # of the export instruction, not a packed limit - 99 is this API's own "hold" marker and
+            # the constant is reused for it rather than a second literal meaning the same thing
+            "dtg": {"enabled": export_enabled and export_soc < EXPORT_LIMIT_FREEZE, "start": export_start, "end": export_end, "limit": dtg_limit},  # encoding-ok
+            "rbd": {"enabled": export_enabled and export_soc == EXPORT_LIMIT_FREEZE, "start": export_start, "end": export_end, "limit": None},  # encoding-ok
         }
 
     async def _cleanup_family(self, site_id, family_key, target, force_recreate):

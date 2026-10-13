@@ -32,7 +32,7 @@ from const import (
     LOAD_FORECAST_HISTORY_MAX_DAYS,
     PREDBAT_MAX_CARS,
     CAR_CHARGING_LIMIT_UNCAPPED,
-    LOW_POWER_PV_LIGHT_FRACTION,
+    CAR_CHARGING_NOW_POWER_W,
     CLOUD_WINDOW_MINUTES,
     CLOUD_ARRAY_MARGIN,
     PV_ARRAY_KWP_UNKNOWN,
@@ -41,7 +41,37 @@ from predbat_metrics import metrics
 from futurerate import FutureRate
 from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
 
+import ast
 import copy
+
+
+# Car state that changes at run time and that the plan reads (the rest is configuration, which a debug yaml holds)
+REPLAY_CAR_FIELDS = (
+    "car_charging_planned",
+    "car_charging_now",
+    "car_charging_soc",
+    "car_charging_soc_next",
+    "car_charging_limit",
+    "car_charging_limit_model",
+    "car_charging_battery_size",
+    "car_charging_slots",
+    "car_energy_reported_load",
+)
+# The inverter's programmed state as fetched each cycle, which the plan and prediction start from
+REPLAY_INVERTER_FIELDS = (
+    "charge_window",
+    "charge_limit",
+    "export_window",
+    "export_limits",
+    "isCharging",
+    "isCharging_Target",
+    "isExporting",
+    "isExporting_Target",
+    "reserve",
+    "reserve_current",
+    "battery_rate_max_charge",
+    "battery_rate_max_discharge",
+)
 
 
 class Fetch:
@@ -905,6 +935,305 @@ class Fetch:
             load_minutes = MinuteArray(load_minutes, size)
         return load_minutes, age_days
 
+    def log_replay_changed(self, attribute, signature_of, build, what):
+        """Log the line build() returns when signature_of() differs from the signature last logged under attribute.
+
+        The shared core of the "Replay input:" lines that are logged only on a change. The signature is recorded
+        before the line is built, so a value that cannot be logged warns once per change rather than every cycle,
+        and is logged again when it next changes. Both are computed inside the try, as either can fail on bad data.
+        Never raises - these run every cycle on the main loop, and a logging fault must not stop the plan.
+        """
+        try:
+            signature = signature_of()
+            if signature == getattr(self, attribute, None):
+                return
+            setattr(self, attribute, signature)
+            self.log(build())
+        except Exception as e:
+            self.log("Warn: Unable to log the {} for replay: {}".format(what, e))
+
+    def replay_clock(self, minute):
+        """A minute from midnight as HH:MM, for the start of a "Replay input:" line."""
+        return (self.midnight_utc + timedelta(minutes=minute)).strftime("%H:%M")
+
+    def log_replay_pv_forecast(self):
+        """Log the PV forecast whenever it changes, so a log can be replayed against the forecast the plan really used.
+
+        A debug yaml holds the forecast at one moment, and Solcast refreshes it during the day. step_data_history()
+        sums every minute of the forecast across the plan, so p50, p10 and p90 are each logged per minute, exactly,
+        as runs of [kWh per minute, minutes] (None where the forecast has no value). The line is written only on a
+        change, while the plan's horizon moves on with the clock, so it covers from now to the end of the forecast
+        rather than to the end of today's plan. One line per change. Never raises - this runs every cycle on the main loop, and a logging fault must
+        not stop the plan.
+        """
+        series = (self.pv_forecast_minute or {}, self.pv_forecast_minute10 or {}, self.pv_forecast_minute90 or {})
+
+        def build():
+            """The PV forecast line, from now to the end of the forecast."""
+            start = self.minutes_now
+            end = max([start + self.forecast_minutes + self.plan_interval_minutes] + [max(values) + 1 for values in series if values])
+            parts = []
+            for name, values in zip(("p50", "p10", "p90"), series):
+                runs = []
+                for minute in range(start, end):
+                    value = values.get(minute)
+                    value = None if value is None else float(value)
+                    if runs and runs[-1][0] == value:
+                        runs[-1][1] += 1
+                    else:
+                        runs.append([value, 1])
+                parts.append("{} [{}]".format(name, ", ".join("[{}, {}]".format(None if value is None else repr(value), count) for value, count in runs)))
+            return "Replay input: PV forecast changed, per-minute kWh runs from {} {}".format(self.replay_clock(start), " ".join(parts))
+
+        self.log_replay_changed("replay_pv_signature", lambda: hash(tuple(tuple(sorted(values.items())) for values in series)), build, "PV forecast")
+
+    def log_replay_ml_forecast(self, results):
+        """Log the Load ML predictions whenever they change, so a log can be replayed against them.
+
+        The predictions come from a model retrained in the background, so a replay cannot re-derive them; they are
+        an input, like the PV forecast. They are logged as read from the sensor, before Predbat converts and
+        re-anchors them, so that code still runs in a replay. Evenly spaced timestamps are logged as a start, a step
+        and the values; anything else as the full mapping. Never raises - this runs every cycle on the main loop.
+        """
+        if not isinstance(results, dict):
+            return
+        items = []
+
+        def signature_of():
+            """Sort the predictions (inside the logger's try, as mixed keys cannot be sorted) and hash them."""
+            items[:] = sorted(results.items())
+            return hash(tuple((str(key), str(value)) for key, value in items))
+
+        def build():
+            """The ML forecast line: a start, a step and the values when the timestamps are evenly spaced, else the mapping."""
+            try:
+                times = [str2time(str(key)) for key, _ in items]
+                steps = {int((after - before).total_seconds() // 60) for before, after in zip(times, times[1:])}
+            except (ValueError, TypeError):
+                steps = set()
+            if items and len(steps) == 1:
+                return "Replay input: ML load forecast changed, from {} every {} minutes kWh [{}]".format(items[0][0], steps.pop(), ", ".join(repr(float(value)) for _, value in items))
+            return "Replay input: ML load forecast changed, kWh {!r}".format(dict(items))
+
+        self.log_replay_changed("replay_ml_signature", signature_of, build, "ML load forecast")
+
+    def log_replay_load_forecast(self):
+        """Log the load forecast the plan will use this cycle, so a log can be replayed against it.
+
+        The forecast is rebuilt every cycle from a history that the load_power fill re-cuts each time, so it cannot
+        be reproduced from a debug yaml. step_data_history() reads load_forecast at the start of each 5-minute step
+        and the minute after it, so those two cumulative-from-midnight values are what the line must reproduce, for
+        every step the plan builds. One line per cycle. Never raises - this runs every cycle on the main loop.
+
+        The forecasts are rounded to 0.1 Wh (dp4 kWh), so they are logged compactly as whole tenths of a Wh: the
+        cumulative value at the first step, then for each step "energy in the 5 minutes/energy in its first minute"
+        in Wh. The replay rebuilds each value as tenths / 10000, which is exactly the float the plan used. Where any
+        value is missing or not a whole tenth of a Wh (another forecast source), the cumulative kWh values are logged
+        in full instead.
+        """
+        try:
+            if not self.load_forecast:
+                # The plan then uses the load history alone, so a replay must drop any forecast it still holds.
+                # Logged when the forecast becomes empty, not every cycle, as many setups have no forecast at all.
+                self.log_replay_changed("replay_load_empty", lambda: True, lambda: "Replay input: load forecast empty", "load forecast")
+                return
+            self.replay_load_empty = None
+            start = self.minutes_now
+            steps = list(range(start, start + self.forecast_minutes + self.plan_interval_minutes, PREDICT_STEP))
+            # The value at each step, the minute after it, and the start of the step after the last
+            minutes = sorted(set(steps + [minute + 1 for minute in steps] + [steps[-1] + PREDICT_STEP]))
+            values = {minute: self.load_forecast.get(minute) for minute in minutes}
+            tenths = {}
+            for minute, value in values.items():
+                if value is None or round(value * 10000) / 10000 != value:
+                    tenths = None
+                    break
+                tenths[minute] = round(value * 10000)
+            when = self.replay_clock(start)
+            if tenths is not None:
+
+                def wh(count):
+                    """A count of tenths of a Wh as Wh text that reads back to the same count."""
+                    return "{:.1f}".format(count / 10)
+
+                parts = ["{}/{}".format(wh(tenths[minute + PREDICT_STEP] - tenths[minute]), wh(tenths[minute + 1] - tenths[minute])) for minute in steps]
+                self.log("Replay input: load from {} base {} Wh, Wh/5min [{}]".format(when, wh(tenths[start]), ", ".join(parts)))
+                return
+
+            def exact(minute):
+                """The forecast's value at minute as text that reads back as the same float, or None."""
+                value = self.load_forecast.get(minute)
+                return None if value is None else repr(float(value))
+
+            pairs = ["[{}, {}]".format(exact(minute), exact(minute + 1)) for minute in steps]
+            self.log("Replay input: load forecast, cumulative kWh at each 5-minute step and the minute after from {} [{}]".format(when, ", ".join(pairs)))
+        except Exception as e:
+            self.log("Warn: Unable to log the load forecast for replay: {}".format(e))
+
+    def log_replay_rates(self):
+        """Log the import and export rates, and the base curves beside them, whenever they change.
+
+        Rates arrive from outside after a debug yaml is written - the next day's Agile prices, a new futurerate
+        prediction - so a replay needs them as an input. Each series is logged from now as [minutes from now, rate]
+        at every change of rate, followed by the minute it runs to, at full precision. Never raises - this runs
+        every cycle on the main loop.
+        """
+        series = (("import", self.rate_import), ("export", self.rate_export), ("import_base", self.rate_import_base), ("export_base", self.rate_export_base))
+
+        def build():
+            """The rates line: each series as change points from now, then the minute it runs to."""
+            start = self.minutes_now
+            parts = []
+            for name, rates in series:
+                points = []
+                last = None
+                minutes = sorted(minute for minute in (rates or {}) if minute >= start)
+                for minute in minutes:
+                    if rates[minute] != last:
+                        last = rates[minute]
+                        points.append([minute - start, last])
+                parts.append("{} {} {}".format(name, points, minutes[-1] + 1 - start if minutes else 0))
+            return "Replay input: rates changed, from {} {}".format(self.replay_clock(start), " ".join(parts))
+
+        self.log_replay_changed("replay_rates_signature", lambda: hash(tuple(tuple(sorted((rates or {}).items())) for _, rates in series)), build, "rates")
+
+    def log_replay_inverter(self):
+        """Log the inverter's programmed state whenever it changes: the windows it holds now, whether it is charging or
+        exporting and to what target, the reserve and the battery rate limits.
+
+        The plan treats a window the inverter is already running specially, and the prediction starts from the rates
+        and reserve in force, so a replay needs them as they were. Logged as one dict whose repr reads back exactly with
+        ast.literal_eval. Never raises - this runs every cycle on the main loop.
+        """
+        self.log_replay_fields("inverter", REPLAY_INVERTER_FIELDS, "replay_inverter_text")
+
+    def log_replay_cars(self):
+        """Log the car state the plan reads whenever it changes, so a log can be replayed across a car plugging in.
+
+        Plugging in, an Octopus Intelligent dispatch plan or a SoC reading all change the car's load in the plan,
+        and a debug yaml holds them at one moment only. The per-car lists are logged as one dict whose repr reads
+        back exactly with ast.literal_eval. Never raises - this runs every cycle on the main loop.
+        """
+        if not self.num_cars:
+            return
+        self.log_replay_fields("cars", REPLAY_CAR_FIELDS, "replay_cars_text")
+
+    def log_replay_fields(self, label, fields, attribute):
+        """Log fields as one "Replay input: <label> changed" dict, on a change, checking that its repr reads back."""
+        state = {name: getattr(self, name, None) for name in fields}
+
+        def build():
+            """The line, once its dict is known to read back exactly with ast.literal_eval."""
+            text = repr(state)
+            ast.literal_eval(text)
+            return "Replay input: {} changed {}".format(label, text)
+
+        self.log_replay_changed(attribute, lambda: repr(state), build, label + " state")
+
+    def log_replay_baseline(self):
+        """Log the dynamic load baseline the plan will use, when it changes.
+
+        dynamic_load() raises the load in the current slot or two to the load just measured when it is high, and
+        step_data_history() adds that floor to all three load scenarios, so a replay needs it as it was. Usually
+        empty. Logged as a dict of minute to kWh whose repr reads back exactly.
+        """
+        baseline = dict(self.dynamic_load_baseline or {})
+        self.log_replay_changed("replay_baseline_text", lambda: repr(baseline), lambda: "Replay input: dynamic load baseline {!r}".format(baseline), "dynamic load baseline")
+
+    def log_replay_state(self):
+        """Log the values the plan starts from this cycle at full precision.
+
+        The human-readable lines round them (SoC to 0.01 kWh, the in-day adjustment to 0.01%), and that rounding is
+        enough to flip a plan that is within a fraction of a penny of another. Never raises - this runs every cycle
+        on the main loop.
+        """
+        try:
+
+            def exact(value):
+                """Shortest text that reads back as the same float, or None."""
+                return None if value is None else repr(float(value))
+
+            self.log(
+                "Replay input: state soc_kw {} soc_max {} inday {} cost_today {} load_today {} import_today {} export_today {} pv_today {} charge_rate_now {} discharge_rate_now {} battery_temperature {} iboost_today {} load_forecast_only {}".format(
+                    exact(self.soc_kw),
+                    exact(self.soc_max),
+                    exact(self.load_inday_adjustment),
+                    exact(self.cost_today_sofar),
+                    exact(self.load_minutes_now),
+                    exact(self.import_today_now),
+                    exact(self.export_today_now),
+                    exact(self.pv_today_now),
+                    exact(self.charge_rate_now),
+                    exact(self.discharge_rate_now),
+                    exact(self.battery_temperature),
+                    exact(self.iboost_today),
+                    exact(self.load_forecast_only),
+                )
+            )
+        except Exception as e:
+            self.log("Warn: Unable to log the state for replay: {}".format(e))
+
+    def fetch_pv_forecast_and_dawn(self, save=True):
+        """
+        Fetch the PV forecast, compute the dawn light/dark split from it, and publish the dawn
+        binary_sensor - as one call so the ordering that #4699 regressed on (the split must be
+        computed from a freshly-fetched forecast, not the empty dict fetch_sensor_data() resets it
+        to at the top of each cycle) can't drift apart again. Published unconditionally regardless
+        of whether import rates currently exist, so the sensor never goes stale.
+
+        Returns:
+            pv_light_dark: dict as returned by calc_pv_light_dark(), also stored on self.pv_light_dark.
+        """
+        self.pv_forecast_minute, self.pv_forecast_minute10, self.pv_forecast_minute90 = self.fetch_pv_forecast()
+        # Not for a tariff comparison run (save=False), whose forecast is not the one the live plan uses
+        if save:
+            self.log_replay_pv_forecast()
+
+        # Stored on self, not just local, so it can be used elsewhere rather than only by the
+        # window split below.
+        pv_light_dark = self.pv_light_dark = self.calc_pv_light_dark()
+        # "on" past dawn, "off" before it or when unclassified (no PV forecast) - based on the PV
+        # forecast crossing low_power_pv_threshold_w, not the same as PV actually producing right
+        # now, see calc_dawn's docstring. Independent of combine_charge_slots/set_charge_low_power.
+        self.dashboard_item(
+            "binary_sensor." + self.prefix + "_dawn",
+            state="on" if pv_light_dark.get(self.minutes_now) == 1 else "off",
+            attributes={"friendly_name": "Predbat is past dawn (light, not dark, by PV forecast)", "icon": "mdi:weather-sunset-up"},
+        )
+        return pv_light_dark
+
+    def combine_active_keep(self):
+        """
+        Combine the SOC keep floors (alerts, manual_soc) and ceilings (manual_soc_max) into all_active_keep/all_active_keep_max.
+        """
+        # Combine keep from alerts and manual SOC into all_active_keep
+        self.all_active_keep = self.alert_active_keep.copy()
+        if self.manual_soc_keep:
+            for minute, soc_value in self.manual_soc_keep.items():
+                if minute in self.all_active_keep:
+                    self.all_active_keep[minute] = max(self.all_active_keep[minute], soc_value)
+                else:
+                    self.all_active_keep[minute] = soc_value
+
+        # Manual SOC max is a ceiling rather than a floor - combine separately, taking the
+        # tightest (lowest) ceiling if more than one source ever applies to the same minute.
+        self.all_active_keep_max = {}
+        if self.manual_soc_max_keep:
+            for minute, soc_value in self.manual_soc_max_keep.items():
+                if minute in self.all_active_keep_max:
+                    self.all_active_keep_max[minute] = min(self.all_active_keep_max[minute], soc_value)
+                else:
+                    self.all_active_keep_max[minute] = soc_value
+
+        # A ceiling below the floor at the same minute is a contradiction (e.g. a leftover manual_soc
+        # override never cleared) - the floor wins as the safety-relevant constraint, so drop the
+        # conflicting ceiling rather than hand the optimiser two penalties pulling opposite ways.
+        for minute in list(self.all_active_keep_max.keys()):
+            floor_value = self.all_active_keep.get(minute, 0)
+            if floor_value > self.all_active_keep_max[minute]:
+                self.log("Warn: manual_soc_max target {}% at minute {} is below the manual_soc/alert floor {}% for the same minute - ignoring the ceiling there".format(self.all_active_keep_max[minute], minute, floor_value))
+                del self.all_active_keep_max[minute]
+
     def fetch_sensor_data(self, save=True):
         """
         Fetch all the data, e.g. energy rates, load, PV predictions, car plan etc.
@@ -917,11 +1246,16 @@ class Fetch:
 
         import_rates = {}
         self.rate_import_replicated = {}
+        self.rate_import_saving_minutes = set()
+        self.rate_import_pre_saving = {}
         export_rates = {}
         self.rate_export_replicated = {}
+        self.rate_export_saving_minutes = set()
+        self.rate_export_pre_saving = {}
         self.rate_slots = []
         self.io_adjusted = {}
         self.low_rates = []
+        self.low_rates_tariff = []
         self.high_export_rates = []
         self.octopus_slots = [[] for _ in range(self.num_cars)]
         self.cost_today_sofar = 0
@@ -938,6 +1272,7 @@ class Fetch:
         self.pv_forecast_minute = {}
         self.pv_forecast_minute10 = {}
         self.pv_forecast_minute90 = {}
+        self.pv_light_dark = {}
         # See Plan.refresh_pv_forecast_minute90(): both series are re-fetched together below, so no
         # earlier pair of signatures may be held against them
         self.pv_forecast_minute90_signatures = None
@@ -952,14 +1287,8 @@ class Fetch:
             if alert_feed:
                 self.alerts, self.alert_active_keep = alert_feed.process_alerts(self.minutes_now, self.midnight_utc)
 
-        # Combine keep from alerts and manual SOC into all_active_keep
-        self.all_active_keep = self.alert_active_keep.copy()
-        if self.manual_soc_keep:
-            for minute, soc_value in self.manual_soc_keep.items():
-                if minute in self.all_active_keep:
-                    self.all_active_keep[minute] = max(self.all_active_keep[minute], soc_value)
-                else:
-                    self.all_active_keep[minute] = soc_value
+        # Combine keep floors and ceilings from alerts and manual SOC
+        self.combine_active_keep()
 
         # iBoost load data
         if "iboost_energy_today" in self.args:
@@ -971,7 +1300,7 @@ class Fetch:
         # Fetch ML forecast if enabled
         load_ml_forecast = {}
         if self.get_arg("load_ml_enable", False) and self.get_arg("load_ml_source", False):
-            load_ml_forecast = self.fetch_ml_load_forecast(self.now_utc)
+            load_ml_forecast = self.fetch_ml_load_forecast(self.now_utc, save=save)
             if load_ml_forecast:
                 self.load_forecast_only = True  # Use only ML forecast for load if enabled and we have data
 
@@ -1130,7 +1459,12 @@ class Fetch:
             )
 
         # Fetch sensor data for cars, e.g. car plan, car energy, car sessions etc.
-        self.fetch_sensor_data_cars()
+        self.dispatch_timeline_pending = []
+        self.fetch_sensor_data_cars(save=save)
+        # Dynamic load: cancel the Octopus Intelligent slots of a car that is in one but not charging -
+        # before the rates are built, so a cancelled dispatch never gets its cheap rate
+        dynamic_load_car_changed = self.dynamic_load_car_check(save=save)
+        octopus_surplus_changed = False
 
         if "rates_export_octopus_url" in self.args:
             # Fixed URL for rate export
@@ -1184,15 +1518,37 @@ class Fetch:
         if import_rates:
             self.rate_scan(import_rates, print=False)
             self.rate_import_base, self.rate_min_base, self.rate_max_base = self.rate_base_min_max(import_rates)
+            previous_surplus = self.octopus_surplus
+            self.octopus_surplus = self.octopus_surplus_minutes()
+            # The rates can move without the slots moving (the car's SoC changes how many half hours it needs)
+            if save and self.octopus_surplus_changed(previous_surplus):
+                self.log("Octopus Intelligent: dispatch minutes no car needs changed to {}".format(len(self.octopus_surplus)))
+                octopus_surplus_changed = True
+            import_rates = self.dynamic_load_car_strip_feed_rates(import_rates)
             import_rates, self.rate_import_replicated = self.rate_replicate(import_rates, self.io_adjusted, is_import=True)
             self.rate_import_no_io = import_rates.copy()
             for car_n in range(self.num_cars):
                 import_rates = self.rate_add_io_slots(car_n, import_rates, self.octopus_slots[car_n])
+            # Snapshot the tariff as it stands AFTER the IOG/SmartFlex dispatch overlay but BEFORE any
+            # saving/free/Axle session distorts it (the overrides below are applied to it too).
+            # rate_import_base is built further up
+            # (ahead of rate_add_io_slots), so capping a saving minute against that would discard a
+            # legitimate IOG discount wherever a session and a dispatch slot overlap, and the automatic
+            # threshold scan could then miss a genuinely cheap slot.
+            self.rate_import_pre_saving = import_rates.copy()
             self.load_saving_slot(self.octopus_saving_slots, import_rates, export=False, rate_replicate=self.rate_import_replicated)
             self.load_free_slot(self.octopus_free_slots, import_rates, export=False, rate_replicate=self.rate_import_replicated)
             load_axle_slot(self, self.axle_sessions, import_rates, export=False, rate_replicate=self.rate_import_replicated)
-            import_rates = self.basic_rates(self.get_arg("rates_import_override", [], indirect=False), "rates_import_override", import_rates, self.rate_import_replicated)
-            import_rates = self.apply_manual_rates(import_rates, self.manual_import_rates, is_import=True, rate_replicate=self.rate_import_replicated)
+            # Snapshot which minutes a saving/free/Axle session tagged "saving" here, before
+            # basic_rates()/apply_manual_rates() below get a chance to overwrite rate_replicate with
+            # their own "increment"/"user" tag on the same minute - a supported combination (an
+            # override active during a saving session). set_rate_thresholds() reads this frozen set,
+            # not the live rate_import_replicated dict, so a later overwrite here can't erase the
+            # "this was a saving minute" provenance it depends on (GH#5050).
+            self.rate_import_saving_minutes = {minute for minute, tag in self.rate_import_replicated.items() if tag == "saving"}
+            import_rates, self.rate_import_pre_saving = self.apply_rate_overrides(
+                import_rates, self.rate_import_pre_saving, self.rate_import_saving_minutes, self.get_arg("rates_import_override", [], indirect=False), "rates_import_override", self.manual_import_rates, True, self.rate_import_replicated
+            )
             self.rate_scan(import_rates, print=True)
         else:
             self.rate_import_no_io = {}
@@ -1200,6 +1556,8 @@ class Fetch:
             self.record_status(message="Error: No import rate data provided", had_errors=True)
         # Atomic publish: readers (e.g. async components) never see a half-built or transiently-empty rate_import during rebuild.
         self.rate_import = import_rates
+        # A charger's own schedule is costed at the tariff, which the car slots were built too early to know
+        self.reprice_charger_schedule_slots()
 
         # Replicate and scan export rates
         if export_rates:
@@ -1209,21 +1567,37 @@ class Fetch:
             # Built here, from the base rates, so the saving session and overrides applied below stay
             # out of it - battery_value_rate needs the tariff's own export price, not an event price
             self.rate_export_max_forward = self.rate_export_max_forward_calc(self.rate_export_base)
+            # Export has no IOG overlay, so the pre-saving tariff matches rate_export_base - copied
+            # rather than aliased so the two can never be corrupted together by a future in-place
+            # mutation of either.
+            self.rate_export_pre_saving = self.rate_export_base.copy()
             # For export tariff only load the saving session if enabled
             if self.rate_export_max > 0:
                 self.load_saving_slot(self.octopus_saving_slots, export_rates, export=True, rate_replicate=self.rate_export_replicated)
             load_axle_slot(self, self.axle_sessions, export_rates, export=True, rate_replicate=self.rate_export_replicated)
-            export_rates = self.basic_rates(self.get_arg("rates_export_override", [], indirect=False), "rates_export_override", export_rates, self.rate_export_replicated)
-            export_rates = self.apply_manual_rates(export_rates, self.manual_export_rates, is_import=False, rate_replicate=self.rate_export_replicated)
+            # See the import block's equivalent comment above (GH#5050).
+            self.rate_export_saving_minutes = {minute for minute, tag in self.rate_export_replicated.items() if tag == "saving"}
+            export_rates, self.rate_export_pre_saving = self.apply_rate_overrides(
+                export_rates, self.rate_export_pre_saving, self.rate_export_saving_minutes, self.get_arg("rates_export_override", [], indirect=False), "rates_export_override", self.manual_export_rates, False, self.rate_export_replicated
+            )
             self.rate_scan_export(export_rates, print=True)
         else:
             self.log("Warning: No export rate data provided")
             self.record_status(message="Error: No export rate data provided", had_errors=True)
         self.rate_export = export_rates
+        # Not for the tariff comparison, which fetches with save off and would log every tariff it tries
+        if save:
+            self.log_replay_rates()
 
         # Set rate thresholds
         if self.rate_import or self.rate_export:
             self.set_rate_thresholds()
+
+        # Needed here, ahead of "Find charging windows" below, because calc_pv_light_dark() reads
+        # self.pv_forecast_minute to locate dawn - it was previously fetched further down in this
+        # function, after the dawn calculation had already run against the freshly-reset empty dict
+        # from the top of fetch_sensor_data(), so the dawn split could never actually trigger (#4699).
+        pv_light_dark = self.fetch_pv_forecast_and_dawn(save=save)
 
         # Find discharging windows
         if self.rate_export:
@@ -1235,17 +1609,19 @@ class Fetch:
 
         # Find charging windows
         if self.rate_import:
-            pv_light_dark = self.calc_pv_light_dark()
+            self.find_low_rate_windows(alt_rates=self.rate_export, pv_light_dark=pv_light_dark)
 
-            # Find charging window
-            self.low_rates, lowest, highest = self.rate_scan_window(self.rate_import, 5, self.rate_import_cost_threshold, False, alt_rates=self.rate_export, pv_light_dark=pv_light_dark)
-            self.log("Low Import rate found rates in range {}{} to {}{}".format(lowest, curr, highest, curr))
-            # Update threshold automatically
-            if self.rate_low_threshold == 0 and highest >= self.rate_min:
-                self.rate_import_cost_threshold = highest
+        # #4516 Stage 1: render the dispatch timelines captured during the car fetch. This has to
+        # come after the low-rate scan above, not merely after set_rate_thresholds(): in automatic
+        # mode (rate_low_threshold 0) set_rate_thresholds() only sets a provisional
+        # "everything but the most expensive" threshold, which the scan then replaces with the real
+        # low-rate band. Rendering on the provisional value painted most of the day as cheap.
+        self.log_dispatch_timelines()
 
         # Work out car plan?
         self.fetch_sensor_data_car_planning()
+        if save:
+            self.log_replay_cars()
         # Publish the car plan
         self.publish_car_plan()
 
@@ -1273,9 +1649,6 @@ class Fetch:
         if self.import_today:
             self.cost_today_sofar, self.carbon_today_sofar = self.today_cost(self.import_today, self.export_today, self.car_charging_energy, self.load_minutes, save=save)
 
-        # Fetch PV forecast if enabled, today must be enabled, other days are optional
-        self.pv_forecast_minute, self.pv_forecast_minute10, self.pv_forecast_minute90 = self.fetch_pv_forecast()
-
         if self.load_minutes and not self.load_forecast_only and not self.load_forecast_history:
             # Apply modal filter to historical data. Skipped for days_previous_auto: the weighted-bucket
             # forecast deliberately ignores missing-data buckets, so the gap-filling/padding the modal filter
@@ -1300,13 +1673,16 @@ class Fetch:
         # no cross-cycle state that could leave a stale "ML was active" reading behind (#4762 review).
         self.apply_load_ml_forecast_history(self.now_utc, load_ml_forecast)
 
+        if save:
+            self.log_replay_load_forecast()
+
         # Load today vs actual
         if self.load_minutes:
             self.load_inday_adjustment = self.load_today_comparison(self.load_minutes, self.load_forecast, self.car_charging_energy, self.import_today, self.minutes_now, save=save)
         else:
             self.load_inday_adjustment = 1.0
 
-        force_replan = False
+        force_replan = dynamic_load_car_changed or octopus_surplus_changed
         # Compare on the change-detection signature, not the raw slots, so the per-cycle re-clocking
         # of an in-progress dispatch (start advanced to now, energy scaled to remaining time) does not
         # force a replan every cycle while a slot is active - only genuine slot changes do
@@ -1349,11 +1725,12 @@ class Fetch:
                         self.car_charging_soc[car_n],
                         limit_percent,
                         self.car_charging_limit[car_n],
-                        self.low_rates,
+                        self.low_rates_tariff,
                         self.car_charging_plan_time[car_n],
                     )
                 )
-                self.car_charging_slots[car_n] = self.plan_car_charging(car_n, self.low_rates)
+                # The tariff's own windows: a car cannot export, so the plan's pre-event windows are no use to it
+                self.car_charging_slots[car_n] = self.plan_car_charging(car_n, self.low_rates_tariff)
             else:
                 self.log("Car {} charging is not planned as it is not plugged in".format(car_n))
 
@@ -1370,9 +1747,27 @@ class Fetch:
                 self.log("Car {} charging is exclusive, will not plan other cars".format(car_n))
                 break
 
-    def fetch_sensor_data_cars(self):
+    def car_planned_slot_entity(self, planned_entity_id_list, car_n, slot_entity_id):
+        """
+        The sensor a car's planned dispatches are read from, where that is not its slot sensor.
+
+        octopus_intelligent_slot supplies both the completed and the planned dispatches unless
+        octopus_intelligent_planned_slot names another sensor for the car. None when it does not, or
+        when it names the slot sensor itself - reading that twice would only repeat its dispatches.
+        """
+        if car_n >= len(planned_entity_id_list):
+            return None
+        planned_entity_id = planned_entity_id_list[car_n]
+        if not planned_entity_id or not isinstance(planned_entity_id, str) or planned_entity_id.startswith("re:") or planned_entity_id == slot_entity_id:
+            return None
+        return planned_entity_id
+
+    def fetch_sensor_data_cars(self, save=True):
         """
         Fetch car specific data such as Octopus intelligent slots and vehicle data if we can get it, and calculate current SoC and limits based on that
+
+        `save` is False when compare.py re-runs the fetch for a candidate tariff rather than the
+        live plan; diagnostics that record state across cycles must be skipped in that case.
         """
 
         # Work out current car SoC and limit
@@ -1399,6 +1794,14 @@ class Fetch:
             entity_id_list = entity_id_config
         else:
             entity_id_list = []
+
+        # A second sensor per car for the planned dispatches, where the one above only has a reliable
+        # record of the completed ones - see car_planned_slot_entity()
+        planned_entity_id_config = self.get_arg("octopus_intelligent_planned_slot", default=None, indirect=False)
+        if planned_entity_id_config and not isinstance(planned_entity_id_config, list):
+            planned_entity_id_list = [planned_entity_id_config]
+        else:
+            planned_entity_id_list = planned_entity_id_config or []
 
         # Cars whose charging plan came from Octopus Intelligent dispatch slots this cycle - used
         # below to decide which cars get a model-facing charge limit override (#4967)
@@ -1436,18 +1839,27 @@ class Fetch:
                         self.log("Warn: Unable to get data from {} for car {} - octopus_intelligent_slot may not be set correctly in apps.yaml".format(entity_id, car_n))
                         self.record_status(message="Error: octopus_intelligent_slot not set correctly in apps.yaml for car {}".format(car_n), had_errors=True)
 
-                # #4516 Stage 1: diagnostic dispatch-timeline log. Purely observational - see
-                # build_dispatch_timeline()'s and dispatch_timeline_should_log()'s docstrings.
-                timeline = self.build_dispatch_timeline(car_n, completed, started, planned)
-                should_log, marker = self.dispatch_timeline_should_log(car_n, timeline)
-                if should_log:
-                    self.log("Octopus: Dispatch timeline car {} @ {} [-4h..+24h]: {}{}".format(car_n, self.time_abs_str(self.minutes_now), timeline, marker))
+                    planned_entity_id = self.car_planned_slot_entity(planned_entity_id_list, car_n, entity_id)
+                    if planned_entity_id:
+                        # The slot sensor above keeps the record of what was dispatched, and so billed
+                        # off-peak (#5413); the plan of what is still to come is taken from here instead.
+                        # What this sensor has already seen finish goes in behind the slot sensor's own
+                        # completed list: it covers a slot from when it ends until the slot sensor lists
+                        # it, and load_octopus_slots() drops whatever of it the slot sensor has by then
+                        try:
+                            planned = self.get_state_wrapper(entity_id=planned_entity_id, attribute="planned_dispatches") or self.get_state_wrapper(entity_id=planned_entity_id, attribute="plannedDispatches")
+                            planned_completed = self.get_state_wrapper(entity_id=planned_entity_id, attribute="completed_dispatches") or self.get_state_wrapper(entity_id=planned_entity_id, attribute="completedDispatches")
+                            completed = (completed or []) + (planned_completed or [])
+                        except (ValueError, TypeError):
+                            self.log("Warn: Unable to get data from {} for car {} - octopus_intelligent_planned_slot may not be set correctly in apps.yaml".format(planned_entity_id, car_n))
+                            self.record_status(message="Error: octopus_intelligent_planned_slot not set correctly in apps.yaml for car {}".format(car_n), had_errors=True)
 
                 # Completed and planned slots - merge from all cars
                 if completed:
                     self.octopus_slots[car_n] += completed
-                if planned and (not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n]):
-                    # We only count planned slots if the car is plugged in or we are ignoring unplugged cars
+                if planned and (not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n] or self.car_charging_now[car_n]):
+                    # We only count planned slots if the car is plugged in or we are ignoring unplugged cars. A car
+                    # charging now is plugged in, even before car_charging_planned catches up with an ad-hoc dispatch
                     self.octopus_slots[car_n] += planned
 
                 # Extract vehicle data if we can get it
@@ -1467,12 +1879,38 @@ class Fetch:
                     if car_n < len(self.car_charging_manual_soc) and not self.car_charging_manual_soc[car_n]:
                         self.car_charging_soc[car_n] = (self.get_arg("car_charging_soc", 0.0, index=car_n) * self.car_charging_battery_size[car_n]) / 100.0
                 if rate:
-                    # Take the max as Octopus over reports
+                    # Octopus's figure only ever raises the configured rate, never lowers it. Where Octopus's catalogue
+                    # gives the charger more than one power, the component passes on the lowest (catalogue_value(), #5438)
                     self.log("Car {} rate from Octopus is {}kW and configured rate {}".format(car_n, rate, self.car_charging_rate[car_n]))
                     self.car_charging_rate[car_n] = max(rate, self.car_charging_rate[car_n])
 
                 # Get car charging limit again from car based on new battery size
                 self.car_charging_limit[car_n] = dp3((float(self.get_arg("car_charging_limit", 100.0, index=car_n)) * self.car_charging_battery_size[car_n]) / 100.0)
+
+                # #4516 Stage 1: diagnostic dispatch-timeline log. Purely observational - see
+                # build_dispatch_timeline()'s and dispatch_timeline_should_log()'s docstrings.
+                # Only the live plan's view is worth recording: compare.py re-runs this whole
+                # fetch per candidate tariff (with save=False), which otherwise emits a burst of
+                # near-identical timelines for plans that were never active - and, because each
+                # one updates the "last logged" state, makes the real cycle's line look changed.
+                #
+                # Recorded here but rendered later: this runs before the rate fetch, so the cheap
+                # ('-') background would read from the previous cycle's rates - and be empty
+                # altogether on the first cycle after a restart. The dispatch lists and the
+                # plugged-in reading are only correct here though: further down this function the
+                # Octopus branch overwrites car_charging_planned with "has dispatch slots", so
+                # capture the inputs now and render once the rates are known.
+                if save:
+                    self.dispatch_timeline_pending.append(
+                        {
+                            "car_n": car_n,
+                            "completed": completed,
+                            "started": started,
+                            "planned": planned,
+                            "plugged": self.car_charging_planned[car_n],
+                            "charging_now": self.get_car_charging_now_tristate(car_n),
+                        }
+                    )
 
                 # Extract vehicle preference if we can get it
                 if self.octopus_intelligent_charging:
@@ -1499,7 +1937,8 @@ class Fetch:
             # Use octopus slots for charging - process for each car
             if self.octopus_intelligent_charging:
                 for car_n in range(min(len(entity_id_list), self.num_cars)):
-                    self.octopus_slots[car_n] = self.add_now_to_octopus_slot(car_n, self.octopus_slots[car_n], self.now_utc)
+                    # car_charging_now adds no dispatch of its own: only Octopus's slots give the car a slot
+                    # and the house its cheap rate
                     if not entity_id_list[car_n]:
                         continue
                     if not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n] or self.car_charging_now[car_n]:
@@ -1528,9 +1967,14 @@ class Fetch:
         # (which also releases the battery discharge hold once the modelled car "fills"). The real
         # car_charging_limit is left untouched - execute.py's "car is full" decision, the
         # plan_car_charging path and load_octopus_slots all still need it. None means no override.
-        if iog_slot_cars and not self.octopus_intelligent_consider_full:
+        # A car reporting car_charging_now is drawing power whatever its modelled SoC says, so it is uncapped
+        # too - execute_plan() holds the battery for it on the sensor alone, and a fill clamp zeroing its load
+        # would leave the plan assuming the battery can discharge while execute holds it (#5245 review).
+        uncapped_cars = set(iog_slot_cars) if not self.octopus_intelligent_consider_full else set()
+        uncapped_cars.update(car_n for car_n in range(self.num_cars) if car_n < len(self.car_charging_now) and self.car_charging_now[car_n])
+        if uncapped_cars:
             self.car_charging_limit_model = self.car_charging_limit[:]
-            for car_n in iog_slot_cars:
+            for car_n in uncapped_cars:
                 self.car_charging_limit_model[car_n] = CAR_CHARGING_LIMIT_UNCAPPED
         else:
             self.car_charging_limit_model = None
@@ -1821,19 +2265,18 @@ class Fetch:
 
     def calc_pv_light_dark(self):
         """
-        Decide whether a dawn light/dark boundary is worth computing at all, and return it via
-        calc_dawn if so - otherwise an empty dict (no split).
+        Compute the dawn light/dark split via calc_dawn().
 
-        Only combine_charge_slots can merge a charge window across dawn in the first place - with it
-        off, find_charge_window already forces a break every charge_slot_split minutes (which equals
-        plan_interval_minutes, the same granularity calc_dawn buckets at), so the dawn boundary could
-        never be reached and computing it would be a pure no-op. This used to be gated on
-        set_charge_low_power instead, since that was the only feature that needed the split - but the
-        split also lets the plan optimizer charge just the dark portion of a combined window and skip
-        the daylight portion (where solar may cover the load) on its own merits, independent of low
-        power charging, so it now runs for any combine_charge_slots user.
+        Always computed, even when combine_charge_slots is off: with it off, find_charge_window
+        already forces a window break every charge_slot_split minutes (which equals
+        plan_interval_minutes, the same granularity calc_dawn buckets at), so the dawn boundary can
+        never actually be reached there and calc_dawn's result is a no-op for window splitting in
+        that case - but binary_sensor.predbat_dawn (published from this same result, see
+        fetch_pv_forecast_and_dawn) is a useful standalone signal regardless of combine_charge_slots,
+        and used to read permanently "off" for anyone with it disabled (the default) even in broad
+        daylight, which is what it is not meant to mean.
         """
-        return self.calc_dawn() if self.combine_charge_slots else {}
+        return self.calc_dawn()
 
     def calc_dawn(self):
         """
@@ -1860,13 +2303,21 @@ class Fetch:
         day correctly stay all-dark (dawn never crosses) and a polar-day day correctly stay all-light
         (crossed from the very first bucket).
 
-        The threshold itself is LOW_POWER_PV_LIGHT_FRACTION of the peak PV forecast anywhere in
-        self.pv_forecast_minute, not a fixed Watts figure, so it scales with the site rather than being
-        picked for a "typical" system size.
+        The threshold is the user-configurable low_power_pv_threshold_w, an absolute Watts figure,
+        rather than a fraction of this forecast's own peak. A fraction-of-peak threshold sounds like it
+        "scales with the site", but it actually scales with today's weather: a heavily overcast day has
+        a low peak of its own, so a fixed fraction of it can call a trickle of PV "light" at a much
+        lower absolute wattage than the same fraction would on a clear day - and there is nothing in
+        Predbat today recording the site's real panel capacity to normalise against instead (only
+        inverter_limit, which caps the inverter's own output, not the array's rating). An absolute
+        figure the user sets once for their own system does not have that problem (#4699 follow-up).
+        The same value and the same comparison is reused by find_charge_rate's low-power abandon check
+        (utils.py) - one threshold answering "is this bright enough to matter" everywhere it is asked,
+        rather than two independently-tuned ones that could disagree on genuine twilight PV.
 
-        Built from whatever PV forecast is already in self.pv_forecast_minute, which at the point this
-        is called from fetch_sensor_data is up to one cycle stale (refreshed later this same loop by
-        fetch_pv_forecast()) - fine for a forecast that doesn't meaningfully change minute to minute.
+        Built from self.pv_forecast_minute as populated earlier this same fetch_sensor_data() call by
+        fetch_pv_forecast() - see #4699, where calc_pv_light_dark() ran before that populating call and
+        so always saw the freshly-reset empty dict, silently disabling the dawn split for everyone.
 
         Logs the calculated dawn time (today's, or the earliest day the forecast reaches if today's PV
         data isn't there) each time it runs, so it's visible whether the detected dawn looks sane.
@@ -1875,11 +2326,7 @@ class Fetch:
         if not self.pv_forecast_minute:
             return pv_light_dark
 
-        peak_pv = max(self.pv_forecast_minute.values())
-        if peak_pv <= 0:
-            return {pv_minute: 0 for pv_minute in self.pv_forecast_minute}
-
-        light_threshold = peak_pv * LOW_POWER_PV_LIGHT_FRACTION
+        light_threshold = self.low_power_pv_threshold_w / MINUTE_WATT
         interval = self.plan_interval_minutes
         bucket_sums = {}
         bucket_counts = {}
@@ -2014,6 +2461,50 @@ class Fetch:
             rate_low_average = dp2(rate_low_average / rate_low_count)
         return rate_low_start, rate_low_end, rate_low_average
 
+    def pre_saving_for_session_minutes(self, pre_saving, saving_minutes):
+        """
+        Keep only the session minutes of a pre-saving snapshot, the only ones rate_minmax_excluding_saving() reads
+
+        The full table is needed while the overrides are applied to it, but kept whole it would put two
+        extra per-minute rate tables in every debug dump, on days without a session too.
+        """
+        return {minute: pre_saving[minute] for minute in saving_minutes if minute in pre_saving}
+
+    def apply_rate_overrides(self, rates, pre_saving, saving_minutes, override_items, rtype, manual_items, is_import, rate_replicate):
+        """
+        Apply the configured rate overrides and then the manual rates on top of rates, tagging each
+        overridden minute in rate_replicate. Returns (rates, pre_saving).
+
+        When there are saving minutes the same overrides also go on pre_saving - the rates without
+        any saving/free/Axle session - so it stays "these rates without the session". Otherwise
+        rate_minmax_excluding_saving() would cap an overridden session minute (a fixed 50p to
+        discourage charging in the session, say) back to the bare tariff and the override would
+        drop out of the threshold stats. With no saving minutes nothing reads pre_saving, and with no
+        overrides there is nothing to apply, so either way it is left alone. Only the session minutes of
+        pre_saving are returned (see pre_saving_for_session_minutes()).
+        """
+        rates_before = rates
+        rates = self.basic_rates(override_items, rtype, rates, rate_replicate)
+        rates = self.apply_manual_rates(rates, manual_items, is_import=is_import, rate_replicate=rate_replicate)
+        if saving_minutes and pre_saving and (override_items or manual_items):
+            pre_saving = self.override_session_rates(rates_before, pre_saving, saving_minutes, override_items, rtype, manual_items, is_import)
+        return rates, self.pre_saving_for_session_minutes(pre_saving, saving_minutes)
+
+    def override_session_rates(self, rates, pre_saving, saving_minutes, override_items, rtype, manual_items, is_import, include_manual_api=True):
+        """
+        Apply overrides (and manual rates) to the session minutes' pre-session rates, returning them for the session minutes only
+
+        basic_rates() works over a whole rate table - it wraps and bounds override ranges by its last
+        minute - so the pre-session rates are laid over `rates` (the table before these overrides) to give
+        it one, and the result is cut back to the session minutes.
+        """
+        table = dict(rates)
+        table.update(pre_saving)
+        table = self.basic_rates(override_items, rtype, table, {}, include_manual_api=include_manual_api)
+        table = self.apply_manual_rates(table, manual_items, is_import=is_import, rate_replicate={})
+        # Only minutes that had a pre-session rate: one a session created has no tariff rate to be capped to
+        return {minute: table[minute] for minute in saving_minutes if minute in pre_saving and minute in table}
+
     def apply_manual_rates(self, rates, manual_items, is_import=True, rate_replicate=None):
         """
         Apply manual rates to the rates dictionary
@@ -2038,8 +2529,9 @@ class Fetch:
 
     def basic_rates(self, info, rtype, prev=None, rate_replicate=None, include_manual_api=True):
         """
-        Work out the energy rates based on user supplied time periods
-        works on a 24-hour period only and then gets replicated later for future days
+        Work out the energy rates based on user supplied time periods. Weekly rules on the base
+        tariff are stamped across the whole horizon, each day against its own day_of_week; any
+        minute no rule claims is left for rate_replicate() to fill later
 
         include_manual_api should be False for callers (e.g. tariff comparison, annual replay)
         that simulate a tariff other than the live one - the live system's manual API overrides
@@ -2189,7 +2681,9 @@ class Fetch:
 
                 # Adjust for date if specified
                 if date:
-                    delta_minutes = minutes_to_time(date, self.midnight)
+                    # Carry midnight_utc's offset so this stays a plain wall-clock difference in
+                    # whole days, whichever side of a DST change the date falls on.
+                    delta_minutes = minutes_to_time(date.replace(tzinfo=self.midnight_utc.tzinfo), self.midnight_utc)
                     start_minutes += delta_minutes
                     end_minutes += delta_minutes
 
@@ -2197,7 +2691,18 @@ class Fetch:
                     "Adding rate {}: {}{} => {} to {} @ {}{}, date {}, day_of_week {}, increment {}{}".format(rtype, this_rate, curr, self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), rate, curr, date, day_of_week, rate_increment, curr)
                 )
 
-                day_of_week_midnight = self.midnight.weekday()
+                day_of_week_midnight = self.midnight_utc.weekday()
+
+                # A weekly rule on the base tariff is stamped over the whole horizon rate_replicate()
+                # goes on to cover, not just the days modelled above, so every day is filtered against
+                # its own weekday. rate_replicate() fills a missing minute from the same time of day 24
+                # hours earlier and knows nothing about day_of_week, so a day left to it takes the
+                # previous day's pattern - a weekend rule flattening the weekday peaks (batpred#5168).
+                # Overrides (prev) already span the replicated horizon via max_minute.
+                if not date and not prev:
+                    stamp_end = max(max_minute + 24 * 60, self.forecast_minutes + 48 * 60)
+                else:
+                    stamp_end = max_minute
 
                 # Store rates against range
                 if end_minutes >= (-48 * 60) and start_minutes < max_minute:
@@ -2206,9 +2711,10 @@ class Fetch:
                         if (not date) or (minute >= (-24 * 60) and minute < max_minute):
                             minute_index = minute_mod - 24 * 60
                             # For incremental adjustments we have to loop over 24-hour periods
-                            while minute_index < max_minute:
+                            while minute_index < stamp_end:
                                 if not date or (minute_index >= start_minutes and minute_index < end_minutes):
-                                    current_day_of_week = (day_of_week_midnight + int(minute_index / (24 * 60))) % 7
+                                    # Floor division, so yesterday's minutes are checked against yesterday's weekday
+                                    current_day_of_week = (day_of_week_midnight + minute_index // (24 * 60)) % 7
                                     if not day_of_week or (current_day_of_week in day_of_week):
                                         if rate_increment:
                                             rates[minute_index] = rates.get(minute_index, 0.0) + rate
@@ -2221,10 +2727,6 @@ class Fetch:
                                         if date:
                                             break
                                 minute_index += 24 * 60
-                            if not date and not prev:
-                                rates[minute_mod + max_minute] = rate
-                                if load_scaling is not None:
-                                    self.load_scaling_dynamic[minute_mod + max_minute] = load_scaling
             else:
                 self.log("Warn: Bad rate data provided in energy rates type {} {}".format(rtype, this_rate))
 
@@ -2289,6 +2791,44 @@ class Fetch:
         rate_min_base, rate_max_base, _, _, _ = self.rate_minmax(rate_base)
         return rate_base, rate_min_base, rate_max_base
 
+    def rate_minmax_excluding_saving(self, rates, saving_minutes, rate_base):
+        """
+        Work out min/max/average over the forecast window at the tariff's own prices
+
+        Each minute in saving_minutes (the minutes the saving/free/Axle loaders tagged, frozen before any
+        override can overwrite the tag) is capped down to its rate in rate_base, which is `rates` without
+        the session but with the same overrides. Capping only goes down, so an event reward is removed but
+        a free or discounted session still counts as cheap. A session minute the tariff has no rate for
+        is skipped. With no rate_base this is the plain min/max/average.
+        """
+        if not saving_minutes or not rate_base:
+            return self.rate_minmax(rates)[:3]
+
+        rate_min = 99999
+        rate_max = 0
+        rate_total = 0
+        rate_n = 0
+
+        for minute in range(self.minutes_now, self.forecast_minutes + self.minutes_now):
+            if minute not in rates:
+                continue
+            rate = rates[minute]
+            if minute in saving_minutes:
+                if minute not in rate_base:
+                    # A session created this minute (load_axle_slot() adds to rate_dict.get(minute, 0)),
+                    # so the tariff has no rate of its own here and the synthetic reward is not one.
+                    continue
+                rate = min(rate, rate_base[minute])
+            rate_min = min(rate_min, rate)
+            rate_max = max(rate_max, rate)
+            rate_total += rate
+            rate_n += 1
+
+        if rate_n == 0:
+            return self.rate_minmax(rates)[:3]
+
+        return dp2(rate_min), dp2(rate_max), dp2(rate_total / rate_n)
+
     def rate_min_forward_calc(self, rates):
         """
         Work out lowest rate from time forwards
@@ -2313,13 +2853,13 @@ class Fetch:
 
         return rate_min_forward
 
-    def rate_scan_window(self, rates, rate_low_min_window, threshold_rate, find_high, return_raw=False, alt_rates=None, pv_light_dark=None):
+    def rate_scan_window(self, rates, rate_low_min_window, threshold_rate, find_high, return_raw=False, alt_rates=None, pv_light_dark=None, start_minute=0):
         """
-        Scan for the next high/low rate window
+        Scan for the next high/low rate window, from start_minute (midnight by default)
         """
         alt_rates = alt_rates or {}
         pv_light_dark = pv_light_dark or {}
-        minute = 0
+        minute = start_minute
         found_rates = []
         lowest = 99
         highest = -99
@@ -2345,9 +2885,88 @@ class Fetch:
 
         return found_rates, lowest, highest
 
+    def find_low_rate_windows(self, alt_rates=None, pv_light_dark=None):
+        """
+        Scan the import rates for the low rate sensors' windows (low_rates_tariff) and the plan's charge windows (low_rates)
+
+        Both start from rate_import_cost_threshold, which is worked out on the tariff's own prices so
+        a saving session or Axle reward does not make the whole day read as cheap (GH#5050). In
+        automatic mode, ahead of a saving session or Axle event priced above the tariff's highest import
+        rate (see find_event_pre_charge()), the plan also gets every tariff import window before it starts,
+        cut at the start, so it can charge the battery to export into the event or to cover the house
+        through it (#249). An event whose import is raised is above the tariff maximum, so it is never
+        offered as a charge window itself. The sensors, the car
+        plan and the automatic threshold tightening keep the tariff's own cheap windows.
+        """
+        curr = self.currency_symbols[1]
+        self.low_rates_tariff, lowest, highest = self.rate_scan_window(self.rate_import, 5, self.rate_import_cost_threshold, False, alt_rates=alt_rates, pv_light_dark=pv_light_dark)
+        self.low_rates = self.low_rates_tariff
+        self.log("Low Import rate found rates in range {}{} to {}{}".format(lowest, curr, highest, curr))
+
+        event_start = self.rate_import_pre_event_end
+        if event_start is not None and self.rate_import_pre_event_threshold > self.rate_import_cost_threshold:
+            # Windows are scanned on a 5 minute grid from midnight, so the split is made at the grid step the event starts in.
+            # Scanning only the minutes before it ends every pre-event window there; the boosted import of an earlier event
+            # is above the tariff maximum, so it is never offered either.
+            cut = event_start - event_start % 5
+            before_event = {minute: rate for minute, rate in self.rate_import.items() if minute < cut}
+            pre_event, _, _ = self.rate_scan_window(before_event, 5, self.rate_import_pre_event_threshold, False, alt_rates=alt_rates, pv_light_dark=pv_light_dark)
+            if pre_event:
+                after_event, _, _ = self.rate_scan_window(self.rate_import, 5, self.rate_import_cost_threshold, False, alt_rates=alt_rates, pv_light_dark=pv_light_dark, start_minute=cut)
+                self.low_rates = pre_event + after_event
+                self.log("Low Import rate: {} windows offered for charging ahead of the event at {}".format(len(pre_event), self.time_abs_str(event_start)))
+
+        # Update threshold automatically, from the tariff's own windows so the published threshold does not
+        # take in the pre-event day rate (GH#5050)
+        if self.rate_low_threshold == 0 and highest >= self.rate_min:
+            self.rate_import_cost_threshold = highest
+
+    def find_event_pre_charge(self, tariff_import_max):
+        """
+        Find the start of the last saving session or Axle event worth charging ahead of, or None
+
+        Each run of consecutive session minutes (import or export) is one event, and it starts at its first
+        minute with an export or import price above the tariff's own highest import price - charging at any
+        tariff rate before that can pay, either to export into the event or to avoid importing during it (a
+        session on a 0p export tariff only raises the import side). Taking the first such minute rather than
+        the run's first keeps a free session that runs straight into a saving session before the event,
+        and a dip in price within an event does not split it. Free sessions and Axle import discounts lower
+        the price, so never qualify. An event already running has nothing before it left to charge in, so
+        it does not count. A manual threshold (rate_low_threshold) is the user's cap on what Predbat charges
+        at, so this only applies in automatic mode.
+        """
+        if self.rate_low_threshold > 0:
+            return None
+        end_minute = self.minutes_now + self.forecast_minutes
+        last_start = None
+        block_start = None
+        previous = None
+        for minute in sorted(self.rate_import_saving_minutes | self.rate_export_saving_minutes):
+            if minute >= end_minute:
+                break
+            if previous is None or minute != previous + 1:
+                block_start = None
+            previous = minute
+            if block_start is None and (self.rate_export.get(minute, 0) > tariff_import_max or self.rate_import.get(minute, 0) > tariff_import_max):
+                block_start = minute
+                if minute > self.minutes_now:
+                    last_start = minute
+        return last_start
+
     def set_rate_thresholds(self):
         """
         Set the high and low rate thresholds
+
+        The thresholds are worked out on the tariff's own prices: rate_minmax_excluding_saving() maps
+        each saving-session/free-slot/Axle minute back to its tariff rate, so a two-rate tariff plus a
+        session reward cannot make the whole ordinary-price day read as "low rate" (GH#5050).
+        find_event_pre_charge() then finds any saving session or Axle event worth charging ahead of, which
+        find_low_rate_windows() uses to give the plan the windows before it (#249).
+
+        rate_import_tariff_max is kept for the PV10 "dispatch gone" price in prediction.py, which wants
+        the tariff's worst price rather than an event reward. self.rate_min/rate_max/rate_average (and
+        the export equivalents) are left untouched, since other consumers (dashboard sensors, graph
+        scaling, plan.py pricing) want the real boosted price shown.
         """
         curr = self.currency_symbols[1]
 
@@ -2357,28 +2976,44 @@ class Fetch:
         car_planning_on_rates = self.num_cars > 0 and not self.octopus_intelligent_charging
         car_charging_max_price = max(self.car_charging_plan_max_price[: self.num_cars]) if car_planning_on_rates else 0.0
 
+        # An empty table has nothing to filter, so keep the stored stats for that side as before - scanning
+        # it would return the (99999, 0, 0) placeholder and push the threshold to 99998.9
+        if self.rate_import:
+            rate_min, rate_max, rate_average = self.rate_minmax_excluding_saving(self.rate_import, self.rate_import_saving_minutes, self.rate_import_pre_saving)
+        else:
+            rate_min, rate_max, rate_average = self.rate_min, self.rate_max, self.rate_average
+        if self.rate_export:
+            rate_export_min, rate_export_max, rate_export_average = self.rate_minmax_excluding_saving(self.rate_export, self.rate_export_saving_minutes, self.rate_export_pre_saving)
+        else:
+            rate_export_min, rate_export_max, rate_export_average = self.rate_export_min, self.rate_export_max, self.rate_export_average
+        self.rate_import_tariff_max = rate_max
+
         if self.rate_low_threshold > 0:
-            self.rate_import_cost_threshold = dp2(self.rate_average * self.rate_low_threshold)
+            self.rate_import_cost_threshold = dp2(rate_average * self.rate_low_threshold)
         else:
             # In automatic mode select the only rate or everything but the most expensive
-            if (self.rate_max == self.rate_min) or (self.rate_export_max > self.rate_max) or have_alerts or have_manual_soc:
-                self.rate_import_cost_threshold = self.rate_max + 0.1
+            if (rate_max == rate_min) or (rate_export_max > rate_max) or have_alerts or have_manual_soc:
+                self.rate_import_cost_threshold = rate_max + 0.1
             else:
-                self.rate_import_cost_threshold = self.rate_max - 0.5
+                self.rate_import_cost_threshold = rate_max - 0.5
 
         # When we plan car on the rates we need to include all the rates up to the max car price
         if car_planning_on_rates:
             self.rate_import_cost_threshold = max(self.rate_import_cost_threshold, car_charging_max_price + 0.1)
 
+        # Ahead of an event worth charging for, every tariff slot is a candidate, as when export beats import above
+        self.rate_import_pre_event_end = self.find_event_pre_charge(rate_max)
+        self.rate_import_pre_event_threshold = rate_max + 0.1
+
         # Compute the export rate threshold
         if self.rate_high_threshold > 0:
-            self.rate_export_cost_threshold = dp2(self.rate_export_average * self.rate_high_threshold)
+            self.rate_export_cost_threshold = dp2(rate_export_average * self.rate_high_threshold)
         else:
             # In automatic mode select the only rate or everything but the most cheapest
-            if (self.rate_export_max == self.rate_export_min) or (self.rate_export_min > self.rate_min) or have_alerts:
-                self.rate_export_cost_threshold = self.rate_export_min - 0.1
+            if (rate_export_max == rate_export_min) or (rate_export_min > rate_min) or have_alerts:
+                self.rate_export_cost_threshold = rate_export_min - 0.1
             else:
-                self.rate_export_cost_threshold = self.rate_export_min + 0.5
+                self.rate_export_cost_threshold = rate_export_min + 0.5
 
         self.log(
             "Rate thresholds (for charge/export) are import {}{} ({}{}), export {}{} ({}{})".format(
@@ -2391,6 +3026,8 @@ class Fetch:
         Scan the rates and work out min/max
         """
         self.rate_min, self.rate_max, self.rate_average, self.rate_min_minute, self.rate_max_minute = self.rate_minmax(rates)
+        # set_rate_thresholds() lowers this to the tariff's own maximum once it knows the event minutes
+        self.rate_import_tariff_max = self.rate_max
         curr = self.currency_symbols[1]
 
         if print:
@@ -2440,6 +3077,53 @@ class Fetch:
         if print:
             self.log("Gas rates: min {}{}, max {}{}, average {}{}".format(self.rate_gas_min, curr, self.rate_gas_max, curr, self.rate_gas_average, curr))
 
+    def get_car_charging_now_tristate(self, car_n):
+        """
+        Read car_charging_now as a tri-state (True/False/None) for the #4516 Stage 1 dispatch
+        timeline's GH#5080 reconciliation note.
+
+        self.car_charging_now (set by get_car_charging_planned()) is a plain boolean used
+        throughout the planner, where "no signal" and "confirmed not charging" both have to mean
+        False - there is no room there for a genuine unknown. This diagnostic needs that
+        distinction: flagging a slot as billing-risk when Predbat actually has no idea whether the
+        car is charging would be a false positive on every dispatch, for every IOG user who hasn't
+        configured the (optional) car_charging_now sensor, or during the "unknown"/"unavailable"
+        state HA reports for a real sensor briefly after a restart.
+
+        Returns None (unknown) when the sensor isn't configured, is out of range for this car, or
+        HA is currently reporting "unknown"/"unavailable"; otherwise the normalised boolean.
+        """
+        if "car_charging_now" not in self.args:
+            return None
+        raw = self.get_arg("car_charging_now", "no", index=car_n)
+        if raw is None:
+            return None
+        if isinstance(raw, str) and raw.lower() in ("unknown", "unavailable"):
+            return None
+        return self.car_charging_now[car_n]
+
+    def car_charging_now_value(self, raw):
+        """
+        Interpret a car_charging_now reading: True (charging), False (not charging) or None (no evidence -
+        unset, "unknown" or "unavailable").
+
+        It can be an on/off sensor, matched against car_charging_now_response, or - for chargers with no
+        "charging" sensor, e.g. Wallbox - a charging power sensor. A number is a power in watts (callers
+        read it with required_unit="W", which converts kW from the entity's unit), and it is charging from
+        CAR_CHARGING_NOW_POWER_W.
+        """
+        if raw is None or isinstance(raw, bool):
+            return raw
+        if isinstance(raw, (int, float)):
+            return raw >= CAR_CHARGING_NOW_POWER_W
+        text = str(raw).strip().lower()
+        if text in ("unknown", "unavailable"):
+            return None
+        try:
+            return float(text) >= CAR_CHARGING_NOW_POWER_W
+        except ValueError:
+            return text in self.car_charging_now_response
+
     def get_car_charging_planned(self):
         """
         Get the car attributes
@@ -2456,7 +3140,7 @@ class Fetch:
         self.car_charging_exclusive = [False for c in range(self.num_cars)]
 
         self.car_charging_planned_response = [str(response).lower() for response in self.get_arg("car_charging_planned_response", ["yes", "on", "enable", "true"])]
-        self.car_charging_now_response = [str(response).lower() for response in self.get_arg("car_charging_now_response", ["yes", "on", "enable", "true"])]
+        self.car_charging_now_response = [str(response).lower() for response in self.get_arg("car_charging_now_response", ["yes", "on", "enable", "true", "charging"])]
         self.car_charging_from_battery = self.get_arg("car_charging_from_battery")
 
         # Car charging planned sensor
@@ -2472,19 +3156,11 @@ class Fetch:
                 planned = False
             self.car_charging_planned[car_n] = planned
 
-            # Car is charging now sensor
-            charging_now = self.get_arg("car_charging_now", "no", index=car_n)
-            if isinstance(charging_now, str):
-                if charging_now.lower() in self.car_charging_now_response:
-                    charging_now = True
-                else:
-                    charging_now = False
-            elif not isinstance(charging_now, bool):
-                charging_now = False
-            self.car_charging_now[car_n] = charging_now
+            # Car is charging now sensor - an on/off sensor, or a charging power sensor read in watts
+            self.car_charging_now[car_n] = bool(self.car_charging_now_value(self.get_arg("car_charging_now", "no", index=car_n, required_unit="W")))
 
             # Other car related configuration
-            self.car_charging_plan_smart[car_n] = self.get_arg("car_charging_plan_smart", False)
+            self.car_charging_plan_smart[car_n] = self.get_arg("car_charging_plan_smart", True)
             self.car_charging_plan_max_price[car_n] = self.get_arg("car_charging_plan_max_price", 0.0)
             self.car_charging_plan_time[car_n] = self.get_arg("car_charging_plan_time", "07:00:00")
             self.car_charging_battery_size[car_n] = dp2(float(self.get_arg("car_charging_battery_size", 100.0, index=car_n)))
@@ -2513,7 +3189,7 @@ class Fetch:
                 )
             )
 
-    def fetch_ml_load_forecast(self, now_utc):
+    def fetch_ml_load_forecast(self, now_utc, save=True):
         """
         Fetches ML load forecast from sensor
         and returns it as a minute_data dictionary
@@ -2521,6 +3197,8 @@ class Fetch:
         # Use ML Model for load prediction
         load_ml_forecast = self.get_state_wrapper("sensor." + self.prefix + "_load_ml_forecast", attribute="results")
         if load_ml_forecast:
+            if save:
+                self.log_replay_ml_forecast(load_ml_forecast)
             self.log("Loading ML load forecast from sensor.{}_load_ml_forecast".format(self.prefix))
             # Convert format from dict to array
             if isinstance(load_ml_forecast, dict):
@@ -2900,6 +3578,36 @@ class Fetch:
 
         return validated_curve
 
+    def check_export_more_solar_effective(self):
+        """
+        Warn when export_more_solar is on but cannot have any effect.
+
+        export_more_solar works by enabling Freeze Export on idle solar slots, and optimise_solar() returns
+        immediately unless export windows are being calculated and set_export_freeze is on. Otherwise the
+        switch is on but does nothing, with no indication anywhere (#4865). Must run after
+        fetch_inverter_data(), which forces set_export_freeze off for an inverter without freeze support,
+        so the value read in fetch_config_options() is not yet the one the plan will use.
+
+        Warns once per incident rather than every cycle, as the combination may be deliberate, but again
+        whenever the reason changes - otherwise fixing one cause would silently leave the next one in place.
+        Re-arms once export_more_solar is effective so a later recurrence is reported.
+        """
+        reason = None
+        if self.export_more_solar:
+            if not self.calculate_best_export:
+                reason = "Predbat mode is not Control charge & discharge, so export slots are not planned. Change the mode, or turn export_more_solar off."
+            elif not self.set_export_freeze:
+                # Ask the inverter rather than the switch: an unsupported inverter forces set_export_freeze off
+                # whatever the switch says, so advising the user to turn the switch on would change nothing.
+                if self.inverters and not self.inverters[0].inv_support_discharge_freeze:
+                    reason = "the inverter does not support Freeze Export. Turn export_more_solar off."
+                else:
+                    reason = "set_export_freeze is off. Enable set_export_freeze, or turn export_more_solar off."
+
+        if reason and reason != self.export_more_solar_warned_reason:
+            self.log("Warn: export_more_solar is enabled but has no effect, as it works by enabling Freeze Export on idle solar slots and " + reason)
+        self.export_more_solar_warned_reason = reason
+
     def fetch_config_options(self):
         """
         Fetch all the configuration options
@@ -3065,8 +3773,11 @@ class Fetch:
         self.octopus_intelligent_charging = self.get_arg("octopus_intelligent_charging")
         self.octopus_intelligent_ignore_unplugged = self.get_arg("octopus_intelligent_ignore_unplugged")
         self.octopus_intelligent_consider_full = self.get_arg("octopus_intelligent_consider_full")
+        self.octopus_intelligent_trust_slots = self.get_arg("octopus_intelligent_trust_slots")
+        self.octopus_intelligent_dynamic = self.get_arg("octopus_intelligent_dynamic")
         self.car_energy_reported_load = self.get_arg("car_energy_reported_load")
         self.get_car_charging_planned()
+        self.dynamic_load_car_check_config()
         self.load_inday_adjustment = 1.0
 
         self.combine_rate_threshold = self.get_arg("combine_rate_threshold")
@@ -3095,6 +3806,8 @@ class Fetch:
         self.set_charge_low_power = self.get_arg("set_charge_low_power")
         self.set_export_low_power = self.get_arg("set_export_low_power")
         self.charge_low_power_margin = self.get_arg("charge_low_power_margin")
+        self.low_power_pv_threshold_w = self.get_arg("low_power_pv_threshold_w")
+        self.set_charge_low_power_solar_full_rate = self.get_arg("set_charge_low_power_solar_full_rate")
         self.calculate_export_first = True
 
         self.set_status_notify = self.get_arg("set_status_notify")
@@ -3216,6 +3929,7 @@ class Fetch:
         self.manual_export_rates = self.manual_rates("manual_export_rates", default_rate=self.get_arg("manual_export_value"))
         self.manual_load_adjust = self.manual_rates("manual_load_adjust", default_rate=self.get_arg("manual_load_value"))
         self.manual_soc_keep = self.manual_rates("manual_soc", default_rate=self.get_arg("manual_soc_value"))
+        self.manual_soc_max_keep = self.manual_rates("manual_soc_max", default_rate=self.get_arg("manual_soc_max_value"))
 
         # Update list of config options to save/restore to
         self.update_save_restore_list()

@@ -19,10 +19,10 @@ schedules, rate window sensors, and financial metric summaries.
 import math
 import copy
 from html import escape as escape_html
-from datetime import timedelta
+from datetime import timedelta, timezone
 from predbat import THIS_VERSION_DISPLAY
-from const import TIME_FORMAT, PREDICT_STEP, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, MINUTE_WATT, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
-from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state, find_charge_rate
+from const import TIME_FORMAT, PREDICT_STEP, RUN_EVERY, EXPORT_LIMIT_IDLE, MINUTE_WATT, FULL_EXPORT_POWER, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
+from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state, find_charge_rate, export_mode_of, export_target_of, export_power_of, export_limit_sort_key, pack_export_limit, export_limit_from_stored
 from prediction import Prediction
 
 # Per-slot plan "why" reason templates. Keyed by a stable reason code, each template is
@@ -33,6 +33,9 @@ REASON_TEMPLATES = {
     "demand_rising": "Demand — battery level is expected to rise from solar generation; no charging or exporting is scheduled this slot.",
     "demand_falling": "Demand — the battery is expected to discharge to cover house load; no charging or exporting is scheduled this slot.",
     "demand_steady": "Demand — battery level is expected to stay steady; no charging or exporting is scheduled this slot.",
+    "hold_for_car": "Hold for car — for at least half of this slot the battery is prevented from discharging while the car charges; house load beyond what solar covers then comes from the grid.",
+    # First half of a split slot held for a car - worded like the demand_before_export_* codes below
+    "hold_for_car_before_export": "Until {split_time}, the battery is prevented from discharging while the car charges.",
     # Used for the first half of a split slot where the export window only starts partway through -
     # deliberately worded without the "nothing is scheduled this slot" clause of the plain demand
     # reasons above, which would contradict the export reason sitting alongside it in the same slot.
@@ -129,9 +132,11 @@ class Output:
         """
         Publish the car charging plan
         """
-        plan = []
         postfix = ""
         for car_n in range(self.num_cars):
+            # A list of its own per car - shared, every car after the first also carried the windows of
+            # the cars before it, and a charger driven from its car's plan would charge in them
+            plan = []
             if car_n > 0:
                 postfix = "_" + str(car_n)
             if not self.car_charging_slots[car_n]:
@@ -160,10 +165,16 @@ class Output:
                 else:
                     slot = False
 
+                # Show when the window really began, not the planner's clamped start, so the
+                # displayed start time stops walking forward once charging is underway (#269).
+                # Octopus slots carry no start_orig and show their own start - which the Octopus
+                # component trims to now once a dispatch is underway, so those still move.
+                window_start = window.get("start_orig", window["start"])
+
                 time_format_time = "%H:%M:%S"
-                car_startt = self.midnight_utc + timedelta(minutes=window["start"])
+                car_startt = self.midnight_utc + timedelta(minutes=window_start)
                 car_start_time_str = car_startt.strftime(time_format_time)
-                minutes_to = max(window["start"] - self.minutes_now, 0)
+                minutes_to = max(window_start - self.minutes_now, 0)
                 self.dashboard_item(
                     self.prefix + ".car_charging_start" + postfix,
                     state=car_start_time_str,
@@ -181,7 +192,7 @@ class Output:
                 total_kwh = 0
                 total_cost = 0
                 for window in self.car_charging_slots[car_n]:
-                    start = self.time_abs_str(window["start"])
+                    start = self.time_abs_str(window.get("start_orig", window["start"]))
                     end = self.time_abs_str(window["end"])
                     kwh = dp2(window["kwh"])
                     average = dp2(window["average"])
@@ -193,6 +204,8 @@ class Output:
                     show["kwh"] = kwh
                     show["average"] = average
                     show["cost"] = cost
+                    if window.get("kwh_cancelled"):
+                        show["kwh_cancelled"] = dp2(window["kwh_cancelled"])
                     total_cost += cost
                     total_kwh += kwh
                     plan.append(show)
@@ -405,12 +418,15 @@ class Output:
     def publish_rates_import(self):
         """
         Publish the import rates
+
+        The low rate sensors come from low_rates_tariff, the tariff's own cheap windows, rather than the
+        plan's charge windows, which a saving session or Axle event can widen to every slot (GH#5050)
         """
         window_str = ""
         # Output rate info
-        if self.low_rates:
+        if self.low_rates_tariff:
             window_n = 0
-            for window in self.low_rates:
+            for window in self.low_rates_tariff:
                 rate_low_start = window["start"]
                 rate_low_end = window["end"]
                 rate_low_average = window["average"]
@@ -516,7 +532,7 @@ class Output:
         self.log("Low import rate windows [{}]".format(window_str))
 
         # Clear rates that aren't available
-        if not self.low_rates:
+        if not self.low_rates_tariff:
             self.log("No low rate period found")
             self.dashboard_item(
                 self.prefix + ".low_rate_start",
@@ -555,7 +571,7 @@ class Output:
                 attributes={"friendly_name": "Next low rate duration", "state_class": "measurement", "unit_of_measurement": "minutes", "icon": "mdi:table-clock"},
             )
             self.dashboard_item("binary_sensor." + self.prefix + "_low_rate_slot", state="off", attributes={"friendly_name": "Predbat low rate slot", "icon": "mdi:home-lightning-bolt-outline"})
-        if len(self.low_rates) < 2:
+        if len(self.low_rates_tariff) < 2:
             self.dashboard_item(
                 self.prefix + ".low_rate_start_2",
                 state="undefined",
@@ -817,7 +833,7 @@ class Output:
         export_window_n = -1
         for minute in range(minutes_now, self.forecast_minutes + minutes_now, PREDICT_STEP):
             export_window_n = self.in_charge_window(self.export_window_best, minute)
-            if export_window_n >= 0 and self.export_limits_best[export_window_n] == EXPORT_LIMIT_IDLE:
+            if export_window_n >= 0 and export_mode_of(self.export_limits_best[export_window_n]) == EXPORT_MODE_IDLE:
                 export_window_n = -1
             if export_window_n >= 0:
                 break
@@ -828,8 +844,21 @@ class Output:
         Get the charge export text for the given minute
         """
         if export_window_n >= 0:
-            target_export = self.export_window_best[export_window_n].get("target", self.export_limits_best[export_window_n])
-            if self.export_limits_best[export_window_n] == EXPORT_LIMIT_FREEZE:
+            # The window carries a plain-number target once clipped; fall back to the instruction's
+            # own target rather than the instruction, which would print as a tuple. A stored target
+            # can itself still be the tuple/list/mapping instruction - from a replayed debug dump or
+            # a plan saved before the window was clipped this cycle - so normalise it the same way
+            # publish_html_plan does, rather than trusting get()'s fallback to catch every case: a
+            # *present* legacy value would otherwise print as "force exporting to (0, 47, 0.7)%"
+            # (GitHub Copilot review, PR #5047).
+            stored_target = self.export_window_best[export_window_n].get("target")
+            if isinstance(stored_target, (tuple, list, dict)):
+                target_export = export_target_of(export_limit_from_stored(stored_target))
+            elif stored_target is not None:
+                target_export = stored_target
+            else:
+                target_export = export_target_of(self.export_limits_best[export_window_n])
+            if export_mode_of(self.export_limits_best[export_window_n]) == EXPORT_MODE_FREEZE:
                 text = "freeze exporting for the next {}".format(self.duration_string(self.export_window_best[export_window_n]["end"] - minutes_now))  # don't include target % for freeze exporting as (the 99%) is meaningless
             else:
                 text = "force exporting to {}% for the next {}".format(target_export, self.duration_string(self.export_window_best[export_window_n]["end"] - minutes_now))
@@ -872,7 +901,7 @@ class Output:
         """
         Get the export type for the given export limit
         """
-        if export_limit == EXPORT_LIMIT_FREEZE:
+        if export_mode_of(export_limit) == EXPORT_MODE_FREEZE:
             if current:
                 return "freeze exporting"
             else:
@@ -988,7 +1017,7 @@ class Output:
             charge_window_n = -1
 
         export_window_n = self.in_charge_window(self.export_window_best, self.minutes_now)
-        if export_window_n >= 0 and self.export_limits_best[export_window_n] == EXPORT_LIMIT_IDLE:
+        if export_window_n >= 0 and export_mode_of(self.export_limits_best[export_window_n]) == EXPORT_MODE_IDLE:
             export_window_n = -1
 
         charge_export_text = self.get_charge_export_text(self.minutes_now, charge_window_n, export_window_n)
@@ -1082,12 +1111,18 @@ class Output:
             self.battery_temperature,
             self.battery_temperature_charge_curve,
             pv_window_kwh=pv_window_kwh,
+            low_power_pv_threshold_w=self.low_power_pv_threshold_w,
+            solar_full_rate=self.set_charge_low_power_solar_full_rate,
         )
         return dp2(charge_rate_now_curve * MINUTE_WATT / 1000.0)
 
-    def publish_html_plan(self, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record, publish=True, prediction=None):
+    def publish_html_plan(self, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record, publish=True, prediction=None, car_hold_minutes=None):
         """
         Publish the current plan in HTML format
+
+        car_hold_minutes, when given, is the set of plan minutes whose recorded status was "Hold for car":
+        the Yesterday actual-history table shows measured SoC, so its car icon comes from what happened
+        rather than from predict_car_hold_best (see plan_row_holding_for_car()).
         """
         html = ""
         plan_debug = self.plan_debug
@@ -1164,8 +1199,11 @@ class Output:
             minute_timestamp = self.midnight_utc + timedelta(minutes=(minute_relative_start + self.minutes_now))
 
             rate_start = minute_timestamp
-            rate_value_import = dp2(self.rate_import.get(minute, 0))
-            rate_value_export = dp2(self.rate_export.get(minute, 0))
+            # From minute_start, not the aligned interval start: the first row covers now to the end of its
+            # interval, like its times and kWh, and a rate that changed earlier in the interval (a cancelled
+            # Intelligent dispatch, say) no longer applies to it. Every later row starts on its interval anyway.
+            rate_value_import = dp2(self.rate_import.get(minute_start, 0))
+            rate_value_export = dp2(self.rate_export.get(minute_start, 0))
             # Default to a single value; overridden to a "{min}-{max}" range below when this row
             # turns out to be the first of a merged/rowspan cell whose minutes span more than one
             # distinct rate - only the first row of a span is ever actually rendered as a tooltip.
@@ -1186,7 +1224,7 @@ class Output:
 
             for try_minute in range(minute_start, minute_end, PREDICT_STEP):
                 export_window_n = self.in_charge_window(self.export_window_best, try_minute)
-                if export_window_n >= 0 and self.export_limits_best[export_window_n] == EXPORT_LIMIT_IDLE:
+                if export_window_n >= 0 and export_mode_of(self.export_limits_best[export_window_n]) == EXPORT_MODE_IDLE:
                     export_window_n = -1
                 if export_window_n >= 0:
                     break
@@ -1202,7 +1240,7 @@ class Output:
                 discharge_intersect = -1
                 for try_minute in range(minute_start, charge_end_minute, PREDICT_STEP):
                     discharge_intersect = self.in_charge_window(self.export_window_best, try_minute)
-                    if discharge_intersect >= 0 and self.export_limits_best[discharge_intersect] == EXPORT_LIMIT_IDLE:
+                    if discharge_intersect >= 0 and export_mode_of(self.export_limits_best[discharge_intersect]) == EXPORT_MODE_IDLE:
                         discharge_intersect = -1
                     if discharge_intersect >= 0:
                         break
@@ -1214,7 +1252,7 @@ class Output:
                     in_span = True
                     start_span = True
                     minute_relative_end = self.charge_window_best[charge_window_n]["end"] - minute_now_align
-                    rate_text_import = self.rate_range_text(self.rate_import, minute, charge_end_minute, rate_value_import)
+                    rate_text_import = self.rate_range_text(self.rate_import, minute_start, charge_end_minute, rate_value_import)
                 else:
                     rowspan = 0
 
@@ -1226,12 +1264,13 @@ class Output:
                     in_span = True
                     start_span = True
                     minute_relative_end = self.export_window_best[export_window_n]["end"] - minute_now_align
-                    rate_text_export = self.rate_range_text(self.rate_export, minute, export_end_minute, rate_value_export)
+                    rate_text_export = self.rate_range_text(self.rate_export, minute_start, export_end_minute, rate_value_export)
                 else:
                     rowspan = 0
 
             in_alert = self.alert_active_keep.get(minute, 0) > 0
             in_manual_soc = self.manual_soc_keep.get(minute, 0) > 0
+            in_manual_soc_max = self.manual_soc_max_keep.get(minute, 0) > 0
 
             pv_forecast = 0
             load_forecast = 0
@@ -1302,13 +1341,20 @@ class Output:
             else:
                 soc_sym = "&searr;"
 
-            state = soc_sym
+            # The discharge hold for a charging car, so the row explains a held SoC with the same "Hold for
+            # car" execute.py shows live. A charge or export row replaces this state and reason below (a split
+            # row checks its own pre-export segment), so only a Demand row needs it.
+            holding_for_car = charge_window_n < 0 and export_window_n < 0 and self.plan_row_holding_for_car(minute_start, minute_end, car_hold_minutes)
+
+            state = "&#128663;" if holding_for_car else soc_sym
             state_color = "#FFFFFF"
             if minute in self.manual_demand_times:
                 state += " &#8526;"
                 raw_state_override = "Manual demand"
 
-            if soc_sym == "&nearr;":
+            if holding_for_car:
+                demand_reason = {"code": "hold_for_car", "params": {}}
+            elif soc_sym == "&nearr;":
                 demand_reason = {"code": "demand_rising", "params": {}}
             elif soc_sym == "&searr;":
                 demand_reason = {"code": "demand_falling", "params": {}}
@@ -1425,12 +1471,19 @@ class Output:
                 if export_window_n >= 0:
                     start = self.export_window_best[export_window_n]["start"]
                     if start > minute:
+                        # This branch describes only the pre-export segment, so the car hold is
+                        # judged on that segment rather than the whole row
+                        holding_for_car_segment = self.plan_row_holding_for_car(minute_start, start, car_hold_minutes)
+
                         soc_change_this = self.predict_soc_best.get(max(start - self.minutes_now, 0), 0.0) - self.predict_soc_best.get(minute_relative_start, 0.0)
                         split_time_str = (self.midnight_utc + timedelta(minutes=start)).strftime("%H:%M")
+                        if holding_for_car_segment:
+                            state = "&#128663;"
+                            reason_parts.append({"code": "hold_for_car_before_export", "params": {"split_time": split_time_str}})
                         # Same near-flat tolerance as the whole-slot demand arrow above - testing
                         # soc_change_this >= 0 first would make the steady case unreachable and
                         # render a flat pre-window period as rising
-                        if abs(soc_change_this) < 0.05:
+                        elif abs(soc_change_this) < 0.05:
                             state = " &rarr;"
                             reason_parts.append({"code": "demand_before_export_steady", "params": {"split_time": split_time_str}})
                         elif soc_change_this >= 0:
@@ -1445,11 +1498,23 @@ class Output:
 
             if export_window_n >= 0:
                 limit = self.export_limits_best[export_window_n]
-                target = limit
+                # The displayed target is the SoC percentage the instruction aims at, not the
+                # instruction itself - a mode carries no target, hence the None
+                target = export_target_of(limit)
                 if "target" in self.export_window_best[export_window_n]:
-                    target = self.export_window_best[export_window_n]["target"]
+                    stored_target = self.export_window_best[export_window_n]["target"]
+                    # A replayed debug dump can carry the instruction itself here, from before the
+                    # window target was stored as a plain number - take the target out of it. The
+                    # normal case is already a plain number, and must stay one: export_limit_from_stored
+                    # treats its input as a packed limit, not a target percentage, so running an
+                    # ordinary target through it misreads 47.0 as a packed instruction and can hand
+                    # back None (GH copilot review #5047 - fixed a raise here, introduced a None).
+                    if isinstance(stored_target, (tuple, list, dict)):
+                        target = export_target_of(export_limit_from_stored(stored_target))
+                    else:
+                        target = stored_target
 
-                if limit == EXPORT_LIMIT_FREEZE:  # freeze exporting
+                if export_mode_of(limit) == EXPORT_MODE_FREEZE:  # freeze exporting
                     if not had_state:
                         state = ""
                     if state:
@@ -1461,7 +1526,7 @@ class Output:
                     raw_state = "FrzExp"
                     show_limit = ""  # suppress displaying the limit (of 99) when freeze exporting as its a meaningless number
                     reason_parts.append({"code": "freeze_export", "params": {}})
-                elif limit < EXPORT_LIMIT_IDLE:
+                elif export_mode_of(limit) != EXPORT_MODE_IDLE:
                     if not had_state:
                         state = ""
                     if state:
@@ -1469,25 +1534,25 @@ class Output:
                         split = True
                     else:
                         state_color = "#FFFF00"
-                    if limit > soc_percent_max_window:
+                    if target is not None and target > soc_percent_max_window:
                         state += "HoldExp&searr;"
                         raw_state = "HoldExp"
                         reason_parts.append({"code": "hold_export_unreachable", "params": {"target_percent": dp2(target)}})
                     else:
                         state += "Exp&searr;"
                         raw_state = "Exp"
-                        export_rate_adjust = 1 - (limit - int(limit))
+                        export_rate_adjust = export_power_of(limit)
                         rate_kw = dp2(self.battery_rate_max_export * export_rate_adjust * MINUTE_WATT / 1000.0)
                         reason_parts.append({"code": "export_high_rate", "params": {"target_percent": dp2(target), "rate": rate_text_export, "rate_kw": "{:.2f}".format(rate_kw)}})
                     show_limit = str(dp2(target))
                     raw_state_target = str(dp2(target))
 
-                    if limit > int(limit):
+                    if export_power_of(limit) < FULL_EXPORT_POWER:
                         # Snail symbol
                         state += "&#x1F40C;"
 
                     if plan_debug:
-                        show_limit += " ({})".format(dp2(limit))
+                        show_limit += " ({})".format(dp2(export_limit_sort_key(limit)))
 
                 if self.export_window_best[export_window_n]["start"] in self.manual_export_times:
                     state += " &#8526;"
@@ -1519,9 +1584,11 @@ class Output:
                 soc_sym = "&#9888; " + soc_sym
             if in_manual_soc:
                 soc_sym = "&#9998; " + soc_sym
+            if in_manual_soc_max:
+                soc_sym = "&#11015; " + soc_sym
 
             # Import and export rates -> to string
-            adjust_type = self.rate_import_replicated.get(minute, None)
+            adjust_type = self.rate_import_replicated.get(minute_start, None)
             adjust_symbol = self.adjust_symbol(adjust_type)
             if adjust_symbol:
                 rate_str_import = "<i>%02.02f %s</i>" % (rate_value_import, adjust_symbol)
@@ -1534,7 +1601,7 @@ class Output:
             if charge_window_n >= 0:
                 rate_str_import = "<b>" + rate_str_import + "</b>"
 
-            adjust_type = self.rate_export_replicated.get(minute, None)
+            adjust_type = self.rate_export_replicated.get(minute_start, None)
             adjust_symbol = self.adjust_symbol(adjust_type)
             if adjust_symbol:
                 rate_str_export = "<i>%02.02f %s</i>" % (rate_value_export, adjust_symbol)
@@ -1572,13 +1639,23 @@ class Output:
 
             # Car charging?
             car_rate = None
+            car_charging_cancelled = 0.0
             if self.num_cars > 0:
                 car_charging_kwh = self.car_charge_slot_kwh(minute_start, minute_end)
                 car_total += car_charging_kwh
+                # A slot dynamic load cancelled (the car is not charging) is not planned for, but is still
+                # shown with a "?" so the car's own plan stays visible - alongside another car's live
+                # charging in the same step, not only when no car is charging
+                car_charging_cancelled = self.car_charge_slot_kwh_cancelled(minute_start, minute_end)
                 if car_charging_kwh > 0.0:
                     car_charging_str = str(car_charging_kwh)
+                    if car_charging_cancelled > 0.0:
+                        car_charging_str += " +" + str(car_charging_cancelled) + "?"
                     car_color = "FFFF00"
                     car_rate = self.car_charge_slot_rate(minute_start, minute_end)
+                elif car_charging_cancelled > 0.0:
+                    car_charging_str = str(car_charging_cancelled) + "?"
+                    car_color = "#FFFFCC"
                 else:
                     car_charging_str = "&#9866;"
                     car_color = "#FFFFFF"
@@ -1780,6 +1857,8 @@ class Output:
                 json_row["extra_color"] = extra_color
             if self.num_cars > 0:
                 json_row["car_charging"] = car_charging_kwh
+                if car_charging_cancelled > 0.0:
+                    json_row["car_charging_cancelled"] = car_charging_cancelled
                 json_row["car_color"] = car_color
                 json_row["car_rate"] = car_rate
                 json_row["car_rate_color"] = car_rate_color if rate_split else None
@@ -1862,6 +1941,8 @@ class Output:
         raw_plan["timestamp"] = self.now_utc_real.isoformat()
 
         if publish:
+            # The live plan is republished on every re-plan; the web page's stale check reads this
+            raw_plan["refresh_minutes"] = self.calculate_plan_every
             self.dashboard_item(self.prefix + ".plan_html", state="", attributes={"text": self.text_plan, "html": html, "raw": raw_plan, "friendly_name": "Plan in HTML", "icon": "mdi:web-box"})
 
         return html, raw_plan
@@ -2308,12 +2389,15 @@ class Output:
             window_n = self.in_charge_window(export_window, minute)
             minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
             stamp = minute_timestamp.strftime(TIME_FORMAT)
-            if window_n >= 0 and (export_limits[window_n] < EXPORT_LIMIT_IDLE):
-                soc_perc = export_limits[window_n]
+            if window_n >= 0 and (export_mode_of(export_limits[window_n]) != EXPORT_MODE_IDLE):
+                limit = export_limits[window_n]
+                # Published as a chart series, so this wants the target SoC percentage for target
+                # windows; the packed-sort sentinel still represents freeze.
+                soc_perc = float(export_target_of(limit)) if export_mode_of(limit) == EXPORT_MODE_TARGET else float(export_limit_sort_key(limit))
                 soc_kw = (soc_perc * self.soc_max) / 100.0
                 if not export_limit_first:
                     export_limit_soc = soc_kw
-                    export_limit_percent = export_limits[window_n]
+                    export_limit_percent = soc_perc
                     export_limit_first = True
             else:
                 soc_perc = EXPORT_LIMIT_IDLE
@@ -3012,9 +3096,13 @@ class Output:
         self.dashboard_item("binary_sensor." + self.prefix + "_demand", state="on" if isDemand else "off", attributes={"friendly_name": "Predbat is in demand mode", "icon": "mdi:battery-arrow-up"})
 
     def yesterday_reconstruct_car_slots(self, end_record, yesterday_load_step, minutes_now):
-        """Rebuild yesterday's car charging slots and subtract them from the load band.
+        """Rebuild car charging slots for yesterday and today-so-far, and subtract them from the load band.
 
-        :param end_record: last plan-axis minute to reconstruct, 0 = yesterday midnight.
+        :param end_record: last plan-axis minute to reconstruct. calculate_yesterday widens
+            yesterday_load_step to cover today-so-far too (0 = yesterday midnight, up to
+            24*60 + minutes_now = now), so this must be passed the same width - reconstructing
+            only the first 24*60 minutes leaves today's sessions in the raw, unsplit load band
+            until the next day's run rolls them into the now-covered "yesterday" range (#5004).
         :param yesterday_load_step: load per PREDICT_STEP, keyed on that same plan axis.
         :param minutes_now: real minutes_now of the live plan. calculate_yesterday fakes
             self.minutes_now to 0 before calling this, but car_charging_energy is still
@@ -3039,7 +3127,17 @@ class Output:
         if self.num_cars > 0 and self.car_charging_energy:
             for start_minute in range(0, end_record, self.plan_interval_minutes):
                 car_energy = 0
-                for minute in range(start_minute, start_minute + self.plan_interval_minutes):
+                # end_record is minutes_now + 24*60 - the real "now" on this widened axis - but
+                # end_record is not generally a multiple of plan_interval_minutes (minutes_now is
+                # only rounded to PREDICT_STEP, 5 minutes, not to the 30-minute plan interval), so
+                # the last bucket can run past it. get_historical_base()'s minute_previous
+                # (minutes_now + 24*60) - minute then goes negative for those extra minutes, and
+                # get_from_incrementing() silently wraps a negative index by +24*60 - reading
+                # yesterday's data at roughly the same clock time instead of "nothing yet", and
+                # miscounting it into today's final bucket (the ghost-slot mechanism #5004 was
+                # fixed for elsewhere, review on #5048). Clamp the inner scan to end_record so it
+                # never reads past the real "now" this function was asked to reconstruct up to.
+                for minute in range(start_minute, min(start_minute + self.plan_interval_minutes, end_record)):
                     car_energy += self.get_historical_base(self.car_charging_energy, minute, minutes_now + 24 * 60)
                 if car_energy > 0.1:
                     # Only add the slot if there isn't already one covering this time period
@@ -3080,18 +3178,57 @@ class Output:
                         load_value = yesterday_load_step.get(minute, 0)
                         yesterday_load_step[minute] = max(load_value - subtract_amount, 0)
 
+    def plan_row_holding_for_car(self, minute_start, minute_end, car_hold_minutes=None):
+        """
+        Whether a plan row (or a split row's pre-export segment) shows the battery held for a charging car:
+        held for at least half of it. A shorter hold leaves the row its trend arrow, so a brief dispatch
+        does not hide the battery discharging for the rest of the row, and a recorded status lagging a slot
+        boundary by a minute or two does not put the car on the next row.
+
+        With car_hold_minutes (the Yesterday actual-history table, whose SoC is measured) the held minutes
+        are those whose recorded status was "Hold for car". Otherwise they are the steps the prediction that
+        drew predict_soc_best held the battery for, so the car explains exactly the SoC shown beside it.
+        """
+        if minute_end <= minute_start:
+            return False
+        if car_hold_minutes is not None:
+            held = sum(1 for minute in range(minute_start, minute_end) if minute in car_hold_minutes)
+        else:
+            held = sum(PREDICT_STEP for minute in range(minute_start, minute_end, PREDICT_STEP) if (minute - self.minutes_now) in self.predict_car_hold_best)
+        return held * 2 >= minute_end - minute_start
+
+    def history_slot(self, when):
+        """Which plan slot the plan history rebuild at when counts towards, as (date, slot number from midnight, UTC offset).
+
+        Slots are plan_interval_minutes long, shifted one run (RUN_EVERY) later: the run at a slot boundary
+        writes predbat.cost_today seconds before calculate_yesterday() reads its history back from Home
+        Assistant, so the slot just finished is rebuilt on the next run, once that value is recorded. This only
+        helps when that next run re-plans; with calculate_plan_every at or above the slot length, re-plans can
+        fall on boundaries and the rebuild then happens there.
+
+        The UTC offset keeps the hour repeated when the clocks go back as separate slots, and the run is
+        stepped back in UTC so the step itself lands on the right side of the change.
+        """
+        when = (when.astimezone(timezone.utc) - timedelta(minutes=RUN_EVERY)).astimezone(when.tzinfo)
+        return when.date(), (when.hour * 60 + when.minute) // self.plan_interval_minutes, when.utcoffset()
+
+    def history_refresh_minutes(self):
+        """The longest the plan history should go between rebuilds: a slot, the run it waits, and up to one re-plan interval."""
+        return self.plan_interval_minutes + RUN_EVERY + self.calculate_plan_every
+
     def calculate_yesterday(self):
         """
         Calculate the base plan for yesterday
         """
 
-        # Check  savings_last_updated timestamp, we don't need to re-compute this one every iteration, once an hour or when the day rolls over is enough
-        if self.savings_last_updated:
-            # savings_last_update is a timestamp object, compare age and date
-            age = self.now_utc - self.savings_last_updated
-            if age < timedelta(minutes=59) and self.savings_last_updated.date() == self.now_utc.date():
-                # Less than an hour old and already updated today
-                return
+        # Recompute once per completed plan slot rather than every iteration: the plan history (the web page's
+        # History view) shows each slot from what actually happened, so rebuilding as soon as a slot ends keeps the
+        # last finished slot on show - the live Plan view starts at the current slot, so an hourly rebuild left the
+        # slots since it in neither view. Each rebuild takes under a second, and it waits one run past the boundary
+        # (see history_slot) so the boundary run's own writes are recorded. A day rolling over rebuilds straight away,
+        # on the midnight re-plan, so the *_yesterday sensors move on to the day just ended without waiting a re-plan.
+        if self.savings_last_updated and self.savings_last_updated.date() == self.now_utc.date() and self.history_slot(self.savings_last_updated) == self.history_slot(self.now_utc):
+            return
 
         # Everything below is anchored on yesterday's recorded cost, so fetch that before doing any of
         # the expensive work - when Home Assistant isn't recording predbat.cost_today there is nothing
@@ -3099,7 +3236,7 @@ class Output:
         cost_today_data = self.get_history_wrapper(entity_id=self.prefix + ".cost_today", days=2, required=False)
         if not cost_today_data:
             self.log("Warn: Calculate yesterday: No history for {}.cost_today, so the savings and plan history can not be computed - check that Home Assistant is recording this entity (see the recorder notes in the FAQ)".format(self.prefix))
-            # Record the attempt so this is retried on the normal hourly cadence rather than every cycle
+            # Record the attempt so this is retried in the next slot rather than every cycle
             self.savings_last_updated = self.now_utc
             return
 
@@ -3143,7 +3280,7 @@ class Output:
         # Assume user might charge at the lowest rate only, for fixed tariff
         # Only use yesterday's rate range (k < end_record) for the threshold to prevent today's rates
         # (which are added progressively as minutes_now increases) from changing the baseline charge
-        # windows on each hourly recalculation and causing savings_yesterday to fluctuate.
+        # windows on each recalculation and causing savings_yesterday to fluctuate.
         charge_window_best = []
         rate_low = self.compute_rate_low_for_yesterday(past_rates, end_record)
         combine_charge = self.combine_charge_slots
@@ -3296,8 +3433,11 @@ class Output:
 
         # re-construct car charging slots from non-octopus using the sensor
         # Pass the real minutes_now: self.minutes_now has been faked to 0 above, but the car
-        # energy history is still indexed from the real now (#5004).
-        self.yesterday_reconstruct_car_slots(end_record, yesterday_load_step, minutes_now)
+        # energy history is still indexed from the real now (#5004). Pass end_record + minutes_now,
+        # not the bare yesterday-only end_record, so the reconstruction reaches as far into today
+        # as yesterday_load_step itself already does - otherwise today's sessions are left in the
+        # raw load band until the next day's run (#5004 follow-up).
+        self.yesterday_reconstruct_car_slots(end_record + minutes_now, yesterday_load_step, minutes_now)
 
         # Simulate yesterday
         self.prediction = Prediction(self, yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, soc_kw=soc_yesterday)
@@ -3331,6 +3471,7 @@ class Output:
         self.export_limits_best = []
         self.export_window_best = []
         plan_html_baseline, plan_json_baseline = self.plan_write_debug(True, None, yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, end_record, prediction=self.prediction)
+        plan_json_baseline["refresh_minutes"] = self.history_refresh_minutes()
 
         # Now try to show what really happened yesterday
         self.charge_limit_best = []
@@ -3342,6 +3483,7 @@ class Output:
         self.predict_metric_best = cost_yesterday_array
 
         # Fake charge/export windows based on previous predbat status
+        car_hold_minutes = set()
         if predbat_status_data:
             predbat_status = minute_data_state(predbat_status_data[0], 2, self.now_utc, "state", "last_updated")
             for minute in predbat_status:
@@ -3349,6 +3491,9 @@ class Output:
                 if "," in status:
                     # If there are multiple statuses take the first one
                     predbat_status[minute] = status.split(",")[0].strip()
+            # The car icon on this table follows the recorded "Hold for car" status, as its SoC is measured.
+            # predbat_status is keyed by minutes ago; plan-minute m is (minutes_now + end_record - m) ago.
+            car_hold_minutes = {minutes_now + end_record - minutes_ago for minutes_ago, status in predbat_status.items() if status.lower() == "hold for car"}
             # Ignore the first and last edge_minutes of each slot when they don't hold one state
             # throughout - Predbat's reported status can lag a slot boundary by a minute or two while
             # it catches up to a replan, and that leftover from the previous (or next) slot must not
@@ -3429,11 +3574,16 @@ class Output:
                     self.export_window_best.append(export_window)
                     if "freeze" in export_during_slot:
                         # Assume freeze export
-                        self.export_limits_best.append(EXPORT_LIMIT_FREEZE)
+                        self.export_limits_best.append(pack_export_limit(EXPORT_MODE_FREEZE))
                     else:
                         soc_was = battery_soc_yesterday_array.get(export_end_minute, 0.0)
                         soc_percent = calc_percent_limit(soc_was, self.soc_max)
-                        self.export_limits_best.append(soc_percent)
+                        # A target instruction, not the bare percentage this used to append. A bare
+                        # number still decodes through the legacy path, but only by accident, and
+                        # not at the top of the range: a slot that ended at 99% read back as a
+                        # freeze and one at 100% as an idle window, dropping it from the History
+                        # view entirely.
+                        self.export_limits_best.append(pack_export_limit(EXPORT_MODE_TARGET, soc_percent))
 
                 if "charging" in charge_during_slot:
                     # Assume charging at this time
@@ -3449,7 +3599,10 @@ class Output:
 
         # Simulate yesterday with actual charge/export windows
         self.forecast_minutes = end_record + minutes_now
-        plan_html_yesterday, plan_json_yesterday = self.publish_html_plan(yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, end_record + minutes_now, publish=False, prediction=self.prediction)
+        plan_html_yesterday, plan_json_yesterday = self.publish_html_plan(
+            yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, end_record + minutes_now, publish=False, prediction=self.prediction, car_hold_minutes=car_hold_minutes
+        )
+        plan_json_yesterday["refresh_minutes"] = self.history_refresh_minutes()
         self.forecast_minutes = end_record
 
         # Restore state
@@ -3754,7 +3907,7 @@ class Output:
 
             if ignore_min and percent == 0.0:
                 continue
-            if ignore_max and percent == EXPORT_LIMIT_IDLE:
+            if ignore_max and export_mode_of(percent) == EXPORT_MODE_IDLE:
                 continue
 
             if not first_window:
@@ -3766,7 +3919,7 @@ class Output:
             end_time = end_timestamp.strftime("%d-%m %H:%M:%S")
             txt += start_time + " - "
             txt += end_time
-            txt += " @ {}{} {}%".format(dp2(average), self.currency_symbols[1], dp2(percent))
+            txt += " @ {}{} {}%".format(dp2(average), self.currency_symbols[1], dp2(export_limit_sort_key(percent)))
         txt += " ]"
         return txt
 

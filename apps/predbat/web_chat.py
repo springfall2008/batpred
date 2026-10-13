@@ -429,10 +429,11 @@ class WebChat:
         model_id = body.get("id") or None
         agent.store.set_model(body.get("conversation"), model_id, agent.active_provider)
         # Also remembered as the global choice, so the next new conversation starts on it and it
-        # survives a restart. Only a real selection is remembered - clearing back to the default
-        # should not pin whatever the default happened to be at that moment.
-        if model_id:
-            agent.store.set_selected_model(model_id, agent.active_provider)
+        # survives a restart. Clearing back to the default forgets the remembered choice rather than
+        # recording the default: pinning it would freeze whatever the default happened to be at that
+        # moment, and leaving the old choice in place would let resolve_model() keep answering with
+        # it, so the Default row could never be selected again (#5230).
+        agent.store.set_selected_model(model_id, agent.active_provider)
         _, error = await self._marshal(agent, agent.store.flush(body.get("conversation")))
         if error:
             return error
@@ -702,7 +703,9 @@ class WebChat:
         # Only once the file write has succeeded is the live configuration changed, so a failed
         # save never leaves Predbat running settings that are not in the file.
         block = plain_yaml_value(chat_block)
-        self.base.args["chat"] = block
+        # set_arg() invalidates log()'s cached redaction pattern (hass.py) too - needed here since
+        # a provider entry can carry a nested api_key (#5053 review).
+        self.base.set_arg("chat", block)
         selected, error = await self._marshal(agent, agent.apply_provider_block(copy.deepcopy(block), active))
         if error:
             return error
@@ -2697,6 +2700,12 @@ function closeModelList() {
 
 function selectModel(id) {
     state.currentModel = id || null;
+    if (!id && state.conversation) {
+        // Default makes the server forget the remembered choice (posted below), so forget it here
+        // too before the picker is redrawn - otherwise effectiveModel() falls straight back to it
+        // and the picker keeps naming the model that was just deselected.
+        state.selectedModel = '';
+    }
     closeModelList();
     updateModelNote();
     if (!state.conversation) {

@@ -167,7 +167,7 @@ def run_inverter_config_checks(my_predbat):
     my_predbat.battery_discharge_power_curve_auto = False
     my_predbat.ha_interface.dummy_items.pop(entity_id, None)
 
-    my_predbat.fetch_inverter_data(create=False)
+    my_predbat.fetch_inverter_data()
 
     item = my_predbat.ha_interface.dummy_items.get(entity_id)
     if item is None:
@@ -187,7 +187,7 @@ def run_inverter_config_checks(my_predbat):
     my_predbat.inverters = [make_stub_inverter(0, 3000), make_stub_inverter(1, 3000, support_feedin_first=False)]
     my_predbat.ha_interface.dummy_items.pop(entity_id, None)
 
-    my_predbat.fetch_inverter_data(create=False)
+    my_predbat.fetch_inverter_data()
 
     if my_predbat.inverter_support_feedin_first is not False:
         print("ERROR: inverter_support_feedin_first is {} expected False when one inverter does not support it".format(my_predbat.inverter_support_feedin_first))

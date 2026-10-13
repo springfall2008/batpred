@@ -9,6 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 
 from datetime import datetime, timedelta, timezone
+from utils import unpack_export_limit
 from const import PREDBAT_MAX_CARS, MINUTE_WATT
 from prediction import Prediction
 import sys
@@ -47,6 +48,32 @@ def run_async(coro):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
     return loop.run_until_complete(coro)
+
+
+class MockStorageComponents:
+    """
+    Minimal components mock returning a pre-configured storage component, for tests of code that saves
+    and loads through Storage.
+    """
+
+    def __init__(self, storage):
+        """Initialise with a storage instance (may be None to simulate unavailable)."""
+        self._storage = storage
+
+    def get_component(self, name):
+        """Return the mocked storage for 'storage', None for everything else."""
+        if name == "storage":
+            return self._storage
+        return None
+
+
+def make_test_storage(predbat, tmpdir):
+    """Create a StorageComponent backed by a real local-file backend in tmpdir."""
+    from storage import StorageComponent, StorageLocalFiles
+
+    storage = StorageComponent(predbat)
+    storage.backend = StorageLocalFiles(tmpdir, predbat.log)
+    return storage
 
 
 def create_aiohttp_mock_response(status=200, json_data=None, json_exception=None):
@@ -384,6 +411,14 @@ class TestHAInterface:
 class TestInverter:
     def __init__(self):
         self.id = 0
+
+    def refresh_config(self, quiet=False):
+        """
+        No-op stand-in for Inverter.refresh_config().
+
+        The real one re-reads runtime config on each cycle now that the Inverter objects persist;
+        this double carries no config, so there is nothing to re-read.
+        """
         pass
 
 
@@ -470,7 +505,7 @@ class MockConfigProvider:
             "car_charging_exclusive": False,
             "car_charging_from_battery": False,
             "car_charging_planned_response": ["yes", "on", "enable", "true"],
-            "car_charging_now_response": ["yes", "on", "enable", "true"],
+            "car_charging_now_response": ["yes", "on", "enable", "true", "charging"],
             "combine_rate_threshold": 1.0,
             "combine_export_slots": True,
             "combine_charge_slots": True,
@@ -560,9 +595,10 @@ class MockConfigProvider:
             "car_charging_from_battery_1": False,
         }
 
-    def get_arg(self, key, default=None, index=None, indirect=True):
+    def get_arg(self, key, default=None, index=None, indirect=True, required_unit=None):
         """
-        Mock get_arg method that returns values from config dict
+        Mock get_arg method that returns values from config dict (required_unit is accepted, as the real
+        get_arg takes it, but the mock's config values are already in the unit asked for)
         """
         return self.config.get(key, default)
 
@@ -948,7 +984,9 @@ def simple_scenario(
     export_limit_best = []
     export_window_best = []
     if discharge < 100:
-        export_limit_best = [discharge]
+        # Callers express this as the packed percentage the encoding used to be (99 = freeze, a
+        # number = a target, with any fraction the export power) - normalise to an instruction
+        export_limit_best = [unpack_export_limit(discharge)]
         export_window_best = [{"start": my_predbat.minutes_now, "end": int(my_predbat.forecast_minutes / charge_period_divide) + my_predbat.minutes_now, "average": 0}]
     if save == "none":
         (

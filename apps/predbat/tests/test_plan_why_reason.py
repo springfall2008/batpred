@@ -13,6 +13,7 @@ import warnings
 from datetime import timedelta
 
 import web_helper
+from const import CAR_CHARGING_LIMIT_UNCAPPED
 from prediction import Prediction
 from tests.test_infra import reset_inverter, reset_rates, update_rates_import
 from utils import calc_percent_limit
@@ -80,7 +81,7 @@ def _render(row, templates):
     """
     Mirror of the client-side renderReasonText() in web_helper.py: fill in each reason
     entry's template with its params, join with a space, prefixing "Then" onto the second half
-    of a demand-before-export split. Used here to verify the code/params/template contract
+    of a split (demand_before_export_* or hold_for_car_before_export first half). Used here to verify the code/params/template contract
     produces the expected human-readable text end-to-end, not just that the right code was picked.
     """
     reasons = row.get("reasons", [])
@@ -92,9 +93,265 @@ def _render(row, templates):
             continue
         text = re.sub(r"\{(\w+)\}", lambda m: str(entry["params"].get(m.group(1), m.group(0))), template)
         rendered.append(text)
-    if len(reasons) == 2 and rendered[0] and rendered[1] and reasons[0]["code"].startswith("demand_before_export_"):
+    if len(reasons) >= 2 and rendered[0] and rendered[1] and (reasons[0]["code"].startswith("demand_before_export_") or reasons[0]["code"] == "hold_for_car_before_export"):
         rendered[1] = "Then " + rendered[1][0].lower() + rendered[1][1:]
     return " ".join(part for part in rendered if part)
+
+
+# State the car hold tests set on the shared fixture - saved and restored around them (#5079 class of
+# leak). The prediction tests run real saving predictions, which replace the *_best arrays the rest of
+# this module renders from, so those are saved too.
+_CAR_HOLD_FIELDS = (
+    "num_cars",
+    "car_charging_slots",
+    "car_charging_from_battery",
+    "car_charging_soc",
+    "car_charging_soc_next",
+    "car_charging_limit",
+    "car_charging_limit_model",
+    "car_charging_loss",
+    "car_charging_battery_size",
+    "car_charging_now",
+    "car_charging_now_slots",
+    "car_charging_rate",
+    "set_charge_window",
+    "prediction",
+    "predict_soc_best",
+    "predict_metric_best",
+    "predict_iboost_best",
+    "predict_carbon_best",
+    "predict_clipped_best",
+    "predict_car_hold_best",
+)
+
+
+def _set_car(my_predbat, slots, soc=0.0, limit=100.0, from_battery=False, charging_now=False, limit_model=None):
+    """Put one car on the fixture with explicit SoC, limit and charging-now state, so no test inherits another's."""
+    my_predbat.num_cars = 1
+    my_predbat.car_charging_from_battery = from_battery
+    my_predbat.car_charging_slots = [slots]
+    my_predbat.car_charging_soc = [soc]
+    my_predbat.car_charging_soc_next = [None]
+    my_predbat.car_charging_limit = [limit]
+    my_predbat.car_charging_limit_model = limit_model
+    my_predbat.car_charging_loss = 1.0
+    my_predbat.car_charging_battery_size = [100.0]
+    my_predbat.car_charging_now = [charging_now]
+    my_predbat.car_charging_now_slots = [[]]
+    my_predbat.car_charging_rate = [7.0]
+
+
+def _car_hold(minutes):
+    """The predict_car_hold_best a prediction records for a car held at these relative minutes."""
+    return {minute: True for minute in minutes}
+
+
+def _predict_car_hold(my_predbat, pv_step, load_step, export_window=None, export_limits=None, car_slots=None, save="best"):
+    """
+    Run one prediction from the fixture's car state, as the live plan does, and return the car hold it
+    recorded: predict_car_hold_best as copied back onto PredBat for a run that publishes the plan, the
+    Prediction's own for any other (which plan.py never copies back).
+    """
+    my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step, car_charging_slots=car_slots)
+    my_predbat.predict_car_hold_best = None
+    my_predbat.run_prediction([], [], export_window or [], export_limits or [], False, end_record=my_predbat.end_record, save=save)
+    if save in ("best", "compare", "yesterday"):
+        return my_predbat.predict_car_hold_best
+    return my_predbat.prediction.predict_car_hold_best
+
+
+def _run_car_hold_prediction_tests(my_predbat, pv_step, load_step, minutes_now):
+    """Tests 10d-10j: a saving prediction records the minutes it held the battery for a charging car."""
+    failed = False
+    slot = {"start": minutes_now, "end": minutes_now + 30, "kwh": 1.0, "average": 8.0, "octopus": True}
+    whole_slot = _car_hold(range(0, 30, 5))
+
+    # --- Test 10d: a car slot with energy holds the battery for every step of the slot, and no other ---
+    print("Test the prediction records the car hold for each step of a car slot")
+    _set_car(my_predbat, [slot])
+    held = _predict_car_hold(my_predbat, pv_step, load_step)
+    if held != whole_slot:
+        print("ERROR: car hold recorded as {}, expected {}".format(held, whole_slot))
+        failed = True
+
+    # --- Test 10e: the car may draw from the battery - nothing is held ---
+    print("Test no car hold is recorded when car_charging_from_battery is on")
+    _set_car(my_predbat, [slot], from_battery=True)
+    held = _predict_car_hold(my_predbat, pv_step, load_step)
+    if held != {}:
+        print("ERROR: car_charging_from_battery on should record no car hold, got {}".format(held))
+        failed = True
+
+    # --- Test 10f: a car already at its limit draws nothing, so nothing is held, even with a planned kWh slot ---
+    print("Test no car hold is recorded for a car already at its limit")
+    _set_car(my_predbat, [slot], soc=100.0, limit=100.0)
+    held = _predict_car_hold(my_predbat, pv_step, load_step)
+    if held != {}:
+        print("ERROR: a full car should record no car hold, got {}".format(held))
+        failed = True
+
+    # --- Test 10g: a car that fills part-way through its slot is held only until it is full - the
+    # prediction clamps car energy step by step, which a render-time check against the car's
+    # starting SoC could not see. 6kWh over an hour is 0.5kWh a step; a 1kWh gap fills in two ---
+    print("Test the car hold stops at the step the car fills")
+    _set_car(my_predbat, [{"start": minutes_now, "end": minutes_now + 60, "kwh": 6.0, "average": 8.0, "octopus": True}], soc=0.0, limit=1.0)
+    held = _predict_car_hold(my_predbat, pv_step, load_step)
+    if held != _car_hold([0, 5]):
+        print("ERROR: a car filling after two steps should be held for relative minutes [0, 5], got {}".format(held))
+        failed = True
+
+    # --- Test 10h: without charge window control neither execute.py nor the prediction holds for the car ---
+    print("Test no car hold is recorded when set_charge_window is off")
+    _set_car(my_predbat, [slot])
+    my_predbat.set_charge_window = False
+    held = _predict_car_hold(my_predbat, pv_step, load_step)
+    my_predbat.set_charge_window = True
+    if held != {}:
+        print("ERROR: set_charge_window off should record no car hold, got {}".format(held))
+        failed = True
+
+    # --- Test 10i: a car reporting car_charging_now outside its plan is held (#5245) - the live plan
+    # models it through car_charging_slots_model() and uncaps its limit, never the published car plan ---
+    print("Test a car charging now outside its plan records the car hold")
+    _set_car(my_predbat, [], soc=100.0, limit=100.0, charging_now=True, limit_model=[CAR_CHARGING_LIMIT_UNCAPPED])
+    my_predbat.dynamic_load_car_charging_now(minutes_now + 30)
+    if not my_predbat.car_charging_now_slots[0]:
+        print("ERROR: test setup - dynamic_load_car_charging_now() did not model the charging car")
+        failed = True
+    else:
+        held = _predict_car_hold(my_predbat, pv_step, load_step, car_slots=my_predbat.car_charging_slots_model())
+        if not held or 0 not in held:
+            print("ERROR: a car charging now outside its plan should be held from now, got {}".format(held))
+            failed = True
+        elif my_predbat.car_charging_slots != [[]]:
+            print("ERROR: the published car plan must stay empty, got {}".format(my_predbat.car_charging_slots))
+            failed = True
+
+    # --- Test 10j: only a run that publishes the plan records the hold - not the optimiser's scenario
+    # runs, nor the PV10 run, which always takes the Python engine as it saves ---
+    for save in (None, "best10"):
+        print("Test a prediction with save={} records no car hold".format(save))
+        _set_car(my_predbat, [slot])
+        held = _predict_car_hold(my_predbat, pv_step, load_step, save=save)
+        if held != {}:
+            print("ERROR: a prediction with save={} should record no car hold, got {}".format(save, held))
+            failed = True
+
+    return failed
+
+
+def _run_car_hold_render_tests(my_predbat, render, templates, minutes_now):
+    """Tests 10k-10q: the plan's "Hold for car" icon and reason follow the car hold the prediction recorded."""
+    failed = False
+    # No car on the fixture - the row must follow the recorded hold, not rework it from car slots
+    _set_car(my_predbat, [])
+    my_predbat.charge_window_best = []
+    my_predbat.charge_limit_best = []
+    my_predbat.export_window_best = []
+    my_predbat.export_limits_best = []
+    my_predbat.predict_soc_best = _flat_soc(my_predbat, 5.0)  # flat - held, not falling
+
+    # --- Test 10k: a Demand row held for the whole of it reads as hold_for_car, with the car icon ---
+    print("Test Demand row held for a charging car reads as hold_for_car")
+    my_predbat.predict_car_hold_best = _car_hold(range(0, 30, 5))
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or _codes(row) != ["hold_for_car"]:
+        print("ERROR: car-held demand reasons unexpected: {}".format(row and _codes(row)))
+        failed = True
+    elif "Hold for car" not in _render(row, templates) or "at least half of this slot" not in _render(row, templates):
+        print("ERROR: car-held demand rendered text should say the hold covers at least half the slot: {}".format(_render(row, templates)))
+        failed = True
+    elif row["state_html"] != "&#128663;":
+        print("ERROR: car-held demand state cell should show the car icon in place of the arrow, got: {}".format(row["state_html"]))
+        failed = True
+
+    # --- Test 10l: held for exactly half the row still reads as held ---
+    print("Test a Demand row held for half of it reads as hold_for_car")
+    my_predbat.predict_car_hold_best = _car_hold([0, 5, 10])
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or _codes(row) != ["hold_for_car"]:
+        print("ERROR: a row held for half of it should read as hold_for_car: {}".format(row and _codes(row)))
+        failed = True
+
+    # --- Test 10m: a short dispatch holds only one step of the row - the battery discharges for the rest,
+    # so the row keeps its falling arrow rather than a car icon claiming the grid covers the house ---
+    print("Test a Demand row held for one step keeps its trend arrow")
+    my_predbat.predict_soc_best = {minute: 5.0 - minute * 0.01 for minute in range(0, my_predbat.forecast_minutes + my_predbat.plan_interval_minutes + 5, 5)}
+    my_predbat.predict_car_hold_best = _car_hold([0])
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or _codes(row) != ["demand_falling"]:
+        print("ERROR: a row held for one step should read as demand_falling: {}".format(row and _codes(row)))
+        failed = True
+    elif "&#128663;" in row["state_html"]:
+        print("ERROR: a row held for one step should show no car icon, got: {}".format(row["state_html"]))
+        failed = True
+    my_predbat.predict_soc_best = _flat_soc(my_predbat, 5.0)
+
+    # --- Test 10n: a split demand-then-export row held before the export reads as
+    # "Until HH:MM, ... Then exporting..." - one narrative, like the demand split ---
+    print("Test split row held for the car before the export window")
+    split_time = (my_predbat.midnight_utc + timedelta(minutes=minutes_now + 15)).strftime("%H:%M")
+    my_predbat.export_window_best = [{"start": minutes_now + 15, "end": minutes_now + 60, "average": 15.0}]
+    my_predbat.export_limits_best = [50.0]
+    my_predbat.predict_car_hold_best = _car_hold([0, 5, 10])
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    rendered = row and _render(row, templates)
+    if row is None or _codes(row) != ["hold_for_car_before_export", "export_high_rate"]:
+        print("ERROR: split pre-export hold reasons unexpected: {}".format(row and _codes(row)))
+        failed = True
+    elif "&#128663;" not in row["state_html"]:
+        print("ERROR: split pre-export hold state cell should show the car icon, got: {}".format(row["state_html"]))
+        failed = True
+    elif "Until {}".format(split_time) not in rendered or "Then exporting down to" not in rendered:
+        print("ERROR: split pre-export hold should read 'Until {} ... Then exporting', got: {}".format(split_time, rendered))
+        failed = True
+
+    # --- Test 10o: a hold only after the export start holds nothing before it - the pre-export
+    # segment is checked on its own, not with the whole row ---
+    print("Test split row held only after the export start shows no hold")
+    my_predbat.predict_car_hold_best = _car_hold([15, 20, 25])
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or _codes(row) != ["demand_before_export_steady", "export_high_rate"]:
+        print("ERROR: a hold after the export start should leave the pre-export segment as plain demand: {}".format(row and _codes(row)))
+        failed = True
+    elif "&#128663;" in row["state_html"]:
+        print("ERROR: no car icon expected before the export when the hold starts with it, got: {}".format(row["state_html"]))
+        failed = True
+    my_predbat.export_window_best = []
+    my_predbat.export_limits_best = []
+
+    # --- Test 10p: the Yesterday actual-history table shows measured SoC, so its car icon follows the
+    # recorded "Hold for car" status, not the model ---
+    print("Test the car icon follows recorded hold minutes when given")
+    my_predbat.predict_car_hold_best = {}
+    _, raw_plan = render(car_hold_minutes=set(range(minutes_now, minutes_now + 20)))
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or _codes(row) != ["hold_for_car"]:
+        print("ERROR: recorded Hold for car for most of the row should show hold_for_car with no modelled hold: {}".format(row and _codes(row)))
+        failed = True
+    my_predbat.predict_car_hold_best = _car_hold(range(0, 30, 5))
+    _, raw_plan = render(car_hold_minutes=set())
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or "hold_for_car" in _codes(row):
+        print("ERROR: no recorded hold should show no hold_for_car even with a modelled hold: {}".format(row and _codes(row)))
+        failed = True
+
+    # --- Test 10q: the recorded status lags a slot boundary by a minute or two after a hold ends, and
+    # that leftover must not put the car icon on the following row ---
+    print("Test a recorded hold lagging into a row by two minutes shows no car icon")
+    my_predbat.predict_car_hold_best = {}
+    _, raw_plan = render(car_hold_minutes={minutes_now, minutes_now + 1})
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or "hold_for_car" in _codes(row):
+        print("ERROR: a two-minute recorded hold at the start of a row should not show hold_for_car: {}".format(row and _codes(row)))
+        failed = True
+
+    return failed
 
 
 def run_test_plan_why_reason(my_predbat):
@@ -113,8 +370,9 @@ def run_test_plan_why_reason(my_predbat):
     minutes_now = my_predbat.minutes_now
     window = [{"start": minutes_now, "end": minutes_now + 30, "average": 10.0}]
 
-    def render():
-        return my_predbat.publish_html_plan(pv_step, pv_step, load_step, load_step, my_predbat.end_record, publish=False)
+    def render(car_hold_minutes=None):
+        """Render the plan JSON for the current fixture state."""
+        return my_predbat.publish_html_plan(pv_step, pv_step, load_step, load_step, my_predbat.end_record, publish=False, car_hold_minutes=car_hold_minutes)
 
     my_predbat.charge_window_best = window
     my_predbat.charge_limit_best = [8.0]
@@ -421,6 +679,18 @@ def run_test_plan_why_reason(my_predbat):
         print("ERROR: flat pre-export tooltip unexpected: {}".format(_render(row, templates)))
         failed = True
 
+    car_state = {field: getattr(my_predbat, field) for field in _CAR_HOLD_FIELDS}
+    try:
+        failed |= _run_car_hold_prediction_tests(my_predbat, pv_step, load_step, minutes_now)
+        failed |= _run_car_hold_render_tests(my_predbat, render, templates, minutes_now)
+    finally:
+        for field, value in car_state.items():
+            setattr(my_predbat, field, value)
+    my_predbat.charge_window_best = window
+    my_predbat.charge_limit_best = [8.0]
+    my_predbat.export_window_best = []
+    my_predbat.export_limits_best = []
+
     # --- Test 11: reason_templates has an entry for every code used across all scenarios ---
     print("Test reason_templates covers every code used")
     all_codes = set()
@@ -436,6 +706,9 @@ def run_test_plan_why_reason(my_predbat):
     renderer_js = get_plan_renderer_js()
     if "function renderReasonText" not in renderer_js:
         print("ERROR: expected a renderReasonText() helper in the plan renderer JS")
+        failed = True
+    if "reasons[0].code === 'hold_for_car_before_export'" not in renderer_js:
+        print("ERROR: renderReasonText() should prefix 'Then' after a hold_for_car_before_export first half, as _render() here does")
         failed = True
     if "row.reasons" not in renderer_js:
         print("ERROR: expected renderStateCell to reference row.reasons")

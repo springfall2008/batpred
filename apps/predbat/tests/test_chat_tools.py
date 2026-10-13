@@ -28,7 +28,7 @@ import shutil
 import tempfile
 
 import chat_tools
-from utils import mask_secret_args, parse_yaml_path
+from utils import mask_secret_args, parse_yaml_path, compile_log_secret_pattern
 from chat_tools import CHAT_TOOL_DEFS, DOCS_READ_MAX_CHARS, read_docs, score_documents, search_docs, read_source, search_source, resolve_source_path, SourceAccessError, is_endpoint_key
 from chat_tools import DEFAULT_FETCH_ALLOWLIST, FetchRefusedError, host_allowed, html_to_text, validate_fetch_target
 from chat_tools import APPS_YAML_RESTART_WARNING, set_apps_config, validate_apps_schema_type
@@ -922,6 +922,44 @@ def test_set_apps_config_success_preserves_formatting_backs_up_and_mirrors_args(
     return failed
 
 
+def test_set_apps_config_success_invalidates_log_secret_cache(my_predbat):
+    """A successful write must invalidate log()'s cached redaction pattern (#5053 review).
+
+    set_apps_config() writes straight to base.args (base.args[key] = value) rather than going
+    through set_arg() or the web editor's batch apply - both of which already invalidate the
+    cache - so it was its own separate gap: a credential-adjacent value saved through the chat
+    agent's tool would keep leaking into the log under the stale pattern until restart, the same
+    class of bug GH#4770 exists to close.
+    """
+    failed = False
+    print("**** Testing set_apps_config invalidates the cached log redaction pattern ****")
+    root = tempfile.mkdtemp(prefix="predbat_apps_")
+    original_args_value = my_predbat.args.get("num_inverters")
+    saved_cache = my_predbat._log_secret_pattern_cache
+    try:
+        apps_path = _apps_yaml_fixture(root)
+        backup_path = apps_path + ".backup"
+        my_predbat.args["num_inverters"] = 1
+        # A stale value built the real way, not an arbitrary sentinel - matches the convention in
+        # test_web_apps_edit.py's equivalent cache-invalidation test.
+        stale_cache_marker = compile_log_secret_pattern({"stale-pattern-marker-5053xx": "marker"})
+        my_predbat._log_secret_pattern_cache = stale_cache_marker
+
+        result = set_apps_config(my_predbat, "num_inverters", 2, apps_yaml_path=apps_path, backup_path=backup_path)
+
+        if not result.get("success"):
+            print("ERROR: a valid change was refused: {}".format(result))
+            return True
+        if my_predbat._log_secret_pattern_cache is stale_cache_marker:
+            print("ERROR: a successful set_apps_config write left the cached log redaction pattern stale")
+            failed = True
+    finally:
+        my_predbat.args["num_inverters"] = original_args_value
+        my_predbat._log_secret_pattern_cache = saved_cache
+        shutil.rmtree(root, ignore_errors=True)
+    return failed
+
+
 def test_validate_apps_schema_type(my_predbat):
     """validate_apps_schema_type checks a value's shape against APPS_SCHEMA, permissively for a
     key with no schema entry at all - not every apps.yaml key is declared there."""
@@ -1385,5 +1423,6 @@ def run_chat_tools_tests(my_predbat):
     failed |= test_set_apps_config_refuses_unknown_key(my_predbat)
     failed |= test_set_apps_config_refuses_a_schema_type_mismatch(my_predbat)
     failed |= test_set_apps_config_success_preserves_formatting_backs_up_and_mirrors_args(my_predbat)
+    failed |= test_set_apps_config_success_invalidates_log_secret_cache(my_predbat)
     failed |= test_validate_apps_schema_type(my_predbat)
     return failed

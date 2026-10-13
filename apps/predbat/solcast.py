@@ -24,7 +24,7 @@ import pytz
 from datetime import datetime, timedelta, timezone
 
 from const import TIME_FORMAT, TIME_FORMAT_SOLCAST
-from utils import dp2, dp4, history_attribute_to_minute_data, minute_data, history_attribute, prune_today
+from utils import dp2, dp4, history_attribute_to_minute_data, minute_data, history_attribute, prune_today, str2time
 from predbat_metrics import record_api_call, metrics
 from component_base import ComponentBase
 from solar_model import convert_azimuth, gti_hourly_to_period_kwh, pvwatts_cell_temperature  # noqa: F401 - re-exported for tests/test_open_meteo.py parity checks
@@ -35,6 +35,23 @@ Solcast class deals with fetching solar predictions, processing the data and pub
 
 PV_CALIBRATION_LOWEST = 0.20
 PV_CALIBRATION_HIGHEST = 4.0
+# Ceiling on the Open-Meteo ensemble's P90:median ratio. Near dawn and dusk the median is a few
+# W/m2 and the ratio is unbounded; this is the same limit best_day_scaling is held to.
+OPEN_METEO_P90_RATIO_MAX = 2.0
+
+# apps.yaml args pointing at solar forecast entities an EXTERNAL integration publishes (typically
+# the HACS "Solcast PV Forecast" integration, when fetch_pv_forecast() falls back to reading HA
+# sensors directly rather than calling any cloud API itself - see that method's final "else"
+# branch, configured_source "ha_sensors") - not entities this component publishes, unlike every
+# other discovery reporter's own entity specs. Used by SolarAPI._discovery_forecast_entities().
+FORECAST_ENTITY_ARGS = ("pv_forecast_today", "pv_forecast_tomorrow", "pv_forecast_d3", "pv_forecast_d4")
+
+# Solcast's forecasts endpoint is always called with "hours": 168 (see download_solcast_data()) -
+# a fixed, genuinely-requested horizon, unlike forecast.solar/Open-Meteo below whose horizon is
+# bounded by however many days this component retains (self.forecast_days) rather than by a fixed
+# request parameter. Solcast's own API returns pv_estimate/pv_estimate10/pv_estimate90 for every
+# period by default, hence the fixed variant list.
+SOLCAST_DISCOVERY_COVERAGE = {"horizon_hours": 168, "resolution_minutes": 30, "variants": ["pv10", "pv50", "pv90"]}
 
 
 class SolarAPI(ComponentBase):
@@ -80,6 +97,8 @@ class SolarAPI(ComponentBase):
         self.pv_scaling = pv_scaling
         self.open_meteo_forecast = open_meteo_forecast
         self.open_meteo_forecast_max_age = open_meteo_forecast_max_age
+        # Set by download_open_meteo_data(): True when the last download carried a real ensemble spread
+        self.open_meteo_ensemble_band = False
         self.solcast_requests_total = 0
         self.solcast_failures_total = 0
         self.forecast_solar_requests_total = 0
@@ -92,6 +111,23 @@ class SolarAPI(ComponentBase):
         self.forecast_solar_rate_limit_until = None
         self.last_fetched_timestamp = None
         self.forecast_days = 4
+        # Solcast resource ids seen across every site-fetch cycle so far, in the order first
+        # encountered - append-only (see download_solcast_data()'s site loop) so build_discovery()
+        # can report one forecasts record per site without re-walking the API response, and so an
+        # id already reported keeps its position even if a later cycle's site list comes back
+        # shorter (a transient API hiccup must not make a previously-discovered site vanish).
+        self.discovered_sites = []
+        # Which provider genuinely served the most recent SUCCESSFUL fetch_pv_forecast() call -
+        # one of "solcast"/"forecast_solar"/"open_meteo"/"ha_sensors", or None before the first
+        # successful fetch. Set in fetch_pv_forecast() itself, beside its own log_source_change()
+        # call, only once pv_forecast_data is non-empty - see build_discovery()'s own docstring for
+        # why this is what answers "which one actually fed the plan". Deliberately NOT the same as
+        # that method's own configured_source local in its two primary/fallback branches
+        # (forecast_solar_open_meteo_first, forecast_solar_open_meteo_backup): configured_source
+        # keeps naming the primary even once a fallback has served the data, so this is tracked via
+        # a second local, active_source, that fetch_pv_forecast() corrects inside each fallback arm
+        # - see that method's own comments.
+        self.active_forecast_source = None
 
     async def run(self, seconds, first):
         """
@@ -107,6 +143,15 @@ class SolarAPI(ComponentBase):
             await self.fetch_pv_forecast()
         elif not same_day or (fetch_age > 60):  # If data is older than 60 minutes or it's a new day, fetch new data
             await self.fetch_pv_forecast()
+
+        # Unconditional and outside both fetch conditions above, exactly like Ohme's and Octopus's
+        # own run()-level call: a report must not be lost for the life of the process just because a
+        # later cycle happens not to call fetch_pv_forecast() again - the common steady-state case
+        # once the cached forecast is still fresh (see fetch_age/same_day above). self.discovered_sites
+        # and the forecast.solar/Open-Meteo/HA-sensor config are already whatever the most recent
+        # successful fetch left them as, so this reflects the current state correctly whether or not
+        # THIS cycle actually re-fetched anything - see ComponentBase.refresh_discovery().
+        self.refresh_discovery()
         return True
 
     async def cache_get_url(self, url, params, max_age=8 * 60):
@@ -227,10 +272,17 @@ class SolarAPI(ComponentBase):
     URL_PERSONAL = "https://api.forecast.solar/{api_key}/estimate/{lat}/{lon}/{dec}/{az}/{kwp}?time=utc"
     URL_PERSONAL_DUAL = "https://api.forecast.solar/{api_key}/estimate/{lat}/{lon}/{dec1}/{az1}/{kwp1}/{dec2}/{az2}/{kwp2}?time=utc"
 
-    async def download_open_meteo_ensemble_data(self, lat, lon, tilt, az, kwp, system_loss):
+    async def download_open_meteo_ensemble_data(self, lat, lon, tilt, az):
         """
-        Download Open-Meteo ensemble data for P10 solar estimate.
-        Returns a dict mapping ISO timestamp strings to P10 kW values.
+        Download Open-Meteo ensemble data for the spread of the solar estimate.
+        Returns a dict mapping ISO timestamp strings to (p10_ratio, p90_ratio): the ensemble's 10th
+        and 90th percentile irradiance for that hour relative to its own median.
+
+        The ratios are applied to the deterministic P50 rather than the ensemble's absolute values
+        being used. The two are different model runs and can disagree on the level of a whole day,
+        so an absolute ensemble P10 can land above the deterministic P50 (leaving no downside at
+        all once clamped) or far below it; the ensemble's spread about its own centre is the part
+        that carries over. Hours where the ensemble median is zero have no ratio and are left out.
         """
         url = "https://ensemble-api.open-meteo.com/v1/ensemble?models=icon_seamless&latitude={lat}&longitude={lon}&hourly=global_tilted_irradiance&tilt={tilt}&azimuth={az}&forecast_days=4&timezone=UTC".format(lat=lat, lon=lon, tilt=tilt, az=az)
         data = await self.cache_get_url(url, params={}, max_age=self.open_meteo_forecast_max_age * 60)
@@ -251,23 +303,32 @@ class SolarAPI(ComponentBase):
                 if val is not None:
                     values.append(val)
             if not values:
-                result[ts] = 0.0
                 continue
             values.sort()
-            p10_idx = max(0, math.ceil(len(values) * 0.10) - 1)
-            gti_p10 = values[p10_idx]
-            result[ts] = dp4((gti_p10 / 1000.0) * kwp * (1.0 - system_loss))
+            gti_p10 = values[max(0, math.ceil(len(values) * 0.10) - 1)]
+            # A true median: with an even number of usable members there is no middle one, so
+            # take the mean of the two either side rather than the lower of them
+            middle = len(values) // 2
+            gti_p50 = values[middle] if len(values) % 2 else 0.5 * (values[middle - 1] + values[middle])
+            gti_p90 = values[max(0, math.ceil(len(values) * 0.90) - 1)]
+            if gti_p50 <= 0:
+                continue
+            result[ts] = (dp4(max(gti_p10, 0) / gti_p50), dp4(min(gti_p90 / gti_p50, OPEN_METEO_P90_RATIO_MAX)))
         return result
 
     async def download_open_meteo_data(self, configs=None):
         """
         Download Open-Meteo forecast data and convert to PV power estimates.
         Uses GTI (global tilted irradiance) with simple temperature derating for P50,
-        and ensemble members for P10. Returns (sorted_data, max_kwh).
+        and the spread of the ensemble members for P10 and P90. Returns (sorted_data, max_kwh).
         If configs is provided it is used directly; otherwise self.open_meteo_forecast is used.
         """
         period_data = {}
         max_kwh = 0
+        # Whether every array that returned a forecast also got a real ensemble spread. Without one
+        # gti_hourly_to_period_kwh() fills pv_estimate10/90 with fixed fractions of P50, which
+        # fetch_pv_forecast() must not mistake for provider figures worth keeping.
+        ensemble_band_ok = True
 
         if configs is None:
             configs = self.open_meteo_forecast
@@ -322,7 +383,10 @@ class SolarAPI(ComponentBase):
                 self.log("Warn: SolarAPI: Open-Meteo data for lat {} lon {} has no hourly data".format(lat, lon))
                 continue
 
-            ensemble_p10 = await self.download_open_meteo_ensemble_data(lat, lon, tilt, az, kwp, system_loss)
+            ensemble_band = await self.download_open_meteo_ensemble_data(lat, lon, tilt, az)
+            if not ensemble_band:
+                self.log("Warn: SolarAPI: Open-Meteo ensemble data for lat {} lon {} could not be downloaded, the 10% and 90% scenarios will be created from history instead".format(lat, lon))
+                ensemble_band_ok = False
 
             array_periods = gti_hourly_to_period_kwh(
                 times,
@@ -332,22 +396,25 @@ class SolarAPI(ComponentBase):
                 kwp=kwp,
                 system_loss=system_loss,
                 shading_factors=shading_factors,
-                p10_instant=ensemble_p10,
+                band_ratio=ensemble_band,
             )
             for stamp, values in array_periods.items():
                 pv50 = values["pv_estimate"]
                 pv10 = values["pv_estimate10"]
+                pv90 = values["pv_estimate90"]
                 if stamp in period_data:
                     period_data[stamp]["pv_estimate"] = dp4(period_data[stamp]["pv_estimate"] + pv50)
                     period_data[stamp]["pv_estimate10"] = dp4(period_data[stamp]["pv_estimate10"] + pv10)
+                    period_data[stamp]["pv_estimate90"] = dp4(period_data[stamp]["pv_estimate90"] + pv90)
                 else:
-                    period_data[stamp] = {"period_start": stamp.strftime(TIME_FORMAT), "pv_estimate": pv50, "pv_estimate10": pv10}
+                    period_data[stamp] = {"period_start": stamp.strftime(TIME_FORMAT), "pv_estimate": pv50, "pv_estimate10": pv10, "pv_estimate90": pv90}
 
         sorted_data = []
         if period_data:
             for key in sorted(period_data.keys()):
                 sorted_data.append(period_data[key])
 
+        self.open_meteo_ensemble_band = ensemble_band_ok and bool(sorted_data)
         self.log("SolarAPI: Open-Meteo returned {} data points".format(len(sorted_data)))
         return sorted_data, max_kwh
 
@@ -575,6 +642,15 @@ class SolarAPI(ComponentBase):
                 if resource_id:
                     self.log("SolarAPI: Fetch data for resource id {}".format(resource_id))
 
+                    # Record every resource id this site loop walks, for the discovery catalogue's
+                    # forecasts section (see build_discovery()) - append-only and de-duplicated so
+                    # a resource id already known keeps its position across cycles, and a site
+                    # returned again is never reported twice. Deliberately NOT the site's own
+                    # "name" field: that is user-authored free text (see build_discovery()'s
+                    # docstring) and the catalogue must never carry it.
+                    if resource_id not in self.discovered_sites:
+                        self.discovered_sites.append(resource_id)
+
                     params = {"format": "json", "api_key": api_key.strip(), "hours": 168}
                     url = f"{host}/rooftop_sites/{resource_id}/forecasts"
                     data = await self.cache_get_url(url, params, max_age=max_age)
@@ -635,6 +711,173 @@ class SolarAPI(ComponentBase):
 
         self.log("SolarAPI: Solcast returned {} data points".format(len(sorted_data)))
         return sorted_data
+
+    def _discovery_forecast_entities(self):
+        """
+        Entity descriptors for the configured pv_forecast_* args that actually exist in the state store.
+
+        Unlike every other discovery reporter's own entity specs, these entity ids are not
+        published by this component at all - they are user-configured apps.yaml values naming an
+        entity an EXTERNAL integration publishes (see FORECAST_ENTITY_ARGS). "Exists" is still
+        checked the same way every other reporter checks it though - discovery_entities() against
+        the actual state store - since a configured-but-never-seen entity_id (a stale or mistyped
+        apps.yaml value, or an external integration that has not started yet) must not be claimed
+        as discovered just because a value is set in apps.yaml. The domain is read back off the
+        entity id itself, since - unlike a fixed entity spec - there is no way to know it in advance
+        for an arbitrary externally-configured entity.
+        """
+        descriptors = {}
+        for name in FORECAST_ENTITY_ARGS:
+            entity_id = getattr(self, name, None)
+            if not entity_id:
+                continue
+            descriptors[name] = {"entity_id": entity_id, "access": "r"}
+            if "." in entity_id:
+                descriptors[name]["domain"] = entity_id.split(".", 1)[0]
+        return self.discovery_entities(descriptors)
+
+    def _discovery_capacity_kw(self, configs):
+        """
+        Sum the configured kwp across every plane of a forecast.solar/Open-Meteo config, or None if nothing is genuinely known.
+
+        Mirrors the exact per-plane default (3.0) download_forecast_solar_data() and
+        download_open_meteo_data() themselves fall back to for a plane with no kwp given, and the
+        same "a single dict or a list of dicts" flexibility those two methods already normalise -
+        so the reported capacity always matches what a fetch this cycle would actually use. Unlike
+        Solcast (whose site payload carries no plane capacity this component ever reads), kwp is a
+        real, already-configured fact here - see the design spec's own placement of capacity_kw in
+        this section's ratings container.
+        """
+        if not configs:
+            return None
+        if not isinstance(configs, list):
+            configs = [configs]
+        total = sum(config.get("kwp", 3.0) for config in configs if isinstance(config, dict))
+        return dp2(total) if total > 0 else None
+
+    def build_discovery(self):
+        """
+        Describe the solar forecast providers actually used for the discovery catalogue's forecasts section.
+
+        Up to four records, one per provider, each reported independently of the others being
+        configured ("when enabled", not "when it wins fetch_pv_forecast()'s own fallback chain" -
+        forecast.solar and Open-Meteo can each be configured as the other's fallback source, so
+        reporting only the branch that happened to win this particular cycle would make the
+        catalogue flicker between what is genuinely a stable, fully-known configuration):
+
+        - One `solar` record per Solcast resource id seen so far (self.discovered_sites, populated
+          by download_solcast_data()'s site loop - see that method). device_id "solcast:{resource
+          id}"; the resource id goes in account_ids (site and plant ids are registry-flagged
+          credentials - see docs/superpowers/specs/2026-09-10-discovery-catalogue-design.md), never
+          in info, so the redactor pseudonymises it; info.vendor "Solcast"; coverage describing the
+          service itself (the "hours": 168 this component actually requests from Solcast's
+          forecasts endpoint, its 30-minute native resolution, and the pv10/pv50/pv90 variants the
+          endpoint returns by default - see SOLCAST_DISCOVERY_COVERAGE). Deliberately never the
+          site's own "name" field: Solcast site names are user-chosen free text, which the spec
+          excludes from the catalogue outright (it can contain anything, a person's name or address
+          included) - see the design doc's "Never included" class. No `ratings.capacity_kw` either:
+          unlike forecast.solar/Open-Meteo below, nothing this component reads from Solcast's site
+          or forecast payloads ever carries a plane's declared capacity, so there is no genuine
+          figure to report - see _discovery_capacity_kw()'s own docstring for the contrast.
+        - One record each for forecast.solar (device_id "forecast_solar") and Open-Meteo (device_id
+          "open_meteo") when their apps.yaml config is set, each with its own coverage: Predbat
+          retains/publishes self.forecast_days days of forecast from every source uniformly (see
+          fetch_pv_forecast()'s own minute_data() calls), so horizon_hours is that figure for both;
+          resolution_minutes is plan_interval_minutes for forecast.solar and a fixed 60 for
+          Open-Meteo - both documented, not guessed, by fetch_pv_forecast()'s own comment on why
+          divide_by is recalculated per source ("Forecast.Solar uses plan_interval_minutes,
+          Open-Meteo is hourly"). ratings.capacity_kw is the sum of each configured plane's own kwp
+          (_discovery_capacity_kw()) - a real, already-configured fact (annual.py and web_annual.py
+          read the very same field), not a guess.
+        - One record (device_id "ha_sensors", matching fetch_pv_forecast()'s own configured_source
+          value for this path) carrying whichever of pv_forecast_today/tomorrow/d3/d4 are both
+          configured and actually exist in the state store (_discovery_forecast_entities()) - the
+          user's own external HA integration, reported independently of whether it is this cycle's
+          winning fallback for the same reason as forecast.solar/Open-Meteo above. No vendor is
+          claimed for it: unlike the other three providers, Predbat has no way to know what
+          published these entities.
+
+        coverage.active: True marks whichever record(s) match self.active_forecast_source - the
+        provider that genuinely served the most recent SUCCESSFUL fetch_pv_forecast() call (set
+        there, beside its own log_source_change() call, only once pv_forecast_data is non-empty, so
+        a failed attempt never overwrites the last known-good answer). Every Solcast record is
+        marked together when active_forecast_source is "solcast", since a Solcast fetch aggregates
+        every discovered site in one cycle - there is no finer-grained "which site" answer to give.
+        This is deliberately independent of "when enabled" above: a record can exist (the provider
+        is configured) without being active (it is not the one currently feeding the plan) - e.g.
+        leftover pv_forecast_today config alongside a live Solcast setup produces an "ha_sensors"
+        record with no coverage.active at all, rather than either vanishing (requirement 2 forbids
+        suppressing a real record) or being wrongly marked live. This is exactly the fact the design
+        spec calls out this section as needing: "it is invisible which one actually fed the plan
+        when several are configured." Carried in coverage, not ratings: ratings is specced for
+        physical quantities (capacity, efficiency, ...) and coverage's own container type already
+        accepts a boolean fact (see coordinator.py's _clean_measure_or_tokens), so a status flag
+        like this belongs there rather than in a container reserved for measurements.
+
+        Reporting is unconditional rather than gated on any automatic-style flag: this component
+        has none (solar forecast sourcing is a plain apps.yaml choice between Solcast/forecast.solar
+        /Open-Meteo/HA sensors, never something Predbat auto-wires the way Ohme's ohme_automatic or
+        GE Cloud's provisioning do), so the report's own "automatic" key is omitted entirely -
+        Coordinator.validate_report() only ever carries it through when a component actually
+        provides one, rather than defaulting a component with no such concept to `automatic: true`.
+        """
+        active_source = self.active_forecast_source
+        forecasts = []
+
+        for resource_id in self.discovered_sites:
+            # dict(...) alone would only shallow-copy SOLCAST_DISCOVERY_COVERAGE, leaving every
+            # record's "variants" list pointing at the very same shared list object - harmless
+            # today (nothing mutates it), but a deep copy removes the footgun for good.
+            coverage = dict(SOLCAST_DISCOVERY_COVERAGE, variants=list(SOLCAST_DISCOVERY_COVERAGE["variants"]))
+            if active_source == "solcast":
+                coverage["active"] = True
+            record = {"device_id": "solcast:{}".format(resource_id), "kind": "solar", "account_ids": {"site_id": resource_id}, "info": {"vendor": "Solcast"}, "coverage": coverage}
+            forecasts.append(record)
+
+        if self.forecast_solar:
+            ratings = {}
+            capacity_kw = self._discovery_capacity_kw(self.forecast_solar)
+            if capacity_kw is not None:
+                ratings["capacity_kw"] = capacity_kw
+            coverage = {"horizon_hours": self.forecast_days * 24, "resolution_minutes": self.plan_interval_minutes}
+            if active_source == "forecast_solar":
+                coverage["active"] = True
+            record = {
+                "device_id": "forecast_solar",
+                "kind": "solar",
+                "info": {"vendor": "Forecast.Solar"},
+                "coverage": coverage,
+            }
+            if ratings:
+                record["ratings"] = ratings
+            forecasts.append(record)
+
+        if self.open_meteo_forecast:
+            ratings = {}
+            capacity_kw = self._discovery_capacity_kw(self.open_meteo_forecast)
+            if capacity_kw is not None:
+                ratings["capacity_kw"] = capacity_kw
+            coverage = {"horizon_hours": self.forecast_days * 24, "resolution_minutes": 60}
+            if active_source == "open_meteo":
+                coverage["active"] = True
+            record = {
+                "device_id": "open_meteo",
+                "kind": "solar",
+                "info": {"vendor": "Open-Meteo"},
+                "coverage": coverage,
+            }
+            if ratings:
+                record["ratings"] = ratings
+            forecasts.append(record)
+
+        ha_entities = self._discovery_forecast_entities()
+        if ha_entities:
+            record = {"device_id": "ha_sensors", "kind": "solar", "entities": ha_entities}
+            if active_source == "ha_sensors":
+                record["coverage"] = {"active": True}
+            forecasts.append(record)
+
+        return {"forecasts": forecasts}
 
     def fetch_pv_datapoints(self, argname, entity_id):
         """
@@ -824,6 +1067,24 @@ class SolarAPI(ComponentBase):
                     },
                     app="solar",
                 )
+                # The provider's forecast for now, before calibration, as a state of its own. It is
+                # the same value as h0's "now" attribute, but calibration reads it back as history and
+                # Home Assistant's history API only returns the rows where an entity's *state* changed
+                # (significant_changes_only), so an attribute moving under a flat calibrated state is
+                # lost. It is published whether or not calibration is on, so the history is there when
+                # calibration is switched on, and it is not scaled by pv_scaling - see pv_forecast_history.
+                self.dashboard_item(
+                    "sensor." + self.prefix + "_pv_forecast_h0_uncalibrated",
+                    state=dp2(power_now),
+                    attributes={
+                        "friendly_name": "PV Forecast Now Uncalibrated",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kW",
+                        "icon": "mdi:solar-power",
+                        "device_class": "power",
+                    },
+                    app="solar",
+                )
             else:
                 day_name = "tomorrow" if day == 1 else "d{}".format(day)
                 day_name_long = day_name if day == 1 else "day {}".format(day)
@@ -847,11 +1108,75 @@ class SolarAPI(ComponentBase):
                     app="solar",
                 )
 
-    def pv_calibration(self, pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data, create_pv10, divide_by, max_kwh, forecast_days, period=None):
+    def pv_forecast_history(self, days):
+        """
+        Return the past uncalibrated PV forecast in kW, keyed by timestamp and oldest first, on the same
+        pv_scaling basis as pv_forecast_minute.
+
+        Read from the uncalibrated forecast sensor, whose state is the provider's figure. Calibration must
+        not measure against the h0 sensor's state: while calibration is on that is the calibrated forecast,
+        so calibration would learn from its own output while its factors are applied to the uncalibrated
+        series, settling at sqrt(actual / forecast) rather than the true ratio (GH#5116).
+
+        Wherever that sensor's history does not reach back to the start of the window - the first week
+        after upgrading to the version that added it, a fresh install, or a purged recorder - the older
+        points come from the h0 sensor instead: its "now" attribute (the same raw value) and, for a point
+        without one, its state. That has to be done on read, because Home Assistant's recorder cannot be
+        back-dated. "now" was added in the same change that made the state calibrated (c448c9ff), so a
+        point without it recorded the raw forecast as its state. The h0 history is fetched only when it is
+        needed, so once the uncalibrated sensor covers the window this costs nothing.
+
+        The history is scaled by the current pv_scaling rather than stored scaled, so a pv_scaling change
+        takes effect over the whole window at once instead of settling in over the following week.
+        """
+        history = history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0_uncalibrated", days, required=False), scale=self.pv_scaling)
+
+        oldest = None
+        for key in history:
+            try:
+                oldest = str2time(key)
+            except (ValueError, TypeError):
+                continue
+            break
+
+        window_start = self.now_utc_exact - timedelta(days=days)
+        if oldest is None or oldest - window_start > timedelta(hours=1):
+            legacy = history_attribute(
+                self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", days, required=False),
+                state_key="now",
+                attributes=True,
+                scale=self.pv_scaling,
+                fallback_to_state=True,
+            )
+            # Only the points before the uncalibrated history starts, so it is never double counted
+            # and the result stays oldest first for prune_today.
+            merged = {}
+            for key, value in legacy.items():
+                try:
+                    if oldest is not None and str2time(key) >= oldest:
+                        continue
+                except (ValueError, TypeError):
+                    continue
+                merged[key] = value
+            if merged:
+                self.log("SolarAPI: PV Calibration: using {} older forecast history points from sensor.{}_pv_forecast_h0 where sensor.{}_pv_forecast_h0_uncalibrated has no history yet".format(len(merged), self.prefix, self.prefix))
+            merged.update(history)
+            history = merged
+
+        if not history:
+            # Neither sensor had any usable history - e.g. both are excluded from the recorder, or the DB
+            # mirror's stored attributes JSON failed to decode for the whole window (db_engine.py).
+            self.log("Warn: SolarAPI: PV Calibration: could not read any forecast history from sensor.{}_pv_forecast_h0_uncalibrated or sensor.{}_pv_forecast_h0 - calibration will be disabled until history builds up".format(self.prefix, self.prefix))
+        return history
+
+    def pv_calibration(self, pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data, create_pv10, divide_by, max_kwh, forecast_days, period=None, calibrate_band=False):
         """
         Perform PV calibration based on historical data and forecast data.
         This will adjust the forecast data based on historical PV production and forecast data.
         It will also create pv_estimate10 and pv_estimate90 data if create_pv10 is True.
+        calibrate_band is for a provider that supplies its own pv_estimate10/pv_estimate90 (so
+        create_pv10 is False): they are kept, and moved with P50 by whatever calibration and array
+        ceiling were applied to it, so they keep the provider's ratio to the P50 that is returned.
         """
         # If no period is given, default to the plan interval (backward-compatible for unit tests).
         if period is None:
@@ -891,10 +1216,8 @@ class SolarAPI(ComponentBase):
                 days_prev = int(abs(minute_absolute) / (24 * 60)) + 1
                 past_day_actual[days_prev] = past_day_actual.get(days_prev, 0) + pv_power_hist[minute]
 
-        # Find the forecast history
-        pv_forecast, pv_forecast_hist_days = history_attribute_to_minute_data(
-            self.now_utc_exact, prune_today(history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", days + 1, required=False)), self.now_utc_exact, self.midnight_utc, prune=False, intermediate=True)
-        )
+        # Find the forecast history - the uncalibrated forecast, never the calibrated h0 state (GH#5116)
+        pv_forecast, pv_forecast_hist_days = history_attribute_to_minute_data(self.now_utc_exact, prune_today(self.pv_forecast_history(days + 1), self.now_utc_exact, self.midnight_utc, prune=False, intermediate=True))
 
         hist_days = min(pv_today_hist_days, pv_forecast_hist_days, days)
         enabled_calibration = True
@@ -1114,9 +1437,10 @@ class SolarAPI(ComponentBase):
         # sunny day. Because the ceiling and the inner max are both >= observed_slot, the cap
         # can never fall below observed generation.
         #
-        # max_pv_power_forecast is deliberately NOT used here: it is read back from the
-        # published pv_forecast_h0 sensor, whose state is this same capped output, so including
-        # it made the cap depend on its own previous result.
+        # max_pv_power_forecast is deliberately NOT used here: it is a past forecast read back from
+        # sensor history (pv_forecast_history), not measured generation, so it is no evidence of what the
+        # array can actually produce. Until GH#5116 it was worse than that - it was read from h0's state,
+        # which is the calibrated forecast, so including it made the cap depend on its own previous result.
         observed_slot = max_pv_power_hist / 60 * self.plan_interval_minutes
         ceiling_slot = max(1.2 * max_kwh, max_pv_power_hist) / 60 * self.plan_interval_minutes
         capped_slots = 0
@@ -1125,6 +1449,12 @@ class SolarAPI(ComponentBase):
         # Per-slot best_day_scaling for the planner's p90 series, held back so the create_pv10 block
         # below can apply the same ceiling this loop applies to the published pv_estimate90.
         slot_best_scaling = {}
+        # The user's switch, as opposed to enabled_calibration above which is "enough history to
+        # calibrate from". It picks the series returned as P50, and so the one the band is built on.
+        calibration_on = self.get_arg("metric_pv_calibration_enable", default=True)
+        # The raw forecast as the planner gets it with calibration off: unscaled, but still held to
+        # the array ceiling in the loop below. A copy, so the caller's series is left alone.
+        pv_forecast_minute_raw = dict(pv_forecast_minute)
         for minute in range(0, max(pv_forecast_minute.keys()) + 1, self.plan_interval_minutes):
             pv_value = 0
             raw_value = 0
@@ -1153,17 +1483,27 @@ class SolarAPI(ComponentBase):
             # for. Only the array limit may cap the upside case.
             capped_p50 = min(pv_value, capped_data)
             pv_estimateCL[minute] = dp4(capped_p50)
-            pv_estimate10[minute] = dp4(capped_p50 * worst_day_scaling)
-            pv_estimate90[minute] = dp4(min(capped_p50 * best_day_scaling, ceiling_slot))
 
-            # The planner's p90 series (built in the create_pv10 block below from the capped
+            # The 10%/90% band is a scaling of whichever series is handed to the planner as P50:
+            # the capped calibrated one, or the raw forecast when the user has switched calibration
+            # off. Scaling the calibrated series regardless left the band and its centre line on two
+            # different curves, so P10 could sit above P50 and P90 below it (GH#5345).
+            #
+            # Switching calibration off turns off the scaling, not the array ceiling: a raw forecast
+            # above what the array can produce is clipped to ceiling_slot either way (the warning
+            # below says as much), so P50 never sits above the ceiling P90 is clamped to.
+            band_p50 = capped_p50 if calibration_on else min(raw_value, ceiling_slot)
+            pv_estimate10[minute] = dp4(band_p50 * worst_day_scaling)
+            pv_estimate90[minute] = dp4(min(band_p50 * best_day_scaling, ceiling_slot))
+
+            # The planner's p90 series (built in the create_pv10 block below from the same
             # per-minute data) must land on the same ceiling as pv_estimate90 above, or the two
             # disagree exactly where the comment above says they must agree. ceiling_slot is kWh per
             # plan interval, so the clamp cannot be applied per minute; record the scaling that
-            # holds this slot's p90 total at min(capped_p50 * best_day_scaling, ceiling_slot) instead
+            # holds this slot's p90 total at min(band_p50 * best_day_scaling, ceiling_slot) instead
             # and let the block below scale every minute of the slot by it. An empty slot has no
             # ratio to take, and needs no clamp either - scaling zero by anything stays zero.
-            slot_best_scaling[minute] = min(best_day_scaling, ceiling_slot / capped_p50) if capped_p50 > 0 else best_day_scaling
+            slot_best_scaling[minute] = min(best_day_scaling, ceiling_slot / band_p50) if band_p50 > 0 else best_day_scaling
 
             # Apply the same cap to the per-minute data the planner consumes. Scale rather than
             # clamp per minute: capped_data is kWh per plan interval, not per minute.
@@ -1173,6 +1513,13 @@ class SolarAPI(ComponentBase):
                     if (minute + offset) in pv_forecast_minute_adjusted:
                         pv_forecast_minute_adjusted[minute + offset] = dp4(pv_forecast_minute_adjusted[minute + offset] * scale_down)
                 capped_slots += 1
+
+            # And the ceiling alone to the raw series used when calibration is switched off.
+            if raw_value > ceiling_slot:
+                scale_down = ceiling_slot / raw_value
+                for offset in range(0, self.plan_interval_minutes, 1):
+                    if (minute + offset) in pv_forecast_minute_raw:
+                        pv_forecast_minute_raw[minute + offset] = dp4(pv_forecast_minute_raw[minute + offset] * scale_down)
 
         if capped_slots:
             ceiling_kw = ceiling_slot * 60 / self.plan_interval_minutes
@@ -1192,6 +1539,33 @@ class SolarAPI(ComponentBase):
                     raw_exceeds_ceiling_slots, dp2(raw_peak_kw), dp2(ceiling_kw), self.pv_scaling
                 )
             )
+
+        # Do we use calibrated or raw data? The band below is built from whichever is returned.
+        pv_forecast_minute_used = pv_forecast_minute_adjusted if calibration_on else pv_forecast_minute_raw
+
+        # A provider's own band (Open-Meteo's ensemble spread) says how far either side of P50 that
+        # particular hour could land, which the flat worst/best day scaling cannot. Keep it, but
+        # move it with the P50 it is paired with: calibration says the array produces some multiple
+        # of the forecast in this slot, and that holds for the pessimistic and optimistic scenarios
+        # as much as the central one. Scaling each minute by used / raw preserves the provider's
+        # ratios to P50 and picks up the array cap applied above (the only thing that moves the raw
+        # series when calibration is off). P10 is held at or below P50; P90 at or above it and, as
+        # for a created P90, no higher than the array ceiling unless P50 itself is.
+        if calibrate_band and not create_pv10:
+            pv_estimate10 = {}
+            pv_estimate90 = {}
+            ceiling_minute = ceiling_slot / self.plan_interval_minutes
+            for minute in range(0, max(pv_forecast_minute.keys()) + 1):
+                raw_minute = pv_forecast_minute.get(minute, 0)
+                used_minute = pv_forecast_minute_used.get(minute, 0)
+                scale = used_minute / raw_minute if raw_minute > 0 else 1.0
+                pv10_minute = dp4(min(pv_forecast_minute10.get(minute, 0) * scale, used_minute))
+                pv90_minute = dp4(max(min(pv_forecast_minute90.get(minute, 0) * scale, ceiling_minute), used_minute))
+                pv_forecast_minute10[minute] = pv10_minute
+                pv_forecast_minute90[minute] = pv90_minute
+                slot_start = int(minute / self.plan_interval_minutes) * self.plan_interval_minutes
+                pv_estimate10[slot_start] = pv_estimate10.get(slot_start, 0) + pv10_minute
+                pv_estimate90[slot_start] = pv_estimate90.get(slot_start, 0) + pv90_minute
 
         for entry in pv_forecast_data:
             period_start = entry.get("period_start", "")
@@ -1227,16 +1601,16 @@ class SolarAPI(ComponentBase):
                 # When we store the data we have to reverse the divide_by factor
                 if has_calibrated:
                     entry["pv_estimateCL"] = calibrated * divide_by
-                if create_pv10 and has_calibrated10:
+                if (create_pv10 or calibrate_band) and has_calibrated10:
                     entry["pv_estimate10"] = calibrated10 * divide_by
-                if create_pv10 and has_calibrated90:
+                if (create_pv10 or calibrate_band) and has_calibrated90:
                     entry["pv_estimate90"] = calibrated90 * divide_by
 
         # Creation of PV10 data using worst day scaling factor
         if create_pv10:
             capped_best_slots = 0
-            for minute in range(0, max(pv_forecast_minute_adjusted.keys()) + 1):
-                pv_value = pv_forecast_minute_adjusted.get(minute, 0)
+            for minute in range(0, max(pv_forecast_minute_used.keys()) + 1):
+                pv_value = pv_forecast_minute_used.get(minute, 0)
                 # Use the worst day scaling factor to create pv_estimate10. No ceiling clamp is
                 # needed: worst_day_scaling is capped at 1.0 above, so this can only scale down.
                 pv_forecast_minute10[minute] = dp4(pv_value * worst_day_scaling)
@@ -1256,12 +1630,9 @@ class SolarAPI(ComponentBase):
                 )
             )
 
-        # Do we use calibrated or raw data?
-        if self.get_arg("metric_pv_calibration_enable", default=True):
+        if calibration_on:
             self.log("SolarAPI: PV Calibration: Using calibrated PV data")
-            return pv_forecast_minute_adjusted, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data
-        else:
-            return pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data
+        return pv_forecast_minute_used, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data
 
     def pack_and_store_forecast(self, pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90):
         """
@@ -1336,6 +1707,14 @@ class SolarAPI(ComponentBase):
         pv_forecast_total_sensor = 0
         create_pv10 = False
         configured_source = None
+        # Which provider genuinely returned pv_forecast_data this call - see the comment where this
+        # feeds self.active_forecast_source below. Equal to configured_source in every branch
+        # except the two with an internal primary/fallback pair immediately below, where a fallback
+        # that actually serves the data must override the primary named by configured_source.
+        # configured_source itself is deliberately left untouched by this - it still names the
+        # primary for log_source_change()'s settling-period message, a separate, pre-existing
+        # concern this task does not change.
+        active_source = None
         max_kwh = 9999
         using_ha_data = False
 
@@ -1346,34 +1725,45 @@ class SolarAPI(ComponentBase):
             divide_by = 30.0
             create_pv10 = True
             configured_source = "open_meteo"
+            active_source = "open_meteo"
             if not pv_forecast_data:
                 self.log("Warn: SolarAPI: Open-Meteo returned no data, falling back to Forecast Solar")
                 pv_forecast_data, max_kwh = await self.download_forecast_solar_data()
+                if pv_forecast_data:
+                    # The fallback is what actually served this fetch, not the primary named above.
+                    active_source = "forecast_solar"
         elif self.forecast_solar:
             self.log("SolarAPI: Obtaining solar forecast from Forecast Solar API")
             pv_forecast_data, max_kwh = await self.download_forecast_solar_data()
             divide_by = 30.0
             create_pv10 = True
             configured_source = "forecast_solar"
+            active_source = "forecast_solar"
             if not pv_forecast_data and self.forecast_solar_open_meteo_backup:
                 self.log("SolarAPI: Forecast Solar returned no data, falling back to Open-Meteo backup")
                 backup_configs = self.open_meteo_forecast if self.open_meteo_forecast else self.forecast_solar
                 pv_forecast_data, max_kwh = await self.download_open_meteo_data(configs=backup_configs)
+                if pv_forecast_data:
+                    # The backup is what actually served this fetch, not the primary named above.
+                    active_source = "open_meteo"
         elif self.open_meteo_forecast:
             self.log("SolarAPI: Obtaining solar forecast from Open-Meteo API")
             pv_forecast_data, max_kwh = await self.download_open_meteo_data()
             divide_by = 30.0
             create_pv10 = True
             configured_source = "open_meteo"
+            active_source = "open_meteo"
         elif self.solcast_host and self.solcast_api_key:
             self.log("SolarAPI: Obtaining solar forecast from Solcast API")
             pv_forecast_data = await self.download_solcast_data()
             divide_by = 30.0
             configured_source = "solcast"
+            active_source = "solcast"
         else:
             self.log("SolarAPI: Using Solcast integration from inside HA for solar forecast")
             using_ha_data = True
             configured_source = "ha_sensors"
+            active_source = "ha_sensors"
 
             # Fetch data from each sensor
             for argname in ["pv_forecast_today", "pv_forecast_tomorrow", "pv_forecast_d3", "pv_forecast_d4"]:
@@ -1411,6 +1801,13 @@ class SolarAPI(ComponentBase):
                 self.log("SolarAPI: PV Forecast today adds up to {} and total sensors add up to {} kWh - detected forecast data is in {} (factor {})".format(pv_forecast_total_data, pv_forecast_total_sensor, units, factor))
 
         if pv_forecast_data:
+            # Recorded only on a successful fetch (this branch), never on the empty-data branch
+            # below - a transient failure must not overwrite the last known-good answer to "which
+            # provider is actually feeding the plan" - see build_discovery()'s own docstring and
+            # this attribute's own comment in initialize(). active_source, not configured_source:
+            # in the two primary/fallback branches above, a fallback that actually served the data
+            # has already overridden it away from the primary configured_source still names.
+            self.active_forecast_source = active_source
             await self.log_source_change(configured_source)
 
             # Detect the actual period of the forecast data (e.g. 15 or 30 minutes)
@@ -1488,9 +1885,18 @@ class SolarAPI(ComponentBase):
             # of double-counting a site configured against two providers.
             self.base.resolve_pv_array_kwp(max_kwh)
 
+            # Open-Meteo's ensemble supplies a real spread, so keep the P10 and P90 built from it
+            # (calibrated alongside P50) rather than replacing them with ones created from history.
+            # active_source, not configured_source: a Forecast.Solar fallback or primary that
+            # actually served the data has no band of its own.
+            calibrate_band = False
+            if active_source == "open_meteo" and self.open_meteo_ensemble_band:
+                create_pv10 = False
+                calibrate_band = True
+
             # Run calibration on the data
             pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data = self.pv_calibration(
-                pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data, create_pv10, divide_by / period, max_kwh, self.forecast_days, period
+                pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data, create_pv10, divide_by / period, max_kwh, self.forecast_days, period, calibrate_band=calibrate_band
             )
             self.publish_pv_stats(pv_forecast_data, divide_by / period, period)
             self.pack_and_store_forecast(pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90)

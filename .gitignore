@@ -39,6 +39,7 @@ wheels/
 MANIFEST
 
 # Test and coverage files
+tools/shuffle_fuzz_known_pairs.txt
 coverage/*.yaml
 coverage/*.log
 coverage/*.json

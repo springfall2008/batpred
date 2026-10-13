@@ -517,7 +517,8 @@ class FakeBase:
         self.html_plan = "x" * (MCP_STATE_DEFAULT_MAX_BYTES + 500)
 
         # Values a plain json.dumps would choke on
-        self.midnight_utc = datetime(2026, 8, 27, 0, 0, 0)
+        self.now_utc = datetime(2026, 8, 27, 12, 0, 0)
+        self.midnight_utc = self.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
         self.inverter_object = object()
 
         # Legitimately-None state - a great deal of Predbat's is, so None must not double as
@@ -615,7 +616,7 @@ def test_debug_excluded_keys(my_predbat):
     failed = False
     print("**** Testing is_debug_excluded_key ****")
 
-    for key in ["ha_interface", "components", "secrets", "octopus_url_cache", "github_url_cache", "inverters", "CONFIG_ITEMS", "logfile"]:
+    for key in ["ha_interface", "components", "coordinator", "secrets", "octopus_url_cache", "github_url_cache", "inverters", "CONFIG_ITEMS", "logfile"]:
         if not is_debug_excluded_key(key):
             print("  ERROR: expected {} to be excluded".format(key))
             failed = True
@@ -1218,7 +1219,7 @@ def _fat_log(now):
     stamp = now.replace(microsecond=0)
     lines = [
         "{}: Info: short line before".format(stamp - timedelta(minutes=3)),
-        "{}: OctopusAPI: Fetched saving sessions data from GraphQL API: {}".format(stamp - timedelta(minutes=2), "x" * 20000),
+        "{}: OctopusAPI: GraphQL response for get-saving-sessions (status 200): {}".format(stamp - timedelta(minutes=2), "x" * 20000),
         "{}: Info: short line after".format(stamp - timedelta(minutes=1)),
     ]
     return "\n".join(lines) + "\n"

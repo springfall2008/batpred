@@ -89,7 +89,7 @@ def _test_missing_slots(my_predbat):
     print("*** Test: Missing 23:00 and 23:30 slots (Octopus Agile before 4PM) ***")
 
     # Setup: Wednesday before 4PM scenario
-    my_predbat.midnight = datetime.strptime("2025-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S")
+    my_predbat.midnight_utc = my_predbat.local_tz.localize(datetime.strptime("2025-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S"))
     my_predbat.forecast_minutes = 2880  # 48 hours forecast
     my_predbat.metric_future_rate_offset_import = 0
     my_predbat.metric_future_rate_offset_export = 0
@@ -159,7 +159,6 @@ def _test_missing_slots(my_predbat):
     # Restore time context to current time
     my_predbat.now_utc = datetime.now(my_predbat.local_tz)
     my_predbat.midnight_utc =  my_predbat.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-    my_predbat.midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     my_predbat.minutes_now = int((my_predbat.now_utc - my_predbat.midnight_utc).total_seconds() / 60)
     my_predbat.rate_max = 0
     my_predbat.forecast_minutes = 24*60
@@ -170,7 +169,7 @@ def _test_no_previous_day(my_predbat):
     """Test for rate_replicate when there's NO previous day data at all."""
     failed = 0
 
-    my_predbat.midnight = datetime.strptime("2025-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S")
+    my_predbat.midnight_utc = my_predbat.local_tz.localize(datetime.strptime("2025-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S"))
     my_predbat.forecast_minutes = 2880
     my_predbat.metric_future_rate_offset_import = 0
     my_predbat.metric_future_rate_offset_export = 0
@@ -207,7 +206,6 @@ def _test_no_previous_day(my_predbat):
     # Restore time context to current time
     my_predbat.now_utc = datetime.now(my_predbat.local_tz)
     my_predbat.midnight_utc =  my_predbat.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-    my_predbat.midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     my_predbat.minutes_now = int((my_predbat.now_utc - my_predbat.midnight_utc).total_seconds() / 60)
     my_predbat.rate_max = 0
     my_predbat.forecast_minutes = 24*60
@@ -219,7 +217,7 @@ def _test_zero_rates(my_predbat):
     """Test for rate_replicate with legitimate zero rates (free electricity)."""
     failed = 0
 
-    my_predbat.midnight = datetime.strptime("2025-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S")
+    my_predbat.midnight_utc = my_predbat.local_tz.localize(datetime.strptime("2025-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S"))
     my_predbat.forecast_minutes = 2880
     my_predbat.metric_future_rate_offset_import = 0
     my_predbat.metric_future_rate_offset_export = 0
@@ -271,7 +269,6 @@ def _test_zero_rates(my_predbat):
     # Restore time context to current time
     my_predbat.now_utc = datetime.now(my_predbat.local_tz)
     my_predbat.midnight_utc =  my_predbat.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-    my_predbat.midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     my_predbat.minutes_now = int((my_predbat.now_utc - my_predbat.midnight_utc).total_seconds() / 60)
     my_predbat.rate_max = 0
     my_predbat.forecast_minutes = 24*60
@@ -286,7 +283,7 @@ def _test_undefined_negative_minutes(my_predbat):
     """
     failed = 0
 
-    my_predbat.midnight = datetime.strptime("2025-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S")
+    my_predbat.midnight_utc = my_predbat.local_tz.localize(datetime.strptime("2025-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S"))
     my_predbat.forecast_minutes = 2880
     my_predbat.metric_future_rate_offset_import = 0
     my_predbat.metric_future_rate_offset_export = 0
@@ -344,7 +341,6 @@ def _test_undefined_negative_minutes(my_predbat):
     # Restore time context to current time
     my_predbat.now_utc = datetime.now(my_predbat.local_tz)
     my_predbat.midnight_utc = my_predbat.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-    my_predbat.midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     my_predbat.minutes_now = int((my_predbat.now_utc - my_predbat.midnight_utc).total_seconds() / 60)
     my_predbat.rate_max = 0
     my_predbat.forecast_minutes = 24*60
@@ -356,7 +352,7 @@ def _test_rate_io(my_predbat):
     """Test rate_replicate with Intelligent Octopus rate_io adjustments."""
     failed = 0
 
-    my_predbat.midnight = datetime.strptime("2025-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S")
+    my_predbat.midnight_utc = my_predbat.local_tz.localize(datetime.strptime("2025-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S"))
     my_predbat.forecast_minutes = 2880
     my_predbat.metric_future_rate_offset_import = 0
     my_predbat.metric_future_rate_offset_export = 0
@@ -403,7 +399,6 @@ def _test_rate_io(my_predbat):
     # Restore context
     my_predbat.now_utc = datetime.now(my_predbat.local_tz)
     my_predbat.midnight_utc = my_predbat.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-    my_predbat.midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     my_predbat.minutes_now = int((my_predbat.now_utc - my_predbat.midnight_utc).total_seconds() / 60)
     my_predbat.rate_max = 0
     my_predbat.forecast_minutes = 24*60
@@ -415,7 +410,7 @@ def _test_future_rate_adjust_import(my_predbat):
     """Test rate_replicate with futurerate_adjust_import feature."""
     failed = 0
 
-    my_predbat.midnight = datetime.strptime("2025-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S")
+    my_predbat.midnight_utc = my_predbat.local_tz.localize(datetime.strptime("2025-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S"))
     my_predbat.forecast_minutes = 2880
     my_predbat.metric_future_rate_offset_import = 0
     my_predbat.metric_future_rate_offset_export = 0
@@ -462,7 +457,6 @@ def _test_future_rate_adjust_import(my_predbat):
         del my_predbat.args["futurerate_adjust_import"]
     my_predbat.now_utc = datetime.now(my_predbat.local_tz)
     my_predbat.midnight_utc = my_predbat.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-    my_predbat.midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     my_predbat.minutes_now = int((my_predbat.now_utc - my_predbat.midnight_utc).total_seconds() / 60)
     my_predbat.rate_max = 0
     my_predbat.forecast_minutes = 24*60
@@ -474,7 +468,7 @@ def _test_future_rate_adjust_export(my_predbat):
     """Test rate_replicate with futurerate_adjust_export feature."""
     failed = 0
 
-    my_predbat.midnight = datetime.strptime("2025-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S")
+    my_predbat.midnight_utc = my_predbat.local_tz.localize(datetime.strptime("2025-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S"))
     my_predbat.forecast_minutes = 2880
     my_predbat.metric_future_rate_offset_import = 0
     my_predbat.metric_future_rate_offset_export = 0
@@ -521,7 +515,6 @@ def _test_future_rate_adjust_export(my_predbat):
         del my_predbat.args["futurerate_adjust_export"]
     my_predbat.now_utc = datetime.now(my_predbat.local_tz)
     my_predbat.midnight_utc = my_predbat.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-    my_predbat.midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     my_predbat.minutes_now = int((my_predbat.now_utc - my_predbat.midnight_utc).total_seconds() / 60)
     my_predbat.rate_max = 0
     my_predbat.forecast_minutes = 24*60
@@ -533,7 +526,7 @@ def _test_import_offset(my_predbat):
     """Test rate_replicate with metric_future_rate_offset_import."""
     failed = 0
 
-    my_predbat.midnight = datetime.strptime("2025-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S")
+    my_predbat.midnight_utc = my_predbat.local_tz.localize(datetime.strptime("2025-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S"))
     my_predbat.forecast_minutes = 2880
     my_predbat.metric_future_rate_offset_import = 5.0  # Add 5p to future rates
     my_predbat.metric_future_rate_offset_export = 0
@@ -575,7 +568,6 @@ def _test_import_offset(my_predbat):
     my_predbat.metric_future_rate_offset_import = 0
     my_predbat.now_utc = datetime.now(my_predbat.local_tz)
     my_predbat.midnight_utc = my_predbat.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-    my_predbat.midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     my_predbat.minutes_now = int((my_predbat.now_utc - my_predbat.midnight_utc).total_seconds() / 60)
     my_predbat.rate_max = 0
     my_predbat.forecast_minutes = 24*60
@@ -587,7 +579,7 @@ def _test_export_offset_negative(my_predbat):
     """Test rate_replicate with metric_future_rate_offset_export and negative clamping."""
     failed = 0
 
-    my_predbat.midnight = datetime.strptime("2025-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S")
+    my_predbat.midnight_utc = my_predbat.local_tz.localize(datetime.strptime("2025-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S"))
     my_predbat.forecast_minutes = 2880
     my_predbat.metric_future_rate_offset_import = 0
     my_predbat.metric_future_rate_offset_export = -8.0  # Subtract 8p from export rates
@@ -634,7 +626,6 @@ def _test_export_offset_negative(my_predbat):
     my_predbat.metric_future_rate_offset_export = 0
     my_predbat.now_utc = datetime.now(my_predbat.local_tz)
     my_predbat.midnight_utc = my_predbat.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-    my_predbat.midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     my_predbat.minutes_now = int((my_predbat.now_utc - my_predbat.midnight_utc).total_seconds() / 60)
     my_predbat.rate_max = 0
     my_predbat.forecast_minutes = 24*60
@@ -646,7 +637,7 @@ def _test_gas_rates(my_predbat):
     """Test rate_replicate with is_gas=True to ensure gas rates are handled correctly."""
     failed = 0
 
-    my_predbat.midnight = datetime.strptime("2025-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S")
+    my_predbat.midnight_utc = my_predbat.local_tz.localize(datetime.strptime("2025-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S"))
     my_predbat.forecast_minutes = 2880
     my_predbat.metric_future_rate_offset_import = 3.0
     my_predbat.metric_future_rate_offset_export = 2.0
@@ -693,7 +684,6 @@ def _test_gas_rates(my_predbat):
     my_predbat.metric_future_rate_offset_export = 0
     my_predbat.now_utc = datetime.now(my_predbat.local_tz)
     my_predbat.midnight_utc = my_predbat.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-    my_predbat.midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     my_predbat.minutes_now = int((my_predbat.now_utc - my_predbat.midnight_utc).total_seconds() / 60)
     my_predbat.rate_max = 0
     my_predbat.forecast_minutes = 24*60
@@ -716,7 +706,7 @@ def _test_rate_base_min_max(my_predbat):
 
     print("*** Test: rate_base_min_max reflects the gap-filled curve, not the raw sparse fetch ***")
 
-    my_predbat.midnight = datetime.strptime("2025-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S")
+    my_predbat.midnight_utc = my_predbat.local_tz.localize(datetime.strptime("2025-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S"))
     my_predbat.forecast_minutes = 2880
     my_predbat.minutes_now = 550  # 09:10 - inside the day segment, matching the reported scenario
     my_predbat.metric_future_rate_offset_import = 0
@@ -772,7 +762,6 @@ def _test_rate_base_min_max(my_predbat):
     # Restore context
     my_predbat.now_utc = datetime.now(my_predbat.local_tz)
     my_predbat.midnight_utc = my_predbat.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-    my_predbat.midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     my_predbat.minutes_now = int((my_predbat.now_utc - my_predbat.midnight_utc).total_seconds() / 60)
     my_predbat.rate_max = 0
     my_predbat.forecast_minutes = 24 * 60

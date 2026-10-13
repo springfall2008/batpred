@@ -24,6 +24,10 @@ pred_bat:
   # Can be auto for automatic, 0 for off or values 1-N for a fixed number
   threads: auto
 
+  # Number of log files to keep, including the live predbat.log (2-100, default 10)
+  # Rotated logs are predbat.01.log .. predbat.99.log
+  #log_count: 10
+
   # If you are using Predbat outside of HA then set the HA URL and Key (long lived access token here)
   #ha_url: 'http://homeassistant.local:8123'
   #ha_key: !secret ha_key
@@ -80,9 +84,6 @@ pred_bat:
   # Controls/status - must by 1 per inverter
   #
   num_inverters: 1
-  #
-  # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
-  balance_inverters_seconds: 60
   #
   # When set use the REST API rather than HA entity for control, should be more reliable/faster to control
   # Set one per inverter
@@ -167,6 +168,9 @@ pred_bat:
   discharge_end_time:
     - select.givtcp_{geserial}_discharge_end_time_slot_1
     - select.givtcp2_{geserial2}_discharge_end_time_slot_1
+  battery_calibration:
+    - select.givtcp_{geserial}_battery_calibration
+    - select.givtcp2_{geserial2}_battery_calibration
 
   # Pause mode is not supported by all firmware's and will be ignored if not present
   pause_mode:
@@ -314,6 +318,15 @@ pred_bat:
   # Leave unset to auto-detect an Intelligent tariff when ohme_automatic is on, or set
   # it explicitly to True/False to override that decision
   #ohme_automatic_octopus_intelligent: True
+
+  # Wallbox EV charger cloud direct integration
+  #wallbox_username: !secret wallbox_username
+  #wallbox_password: !secret wallbox_password
+  # Register the Wallbox chargers with Predbat as cars (on by default)
+  #wallbox_automatic: True
+  # Let Predbat pause and resume the chargers according to its own car charging plan.
+  # Requires wallbox_automatic
+  #wallbox_control: True
 
   # car_charging_energy defines a daily incrementing sensor which measures the charge added to your car and resets to zero at midnight
   # is used for car_charging_hold feature to filter out car charging from the previous load data
@@ -631,4 +644,15 @@ pred_bat:
   #  - '{octopus_saving_session}'
   #  - '+[car_charging_planned]'
   #  - '+[car_charging_soc]'
-  #  - '{car_charging_now}'
+
+  # Redact additional values from predbat.log and debug dumps that Predbat cannot otherwise
+  # recognise as sensitive (an MPAN or similar identifier surfaced by a third-party HA
+  # integration's sensor, say) - see "Redaction in logs and debug files" in apps-yaml.md.
+  # redact_strings_labelled is a name -> value mapping, masked with your own label (e.g. <my_mpan>
+  # below); redact_strings is a bare list for when you don't need one, masked generically as
+  # <redact_strings>. As with any other setting, either can reference a value in secrets.yaml
+  # with !secret instead of writing it here directly.
+  #redact_strings_labelled:
+  #  my_mpan: "1234567890123"
+  #redact_strings:
+  #  - "1234567890123"

@@ -16,6 +16,7 @@ import tracemalloc
 
 import yaml
 
+from coordinator import Coordinator
 from inverter import Inverter
 from userinterface import dump_debug_yaml
 
@@ -290,6 +291,73 @@ def test_create_debug_yaml_file_matches_the_string(my_predbat=None):
     return 1 if failed else 0
 
 
+class _DiscoveryComponentsStub:
+    """Minimal stand-in for Components: .coordinator plus the registry surface
+    Coordinator._component_status() reads on every assemble() call, as create_debug_yaml() expects."""
+
+    def __init__(self, coordinator):
+        """Hold the coordinator; every reported component is treated as known, active and alive."""
+        self.coordinator = coordinator
+
+    def get_all(self):
+        """Every component name the registry knows about - just whoever has reported, here."""
+        return sorted(self.coordinator.reports)
+
+    def is_active(self, name):
+        """Whether the named component was constructed - always, in this stub."""
+        return True
+
+    def is_alive(self, name):
+        """Whether the named component is running and fresh - always, in this stub."""
+        return True
+
+    def load_error(self, name):
+        """Why the named component failed to construct - never, in this stub."""
+        return None
+
+
+def test_debug_yaml_includes_redacted_discovery_catalogue(my_predbat=None):
+    """
+    create_debug_yaml() gains a "discovery" key sourced from the coordinator's redacted catalogue,
+    and a seeded MPAN must not appear in it - the same reachability contract this module enforces
+    for every other member, now extended to the discovery catalogue coordinator.py adds.
+
+    catalogue() re-assembles on every call (final review: a frozen assemble()-once snapshot would
+    have missed anything reported after the startup barrier - see coordinator.py's catalogue()
+    docstring), so create_debug_yaml()'s own call to it exercises _component_status()'s registry
+    reads for real; _DiscoveryComponentsStub supplies them rather than a bare .coordinator
+    attribute. my_predbat.components is restored afterwards regardless of what the shared fixture
+    was carrying beforehand - another test in this suite, test_github.py's
+    _MockComponentsWithStorage, sets my_predbat.components and never restores it, so by the time
+    tests run in full-suite order this can already be some unrelated registry stub.
+    """
+    failed = False
+    print("**** Testing create_debug_yaml() includes the redacted discovery catalogue ****")
+
+    original_components = my_predbat.components
+    try:
+        coordinator = Coordinator(my_predbat)
+        coordinator.salt = "test-salt-debug-yaml-scope"
+        coordinator.report("octopus", {"meters": [{"device_id": "octopus:m", "direction": "import", "account_ids": {"mpan": "1234567890123"}}]})
+        my_predbat.components = _DiscoveryComponentsStub(coordinator)
+
+        text = my_predbat.create_debug_yaml(write_file=False)
+        debug = yaml.unsafe_load(text)
+
+        if "discovery" not in debug:
+            print("ERROR: the debug yaml is missing the 'discovery' key")
+            failed = True
+        elif "1234567890123" in str(debug["discovery"]):
+            print("ERROR: the seeded MPAN survived, unredacted, into the debug yaml's discovery catalogue")
+            failed = True
+    finally:
+        my_predbat.components = original_components
+
+    if not failed:
+        print("PASS: the debug yaml carries the redacted discovery catalogue, with the seeded MPAN pseudonymised")
+    return 1 if failed else 0
+
+
 def run_debug_yaml_scope_tests(my_predbat):
     """Run every create_debug_yaml() scope test, returning a non-zero count on failure."""
     failed = 0
@@ -298,4 +366,5 @@ def run_debug_yaml_scope_tests(my_predbat):
     failed += test_per_key_dump_loads_as_one_document(my_predbat)
     failed += test_per_key_dump_bounds_the_node_tree(my_predbat)
     failed += test_create_debug_yaml_file_matches_the_string(my_predbat)
+    failed += test_debug_yaml_includes_redacted_discovery_catalogue(my_predbat)
     return failed
