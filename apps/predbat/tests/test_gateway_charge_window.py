@@ -1,11 +1,12 @@
 """Joined engine window, Hub JSON and applied-ACK regressions."""
+# cspell:ignore excepthook
 
 import asyncio
 import datetime
 import json
 import types
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from gateway import GatewayMQTT
 from inverter import Inverter
@@ -149,6 +150,23 @@ class TestGatewayChargeWindow(unittest.TestCase):
         self.assertEqual(base.control_ledger.record_write.call_count, 2)
         self.apply(inverter)
         self.assertEqual(len(wire), 1)
+
+    def test_async_timer_publication_exception_never_becomes_coordinator_fallback(self):
+        """RunThread returns None on error; that must remain a failed direct write."""
+        inverter, gateway, base, wire = self.fixture(outcome="exception")
+
+        async def timer():
+            """Match the standalone timer calling synchronous execution on its loop."""
+            self.apply(inverter)
+
+        with patch("threading.excepthook") as thread_error:
+            asyncio.run(timer())
+        thread_error.assert_called_once()
+        self.assertEqual(len(wire), 1)
+        self.assertTrue(base.errors)
+        inverter.write_and_poll_option.assert_not_called()
+        inverter.write_and_poll_switch.assert_not_called()
+        self.assertFalse(any("Updated start and end" in line for line in base.logs))
 
     def test_read_only_or_mismatched_entity_ownership_refuses_without_publication(self):
         """Never route a Cloud endpoint or user read-only window to the Hub."""

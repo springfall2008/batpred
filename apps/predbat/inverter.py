@@ -3507,6 +3507,8 @@ class Inverter:
             return False
         if not all(self.check_write_entity("write_and_poll_gateway_charge_window", name, entity, value) for name, entity, value in zip(names, entities, target)):
             return False
+        if gateway.charge_window_uses_staging(*entities):
+            return None  # Coordinator slot staging must precede its enable write.
 
         def read_pair():
             """Read both endpoint entities without substituting desired values."""
@@ -3527,9 +3529,7 @@ class Inverter:
             except Exception as error:
                 self.base.log(f"Warn: Inverter {self.id} Hub charge window publication failed: {error}")
                 break
-            if published is None:
-                return None  # Coordinator slot staging must precede its enable write.
-            if not published:
+            if published is not True:
                 break
             self._poll_after_write(entities[0], lambda state: state == new_start and self.base.get_state_wrapper(entities[1], refresh=True) == new_end)
             verified = read_pair() == target
