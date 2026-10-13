@@ -3799,11 +3799,19 @@ class Octopus:
             # Octopus zeros chargeKwh once it calculates the car has hit its target SoC, but the
             # dispatch window stays open and the charger may still draw power. Preserve active slots
             # with a duration-based kwh so the "Hold for car" guard in execute.py still fires.
+            # The cap is counted from the dispatch's own start, as rate_add_io_slots() counts it, so the
+            # part already gone is kept as a part with no load: it uses the budget and emits nothing.
+            dispatch_start, dispatch_end = start_minutes, end_minutes
+            parts = []
             if kwh == 0 and start_minutes <= self.minutes_now < end_minutes:
                 remaining_minutes = end_minutes - self.minutes_now
                 kwh = remaining_minutes * self.car_charging_rate[car_n] / 60.0
+                if start_minutes < self.minutes_now:
+                    parts.append((start_minutes, self.minutes_now, 0))
                 start_minutes = self.minutes_now  # align span with the synthesised kwh so downstream rate calculations are consistent
             if kwh > 0:
+                parts.append((start_minutes, end_minutes, kwh))
+            for start_minutes, end_minutes, kwh in parts:
                 # Don't add overlapping slots, bug in Octopus API means that sometimes slots overlap.
                 # Subtract every already-decoded slot's span from this slot's remaining segments -
                 # a slot can be trimmed at the start, trimmed at the end, removed entirely (it's
@@ -3817,7 +3825,7 @@ class Octopus:
                 original_span = end_minutes - start_minutes
                 segments = [(start_minutes, end_minutes)]
                 for current_slot in slots_decoded:
-                    current_start, current_end, current_kwh, current_source, current_location = current_slot
+                    current_start, current_end = current_slot[0], current_slot[1]
                     remaining = []
                     for seg_start, seg_end in segments:
                         if seg_start < current_end and seg_end > current_start:
@@ -3837,14 +3845,14 @@ class Octopus:
                     if seg_start == seg_end:
                         continue
                     seg_kwh = kwh * (seg_end - seg_start) / original_span if (split and original_span > 0) else kwh
-                    slots_decoded.append((seg_start, seg_end, seg_kwh, source, location))
+                    slots_decoded.append((seg_start, seg_end, seg_kwh, source, location, dispatch_start, dispatch_end))
 
         # Sort slots by start time
         slots_sorted = sorted(slots_decoded, key=lambda x: x[0])
 
         # Add in the current charging slot
         for slot in slots_sorted:
-            start_minutes, end_minutes, kwh, source, location = slot
+            start_minutes, end_minutes, kwh, source, location, dispatch_start, dispatch_end = slot
 
             # Determine rate for this slot, applying the midday-to-midday cap. A slot that only
             # partly fits the remaining daily budget is split at the point the budget runs out -
@@ -3860,8 +3868,10 @@ class Octopus:
             charger_schedule = source == DISPATCH_SOURCE_CHARGER_SCHEDULE
             if charger_schedule:
                 chunks = self.split_slot_by_rate(start_minutes, end_minutes, kwh)
-            elif octopus_slot_low_rate and self.dispatch_billed_off_peak(source, location, end_minutes):
-                day_offset = (start_minutes - 720) // (24 * 60)
+            elif octopus_slot_low_rate and self.dispatch_billed_off_peak(source, location, dispatch_end):
+                # Eligibility and the budget's period go by the whole dispatch, not by the part of it
+                # this slot is, so every part of one dispatch is treated alike
+                day_offset = (dispatch_start - 720) // (24 * 60)
                 slot_minutes = end_minutes - start_minutes
                 low_minutes = self.take_cap_minutes(minutes_per_day, day_offset, slot_minutes, cap_minutes)
 

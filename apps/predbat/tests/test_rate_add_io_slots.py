@@ -704,6 +704,20 @@ def run_cap_minutes_tests(my_predbat, midnight_utc, time_format):
         print("\n**** Cap minutes: a single 7-hour dispatch off the half hour ****")
         slots = [dispatch((10, 40), (17, 40), 7.0)]
         failed |= run_cap_minutes_case("cap_minutes_seven_hours_offset", my_predbat, slots, 12, rates_for((630, 1020, 4.0), (1020, 1080, 10.0)), [(640, 1000, 4), (1000, 1060, 10)])
+
+        # A dispatch still running that Octopus has zeroed the kWh of: the car plan only has its load
+        # from now on, but it uses the budget from its own start, as it does in the rates. Its 60
+        # minutes are the whole cap, so the dispatch after it is over the cap in both
+        print("\n**** Cap minutes: a running zero kWh dispatch counts from its start ****")
+        slots = [dispatch((9, 30), (10, 30), 0.0), dispatch((11, 0), (11, 20))]
+        failed |= run_cap_minutes_case("cap_minutes_running_zero_kwh", my_predbat, slots, 2, rates_for((570, 630, 4.0), (660, 690, 10.0)), [(600, 630, 4), (660, 680, 10)])
+
+        # The same with a completed dispatch inside the part already gone: the minutes they share are
+        # counted once, 60 in all, so with a 90-minute cap the next 20 minutes fit and then 10 more
+        print("\n**** Cap minutes: a running zero kWh dispatch over a completed one ****")
+        slots = [dispatch((9, 40), (9, 50), 1.0), dispatch((9, 30), (10, 30), 0.0), dispatch((11, 0), (11, 20)), dispatch((11, 30), (11, 50))]
+        expected_rates = rates_for((570, 630, 4.0), (660, 690, 4.0), (690, 720, 4.0))
+        failed |= run_cap_minutes_case("cap_minutes_running_zero_kwh_overlap", my_predbat, slots, 3, expected_rates, [(600, 630, 4), (660, 680, 4), (690, 700, 4), (700, 710, 10)])
     finally:
         for key, value in saved.items():
             setattr(my_predbat, key, value)
