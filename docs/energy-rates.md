@@ -726,6 +726,12 @@ battery exports within such a rule. Set in `apps.yaml`:
   may be force exported. Every kWh that reaches the grid is PV, sent directly or stored first, and
   grid energy is only ever used on site. Use this where the rule is "only PV energy may be sold" and
   storing grid energy for your own use is allowed.
+
+  For example (ignoring losses), the battery charges 5 kWh from the grid while PV makes 5 kWh and the
+  house uses 5 kWh. The 5 kWh stored counts as PV and the house is deemed to have used the grid energy,
+  so the battery may export those 5 kWh later. Over the whole period 5 kWh was imported and used on
+  site, and the 5 kWh exported equals the PV produced. Had the battery charged 5 kWh from the grid at
+  night with no PV, that energy would be grid part: it can run the house but is never force exported.
 - **pv_equivalent**: a credit bucket that all PV production fills (including PV the house uses) and
   every kWh exported drains. The battery may force export while the bucket has credit. Direct PV
   surplus export is never limited; it only uses up credit. `export_budget_cap_kwh` (default the
