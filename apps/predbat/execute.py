@@ -609,7 +609,11 @@ class Execute:
                         else:
                             # If there is a previous set charge window, but its more than the set window minutes in the future but we are not close to it then we can leave it enabled for now
                             # saves register writes and avoids turning off the window before the inverter knows it finished
-                            if (inverter.charge_start_time_minutes != inverter.charge_end_time_minutes) and (inverter.charge_start_time_minutes - self.minutes_now) > self.set_window_minutes:
+                            # Only for an inverter with no charge enable switch, where turning the charge off means rewriting the
+                            # window itself (#2993). With a switch it is one write that leaves the times alone, and leaving it on
+                            # arms every other slot the inverter has: on a GivEnergy 3-phase the unused slots, held at 00:00-00:00,
+                            # are live for the first minute of the day and charged from the grid at full rate (#5371)
+                            if (not inverter.inv_has_charge_enable_time) and (inverter.charge_start_time_minutes != inverter.charge_end_time_minutes) and (inverter.charge_start_time_minutes - self.minutes_now) > self.set_window_minutes:
                                 self.log(
                                     "Inverter {} leaving charge window as already set and more than set_window_minutes {} away (now {} charge start time {})".format(
                                         inverter.id, self.set_window_minutes, self.time_abs_str(self.minutes_now), self.time_abs_str(inverter.charge_start_time_minutes)
