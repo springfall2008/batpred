@@ -2969,12 +2969,18 @@ class Inverter:
             try:
                 published = run_async(gateway.update_discharge_window(*entities, *target))
             except Exception as error:
+                # Only reached without a running event loop: inside one, run_async's thread hands
+                # the exception to the thread exception hook and returns None, handled just below
                 self.base.log(f"Warn: Inverter {self.id} Hub discharge window publication failed: {error}")
                 break
             if published is not True:
                 break
-            self._poll_after_write(entities[0], lambda state: state == new_start and self.base.get_state_wrapper(entities[1], refresh=True) == new_end)
+            # A refusal is final for this cycle (the identical command is not re-sent within the
+            # ack window), so stop waiting as soon as it arrives rather than polling to the timeout
+            self._poll_after_write(entities[0], lambda state: (state == new_start and self.base.get_state_wrapper(entities[1], refresh=True) == new_end) or gateway.discharge_window_refused(*entities, *target))
             verified = read_pair() == target
+            if not verified and gateway.discharge_window_refused(*entities, *target):
+                break
             if verified:
                 self.count_register_writes += 1
                 self.registers_moved += sum(old != wanted for old, wanted in zip(before, target))
@@ -3099,6 +3105,13 @@ class Inverter:
         if (new_start and new_start != old_start) or (new_end and new_end != old_end):
             gateway_window = self.write_and_poll_gateway_discharge_window(new_start or old_start, new_end or old_end)
             if gateway_window is False:
+                if force_export and old_discharge_enable and not getattr(self.base, "set_read_only", False):
+                    # The previous window is still armed: leaving it would keep exporting on a
+                    # schedule the plan has moved away from, so stop exporting until a write lands.
+                    # (Without force_export the schedule was already turned off above.)
+                    self.log("Warn: Inverter {} Hub discharge window write failed, turning off scheduled export".format(self.id))
+                    self.write_and_poll_switch("scheduled_discharge_enable", self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id), False)
+                    self.adjust_inverter_mode(False)
                 self.record_commit("export_window", (new_start, new_end, force_export), False)
                 return
             if gateway_window is True:

@@ -140,6 +140,36 @@ class TestGatewayDischargeWindow(unittest.TestCase):
         self.assertEqual((gw.cache[base.START], gw.cache[base.END], gw.cache[base.ENABLE]), ("02:55:00", "03:01:00", "on"))
         self.assertFalse(base.errors)
 
+    def test_paired_write_counts_one_write_and_both_moved_registers(self):
+        """The pair is one physical write that moves both endpoints."""
+        inv, gw, base, wire, mode = self.fixture(enabled="on")
+        self.apply(inv)
+        self.assertEqual([command["command"] for command in wire], ["set_discharge_slot"])
+        self.assertEqual((inv.count_register_writes, inv.registers_moved), (1, 2))
+
+    def test_refused_window_disables_an_already_exporting_schedule(self):
+        """A refused move must not leave the previous enabled window exporting."""
+        inv, gw, base, wire, mode = self.fixture(outcome="refused", start="02:00:00", end="04:00:00", enabled="on")
+        self.apply(inv, start="02:30:00", end="03:00:00")
+        self.assertEqual(json.loads(wire[0]["schedule_json"]), {"start": 230, "end": 300})
+        self.assertEqual((gw.cache[base.START], gw.cache[base.END]), ("02:00:00", "04:00:00"))
+        self.assertEqual(gw.cache[base.ENABLE], "off")
+        self.assertEqual([command.get("enable") for command in wire if command["command"] == "set_discharge_enable"], [False])
+        inv.adjust_inverter_mode.assert_called_once_with(False)
+        self.assertTrue(inv.commit_pending["export_window"])
+
+    def test_refusal_is_not_polled_to_timeout_or_resent(self):
+        """A refusal ends the attempt at once; the identical command is not re-sent or re-polled."""
+        inv, gw, base, wire, mode = self.fixture(outcome="refused")
+        inv.inv_write_and_poll_sleep = 3600  # any poll to timeout would hang the test
+        polls = []
+        original = inv._poll_after_write
+        inv._poll_after_write = lambda *args, **kwargs: polls.append(args) or original(*args, **kwargs)
+        self.apply(inv)
+        self.assertEqual(len(polls), 1)
+        self.assertEqual([command["command"] for command in wire], ["set_discharge_slot"])
+        self.assertTrue(base.errors)
+
     def test_unverified_pair_clears_ledger_and_cannot_activate(self):
         """Refusal, incomplete or staged ACKs, timeout and exceptions fail closed."""
         for outcome in ("refused", "partial", "staged", "timeout", "exception"):
@@ -166,15 +196,16 @@ class TestGatewayDischargeWindow(unittest.TestCase):
         self.assertFalse(inv.commit_pending["export_window"])
         self.assertEqual(json.loads(wire[-2]["schedule_json"]), {"start": 255, "end": 301})
 
-    def test_read_only_owner_and_serial_refuse(self):
+    def test_read_only_owner_and_mismatched_pair_refuse(self):
         """Do not publish across read-only or mismatched endpoint boundaries."""
-        for reason in ("read_only", "owner", "serial"):
+        for reason in ("read_only", "owner", "mismatched_pair"):
             inv, gw, base, wire, mode = self.fixture()
             if reason == "read_only":
                 base.set_read_only = True
             elif reason == "owner":
                 base.dashboard_index_app[base.END] = "gecloud"
             else:
+                # An end slot of another serial is not this start's pair
                 entity = base.END.replace("456789", "654321")
                 base.args["discharge_end_time"] = entity
                 base.dashboard_index_app[entity] = "gateway"
