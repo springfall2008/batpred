@@ -77,11 +77,14 @@ DEVICE_REFRESH_SECONDS = 60 * 60
 # burns its whole retry budget, so a refresh can run for many minutes. It runs as its own task and the
 # cycle waits this long for it before carrying on, so live status and meter data keep being published.
 SETTINGS_REFRESH_WAIT_SECONDS = 20
-# A setting whose read has failed this many periodic refreshes in a row is backed off: skipped for the
-# next refresh, then 2, 4... up to SETTING_READ_BACKOFF_MAX_SKIP refreshes, and tried again after that.
-# Its last known value is kept and published as a failed readback.
+# A setting whose read has failed this many periodic refreshes in a row, while the device answered its
+# other reads, is backed off: not read for SETTING_READ_BACKOFF_MINUTES, doubling with each further
+# failure up to SETTING_READ_BACKOFF_MAX_MINUTES, then tried again. Its last known value is kept and
+# published as a failed readback. Time-based, so no register goes unread for more than the cap whatever
+# the device's refresh cadence.
 SETTING_READ_BACKOFF_FAILURES = 3
-SETTING_READ_BACKOFF_MAX_SKIP = 6
+SETTING_READ_BACKOFF_MINUTES = 15
+SETTING_READ_BACKOFF_MAX_MINUTES = 60
 
 # An inverter under EMS control is expected to leave its own slot 1 windows spanning the whole day so
 # that they never override a command from the EMS (see #3781). Anything else is reported.
@@ -653,7 +656,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         # a settings read can tell whether a write landed after it was issued
         self.write_seq = 0
         self.recent_writes = {}
-        # serial -> setting id -> {"failures": consecutive failed reads, "skip": refreshes left to skip}
+        # serial -> setting id -> {"failures": consecutive failed reads, "until": not read again before this time}
         self.setting_read_backoff = {}
         self.default_options_stamp = None
         # Devices found by the periodic device check still waiting for their default options, kept across
@@ -2784,8 +2787,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                         future["skipped"] = False
                         future["issue_seq"] = refresh_seq
                         state = device_backoff.get(sid, None)
-                        if backoff and not first and state and state["skip"] > 0:
-                            state["skip"] -= 1
+                        if backoff and not first and state and state.get("until") and self.now_utc_exact < state["until"]:
                             future["skipped"] = True
                             future["data"] = None
                             complete.append(future)
@@ -2824,6 +2826,9 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             # A failure only counts towards backing a register off when the device answered other reads in the
             # same refresh: when nothing reads at all the device or GE Cloud is down, not that one register
             device_answered = any(future["data"] and ("value" in future["data"]) for future in complete)
+            if not first and not device_answered and any(not future["skipped"] for future in complete):
+                # Nothing answered: start every register afresh, so all are read as soon as the device is back
+                device_backoff.clear()
 
             # Wait for all the futures to complete and store results
             for future in complete:
@@ -2874,8 +2879,8 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         Track consecutive failed reads of a setting and back it off once it keeps failing
 
         An inverter can list a register it cannot serve (for example AC charge slots 8 and 9), and every
-        read of it times out through the whole retry budget. Backed off, it is skipped for 1, 2, 4... up
-        to SETTING_READ_BACKOFF_MAX_SKIP refreshes and then tried again, so it is never hidden for good.
+        read of it times out through the whole retry budget. Backed off, it is not read for 15, 30, then
+        at most 60 minutes before it is tried again, so it is never hidden for good.
         device_backoff is the device's entry in setting_read_backoff taken when the reads started, so a
         device dropped by a device list refresh meanwhile is not added back.
         """
@@ -2884,11 +2889,12 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             if state and state["failures"] >= SETTING_READ_BACKOFF_FAILURES:
                 self.log("GECloud: Device {} setting id {} ({}) read again after {} failed refreshes".format(serial, sid, name, state["failures"]))
             return
-        state = device_backoff.setdefault(sid, {"failures": 0, "skip": 0})
+        state = device_backoff.setdefault(sid, {"failures": 0, "until": None})
         state["failures"] += 1
         if state["failures"] >= SETTING_READ_BACKOFF_FAILURES:
-            state["skip"] = min(2 ** (state["failures"] - SETTING_READ_BACKOFF_FAILURES), SETTING_READ_BACKOFF_MAX_SKIP)
-            self.log("GECloud: Warn: Device {} setting id {} ({}) has failed {} refreshes in a row, skipping it for the next {} refreshes and keeping its last known value".format(serial, sid, name, state["failures"], state["skip"]))
+            minutes = min(SETTING_READ_BACKOFF_MINUTES * 2 ** (state["failures"] - SETTING_READ_BACKOFF_FAILURES), SETTING_READ_BACKOFF_MAX_MINUTES)
+            state["until"] = self.now_utc_exact + timedelta(minutes=minutes)
+            self.log("GECloud: Warn: Device {} setting id {} ({}) has failed {} refreshes in a row, not reading it for {} minutes and keeping its last known value".format(serial, sid, name, state["failures"], minutes))
 
     async def async_get_smart_device_data(self, uuid):
         """

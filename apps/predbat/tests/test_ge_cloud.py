@@ -11,7 +11,7 @@
 
 from gecloud import GECloudDirect, GECloudData, regname_to_ha
 from gecloud import GE_API_ACCOUNT, GE_API_DEVICES, GE_API_EVC_SEND_COMMAND, GE_API_INVERTER_WRITE_SETTING, GE_API_SITE
-from gecloud import GE_API_INVERTER_READ_SETTING, GE_API_INVERTER_SETTINGS, SETTING_READ_BACKOFF_MAX_SKIP
+from gecloud import GE_API_INVERTER_READ_SETTING, GE_API_INVERTER_SETTINGS, SETTING_READ_BACKOFF_MAX_MINUTES
 from gecloud import EVCCommandFailed, GECloudTerminalError, SITE_MAX_AGE_MINUTES, parse_site_export_limit
 from gecloud import DEVICE_REFRESH_SECONDS, SETTINGS_SLOW_REFRESH_SECONDS, find_ems_slot_overrides, normalise_register_time
 from utils import dp4
@@ -8839,12 +8839,15 @@ def _test_settings_read_backoff(my_predbat):
             ge.settings["inv001"] = await ge.async_get_inverter_settings("inv001", previous={})
             ge.read_values[120] = None
             read_pattern = []
-            for _ in range(9):
+            for _ in range(17):
+                # A refresh every 10 minutes, as in polling mode
+                ge._now_utc_exact += timedelta(minutes=10)
                 before = len(ge.read_calls)
                 ge.settings["inv001"] = await ge.async_get_inverter_settings("inv001", previous=ge.settings["inv001"], backoff=True)
                 read_pattern.append(any(call[1] == 120 for call in ge.read_calls[before:]))
-            # Fails 1, 2, 3 (back off 1), skip, fails 4 (back off 2), skip, skip, fails 5 (back off 4), skip
-            expected = [True, True, True, False, True, False, False, True, False]
+            # Fails 1, 2, 3 (15 min off: skip 1), fails 4 (30 min: skip 2), fails 5 (60 min: skip 5),
+            # fails 6 (capped at 60 min: skip 5), read again
+            expected = [True, True, True, False, True, False, False, True, False, False, False, False, False, True, False, False, False]
             if read_pattern != expected:
                 print("ERROR: Backoff read pattern {} expected {}".format(read_pattern, expected))
                 failed += 1
@@ -8867,7 +8870,8 @@ def _test_settings_read_backoff(my_predbat):
 
             # Good again: read on the next try after the backoff, and the flag and backoff are cleared
             ge.read_values[120] = "03:00"
-            for _ in range(SETTING_READ_BACKOFF_MAX_SKIP + 1):
+            for _ in range(SETTING_READ_BACKOFF_MAX_MINUTES // 10 + 1):
+                ge._now_utc_exact += timedelta(minutes=10)
                 ge.settings["inv001"] = await ge.async_get_inverter_settings("inv001", previous=ge.settings["inv001"], backoff=True)
             register = ge.settings["inv001"][120]
             if register.get("value") != "03:00" or register.get("read_failed") or 120 in ge.setting_read_backoff.get("inv001", {}):
@@ -8878,15 +8882,24 @@ def _test_settings_read_backoff(my_predbat):
                 failed += 1
 
             # The device or GE Cloud being down fails every read: that is not a register it cannot serve, so
-            # nothing is backed off and every register is read again as soon as it is back
+            # nothing is backed off - even a register already backed off is read the moment the device is back
+            ge.read_values = {17: True, 120: None}
+            for _ in range(3):
+                ge._now_utc_exact += timedelta(minutes=10)
+                ge.settings["inv001"] = await ge.async_get_inverter_settings("inv001", previous=ge.settings["inv001"], backoff=True)
+            if not ge.setting_read_backoff.get("inv001", {}).get(120, {}).get("until"):
+                print("ERROR: Expected id 120 backed off before the outage: {}".format(ge.setting_read_backoff))
+                failed += 1
             ge.read_values = {17: None, 120: None}
-            for _ in range(SETTING_READ_BACKOFF_MAX_SKIP + 2):
+            for _ in range(8):
+                ge._now_utc_exact += timedelta(minutes=1)
                 ge.settings["inv001"] = await ge.async_get_inverter_settings("inv001", previous=ge.settings["inv001"], backoff=True)
             if ge.setting_read_backoff.get("inv001"):
                 print("ERROR: An outage backed registers off: {}".format(ge.setting_read_backoff))
                 failed += 1
             ge.read_values = {17: True, 120: "04:00"}
             before = len(ge.read_calls)
+            ge._now_utc_exact += timedelta(minutes=1)
             ge.settings["inv001"] = await ge.async_get_inverter_settings("inv001", previous=ge.settings["inv001"], backoff=True)
             if sorted(call[1] for call in ge.read_calls[before:]) != [17, 120] or ge.settings["inv001"][120]["value"] != "04:00":
                 print("ERROR: Registers not read on the first refresh after an outage: {}".format(ge.read_calls[before:]))
