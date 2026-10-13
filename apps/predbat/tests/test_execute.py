@@ -2394,9 +2394,27 @@ def run_execute_tests(my_predbat):
         inverter_charge_time_minutes_start=12 * 60,
         minutes_now=0,
     )
+    # The inverter still holds a window that finished, which now reads as tomorrow's, and the next planned
+    # charge is hours away. With a charge enable switch the switch goes off between windows: left on it arms
+    # every other slot the inverter has, and a GivEnergy 3-phase unit's unused 00:00-00:00 slots are live for
+    # the first minute of the day (#5371)
     failed |= run_execute_test(
         my_predbat,
         "charge_midnight2d",
+        charge_window_best=charge_window_best7d,
+        charge_limit_best=charge_limit_best,
+        assert_charge_time_enable=False,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Demand",
+        inverter_charge_time_minutes_start=30 + 24 * 60,
+    )
+    # With no switch, turning the charge off means rewriting the window, so it is left alone as before (#2993)
+    for inverter in my_predbat.inverters:
+        inverter.charge_time_enable = True
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_midnight2d_no_enable_switch",
         charge_window_best=charge_window_best7d,
         charge_limit_best=charge_limit_best,
         assert_charge_time_enable=True,
@@ -2406,6 +2424,22 @@ def run_execute_tests(my_predbat):
         assert_charge_start_time_minutes=30 + 24 * 60,
         assert_charge_end_time_minutes=-1,
         inverter_charge_time_minutes_start=30 + 24 * 60,
+        has_charge_enable_time=False,
+    )
+    # And the switch comes back on once the next window is close enough to program
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_midnight2d_window_close",
+        charge_window_best=charge_window_best7d,
+        charge_limit_best=charge_limit_best,
+        assert_charge_time_enable=True,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Demand",
+        assert_charge_start_time_minutes=22 * 60,
+        assert_charge_end_time_minutes=23 * 60,
+        inverter_charge_time_minutes_start=30 + 24 * 60,
+        minutes_now=22 * 60 - 10,
     )
 
     for inverter in my_predbat.inverters:
