@@ -158,6 +158,16 @@ class TestGatewayDischargeWindow(unittest.TestCase):
         inv.adjust_inverter_mode.assert_called_once_with(False)
         self.assertTrue(inv.commit_pending["export_window"])
 
+    def test_applied_move_of_an_exporting_schedule_keeps_it_exporting(self):
+        """The fail-safe disable is only for a failed write: a successful move stays enabled."""
+        inv, gw, base, wire, mode = self.fixture(start="02:00:00", end="04:00:00", enabled="on")
+        self.apply(inv, start="02:30:00", end="03:00:00")
+        self.assertEqual([command["command"] for command in wire], ["set_discharge_slot"])
+        self.assertEqual((gw.cache[base.START], gw.cache[base.END], gw.cache[base.ENABLE]), ("02:30:00", "03:00:00", "on"))
+        inv.adjust_inverter_mode.assert_called_once_with(True, changed_start_end=True)
+        self.assertFalse(inv.commit_pending["export_window"])
+        self.assertFalse(base.errors)
+
     def test_refusal_is_not_polled_to_timeout_or_resent(self):
         """A refusal ends the attempt at once; the identical command is not re-sent or re-polled."""
         inv, gw, base, wire, mode = self.fixture(outcome="refused")
