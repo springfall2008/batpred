@@ -80,6 +80,11 @@ class MockGECloudDirect(GECloudDirect):
         self.settings_refresh_task = None
         self.settings_refresh_started = None
         self.setting_read_backoff = {}
+        self.settings_refresh_owed = set()
+        self.settings_refresh_detached = False
+        self.settings_refresh_error = False
+        self.write_seq = 0
+        self.recent_writes = {}
         self.default_options_stamp = None
         self.pending_default_options = set()
         self.ems_disabled_ge_cloud_data = False
@@ -301,6 +306,7 @@ def test_ge_cloud(my_predbat=None):
         ("settings_read_vs_write", _test_settings_read_does_not_overwrite_newer_write, "Settings read in flight does not overwrite a newer write"),
         ("settings_read_backoff", _test_settings_read_backoff, "Persistently failing setting read is backed off and marked read_failed"),
         ("settings_refresh_departed_device", _test_settings_refresh_departed_device, "Departed device does not come back from a background refresh"),
+        ("settings_refresh_follow_ups", _test_settings_refresh_follow_ups, "Owed devices, deferred default options and failure reporting for the background refresh"),
         ("inverter_status", _test_async_get_inverter_status, "Get inverter status"),
         ("inverter_meter", _test_async_get_inverter_meter, "Get inverter meter"),
         ("status_null_leaves", _test_inverter_status_null_leaves_retained, "Null status leaves retain previous reading"),
@@ -8670,8 +8676,11 @@ def _test_settings_refresh_does_not_hold_up_live_data(my_predbat):
                 # Predbat turns discharge on while the refresh is still holding its older read of the switch
                 await ge.switch_event(ISOLATION_SWITCH, "turn_on")
             if seconds == 1500:
+                marks["held_task"] = ge.settings_refresh_task
+                # The slot changed in the meantime, so the completed refresh must bring the new value in
+                ge.read_values[120] = "05:30"
                 ge.hold_reads.set()
-            if seconds == 1560:
+            if seconds > 1500 and not ge.settings_refresh_running():
                 ge.api_stop = True
 
         ge.hold_reads.set()
@@ -8698,8 +8707,12 @@ def _test_settings_refresh_does_not_hold_up_live_data(my_predbat):
         if ge.dashboard_items.get(ISOLATION_SWITCH, {}).get("state") != "on":
             print("ERROR: The switch was not left published on: {}".format(ge.dashboard_items.get(ISOLATION_SWITCH)))
             failed += 1
-        if ge.settings_refresh_running():
-            print("ERROR: Refresh still running after the component stopped")
+        held = marks.get("held_task")
+        if held is None or held.cancelled() or not held.done():
+            print("ERROR: The held refresh did not run to completion: {}".format(held))
+            failed += 1
+        if ge.settings["inv001"][120]["value"] != "05:30" or ge.settings["inv001"][120].get("read_failed"):
+            print("ERROR: The completed refresh did not store the value it read: {}".format(ge.settings["inv001"][120]))
             failed += 1
         return failed
 
@@ -8797,6 +8810,15 @@ def _test_settings_read_does_not_overwrite_newer_write(my_predbat):
         if data != {"value": False, "context": "predbat"}:
             print("ERROR: Pending write read back as the older value: {}".format(data))
             failed += 1
+
+        # Once the write is no longer pending, a read issued after it is the inverter's own state: a change
+        # made outside Predbat since (in the GivEnergy app, say) is not masked by Predbat's earlier write
+        ge.pending_writes["inv001"] = []
+        ge.read_values[17] = False
+        await refresh(ge)
+        if ge.settings["inv001"][17]["value"] is not False:
+            print("ERROR: An earlier write masked a later change read from the inverter: {}".format(ge.settings["inv001"][17]))
+            failed += 1
         return failed
 
     return run_async(test())
@@ -8853,6 +8875,94 @@ def _test_settings_read_backoff(my_predbat):
                 failed += 1
             if ge.settings["inv001"][17].get("read_failed"):
                 print("ERROR: A good register was marked read_failed")
+                failed += 1
+
+            # The device or GE Cloud being down fails every read: that is not a register it cannot serve, so
+            # nothing is backed off and every register is read again as soon as it is back
+            ge.read_values = {17: None, 120: None}
+            for _ in range(SETTING_READ_BACKOFF_MAX_SKIP + 2):
+                ge.settings["inv001"] = await ge.async_get_inverter_settings("inv001", previous=ge.settings["inv001"], backoff=True)
+            if ge.setting_read_backoff.get("inv001"):
+                print("ERROR: An outage backed registers off: {}".format(ge.setting_read_backoff))
+                failed += 1
+            ge.read_values = {17: True, 120: "04:00"}
+            before = len(ge.read_calls)
+            ge.settings["inv001"] = await ge.async_get_inverter_settings("inv001", previous=ge.settings["inv001"], backoff=True)
+            if sorted(call[1] for call in ge.read_calls[before:]) != [17, 120] or ge.settings["inv001"][120]["value"] != "04:00":
+                print("ERROR: Registers not read on the first refresh after an outage: {}".format(ge.read_calls[before:]))
+                failed += 1
+        return failed
+
+    return run_async(test())
+
+
+def _test_settings_refresh_follow_ups(my_predbat):
+    """
+    Devices due while a refresh is still running are read by the next one; the default options pass waits
+    for fresh settings rather than running on the old ones; a failed background refresh fails the cycle
+    """
+
+    async def test():
+        failed = 0
+        with patch("gecloud.SETTINGS_REFRESH_WAIT_SECONDS", 0.05):
+            # Under an EMS the member inverter inv001 is only re-read hourly; that slot falls while a refresh
+            # of the EMS is held, so the next refresh must read it
+            ge = _make_isolation_ge_cloud(devices=("inv001", "inv002"))
+            await ge.run(seconds=0, first=True)
+            ge.polling_mode = False
+            ge.ems_device = "inv002"
+            ge.hold_reads = asyncio.Event()
+            ge.read_started.clear()
+            await asyncio.wait_for(ge.run(seconds=SETTINGS_SLOW_REFRESH_SECONDS - 600, first=False), 5)
+            await asyncio.wait_for(ge.read_started.wait(), 1)
+            await asyncio.wait_for(ge.run(seconds=SETTINGS_SLOW_REFRESH_SECONDS, first=False), 5)
+            ge.hold_reads.set()
+            await asyncio.wait_for(ge.settings_refresh_task, 5)
+            ge.hold_reads = None
+            before = len(ge.read_calls)
+            await asyncio.wait_for(ge.run(seconds=SETTINGS_SLOW_REFRESH_SECONDS + 600, first=False), 5)
+            await asyncio.wait_for(ge.settings_refresh_task, 5)
+            if not any(call[0] == "inv001" for call in ge.read_calls[before:]):
+                print("ERROR: The hourly re-read skipped behind a running refresh was lost: {}".format(ge.read_calls[before:]))
+                failed += 1
+
+            # The default options pass is due; the refresh is slow, so it runs once that refresh completes
+            ge = _make_isolation_ge_cloud()
+            option_calls = []
+
+            async def record_options(device, registers):
+                option_calls.append((device, registers[120]["value"]))
+
+            ge.enable_default_options = record_options
+            await ge.run(seconds=0, first=True)
+            ge._read_only = False
+            ge.default_options_stamp = ge.now_utc_exact - timedelta(hours=25)
+            ge.hold_reads = asyncio.Event()
+            ge.read_values[120] = "06:00"
+            await asyncio.wait_for(ge.run(seconds=600, first=False), 5)
+            if option_calls:
+                print("ERROR: Default options ran on the settings from before the refresh: {}".format(option_calls))
+                failed += 1
+            ge.hold_reads.set()
+            await asyncio.wait_for(ge.settings_refresh_task, 5)
+            if option_calls != [("inv001", "06:00")]:
+                print("ERROR: Default options did not run on the fresh settings: {}".format(option_calls))
+                failed += 1
+
+            # A refresh that raises fails the cycle, with the traceback logged, and the next cycle is clean
+            ge = _make_isolation_ge_cloud()
+            await ge.run(seconds=0, first=True)
+
+            async def broken(*args, **kwargs):
+                raise ValueError("bad register list")
+
+            ge.async_get_inverter_settings = broken
+            result = await asyncio.wait_for(ge.run(seconds=600, first=False), 5)
+            if result is not False or not any("Traceback" in message for message in ge.log_messages):
+                print("ERROR: A failed background refresh was not reported: result {}".format(result))
+                failed += 1
+            if await ge.run(seconds=660, first=False) is not True:
+                print("ERROR: The cycle after a reported refresh failure should succeed")
                 failed += 1
         return failed
 

@@ -23,6 +23,7 @@ import asyncio
 import math
 import json
 import random
+import traceback
 from component_base import ComponentBase
 from coordinator import inverter_record
 from mock_base import MockBase as SharedMockBase
@@ -642,6 +643,16 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         # The periodic settings refresh running in the background, and when it started
         self.settings_refresh_task = None
         self.settings_refresh_started = None
+        # Devices due a settings read while a refresh was still running, read by the next one
+        self.settings_refresh_owed = set()
+        # Set when the cycle that started the refresh stopped waiting for it
+        self.settings_refresh_detached = False
+        # Set when a background refresh failed, so the next cycle reports the failure
+        self.settings_refresh_error = False
+        # Every confirmed write is numbered; serial -> setting id -> (number, value) of the latest one, so
+        # a settings read can tell whether a write landed after it was issued
+        self.write_seq = 0
+        self.recent_writes = {}
         # serial -> setting id -> {"failures": consecutive failed reads, "skip": refreshes left to skip}
         self.setting_read_backoff = {}
         self.default_options_stamp = None
@@ -2260,7 +2271,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
 
         # Every store rather than just the devices polled until now, so entries that never were polled
         # (settings restored from the storage cache for hardware that has since gone) are dropped too
-        stores = (self.status, self.meter, self.info, self.settings, self.pending_writes, self.register_list, self.setting_read_backoff)
+        stores = (self.status, self.meter, self.info, self.settings, self.pending_writes, self.register_list, self.setting_read_backoff, self.recent_writes)
         for device in set().union(*stores, self.ems_slot_warned) - set(device_list):
             for store in stores:
                 store.pop(device, None)
@@ -2459,18 +2470,29 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             # back stays invisible until a restart (#5103). `first` rather than `seconds == 0` so a startup
             # that only succeeds on a backoff retry still takes the snapshot.
             refresh_devices = [device for device in self.device_list if first or (device in new_devices) or (seconds % SETTINGS_SLOW_REFRESH_SECONDS == 0) or self.polling_mode or (device == self.ems_device) or (device == self.gateway_device)]
+            settings_fresh = True
             if first or devices_changed:
                 # Automatic config below is built from these settings, so they are read before carrying on. A
                 # periodic refresh still running was started for the old device list, so it is stopped first.
                 await self.cancel_settings_refresh()
                 await self.refresh_settings(refresh_devices, use_cache=first, backoff=False)
             elif self.settings_refresh_running():
+                # Remember what was due (the hourly re-read of EMS member inverters, say), so it is read by the
+                # next refresh rather than waiting for its next turn
+                self.settings_refresh_owed.update(refresh_devices)
+                settings_fresh = False
                 self.log("GECloud: Warn: Settings refresh started {:.0f} seconds ago is still running, not starting another".format((self.now_utc_exact - self.settings_refresh_started).total_seconds()))
             else:
+                refresh_devices = [device for device in self.device_list if device in refresh_devices or device in self.settings_refresh_owed]
+                self.settings_refresh_owed.clear()
                 self.settings_refresh_started = self.now_utc_exact
+                self.settings_refresh_detached = False
                 self.settings_refresh_task = asyncio.get_running_loop().create_task(self.refresh_settings_background(refresh_devices), name="GECloudSettingsRefresh")
                 done, _ = await asyncio.wait({self.settings_refresh_task}, timeout=SETTINGS_REFRESH_WAIT_SECONDS)
                 if not done:
+                    # The refresh applies the default options and AC charge gate itself once it has fresh settings
+                    self.settings_refresh_detached = True
+                    settings_fresh = False
                     self.log("GECloud: Settings refresh of {} is taking longer than {} seconds, carrying on with live data while it completes".format(refresh_devices, SETTINGS_REFRESH_WAIT_SECONDS))
 
             # Run at startup, and again whenever the periodic device check finds the hardware has changed
@@ -2489,38 +2511,50 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             # so a failed report is retried rather than lost - see refresh_discovery().
             self.refresh_discovery()
 
-            now_utc = self.now_utc_exact
-            options_due = self.default_options_stamp is None or (now_utc - self.default_options_stamp) >= timedelta(hours=24)
-            # read_only_now() rather than the switch alone, so an active Axle event (which forces read only
-            # through the attribute) defers the pass instead of writing over Axle's control (GH#5269)
-            if not self.read_only_now():
-                if options_due:
-                    self.default_options_stamp = now_utc
-                    option_devices = self.device_list
-                else:
-                    # A device found by the periodic device check is set up now, not at the next 24 hour pass -
-                    # or, when it was found while read only, on the first settings cycle after read only ends
-                    option_devices = [device for device in self.device_list if device in self.pending_default_options]
-                self.pending_default_options.clear()
-                for device in option_devices:
-                    await self.enable_default_options(device, self.settings[device])
+            if settings_fresh:
+                await self.apply_settings_defaults()
 
-            # The 24 hour pass above is only a backstop for the AC charge gate: while a force charge is
-            # running, re-assert it on every settings refresh in case it was cleared mid-charge (GH#5269).
-            # Nothing is written while Predbat is not force charging, so an external controller is not fought.
-            for device in self.device_list:
-                if self.force_charge_on(device):
-                    await self.ensure_ac_charge_gate(device)
+        # Clear pending writes
+        for device in self.device_list:
+            if device in self.pending_writes:
+                self.pending_writes[device] = []
 
-        # Clear pending writes - unless a settings refresh is still reading, as it needs them to tell a write
-        # made while it was in flight from the older value it read back
-        if not self.settings_refresh_running():
-            for device in self.device_list:
-                if device in self.pending_writes:
-                    self.pending_writes[device] = []
+        if self.settings_refresh_error:
+            # A background settings refresh failed since the last cycle: report it as this cycle failing, as it
+            # was when the refresh ran inline
+            self.settings_refresh_error = False
+            return False
 
         self.update_success_timestamp()
         return True
+
+    async def apply_settings_defaults(self):
+        """
+        Once fresh settings are in hand: set the default options (every 24 hours, or for a new device) and
+        re-assert the AC charge gate while force charging
+        """
+        now_utc = self.now_utc_exact
+        options_due = self.default_options_stamp is None or (now_utc - self.default_options_stamp) >= timedelta(hours=24)
+        # read_only_now() rather than the switch alone, so an active Axle event (which forces read only
+        # through the attribute) defers the pass instead of writing over Axle's control (GH#5269)
+        if not self.read_only_now():
+            if options_due:
+                self.default_options_stamp = now_utc
+                option_devices = self.device_list
+            else:
+                # A device found by the periodic device check is set up now, not at the next 24 hour pass -
+                # or, when it was found while read only, on the first settings cycle after read only ends
+                option_devices = [device for device in self.device_list if device in self.pending_default_options]
+            self.pending_default_options.clear()
+            for device in option_devices:
+                await self.enable_default_options(device, self.settings[device])
+
+        # The 24 hour pass above is only a backstop for the AC charge gate: while a force charge is
+        # running, re-assert it on every settings refresh in case it was cleared mid-charge (GH#5269).
+        # Nothing is written while Predbat is not force charging, so an external controller is not fought.
+        for device in self.device_list:
+            if self.force_charge_on(device):
+                await self.ensure_ac_charge_gate(device)
 
     def settings_refresh_running(self):
         """Is a periodic settings refresh still running in the background"""
@@ -2558,6 +2592,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                 results = await self.async_get_inverter_settings(device, first=False, previous=self.settings.get(device, {}), backoff=backoff)
                 if device not in self.device_list:
                     # Gone from the account while it was being read: storing it would bring it back (#5294)
+                    self.register_list.pop(device, None)
                     continue
                 self.settings[device] = results
                 await self.publish_registers(device, results)
@@ -2574,14 +2609,17 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         """The periodic settings refresh, run as its own task so a slow one does not hold up live data"""
         try:
             await self.refresh_settings(devices, backoff=True)
+            elapsed = (self.now_utc_exact - self.settings_refresh_started).total_seconds() if self.settings_refresh_started else 0
+            if self.settings_refresh_detached:
+                self.log("GECloud: Settings refresh of {} completed after {:.0f} seconds".format(devices, elapsed))
+                # The cycle that started this refresh moved on without it, so apply the defaults here
+                await self.apply_settings_defaults()
         except asyncio.CancelledError:
             raise
         except Exception as e:
             self.log("GECloud: Error: Settings refresh failed: {}".format(e))
-            return
-        elapsed = (self.now_utc_exact - self.settings_refresh_started).total_seconds() if self.settings_refresh_started else 0
-        if elapsed > SETTINGS_REFRESH_WAIT_SECONDS:
-            self.log("GECloud: Settings refresh of {} completed after {:.0f} seconds".format(devices, elapsed))
+            self.log("Error: " + traceback.format_exc())
+            self.settings_refresh_error = True
 
     async def async_send_evc_command(self, uuid, command, params):
         """
@@ -2678,6 +2716,8 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                     await asyncio.sleep(random.random() * (3 + retry))
                 else:
                     self.pending_writes[serial].append({"setting_id": setting_id, "value": data_value})
+                    self.write_seq += 1
+                    self.recent_writes.setdefault(serial, {})[setting_id] = (self.write_seq, data_value)
                     # Update the register held in the cache now rather than leaving it to the caller: a settings
                     # refresh can replace the cached register while this write is in flight, and the caller
                     # would then update the replaced one and the cache would keep the value read before the write
@@ -2716,6 +2756,8 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             complete = []
             loop = asyncio.get_running_loop()
             device_backoff = self.setting_read_backoff.setdefault(serial, {})
+            # Writes numbered after this were confirmed after the reads below began
+            refresh_seq = self.write_seq
 
             # Create the read tasks
             for setting in self.register_list[serial]:
@@ -2740,6 +2782,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                         future["validation_rules"] = validation_rules
                         future["validation"] = validation
                         future["skipped"] = False
+                        future["issue_seq"] = refresh_seq
                         state = device_backoff.get(sid, None)
                         if backoff and not first and state and state["skip"] > 0:
                             state["skip"] -= 1
@@ -2754,6 +2797,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                 while pending or futures:
                     while len(futures) < MAX_THREADS and pending:
                         future = pending.pop(0)
+                        future["issue_seq"] = self.write_seq
                         if not first:
                             future["future"] = loop.create_task(self.async_read_inverter_setting(future["serial"], future["sid"]), name=f"ReadSetting-{future['sid']}")
                         futures.append(future)
@@ -2777,6 +2821,10 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                     await asyncio.wait(outstanding)
                 raise
 
+            # A failure only counts towards backing a register off when the device answered other reads in the
+            # same refresh: when nothing reads at all the device or GE Cloud is down, not that one register
+            device_answered = any(future["data"] and ("value" in future["data"]) for future in complete)
+
             # Wait for all the futures to complete and store results
             for future in complete:
                 sid = future["sid"]
@@ -2789,7 +2837,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                 else:
                     value = None
 
-                if not first and not future["skipped"]:
+                if not first and not future["skipped"] and (value is not None or device_answered):
                     self.record_setting_read(device_backoff, serial, sid, name, value is not None)
 
                 if value is None:
@@ -2810,15 +2858,15 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                         "validation": validation,
                     }
 
-        # A write confirmed while these reads were in flight is newer than what they read back, so it wins
-        # (the same rule async_read_inverter_setting applies to a read issued after the write)
-        for pending_write in self.pending_writes.get(serial, []):
-            sid = pending_write["setting_id"]
-            if sid in results:
-                written = dict(results[sid])
-                written["value"] = pending_write["value"]
-                written.pop("read_failed", None)
-                results[sid] = written
+            # A write confirmed after a register's read was issued is newer than what that read returns, so it wins
+            # (a read issued after the write already reads back the pending write, see async_read_inverter_setting)
+            issued = {future["sid"]: future["issue_seq"] for future in complete}
+            for sid, (seq, value) in self.recent_writes.get(serial, {}).items():
+                if sid in results and seq > issued.get(sid, refresh_seq):
+                    written = dict(results[sid])
+                    written["value"] = value
+                    written.pop("read_failed", None)
+                    results[sid] = written
         return results
 
     def record_setting_read(self, device_backoff, serial, sid, name, success):
