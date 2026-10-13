@@ -1,4 +1,5 @@
 """Joined engine discharge window, command serialization and ACK regressions."""
+
 # cspell:ignore excepthook
 
 import asyncio
@@ -208,6 +209,16 @@ class TestGatewayDischargeWindow(unittest.TestCase):
             self.apply(inv)
             self.assertEqual([json.loads(command["schedule_json"]) for command in wire if command["command"] == "set_discharge_slot"], [{"start": 255}, {"end": 301}])
             self.assertEqual(wire[-1]["command"], "set_discharge_enable")
+
+    def test_coordinator_with_partial_ownership_keeps_staged_sequence(self):
+        """A coordinator is identified before ownership checks, so it is never refused by them."""
+        for kind in GATEWAY_COORDINATOR_TYPES:
+            inv, gw, base, wire, mode = self.fixture()
+            gw._discovery = {"CE123456789": {"type": kind}}
+            base.dashboard_index_app[base.END] = None
+            self.apply(inv)
+            self.assertFalse(any("inconsistent entity ownership" in error for error in base.errors), kind)
+            self.assertEqual([json.loads(command["schedule_json"]) for command in wire if command["command"] == "set_discharge_slot"], [{"start": 255}, {"end": 301}])
 
     def test_disable_and_midnight_zero_window_remain_valid(self):
         """A disable request never activates export and may program midnight endpoints."""
