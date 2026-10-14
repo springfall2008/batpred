@@ -4186,7 +4186,11 @@ The default options passed in are:
 
 #### discharge_freeze_service
 
-If defined, called for an explicit discharge freeze; otherwise `discharge_stop_service` is used, not a new forced export.
+For an **explicit discharge freeze request** with a target below 100%, Predbat first calls `charge_stop_service`, then calls `discharge_freeze_service` if it is configured. If the freeze service is absent, it calls `discharge_stop_service` instead; it does not fall back to starting a forced export.
+
+Reaching the target during an ordinary export is different: without an explicit freeze request, a target at or above current SoC calls `discharge_stop_service`, not `discharge_freeze_service`. These are the existing v9.4.0 routes. Stopping forced export is not necessarily a hold against normal household discharge or PV charging; the actual freeze behaviour depends on the inverter's supported controls.
+
+As with charge services, an explicit `[]` is a handled no-op and a failed configured freeze is not treated as an absent hook. For the idle/stop-export call (target 100%), an absent `discharge_stop_service` falls back to `charge_stop_service` as described below; the explicit empty stop list in the Deye template prevents that fallback from cancelling a charge.
 
 #### discharge_stop_service
 
