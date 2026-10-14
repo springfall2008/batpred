@@ -2799,7 +2799,9 @@ To run PredBat with Solis hybrid inverters with firmware level FB00 or later (yo
 
 ## Deye Solarman local
 
-**Experimental - grid charging and ordinary self-consumption only; not field commissioned.**
+**Experimental - tested for grid charging and ordinary self-consumption on a Deye SUN-16K-SG01LP1-EU using local Solarman.**
+
+This template has been used on a real home installation, not only in software tests. Home Assistant observations and recorded telemetry support its charge/self-consumption operation on that installation. This does not establish compatibility with every Deye model or firmware, forced export, or failure recovery. Check the entities and options exposed by your own Solarman profile before enabling control.
 
 Use the shared [deye_solarman.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/deye_solarman.yaml) with [ha-solarman](https://github.com/davidrapan/ha-solarman). Its entity names and options follow the integration's [deye_hybrid profile](https://github.com/davidrapan/ha-solarman/blob/main/custom_components/solarman/inverter_definitions/deye_hybrid.yaml); verify compatibility with your exact model and firmware. This is a custom `DeyeSolarman` profile defined in `apps.yaml`, not a new built-in inverter type or a Deye Cloud connection.
 
