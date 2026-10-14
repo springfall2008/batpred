@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Wallbox Component — Design - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Wallbox Component \u2014 Design";
+        var mkdocs_page_input_path = "superpowers/specs/2026-10-05-wallbox-component-design.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../discovery-catalogue/">Discovery Catalogue</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Wallbox Component — Design</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="wallbox-component-design">Wallbox Component — Design</h1>
+<p>Date: 2026-10-05
+Status: Awaiting review</p>
+<h2 id="1-purpose">1. Purpose</h2>
+<p>Add Wallbox EV charger support to Predbat as a pluggable cloud component, so a Wallbox
+works without Home Assistant (Predbat.com and Docker) and without the regex wiring that
+<a href="../../../devices/">docs/devices.md</a> describes today.</p>
+<p>Scope:</p>
+<ul>
+<li>Monitoring of every charger on one Wallbox account, published as Predbat entities.</li>
+<li>Automatic configuration wiring those entities into the <code>car_charging_*</code> arguments.</li>
+<li>Manual controls: pause/resume, lock, maximum charging current and Eco-Smart mode.</li>
+<li>Opt-in Predbat-led charging, where the car plan pauses and resumes the charger.</li>
+<li>A command line test mode that doubles as the tool for capturing real payloads.</li>
+</ul>
+<p>The reference for the API is the Home Assistant <code>wallbox</code> integration and the <code>wallbox</code>
+PyPI library (v0.9.0) it wraps. That library is synchronous <code>requests</code>, so its calls are
+reimplemented in <code>aiohttp</code> and no dependency is added.</p>
+<h2 id="2-the-wallbox-api">2. The Wallbox API</h2>
+<p>Two hosts: <code>https://user-api.wall-box.com/</code> for authentication and
+<code>https://api.wall-box.com/</code> for everything else.</p>
+<h3 id="21-authentication">2.1 Authentication</h3>
+<table>
+<thead>
+<tr>
+<th>Call</th>
+<th>Request</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Sign in</td>
+<td><code>GET user-api…/users/signin</code>, HTTP Basic (username, password), header <code>Partner: wallbox</code></td>
+<td>403 means bad credentials</td>
+</tr>
+<tr>
+<td>Refresh</td>
+<td><code>GET user-api…/users/refresh-token</code>, <code>Authorization: Bearer &lt;refresh token&gt;</code>, header <code>Partner: wallbox</code></td>
+<td>401 means the refresh token was revoked: fall back to sign in</td>
+</tr>
+</tbody>
+</table>
+<p>Both return <code>data.attributes</code> with <code>token</code>, <code>refresh_token</code>, <code>ttl</code> and
+<code>refresh_token_ttl</code>. The two TTLs are absolute expiry times in epoch milliseconds. Every
+other call sends <code>Authorization: Bearer &lt;token&gt;</code>, <code>Accept: application/json</code> and
+<code>Content-Type: application/json;charset=UTF-8</code>.</p>
+<h3 id="22-endpoints-used">2.2 Endpoints used</h3>
+<table>
+<thead>
+<tr>
+<th>Purpose</th>
+<th>Request</th>
+<th>Body</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>List chargers</td>
+<td><code>GET v3/chargers/groups</code></td>
+<td>ids at <code>result.groups[].chargers[].id</code></td>
+</tr>
+<tr>
+<td>Charger status</td>
+<td><code>GET chargers/status/{id}</code></td>
+<td>see 2.3</td>
+</tr>
+<tr>
+<td>Pause / resume</td>
+<td><code>POST v3/chargers/{id}/remote-action</code></td>
+<td><code>{"action": 2}</code> / <code>{"action": 1}</code></td>
+</tr>
+<tr>
+<td>Resume schedule</td>
+<td><code>POST v3/chargers/{id}/remote-action</code></td>
+<td><code>{"action": 9}</code></td>
+</tr>
+<tr>
+<td>Lock / unlock</td>
+<td><code>PUT v2/charger/{id}</code></td>
+<td><code>{"locked": 1}</code> / <code>{"locked": 0}</code></td>
+</tr>
+<tr>
+<td>Max charging current</td>
+<td><code>PUT v2/charger/{id}</code></td>
+<td><code>{"maxChargingCurrent": &lt;amps&gt;}</code></td>
+</tr>
+<tr>
+<td>Eco-Smart</td>
+<td><code>PUT v4/chargers/{id}/eco-smart</code></td>
+<td><code>{"data": {"attributes": {"enabled": 0\|1, "mode": 0\|1}, "type": "eco_smart"}}</code></td>
+</tr>
+</tbody>
+</table>
+<p>Any call can return 429 (too many requests). The writes can return 403: seen live for a pause sent
+to a locked charger, and treated by the Home Assistant integration as missing admin rights.
+They return 409 when the action does not apply in the charger's state, such as a resume
+with nothing paused.</p>
+<h3 id="23-status-fields-used">2.3 Status fields used</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>status_id</code></td>
+<td>Numeric state, see 2.4</td>
+</tr>
+<tr>
+<td><code>charging_power</code></td>
+<td>kW</td>
+</tr>
+<tr>
+<td><code>added_energy</code></td>
+<td>kWh delivered this session; resets for each session</td>
+</tr>
+<tr>
+<td><code>max_available_power</code></td>
+<td>Upper bound for the charging current, in amps despite the name</td>
+</tr>
+<tr>
+<td><code>name</code></td>
+<td>Charger name</td>
+</tr>
+<tr>
+<td><code>config_data.max_charging_current</code></td>
+<td>Amps</td>
+</tr>
+<tr>
+<td><code>config_data.locked</code></td>
+<td>Lock state</td>
+</tr>
+<tr>
+<td><code>config_data.serial_number</code>, <code>.part_number</code>, <code>.software.currentVersion</code></td>
+<td>Identity</td>
+</tr>
+<tr>
+<td><code>config_data.operation_mode</code></td>
+<td><code>ocpp</code> when an OCPP backend runs the charger; published as an attribute of the status sensor. Seen live: such a charger stays Locked and an API unlock has no effect. Plan-led control skips a charger in this mode, with one warning</td>
+</tr>
+<tr>
+<td><code>config_data.timezone</code>, <code>.country.iso2</code>, <code>.zipcode</code></td>
+<td>Location, published as attributes of the status sensor</td>
+</tr>
+<tr>
+<td><code>config_data.ecosmart.enabled</code>, <code>.mode</code></td>
+<td>Absent when the charger has no Eco-Smart; mode 0 is eco, 1 is full solar</td>
+</tr>
+</tbody>
+</table>
+<p>The payload has a <code>state_of_charge</code> field, but a Type 2 connector cannot report the car's
+state of charge, so it is not read.</p>
+<h3 id="24-status-codes">2.4 Status codes</h3>
+<table>
+<thead>
+<tr>
+<th>Codes</th>
+<th>State</th>
+<th>Connected</th>
+<th>Charging</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>193, 194, 195</td>
+<td>Charging</td>
+<td>yes</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>196</td>
+<td>Discharging</td>
+<td>yes</td>
+<td>no</td>
+</tr>
+<tr>
+<td>178, 182</td>
+<td>Paused</td>
+<td>yes</td>
+<td>no</td>
+</tr>
+<tr>
+<td>177, 179</td>
+<td>Scheduled</td>
+<td>yes</td>
+<td>no</td>
+</tr>
+<tr>
+<td>164, 180, 181, 183–189</td>
+<td>Waiting: the car is connected and the charger is waiting for it to draw energy</td>
+<td>yes</td>
+<td>no</td>
+</tr>
+<tr>
+<td>210</td>
+<td>Locked, car connected</td>
+<td>yes</td>
+<td>no</td>
+</tr>
+<tr>
+<td>165, 209</td>
+<td>Locked</td>
+<td>no</td>
+<td>no</td>
+</tr>
+<tr>
+<td>161, 162</td>
+<td>Ready</td>
+<td>no</td>
+<td>no</td>
+</tr>
+<tr>
+<td>0, 163</td>
+<td>Disconnected</td>
+<td>no</td>
+<td>no</td>
+</tr>
+<tr>
+<td>166</td>
+<td>Updating</td>
+<td>no</td>
+<td>no</td>
+</tr>
+<tr>
+<td>14, 15</td>
+<td>Error</td>
+<td>no</td>
+<td>no</td>
+</tr>
+<tr>
+<td>anything else</td>
+<td>Unknown</td>
+<td>no</td>
+<td>no</td>
+</tr>
+</tbody>
+</table>
+<p>The published status text is the finer Home Assistant wording (for example "Waiting in
+queue by Power Boost"), so entity states match what existing users already see.</p>
+<h2 id="3-architecture">3. Architecture</h2>
+<p>One new file, <code>apps/predbat/wallbox.py</code>, in the shape of <code>myenergi.py</code>:</p>
+<ul>
+<li><code>WallboxCharger</code> — a dataclass holding one charger's normalised state: id, name,
+  serial, status id, status text, connected, charging, paused, locked, power in watts,
+  session energy, max charging current, max available current and Eco-Smart mode
+  (<code>None</code> when unsupported).</li>
+<li><code>normalise_charger(charger_id, payload)</code> — a pure function from a status payload to a
+  <code>WallboxCharger</code>. Missing or malformed fields give safe defaults, never an exception.</li>
+<li><code>WallboxTransport</code> — owns the tokens and every HTTP call. A new <code>aiohttp.ClientSession</code>
+  per request with a 30 second total timeout, as myenergi does. Raises <code>WallboxAuthError</code>
+  (bad credentials), <code>WallboxRateLimitError</code> (429), <code>WallboxRefusedError</code> (403 on a
+  write) or <code>WallboxApiError</code>, all under <code>WallboxError</code>. Every call is recorded with
+  <code>record_api_call("wallbox", …)</code>.</li>
+<li><code>WallboxAPI(ComponentBase)</code> — polling, publishing, event handling, automatic
+  configuration and plan-led control. It never touches <code>aiohttp</code>.</li>
+</ul>
+<p>The transport checks the token before each call: reuse it while it has more than
+<code>poll_seconds</code> left, otherwise refresh, otherwise sign in. Tokens are held in memory
+only, so a restart costs one sign in.</p>
+<h2 id="4-configuration">4. Configuration</h2>
+<h3 id="41-component_list-entry-componentspy">4.1 <code>COMPONENT_LIST</code> entry (<code>components.py</code>)</h3>
+<pre><code class="language-python">&quot;wallbox&quot;: {
+    &quot;class&quot;: &quot;wallbox.WallboxAPI&quot;,
+    &quot;name&quot;: &quot;Wallbox Charger&quot;,
+    &quot;event_filter&quot;: &quot;predbat_wallbox_&quot;,
+    &quot;args&quot;: {
+        &quot;username&quot;: {&quot;required&quot;: True, &quot;secret&quot;: True, &quot;config&quot;: &quot;wallbox_username&quot;},
+        &quot;password&quot;: {&quot;required&quot;: True, &quot;secret&quot;: True, &quot;config&quot;: &quot;wallbox_password&quot;},
+        &quot;automatic&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;wallbox_automatic&quot;, &quot;default&quot;: True},
+        &quot;wallbox_control&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;wallbox_control&quot;, &quot;default&quot;: False},
+        &quot;poll_seconds&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;wallbox_poll_seconds&quot;, &quot;default&quot;: 120},
+    },
+    &quot;phase&quot;: 1,
+    &quot;can_restart&quot;: True,
+},
+</code></pre>
+<p>There is no switch to hide the manual controls: they are always published.</p>
+<h3 id="42-apps_schema-additions-configpy">4.2 <code>APPS_SCHEMA</code> additions (<code>config.py</code>)</h3>
+<pre><code class="language-python">&quot;wallbox_username&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;empty&quot;: False},
+&quot;wallbox_password&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;empty&quot;: False},
+&quot;wallbox_automatic&quot;: {&quot;type&quot;: &quot;boolean&quot;},
+&quot;wallbox_control&quot;: {&quot;type&quot;: &quot;boolean&quot;},
+&quot;wallbox_poll_seconds&quot;: {&quot;type&quot;: &quot;integer&quot;, &quot;zero&quot;: False},
+</code></pre>
+<p><code>wallbox_poll_seconds</code> is rounded to a multiple of 60 and clamped to 60–1800, as
+myenergi's is, so the 60 minute component health window can never be tripped by config.</p>
+<h2 id="5-published-entities">5. Published entities</h2>
+<p>Per charger, with <code>&lt;p&gt;</code> = <code>{prefix}_wallbox_{charger_id}</code>, all through <code>dashboard_item</code>
+with <code>app="wallbox"</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Entity</th>
+<th>State</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>sensor.&lt;p&gt;_status</code></td>
+<td>Status text</td>
+<td>attributes: <code>status_id</code>, <code>name</code>, <code>serial_number</code>, <code>part_number</code>, <code>software_version</code></td>
+</tr>
+<tr>
+<td><code>sensor.&lt;p&gt;_power</code></td>
+<td>Watts</td>
+<td><code>charging_power</code> × 1000</td>
+</tr>
+<tr>
+<td><code>sensor.&lt;p&gt;_session_energy</code></td>
+<td>kWh</td>
+<td><code>added_energy</code></td>
+</tr>
+<tr>
+<td><code>binary_sensor.&lt;p&gt;_connected</code></td>
+<td>on/off</td>
+<td>from 2.4</td>
+</tr>
+<tr>
+<td><code>binary_sensor.&lt;p&gt;_charging</code></td>
+<td>on/off</td>
+<td>from 2.4</td>
+</tr>
+<tr>
+<td><code>switch.&lt;p&gt;_charging</code></td>
+<td>on/off</td>
+<td>on resumes, off pauses</td>
+</tr>
+<tr>
+<td><code>switch.&lt;p&gt;_locked</code></td>
+<td>on/off</td>
+<td></td>
+</tr>
+<tr>
+<td><code>number.&lt;p&gt;_max_charging_current</code></td>
+<td>Amps</td>
+<td>min 6, max <code>max_available_power</code>, step 1</td>
+</tr>
+<tr>
+<td><code>select.&lt;p&gt;_eco_smart</code></td>
+<td><code>off</code> / <code>eco_mode</code> / <code>full_solar</code></td>
+<td>only when the charger reports Eco-Smart</td>
+</tr>
+</tbody>
+</table>
+<p>Global: <code>switch.{prefix}_wallbox_control</code>, published only while plan-led control is
+available (section 7).</p>
+<h2 id="6-automatic-configuration">6. Automatic configuration</h2>
+<p>Runs after the first successful poll when <code>wallbox_automatic</code> is on, and again only when a
+charger is added to the account. Car order comes from the account's charger list in numeric
+id order and is append-only while Predbat runs, so charger N is car N even when a status
+read fails, and a charger added later becomes the next car. All through <code>set_arg_auto</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>car_charging_energy</code></td>
+<td>list of <code>sensor.&lt;p&gt;_session_energy</code></td>
+</tr>
+<tr>
+<td><code>car_charging_planned</code></td>
+<td>list of <code>binary_sensor.&lt;p&gt;_connected</code></td>
+</tr>
+<tr>
+<td><code>car_charging_power</code></td>
+<td>list of <code>sensor.&lt;p&gt;_power</code></td>
+</tr>
+<tr>
+<td><code>car_charging_now</code></td>
+<td>the same power list, with <code>overwrite=False</code></td>
+</tr>
+<tr>
+<td><code>num_cars</code></td>
+<td>raised to the number of chargers if lower, via <code>set_arg</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>car_charging_soc</code> is not set: the charger cannot know it. Users who want Predbat to plan
+to a target must supply it from their car's own integration, and the docs say so.
+<code>car_charging_now</code> relies on the existing rule that a power sensor counts as charging
+from <code>CAR_CHARGING_NOW_POWER_W</code> (200 W).</p>
+<h2 id="7-controls">7. Controls</h2>
+<h3 id="71-manual">7.1 Manual</h3>
+<p>Event stubs queue <code>(handler, args)</code> and the queue is drained at the top of the next
+<code>run()</code>, as both existing chargers do. Each successful write is followed by an immediate
+re-poll of that charger so the entity reflects the result.</p>
+<table>
+<thead>
+<tr>
+<th>Entity</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>switch.&lt;p&gt;_charging</code></td>
+<td>on → resume, off → pause</td>
+</tr>
+<tr>
+<td><code>switch.&lt;p&gt;_locked</code></td>
+<td>lock / unlock</td>
+</tr>
+<tr>
+<td><code>number.&lt;p&gt;_max_charging_current</code></td>
+<td>set, clamped to 6..<code>max_available_power</code></td>
+</tr>
+<tr>
+<td><code>select.&lt;p&gt;_eco_smart</code></td>
+<td><code>off</code> disables; <code>eco_mode</code> and <code>full_solar</code> enable with mode 0 and 1</td>
+</tr>
+</tbody>
+</table>
+<p>A failed write logs a warning and does not fail the component.</p>
+<h3 id="72-predbat-led-charging-wallbox_control">7.2 Predbat-led charging (<code>wallbox_control</code>)</h3>
+<p>Available when <code>wallbox_control</code> and <code>wallbox_automatic</code> are both on. The user can then
+turn it on and off at runtime with <code>switch.{prefix}_wallbox_control</code>.</p>
+<p>Each poll, for each charger N, read the <code>planned</code> attribute of
+<code>binary_sensor.{prefix}_car_charging_slot</code> (suffix <code>_N</code> for N &gt; 0) and parse it with the
+shared <code>utils.parse_car_plan_windows</code> / <code>in_car_plan_window</code>:</p>
+<ul>
+<li>Inside a window and the charger is Paused → resume.</li>
+<li>Outside a window and the charger is Charging → pause, and record that Predbat paused it.</li>
+<li>Any other state → no action. Resume applies only to a Paused charger: one in Scheduled
+  is following its own schedule and one in Waiting is waiting on the car, so neither is
+  sent anything.</li>
+<li>A locked charger is sent neither pause nor resume, by plan-led control, by release or by
+  the manual switch: Wallbox refuses both while it is locked (seen live: 403 and 409).
+  Plan-led control warns once per charger; the manual switch warns each time. Predbat never
+  unlocks a charger. A charger Predbat paused stays on its list until it is unlocked.</li>
+</ul>
+<p>At most one command is sent per charger per poll, and only on freshly polled state, so a
+slow charger is not sent the same command repeatedly.</p>
+<p><strong>Release.</strong> When Predbat is in read-only mode, or the control switch is off, or control
+is not available at all, every charger Predbat paused is resumed and then sent "resume
+schedule", and the record is cleared.</p>
+<p><strong>Persistence.</strong> The control switch state and the list of charger ids Predbat paused are
+saved through the Storage component (<code>storage.save("wallbox", "control_state", …)</code>) and
+loaded on the first run. Release runs from the stored list even when control is
+unavailable. This is the lesson from the myenergi entry in <code>tools/debug-journal.md</code>,
+where control state latched at the first tick left a charger stopped after a restart with
+control turned off.</p>
+<p><strong>Known limits.</strong> Wallbox can only be paused once it is charging. A car plugged in outside
+a planned window therefore draws power until the next poll, up to <code>wallbox_poll_seconds</code>.
+A schedule set in the Wallbox app competes with Predbat: a charger held in Scheduled does
+not charge inside a Predbat window. The docs tell users to clear the Wallbox schedule
+when they turn <code>wallbox_control</code> on.</p>
+<h2 id="8-polling-and-error-handling">8. Polling and error handling</h2>
+<ul>
+<li><code>run()</code> is called every 60 seconds; a poll happens on the first run, after a control
+  event, and every <code>wallbox_poll_seconds</code>.</li>
+<li>The charger list is fetched on the first run and every 30 minutes. Each poll makes one
+  status call per charger.</li>
+<li><code>WallboxAuthError</code> on sign in logs an error and returns False, so the base class's
+  start-up back-off applies.</li>
+<li><code>WallboxRateLimitError</code> skips polls on a doubling back-off (2, 4, 8 minutes) capped at
+  15 minutes, and returns True so one 429 does not count as a failure. The cap keeps
+  recovery inside the 60 minute health window.</li>
+<li><code>WallboxRefusedError</code> (403) on a control the user sent is logged each time with Wallbox's
+  reason. In the plan-led loop it is logged once. Monitoring carries on.</li>
+<li>Any other <code>WallboxError</code> on a poll logs a warning and returns False.</li>
+<li><code>update_success_timestamp()</code> is called only after a poll that returned at least one
+  charger.</li>
+</ul>
+<h2 id="9-command-line-test-interface">9. Command line test interface</h2>
+<p><code>python3 wallbox.py --username … --password …</code>, in the shape of myenergi's <code>main()</code>:</p>
+<ul>
+<li>Default: sign in, list chargers, print the normalised record of each.</li>
+<li><code>--raw</code> prints the raw status payload as JSON, for building fixtures.</li>
+<li><code>--charger &lt;id&gt;</code> selects a charger for the actions; default is the first.</li>
+<li><code>--pause</code>, <code>--resume</code>, <code>--resume-schedule</code>, <code>--lock</code>, <code>--unlock</code>,
+  <code>--max-current &lt;amps&gt;</code>, <code>--eco-smart {off,eco_mode,full_solar}</code>.</li>
+</ul>
+<h2 id="10-testing">10. Testing</h2>
+<p><code>apps/predbat/tests/test_wallbox.py</code>, in the myenergi style: plain assert-style functions
+called from one <code>test_wallbox(my_predbat=None)</code>, a real <code>WallboxAPI(MockBase(), …)</code>, the
+transport tested under <code>patch("aiohttp.ClientSession")</code> and replaced by a stub for
+component tests. Registered in <code>TEST_REGISTRY</code> in <code>unit_test.py</code> as <code>wallbox</code>.</p>
+<p>Fixtures are real payloads captured with <code>--raw</code> from the maintainer's charger, with the
+serial number, charger id and name replaced. Capture is the first implementation task, so
+the normaliser is written against real data.</p>
+<p>Coverage:</p>
+<ul>
+<li>Normalisation: every row of the status table, a missing <code>ecosmart</code> block, a missing
+  <code>config_data</code>, kW to W.</li>
+<li>Transport: sign in, token reuse, refresh, refresh rejected with 401 then sign in, 403
+  on sign in, 429, 403 on a write, timeout, and the exact method, URL and body of each
+  write.</li>
+<li>Publishing: the entity set for one and for two chargers; the Eco-Smart select absent
+  when unsupported.</li>
+<li>Events: each control's API call, clamping of the current, and the re-poll after a write.</li>
+<li>Automatic configuration: the argument lists, charger order, <code>car_charging_now</code> not
+  overwritten, nothing set when <code>wallbox_automatic</code> is off.</li>
+<li>Control: resume inside a window, pause outside, no action when disconnected, locked, Scheduled or Waiting,
+  one command per poll, second car reads the <code>_1</code> slot sensor, release on read-only and
+  on switch off, release after a restart from stored state, control state saved and
+  loaded.</li>
+<li>Polling: cadence, 429 back-off and recovery, <code>update_success_timestamp</code> only on success.</li>
+</ul>
+<p>The last task is a live check on real hardware: pause, resume and release.</p>
+<h2 id="11-documentation">11. Documentation</h2>
+<ul>
+<li><code>docs/components.md</code>: a <code>Wallbox Charger (wallbox)</code> section and table of contents entry.</li>
+<li><code>docs/car-charging.md</code>: a "Wallbox direct integration" section including Predbat-led
+  charging and the missing state of charge, plus the lists of supported charger
+  integrations.</li>
+<li><code>docs/apps-yaml.md</code>: the five keys and the two secrets.</li>
+<li><code>docs/devices.md</code>: the existing "Wallbox Pulsar" section becomes the Home Assistant
+  route, with a pointer to the direct component as the alternative.</li>
+<li><code>apps/predbat/config/apps.yaml</code>: a commented example block next to Ohme's.</li>
+<li><code>CLAUDE.md</code>, <code>AGENTS.md</code>, <code>.github/copilot-instructions.md</code>: the component count and
+  name lists.</li>
+</ul>
+<h2 id="12-out-of-scope">12. Out of scope</h2>
+<ul>
+<li>Energy cost, ICP maximum current, restart, firmware update and schedule editing.</li>
+<li>Quasar bidirectional discharge control; "Discharging" is reported as a status only.</li>
+<li>Octopus Intelligent wiring: the Wallbox API exposes no dispatch slots.</li>
+<li>Reporting to the discovery coordinator (myenergi does not either).</li>
+<li>The Predbat.com integration definition and credential UI, which live in another repo.</li>
+</ul>
+<h2 id="13-risks-to-settle-on-hardware">13. Risks, to settle on hardware</h2>
+<ul>
+<li>Whether a 120 second poll stays clear of the rate limit. Home Assistant uses 90.</li>
+<li>Whether the API accepts a <code>User-Agent</code> of <code>Predbat</code>. The library sends
+  <code>HomeAssistantWallboxPlugin/1.0.0</code>.</li>
+<li>Some cars go to sleep when paused and will not resume. This is a property of the car,
+  and is documented as a caveat of Predbat-led charging.</li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Discovery Catalogue v1 (Observe Only) — Design - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Discovery Catalogue v1 (Observe Only) \u2014 Design";
+        var mkdocs_page_input_path = "superpowers/specs/2026-09-10-discovery-catalogue-design.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../discovery-catalogue/">Discovery Catalogue</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Discovery Catalogue v1 (Observe Only) — Design</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="discovery-catalogue-v1-observe-only-design">Discovery Catalogue v1 (Observe Only) — Design</h1>
+<p>Date: 2026-09-10. Status: agreed with maintainer.
+Supersedes the v1 scope of <code>2026-09-06-discovery-coordinator-design.md</code>, which remains the
+design record for the slot <strong>allocator</strong> deferred out of this version.</p>
+<h2 id="purpose">Purpose</h2>
+<p>Components describe what they discovered — inverters, cars, car chargers, meters, forecast
+providers and flexibility programmes — into a single assembled catalogue. The catalogue is
+published into the debug YAML dump (and later a web viewer) so real user topologies can be
+read before any allocation rules are designed.</p>
+<p><strong>v1 takes no action on the catalogue.</strong> Nothing is allocated, nothing is written to
+<code>self.args</code>, no existing behaviour changes. Every component keeps auto-configuring exactly
+as it does today.</p>
+<h2 id="why-observe-first">Why observe first</h2>
+<p>The prior design allocated inverter slots, car indices and sensor indices from these same
+reports. That design stands, but it makes assumptions about real installations that nobody
+can currently check: how often two inverter components are enabled together, how often a
+serial is claimed twice, how often Octopus and Kraken both wire the import rate, whether
+sensor-only PV devices are common enough to justify a separate index pool. The catalogue
+answers those questions from user bug reports at a fraction of the risk, because a purely
+additive observer cannot break a working installation.</p>
+<h2 id="non-goals-for-v1">Non-goals for v1</h2>
+<ul>
+<li>No slot, index or car-number allocation.</li>
+<li>No <code>Assignment</code>, no <code>apply_assignment()</code>, no changes to any <code>automatic_config()</code>.</li>
+<li>No writes to <code>self.args</code>, no <code>set_arg</code> changes, no <code>givtcp_rest</code> slot alignment.</li>
+<li>No persistence or slot stickiness.</li>
+<li>No conflict <em>resolution</em> — conflicts are recorded as observations only.</li>
+</ul>
+<h2 id="architecture">Architecture</h2>
+<p>New module <code>apps/predbat/coordinator.py</code> holding a thread-safe <code>Coordinator</code>:</p>
+<ul>
+<li><code>report(component_name, report)</code> — validates and stores one component's report dict,
+  replacing any previous one. Called by a component from its own thread during its first
+  successful <code>run()</code>.</li>
+<li><code>assemble()</code> — merges every report into one site-level catalogue organised by category,
+  tagging each entry with the component that reported it, and adds the observation layer.</li>
+<li><code>catalogue()</code> — the assembled catalogue, <strong>redacted</strong> (see below). This is what every
+  consumer gets.</li>
+<li><code>catalogue_raw()</code> — the unredacted form. In-process diagnostics only; never written to a
+  file, an entity, an API response or a log line.</li>
+</ul>
+<p><code>ComponentBase</code> gains <code>report_discovery()</code> (a thin wrapper that finds the coordinator and
+calls <code>report</code>) and the <code>build_discovery()</code> convention. <code>Components</code> owns the coordinator
+instance. <code>PredBat.initialize()</code> calls <code>assemble()</code> after <code>start(phase=1)</code> returns — the
+point at which every phase-1 component has started or timed out — and again after phase 2.</p>
+<p>A component that never reports is not absent from the catalogue: <code>Components</code> already
+distinguishes configured-and-loaded from failed-to-load from not-configured via
+<code>get_active()</code>, <code>is_alive()</code> and <code>load_error()</code>, so <code>assemble()</code> derives a status for every
+component in <code>COMPONENT_LIST</code> rather than only for those that spoke.</p>
+<h2 id="report-schema">Report schema</h2>
+<p>One dict per component. All sections optional.</p>
+<pre><code class="language-python">{
+    &quot;schema_version&quot;: 1,
+    &quot;automatic&quot;: True,          # mirrors the component's own *_automatic flag, recorded not acted on
+    &quot;inverters&quot;:  [ ... ],
+    &quot;chargers&quot;:   [ ... ],
+    &quot;cars&quot;:       [ ... ],
+    &quot;meters&quot;:     [ ... ],
+    &quot;forecasts&quot;:  [ ... ],
+    &quot;programmes&quot;: [ ... ],
+}
+</code></pre>
+<h3 id="record-containers">Record containers</h3>
+<p>Every record is built from a small fixed set of <strong>typed containers</strong>. A container declares
+what kind of value it holds and what happens to those values when the catalogue is shared —
+so a component adding a new fact chooses a container, not a schema entry, and needs no
+change here. The container's type constraint is what makes that safe: a container that
+accepts only numbers cannot leak a name, an email or a credential however it is extended.</p>
+<table>
+<thead>
+<tr>
+<th>Container</th>
+<th>Accepts</th>
+<th>On share</th>
+<th>Extend freely</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>hardware_ids</code></td>
+<td>Strings ≤64 chars identifying a device: serial, model number</td>
+<td>clear</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>account_ids</code></td>
+<td>Any scalar identifying a person, supply point or account</td>
+<td>pseudonymised</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>info</code></td>
+<td>Vendor-supplied descriptive strings ≤64 chars: model, firmware, API version</td>
+<td>clear</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>ratings</code></td>
+<td>Numbers and booleans only — physical quantities</td>
+<td>clear</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>coverage</code></td>
+<td>Numbers, booleans, vocabulary tokens</td>
+<td>clear</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>functions</code>, <code>capabilities</code>, <code>flags</code>, <code>effects</code></td>
+<td>Lists of vocabulary tokens matching <code>^[a-z0-9_]{1,32}$</code></td>
+<td>clear</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>entities</code></td>
+<td>Entity descriptors, keyed by Predbat standard name</td>
+<td>clear</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>Top level</td>
+<td><code>source</code>, <code>device_id</code>, <code>kind</code>, <code>direction</code>, and the cross-links</td>
+<td>structural</td>
+<td>needs a schema change</td>
+</tr>
+</tbody>
+</table>
+<p>The split between <code>hardware_ids</code> and <code>account_ids</code> is the one classification a developer has
+to get right, and it follows the line the codebase already draws: a serial addresses
+hardware, so it stays readable and is what makes a bug report diagnosable, while an MPAN or
+account number identifies a person and does not. Putting a new identifier in <code>account_ids</code>
+is always the safe choice — it is pseudonymised whatever it is called.</p>
+<p>Only the top-level structural fields are enumerated by this spec, and there are few of them.
+Everything descriptive lives in a container and extends without touching the schema.</p>
+<h3 id="the-entity-descriptor">The entity descriptor</h3>
+<p>Every record's <code>entities</code> is a dict keyed by <strong>Predbat's standard name</strong> for that sensor or
+control — the key is what gives the entity its meaning. Sensors and controls live in the
+same map, separated by <code>access</code>.</p>
+<pre><code class="language-python">&quot;charge_rate&quot;: {
+    &quot;entity_id&quot;: &quot;number.predbat_givtcp_0_charge_rate&quot;,
+    &quot;domain&quot;: &quot;number&quot;,          # number | select | switch | sensor | binary_sensor
+    &quot;access&quot;: &quot;rw&quot;,              # r = read only (sensor), rw = control
+    &quot;unit&quot;: &quot;W&quot;,
+    &quot;device_class&quot;: &quot;power&quot;,
+    &quot;min&quot;: 0, &quot;max&quot;: 3600, &quot;step&quot;: 100,
+    &quot;options&quot;: [...],            # select domain only
+    &quot;format&quot;: &quot;HH:MM:SS&quot;,        # time-valued selects
+    &quot;precision&quot;: 0
+}
+</code></pre>
+<p>This vocabulary already exists: <code>GIVTCP_CONTROLS</code> in <code>givtcp.py</code> is keyed by Predbat
+standard name and carries domain, unit, device class, min, max, step and options, and
+<code>Inverter</code> already reads per-device bounds back off entity attributes
+(<code>get_arg("charge_rate", attribute="max", ...)</code> for the real battery rate;
+<code>reserve_device_bounds()</code> for the reserve floor and ceiling). Today that metadata travels
+out of band as HA attributes and only three values are ever read back. The catalogue records
+it in band.</p>
+<p>Boundary: the descriptor states <strong>what values are legal</strong>. <code>INVERTER_DEF</code> continues to state
+<strong>how a write is performed</strong> (button press, poll-and-verify, time format, percent versus
+power control). No write protocol moves into the catalogue.</p>
+<h3 id="sections">Sections</h3>
+<p>Every record carries <code>source</code> (the reporting component name) and <code>device_id</code>, a stable
+identity of the form <code>"{component}:{identifier}"</code>.</p>
+<p>The field name is <code>device_id</code>, not <code>device_key</code>: <code>is_secret_key()</code> matches the substring
+<code>_key</code>, so any field named <code>*_key</code> is redacted to <code>xxx</code> by the generic masker in
+<code>mask_secret_args()</code>. Naming the catalogue's primary identity field <code>device_key</code> would mean
+that one careless call to the generic masker silently destroys the whole document.</p>
+<p><strong><code>inverters</code></strong> — a device that generates, stores or both.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Container</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>serial</code></td>
+<td><code>hardware_ids</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>functions</code></td>
+<td>vocabulary</td>
+<td><code>["solar"]</code>, <code>["battery"]</code> or both. A PV-only inverter is how the extra-PV-sensor case is expressed</td>
+</tr>
+<tr>
+<td><code>inverter_type</code></td>
+<td>top level</td>
+<td><code>INVERTER_DEF</code> key, where the component has one</td>
+</tr>
+<tr>
+<td><code>control</code></td>
+<td>top level</td>
+<td>Whether Predbat is permitted to drive it (<code>control_enable</code>, monitor-only modes)</td>
+</tr>
+<tr>
+<td><code>composition</code></td>
+<td>top level</td>
+<td><code>direct</code>, <code>gateway</code> (fronting <code>serials</code>), or <code>ems</code></td>
+</tr>
+<tr>
+<td><code>measures_meter</code></td>
+<td>cross-link</td>
+<td>A meter <code>device_id</code>, so double counting is detectable</td>
+</tr>
+<tr>
+<td><code>model</code>, <code>firmware</code></td>
+<td><code>info</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>inverter_limit</code>, <code>export_limit</code>, <code>import_limit</code>, <code>battery_rate_max</code>, <code>soc_max</code>, <code>battery_min_soc</code>, <code>modules</code>, <code>dod_percent</code>, <code>nominal_voltage</code></td>
+<td><code>ratings</code></td>
+<td>Renamed to Predbat setting names on 24 Sep 2026 (was <code>battery_kwh</code>, <code>max_charge_w</code>) - see <code>2026-09-24-discovery-inverter-record-vocabulary-design.md</code></td>
+</tr>
+<tr>
+<td><code>capabilities</code></td>
+<td>dict of bool</td>
+<td>Superseded on 24 Sep 2026: the seven <code>INVERTER_DEF</code> behaviour keys as <code>True</code>/<code>False</code>, not tokens - see <code>2026-09-24-discovery-inverter-record-vocabulary-design.md</code></td>
+</tr>
+<tr>
+<td><code>entities</code></td>
+<td><code>entities</code></td>
+<td>Keyed by Predbat standard name</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Cross-links may dangle, and a component must never invent a record to resolve one.</strong>
+<code>measures_meter</code>, <code>serves_cars</code>, <code>charged_by</code> and <code>programmes[].meter</code> name a record that may not
+exist — typically because the component holding the link knows a hardware serial while no
+component has reported the thing it belongs to. A dangling link is an honest record of what is
+known; resolving it is the observation layer's job, not the reporter's. In particular a component
+with no genuine supply point to describe reports no <code>meters</code> records at all: a CT clamp attached
+to an inverter is measurement hardware, not a billing point, and giving it a <code>meters</code> record would
+let it collide with real supply points in the <code>multiple_import_meters</code> detector.</p>
+<p><strong><code>chargers</code></strong> — an EVSE. <code>serial</code> in <code>hardware_ids</code>; <code>vendor</code> and <code>model</code> in <code>info</code>;
+<code>max_power_kw</code> and <code>phases</code> in <code>ratings</code>; <code>serves_cars</code> cross-links to <code>cars</code>. Its
+<code>entities</code> carry the charger facts: <code>car_charging_planned</code>, <code>car_charging_energy</code>,
+<code>car_charging_power</code>, <code>car_charging_now</code>.</p>
+<p><strong><code>cars</code></strong> — a vehicle. Predbat indexes cars, not chargers, so a charger integration that
+knows nothing about the vehicle still emits a stub car record with <code>info.stub</code>. Ohme can do
+better: it holds a vehicle list today that is discarded. <code>make</code> and <code>model</code> in <code>info</code>;
+<code>battery_kwh</code> and <code>max_charge_kw</code> in <code>ratings</code>; <code>charged_by</code> cross-links to <code>chargers</code>. Its
+<code>entities</code> carry the car facts: <code>car_charging_soc</code>, <code>car_charging_limit</code>,
+<code>octopus_intelligent_slot</code>, <code>octopus_ready_time</code>, <code>octopus_charge_limit</code>.</p>
+<p><code>car_charging_rate</code> is the one genuinely negotiated value: the charger reports its limit and
+the car reports its own, rather than either pre-flattening the minimum as today.</p>
+<p><strong><code>meters</code></strong> — a supply point, which may carry a tariff.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Container</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>device_id</code></td>
+<td>derived from <code>account_ids</code></td>
+<td>Pseudonymised, since it is built from the MPAN</td>
+</tr>
+<tr>
+<td><code>direction</code></td>
+<td>top level</td>
+<td><code>import</code>, <code>export</code> or <code>gas</code>. One or more of each is legal</td>
+</tr>
+<tr>
+<td><code>mpan</code>, <code>account</code>, <code>meter_serial</code></td>
+<td><code>account_ids</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>tariff.tariff_code</code>, <code>tariff.product_code</code></td>
+<td><code>info</code></td>
+<td>Public product identifiers and highly diagnostic</td>
+</tr>
+<tr>
+<td><code>tariff.flags</code></td>
+<td>vocabulary</td>
+<td><code>intelligent_go</code>, <code>agile</code>, <code>six_hour_cap</code>, <code>tracker</code>, <code>fixed</code></td>
+</tr>
+<tr>
+<td><code>tariff.standing_charge_p</code></td>
+<td><code>ratings</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>entities</code></td>
+<td><code>entities</code></td>
+<td><code>metric_octopus_import</code>, <code>metric_octopus_export</code>, <code>metric_standing_charge</code></td>
+</tr>
+</tbody>
+</table>
+<p>Modelling tariffs as a property of a meter rather than as a single site-wide record is what
+makes Kraken's separate import and export accounts representable, makes gas a direction
+rather than a special case, and gives the Octopus-versus-Kraken contention over
+<code>metric_octopus_import</code> a place to be observed per meter.</p>
+<p><strong><code>forecasts</code></strong> — a service producing a time series. No slot, no index. <code>provider_id</code> from
+<code>account_ids</code> (Solcast site ids and plant ids are registry-flagged); <code>kind</code> at top level
+(<code>solar</code>, <code>carbon</code>, <code>temperature</code>, <code>load</code>); <code>vendor</code> in <code>info</code>; <code>capacity_kw</code> in <code>ratings</code>;
+<code>horizon_hours</code>, <code>resolution_minutes</code> and <code>variants</code> (<code>pv10</code>/<code>pv50</code>/<code>pv90</code>) in <code>coverage</code>.</p>
+<p><strong><code>programmes</code></strong> — a flexibility enrolment that emits events and may constrain Predbat.
+<code>programme_id</code> from <code>account_ids</code>; <code>kind</code> at top level (<code>vpp</code>, <code>saving_session</code>,
+<code>free_electricity</code>); <code>meter</code> cross-linking to the enrolled supply point; <code>effects</code> as
+vocabulary (<code>rate_override</code>, <code>forces_read_only</code>).</p>
+<p>A seventh section, <code>loads</code> (myenergi Eddi, iBoost, Predheat), is named here as the intended
+home for controllable loads. Nothing reports it in v1.</p>
+<h2 id="redaction">Redaction</h2>
+<p>The catalogue is designed to be posted to public GitHub issues, so it redacts itself at
+source: <code>catalogue()</code> returns the redacted form and every consumer uses it. There is no
+"remember to mask this" step for a caller to forget.</p>
+<p>The existing generic masker is not usable for this and must not be relied on. It matches on
+key <strong>name</strong>: <code>mask_secret_args()</code> would redact <code>device_key</code>, <code>meter_key</code> and <code>provider_key</code>
+because they contain <code>_key</code>, while passing <code>mpan</code>, <code>account</code>, <code>site_id</code> and <code>postcode</code>
+through in the clear, because the registry flags the apps.yaml names (<code>kraken_mpan</code>,
+<code>octopus_api_account</code>, <code>enphase_site_id</code>) rather than these field names. It is wrong in both
+directions here.</p>
+<h3 id="four-classes">Four classes</h3>
+<p><strong>Never included.</strong> These must not enter the catalogue at all, not even to be masked later.
+Credentials of every kind (API keys, tokens, passwords, secrets, OAuth material); any
+user-authored free text (Solcast site names, charger nicknames, account labels), which can
+contain anything including names and addresses; precise location (latitude, longitude, full
+postcode, address); and vehicle registration. No container accepts these, which is what
+makes the rule enforceable rather than advisory.</p>
+<p><strong>Pseudonymised.</strong> Everything in <code>account_ids</code>, and any value cross-linking to one: MPAN and
+MPRN, account identifiers, site, plant and system identifiers, hub serials (myenergi's is
+the digest-auth username), and login identifiers such as the Ohme email. Each is replaced by
+<code>"{prefix}:#{token}"</code> where the token is a short digest of the value with a per-installation
+random salt — so <code>meters[0].device_id</code> still matches <code>programmes[0].meter</code> within a dump and
+across successive dumps from the same installation, while the same MPAN from two different
+users does not collide and the original cannot be recovered. A plain unsalted digest would
+be pointless for a 13-digit MPAN, which is brute-forceable in seconds. The salt is generated
+once, stored via the Storage component, and is itself excluded from every dump.</p>
+<p>Pseudonymising a value also rewrites it wherever else it appears, entity ids included.
+Vendors embed identifiers in entity names, so <code>sensor.predbat_x_{site_id}_forecast</code> would
+otherwise republish in the clear exactly what the <code>site_id</code> field just hid.</p>
+<p><strong>Coarsened.</strong> Location that retains diagnostic value in reduced form: a postcode is
+truncated to its outward code (<code>SW1A</code>), latitude and longitude are dropped rather than
+rounded.</p>
+<p><strong>Clear.</strong> Everything in <code>hardware_ids</code>, <code>info</code>, <code>ratings</code>, <code>coverage</code>, the vocabulary lists
+and <code>entities</code>: device serials, model, firmware, <code>inverter_type</code>, <code>functions</code>,
+<code>capabilities</code>, ratings, tariff and product codes, entity ids, units, bounds, options,
+counts, statuses and timestamps. This follows the line the codebase already draws —
+<code>secret_config_names()</code> deliberately does not flag device serials, because they address
+hardware rather than authenticate it and they are what makes a bug report diagnosable.</p>
+<h3 id="enforcement">Enforcement</h3>
+<p>Safety comes from the containers being typed, not from enumerating every field. A component
+adds facts freely; what it cannot do is put a value somewhere its type does not fit. Values
+failing a container's constraint are dropped and logged rather than emitted, so the failure
+mode of misfiling is missing data, never a leak.</p>
+<p>Three guards sit on top, in order of how much work they do:</p>
+<ol>
+<li><strong>Type constraints per container</strong>, as tabled above. This is the primary mechanism: a
+   numbers-only <code>ratings</code>, a <code>^[a-z0-9_]{1,32}$</code> vocabulary and a length-capped <code>info</code> that
+   rejects <code>@</code> between them exclude names, emails, addresses, JWTs and free text
+   structurally, no matter how the catalogue grows.</li>
+<li><strong>A field-name credential guard.</strong> Any field whose name trips <code>is_secret_key()</code>'s
+   substrings (<code>_key</code>, <code>password</code>, <code>secret</code>, <code>token</code>), in any container, is rejected and the
+   reporting component logged. A credential reported by mistake never reaches the catalogue.</li>
+<li><strong>Value-shape guards</strong> for the one gap the type system cannot close: an MPAN is a
+   number, so it satisfies <code>ratings</code>. Any clear-container value that looks like an
+   identifier rather than a measurement — a long digit run, something containing <code>@</code>, a
+   coordinate-shaped float pair — is pseudonymised defensively and logged loudly as
+   misfiled. This is a safety net for a mistake, not the classification mechanism.</li>
+</ol>
+<p>A test asserts every container has a declared class and constraint, and a corpus test walks
+a synthetic catalogue seeded with credential-, MPAN-, email- and postcode-shaped values and
+asserts none survives into the redacted form.</p>
+<h2 id="assembled-catalogue">Assembled catalogue</h2>
+<pre><code class="language-yaml">discovery:
+  schema_version: 1
+  generated: 2026-09-10T08:30:00Z
+  components:
+    givtcp:  {status: ok, reported_at: 2026-09-10T08:29:12Z, automatic: true, counts: {inverters: 2}}
+    gecloud: {status: timed_out, reported_at: null}
+    solis:   {status: not_configured}
+    fox:     {status: load_error, error: &quot;No module named 'protobuf'&quot;}
+  inverters:  [...]
+  chargers:   [...]
+  cars:       [...]
+  meters:     [...]
+  forecasts:  [...]
+  programmes: [...]
+  observations:
+    conflicts:
+      - {kind: duplicate_serial, serial: SA2242G123, claimed_by: [givtcp, gecloud]}
+      - {kind: contested_key, key: metric_octopus_import, claimed_by: [octopus, kraken]}
+      - {kind: contested_car_slots, claimed_by: [ohme, octopus]}
+    resulting_config: {num_inverters: 2, num_cars: 1, inverter_type: [GE, GEC]}
+</code></pre>
+<p><code>observations</code> is the part that earns v1 its keep. <code>conflicts</code> records collisions that today
+resolve silently by dict ordering, without changing the outcome — so the frequency of the
+two-vendor case in the field becomes measurable. <code>resulting_config</code> records what
+<code>self.args</code> actually ended up as, making every dump a free comparison between what was
+discovered and what was configured, which is the evidence the allocator should be designed
+from.</p>
+<h2 id="consumers">Consumers</h2>
+<p><code>create_debug_yaml()</code> gains one explicit line, <code>debug["discovery"] = catalogue</code>, placed
+beside the existing <code>debug["inverters"]</code>. It must be explicit: <code>components</code> is in
+<code>DEBUG_EXCLUDE_LIST</code>, so nothing under it is dumped automatically, and an explicit plain
+dict also avoids the object-graph walk that the surrounding code documents as dangerous.</p>
+<p>The catalogue is also published as attributes on <code>sensor.predbat_discovery</code> for the web
+viewer to read later. A web page and any predbat.com upload are out of scope for v1.</p>
+<h2 id="v1-reporters">v1 reporters</h2>
+<p>Five components, chosen to exercise every section once:</p>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Exercises</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GivTCP</td>
+<td>Multiple inverters from one component; entity descriptors with real per-device min/max</td>
+</tr>
+<tr>
+<td>GE Cloud</td>
+<td>Gateway composition, EMS, split PV (<code>functions: ["solar"]</code> devices), shared-CT <code>measures_meter</code></td>
+</tr>
+<tr>
+<td>Octopus</td>
+<td>Meters in both directions with tariffs; cars via intelligent devices</td>
+</tr>
+<tr>
+<td>Ohme</td>
+<td>The charger-and-car split, including a non-stub car record</td>
+</tr>
+<tr>
+<td>Solcast</td>
+<td>The <code>forecasts</code> section and multi-site providers</td>
+</tr>
+</tbody>
+</table>
+<p>Each is a <code>build_discovery()</code> returning a dict plus one <code>report_discovery()</code> call in its
+existing first-run path. No other line of those components changes.</p>
+<h2 id="testing">Testing</h2>
+<p>Coordinator unit tests: container type constraints and value dropping, the credential guard,
+the value-shape guards, assembly and merging across components, status derivation for
+reported, silent, failed and unconfigured components, conflict detection, and JSON/YAML
+round-tripping of the assembled catalogue. Redaction tests: each of the four classes,
+pseudonym stability within a document and instability across salts, substitution of
+pseudonymised values inside entity ids, and the seeded-corpus scan asserting no credential,
+MPAN, account id, email or postcode survives into the redacted catalogue. Per-component
+tests: each reporter's <code>build_discovery()</code> against that module's existing fixtures. Plus a
+regression assertion that enabling discovery changes no <code>self.args</code> key.</p>
+<h2 id="deferred">Deferred</h2>
+<p>Slot and index allocation, <code>Assignment</code> hand-off, persistence and stickiness, and the
+migration of <code>automatic_config()</code> to assigned indices are all designed in
+<code>2026-09-06-discovery-coordinator-design.md</code> and unchanged by this document. They become
+implementable — and their rules become evidence-based — once catalogues from real
+installations can be read.</p>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>
