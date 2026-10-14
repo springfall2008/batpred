@@ -694,6 +694,80 @@ def _unavailable_reason(report):
     return "No complete paired native-replay preview is available. Rejected or unavailable candidates are not shown; no earlier schedule is reused."
 
 
+def _household_fallback_debug(report):
+    """Build the hidden Show-Debug markup for a household-fallback report.
+
+    The branch must never project authority: the existing Plan table, columns,
+    colours and precision stay unchanged. Only the debug span is augmented, and
+    the arrival forecast (set by ``evaluate_joint_site`` when the recurring
+    policy withdrew and the native executor handed back to household control)
+    is rendered with full HTML escaping so Show Debug surfaces the
+    low-confidence assumption, empirical range, sample count, source
+    timestamps and shortfall that the live planning model just used.
+
+    The function is intentionally small: it does not touch ``report``,
+    ``native_diagnostic`` or any other shared state, and it never calls a
+    HA service or writes to an inverter.
+    """
+    parts = ['<div class="joint-site-preview-debug" style="display:none;">']
+    parts.append("EV authority withdrawn; native domestic control retained. Reason: ")
+    parts.append(escape(str(report.get("execution_reason", "ev_unavailable"))))
+    arrival = report.get("arrival_forecast") if isinstance(report, dict) else None
+    if not isinstance(arrival, dict):
+        parts.append("</div>")
+        return "".join(parts)
+    parts.append("<br>")
+    parts.append("Arrival forecast: ")
+    parts.append(escape(str(arrival.get("status", "unavailable"))))
+    status = arrival.get("status")
+    if status == "anticipated":
+        parts.append("<br>")
+        parts.append("Expected arrival: ")
+        parts.append(_safe_iso(arrival.get("expected_arrival")))
+        parts.append(" (p10 ")
+        parts.append(_safe_iso(arrival.get("arrival_p10")))
+        parts.append(", p90 ")
+        parts.append(_safe_iso(arrival.get("arrival_p90")))
+        parts.append(")")
+        parts.append("<br>")
+        parts.append("Confidence: ")
+        parts.append(escape(str(arrival.get("confidence", "low"))))
+        parts.append("<br>")
+        parts.append("Sample size: ")
+        parts.append(escape("{} eligible of {} completed trips ({})".format(arrival.get("eligible_trips", 0), arrival.get("completed_trips", 0), arrival.get("cohort", ""))))
+        parts.append("<br>")
+        parts.append("Source timestamp: ")
+        parts.append(_safe_iso(arrival.get("prepared_at")))
+        parts.append(" (history fetched ")
+        parts.append(_safe_iso(arrival.get("history_fetched_at")))
+        parts.append(", latest state ")
+        parts.append(_safe_iso(arrival.get("latest_history_state_at")))
+        parts.append(", departure observed ")
+        parts.append(_safe_iso(arrival.get("departure_observed_at")))
+        parts.append(")")
+        parts.append("<br>")
+        parts.append("Hypothetical demand: empty-car scenario (not a vehicle reading), ")
+        parts.append(escape("{} kWh requested, {} kWh at site AC, {} kWh shortfall".format(_format_finite(arrival.get("requested_target_kwh"), 2), _format_finite(arrival.get("model_ac_kwh"), 2), _format_finite(arrival.get("shortfall_kwh"), 2))))
+        parts.append("<br>")
+        parts.append("Ready by: ")
+        parts.append(_safe_iso(arrival.get("ready_by")))
+        parts.append(" (guaranteed target met: ")
+        parts.append(escape(str(arrival.get("guaranteed_target_met"))))
+        parts.append(", execution permission: ")
+        parts.append(escape(str(arrival.get("execution_permission"))))
+        parts.append(")")
+    else:
+        parts.append("<br>")
+        parts.append("Reason: ")
+        parts.append(escape(str(arrival.get("reason", ""))))
+        if arrival.get("prepared_at") is not None:
+            parts.append("<br>")
+            parts.append("Source timestamp: ")
+            parts.append(_safe_iso(arrival.get("prepared_at")))
+    parts.append("</div>")
+    return "".join(parts)
+
+
 def render_joint_site_preview(report, native_diagnostic, now=None):
     """Render only the ownership/freshness banner above the existing Plan table.
 
@@ -719,7 +793,7 @@ def render_joint_site_preview(report, native_diagnostic, now=None):
         return ""
     now = now if now is not None else datetime.now(timezone.utc)
     if isinstance(report, dict) and report.get("status") == "household_fallback":
-        return '<div class="joint-site-preview-debug" style="display:none;">EV authority withdrawn; native domestic control retained. Reason: ' + escape(str(report.get("execution_reason", "ev_unavailable"))) + "</div>"
+        return _household_fallback_debug(report)
     active = isinstance(report, dict) and report.get("status") != "disabled"
     status = report.get("status", "") if isinstance(report, dict) else ""
     is_applied = status == "applied"

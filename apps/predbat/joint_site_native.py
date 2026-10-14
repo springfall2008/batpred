@@ -70,7 +70,21 @@ def _read_entity_state(base, entity_id):
         last_updated_aware = _parse_entity_timestamp(last_updated, "last_updated") if isinstance(last_updated, str) else _aware(last_updated, "last_updated")
     except ValueError:
         return None
-    return {"state": state, "last_changed": last_changed_aware, "last_updated": last_updated_aware, "attributes": deepcopy(payload.get("attributes", {}))}
+    transition = payload.get("value_last_changed")
+    try:
+        transition = _parse_entity_timestamp(transition, "value_last_changed") if isinstance(transition, str) else _aware(transition, "value_last_changed")
+        if transition > last_changed_aware:
+            transition = last_changed_aware
+    except ValueError:
+        transition = last_changed_aware
+    return {
+        "state": state,
+        "last_changed": last_changed_aware,
+        "last_updated": last_updated_aware,
+        "value_last_changed": transition,
+        "value_history": deepcopy(payload.get("value_history")),
+        "attributes": deepcopy(payload.get("attributes", {})),
+    }
 
 
 def _parse_soc_raw(state, unit, capacity_kwh):
@@ -104,6 +118,16 @@ def _parse_soc_raw(state, unit, capacity_kwh):
 def _observation_clock():
     """Read wall time, never replace an entity's actual observation timestamp."""
     return datetime.now(timezone.utc)
+
+
+def _ev_charging_priority(base):
+    """Resolve a literal priority or a cached HA dropdown without refreshing devices."""
+    settings = base.args.get("joint_site")
+    priority = settings.get("ev_charging_priority", "cost") if isinstance(settings, dict) else None
+    if isinstance(priority, str) and priority.startswith(("input_select.", "select.")):
+        observed = _read_entity_state(base, priority)
+        return observed["state"] if observed else None
+    return priority
 
 
 def _options(base):
@@ -141,9 +165,11 @@ def _options(base):
         "execution_authorised",
         "connection_error_acknowledgement",
         "ev_charging_priority",
+        "self_consumption_first",
         "household_fallback",
         "home_entity",
         "ev_partial_target_authorised",
+        "recurring_session",
     }
     if set(settings) - allowed:
         raise ValueError("Unknown joint_site option")
@@ -155,11 +181,16 @@ def _options(base):
     control_model = settings.get("control_model", "native")
     if control_model not in ("native", "deye_tou", "deye_solarman"):
         raise ValueError("Unsupported joint-site control model")
-    ev_priority = settings.get("ev_charging_priority", "cost")
+    ev_priority = _ev_charging_priority(base)
     if ev_priority not in ("cost", "asap"):
         raise ValueError("EV charging priority must be cost or asap")
     if ev_priority == "asap" and (control_model != "deye_solarman" or not settings.get("grid_charge_support")):
         raise ValueError("ASAP charging requires shared grid-support controls")
+    self_consumption_first = settings.get("self_consumption_first", False)
+    if type(self_consumption_first) is not bool:
+        raise ValueError("self_consumption_first must be boolean")
+    if self_consumption_first and (control_model != "deye_solarman" or not settings.get("grid_charge_support")):
+        raise ValueError("Self-consumption preference requires shared grid-support controls")
     if type(settings.get("allow_stale_shadow_soc", False)) is not bool:
         raise ValueError("allow_stale_shadow_soc must be boolean")
     if type(settings.get("apply_verified", False)) is not bool:
@@ -180,6 +211,16 @@ def _options(base):
             raise ValueError("Observation timestamp entities must be non-empty strings")
     _number(base.soc_max, "soc_max", 0.001)
     _number(base.reserve, "reserve", 0, base.soc_max)
+    from joint_site_recurring import recurring_enabled, resolve_recurring_session
+
+    recurring = None
+    if recurring_enabled(settings):
+        if "session" in settings or "confirmed_session" in settings:
+            raise ValueError("Recurring and dated sessions are mutually exclusive")
+        recurring = resolve_recurring_session(base, settings)
+        if recurring["status"] != "ready":
+            raise ValueError("Recurring session is unavailable: " + recurring["reason"])
+        settings = {**settings, "session": recurring["session"]}
     session = settings.get("session")
     if not isinstance(session, dict) or set(session) != {"available_from", "departure", "soc_kwh", "soc_observed_at"}:
         raise ValueError("A complete dated joint_site session is required")
@@ -249,7 +290,7 @@ def _options(base):
         except (TypeError, ValueError):
             support_w = 0.0
             entity_blockers.append("grid_charge_support_unavailable")
-    confirmed_observation = None
+    confirmed_observation = recurring["observation"] if recurring else None
     if settings.get("confirmed_session") is not None:
         from joint_site_observation import confirmed_session_observation
 
@@ -368,6 +409,7 @@ def _options(base):
         "control_model": control_model,
         "grid_charge_support_w": support_w,
         "ev_charging_priority": ev_priority,
+        "self_consumption_first": self_consumption_first,
         "deadline": end_offset,
         "departure_passed": departure <= observed_now,
         "house_only": mode == "apply" and departure <= observed_now,
@@ -381,6 +423,7 @@ def _options(base):
         "soc_observed_at": soc_observed_at,
         "soc_observation_age_minutes": soc_age_minutes,
         "confirmed_observation": confirmed_observation,
+        "recurring_evidence": {key: recurring[key] for key in ("identity", "session", "latest_deadline")} if recurring else None,
         "load_cap": _number(settings.get("load_port_limit_w"), "load_port_limit_w", 1) / 1000,
         "import_limit_w": _number(settings.get("import_limit_w", getattr(base, "import_limit", 0)), "import_limit_w", 1),
         "pause": pause,
@@ -551,6 +594,7 @@ def build_candidate(base, options):
             allow_limited_discharge=options["control_model"] == "deye_tou",
             allowed_battery_modes=modes,
             economic_diversity=options.get("mode") == "shadow" and options["control_model"] == "deye_solarman" and options.get("economic_diversity", True),
+            initial_battery_mode="demand" if options.get("initial_demand_only") else None,
         ),
     )
     return result, slots
@@ -790,16 +834,19 @@ def _continuous_grid_support_shadow(base, options):
     ranked = sorted(starts) if asap else sorted(starts, key=lambda start: (sum(base.rate_import[base.minutes_now + minute] for minute in range(start, start + duration)), start))[:12]
     best, attempts = None, []
     for start in ranked:
-        trial = {**options, "forecast_basis": "envelope", "ev_continuous_block": (start, start + duration)}
-        result, slots = build_candidate(base, trial)
-        passed = False
-        if result.actions:
-            _validate_candidate_modes(options, result)
-            windows, checks = _replay_candidate(base, trial, result, slots)
-            passed = all(check["passed"] for check in checks.values())
-            if passed and (best is None or result.total_cost < best[0].total_cost):
-                best = result, slots, windows, checks
-        attempts.append({"start_offset": start, "end_offset": start + duration, "solver_status": result.status, "native_passed": passed})
+        for initial_demand in (True, False) if options.get("self_consumption_first") else (False,):
+            trial = {**options, "forecast_basis": "envelope", "ev_continuous_block": (start, start + duration), "initial_demand_only": initial_demand}
+            result, slots = build_candidate(base, trial)
+            passed = False
+            if result.actions:
+                _validate_candidate_modes(options, result)
+                windows, checks = _replay_candidate(base, trial, result, slots)
+                passed = all(check["passed"] for check in checks.values())
+                if passed and (best is None or result.total_cost < best[0].total_cost):
+                    best = result, slots, windows, checks
+            attempts.append({"start_offset": start, "end_offset": start + duration, "solver_status": result.status, "native_passed": passed, "initial_demand_only": initial_demand})
+            if passed:
+                break
         if asap and passed:
             break
     return best, attempts
@@ -869,6 +916,14 @@ def evaluate_joint_site(base, publish=True):
         if reason:
             report = _empty_report("household_fallback")
             report.update(execution_reason=reason, requested_mode="apply", ev_available=False, household_executor="native", ev_soc_not_required=True)
+            from joint_site_recurring import recurring_enabled, resolve_recurring_session
+
+            if recurring_enabled(settings):
+                recurring = resolve_recurring_session(base)
+                report["recurring_evidence"] = {"status": recurring["status"], "latest_deadline": recurring.get("latest_deadline")}
+                from joint_site_arrival import arrival_evidence
+
+                report["arrival_forecast"] = arrival_evidence(base)
             _publish_report(base, report, publish)
             return report
         options = _options(base)
@@ -902,8 +957,10 @@ def evaluate_joint_site(base, publish=True):
             "control_model": options["control_model"],
             "grid_charge_support_w": options["grid_charge_support_w"],
             "ev_charging_priority": options["ev_charging_priority"],
+            "self_consumption_first": options["self_consumption_first"],
             "grid_charge_support_convention": "charge_request_with_load_priority_and_bounded_battery_support" if options["grid_charge_support_w"] else "disabled",
             "confirmed_observation": options["confirmed_observation"],
+            "recurring_evidence": options["recurring_evidence"],
             "counterfactual_controls": options["control_model"] == "deye_tou" and options["mode"] == "shadow",
             "requested_mode": options["mode"],
             "activation_requirements": execution_requirements,
@@ -1092,7 +1149,7 @@ def evaluate_joint_site(base, publish=True):
                 report.update(
                     requested_ev_target_kwh=requested,
                     requested_ev_target_percent=requested * 100 / model_base.car_charging_battery_size[0],
-                    ev_departure_at=base.args["joint_site"]["session"]["departure"],
+                    ev_departure_at=options["settings"]["session"]["departure"] if options["settings"] else base.args["joint_site"]["session"]["departure"],
                     planning_ev_target_kwh=requested,
                     planned_ev_kwh_by_departure=min(delivered, model_base.car_charging_battery_size[0]),
                     planned_ev_percent_by_departure=min(100, delivered * 100 / model_base.car_charging_battery_size[0]),
@@ -1145,7 +1202,7 @@ def evaluate_joint_site(base, publish=True):
                     solver_grid_cost=sum(action.grid_import_kwh * action.import_price - action.grid_export_kwh * action.export_price for action in result.actions),
                     requested_ev_target_kwh=requested,
                     requested_ev_target_percent=requested * 100 / model_base.car_charging_battery_size[0],
-                    ev_departure_at=base.args["joint_site"]["session"]["departure"],
+                    ev_departure_at=options["settings"]["session"]["departure"] if options["settings"] else base.args["joint_site"]["session"]["departure"],
                     planning_ev_target_kwh=planning_target,
                     planned_ev_kwh_by_departure=delivered,
                     planned_ev_percent_by_departure=delivered * 100 / model_base.car_charging_battery_size[0],

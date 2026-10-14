@@ -183,6 +183,69 @@ def test_grid_support_domestic_targets_follow_solar(base):
     assert plans[1] < plans[0]
 
 
+def test_initial_demand_is_a_scoped_search_constraint():
+    """Consistent demand-first actions can still use later grid preparation for the same floor."""
+    slots = [Slot(index, index * 5, 5, 0, 0, 10, 0) for index in range(3)]
+    battery = BatteryConfig(10, 2, 1, 3, 8, 1, 1, 2.4, terminal_value_per_kwh=100)
+    ev = EVConfig(25, 0, 0, deadline_min=15)
+    site = SiteConfig(6, 0, 16)
+    config = PlannerConfig(beam_width=None, allowed_battery_modes=("demand", "charge"))
+    default = plan(slots, ev, battery, site, config)
+    preferred = plan(slots, ev, battery, site, replace(config, initial_battery_mode="demand"))
+    assert default.actions[0].battery_mode == "charge"
+    assert preferred.status == "feasible" and preferred.actions[0].battery_mode == "demand"
+    assert preferred.actions[0].grid_import_kwh == 0 and preferred.actions[0].battery_soc_kwh_end == 2
+    assert any(action.battery_mode == "charge" for action in preferred.actions[1:])
+    assert preferred.diagnostics.final_battery_soc_kwh >= 2.4
+    for mode in (True, "unsupported", "hold"):
+        try:
+            plan(slots, ev, battery, site, replace(config, initial_battery_mode=mode))
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("Unsupported initial mode accepted")
+
+
+def test_self_consumption_preference_is_paired_and_explicit(base):
+    """Opt-in sources preference changes the search, not source settings or replay guards."""
+    _support_fixture(base)
+    base.args["joint_site"].update(self_consumption_first=True, ev_charging_priority="asap")
+    before = deepcopy(base.args)
+    with patch("joint_site_native._observation_clock", return_value=base.now_utc):
+        options = _options(base)
+    chosen, attempts = _continuous_grid_support_shadow(base, options)
+    assert chosen is not None and chosen[0].actions[0].battery_mode == "demand"
+    assert attempts[0]["initial_demand_only"] is True and attempts[0]["native_passed"]
+    assert all(check["passed"] for check in chosen[3].values())
+    assert base.args == before and not getattr(base, "joint_site_pending", None)
+    # Force the initial-demand trial to fail independent replay. The fallback
+    # must be separately checked, rather than hiding the rejection or dropping a gate.
+    from joint_site_native import _replay_candidate as original
+
+    def reject_demand(base, trial, result, slots):
+        """Inject a paired-check failure only in the preferred trial."""
+        windows, checks = original(base, trial, result, slots)
+        if trial.get("initial_demand_only"):
+            checks["pv10"]["passed"] = False
+        return windows, checks
+
+    with patch("joint_site_native._replay_candidate", side_effect=reject_demand):
+        fallback, attempts = _continuous_grid_support_shadow(base, options)
+    assert fallback is not None and all(check["passed"] for check in fallback[3].values())
+    assert attempts[0]["initial_demand_only"] and not attempts[0]["native_passed"]
+    assert not attempts[1]["initial_demand_only"] and attempts[1]["native_passed"]
+    assert base.args == before
+    for value in ("yes", 1, None):
+        base.args["joint_site"]["self_consumption_first"] = value
+        with patch("joint_site_native._observation_clock", return_value=base.now_utc):
+            try:
+                _options(base)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("Non-boolean source preference accepted")
+
+
 def run_joint_site_grid_support_tests(base):
     """Run deterministic dispatch and authority-boundary regressions."""
     for test in (test_grid_support_recorded_charge_request, test_grid_support_headroom_and_exhaustion, test_grid_support_continuous_ev_before_solar):
@@ -191,4 +254,6 @@ def run_joint_site_grid_support_tests(base):
     test_grid_support_continuous_candidate_is_paired(base)
     test_grid_support_replay_rejects_hidden_reserve_tail(base)
     test_grid_support_domestic_targets_follow_solar(base)
+    test_initial_demand_is_a_scoped_search_constraint()
+    test_self_consumption_preference_is_paired_and_explicit(base)
     return False

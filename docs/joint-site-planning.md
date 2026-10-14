@@ -52,6 +52,18 @@ It neither invents a new departure nor renews the session. If this bounded searc
 finds no safe continuous block, the report explicitly identifies the ordinary
 validated-search fallback; it does not claim the earliest physically possible start.
 
+The priority can also reference a Home Assistant `input_select` or `select` entity
+whose options are exactly `asap` and `cost`. Create a
+[dropdown helper](https://www.home-assistant.io/integrations/input_select/), then
+set `joint_site.ev_charging_priority: input_select.ev_charging_priority` and append
+that entity to the top-level `watch_list` in `apps.yaml`. An entities dashboard
+card displays it as a dropdown. A selection change requests a new plan on the
+next update-loop tick, without waiting for the five-minute schedule. It also
+invalidates an old execution receipt; a change during calculation cannot dispatch
+the previous-priority candidate. Missing, unknown or unavailable options fail
+validation rather than silently selecting a different priority. Keep literal
+`asap` or `cost` if no dashboard control is required.
+
 ### Independent household routing and authorised partial targets
 
 `household_fallback: true` opts into availability-first routing in apply mode.
@@ -64,7 +76,7 @@ runs. A rejected joint candidate uses the same handback. Reasons remain in Show 
 ordinary absence does not set a global error or change read-only/manual controls.
 The household Plan retains its native rows, columns, precision and totals.
 
-For connected sessions this opt-in also persists SOC-contradiction invalidation
+For dated, operator-confirmed sessions this opt-in also persists SOC-contradiction invalidation
 through the Storage component. Age and restart cannot erase it; recovery needs
 a strictly newer explicit confirmation and reconciled baseline. Later home or
 idle connection transitions require renewed confirmation, never automatic reuse
@@ -81,6 +93,75 @@ drop against that same lower target. Missing, altered or inconsistent evidence
 fails closed. ASAP also seeks a continuous block for this partial target.
 The active status retains the achievable percentage and the unchanged request;
 neither a partial result nor deployment renews a session or proves physical delivery.
+
+### Optional standing daily policy
+
+`recurring_session` is a separate, off-by-default alternative to `session` and
+`confirmed_session`; these configurations are mutually exclusive. Its exact fields
+are `enabled: true`, an offset-aware `policy_authorised_at`, and the dedicated
+`energy_entity` (kWh) and `power_entity` (kW). It requires apply mode, shared local
+grid support, `execution_authorised: true` and `household_fallback: true`.
+It does not assert that `apply_verified` or hardware commissioning is complete.
+
+The daily deadline comes from the first car's native `car_charging_plan_time` and
+the configured `timezone`. Local calendar arithmetic handles 23- and 25-hour days.
+The existing requested target, ASAP preference and partial-delivery authorisation
+remain independent. No per-day or per-connection operator confirmation is created.
+
+Presence, connection and permission are checked before vehicle SOC or energy.
+Real arrivals and reconnections create sensor-derived baselines only after observed
+relay OFF and zero EV power. Exactly chained same-state HA reports preserve
+continuity; missed event chains are not assumed continuous. A bounded cache history
+distinguishes eligible charging-state changes from an intervening unplug.
+
+The Storage component retains the physical baseline across midnight and deadline
+rollover. Unreadable existing records fail closed rather than becoming first-use
+records. Meter resets, implausible delivery and contradictory SOC persist as faults;
+rollover or restart cannot clear them. Retained vehicle readings keep their real
+timestamps, metered SOC is labelled as an estimate, and a validated changed vehicle
+value can correct that estimate. A retained old full reading cannot establish a new
+completed session. Prior-deadline evidence remains in Show Debug; later energy is
+never attributed retroactively to that deadline.
+
+Only the existing external executor may consume bounded version-1 EV leases.
+Household reserves, manual targets, restart/pause thresholds and cooldown are
+unchanged. The standing policy does **not** pretend an absent vehicle is connected:
+it hands back to native household planning. Forecasting a future arrival remains a
+separate planning input, not execution permission or evidence of delivered energy.
+
+### Anticipated arrival is a model input, not a charging slot
+
+While the recurring-policy car is observed away and the relay is OFF, the native
+household prediction can include conditional future EV demand. It uses the existing
+**model-only** car-slot seam, never the published charger slots, and never reads
+vehicle SOC or energy while away. Actual arrival, connection and the existing
+lease/executor checks remain mandatory for real charging.
+
+The native HA recorder/history cache supplies fourteen days of home/away events.
+Only paired departures and returns count; repeated same-state reports and unknown
+gaps do not create trips. The sample is conditioned on how long the current trip
+has already lasted, using similar departure hours and weekday/weekend type when
+at least three examples remain. For a long trip with too few surviving examples,
+it falls back to the last genuine return on each completed historical day, using
+only local return times still ahead and before the ready deadline; this also
+requires three examples. The empirical 75th percentile provides one
+expected arrival; the 10th/90th percentiles describe uncertainty, not a promise.
+History is reused for up to an hour, with a new real departure invalidating that
+cache. No device refresh or extra hardware polling is performed.
+
+Because away SOC is unknown, this conservative demand scenario assumes an empty
+car, explicitly **not** a zero-percent measurement. It uses the existing target,
+rate, loss and next local ready time. Model energy starts only after the expected
+arrival, never spills past the deadline, and shows any shortfall. The actual SOC
+baseline and delivered-energy counter are not advanced by the hypothetical plan.
+
+Show Debug carries the low-confidence assumption, empirical range, sample count,
+source timestamps and shortfall. Native Plan columns, colours and numeric formatting
+are unchanged; its future energy and cost totals include the modelled demand.
+This is neither a guarantee of completion nor a new hard household reserve. Human
+targets and the native household optimiser remain authoritative. Missing history,
+a retained session fault, stale assumptions, a real return or changed user intent
+withdraw the hypothesis without granting EV authority.
 
 This addresses the distinction between the requested command and observed power
 flow. The Deye [SG01LP1 manual, section 5.7](https://www.deyeinverter.com/deyeinverter/2026/05/19/rand/5060/%E3%80%90b%E3%80%91manual_sun-12-16k-sg01lp1-eu_20260519_en.pdf)
@@ -182,7 +263,8 @@ The mapping accepts:
 | `soc_max_age_minutes` | Maximum age of the EV observation; default 60, maximum 1440 |
 | `ev_pause_percent` / `ev_restart_percent` | Domestic-battery EV thresholds; defaults 15 / 25 |
 | `min_off_minutes` | Minimum EV off interval; default 10 |
-| `ev_charging_priority` | `cost` (default) or `asap`, preferring the earliest paired-safe continuous block for shared grid-support controls |
+| `ev_charging_priority` | `cost` (default), `asap`, or a watched HA dropdown containing those options; ASAP prefers the earliest paired-safe continuous block for shared grid-support controls |
+| `self_consumption_first` | `false` by default; shared grid support can first try a complete continuous candidate with native Demand in the current step, using PV/battery before grid charging. Both full native replays must pass; otherwise the separately checked ordinary candidate remains available. This is not a ban on necessary grid import or a global minimum-import guarantee. |
 | `terminal_min_percent` | End-of-horizon battery floor; defaults to the configured domestic reserve |
 | `beam_width` | Bounded search size; default 128, maximum 512 |
 | `soc_entity` / `soc_entity_unit` | Optional current HA EV SOC entity and explicit `%` or `kWh` units |

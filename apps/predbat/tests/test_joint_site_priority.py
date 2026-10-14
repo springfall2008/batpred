@@ -1,0 +1,143 @@
+"""Exercise the HA dropdown through planning, invalidation and bounded execution."""
+
+import asyncio
+from copy import deepcopy
+from datetime import timedelta
+from unittest.mock import patch
+
+from joint_site_apply import execute_joint_site, publish_joint_ev, execution_fingerprint
+from joint_site_native import _options, _continuous_grid_support_shadow, evaluate_joint_site
+from tests.test_joint_site_actual import _actual_inputs, _set_entity
+
+PRIORITY_ENTITY = "input_select.test_ev_priority"
+
+
+def _priority_inputs(base, priority="asap"):
+    """Provide two safe tariff bands and an entity-backed priority on the real template."""
+    inverter, writes, _, _ = _actual_inputs(base)
+    settings = base.args["joint_site"]
+    settings["ev_charging_priority"] = PRIORITY_ENTITY
+    settings["session"]["departure"] = settings["confirmed_session"]["departure"] = (base.now_utc + timedelta(minutes=60)).isoformat()
+    base.soc_kw = base.soc_max * 0.8
+    inverter.soc_kw, inverter.soc_percent = base.soc_kw, 80
+    base.metric_battery_value_scaling = 0
+    base.rate_import.update({base.minutes_now + minute: 50 if minute < 30 else 1 for minute in range(60)})
+    base.watch_list = [PRIORITY_ENTITY]
+    _set_entity(base, PRIORITY_ENTITY, priority)
+    return writes
+
+
+def test_priority_dropdown_replans_and_preserves_target(base):
+    """A watched dropdown switches tariff preference while preserving the session and guards."""
+    writes = _priority_inputs(base)
+    settings = deepcopy(base.args["joint_site"])
+    limits = (base.reserve, base.car_charging_rate[:], base.car_charging_limit[:], base.car_charging_battery_size[:])
+    first = evaluate_joint_site(base, publish=False)
+    assert first["status"] == "candidate" and first["ev_charging_priority"] == "asap", first
+    assert first["proposed_ev_windows"][0]["start"] == base.minutes_now
+    assert execute_joint_site(base)[0] != "Joint blocked", base.joint_site_report
+    fingerprint = execution_fingerprint(base)
+    count = len(writes)
+    base.update_pending, base.plan_valid = False, True
+    _set_entity(base, PRIORITY_ENTITY, "cost")
+    asyncio.run(base.trigger_watch_list(PRIORITY_ENTITY, "state", "asap", "cost"))
+    assert base.update_pending is True and base.plan_valid is False
+    assert execution_fingerprint(base) != fingerprint
+    publish_joint_ev(base)
+    assert base.joint_site_execution is None and len(writes) == count
+    assert base.dashboard_values["binary_sensor." + base.prefix + "_car_charging_slot"]["state"] == "off"
+    second = evaluate_joint_site(base, publish=False)
+    assert second["status"] == "candidate" and second["ev_charging_priority"] == "cost", second
+    assert second["proposed_ev_windows"][0]["start"] > first["proposed_ev_windows"][0]["start"]
+    for report in (first, second):
+        assert all(check["passed"] for check in report["native_checks"].values())
+        assert all(check["final_ev_kwh"] >= base.car_charging_limit[0] - 0.002 for check in report["native_checks"].values())
+        assert max(window["end"] for window in report["proposed_ev_windows"]) <= base.minutes_now + 60
+    assert base.args["joint_site"] == settings
+    assert limits == (base.reserve, base.car_charging_rate, base.car_charging_limit, base.car_charging_battery_size)
+    assert not any(service.startswith("switch") for service, _ in writes)
+
+
+def test_priority_dropdown_unavailable_revokes_authority(base):
+    """Missing or invalid dropdown states cannot silently fall back to another priority."""
+    for value in ("unknown", "unavailable", "fastest", None):
+        writes = _priority_inputs(base)
+        assert evaluate_joint_site(base, publish=False)["status"] == "candidate"
+        if value is None:
+            base.ha_interface.dummy_items.pop(PRIORITY_ENTITY)
+        else:
+            _set_entity(base, PRIORITY_ENTITY, value)
+        assert execute_joint_site(base)[0] == "Joint blocked" and not writes
+        assert evaluate_joint_site(base, publish=False)["status"] == "invalid_input"
+        assert base.joint_site_pending is None
+
+
+def test_priority_change_during_calculation_rejects_old_candidate(base):
+    """A late selection cannot stamp an old-priority candidate with the new fingerprint."""
+    writes = _priority_inputs(base)
+
+    def select_after_search(model, options):
+        """Deliver a HA state event after the old-priority search has completed."""
+        result = _continuous_grid_support_shadow(model, options)
+        _set_entity(base, PRIORITY_ENTITY, "cost")
+        return result
+
+    with patch("joint_site_native._continuous_grid_support_shadow", side_effect=select_after_search):
+        report = evaluate_joint_site(base, publish=False)
+    assert report["status"] == "candidate" and report["ev_charging_priority"] == "asap", report
+    assert base.joint_site_pending["fingerprint"] == execution_fingerprint(base)
+    assert execute_joint_site(base)[0] == "Joint blocked" and not writes
+
+
+def test_priority_literal_and_select_compatibility(base):
+    """Existing literal settings and HA select entities retain the same enum validation."""
+    _priority_inputs(base)
+    settings = base.args["joint_site"]
+    for priority in ("cost", "asap"):
+        settings["ev_charging_priority"] = priority
+        assert _options(base)["ev_charging_priority"] == priority
+    settings.pop("ev_charging_priority")
+    assert _options(base)["ev_charging_priority"] == "cost"
+    settings["ev_charging_priority"] = "select.test_ev_priority"
+    _set_entity(base, settings["ev_charging_priority"], "asap")
+    assert _options(base)["ev_charging_priority"] == "asap"
+
+
+def test_priority_dropdown_preserves_recurring_session(base):
+    """Changing preference cannot renew standing consent or reset the physical meter baseline."""
+    from joint_site_recurring import resolve_recurring_session
+    from tests.test_joint_site_recurring import recurring_inputs
+
+    (_, writes, _, _), store = recurring_inputs(base)
+    settings = base.args["joint_site"]
+    settings["ev_charging_priority"] = PRIORITY_ENTITY
+    _set_entity(base, PRIORITY_ENTITY, "asap")
+    first = resolve_recurring_session(base)
+    assert first["status"] == "ready", first
+    saved = deepcopy(store.records)
+    fingerprint = execution_fingerprint(base)
+    _set_entity(base, PRIORITY_ENTITY, "cost")
+    assert _options(base)["ev_charging_priority"] == "cost"
+    second = resolve_recurring_session(base)
+    assert second["status"] == "ready" and second["identity"] == first["identity"]
+    assert second["session"] == first["session"] and store.records == saved
+    assert execution_fingerprint(base) != fingerprint and not writes
+
+
+def run_joint_site_priority_tests(base):
+    """Run deterministic dropdown tests against the native template and HA cache."""
+    from tests.test_joint_site_template import shared_template_available, check_unavailable_template
+
+    if not shared_template_available():
+        check_unavailable_template(base)
+        return False
+    with patch("joint_site_native._observation_clock", side_effect=lambda: base.now_utc):
+        for test in (
+            test_priority_dropdown_replans_and_preserves_target,
+            test_priority_dropdown_unavailable_revokes_authority,
+            test_priority_change_during_calculation_rejects_old_candidate,
+            test_priority_literal_and_select_compatibility,
+            test_priority_dropdown_preserves_recurring_session,
+        ):
+            test(base)
+    return False

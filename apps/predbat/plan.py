@@ -358,7 +358,12 @@ class Plan:
         """
         now_slots = self.car_charging_now_slots
         # Always a fresh list per car, so a caller that edits the model can never edit the published plan
-        return [(now_slots[car_n] if car_n < len(now_slots) else []) + list(slots) for car_n, slots in enumerate(self.car_charging_slots)]
+        model = [(now_slots[car_n] if car_n < len(now_slots) else []) + list(slots) for car_n, slots in enumerate(self.car_charging_slots)]
+        from joint_site_arrival import model_arrival_slots
+
+        if model and not model[0]:
+            model[0] = model_arrival_slots(self)
+        return model
 
     def car_charging_threshold_kw(self):
         """

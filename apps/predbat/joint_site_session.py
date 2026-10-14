@@ -10,6 +10,10 @@ def household_reason(base):
     settings = base.args.get("joint_site")
     if not isinstance(settings, dict) or settings.get("mode") != "apply" or settings.get("household_fallback") is not True:
         return None
+    from joint_site_recurring import recurring_enabled, resolve_recurring_session
+
+    if recurring_enabled(settings):
+        return resolve_recurring_session(base)["reason"]
     from joint_site_native import _read_entity_state, _observation_clock, _parse_entity_timestamp
 
     now = _observation_clock()
@@ -58,10 +62,10 @@ def household_reason(base):
     if confirmation:
         try:
             confirmed = _parse_entity_timestamp(confirmation["confirmed_at"], "confirmed_at")
-            if settings.get("home_entity") and home["last_changed"] > confirmed:
+            if settings.get("home_entity") and home["value_last_changed"] > confirmed:
                 return "new_vehicle_session_required"
             relay = observed("relay_entity")
-            if relay and relay["state"] == "off" and connection["last_changed"] > confirmed and connection["state"] in (allowed or []):
+            if relay and relay["state"] == "off" and connection["value_last_changed"] > confirmed and connection["state"] in (allowed or []):
                 return "new_connection_confirmation_required"
         except (ValueError, TypeError, KeyError):
             return "ev_session_required"

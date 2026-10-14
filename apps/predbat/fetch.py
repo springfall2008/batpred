@@ -1750,6 +1750,10 @@ class Fetch:
                 self.log("Car {} charging is exclusive, will not plan other cars".format(car_n))
                 break
 
+        from joint_site_arrival import prepare_arrival_forecast
+
+        prepare_arrival_forecast(self)
+
     def car_planned_slot_entity(self, planned_entity_id_list, car_n, slot_entity_id):
         """
         The sensor a car's planned dispatches are read from, where that is not its slot sensor.
@@ -1773,6 +1777,11 @@ class Fetch:
         live plan; diagnostics that record state across cycles must be skipped in that case.
         """
 
+        from joint_site_recurring import recurring_enabled
+
+        joint_soc = recurring_enabled(self.args.get("joint_site"))
+        # The standing joint policy reads its own SOC after availability checks.
+        # Native zero entries are inactive model placeholders, not observed SOC.
         # Work out current car SoC and limit
         self.car_charging_loss = 1 - float(self.get_arg("car_charging_loss"))
 
@@ -1784,7 +1793,7 @@ class Fetch:
             if car_n < len(self.car_charging_manual_soc) and self.car_charging_manual_soc[car_n]:
                 car_postfix = "" if car_n == 0 else "_" + str(car_n)
                 self.car_charging_soc[car_n] = self.get_arg("car_charging_manual_soc_kwh" + car_postfix, 0.0)
-            else:
+            elif not (joint_soc and car_n == 0):
                 self.car_charging_soc[car_n] = (self.get_arg("car_charging_soc", 0.0, index=car_n) * self.car_charging_battery_size[car_n]) / 100.0
 
         # Get octopus intelligent slot configuration - could be single value or list for multiple cars
@@ -1887,7 +1896,7 @@ class Fetch:
                 if size:
                     self.car_charging_battery_size[car_n] = size
                     # Recalculate car SoC now that battery size has been updated from Octopus data
-                    if car_n < len(self.car_charging_manual_soc) and not self.car_charging_manual_soc[car_n]:
+                    if car_n < len(self.car_charging_manual_soc) and not self.car_charging_manual_soc[car_n] and not (joint_soc and car_n == 0):
                         self.car_charging_soc[car_n] = (self.get_arg("car_charging_soc", 0.0, index=car_n) * self.car_charging_battery_size[car_n]) / 100.0
                 if rate:
                     # Octopus's figure only ever raises the configured rate, never lowers it. Where Octopus's catalogue
@@ -1993,7 +2002,8 @@ class Fetch:
         # Log final car SoC (initialised before the IOG loop, updated per-car after Octopus battery_size is read)
         if self.num_cars:
             car_charging_limit_percent = [dp1(limit / size * 100) if size else 0 for limit, size in zip(self.car_charging_limit, self.car_charging_battery_size)]
-            self.log("Cars: SoC: {}kWh, Charge limit {}% ({}kWh), plan time {}, battery size {}kWh".format(self.car_charging_soc, car_charging_limit_percent, self.car_charging_limit, self.car_charging_plan_time, self.car_charging_battery_size))
+            displayed_soc = ["joint-managed" if joint_soc and index == 0 else value for index, value in enumerate(self.car_charging_soc)]
+            self.log("Cars: SoC: {}kWh, Charge limit {}% ({}kWh), plan time {}, battery size {}kWh".format(displayed_soc, car_charging_limit_percent, self.car_charging_limit, self.car_charging_plan_time, self.car_charging_battery_size))
 
     def fetch_pv_forecast(self):
         """

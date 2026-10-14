@@ -71,6 +71,9 @@ from tests.test_joint_site_grid_support import run_joint_site_grid_support_tests
 from tests.test_prediction_grid_support import run_prediction_grid_support_tests
 from tests.test_joint_site_actual import run_joint_site_actual_tests
 from tests.test_joint_site_session import run_joint_site_session_tests
+from tests.test_joint_site_recurring import run_joint_site_recurring_tests
+from tests.test_joint_site_arrival import run_joint_site_arrival_tests
+from tests.test_joint_site_priority import run_joint_site_priority_tests
 from tests.test_joint_site_partial_apply import run_joint_site_partial_apply_tests
 from tests.test_joint_site_applied_view import run_joint_site_applied_view_tests
 from tests.test_basic_rates import test_basic_rates
@@ -533,6 +536,9 @@ def main():
         ("prediction_grid_support", run_prediction_grid_support_tests_isolated, "Independent charge-request grid support replay", False),
         ("joint_site_actual", run_joint_site_actual_tests_isolated, "Confirmed sessions and exact native charge ceilings", False),
         ("joint_site_session", run_joint_site_session_tests, "Native domestic handback and durable session evidence", False),
+        ("joint_site_recurring", run_joint_site_recurring_tests, "Standing EV policy and durable sensor-derived sessions", False),
+        ("joint_site_arrival", run_joint_site_arrival_tests, "Absent EV demand in the native model without execution authority", False),
+        ("joint_site_priority", run_joint_site_priority_tests, "HA charging priority dropdown and immediate plan invalidation", False),
         ("joint_site_partial_apply", run_joint_site_partial_apply_tests, "Authorised partial targets through paired replay and dispatch", False),
         ("joint_site_applied_view", run_joint_site_applied_view_tests, "Truthful applied plan and execution receipt presentation", False),
         ("execute", run_execute_tests, "Execute tests", False),

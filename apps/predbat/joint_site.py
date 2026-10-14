@@ -114,6 +114,7 @@ class PlannerConfig:
     allow_limited_discharge: bool = False
     allowed_battery_modes: Tuple[str, ...] = BATTERY_MODES
     economic_diversity: bool = False
+    initial_battery_mode: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -231,6 +232,8 @@ def _validate(slots, ev, battery, site, planner):
         if mode in seen:
             raise PlannerInputError("allowed_battery_modes contains duplicate mode")
         seen.add(mode)
+    if planner.initial_battery_mode is not None and (type(planner.initial_battery_mode) is not str or planner.initial_battery_mode not in allowed):
+        raise PlannerInputError("initial_battery_mode must be an allowed mode or None")
     _require_finite("soc_bucket_kwh", planner.soc_bucket_kwh, 1e-6)
     if not slots or len(slots) > 576 or (planner.beam_width is None and len(slots) > 12):
         raise PlannerInputError("Horizon must have 1..576 slots (at most 12 for exhaustive search)")
@@ -528,7 +531,7 @@ def plan(slots: Sequence[Slot], ev: EVConfig, battery: BatteryConfig, site: Site
     for i, slot in enumerate(slots):
         next_states = {}
         for node in frontier:
-            for mode in modes:
+            for mode in (planner.initial_battery_mode,) if i == 0 and planner.initial_battery_mode is not None else modes:
                 for on in (False, True):
                     transitions += 1
                     action = _resolve_action(slot, on, mode, node, battery, ev, site)
