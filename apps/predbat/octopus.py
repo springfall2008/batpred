@@ -4064,17 +4064,18 @@ class Octopus:
         The source of the planned dispatch that is pricing the current half hour off-peak for car_n, or None
         when none is.
 
-        The dispatch must have started - on the exact clock, as the Octopus API component advances the start
-        of a running dispatch to the time of its last poll, which is after minutes_now - and reach into the
-        current half hour, which rate_add_io_slots() prices whole. One still to start is not counted, though
-        its half hour is priced too: Octopus can withdraw it before it runs.
+        The dispatch must be running on the exact clock: started - the Octopus API component advances the
+        start of a running dispatch to the time of its last poll, which is after minutes_now - and not yet
+        ended. One still to start is not counted, though rate_add_io_slots() prices its half hour too:
+        Octopus can withdraw it before it runs. Nor is an entry still listed after its end, which was never
+        seen running, and which dispatch_billed_off_peak() would take as finished whatever its location.
         """
         minute_exact = self.dynamic_load_car_minute(self.now_utc_real)
         for slot in planned:
             start_minutes, end_minutes, _, source, location = self.decode_octopus_slot(car_n, slot, raw=True)
             if start_minutes == end_minutes or not self.dispatch_billed_off_peak(source, location, end_minutes):
                 continue
-            if start_minutes <= minute_exact and round_out_to_period(start_minutes, end_minutes)[1] > self.minutes_now:
+            if start_minutes <= minute_exact < end_minutes:
                 return source
         return None
 

@@ -248,6 +248,16 @@ def _run(my_predbat):
     rates = _cycle(my_predbat, 1115)
     failed |= _check("t11 held", _low(rates, 1080, 1110), "rate {}".format(rates[1080]))
 
+    print("Test 12: a planned entry first seen after it has ended was never seen running, so is not held")
+    _reset(my_predbat)
+    # Still listed as planned 3 minutes after its end, and by then priced as finished whatever its location
+    _cycle(my_predbat, 1095, planned=[_dispatch(my_predbat, 1083, 1092, location="AWAY")])
+    failed |= _check("t12 away entry not recorded", not my_predbat.octopus_slots_held.get(0), "held {}".format(my_predbat.octopus_slots_held))
+    _cycle(my_predbat, 1097, planned=[_dispatch(my_predbat, 1083, 1096)], seconds=30)
+    failed |= _check("t12 entry ended since minutes_now not recorded", not my_predbat.octopus_slots_held.get(0), "held {}".format(my_predbat.octopus_slots_held))
+    rates = _cycle(my_predbat, 1100)
+    failed |= _check("t12 day rate once the entry has gone", _day(rates, 1080, 1110), "rate {}".format(rates[1080]))
+
     return failed
 
 
