@@ -3650,7 +3650,8 @@ class Fetch:
             self.log("Warn: iBoost demand forecast contains no future demand, using the legacy iBoost smart plan")
             return {}
 
-        self.iboost_forecast_extent = last_data_minute
+        # The fill pass stops here: at the end of the data, and never past the demand grid
+        self.iboost_forecast_extent = min(last_data_minute, grid_end)
         self.log("iBoost demand forecast loaded: {} kWh over {} intervals of {} minutes from minute {}".format(dp2(total), len(demand), self.plan_interval_minutes, start_minute))
         return demand
 

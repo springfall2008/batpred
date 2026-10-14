@@ -455,6 +455,20 @@ def run_iboost_forecast_tests(my_predbat):
     del my_predbat.ha_interface.dummy_items["sensor.hot_water_demand"]
     my_predbat.iboost_forecast_extent = None
 
+    # Data reaching past the demand grid (forecast_hours 24 with a sensor publishing further ahead)
+    # must not take the fill clamp beyond the grid, where no demand is modelled
+    print("**** Running Test: iboost_fetch_extent_past_grid ****")
+    far_attribute = make_forecast_attribute(my_predbat, forecast_points + [((my_predbat.forecast_days + 1) * 24 * 60 + 600, 1.5)])
+    my_predbat.args["iboost_forecast"] = ["sensor.hot_water_demand$results"]
+    my_predbat.ha_interface.set_state("sensor.hot_water_demand", "ok", attributes={"results": far_attribute})
+    demand = my_predbat.fetch_iboost_forecast()
+    if my_predbat.iboost_forecast_extent != max(demand) + my_predbat.plan_interval_minutes:
+        print("ERROR: iboost_fetch_extent_past_grid forecast extent should stop at the grid end {} got {}".format(max(demand) + my_predbat.plan_interval_minutes, my_predbat.iboost_forecast_extent))
+        failed = True
+    del my_predbat.args["iboost_forecast"]
+    del my_predbat.ha_interface.dummy_items["sensor.hot_water_demand"]
+    my_predbat.iboost_forecast_extent = None
+
     failed |= run_iboost_fetch_test(
         "iboost_fetch_scaling",
         my_predbat,
