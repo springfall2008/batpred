@@ -55,6 +55,7 @@ _SNAPSHOT_ATTRS = [
     "rate_export_min",
     "rate_min",
     "rate_max",
+    "rate_import_tariff_max",
     "rate_min_base",
     "rate_max_base",
     "combine_charge_slots",

@@ -145,6 +145,7 @@ denorm
 derate
 derated
 derating
+dess
 desync
 desynced
 devcontainer
@@ -170,6 +171,8 @@ dtype
 dwindow
 eauth
 echargingpile
+ECONNRESET
+ecosmart
 Eddi
 eddis
 efgh
@@ -194,15 +197,18 @@ energythroughput
 enho
 Enlighten
 enlm
+ENOTFOUND
 enph
 enphase
 enphaseenergy
 Enpower
+entityfilter
 entrez
 epod
 epvtoday
 errno
 ESSAPI
+ETIMEDOUT
 etoday
 etok
 euids
@@ -252,6 +258,7 @@ getall
 getattr
 getrusage
 Ginlong
+githubusercontent
 gitnexus
 giv
 GivEnergy
@@ -346,6 +353,7 @@ labelcolor
 labelledby
 labelnames
 ladybugdb
+Lanmate
 larr
 libbi
 libc
@@ -470,6 +478,7 @@ overfitting
 oversizing
 overvoltage
 ownerapi
+pac
 parseable
 pbat
 pbgw
@@ -529,6 +538,7 @@ pyproject
 pytest
 pythonhashseed
 pytz
+Quattro
 Qwen
 randn
 rany2
@@ -625,6 +635,7 @@ startswith
 startt
 stdlib
 stepline
+stevekirtley
 Storion
 Stromligning
 strptime

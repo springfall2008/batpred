@@ -884,6 +884,13 @@ CONFIG_ITEMS = [
         "default": True,
     },
     {
+        "name": "octopus_intelligent_charger_follows_car",
+        "friendly_name": "Drive the charger to the Intelligent dispatches when Octopus drives the car",
+        "type": "switch",
+        "default": False,
+        "enable": "expert_mode",
+    },
+    {
         "name": "octopus_saving_auto_join",
         "friendly_name": "Octopus Saving Session Auto Join",
         "type": "switch",
@@ -2811,6 +2818,11 @@ APPS_SCHEMA = {
     "myenergi_enable_controls": {"type": "boolean"},
     "myenergi_poll_seconds": {"type": "integer", "zero": False},
     "myenergi_zappi_control": {"type": "boolean"},
+    "wallbox_username": {"type": "string", "empty": False},
+    "wallbox_password": {"type": "string", "empty": False},
+    "wallbox_automatic": {"type": "boolean"},
+    "wallbox_control": {"type": "boolean"},
+    "wallbox_poll_seconds": {"type": "integer", "zero": False},
     "fox_key": {"type": "string", "empty": False},
     "fox_automatic": {"type": "boolean"},
     "fox_automatic_ignore_pv": {"type": "boolean"},
@@ -2868,6 +2880,7 @@ APPS_SCHEMA = {
     "enphase_automatic": {"type": "boolean"},
     "enphase_automatic_ignore_pv": {"type": "boolean"},
     "octopus_intelligent_slot": {"type": "sensor|sensor_list", "sensor_type": "boolean|action", "entries": "num_cars", "optional_entries": True},
+    "octopus_intelligent_planned_slot": {"type": "sensor|sensor_list", "sensor_type": "boolean", "entries": "num_cars", "optional_entries": True},
     "octopus_ready_time": {"type": "sensor|sensor_list", "sensor_type": "string", "entries": "num_cars", "optional_entries": True},
     "octopus_charge_limit": {"type": "sensor|sensor_list", "sensor_type": "float", "entries": "num_cars", "optional_entries": True},
     "octopus_slot_low_rate": {"type": "boolean"},
@@ -2932,10 +2945,13 @@ APPS_SCHEMA = {
     "enable_coarse_fine_levels": {"type": "boolean"},
     "load_power_fill_enable": {"type": "boolean"},
     "load_ml_enable": {"type": "boolean"},
+    "load_ml_retrain_interval_hours": {"type": "integer", "min": 1, "max": 48},
     "gateway_device_id": {"type": "string", "empty": False},
     "gateway_mqtt_host": {"type": "string", "empty": False},
     "gateway_mqtt_port": {"type": "integer", "zero": False},
     "gateway_mqtt_token": {"type": "string", "empty": False},
+    "gateway_shared_ct": {"type": "boolean"},
+    "gateway_integrate_power": {"type": "boolean"},
     # User-maintained log/debug redaction denylist (GH#4770): literal strings to mask wherever a
     # value appears in predbat.log or a debug dump, for anything Predbat cannot recognise as a
     # credential from its own config - an MPAN or account number surfaced by a third-party HA
