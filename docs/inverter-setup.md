@@ -2816,11 +2816,15 @@ The template applies Predbat's **current command to all six physical Time of Use
 
 If a service is rejected or an expected value is not observed, Predbat stops that sequence and reports the failure. A later cycle checks the current state again. Group writes may partially apply; Home Assistant read-back is not independent hardware confirmation.
 
-`Disabled` disables those rows' grid/generator charging sources; it is **not** an export-disable or a battery hold command. Generator / Both sources are never enabled. Physical ToU boundaries, ToU enable, Program Power, work mode, global currents, shutdown and BMS/protection controls are not written.
+### Charging sources and required inverter setup
+
+`Disabled` is the charging-source option for a program: it disables grid/generator charging through that row. It does **not** turn off the inverter, disable all export, or hold the battery. The template uses `Disabled` and `Grid`; it does not select Generator / Both.
+
+**Settings to configure or verify yourself, outside Predbat:** Capacity/SoC mode, work mode, ToU enable and its physical time boundaries, and the commissioned Program Power/current/protection settings. Use the inverter's controls or the corresponding Solarman controls in Home Assistant. This template leaves those settings unchanged; it does not supply safe universal values for your battery, BMS or electrical installation. Keep commissioned limits rather than raising them to make a plan work.
 
 With `charge_time_format: "S"` and no mapped physical time entities, Predbat creates private sensors for its own start/end bookkeeping. Those sensors are **not** the six physical boundaries. Do not map two native start/end controls onto that six-row table. This template does not upload a future six-period schedule: it relies on Predbat continuing to run and changing the current intent.
 
-### Deye setup and commissioning boundaries
+### Required inverter setup and control checks
 
 1. Configure Solarman using its installation instructions. In **Monitor**, check every sensor/number/select, its units and direction. Set `deye_entity_prefix` to your actual entity prefix and adapt individual mappings where names differ.
 2. Merge the template into your own `apps.yaml`, preserving [tariffs](energy-rates.md), forecasts and load history. Replace example `soc_max`, `battery_rate_max`, `inverter_limit_charge`, `inverter_limit_discharge` and `inverter_limit` values with verified installation values. These are modelling inputs in watts, **not enforced hardware limits**. The inverter AC rating is not the site's grid-import limit. Keep `battery_min_soc` distinct from the emergency shutdown SOC.
