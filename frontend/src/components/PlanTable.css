@@ -503,8 +503,8 @@
   transform: translate(calc(-50% + var(--plan-action-tooltip-shift, 0px)), 4px);
   transition:
     opacity 0.12s ease,
-    transform 0.12s ease,
     visibility 0.12s ease;
+  overflow-wrap: anywhere;
 }
 
 .plan-action-control:hover .plan-action-tooltip,
