@@ -1,6 +1,7 @@
 # Shared local Deye/Solarman example. Read the Deye section of inverter-setup.md first.
 # Experimental charge/demand only; not a commissioned hold or power-limiting controller.
-# Merge the inverter section into your own apps.yaml; keep your tariffs and forecasts.
+# Back up apps.yaml, then replace the default GivTCP example with this template.
+# Configure your tariffs, forecasts and optional car in this file; do not merge inverter profiles.
 ---
 pred_bat:
   module: predbat
