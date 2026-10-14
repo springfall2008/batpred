@@ -695,6 +695,46 @@ class TestInjectEntities:
                 assert attrs["unit_of_measurement"] == "W"
                 assert attrs["step"] == 10
 
+    def test_grid_charge_only_marked_on_3ph_charge_rate(self):
+        """A GivEnergy 3-phase model's charge rate is marked as limiting grid charging only, so no Freeze Export is planned (#5082)."""
+        from gateway import GATEWAY_ATTRIBUTE_TABLE
+
+        status = self._make_status()
+        status.inverters[0].type = pb.INVERTER_TYPE_GIVENERGY
+        # The names the hub firmware reports, and a different casing in case it changes
+        for model in ("Hybrid 3ph", "AC 3ph", "HYBRID 3PH"):
+            status.inverters[0].model = model
+            gw = self._make_gateway()
+            gw._inject_entities(status)
+
+            _, attrs = gw._dashboard_calls["number.predbat_gateway_456789_charge_rate"]
+            assert attrs["grid_charge_only"] is True, (model, attrs)
+            assert attrs["step_percent_of_capacity"] == 1, (model, attrs)
+            # It describes charging: the discharge rate is not marked
+            _, attrs = gw._dashboard_calls["number.predbat_gateway_456789_discharge_rate"]
+            assert "grid_charge_only" not in attrs, (model, attrs)
+
+        # Marked on a copy, like the rate step
+        assert "grid_charge_only" not in GATEWAY_ATTRIBUTE_TABLE["charge_rate"]
+
+    def test_grid_charge_only_not_marked_on_other_models(self):
+        """Single-phase GivEnergy models (Battery Pause, or a charge limit that does stop the battery), older firmware with no model and other brands keep Freeze Export."""
+        status = self._make_status()
+        for inverter_type, model in (
+            (pb.INVERTER_TYPE_GIVENERGY, "Hybrid Gen3"),
+            (pb.INVERTER_TYPE_GIVENERGY, "All-in-One"),
+            (pb.INVERTER_TYPE_GIVENERGY, "AC Gen1"),
+            (pb.INVERTER_TYPE_GIVENERGY, ""),
+            (pb.INVERTER_TYPE_SOLIS_HYBRID, "Hybrid 3ph"),
+        ):
+            status.inverters[0].type = inverter_type
+            status.inverters[0].model = model
+            gw = self._make_gateway()
+            gw._inject_entities(status)
+
+            _, attrs = gw._dashboard_calls["number.predbat_gateway_456789_charge_rate"]
+            assert "grid_charge_only" not in attrs, (inverter_type, model, attrs)
+
     def test_rate_step_not_marked_on_other_brands(self):
         """GWMQTT is one inverter type for every brand the hub drives, so the GivEnergy step must not reach the others."""
         from gateway import GATEWAY_ATTRIBUTE_TABLE
@@ -7404,8 +7444,14 @@ class TestIntegratePower:
 def run_gateway_tests(my_predbat=None):
     """Run all GatewayMQTT tests. Returns True on failure, False on success."""
     from tests.test_gateway_token_refresh import TestIsAuthFailure, TestApplyRefreshResponse, TestMaybeRefreshOnAuthError
+    from tests.test_gateway_charge_window import TestGatewayChargeWindow
+    from tests.test_gateway_discharge_window import TestGatewayDischargeWindow
+    from tests.test_gateway_display import TestGatewayDisplayOnly
 
     test_classes = [
+        TestGatewayChargeWindow,
+        TestGatewayDischargeWindow,
+        TestGatewayDisplayOnly,
         TestProtobufDecode,
         TestPlanSerialization,
         TestCommandFormat,

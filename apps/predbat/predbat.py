@@ -34,7 +34,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v9.3.8"
+THIS_VERSION = "v9.4.0"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
 from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, DEFAULT_PREDBAT_REPOSITORY
@@ -573,6 +573,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.dynamic_load_car_effective = {}
         self.dynamic_load_car_stripped = 0
         self.octopus_surplus = set()
+        self.octopus_slots_planned = {}
+        self.octopus_slots_held = {}
         self.battery_capacity_nominal = False
         self.battery_scaling_auto = False
         self.releases = {}

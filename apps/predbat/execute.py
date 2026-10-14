@@ -609,7 +609,11 @@ class Execute:
                         else:
                             # If there is a previous set charge window, but its more than the set window minutes in the future but we are not close to it then we can leave it enabled for now
                             # saves register writes and avoids turning off the window before the inverter knows it finished
-                            if (inverter.charge_start_time_minutes != inverter.charge_end_time_minutes) and (inverter.charge_start_time_minutes - self.minutes_now) > self.set_window_minutes:
+                            # Only for an inverter with no charge enable switch, where turning the charge off means rewriting the
+                            # window itself (#2993). With a switch it is one write that leaves the times alone, and leaving it on
+                            # arms every other slot the inverter has: on a GivEnergy 3-phase the unused slots, held at 00:00-00:00,
+                            # are live for the first minute of the day and charged from the grid at full rate (#5371)
+                            if (not inverter.inv_has_charge_enable_time) and (inverter.charge_start_time_minutes != inverter.charge_end_time_minutes) and (inverter.charge_start_time_minutes - self.minutes_now) > self.set_window_minutes:
                                 self.log(
                                     "Inverter {} leaving charge window as already set and more than set_window_minutes {} away (now {} charge start time {})".format(
                                         inverter.id, self.set_window_minutes, self.time_abs_str(self.minutes_now), self.time_abs_str(inverter.charge_start_time_minutes)
@@ -1242,11 +1246,6 @@ class Execute:
                 self.charge_window = inverter.charge_window
                 self.export_window = inverter.export_window
                 self.export_limits = inverter.export_limits
-                if not inverter.inv_support_discharge_freeze:
-                    # Force off unsupported feature
-                    self.log("Note: Inverter does not support discharge freeze - disabled")
-                    self.set_export_freeze = False
-                    self.set_export_freeze_only = False
                 if not inverter.inv_support_charge_freeze:
                     # Force off unsupported feature
                     self.log("Note: Inverter does not support charge freeze - disabled")
@@ -1256,6 +1255,14 @@ class Execute:
                     self.set_reserve_enable = False
                     self.set_reserve_hold = False
                     self.set_discharge_during_charge = True
+            # Fleet-wide like the capability below, and for the same reason: the prediction models one
+            # combined battery, so a single inverter that keeps charging from solar through a Freeze
+            # Export means the plan's hold does not happen (#5082).
+            if not inverter.inv_support_discharge_freeze:
+                # Force off unsupported feature
+                self.log("Note: Inverter {} does not support discharge freeze - disabled".format(inverter.id))
+                self.set_export_freeze = False
+                self.set_export_freeze_only = False
             # Unlike the first-inverter-only settings above this is a fleet-wide capability: the
             # prediction models one combined battery, so a single inverter that just disables
             # charging during Freeze Export means the fleet as a whole cannot recapture PV.
