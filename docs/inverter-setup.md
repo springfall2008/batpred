@@ -2805,12 +2805,16 @@ This template has been used on a real home installation, not only in software te
 
 Use the shared [deye_solarman.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/deye_solarman.yaml) with [ha-solarman](https://github.com/davidrapan/ha-solarman). Its entity names and options follow the integration's [deye_hybrid profile](https://github.com/davidrapan/ha-solarman/blob/main/custom_components/solarman/inverter_definitions/deye_hybrid.yaml); verify compatibility with your exact model and firmware. This is a custom `DeyeSolarman` profile defined in `apps.yaml`, not a new built-in inverter type or a Deye Cloud connection.
 
-The template applies the **current intent to all six physical ToU rows** using [verified service sequences](#verified-service-sequences):
+The template applies Predbat's **current command to all six physical Time of Use (ToU) programs** using [verified service sequences](#verified-service-sequences). The inverter selects a program according to its clock; giving every program the same current settings prevents a program boundary from changing Predbat's requested behaviour. This is not a six-period forecast uploaded to the inverter.
 
-| Intent | Ordered actions |
-| ------ | --------------- |
-| Grid charge | Observe all six `Program N Charging` selects as `Disabled`; set and observe all six `Program N SOC` numbers at `{target_soc}`; then select `Grid` on all six rows |
-| Demand | Observe all six sources as `Disabled`; set all six SOC numbers to `{reserve_soc}`, the effective domestic minimum rounded up |
+**Predbat performs both the writes and the checks below automatically.** The checks are not instructions for you to inspect six controls on every cycle. Each phase must be visible in Home Assistant before Predbat advances to the next phase. If the final settings already match, no writes are needed.
+
+| Predbat command | Predbat sends, in order | Predbat checks in Home Assistant |
+| --------------- | ----------------------- | ------------------------------- |
+| Grid charge | Set all six charging-source selects to `Disabled`; set all six targets to `{target_soc}`; set all six sources to `Grid` | All six sources are disabled before changing targets; all six targets match before enabling grid charging; all six sources finally show `Grid` |
+| Demand (normal self-consumption) | Set all six charging sources to `Disabled`; set all six targets to `{reserve_soc}`, the effective domestic minimum rounded up | All six sources show `Disabled`, then all six targets match the minimum |
+
+If a service is rejected or an expected value is not observed, Predbat stops that sequence and reports the failure. A later cycle checks the current state again. Group writes may partially apply; Home Assistant read-back is not independent hardware confirmation.
 
 `Disabled` disables those rows' grid/generator charging sources; it is **not** an export-disable or a battery hold command. Generator / Both sources are never enabled. Physical ToU boundaries, ToU enable, Program Power, work mode, global currents, shutdown and BMS/protection controls are not written.
 
