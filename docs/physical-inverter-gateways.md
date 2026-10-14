@@ -111,3 +111,13 @@ The excluded pre-existing function requires the custom project runner's
 actual Gateway suite and existing source-gate/display regressions run in this
 invocation. Provider and broker responses are synthetic, with no customer keys,
 connections or commands.
+
+Optional automatic mappings retain the provider's existing semantics. An omitted
+key leaves the configured value or consumer default in place. An explicit
+`None` removes an unsupported mapping when no selected slot supplies a value;
+it cannot revive a stale standby control entity. For mixed selected providers,
+a supplied value replaces only its own physical slot, while an omitted slot
+retains its existing configured value. Rediscovery cannot change the composed
+bindings within the same boot. Regression tests use actual Cloud discovery and
+`Inverter.refresh_config` to verify explicit 1500 W and zero-export caps, a
+discovered site cap, and the absent-cap consumer default.
