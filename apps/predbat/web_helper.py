@@ -7247,8 +7247,8 @@ def get_plan_renderer_js():
                 // Car charging (conditional)
                 if (jsonData.num_cars > 0) {
                     // A slot dynamic load cancelled (car not charging) still shows its kWh, with a "?"
-                    const carCancelled = row.car_charging_cancelled > 0 ? `${row.car_charging_cancelled}?` : '';
-                    const carVal = row.car_charging > 0 ? (carCancelled ? `${row.car_charging} +${carCancelled}` : (joint ? Number(row.car_charging.toFixed(2)) : row.car_charging)) : (carCancelled || '&#9866;');
+                    const carCancelled = row.car_charging_cancelled > 0 ? `${row.car_charging_cancelled.toFixed(2)}?` : '';
+                    const carVal = row.car_charging > 0 ? (carCancelled ? `${row.car_charging.toFixed(2)} +${carCancelled}` : row.car_charging.toFixed(2)) : (carCancelled || '&#9866;');
                     html += `<td id=car bgcolor=${row.car_color || '#FFFFFF'}>${carVal}</td>`;
                 }
 
@@ -7333,7 +7333,7 @@ def get_plan_renderer_js():
 
                 // Car charging (if enabled)
                 if (jsonData.num_cars > 0 && totals.car_charging !== undefined) {
-                    html += `<td bgcolor=#FFFFFF><b>${totals.car_charging}</b></td>`;
+                    html += `<td bgcolor=#FFFFFF><b>${totals.car_charging.toFixed(2)}</b></td>`;
                 }
 
                 // iBoost (if enabled)
