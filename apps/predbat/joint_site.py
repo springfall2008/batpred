@@ -115,6 +115,8 @@ class PlannerConfig:
     allowed_battery_modes: Tuple[str, ...] = BATTERY_MODES
     economic_diversity: bool = False
     initial_battery_mode: Optional[str] = None
+    require_ev_start: bool = False
+    solar_ev_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -218,6 +220,10 @@ def _validate(slots, ev, battery, site, planner):
         raise PlannerInputError("beam_width must be an integer in 1..4096 or None")
     if type(planner.allow_limited_discharge) is not bool:
         raise PlannerInputError("allow_limited_discharge must be boolean")
+    if type(planner.require_ev_start) is not bool:
+        raise PlannerInputError("require_ev_start must be boolean")
+    if type(planner.solar_ev_only) is not bool:
+        raise PlannerInputError("solar_ev_only must be boolean")
     allowed = planner.allowed_battery_modes
     if not isinstance(allowed, (tuple, list)) or isinstance(allowed, (str, bytes)):
         raise PlannerInputError("allowed_battery_modes must be a tuple or list")
@@ -532,7 +538,9 @@ def plan(slots: Sequence[Slot], ev: EVConfig, battery: BatteryConfig, site: Site
         next_states = {}
         for node in frontier:
             for mode in (planner.initial_battery_mode,) if i == 0 and planner.initial_battery_mode is not None else modes:
-                for on in (False, True):
+                for on in (True,) if i == 0 and planner.require_ev_start else (False, True):
+                    if on and planner.solar_ev_only and (mode != BATTERY_DEMAND or slot.pv_kwh - slot.ac_load_kwh < ev.rate_kw * slot.duration_min / 60 - EPSILON):
+                        continue
                     transitions += 1
                     action = _resolve_action(slot, on, mode, node, battery, ev, site)
                     if action is None:

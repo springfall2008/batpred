@@ -352,14 +352,14 @@ def test_native_readonly_switch_transition_requires_observed_dispatch(base):
 
 
 def test_asap_prefers_earlier_paired_block_without_changing_session(base):
-    """Explicit ASAP ranks time before cost and still stages only the fully checked native commands."""
+    """ASAP takes the next cheaper band before the cheapest later band without changing consent."""
     _actual_inputs(base)
     settings = base.args["joint_site"]
     settings["session"]["departure"] = settings["confirmed_session"]["departure"] = (base.now_utc + timedelta(minutes=60)).isoformat()
     base.soc_kw = base.soc_max * 0.8
     base.inverters[0].soc_kw, base.inverters[0].soc_percent = base.soc_kw, 80
     base.metric_battery_value_scaling = 0
-    base.rate_import.update({base.minutes_now + minute: 50 if minute < 30 else 1 for minute in range(60)})
+    base.rate_import.update({base.minutes_now + minute: 50 if minute < 15 else 10 if minute < 30 else 1 for minute in range(60)})
     session = deepcopy(settings["session"])
     confirmation = deepcopy(settings["confirmed_session"])
     ordinary = evaluate_joint_site(base, publish=False)
@@ -367,13 +367,15 @@ def test_asap_prefers_earlier_paired_block_without_changing_session(base):
     settings["ev_charging_priority"] = "asap"
     report = evaluate_joint_site(base, publish=False)
     assert report["status"] == "candidate", report
-    assert report["ev_charging_priority"] == "asap" and report["proposed_ev_windows"][0]["start"] == base.minutes_now
+    assert report["ev_charging_priority"] == "asap" and report["proposed_ev_windows"][0]["start"] == base.minutes_now + 15
+    assert report["proposed_ev_windows"][0]["start"] < ordinary["proposed_ev_windows"][0]["start"]
+    assert report["priority_selection_reason"] == "next_cheaper_band"
     assert len(report["continuous_block_attempts"]) == 1 and all(check["passed"] for check in report["native_checks"].values())
     assert all(left["end"] == right["start"] for left, right in zip(report["proposed_ev_windows"], report["proposed_ev_windows"][1:]))
     assert settings["session"] == session and settings["confirmed_session"] == confirmation
-    assert base.joint_site_pending["commands"][0]["ev_on"]
+    assert not base.joint_site_pending["commands"][0]["ev_on"]
     assert execute_joint_site(base)[0] != "Joint blocked", base.joint_site_report
-    assert base.dashboard_values["binary_sensor." + base.prefix + "_car_charging_slot"]["state"] == "on"
+    assert base.dashboard_values["binary_sensor." + base.prefix + "_car_charging_slot"]["state"] == "off"
     # A later priority edit invalidates the old receipt instead of silently reusing it.
     settings["ev_charging_priority"] = "cost"
     publish_joint_ev(base)

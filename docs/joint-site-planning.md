@@ -34,26 +34,77 @@ mode writes are introduced. Nominal and PV10 replay use an explicitly opted-in
 Python Prediction; unmodified kernel and ordinary native plans retain their
 existing semantics. EV power, deadline, pause/restart and cooldown still apply.
 
-The opt-in model also prefers a single continuous EV block when both native
-forecasts validate it. An already active relay tries only a continuation from now.
-With the default cost preference, at most twelve coupled
-battery searches compare blocks using the existing conservative cost objective,
-including cycle cost and terminal energy. If no block validates, the ordinary
-bounded search remains available. This is an explicit continuity preference, not
-a calibrated ramp/restart penalty or an optimality guarantee. Passing replay alone
-does not grant execution authority.
+The opt-in model supports four distinct priorities. All schedules still require
+both native forecasts and the existing execution gates. An active relay first
+tries continuation without inventing a new OFF interval. Passing replay does not
+grant execution authority or prove physical delivery.
 
-For an earlier trip, `ev_charging_priority: asap` checks continuous starts across
-the finite departure horizon in chronological five-minute order and takes the first that passes
-both native forecasts, before considering cost. The default `cost` keeps the
-existing economic ordering. ASAP changes only scheduling preference: the fixed
-session, target, cooldown, domestic thresholds and executor guards remain intact.
-It neither invents a new departure nor renews the session. If this bounded search
-finds no safe continuous block, the report explicitly identifies the ordinary
-validated-search fallback; it does not claim the earliest physically possible start.
+| Priority | Scheduling preference |
+| --- | --- |
+| `now` | Require a validated start in the current interval, using supported grid/battery assistance if needed |
+| `asap` | Take the next useful opportunity: nearby solar first, then the next cheaper tariff band, with an earlier deadline-preserving fallback |
+| `cost` | Compare whole-house economic outcomes until departure, including flexible schedules and solar opportunity cost |
+| `solar` | Charge only from forecast household PV surplus, with an independent fresh local-meter gate; never fall back to grid/battery EV charging |
+
+`asap` first checks starts within **30 minutes** with conservative PV surplus
+covering full EV power for at least **15 minutes** (or the complete block if shorter).
+It then tries the first lower import-rate band, not necessarily the cheapest one
+in the entire horizon. A current band that has already fallen below its preceding
+band also qualifies, preventing repeated replanning from continually postponing
+the start. Tariffs come from the site's actual rate series; no clock time or price
+is hard-coded. Up to twelve preferred starts and twelve earlier fallback starts
+are considered, with five-minute resolution. Every accepted full-target block
+must still fit before departure and pass both native replays. If the cheaper/solar
+opportunity would miss that target, an earlier safe start takes precedence.
+If those bounded trials miss, the ordinary validated search remains available and
+the fallback is explicit in Show Debug.
+
+The default `cost` ranks up to twelve continuous candidates using estimated grid
+and solar opportunity cost, then compares their complete coupled battery outcomes
+with an unrestricted envelope schedule. A cheaper validated split schedule can
+therefore beat continuity. The objective includes battery cycle cost and terminal
+energy. More expensive energy remains eligible when needed to meet the requested
+target by departure. This is the lowest validated cost found by bounded search,
+not a proof of a global optimum.
+
+`ev_charging_priority: now` instead requires EV charging in the **current control
+interval**. It first tries a continuous block starting now; every bounded retry
+and separately authorised partial alternative retains that immediate-start
+constraint. It never substitutes a later start because it is cheaper or easier
+to schedule. If no paired-safe immediate start is found, the report identifies
+`immediate_start_not_validated`. This is a bounded search outcome, not proof that
+starting is physically impossible. A satisfied target does not request more charging.
+NOW preserves availability, consent, cooldown, domestic pause/restart and reserve,
+manual floors, fixed EV power, both native replays and the sole external executor.
+It takes effect on the next update-loop tick; it is not a direct relay command.
+
+`solar` allows EV-ON steps only where the lower PV forecast, after inverter
+conversion/caps, covers the higher household-load forecast plus the full fixed EV
+power. These steps use Demand, not a domestic grid-charge request, and independent
+native replay must show no domestic battery depletion. The household's separate
+charging conversion losses and any grid imports remain visible in the native
+trace: solar-only EV is not a claim of zero whole-site import.
+
+Immediately before dispatch and during lease renewal, SOLAR also checks the
+existing local `pv_power` and `load_power` entity mappings. When already charging,
+it subtracts the separately metered EV power from the household total. Readings
+must have explicit W/kW units, be less than 60 seconds old and be aligned within
+30 seconds. Starting requires 200 W headroom above full EV power; continuation
+still requires the full power. Solar leases last at most 60 seconds and cannot
+outlive the reading's freshness. A missing/stale source or lost surplus withdraws
+the lease for the sole external executor; it never calls the relay directly.
+This sampled control is not an instantaneous electrical clamp. The supported
+meter topology is the shared single-inverter template with one non-inverted
+household power entity, including the EV in that reading.
+
+SOLAR may miss the requested departure target. A separately authorised partial
+plan retains the original requested percentage and displays its shortfall. If no
+solar delivery validates, the report shows the remaining shortfall and waits for
+surplus; household control resumes after observed EV OFF. Choosing SOLAR neither
+renews consent nor grants partial-target authorisation by itself.
 
 The priority can also reference a Home Assistant `input_select` or `select` entity
-whose options are exactly `asap` and `cost`. Create a
+whose options are `cost`, `asap`, `now` and `solar` (existing smaller helpers still work). Create a
 [dropdown helper](https://www.home-assistant.io/integrations/input_select/), then
 set `joint_site.ev_charging_priority: input_select.ev_charging_priority` and append
 that entity to the top-level `watch_list` in `apps.yaml`. An entities dashboard
@@ -62,7 +113,7 @@ next update-loop tick, without waiting for the five-minute schedule. It also
 invalidates an old execution receipt; a change during calculation cannot dispatch
 the previous-priority candidate. Missing, unknown or unavailable options fail
 validation rather than silently selecting a different priority. Keep literal
-`asap` or `cost` if no dashboard control is required.
+`asap`, `cost`, `now` or `solar` if no dashboard control is required.
 
 ### Independent household routing and authorised partial targets
 
@@ -263,7 +314,7 @@ The mapping accepts:
 | `soc_max_age_minutes` | Maximum age of the EV observation; default 60, maximum 1440 |
 | `ev_pause_percent` / `ev_restart_percent` | Domestic-battery EV thresholds; defaults 15 / 25 |
 | `min_off_minutes` | Minimum EV off interval; default 10 |
-| `ev_charging_priority` | `cost` (default), `asap`, or a watched HA dropdown containing those options; ASAP prefers the earliest paired-safe continuous block for shared grid-support controls |
+| `ev_charging_priority` | `cost` (default), `asap`, `now`, `solar`, or a watched HA dropdown; economic, next-opportunity, immediate-start and solar-only policies respectively |
 | `self_consumption_first` | `false` by default; shared grid support can first try a complete continuous candidate with native Demand in the current step, using PV/battery before grid charging. Both full native replays must pass; otherwise the separately checked ordinary candidate remains available. This is not a ban on necessary grid import or a global minimum-import guarantee. |
 | `terminal_min_percent` | End-of-horizon battery floor; defaults to the configured domestic reserve |
 | `beam_width` | Bounded search size; default 128, maximum 512 |

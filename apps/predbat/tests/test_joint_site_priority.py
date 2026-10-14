@@ -29,18 +29,18 @@ def _priority_inputs(base, priority="asap"):
 
 def test_priority_dropdown_replans_and_preserves_target(base):
     """A watched dropdown switches tariff preference while preserving the session and guards."""
-    writes = _priority_inputs(base)
+    writes = _priority_inputs(base, priority="now")
     settings = deepcopy(base.args["joint_site"])
     limits = (base.reserve, base.car_charging_rate[:], base.car_charging_limit[:], base.car_charging_battery_size[:])
     first = evaluate_joint_site(base, publish=False)
-    assert first["status"] == "candidate" and first["ev_charging_priority"] == "asap", first
+    assert first["status"] == "candidate" and first["ev_charging_priority"] == "now", first
     assert first["proposed_ev_windows"][0]["start"] == base.minutes_now
     assert execute_joint_site(base)[0] != "Joint blocked", base.joint_site_report
     fingerprint = execution_fingerprint(base)
     count = len(writes)
     base.update_pending, base.plan_valid = False, True
     _set_entity(base, PRIORITY_ENTITY, "cost")
-    asyncio.run(base.trigger_watch_list(PRIORITY_ENTITY, "state", "asap", "cost"))
+    asyncio.run(base.trigger_watch_list(PRIORITY_ENTITY, "state", "now", "cost"))
     assert base.update_pending is True and base.plan_valid is False
     assert execution_fingerprint(base) != fingerprint
     publish_joint_ev(base)
@@ -93,7 +93,7 @@ def test_priority_literal_and_select_compatibility(base):
     """Existing literal settings and HA select entities retain the same enum validation."""
     _priority_inputs(base)
     settings = base.args["joint_site"]
-    for priority in ("cost", "asap"):
+    for priority in ("cost", "asap", "now", "solar"):
         settings["ev_charging_priority"] = priority
         assert _options(base)["ev_charging_priority"] == priority
     settings.pop("ev_charging_priority")
@@ -127,7 +127,11 @@ def test_priority_dropdown_preserves_recurring_session(base):
 def run_joint_site_priority_tests(base):
     """Run deterministic dropdown tests against the native template and HA cache."""
     from tests.test_joint_site_template import shared_template_available, check_unavailable_template
+    from tests.test_joint_site_now import run_joint_site_now_tests
+    from tests.test_joint_site_preferences import run_joint_site_preferences_tests
 
+    run_joint_site_now_tests(base, shared_template_available())
+    run_joint_site_preferences_tests(base, shared_template_available())
     if not shared_template_available():
         check_unavailable_template(base)
         return False

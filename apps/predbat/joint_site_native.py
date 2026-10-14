@@ -182,10 +182,10 @@ def _options(base):
     if control_model not in ("native", "deye_tou", "deye_solarman"):
         raise ValueError("Unsupported joint-site control model")
     ev_priority = _ev_charging_priority(base)
-    if ev_priority not in ("cost", "asap"):
-        raise ValueError("EV charging priority must be cost or asap")
-    if ev_priority == "asap" and (control_model != "deye_solarman" or not settings.get("grid_charge_support")):
-        raise ValueError("ASAP charging requires shared grid-support controls")
+    if ev_priority not in ("cost", "asap", "now", "solar"):
+        raise ValueError("EV charging priority must be cost, asap, now or solar")
+    if ev_priority in ("asap", "now", "solar") and (control_model != "deye_solarman" or not settings.get("grid_charge_support")):
+        raise ValueError("ASAP, NOW and SOLAR charging require shared grid-support controls")
     self_consumption_first = settings.get("self_consumption_first", False)
     if type(self_consumption_first) is not bool:
         raise ValueError("self_consumption_first must be boolean")
@@ -565,7 +565,11 @@ def build_candidate(base, options):
         rate_kw=base.car_charging_rate[0],
         efficiency=base.car_charging_loss,
         deadline_min=options["deadline"],
-        availability=tuple(s.index for s in slots if options["arrival"] <= s.start_min and s.start_min + s.duration_min <= options["deadline"]),
+        availability=tuple(
+            s.index
+            for s in slots
+            if options["arrival"] <= s.start_min and s.start_min + s.duration_min <= options["deadline"] and (options.get("ev_charging_priority") != "solar" or _solar_surplus_kwh(base, s.start_min) >= base.car_charging_rate[0] * PREDICT_STEP / 60 - 1e-9)
+        ),
         pause_battery_percent=options["pause"],
         restart_battery_percent=options["restart"],
         min_off_minutes=options["off_minutes"],
@@ -595,6 +599,8 @@ def build_candidate(base, options):
             allowed_battery_modes=modes,
             economic_diversity=options.get("mode") == "shadow" and options["control_model"] == "deye_solarman" and options.get("economic_diversity", True),
             initial_battery_mode="demand" if options.get("initial_demand_only") else None,
+            require_ev_start=options.get("ev_charging_priority") == "now" and not options.get("house_only") and options["ev_soc"] < base.car_charging_limit[0] - 0.002,
+            solar_ev_only=options.get("ev_charging_priority") == "solar",
         ),
     )
     return result, slots
@@ -704,6 +710,14 @@ def _replay(base, options, result, slots, windows, scenario):
         load_kw = scenario_load[slot.start_min] * 60 / slot.duration_min + (base.car_charging_rate[0] if on else 0)
         if load_kw > options["load_cap"] + 1e-9:
             reasons.append("load_port_exceeded")
+        if on and options.get("ev_charging_priority") == "solar":
+            # PV must cover the full house/EV reservation and the battery cannot
+            # discharge. Native domestic PV-charging conversion losses remain in
+            # the raw grid/cost trace; solar-only EV is not a whole-site zero-import claim.
+            if action.battery_mode != "demand" or end_soc < start_soc - 0.002:
+                reasons.append("solar_only_native_supply")
+            if _solar_surplus_kwh(base, slot.start_min) < base.car_charging_rate[0] * slot.duration_min / 60 - 1e-9:
+                reasons.append("solar_surplus_forecast_insufficient")
         off_minutes = 0 if on else (0 if previous_on else off_minutes) + slot.duration_min
         previous_on = on
     ev_target = options["ev_soc"] if options.get("house_only") else base.car_charging_limit[0]
@@ -809,15 +823,65 @@ def _best_effort_shadow(base, options):
     return best, attempts
 
 
+def _solar_surplus_kwh(base, minute):
+    """Reserve conservative household demand before converting available PV to AC energy."""
+    pv = min(base.pv_forecast_minute_step[minute], base.pv_forecast_minute10_step[minute])
+    pv *= base.inverter_loss if base.inverter_hybrid else 1
+    if not base.inverter_hybrid and base.pv_ac_limit > 0:
+        pv = min(pv, base.pv_ac_limit * PREDICT_STEP)
+    pv = min(pv, base.inverter_limit * PREDICT_STEP)
+    return pv - max(base.load_minutes_step[minute], base.load_minutes_step10[minute])
+
+
+def _priority_block_starts(base, options, first, last, duration):
+    """Rank bounded opportunities, with explicit deadline fallback rather than a silent delay."""
+    priority = options.get("ev_charging_priority", "cost")
+    if options["initially_on"]:
+        return [(0, "active_continuation")]
+    if priority == "now":
+        return [(0, "immediate")] if first == 0 else []
+    starts = list(range(first, last + 1, PREDICT_STEP))
+    ev_step = base.car_charging_rate[0] * PREDICT_STEP / 60
+    if priority == "solar":
+        return [(start, "solar_surplus_only") for start in starts if all(_solar_surplus_kwh(base, minute) >= ev_step - 1e-9 for minute in range(start, start + duration, PREDICT_STEP))][:12]
+    if priority == "asap":
+        solar = [start for start in starts if start <= 30 and all(_solar_surplus_kwh(base, minute) >= ev_step - 1e-9 for minute in range(start, start + min(15, duration), PREDICT_STEP))]
+        current_rate = base.rate_import[base.minutes_now]
+        previous = base.minutes_now - 1
+        while previous >= 0 and base.rate_import.get(previous) == current_rate:
+            previous -= 1
+        current_discount = base.rate_import.get(previous, current_rate) > current_rate + 1e-9
+        cheaper = [start for start in starts if start not in solar and (base.rate_import[base.minutes_now + start] < current_rate - 1e-9 or (current_discount and base.rate_import[base.minutes_now + start] == current_rate))]
+        preferred = [(start, "near_term_solar") for start in solar] + [(start, "next_cheaper_band") for start in cheaper]
+        # Failed preferred blocks never erase an earlier feasible deadline path.
+        preferred = preferred[:12]
+        tried = {start for start, _ in preferred}
+        return preferred + [(start, "deadline_or_no_opportunity") for start in starts if start not in tried][:12]
+    # Include PV opportunity cost when selecting the twelve coupled searches.
+    # The final ranking still uses the whole-house solver objective and both replays.
+    ranked = []
+    for start in starts:
+        estimate = 0
+        for minute in range(start, start + duration, PREDICT_STEP):
+            solar = min(ev_step, max(0, _solar_surplus_kwh(base, minute)))
+            absolute = base.minutes_now + minute
+            estimate += (ev_step - solar) * base.rate_import[absolute] + solar * base.rate_export[absolute]
+        ranked.append((estimate, start))
+    return [(start, "coupled_cost") for _, start in sorted(ranked)[:12]]
+
+
 def _continuous_grid_support_shadow(base, options):
     """Prefer one paired-safe fixed-rate block within the finite departure horizon.
 
     This is an explicit continuity preference, not a calibrated restart penalty or
     global cost optimum. Rank valid blocks by the existing conservative solver
-    objective (including cycle cost and terminal energy). If none validate, retain
-    the ordinary search. An already active relay tries only a continuation from now;
-    it never needs a new OFF interval. Explicit ASAP instead checks five-minute
-    starts chronologically and accepts the first paired-safe block, before cost.
+    objective (including cycle cost and terminal energy). COST also compares an
+    unrestricted envelope schedule, so continuity cannot hide a cheaper valid plan.
+    An active relay tries continuation without inventing a new OFF interval.
+    ASAP tries nearby solar, then the next cheaper band, then an earlier safe
+    deadline path. SOLAR reserves conservative surplus and never falls back to grid.
+    NOW checks only the current interval; every other search also requires the
+    initial EV action, so no retry or partial alternative can silently defer it.
     The search remains bounded; failure is not proof an earlier start is impossible.
     Closed sessions cannot use this preference.
     """
@@ -829,11 +893,11 @@ def _continuous_grid_support_shadow(base, options):
     last = options["deadline"] - duration
     if duration <= 0 or last < first:
         return None, []
-    asap = options.get("ev_charging_priority") == "asap"
-    starts = {0} if options["initially_on"] else set(range(first, last + 1, PREDICT_STEP if asap else 30)) | {last}
-    ranked = sorted(starts) if asap else sorted(starts, key=lambda start: (sum(base.rate_import[base.minutes_now + minute] for minute in range(start, start + duration)), start))[:12]
+    priority = options.get("ev_charging_priority", "cost")
+    ranked = _priority_block_starts(base, options, first, last, duration)
     best, attempts = None, []
-    for start in ranked:
+    selected = None
+    for start, reason in ranked:
         for initial_demand in (True, False) if options.get("self_consumption_first") else (False,):
             trial = {**options, "forecast_basis": "envelope", "ev_continuous_block": (start, start + duration), "initial_demand_only": initial_demand}
             result, slots = build_candidate(base, trial)
@@ -844,11 +908,26 @@ def _continuous_grid_support_shadow(base, options):
                 passed = all(check["passed"] for check in checks.values())
                 if passed and (best is None or result.total_cost < best[0].total_cost):
                     best = result, slots, windows, checks
-            attempts.append({"start_offset": start, "end_offset": start + duration, "solver_status": result.status, "native_passed": passed, "initial_demand_only": initial_demand})
+                    selected = len(attempts)
+            attempts.append({"start_offset": start, "end_offset": start + duration, "solver_status": result.status, "native_passed": passed, "initial_demand_only": initial_demand, "priority_reason": reason})
             if passed:
                 break
-        if asap and passed:
+        if priority != "cost" and passed:
             break
+    if priority == "cost" and not options["initially_on"]:
+        trial = {**options, "forecast_basis": "envelope"}
+        result, slots = build_candidate(base, trial)
+        passed = False
+        if result.actions:
+            _validate_candidate_modes(options, result)
+            windows, checks = _replay_candidate(base, trial, result, slots)
+            passed = all(check["passed"] for check in checks.values())
+            if passed and (best is None or result.total_cost < best[0].total_cost - 1e-9):
+                best = result, slots, windows, checks
+                selected = len(attempts)
+        attempts.append({"solver_status": result.status, "native_passed": passed, "priority_reason": "coupled_cost_flexible_schedule"})
+    if selected is not None:
+        attempts[selected]["selected"] = True
     return best, attempts
 
 
@@ -1021,7 +1100,14 @@ def evaluate_joint_site(base, publish=True):
                 result, slots = continuous[:2]
             report["ev_run_strategy"] = "single_continuous_block_preferred_no_restart_calibration" if continuous is not None else "ordinary_bounded_search"
             if options["ev_charging_priority"] == "asap":
-                report["ev_run_strategy"] = "earliest_paired_continuous_block_found" if continuous is not None else "asap_search_missed_using_ordinary_bounded_search"
+                report["ev_run_strategy"] = "next_solar_or_cheaper_opportunity" if continuous is not None else "asap_deadline_fallback_bounded_search"
+            elif options["ev_charging_priority"] == "now":
+                report["ev_run_strategy"] = "immediate_paired_continuous_block" if continuous is not None else "immediate_start_required_bounded_search"
+            elif options["ev_charging_priority"] == "solar":
+                report["ev_run_strategy"] = "solar_surplus_only"
+            elif continuous is not None:
+                report["ev_run_strategy"] = "lowest_validated_coupled_cost_found"
+            report["priority_selection_reason"] = next((attempt["priority_reason"] for attempt in report["continuous_block_attempts"] if attempt.get("selected")), "bounded_search_fallback")
         if options["control_model"] == "deye_solarman":
             report["supported_battery_modes"] = ["demand", "charge"]
             report["search_beam_attempts"] = [{"beam_width": options["beam"], "solver_status": result.status}]
@@ -1178,7 +1264,7 @@ def evaluate_joint_site(base, publish=True):
             report["partial_search_attempts"] = partial_attempts
             if partial is not None:
                 result, slots, windows, checks, planning_target, delivered = partial
-                if partial_authorised and options["ev_charging_priority"] == "asap":
+                if partial_authorised and options["ev_charging_priority"] in ("asap", "now", "solar"):
                     partial_base = copy(model_base)
                     partial_base.car_charging_limit = list(model_base.car_charging_limit)
                     partial_base.car_charging_limit[0] = planning_target
@@ -1186,7 +1272,8 @@ def evaluate_joint_site(base, publish=True):
                     if continuous is not None:
                         result, slots, windows, checks = continuous
                         delivered = min(check["final_ev_kwh"] for check in checks.values())
-                        report["ev_run_strategy"] = "earliest_paired_partial_continuous_block_found"
+                        report["ev_run_strategy"] = {"now": "immediate_paired_partial_continuous_block", "asap": "next_opportunity_partial_continuous_block", "solar": "solar_surplus_only_partial_block"}[options["ev_charging_priority"]]
+                        report["priority_selection_reason"] = next(attempt["priority_reason"] for attempt in report["partial_continuous_block_attempts"] if attempt.get("selected"))
                 requested = model_base.car_charging_limit[0]
                 target_met = delivered >= requested - 0.002
                 report.update(
@@ -1255,6 +1342,25 @@ def evaluate_joint_site(base, publish=True):
                         "replay_inputs": deepcopy((result, slots, windows)),
                         "partial_fingerprint": partial_fingerprint(report),
                     }
+        if options["ev_charging_priority"] == "solar" and not options.get("house_only"):
+            report["solar_policy"] = "conservative_household_surplus_only_with_fresh_meter_gate_no_grid_or_battery_ev_fallback"
+            if report["status"] in ("no_plan_found", "conditional_no_plan_found", "native_rejected", "conditional_native_rejected"):
+                requested = model_base.car_charging_limit[0]
+                report.update(
+                    reason="No paired-safe solar-only EV delivery was validated; waiting for surplus without grid fallback",
+                    requested_ev_target_kwh=requested,
+                    requested_ev_target_percent=requested * 100 / base.car_charging_battery_size[0],
+                    planned_ev_kwh_by_departure=options["ev_soc"],
+                    planned_ev_percent_by_departure=options["ev_soc"] * 100 / base.car_charging_battery_size[0],
+                    requested_ev_target_met=options["ev_soc"] >= requested - 0.002,
+                    ev_target_shortfall_kwh=max(0, requested - options["ev_soc"]),
+                    priority_selection_reason="solar_surplus_not_validated",
+                )
+        if options["ev_charging_priority"] == "now" and not options.get("house_only") and options["ev_soc"] < model_base.car_charging_limit[0] - 0.002:
+            if report["status"] in ("no_plan_found", "conditional_no_plan_found", "native_rejected", "conditional_native_rejected"):
+                report["ev_run_strategy"] = "immediate_start_not_validated"
+                report["execution_blockers"] = [*report.get("execution_blockers", []), "immediate_start_not_validated"]
+                report["reason"] = "No paired-safe EV start was validated for the current control interval; NOW does not defer the start"
     except UnsupportedJointSite as exc:
         report = _empty_report("unsupported")
         report["reason"] = str(exc)

@@ -16,6 +16,8 @@ RECEIPT_TTL_SECONDS = 300
 PLAN_REVALIDATION_MAX_AGE_SECONDS = 600
 OBSERVATION_MAX_AGE_SECONDS = 180
 EV_HANDOFF_SECONDS = 30
+SOLAR_RECEIPT_SECONDS = 60
+SOLAR_OBSERVATION_SECONDS = 60
 
 
 class JointBlocked(ValueError):
@@ -114,6 +116,9 @@ def execution_fingerprint(base):
     from joint_site_native import _ev_charging_priority
 
     payload["ev_charging_priority"] = _ev_charging_priority(base)
+    if payload["ev_charging_priority"] == "solar":
+        payload["solar_meter_mapping"] = {name: base.args.get(name) for name in ("pv_power", "load_power", "load_power_invert", "deye_entity_prefix")}
+        payload["solar_conversion"] = {name: getattr(base, name, None) for name in ("inverter_hybrid", "pv_ac_limit")}
     from joint_site_recurring import recurring_enabled, resolve_recurring_session
 
     if recurring_enabled(payload["settings"]):
@@ -253,6 +258,46 @@ def _evidence(base, allow_read_only_transition=False):
     return options, inverter, relay, now, minute
 
 
+def _solar_observation(base, options, relay, now):
+    """Require fresh local surplus at full EV power, reserving measured household demand first."""
+    inverter = base.inverters[0]
+    _require(getattr(inverter, "inv_num_load_entities", None) == 1 and not base.get_arg("load_power_invert", False, index=0), "solar_meter_topology_unsupported")
+    observations = []
+
+    def power(entity):
+        """Read explicit watt units from cached entities without refreshing hardware."""
+        observed = _cached(base, entity)
+        age = (now - observed["last_updated"]).total_seconds()
+        _require(0 <= age < SOLAR_OBSERVATION_SECONDS and observed["last_changed"] <= now, "solar_power_stale_or_future")
+        unit = observed["attributes"].get("unit_of_measurement")
+        _require(unit in ("W", "kW") and not isinstance(observed["state"], bool), "solar_power_units_invalid")
+        try:
+            value = float(observed["state"]) * (1000 if unit == "kW" else 1)
+        except (TypeError, ValueError):
+            raise JointBlocked("solar_power_invalid") from None
+        _require(_finite(value), "solar_power_invalid")
+        observations.append(observed["last_updated"])
+        return value
+
+    pv = power(base.get_arg("pv_power", None, indirect=False, index=0))
+    load = power(base.get_arg("load_power", None, indirect=False, index=0))
+    ev_power = 0
+    if relay["state"] == "on":
+        metering = options["settings"].get("recurring_session") or options["settings"].get("confirmed_session") or {}
+        ev_power = power(metering.get("power_entity"))
+        _require(ev_power <= load + 200 and ev_power <= base.car_charging_rate[0] * 1100, "solar_power_inconsistent")
+    _require((max(observations) - min(observations)).total_seconds() <= 30, "solar_power_samples_misaligned")
+    pv_ac = pv * (base.inverter_loss if base.inverter_hybrid else 1)
+    if not base.inverter_hybrid and base.pv_ac_limit > 0:
+        pv_ac = min(pv_ac, base.pv_ac_limit * MINUTE_WATT)
+    pv_ac = min(pv_ac, base.inverter_limit * MINUTE_WATT)
+    house = max(0, load - ev_power)
+    surplus = pv_ac - house
+    required = base.car_charging_rate[0] * 1000 + (200 if relay["state"] == "off" else 0)
+    _require(surplus >= required, "solar_surplus_insufficient")
+    return {"observed_at": min(observations).isoformat(), "surplus_w": surplus, "required_w": required, "household_load_w": house, "pv_ac_w": pv_ac, "ev_metered_w": ev_power}
+
+
 def _ev_permitted(base, options, relay, now, on):
     """Check hysteresis and exact elapsed OFF seconds independently of battery mode."""
     if not on:
@@ -265,6 +310,8 @@ def _ev_permitted(base, options, relay, now, on):
     if relay["state"] == "off":
         _require(base.soc_kw >= options["restart"] * base.soc_max / 100, "ev_restart_threshold")
         _require((now - relay["last_changed"]).total_seconds() >= options["off_minutes"] * 60, "ev_cooldown")
+    if options["ev_charging_priority"] == "solar":
+        return _solar_observation(base, options, relay, now)
 
 
 def _intent(command, inverter, charge_ceiling=False):
@@ -323,6 +370,10 @@ def _candidate(base, pending, inverter, now, minute):
         _require(command.get("start") == base.minutes_now + index * PREDICT_STEP and command.get("end") == command["start"] + PREDICT_STEP, "command_timeline_mismatch")
     command = commands[0]
     _require(command["start"] <= minute < command["end"], "current_command_expired")
+    if pending["options"]["ev_charging_priority"] == "now" and not closed and pending["options"]["ev_soc"] < base.car_charging_limit[0] - 0.002:
+        _require(command["ev_on"], "immediate_start_not_validated")
+    if pending["options"]["ev_charging_priority"] == "solar" and command["ev_on"]:
+        _require(command["target_soc"] == 0 and not command["freeze"], "solar_requires_demand")
     if soc_fell:
         # The ordinary native loop re-reads SOC after calculating. A lower value
         # cannot be waived with a tolerance: replay the SAME controls from that
@@ -508,7 +559,7 @@ def execute_joint_site(base):
         _require(pending["fingerprint"] == execution_fingerprint(base), "configuration_changed_during_dispatch")
         _require(pending["report"].get("session_closed", False) is options["departure_passed"], "session_phase_changed")
         _require(command["start"] <= minute < command["end"], "command_expired_during_dispatch")
-        _ev_permitted(base, options, relay, now, command["ev_on"])
+        solar = _ev_permitted(base, options, relay, now, command["ev_on"])
         if read_only_transition:
             # The native read-only switch requests reinitialisation. The shared
             # executor fulfils it by observing ALL canonical rows of this exact
@@ -523,6 +574,8 @@ def execute_joint_site(base):
         expires = min(authority_end, now + timedelta(seconds=RECEIPT_TTL_SECONDS))
         if command["ev_on"]:
             expires = min(expires, _stamp(options["settings"]["session"]["departure"]))
+        if solar:
+            expires = min(expires, now + timedelta(seconds=SOLAR_RECEIPT_SECONDS), _stamp(solar["observed_at"]) + timedelta(seconds=SOLAR_OBSERVATION_SECONDS))
         base.joint_site_execution = {
             "generated_at": now.isoformat(),
             "plan_generated_at": pending["report"]["generated_at"],
@@ -535,6 +588,7 @@ def execute_joint_site(base):
             "hardware_confirmed": False,
             "connection_error_acknowledged": options.get("connection_error_acknowledged", False),
             "read_only_transition_observed": read_only_transition,
+            "solar_observation": solar,
         }
         base.isCharging = target > 0 or freeze
         base.isExporting = False
@@ -571,7 +625,9 @@ def publish_joint_ev(base, renew=False):
         _intent(command, inverter, bool(options.get("grid_charge_support_w")))
         authority_end = _receipt_authority_end(base, options, receipt)
         _require(command["start"] <= minute and now < authority_end, "command_authority_expired")
-        _ev_permitted(base, options, relay, now, command["ev_on"])
+        solar = _ev_permitted(base, options, relay, now, command["ev_on"])
+        if solar:
+            _require(command["target_soc"] == 0 and not command["freeze"], "solar_requires_demand")
         if renew:
             # Revalidate only the already observed, identical current intent.
             # The immutable plan clock bounds renewal across one delayed calculation;
@@ -582,7 +638,11 @@ def publish_joint_ev(base, renew=False):
             expires = min(authority_end, now + timedelta(seconds=RECEIPT_TTL_SECONDS), plan_time + timedelta(seconds=PLAN_REVALIDATION_MAX_AGE_SECONDS))
             if command["ev_on"]:
                 expires = min(expires, _stamp(options["settings"]["session"]["departure"]))
+            if solar:
+                expires = min(expires, now + timedelta(seconds=SOLAR_RECEIPT_SECONDS), _stamp(solar["observed_at"]) + timedelta(seconds=SOLAR_OBSERVATION_SECONDS))
             receipt = {**receipt, "generated_at": now.isoformat(), "expires_at": expires.isoformat()}
+            if solar:
+                receipt["solar_observation"] = solar
             base.joint_site_execution = receipt
         _publish_ev(base, command, now, expires)
         if renew:
