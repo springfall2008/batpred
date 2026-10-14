@@ -19,7 +19,7 @@ import requests
 import re
 from datetime import datetime, timedelta, timezone
 from predbat_metrics import record_api_call
-from const import TIME_FORMAT, TIME_FORMAT_OCTOPUS, DISPATCH_SOURCE_CHARGER_SCHEDULE, REPEAT_FULL_LOG_SECONDS
+from const import TIME_FORMAT, TIME_FORMAT_OCTOPUS, DISPATCH_SOURCE_CHARGER_SCHEDULE, REPEAT_FULL_LOG_SECONDS, OCTOPUS_DISPATCH_HOLD_MINUTES
 from utils import RepeatLogGate, str2time, minutes_to_time, dp1, dp2, dp4, minute_data, round_out_to_period, filter_payment_method, is_edge_block_body, token_mint_backoff_seconds, TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS
 from component_base import ComponentBase
 from mock_base import MockBase as SharedMockBase
@@ -3258,8 +3258,11 @@ class Octopus:
         and force a needless replan each time. For a currently active slot the signature keeps only
         the stable fields (window end, source, location); genuine changes - new/removed slots, a
         moved window end, a revised future slot, a future slot becoming active - still alter it.
+
+        A held slot (octopus_held_dispatches()) is left out: it only re-states a half hour a planned dispatch
+        already priced, and the one for the half hour in progress ends at now, so moves every cycle.
         """
-        return dispatch_slots_signature(octopus_slots, self.now_utc)
+        return dispatch_slots_signature([[slot for slot in car_slots if not slot.get("held", False)] for car_slots in octopus_slots], self.now_utc)
 
     def load_free_slot(self, octopus_free_slots, rate_dict, export=False, rate_replicate=None):
         """
@@ -4055,6 +4058,91 @@ class Octopus:
                 self.log("Octopus: Intelligent slots for day {}: {} of {} max".format(day_offset, slots_per_day[day_offset], octopus_slot_max))
 
         return rates
+
+    def octopus_planned_running(self, car_n, planned):
+        """
+        The source of the planned dispatch that is pricing the current half hour off-peak for car_n, or None
+        when none is.
+
+        The dispatch must be running on the exact clock: started - the Octopus API component advances the
+        start of a running dispatch to the time of its last poll, which is after minutes_now - and not yet
+        ended. One still to start is not counted, though rate_add_io_slots() prices its half hour too:
+        Octopus can withdraw it before it runs. Nor is an entry still listed after its end, which was never
+        seen running, and which dispatch_billed_off_peak() would take as finished whatever its location.
+        """
+        minute_exact = self.dynamic_load_car_minute(self.now_utc_real)
+        for slot in planned:
+            start_minutes, end_minutes, _, source, location = self.decode_octopus_slot(car_n, slot, raw=True)
+            if start_minutes == end_minutes or not self.dispatch_billed_off_peak(source, location, end_minutes):
+                continue
+            if start_minutes <= minute_exact < end_minutes:
+                return source
+        return None
+
+    def octopus_held_update(self):
+        """
+        Remember the half hour a planned Octopus Intelligent dispatch is running in, per car, so it keeps the
+        dispatch rate once it has passed (see octopus_held_dispatches()).
+
+        Called once per cycle after dynamic_load_car_check(), so that a half hour in which the car was seen
+        in its dispatch but not charging is not kept - unless it charged earlier in the same half hour,
+        which Octopus bills off-peak whole (see dynamic_load_car_strip_from()). Half hours are kept by their
+        absolute start, as minutes since midnight_utc mean something else after midnight, and dropped
+        OCTOPUS_DISPATCH_HOLD_MINUTES after they end.
+        """
+        period_minute = (self.minutes_now // 30) * 30
+        period_start = self.midnight_utc + timedelta(minutes=period_minute)
+        for car_n in range(self.num_cars):
+            held = self.octopus_slots_held.setdefault(car_n, {})
+            for start in list(held):
+                if start + timedelta(minutes=30 + OCTOPUS_DISPATCH_HOLD_MINUTES) <= self.now_utc:
+                    del held[start]
+            strip_from = self.dynamic_load_car_strip_from(car_n)
+            if strip_from is not None and strip_from < period_minute + 30:
+                held.pop(period_start, None)
+                continue
+            source = self.octopus_planned_running(car_n, self.octopus_slots_planned.get(car_n, []))
+            if source is not None:
+                held[period_start] = source
+
+    def octopus_held_dispatches(self, car_n, completed, planned):
+        """
+        The half hours a planned dispatch of car_n ran in that nothing else covers any more, as dispatches
+        that have finished, to go into octopus_slots with the completed ones.
+
+        A planned dispatch only covers what is still to come: the Octopus API component advances the start
+        of a running one to now (trim_started_dispatch()) and any source drops one that has ended, while
+        Octopus lists it as completed 15 to 60 minutes later. In between the half hour went back to the
+        day rate, and as today's cost is priced from the current rates the day's cost jumped up after each
+        half hour of charging and fell back when the completed dispatch arrived (#5520).
+
+        A half hour is covered from when it was seen running (octopus_held_update()) until a completed
+        dispatch overlaps it - which is then the record, including one of no energy, which is treated as
+        never having happened - or the hold runs out. It is left out while a planned dispatch still reaches
+        it, so it is not counted twice against the daily slot cap. The one in progress ends at now: it has
+        finished, so load_octopus_slots() plans no car charging in it, and rate_add_io_slots() prices the
+        rest of the half hour as Octopus bills it once a dispatch has started in it (GH#5316).
+        """
+        held = self.octopus_slots_held.get(car_n, {})
+        if not held:
+            return []
+        covered = []
+        for slot in list(completed) + list(planned):
+            start_minutes, end_minutes, _, _, _ = self.decode_octopus_slot(car_n, slot, raw=True, boundaries_only=True)
+            if start_minutes != end_minutes:
+                covered.append(round_out_to_period(start_minutes, end_minutes))
+
+        dispatches = []
+        for period_start in sorted(held):
+            period_end = period_start + timedelta(minutes=30)
+            end = min(period_end, self.now_utc)
+            if end <= period_start or period_end + timedelta(minutes=OCTOPUS_DISPATCH_HOLD_MINUTES) <= self.now_utc:
+                continue
+            period_minute = minutes_to_time(period_start, self.midnight_utc)
+            if any(start_minutes < period_minute + 30 and end_minutes > period_minute for start_minutes, end_minutes in covered):
+                continue
+            dispatches.append({"start": period_start.strftime(TIME_FORMAT), "end": end.strftime(TIME_FORMAT), "source": held[period_start], "location": "AT_HOME", "held": True})
+        return dispatches
 
     def in_iog_fixed_window(self, minute):
         """

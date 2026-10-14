@@ -624,6 +624,12 @@ See also **ge_cloud_automatic_split_ct** which takes priority over this setting 
 Use this to override automatic shared-CT detection if Predbat incorrectly identifies your system as sharing a CT clamp (e.g. when duplicate meter serials are reported by the cloud API but the inverters actually have separate CT clamps).
 This setting takes priority over **ge_cloud_automatic_shared_ct** if both are set.
 
+- **gateway_display_only** - Optional, defaults to false. Set to `true` to send prices, costs and the plan timeline to a paired Hub while another integration controls the battery.
+The Hub does not need a discovered inverter. This mode does not configure inverter or EV charger entities, change the selected inverter integration, or publish commands or executable schedules.
+Keep the Hub in enforced standby (including passive mode on supported firmware) before enabling this option or handing control to another integration. The option only prevents this Predbat component from sending writes; it cannot stop an old schedule or autonomous fallback already running on the Hub.
+The existing firmware still needs a local inverter connection for live power flow and battery readings; cloud-fed live readings and pairing without inverter discovery are separate changes.
+This is a display option, not automatic backup switching.
+
 - **gateway_shared_ct** - Optional, defaults to true. The equivalent of **ge_cloud_automatic_shared_ct** for inverters controlled through the Predbat Gateway.
 When `true`, Predbat treats multiple inverters as sharing a single physical CT clamp for grid and load measurement,
 so only the first inverter's grid and load power readings are used (the rest are zeroed out), preventing double-counting of grid import/export and house load.

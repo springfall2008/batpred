@@ -662,6 +662,10 @@ But a dispatch does not always happen: the car may be full, asleep or unplugged,
 **switch.predbat_octopus_intelligent_dynamic** (*expert mode*, On by default) makes Predbat check that the car really is charging during a dispatch, and stop relying on the dispatch when it is not.
 It only applies to Octopus Intelligent charging (**switch.predbat_octopus_intelligent_charging** On); slots Predbat plans itself (Predbat-led charging) are never checked.
 
+Octopus only confirms a dispatch as completed some time after it has run, typically 15 to 60 minutes later.
+Until then Predbat keeps the dispatch rate on each half hour the dispatch ran in, unless the check above cancelled it, so today's cost does not jump up after each half hour of charging and fall back later.
+A half hour Octopus has still not confirmed after 90 minutes goes back to your normal rate.
+
 **Setting it up**
 
 Point **car_charging_now** in `apps.yaml` at a sensor that shows the car charging.
@@ -873,6 +877,7 @@ Note: [Multiple cars](car-charging.md#multiple-electric-cars) can be planned wit
 - **switch.predbat_car_charging_from_battery** - When set to On the car can drain the home battery, Predbat will manage the correct level of battery accordingly.
 When set to Off home battery discharge will be prevented when your car charges, and all load from the car and home will be from the grid.
 This is achieved by setting the battery discharge rate to 0 during car charging and to the maximum otherwise.
+On inverters without a timed pause, the car hold does not set the discharge rate to 0 while the home battery is itself charging in a charge window, as a charging battery cannot feed the car.
 The home battery can still charge from the grid/solar in either case. Only use this if Predbat knows your car charging plan,
 e.g. you are using Intelligent Octopus or you use the car slots in Predbat to control your car charging.
 
