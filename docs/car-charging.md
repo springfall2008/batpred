@@ -662,6 +662,10 @@ But a dispatch does not always happen: the car may be full, asleep or unplugged,
 **switch.predbat_octopus_intelligent_dynamic** (*expert mode*, On by default) makes Predbat check that the car really is charging during a dispatch, and stop relying on the dispatch when it is not.
 It only applies to Octopus Intelligent charging (**switch.predbat_octopus_intelligent_charging** On); slots Predbat plans itself (Predbat-led charging) are never checked.
 
+Octopus only confirms a dispatch as completed some time after it has run, typically 15 to 60 minutes later.
+Until then Predbat keeps the dispatch rate on each half hour the dispatch ran in, unless the check above cancelled it, so today's cost does not jump up after each half hour of charging and fall back later.
+A half hour Octopus has still not confirmed after 90 minutes goes back to your normal rate.
+
 **Setting it up**
 
 Point **car_charging_now** in `apps.yaml` at a sensor that shows the car charging.
