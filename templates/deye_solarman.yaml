@@ -113,7 +113,9 @@ pred_bat:
   discharge_stop_service: []
 
   # No physical time, Program Power, global current, reserve/shutdown or mode outputs.
-  # Start in Monitor. After commissioning use Control charge only; freeze, low-power,
+  # Start in Monitor. After checking the installation use Control charge for grid charging
+  # and ordinary discharge to household loads; scheduled forced export is not implemented.
+  # Freeze, low-power,
   # reserve holds, solar SoC ceilings and car/iBoost battery holds are unsupported.
   # Stopping Predbat/HA does NOT undo persistent ToU writes or provide a watchdog.
   # Configure your own rates, load history and PV forecasts as documented in apps-yaml.md.
