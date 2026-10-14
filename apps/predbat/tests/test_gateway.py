@@ -7444,10 +7444,12 @@ class TestIntegratePower:
 def run_gateway_tests(my_predbat=None):
     """Run all GatewayMQTT tests. Returns True on failure, False on success."""
     from tests.test_gateway_token_refresh import TestIsAuthFailure, TestApplyRefreshResponse, TestMaybeRefreshOnAuthError
+    from tests.test_gateway_charge_window import TestGatewayChargeWindow
     from tests.test_gateway_discharge_window import TestGatewayDischargeWindow
     from tests.test_gateway_display import TestGatewayDisplayOnly
 
     test_classes = [
+        TestGatewayChargeWindow,
         TestGatewayDischargeWindow,
         TestGatewayDisplayOnly,
         TestProtobufDecode,

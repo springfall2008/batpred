@@ -2727,6 +2727,44 @@ class GatewayMQTT(ComponentBase):
                 # Read current charge slot times to send both start and end
                 await self._update_charge_slot(entity_id, hhmm, serial=serial)
 
+    def charge_window_uses_staging(self, start_entity, end_entity):
+        """Identify a coordinator synchronously, before crossing an async bridge."""
+        if not isinstance(start_entity, str) or not start_entity.endswith("_charge_slot1_start"):
+            return False
+        if end_entity != start_entity.removesuffix("_start") + "_end":
+            return False
+        serial = self._serial_from_entity_id(start_entity)
+        record = getattr(self, "_discovery", {}).get((serial or "").upper(), {})
+        return bool(serial) and record.get("type") in GATEWAY_COORDINATOR_TYPES
+
+    async def update_charge_window(self, start_entity, end_entity, start, end):
+        """Send an engine charge window as one full-serial command, not two partial slots.
+
+        True means publication was attempted, not that the inverter applied it. The
+        caller must verify both endpoint entities, which only an applied ACK or
+        physical telemetry updates. Coordinators use their existing separate path:
+        those devices can stage a disabled slot and apply it only on enable.
+        Manual single-endpoint selects keep their path.
+        """
+        if getattr(self.base, "set_read_only", False):
+            return False
+        if not isinstance(start_entity, str) or not start_entity.endswith("_charge_slot1_start"):
+            return False
+        if end_entity != start_entity.removesuffix("_start") + "_end":
+            return False
+        serial = self._serial_from_entity_id(start_entity)
+        if not serial or self._serial_from_entity_id(end_entity) != serial:
+            return False
+        if self.charge_window_uses_staging(start_entity, end_entity):
+            return False
+        try:
+            times = [datetime.datetime.strptime(value, "%H:%M:%S") for value in (start, end)]
+        except (ValueError, TypeError):
+            return False
+        schedule = {field: value.hour * 100 + value.minute for field, value in zip(("start", "end"), times)}
+        await self._send_control(start_entity, "set_charge_slot", schedule_json=json.dumps(schedule), serial=serial)
+        return True
+
     async def _update_charge_slot(self, entity_id, hhmm, serial):
         """Send set_charge_slot command with updated start or end time."""
         # Determine which field changed
