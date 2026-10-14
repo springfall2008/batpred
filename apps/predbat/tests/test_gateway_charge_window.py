@@ -203,6 +203,19 @@ class TestGatewayChargeWindow(unittest.TestCase):
             self.assertEqual(inverter.write_and_poll_option.call_count, 2)
             self.assertEqual(base.errors, [])
 
+    def test_coordinator_with_partial_ownership_keeps_staged_sequence(self):
+        """A coordinator is identified before ownership checks, so it is never refused by them."""
+        from gateway import GATEWAY_COORDINATOR_TYPES
+
+        for kind in GATEWAY_COORDINATOR_TYPES:
+            inverter, gateway, base, wire = self.fixture()
+            gateway._discovery = {"CE123456789": {"type": kind}}
+            base.dashboard_index_app[TestCommandAck.SLOT_END] = None
+            self.apply(inverter)
+            self.assertFalse(any("inconsistent entity ownership" in error for error in base.errors), kind)
+            self.assertEqual(wire, [], kind)
+            self.assertEqual(inverter.write_and_poll_option.call_count, 2, kind)
+
     def test_invalid_time_or_pair_is_rejected_before_command(self):
         """The public paired method validates inputs before calling the command sink."""
         inverter, gateway, base, wire = self.fixture()

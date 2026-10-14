@@ -3638,13 +3638,13 @@ class Inverter:
         gateway = components.get_component("gateway") if components else None
         names = ("charge_start_time", "charge_end_time")
         target = (new_start, new_end)
+        if gateway is not None and gateway.charge_window_uses_staging(*entities):
+            return None  # Coordinator slot staging must precede its enable write.
         if owners != ["gateway", "gateway"] or gateway is None:
             self.base.record_status(f"Warn: Inverter {self.id} Hub charge window has inconsistent entity ownership", had_errors=True)
             return False
         if not all(self.check_write_entity("write_and_poll_gateway_charge_window", name, entity, value) for name, entity, value in zip(names, entities, target)):
             return False
-        if gateway.charge_window_uses_staging(*entities):
-            return None  # Coordinator slot staging must precede its enable write.
 
         def read_pair():
             """Read both endpoint entities without substituting desired values."""
