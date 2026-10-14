@@ -4120,6 +4120,12 @@ Verified entries can also use `{reserve_soc}`: the current inverter's effective 
 
 The internal return value still means **configured/handled**, not success: a failed configured freeze must not silently fall back to another command. An explicit `[]` is a handled no-op, unlike an absent/null hook. The Deye template uses `discharge_stop_service: []` so stopping a non-existent forced export does not fall back to stopping an active charge.
 
+#### YAML anchors in service examples
+
+The Deye template uses ordinary YAML reuse, not a Predbat function or a Home Assistant script. In `- &disable_sources`, `&disable_sources` gives that service mapping a name (an **anchor**). A later `- *disable_sources` is an **alias** for the same mapping. YAML resolves this before Predbat executes the service list; it does not call a subroutine or start a separate sequence.
+
+The first anchored entry is still a real step in its list, not just a definition. The anchor names are local to this YAML document and must be defined before an alias uses them. For example, the Deye `charge_stop_service` reuses the earlier disable-sources step with `*disable_sources`.
+
 For example, disable charging, set its target, then enable it only after observing the target:
 
 ```yaml

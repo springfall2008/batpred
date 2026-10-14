@@ -75,6 +75,7 @@ pred_bat:
   # Each phase must be observed in HA before the next is attempted. HA observation
   # is not hardware confirmation; cached/optimistic states need commissioning.
   charge_start_service:
+    # YAML anchor: this step also names a mapping reused by later list entries.
     - &disable_sources
       service: select.select_option
       entity_id: >-
