@@ -4126,6 +4126,30 @@ The Deye template uses ordinary YAML reuse, not a Predbat function or a Home Ass
 
 The first anchored entry is still a real step in its list, not just a definition. The anchor names are local to this YAML document and must be defined before an alias uses them. For example, the Deye `charge_stop_service` reuses the earlier disable-sources step with `*disable_sources`.
 
+The YAML **merge key** `<<: *disable_sources` copies that mapping's keys into a new step. An explicitly supplied key overrides the reused value, so this changes only the option from `Disabled` to `Grid`:
+
+```yaml
+  - <<: *disable_sources
+    option: "Grid"
+```
+
+Given the Deye anchor, the fully expanded step is:
+
+```yaml
+  - service: select.select_option
+    entity_id: >-
+      select.{deye_entity_prefix}_program_1_charging,
+      select.{deye_entity_prefix}_program_2_charging,
+      select.{deye_entity_prefix}_program_3_charging,
+      select.{deye_entity_prefix}_program_4_charging,
+      select.{deye_entity_prefix}_program_5_charging,
+      select.{deye_entity_prefix}_program_6_charging
+    option: "Grid"
+    verify: true
+```
+
+It therefore enables grid charging on the same six entities while keeping verification enabled. The mapping's name does not make this an extra disable operation: Predbat sees `option: "Grid"` after YAML loading. This is the [YAML merge-key syntax](https://yaml.org/type/merge.html), not a template-specific control command.
+
 For example, disable charging, set its target, then enable it only after observing the target:
 
 ```yaml

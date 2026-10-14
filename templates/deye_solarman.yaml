@@ -98,6 +98,7 @@ pred_bat:
         number.{deye_entity_prefix}_program_6_soc
       value: "{target_soc}"
       verify: true
+    # YAML merge: reuse the entity/service/verify fields, replacing only the option.
     - <<: *disable_sources
       option: "Grid"
 
