@@ -2957,6 +2957,87 @@ class Inverter:
                 self.write_and_poll_option("idle_end_time", idle_end_time_id, idle_end)
                 self.idle_end_minutes = idle_end_minutes
 
+    def write_and_poll_gateway_discharge_window(self, new_start, new_end):
+        """Verify a complete Hub slot together, or return None for another provider.
+
+        A start equal to the old end cannot be sent alone while discharging is enabled:
+        it temporarily disables the slot and the Hub correctly refuses it. Sending
+        both bounds also handles swapping the bounds of a midnight-spanning slot.
+        """
+        from ha import run_async
+
+        entities = [self.base.get_arg(name, indirect=False, index=self.id) for name in ("discharge_start_time", "discharge_end_time")]
+        owners = [getattr(self.base, "dashboard_index_app", {}).get(entity) for entity in entities]
+        if "gateway" not in owners:
+            return None
+        components = getattr(self.base, "components", None)
+        gateway = components.get_component("gateway") if components else None
+        names = ("discharge_start_time", "discharge_end_time")
+        target = (new_start, new_end)
+        if gateway is not None and gateway.discharge_window_uses_staging(*entities):
+            return None  # Coordinator slot staging must precede its enable write.
+        if owners != ["gateway", "gateway"] or gateway is None:
+            self.base.record_status(f"Warn: Inverter {self.id} Hub discharge window has inconsistent entity ownership", had_errors=True)
+            return False
+        if not all(self.check_write_entity("write_and_poll_gateway_discharge_window", name, entity, value) for name, entity, value in zip(names, entities, target)):
+            return False
+
+        def read_pair():
+            """Read both endpoint entities without substituting desired values."""
+            return tuple(self.base.get_state_wrapper(entity, refresh=True) for entity in entities)
+
+        before = read_pair()
+        ledger = self.base.control_ledger
+        if ledger is not None:
+            for name, entity, value, wanted in zip(names, entities, before, target):
+                self._ledger_observe(ledger, name, entity, value)
+                if value != wanted:
+                    ledger.note_write_attempt(entity)
+        key = "|".join(entities)
+        verified = before == target
+        for _retry in range(0 if verified else self._write_attempts("discharge_window", key, target)):
+            try:
+                published = run_async(gateway.update_discharge_window(*entities, *target))
+            except Exception as error:
+                # Only reached without a running event loop: inside one, run_async's thread hands
+                # the exception to the thread exception hook and returns None, handled just below
+                self.base.log(f"Warn: Inverter {self.id} Hub discharge window publication failed: {error}")
+                break
+            if published is not True:
+                break
+            # A refusal is final for this cycle (the identical command is not re-sent within the
+            # ack window), so stop waiting as soon as it arrives rather than polling to the timeout
+            self._poll_after_write(entities[0], lambda state: (state == new_start and self.base.get_state_wrapper(entities[1], refresh=True) == new_end) or gateway.discharge_window_refused(*entities, *target))
+            verified = read_pair() == target
+            if not verified and gateway.discharge_window_refused(*entities, *target):
+                break
+            if verified:
+                self.count_register_writes += 1
+                self.registers_moved += sum(old != wanted for old, wanted in zip(before, target))
+                break
+        self._write_backoff_result("discharge_window", key, target, verified)
+        if ledger is not None:
+            for name, entity, value in zip(names, entities, target):
+                if verified:
+                    if before == target:
+                        ledger.record_ownership_from_read(entity, name, value, now=time.time(), generation=self._ledger_generation(entity))
+                    else:
+                        ledger.record_write(entity, name, value, now=time.time(), generation=self._ledger_generation(entity))
+                else:
+                    ledger.clear(entity)
+        if not verified:
+            message = f"Warn: Inverter {self.id} write to Hub discharge window failed: wanted {target}, got {read_pair()}"
+            self.base.log(message)
+            self.base.record_status(message, had_errors=True)
+        return verified
+
+    def gateway_discharge_window_refused(self, new_start, new_end):
+        """Whether the Hub explicitly refused this exact paired discharge window just now."""
+        entities = [self.base.get_arg(name, indirect=False, index=self.id) for name in ("discharge_start_time", "discharge_end_time")]
+        components = getattr(self.base, "components", None)
+        gateway = components.get_component("gateway") if components else None
+        return gateway is not None and gateway.discharge_window_refused(*entities, new_start, new_end)
+
     def adjust_force_export(self, force_export, new_start_time=None, new_end_time=None):
         """
         Adjust force export on/off and set the time window correctly
@@ -3054,8 +3135,33 @@ class Inverter:
         else:
             self.adjust_idle_time(discharge_start="00:00:00", discharge_end="00:00:00")
 
+        # Direct Hub batteries accept the complete slot as one physical write. Do not
+        # enable or enter export mode after a refused, staged or incomplete read-back.
+        # Coordinators retain their existing staged-endpoint then enable sequence.
+        gateway_window = None
+        if (new_start and new_start != old_start) or (new_end and new_end != old_end):
+            gateway_window = self.write_and_poll_gateway_discharge_window(new_start or old_start, new_end or old_end)
+            if gateway_window is False:
+                refused = self.gateway_discharge_window_refused(new_start or old_start, new_end or old_end)
+                if force_export and old_discharge_enable and refused and not getattr(self.base, "set_read_only", False):
+                    # The Hub refused the move, so the previous window is still armed: leaving it
+                    # would keep exporting on a schedule the plan has moved away from, so stop
+                    # exporting until a write lands. Only an explicit refusal does this - a write
+                    # that is merely not confirmed yet (slow ACK, telemetry lag) may well have
+                    # applied, and the plan still wants to export, so it is left running and the
+                    # pending commit retries it. (Without force_export the schedule was already
+                    # turned off above.) The caller is not told: execute.py still reports
+                    # "Exporting" for this cycle, and the next cycle retries the window.
+                    self.log("Warn: Inverter {} Hub refused the discharge window, turning off scheduled export".format(self.id))
+                    self.write_and_poll_switch("scheduled_discharge_enable", self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id), False)
+                    self.adjust_inverter_mode(False)
+                self.record_commit("export_window", (new_start, new_end, force_export), False)
+                return
+            if gateway_window is True:
+                changed_start_end = True
+
         # Change start time
-        if new_start and (new_start != old_start or is_hm_format):
+        if gateway_window is None and new_start and (new_start != old_start or is_hm_format):
             self.base.log("Inverter {} set new export start time to {}".format(self.id, new_start))
             if "discharge_start_time" in self.base.args:
                 # Always write to this as it is the GE default
@@ -3077,7 +3183,7 @@ class Inverter:
                 self.log("Warn: Inverter {} unable write export start time as neither REST or discharge_start_time are set".format(self.id))
 
         # Change end time
-        if new_end and (new_end != old_end or is_hm_format):
+        if gateway_window is None and new_end and (new_end != old_end or is_hm_format):
             self.base.log("Inverter {} Set new export end time to {} was {}".format(self.id, new_end, old_end))
             if "discharge_end_time" in self.base.args:
                 # Always write to this as it is the GE default
