@@ -3966,7 +3966,6 @@ The following template can be used as a starting point:
     name: "MINE"
     has_rest_api: False
     has_mqtt_api: False
-    has_service_api: True
     output_charge_control: "power"
     charge_control_immediate: False
     current_dp: 1
@@ -4037,7 +4036,9 @@ These three messages change between battery charge/discharge and auto (demand) m
 
 ### has_service_api
 
-When True a Home Assistant service will be used to issue control messages for the inverter.
+This old flag is **ignored**: setting it to either True or False does not enable or disable service control. Leave it out of new templates. Predbat uses the configured service hooks, such as `charge_start_service` and `charge_stop_service`, when their control paths run.
+
+### Home Assistant service hooks
 
 For each service you wish to use it must be defined in `apps.yaml`.
 

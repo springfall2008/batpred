@@ -19,7 +19,6 @@ pred_bat:
     name: "Deye / Solarman local"
     has_rest_api: false
     has_mqtt_api: false
-    has_service_api: true
     output_charge_control: "none"
     charge_control_immediate: false
     charge_discharge_with_rate: false
