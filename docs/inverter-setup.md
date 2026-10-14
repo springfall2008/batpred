@@ -2824,15 +2824,15 @@ With `charge_time_format: "S"` and no mapped physical time entities, Predbat cre
 
 1. Configure Solarman using its installation instructions. In **Monitor**, check every sensor/number/select, its units and direction. Set `deye_entity_prefix` to your actual entity prefix and adapt individual mappings where names differ.
 2. Merge the template into your own `apps.yaml`, preserving [tariffs](energy-rates.md), forecasts and load history. Replace example `soc_max`, `battery_rate_max`, `inverter_limit_charge`, `inverter_limit_discharge` and `inverter_limit` values with verified installation values. These are modelling inputs in watts, **not enforced hardware limits**. The inverter AC rating is not the site's grid-import limit. Keep `battery_min_soc` distinct from the emergency shutdown SOC.
-3. Before control, verify the exact firmware/model, Capacity/SOC mode, Zero Export To CT setup, an enabled all-day six-period ToU schedule (including its overnight wrap), and the existing global grid-charge/current limits. Do not raise limits to make a plan work. If these prerequisites are unknown, stay in Monitor.
+3. Before control, verify the exact firmware/model, Capacity/SoC mode, Zero Export To CT setup, an enabled all-day six-period ToU schedule (including its overnight wrap), and the existing global grid-charge/current limits. Do not raise limits to make a plan work. If these prerequisites are unknown, stay in Monitor.
 4. Establish one automatic writer before commissioning: Deye Cloud, alternative inverter controllers and automations writing these same registers must not compete with Predbat. The template does not disable other writers for you.
 5. Keep `template: true` while editing. Before removing it, select Monitor and review any persisted Predbat settings. Use **Control charge only after site-specific commissioning**, not merely after a successful software test or an elapsed observation period. Never select Control charge & discharge with this template.
 
-Unsupported: forced export, charge/export freeze, hold/pause, low-power or per-cycle rate control, solar SOC ceilings and car/iBoost battery holds. Keep those features off. A Predbat status such as *Hold charging* describes intent, not measured battery behaviour; this template cannot guarantee that hold.
+Unsupported: forced export, charge/export freeze, hold/pause, low-power or per-cycle rate control, solar SoC ceilings and car/iBoost battery holds. Keep those features off. A Predbat status such as *Hold charging* describes intent, not measured battery behaviour; this template cannot guarantee that hold.
 
 In the [SUN-12/16K-SG01LP1-EU manual](https://www.deyeinverter.com/deyeinverter/2026/05/19/rand/5060/%E3%80%90b%E3%80%91manual_sun-12-16k-sg01lp1-eu_20260519_en.pdf), §5.7 describes ToU **Power** as a discharge limit in **Selling First**. That does not establish an equivalent limit in Zero Export To CT. This template neither writes Program Power nor switches work mode to obtain that behaviour.
 
-**Failure and shutdown:** sources and SOC values persist in the inverter when Predbat or HA stops. There is no watchdog or automatic rollback here. Commission site-specific failure/recovery behaviour separately; do not assume a generic restore script is safe. HA observations can be cached or optimistic and do not confirm physical inverter operation.
+**Failure and shutdown:** sources and SoC values persist in the inverter when Predbat or HA stops. There is no watchdog or automatic rollback here. Commission site-specific failure/recovery behaviour separately; do not assume a generic restore script is safe. HA observations can be cached or optimistic and do not confirm physical inverter operation.
 
 ## Sunsynk Cloud
 

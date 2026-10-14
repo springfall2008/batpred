@@ -58,7 +58,7 @@ pred_bat:
   soc_percent: ["sensor.{deye_entity_prefix}_battery"]
 
   # Examples ONLY: replace with verified installed usable capacity and limits.
-  # battery_min_soc is the domestic discharge floor, NOT the emergency shutdown SOC.
+  # battery_min_soc is the domestic discharge floor, NOT the emergency shutdown SoC.
   soc_max: [10]
   battery_min_soc: [10]
   battery_rate_max: [3000]
@@ -70,7 +70,7 @@ pred_bat:
   # Keep manual global/grid-charge currents, BMS limits and protections unchanged.
 
   # All six rows receive the CURRENT intent, not a six-period forecast schedule.
-  # Prerequisites (manual): Capacity mode, Zero Export To CT, valid all-day ToU,
+  # Prerequisites (manual): Capacity/SoC mode, Zero Export To CT, valid all-day ToU,
   # commissioned grid charging and no other automatic writer (including Deye Cloud).
   # Each phase must be observed in HA before the next is attempted. HA observation
   # is not hardware confirmation; cached/optimistic states need commissioning.
@@ -113,6 +113,6 @@ pred_bat:
 
   # No physical time, Program Power, global current, reserve/shutdown or mode outputs.
   # Start in Monitor. After commissioning use Control charge only; freeze, low-power,
-  # reserve holds, solar SOC ceilings and car/iBoost battery holds are unsupported.
+  # reserve holds, solar SoC ceilings and car/iBoost battery holds are unsupported.
   # Stopping Predbat/HA does NOT undo persistent ToU writes or provide a watchdog.
   # Configure your own rates, load history and PV forecasts as documented in apps-yaml.md.
