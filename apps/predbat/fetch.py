@@ -3610,7 +3610,7 @@ class Fetch:
             elif not self.set_export_freeze:
                 # Ask the inverter rather than the switch: an unsupported inverter forces set_export_freeze off
                 # whatever the switch says, so advising the user to turn the switch on would change nothing.
-                if self.inverters and not self.inverters[0].inv_support_discharge_freeze:
+                if any(not inverter.inv_support_discharge_freeze for inverter in self.inverters):
                     reason = "the inverter does not support Freeze Export. Turn export_more_solar off."
                 else:
                     reason = "set_export_freeze is off. Enable set_export_freeze, or turn export_more_solar off."
