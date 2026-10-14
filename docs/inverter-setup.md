@@ -4101,7 +4101,11 @@ If however, you want the service to be called on each Predbat run then you shoul
 
 ### Verified service sequences
 
-Existing service templates retain their acceptance-based repeat suppression. To opt into **HA state observation**, put `verify: true` on every step. If any step contains `verify`, all steps must use the literal boolean `true`; mixed lists are rejected before writing.
+Use a verified sequence when one control change must be visible before another is sent. For example, disable grid charging, set its target, and only then enable it: accepting three Home Assistant service calls does not by itself show that the new target is visible before charging starts.
+
+The traditional service templates described above remain available. They remember accepted calls and normally suppress identical repeats; `repeat: true` resends them whenever the hook runs, but does **not** add state verification. A verified sequence instead compares the observed final state on every invocation, skips unnecessary writes, and checks each changed step before continuing. It does not need a forced resend when the intended settings already match.
+
+To opt into **HA state observation**, put `verify: true` on every step. If any step contains `verify`, all steps must use the literal boolean `true`; mixed lists are rejected before writing. **Do not combine `verify` with `repeat` or `always`: verified sequences reject those keys.** Read-back is a Home Assistant observation, not proof from an independent physical measurement.
 
 - Supported direct services: `number.set_value`, `input_number.set_value`, `select.select_option`, `input_select.select_option`, and `turn_on` / `turn_off` for `switch` / `input_boolean`.
 - Allowed keys: `service`, `entity_id`, `verify`, plus `value` for numbers or `option` for selects. `entity_id` is a string, optionally comma-separated for a group. A YAML list selects one such string per inverter, as in ordinary templates; it is not a group. `repeat`, `always`, nested `target`, device/area targets and other keys are rejected.
