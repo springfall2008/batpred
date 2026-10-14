@@ -141,6 +141,8 @@ function StatusCard({
           >
             <option value="Monitor">Monitor</option>
 
+            <option value="Control SOC only">Control SOC only</option>
+
             <option value="Control charge">Control charge</option>
 
             <option value="Control charge & discharge">Control charge & discharge</option>
