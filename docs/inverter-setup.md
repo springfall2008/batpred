@@ -2822,7 +2822,13 @@ If a service is rejected or an expected value is not observed, Predbat stops tha
 
 **Settings to configure or verify yourself, outside Predbat:** Capacity/SoC mode, work mode, ToU enable and its physical time boundaries, and the commissioned Program Power/current/protection settings. Use the inverter's controls or the corresponding Solarman controls in Home Assistant. This template leaves those settings unchanged; it does not supply safe universal values for your battery, BMS or electrical installation. Keep commissioned limits rather than raising them to make a plan work.
 
-With `charge_time_format: "S"` and no mapped physical time entities, Predbat creates private sensors for its own start/end bookkeeping. Those sensors are **not** the six physical boundaries. Do not map two native start/end controls onto that six-row table. This template does not upload a future six-period schedule: it relies on Predbat continuing to run and changing the current intent.
+### Physical program times versus Predbat's plan times
+
+Enable ToU for the required days and configure its **six physical program boundaries once**, using the inverter or Solarman's `Program N Time` controls. Check that the programs cover the complete day, including the overnight wrap, according to your model's manual. Do not treat this as a single native charge window with a start of `00:00` and an end of `23:59`: the six programs form a table, not that pair of controls.
+
+Solarman exposes writable time entities and Home Assistant supports [`time.set_value`](https://www.home-assistant.io/integrations/time/), but **this template does not write those times or enable ToU for you**. The verified sequences currently support number/select/switch actions, not time actions. Automatic schedule initialisation would require additional implementation and validation; writable entities alone do not provide it.
+
+With `charge_time_format: "S"` and no mapped physical time entities, Predbat creates private sensors for its plan's start/end bookkeeping. Leave the physical `Program N Time` entities out of `charge_start_time` / `charge_end_time` in `apps.yaml`; a pair cannot represent the six-row table. Predbat runs continuously and changes the current source/SoC command when its plan requires it, rather than uploading a future six-period schedule.
 
 ### Required inverter setup and control checks
 
