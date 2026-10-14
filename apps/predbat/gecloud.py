@@ -257,6 +257,31 @@ GE_SETTING_ENDPOINTS = [GE_API_INVERTER_READ_SETTING, GE_API_INVERTER_WRITE_SETT
 # seven INVERTER_DEF behaviour keys, valued as the "GEC" and "GEE" rows state them today
 # (support_feedin_first is absent from both rows and defaults to False in inverter.py). Literal on
 # purpose - reading the rows back would make the discovery completeness test prove nothing.
+# The percentage charge rate registers, as their HA-style names carry them
+GE_CHARGE_RATE_PERCENT_REGISTERS = ["inverter_charge_power_percentage", "charge_power_rate"]
+
+
+def is_charge_rate_percent_register(ha_name):
+    """Whether an HA-style register name is a percentage charge rate - "discharge_power_rate" contains "charge_power_rate" and is not one."""
+    if "discharge_power_rate" in ha_name:
+        return False
+    return any(candidate in ha_name for candidate in GE_CHARGE_RATE_PERCENT_REGISTERS)
+
+
+def charge_rate_grid_only(ha_names):
+    """
+    Whether a device with these HA-style register names can only limit charging from the grid.
+
+    True for the 3-phase class (GIV-3HY): it has no Battery Pause and no battery charge power
+    register, only the percentage charge rate, which limits AC (grid) charging and leaves PV
+    charging the battery at full power. Freeze Export cannot be carried out there (#5082).
+    """
+    has_percent = any(is_charge_rate_percent_register(ha_name) for ha_name in ha_names)
+    has_power = any("battery_charge_power" in ha_name for ha_name in ha_names)
+    has_pause = any("pause_battery" in ha_name for ha_name in ha_names)
+    return has_percent and not has_power and not has_pause
+
+
 GE_CLOUD_CAPABILITIES = {
     "GEC": {
         "support_charge_freeze": True,
@@ -1435,6 +1460,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         """
         Publish the registers
         """
+        grid_only = charge_rate_grid_only([regname_to_ha(registers[key].get("name", None) or "") for key in registers])
         for key in registers:
             if select_key and key != select_key:
                 continue
@@ -1488,6 +1514,9 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                     elif "_power" in ha_name:
                         attributes["device_class"] = "power"
                         attributes["unit_of_measurement"] = "W"
+                    # Tells Predbat this rate cannot stop solar charging, so no Freeze Export (#5082)
+                    if grid_only and is_charge_rate_percent_register(ha_name):
+                        attributes["grid_charge_only"] = True
 
             if isinstance(validation, str) and validation.startswith(VALIDATION_OPTIONS_PREFIX):
                 validation_options = parse_validation_options(validation)
@@ -1667,14 +1696,17 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         # The percentage rate registers only win as the control when the direct power register is
         # absent. When both a power register and its percentage equivalent exist, the power register
         # is the primary control and the percentage is left at 100% (reset by enable_default_options).
-        if has_charge_power_percent and not has_charge_rate:
-            self.set_arg("charge_rate_percent", build_entities("number", ["inverter_charge_power_percentage", "charge_power_rate"]))
-        else:
-            self.set_arg("charge_rate_percent", None)
-        if has_discharge_power_percent and not has_discharge_rate:
-            self.set_arg("discharge_rate_percent", build_entities("number", ["inverter_discharge_power_percentage", "discharge_power_rate"]))
-        else:
-            self.set_arg("discharge_rate_percent", None)
+        # Decided for each device on its own registers: a fleet can mix a unit with a power register
+        # and a 3-phase one with only the percentage, and each then gets the control it has (#5359).
+        def build_percent_entities(power_register, candidates):
+            """Per-device percentage rate entity IDs for the devices with no power register, or None if none qualify."""
+            entities = [None if power_register in register_names_by_device.get(device, set()) else first_existing_entity("number", device, candidates) for device in batteries]
+            if all(entity is None for entity in entities):
+                return None
+            return entities
+
+        self.set_arg("charge_rate_percent", build_percent_entities("battery_charge_power", ["inverter_charge_power_percentage", "charge_power_rate"]))
+        self.set_arg("discharge_rate_percent", build_percent_entities("battery_discharge_power", ["inverter_discharge_power_percentage", "discharge_power_rate"]))
 
         self.set_arg("givtcp_rest", None)
 
@@ -1771,9 +1803,10 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         The register features async_automatic_config() sniffs for, as this one device reports them.
 
         The same substrings as its sniffing loop, but scoped to this device's own settings rather
-        than ORed across the fleet: automatic_config() gates pause_mode, pause_start_time/end_time,
-        discharge_target_soc and the percentage rate controls for every device on what ANY device
-        reports, while a discovery record describes only its own device (spec D10).
+        than ORed across the fleet: automatic_config() gates pause_mode, pause_start_time/end_time
+        and discharge_target_soc for every device on what ANY device reports, while a discovery
+        record describes only its own device (spec D10). The percentage rate controls are bound
+        per device by both (#5359).
         """
         features = {"charge_rate": False, "discharge_rate": False, "charge_power_percent": False, "discharge_power_percent": False, "pause_start_time": False, "discharge_target_soc": False, "pause_battery": False}
         for register in self.settings.get(device, {}).values():
@@ -2021,7 +2054,8 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         clamp serial is not a utility supply point and does not fit that section's identity model
         (see _meter_cross_link).
 
-        Each controlled record carries the type's literal `capabilities` (GE_CLOUD_CAPABILITIES),
+        Each controlled record carries the type's literal `capabilities` (GE_CLOUD_CAPABILITIES) -
+        less support_discharge_freeze where the device's own registers cannot hold one (#5082) -
         an `entities` map of every setting async_automatic_config() binds for that device (see
         _device_entities), and `ratings` under Predbat's setting names - including export_limit,
         this inverter's equal share of the site grid export limit (spec decision D7). PV-only
@@ -2058,6 +2092,10 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             share = self._export_limit_share(device)
             if share is not None:
                 ratings["export_limit"] = share
+            capabilities = dict(GE_CLOUD_CAPABILITIES[inverter_type])
+            if charge_rate_grid_only([regname_to_ha(register.get("name", None) or "") for register in self.settings.get(device, {}).values()]):
+                # The type's row says Freeze Export works; this device's registers say it cannot (#5082)
+                capabilities["support_discharge_freeze"] = False
             inverters.append(
                 inverter_record(
                     "gecloud:{}".format(device),
@@ -2065,7 +2103,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                     composition=composition,
                     measures_meter=self._meter_cross_link(devices, device),
                     functions=["solar", "battery"],
-                    capabilities=dict(GE_CLOUD_CAPABILITIES[inverter_type]),
+                    capabilities=capabilities,
                     hardware_ids={"serial": device},
                     serials=fronted_serials,
                     info=info,
