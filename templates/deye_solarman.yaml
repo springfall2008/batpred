@@ -117,4 +117,122 @@ pred_bat:
   # Freeze, low-power,
   # reserve holds, solar SoC ceilings and car/iBoost battery holds are unsupported.
   # Stopping Predbat/HA does NOT undo persistent ToU writes or provide a watchdog.
-  # Configure your own rates, load history and PV forecasts as documented in apps-yaml.md.
+  # General settings below follow the standard Predbat apps.yaml example.
+  # Edit timezone above and currency here for your location.
+  currency_symbols: ["£", "p"]
+
+  # The deye_hybrid profile describes a DC-coupled hybrid inverter.
+  inverter_hybrid: true
+  battery_scaling: [1.0]
+  import_export_scaling: 1.0
+
+  # Load history comes from load_today above. Use kWh energy, not a power sensor.
+  # Seven days of history and a 48-hour forecast follow the standard template.
+  load_filter_threshold: 30
+  days_previous: [7]
+  forecast_hours: 48
+  # Optional additional predicted load, for example from Predheat:
+  #load_forecast:
+  #  - predheat.heat_energy$external
+
+  # PV forecast: choose ONE source and configure it before removing template: true.
+  # Examples for the Solcast Home Assistant integration; change names if needed.
+  #pv_forecast_today: re:(sensor.(solcast_|)(pv_forecast_|)forecast_today)
+  #pv_forecast_tomorrow: re:(sensor.(solcast_|)(pv_forecast_|)forecast_tomorrow)
+  #pv_forecast_d3: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_3|d3))
+  #pv_forecast_d4: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_4|d4))
+  # Alternatively use the Predbat Solcast API component (optional):
+  #solcast_host: https://api.solcast.com.au/
+  #solcast_api_key: !secret solcast_api_key
+  #solcast_poll_hours: 4.8
+  # For other providers, see apps-yaml.md (Solar PV predictions).
+
+  # Energy rates: configure your actual import/export rates before enabling control.
+  # Rates are in minor currency units per kWh (pence with the symbols above).
+  # Choose either a provider's rate sensors/API or your own rate schedule.
+  # Octopus Energy Home Assistant integration examples (optional):
+  #metric_octopus_import: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_rate)'
+  #metric_octopus_export: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_export_current_rate)'
+  #metric_standing_charge: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_standing_charge)'
+  # Or replace these EXAMPLE prices with your own full-day schedule:
+  #rates_import:
+  #  - start: "00:30:00"
+  #    end: "04:30:00"
+  #    rate: 7.5
+  #  - start: "04:30:00"
+  #    end: "00:30:00"
+  #    rate: 40.0
+  #rates_export:
+  #  - rate: 4.2
+  # Do not leave gaps in a manually configured rate schedule.
+  # Direct provider APIs and tariff overrides are described in energy-rates.md.
+
+  # Car charging is OPTIONAL and off in this blank template.
+  # Set num_cars to 1 only after configuring the charger and per-car inputs.
+  # Planning a car does not install a Home Assistant relay automation.
+  num_cars: 0
+  # Daily/session metered charging energy, used to separate car and household load:
+  #car_charging_energy: 're:(sensor.myenergi_zappi_[0-9a-z]+_charge_added_session|sensor.wallbox_portal_added_energy)'
+  # One entry per car: its connection/planned-state sensor, not a switch to write.
+  #car_charging_planned:
+  #  - 're:(sensor.wallbox_portal_status_description|sensor.myenergi_zappi_[0-9a-z]+_plug_status|sensor.tesla_wall_connector_status)'
+  car_charging_planned_response:
+    - "yes"
+    - "on"
+    - "true"
+    - "connected"
+    - "ev connected"
+    - "charging"
+    - "paused"
+    - "waiting for car demand"
+    - "waiting for ev"
+    - "scheduled"
+    - "enabled"
+    - "latched"
+    - "locked"
+    - "plugged in"
+    - "waiting"
+    - "waiting_car"
+  #car_charging_now:
+  #  - sensor.your_charger_status
+  car_charging_now_response: ["yes", "on", "true", "charging"]
+  # Optional battery size in kWh; limit and current SoC in percent:
+  #car_charging_battery_size:
+  #  - 75
+  #car_charging_limit:
+  #  - 're:number.your_car_charge_limit'
+  #car_charging_soc:
+  #  - 're:sensor.your_car_battery'
+  #car_charging_exclusive:
+  #  - true
+  # Set charge rate and ready-by time in Predbat's car settings; see car-charging.md.
+  # The Deye template does not provide car/iBoost battery-hold control.
+
+  # Optional Intelligent Octopus planned slots take precedence when configured:
+  #octopus_intelligent_slot: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_intelligent_dispatching)'
+  #octopus_ready_time: 're:((select|time).octopus_energy_([0-9a-z_]+|)_intelligent_target_time)'
+  #octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_target)'
+  #octopus_saving_session: 're:(event.octopus_energy([0-9a-z_]+|)_(saving_session_events?|power_down_events))'
+
+  # Optional notifications and cache-driven plan updates:
+  #notify_devices:
+  #  - mobile_app_your_phone
+  #watch_list:
+  #  - '+[car_charging_planned]'
+  #  - '+[car_charging_soc]'
+  #  - '{octopus_intelligent_slot}'
+  #  - '{octopus_ready_time}'
+  #  - '{octopus_charge_limit}'
+  #  - '{octopus_saving_session}'
+
+  # Leave clock corrections at zero unless required by your installation.
+  # These adjust Predbat's plan times, not the six physical program boundaries.
+  inverter_clock_skew_start: 0
+  inverter_clock_skew_end: 0
+  inverter_clock_skew_discharge_start: 0
+  inverter_clock_skew_discharge_end: 0
+  clock_skew: 0
+
+  # Additional log redaction is optional; use your own identifiers, never API keys here.
+  #redact_strings_labelled:
+  #  my_meter: "your_meter_identifier"

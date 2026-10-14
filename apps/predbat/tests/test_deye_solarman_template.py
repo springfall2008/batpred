@@ -87,6 +87,10 @@ def run_deye_solarman_template_tests(my_predbat):
         my_predbat.inverters = [inv]
         check(not writes, "construction must not send hardware services")
         check(template["template"] is True, "shipped example must stay in template mode")
+        check(template.get("inverter_hybrid") is True and template.get("num_cars") == 0, "blank template must model a hybrid without enabling an EV")
+        check(template.get("days_previous") == [7] and template.get("forecast_hours") == 48, "complete template must include load history and forecast horizon")
+        check(template.get("currency_symbols") == ["£", "p"], "complete template must include editable currency symbols")
+        check(not any(key in template for key in ("givtcp_rest", "deye_automatic", "ohme_control", "wallbox_control", "joint_site")), "blank local template must not activate another control path")
         check(not inv.inv_support_charge_freeze and not inv.inv_support_discharge_freeze and not inv.inv_has_timed_pause, "unsupported freeze/pause must remain disabled")
         check(inv.inv_output_charge_control == "none", "global rate controls must remain unmapped")
         check("discharge_start_service" not in template, "forced export must be absent")
