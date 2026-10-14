@@ -4155,7 +4155,16 @@ The default options passed in are:
 
 #### charge_freeze_service
 
-If defined, called for freeze charge. An explicit freeze request without this hook falls back to `charge_stop_service`, not a new charge. Reaching the target without an explicit freeze request retains the normal charge-start fallback.
+Predbat's current charge-service routing distinguishes an **explicit freeze request** from simply **reaching the charge target**:
+
+| Situation | If `charge_freeze_service` is configured | If it is absent |
+| --------- | --------------------------------------- | --------------- |
+| Explicit freeze request with a positive target | Call `charge_freeze_service` | Call `charge_stop_service`, not `charge_start_service` |
+| Target equals the current inverter SoC, without an explicit freeze request | Call `charge_freeze_service` | Call `charge_start_service` with that target |
+
+These are the existing v9.4.0 code paths; this documentation does not introduce a new fallback. Stopping grid charging alone does not guarantee that battery SoC stays constant: a physical hold also depends on the inverter's supported target, pause/rate or reserve controls. The Deye/Solarman template above does not advertise that hold capability.
+
+An explicitly empty list (`[]`) is a configured no-op, not an absent service. Likewise, failure of a configured service does not make Predbat silently choose its missing-service fallback.
 
 Note that **switch.predbat_set_charge_freeze** must be turned on for Predbat to plan Freeze Charge activity, and as this is an expert mode option, Predbat's [Expert Mode](customisation.md#expert-mode) must be turned on first.
 
