@@ -2805,6 +2805,18 @@ This template has been used on a real home installation, not only in software te
 
 Use the shared [deye_solarman.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/deye_solarman.yaml) with [ha-solarman](https://github.com/davidrapan/ha-solarman). Its entity names and options follow the integration's [deye_hybrid profile](https://github.com/davidrapan/ha-solarman/blob/main/custom_components/solarman/inverter_definitions/deye_hybrid.yaml); verify compatibility with your exact model and firmware. This is a custom `DeyeSolarman` profile defined in `apps.yaml`, not a new built-in inverter type or a Deye Cloud connection.
 
+### Quick start
+
+1. **Connect the inverter to Home Assistant through Solarman.** Confirm that its sensors and all six charging-source/SoC controls exist and report valid values. Match the integration's profile to your inverter model.
+2. **Back up `apps.yaml` and use the complete Deye/Solarman template instead of the default GivTCP example.** Edit `deye_entity_prefix`, timezone/currency, usable battery capacity and the power limits for your installation. Do not merge inverter profiles.
+3. **Configure energy rates, household history and a PV forecast source in that file.** The template includes commented rate/forecast examples; they are not your actual tariff. Optional car settings are included, with `num_cars: 0` until you configure a car. Refer to [apps.yaml configuration](apps-yaml.md), [energy rates](energy-rates.md) and [car charging](car-charging.md) for those inputs.
+4. **Prepare the inverter and remove competing control.** Follow [required inverter setup](#required-inverter-setup-and-control-checks): verify the six-program all-day ToU coverage, Capacity/SoC mode, Zero Export To CT, existing current/Program Power/protection settings and grid-charging permission. Disable other automatic controllers that write these settings.
+5. **Start with Monitor, then test the supported operation.** Keep `template: true` during editing. Select Monitor and check persisted settings before removing that line. Review sensors and the plan, then use Control charge to test a charge/return-to-self-consumption cycle on your installation. Check real battery/grid behaviour as well as HA read-back, and verify how your installation behaves if Predbat stops before relying on unattended control.
+
+Control charge supports grid charging and ordinary discharge to household loads. It does not provide scheduled forced export or battery holds. The sections below explain the automatic six-row sequence, one-time inverter setup and the limits of HA verification.
+
+### What Predbat controls
+
 The template applies Predbat's **current command to all six physical Time of Use (ToU) programs** using [verified service sequences](#verified-service-sequences). The inverter selects a program according to its clock; giving every program the same current settings prevents a program boundary from changing Predbat's requested behaviour. This is not a six-period forecast uploaded to the inverter.
 
 **Predbat performs both the writes and the checks below automatically.** The checks are not instructions for you to inspect six controls on every cycle. Each phase must be visible in Home Assistant before Predbat advances to the next phase. If the final settings already match, no writes are needed.
