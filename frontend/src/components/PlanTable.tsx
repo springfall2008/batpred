@@ -1345,8 +1345,8 @@ export default function PlanTable({
       const visibleHeight = viewport.height + viewport.offsetTop
 
       // Mobile browsers do not agree on whether innerHeight follows the
-      // keyboard. Comparing the current visual viewport with its unoccluded
-      // height works in both a browser tab and Home Assistant's iframe.
+      // keyboard. Comparing the current visual viewport with its height before
+      // the keyboard opens works in both a browser tab and Home Assistant's iframe.
       baselineHeight = Math.max(baselineHeight, visibleHeight)
 
       const offset = Math.max(0, baselineHeight - visibleHeight)
@@ -1398,10 +1398,13 @@ export default function PlanTable({
       const viewport = window.visualViewport
       const viewportLeft = viewport?.offsetLeft ?? 0
       const viewportWidth = viewport?.width ?? window.innerWidth
-      const bounds = element.getBoundingClientRect()
+      const containerBounds = element.closest('.plan-table-scroll')?.getBoundingClientRect()
       const safeInset = 8
-      const minimumLeft = viewportLeft + safeInset
-      const maximumLeft = Math.max(minimumLeft, viewportLeft + viewportWidth - bounds.width - safeInset)
+      const minimumLeft = Math.max(viewportLeft, containerBounds?.left ?? viewportLeft) + safeInset
+      const maximumRight = Math.min(viewportLeft + viewportWidth, containerBounds?.right ?? viewportLeft + viewportWidth) - safeInset
+      element.style.maxWidth = `${Math.max(0, maximumRight - minimumLeft)}px`
+      const bounds = element.getBoundingClientRect()
+      const maximumLeft = Math.max(minimumLeft, maximumRight - bounds.width)
       const constrainedLeft = Math.min(maximumLeft, Math.max(minimumLeft, bounds.left))
 
       element.style.setProperty(shiftProperty, `${constrainedLeft - bounds.left}px`)
