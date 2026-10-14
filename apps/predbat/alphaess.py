@@ -41,6 +41,7 @@ import time
 import aiohttp
 from datetime import datetime
 from component_base import ComponentBase
+from const import PREDBAT_MODE_MONITOR, PREDBAT_MODE_OPTIONS
 from coordinator import inverter_record
 from alphaess_const import (
     ALPHAESS_BASE_URL,
@@ -1515,6 +1516,10 @@ class AlphaESSAPI(ComponentBase):
         Does nothing before Predbat has written anything for this serial and direction:
         with no recorded intent there is nothing to have been overwritten, and what the
         inverter reports is simply the user's own configuration.
+
+        Manual changes are expected while automatic control is suspended. In that case
+        invalidate a stale acknowledgement silently, so resuming control cannot mistake
+        the old POST for the inverter's current settings.
         """
         applied = self.applied_payload.get(sn, {}).get(direction)
         if not applied or not isinstance(observed, dict):
@@ -1531,14 +1536,15 @@ class AlphaESSAPI(ComponentBase):
         differing = [field for field in self._owned_fields(direction) if field in observed and self._field_differs(direction, field, observed.get(field), applied.get(field))]
         if not differing:
             return
-        detail = ", ".join("{}={} (Predbat wrote {})".format(field, observed.get(field), applied.get(field)) for field in differing)
-        self.log(
-            "Warn: AlphaESS {} {} settings no longer match what Predbat wrote: {}. The AlphaESS app, another Predbat instance, or the installer portal may have changed them - these endpoints are whole-object replacements, so the last writer wins.".format(
-                sn, direction, detail
+        if self._automatic_control_enabled():
+            detail = ", ".join("{}={} (Predbat wrote {})".format(field, observed.get(field), applied.get(field)) for field in differing)
+            self.log(
+                "Warn: AlphaESS {} {} settings no longer match what Predbat wrote: {}. The AlphaESS app, another Predbat instance, or the installer portal may have changed them - these endpoints are whole-object replacements, so the last writer wins.".format(
+                    sn, direction, detail
+                )
             )
-        )
-        # Clear the recorded intent so the next cycle re-applies rather than deciding the
-        # payload is unchanged and leaving the inverter on someone else's settings.
+        # Clear the recorded intent so the next active control cycle re-applies rather
+        # than trusting an acknowledgement that no longer matches the inverter.
         self.applied_payload.get(sn, {}).pop(direction, None)
 
     async def fetch_config(self, sn):
@@ -1646,6 +1652,16 @@ class AlphaESSAPI(ComponentBase):
     def _is_read_only(self):
         """Return True when Predbat is in read-only mode and must not write to the inverter."""
         return self.get_state_wrapper("switch.{}_set_read_only".format(self.prefix), default="off") == "on"
+
+    def _automatic_control_enabled(self):
+        """Allow background schedule writes only while Predbat is actively controlling.
+
+        Read the live mode, with a configured fallback for startup, rather than the mode
+        cached by the last planning cycle. Explicit write-button events retain the shared
+        executor's one-off mode-change reset and the existing manual control behaviour.
+        """
+        mode = self.get_state_wrapper("select.{}_mode".format(self.prefix), default=self.get_arg("mode"))
+        return self.control_enable and not self._is_read_only() and mode != PREDBAT_MODE_OPTIONS[PREDBAT_MODE_MONITOR]
 
     def _write_settle_seconds(self):
         """Seconds after a successful write in which a correction is still the same update.
@@ -1904,15 +1920,14 @@ class AlphaESSAPI(ComponentBase):
     async def _reconcile_control(self, sn):
         """Re-apply sn's schedule if Predbat already controls it, unforced.
 
-        Gated on read-only for a specific reason. Predbat's own read-only handling
-        (execute.py:145) covers every write that originates from a plan, but NOT one this
-        component initiates itself - and this is exactly that. The payload is time-aware
+        Predbat's executor gates writes originating from a plan, but this component
+        initiates its own writes and must check Monitor and read-only independently.
+        The payload is time-aware
         because batUseCap switches between the export target and the reserve, so a window
         transition changes it with no plan change at all, and without this gate that
-        transition would write to the inverter while Predbat was in read-only mode. This is
-        GH#4436 (deye.py:1661, sunsynk.py:1346).
+        transition would write to the inverter while Predbat was only monitoring.
         """
-        if sn not in self.control_active or self._is_read_only() or not self.control_enable:
+        if sn not in self.control_active or not self._automatic_control_enabled():
             return
         try:
             await self.apply_schedule(sn)
@@ -2154,7 +2169,7 @@ class AlphaESSAPI(ComponentBase):
             self.log("Warn: AlphaESS found no battery systems on this account")
             return False
         config_ttl = ALPHAESS_TTL_CONFIG
-        if self.control_active.intersection(self.device_list) and self.control_enable and not self._is_read_only():
+        if self.control_active.intersection(self.device_list) and self._automatic_control_enabled():
             config_ttl = ALPHAESS_TTL_CONTROL_CONFIG
         if self.tier_expired("config", config_ttl):
             await self.refresh_config()
@@ -2233,7 +2248,7 @@ class AlphaESSAPI(ComponentBase):
 
     async def final(self):
         """Optionally clear schedules, then persist state for the next startup."""
-        if self.shutdown_mode in ("self_consumption", "self_consumption_force") and self.control_enable and not self._is_read_only():
+        if self.shutdown_mode in ("self_consumption", "self_consumption_force") and self._automatic_control_enabled():
             for sn in self.device_list:
                 if sn not in self.control_active:
                     continue

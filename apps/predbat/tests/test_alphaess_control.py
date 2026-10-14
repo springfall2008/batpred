@@ -2060,13 +2060,130 @@ def test_alphaess_periodic_cycle_type_change_is_detected():
     assert "periodic" not in client.applied_payload["AL70"], "A daily schedule changed to weekly without being detected"
 
 
+def test_alphaess_monitor_preserves_manual_schedule_after_restart():
+    """Restored ownership must not replace a manual weekly schedule during Monitor ticks."""
+    from tests.test_alphaess_storage import FakeStorage, StoredAlphaESS
+
+    store = FakeStorage()
+    client = StoredAlphaESS(store=store)
+    client.device_list = ["AL70"]
+    client.control_active.add("AL70")
+    client._periodic_ok["AL70"] = True
+    client.local_schedule["AL70"] = _schedule()
+    payload = client.build_periodic_payload("AL70", client.local_schedule["AL70"])
+    client.applied_payload["AL70"] = {"periodic": payload}
+    client.last_write_time[("AL70", "periodic")] = 1000.0
+    run_async_local(client.save_static())
+    run_async_local(client.save_config())
+    run_async_local(client.save_control())
+
+    restored = StoredAlphaESS(store=store)
+    restored.state["select.predbat_mode"] = "Monitor"
+    restored.state["switch.predbat_set_read_only"] = "off"
+    manual = dict(payload, executeCycleType=1, gridChargeCycle=1)
+    manual["chargeTimeList"] = [{"beginTime": "00:00", "endTime": "06:00", "chargeLimit": 100.0, "chargePower": 3000, "weeks": [6, 5, 4, 3, 2, 1, 7]}]
+    restored._get = AsyncMock(side_effect=lambda endpoint, params=None: (200, manual if endpoint == "time_charge" else {}))
+    restored._post = AsyncMock(return_value=(200, None))
+    with (
+        patch.object(restored, "refresh_static", new_callable=AsyncMock),
+        patch.object(restored, "refresh_power", new_callable=AsyncMock, return_value=True),
+        patch.object(restored, "refresh_energy", new_callable=AsyncMock, return_value=True),
+        patch.object(restored, "refresh_discovery"),
+    ):
+        for tick, now in enumerate((2800.0, 4600.0, 6400.0)):
+            with patch("alphaess.time.time", return_value=now):
+                assert run_async_local(restored.run(60, tick == 0))
+            assert restored.device_config["AL70"]["periodic"] == manual
+            restored._post.assert_not_awaited()
+    assert not any("no longer match" in message for message in restored.log_messages)
+    assert "periodic" not in restored.applied_payload["AL70"], "Manual changes must invalidate old write acknowledgements even while monitoring"
+
+    # Returning to active control must apply the current plan, rather than trust the old acknowledgement.
+    restored.state["select.predbat_mode"] = "Control charge"
+    restored.local_schedule["AL70"] = _schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "05:00:00"})
+    run_async_local(restored._reconcile_control("AL70"))
+    restored._post.assert_awaited_once()
+    assert restored._post.await_args.kwargs["body"]["chargeTimeList"][0]["beginTime"] == "01:00"
+
+
+def test_alphaess_inactive_control_does_not_warn_about_manual_changes():
+    """Manual changes are expected in Monitor, read-only, and disabled component control."""
+    for mode, read_only, control_enable in (("Monitor", False, True), ("Control charge", True, True), ("Control charge", False, False)):
+        for direction, field in (("charge", "gridCharge"), ("discharge", "ctrDis"), ("periodic", "executeCycleType")):
+            client = _writable()
+            client.state["select.predbat_mode"] = mode
+            client.state["switch.predbat_set_read_only"] = "on" if read_only else "off"
+            client.control_enable = control_enable
+            client.applied_payload["AL70"] = {direction: {field: 0}}
+            client.last_write_time[("AL70", direction)] = 1000.0
+            with patch("alphaess.time.time", return_value=2800.0):
+                client.note_external_change("AL70", direction, {field: 1})
+                run_async_local(client._reconcile_control("AL70"))
+            assert not any("no longer match" in message for message in client.log_messages), (mode, read_only, control_enable, direction)
+            assert direction not in client.applied_payload["AL70"], "Do not retain an acknowledgement that no longer matches the inverter"
+
+
+def test_alphaess_monitor_suppresses_reconcile_and_shutdown_clears():
+    """Monitor protects both legacy and periodic schedules, even with forced shutdown clearing."""
+    for periodic in (False, True):
+        for shutdown_mode in ("self_consumption", "self_consumption_force"):
+            client = _writable()
+            client.state["select.predbat_mode"] = "Monitor"
+            client._periodic_ok["AL70"] = periodic
+            client.shutdown_mode = shutdown_mode
+            client.local_schedule["AL70"] = _schedule()
+            client._post = AsyncMock(return_value=(200, None))
+            run_async_local(client._reconcile_control("AL70"))
+            run_async_local(client.final())
+            client._post.assert_not_awaited()
+
+
+def test_alphaess_mode_guard_uses_current_configuration():
+    """Use the live mode entity and configured fallback rather than a stale fetched mode."""
+    client = _writable()
+    client.base.predbat_mode = "Control charge"
+    client.state["select.predbat_mode"] = "Monitor"
+    client.apply_schedule = AsyncMock(return_value=True)
+    run_async_local(client._reconcile_control("AL70"))
+    client.apply_schedule.assert_not_awaited()
+    client.state.pop("select.predbat_mode")
+    client.base.get_arg.return_value = "Monitor"
+    run_async_local(client._reconcile_control("AL70"))
+    client.apply_schedule.assert_not_awaited()
+    client.base.get_arg.return_value = "Control charge"
+    run_async_local(client._reconcile_control("AL70"))
+    client.apply_schedule.assert_awaited_once_with("AL70")
+
+
+def test_alphaess_explicit_write_still_applies_the_shared_mode_reset():
+    """The explicit write event used by reset_inverter retains Predbat's reset convention."""
+    for mode, read_only in (("Monitor", False), ("Control charge", True)):
+        client = _writable()
+        client.state["select.predbat_mode"] = mode
+        client.state["switch.predbat_set_read_only"] = "on" if read_only else "off"
+        client._periodic_ok["AL70"] = True
+        client.local_schedule["AL70"] = _schedule()
+        client._post = AsyncMock(return_value=(200, None))
+        run_async_local(client.switch_event("switch.predbat_alphaess_al70_battery_schedule_charge_write", "turn_on"))
+        client._post.assert_awaited_once()
+        assert client._post.await_args.kwargs["body"]["gridChargeCycle"] == 0
+        assert client._post.await_args.kwargs["body"]["ctrDisCycle"] == 0
+
+
 def test_alphaess_control_readback_uses_five_minutes_only_while_driving():
     """Active control checks settings sooner; monitoring and read-only retain the normal TTL."""
-    for active, enabled, read_only, interval in ((True, True, False, 300), (False, True, False, 1800), (True, False, False, 1800), (True, True, True, 1800)):
+    for active, enabled, read_only, mode, interval in (
+        (True, True, False, "Control charge", 300),
+        (False, True, False, "Control charge", 1800),
+        (True, False, False, "Control charge", 1800),
+        (True, True, True, "Control charge", 1800),
+        (True, True, False, "Monitor", 1800),
+    ):
         client = _client()
         client.control_active = {"AL70"} if active else set()
         client.control_enable = enabled
         client.state["switch.predbat_set_read_only"] = "on" if read_only else "off"
+        client.state["select.predbat_mode"] = mode
         client._tier_refreshed = {tier: 1000.0 for tier in ("static", "config", "power", "energy")}
         with (
             patch.object(client, "refresh_config", new_callable=AsyncMock, return_value=True) as refresh,
@@ -2116,6 +2233,11 @@ def run_alphaess_control_tests(my_predbat):
     """Run all AlphaESS control-logic tests."""
     failed = False
     for name, fn in [
+        ("monitor_preserves_manual_schedule_after_restart", test_alphaess_monitor_preserves_manual_schedule_after_restart),
+        ("inactive_control_manual_changes", test_alphaess_inactive_control_does_not_warn_about_manual_changes),
+        ("monitor_reconcile_and_shutdown", test_alphaess_monitor_suppresses_reconcile_and_shutdown_clears),
+        ("mode_guard_current_configuration", test_alphaess_mode_guard_uses_current_configuration),
+        ("explicit_write_keeps_mode_reset", test_alphaess_explicit_write_still_applies_the_shared_mode_reset),
         ("readback_elapsed_grace", test_alphaess_readback_grace_expires_by_time_on_the_first_config_poll),
         ("readback_full_grace", test_alphaess_readback_grace_protects_the_full_five_minutes),
         ("periodic_cycle_type_change", test_alphaess_periodic_cycle_type_change_is_detected),

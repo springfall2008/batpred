@@ -264,6 +264,8 @@ Grep for the named symbol rather than trusting a line number.
 
 - **AlphaESS write acknowledgements are not schedule readback (2026-10-13).** `applied_payload` caches a successful POST, not device confirmation. Before this fix, `note_external_change()` ignored three config polls after each write even though the config tier ran every 30 minutes, hiding an overwrite for roughly two hours and restarting that poll count after a restart. Reproduced with the 2026-10-13 log's disabled weekly `getTimeChargeBySn` response. Timestamped writes now get five minutes of propagation grace, active control reads every five minutes, and `executeCycleType` is included in owned-field comparison. The generic executor can deliberately leave a future charge window enabled outside the current window (since `17921c5a`, November 2025); that log line alone does not prove an AlphaESS write failed.
 
+- **AlphaESS Monitor mode and persisted ownership (2026-10-14).** `control_active` survives restarts, so checking only the read-only switch in `_reconcile_control()` allowed cached schedules to overwrite manual ones while `select.predbat_mode` was `Monitor`. Reproduced with a restored disabled daily schedule and a manual weekly 00:00-06:00 charge. `_automatic_control_enabled()` now gates background re-apply, faster config polling and optional shutdown clearing on both mode and read-only. Manual changes while control is suspended invalidate old acknowledgements silently. Explicit write-button events still allow the shared executor's one-off mode/read-only reset.
+
 ## What belongs here, and what does not
 
 The journal is for what a future triage run would otherwise have to rediscover. Test every entry with one question: would it save time on a **different** issue?
