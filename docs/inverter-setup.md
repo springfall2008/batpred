@@ -173,6 +173,11 @@ This is being worked on by the author of GivTCP, e.g. see [GivTCP issue: unable 
     - Set geserial to your inverter serial number
 - If you set **ge_cloud_automatic** to `true` in `apps.yaml` then Predbat will auto-configure itself to use the appropriate GE Cloud controls and will ignore any inverter and battery controls set in `apps.yaml`
 - Make sure that the 'discharge down to' registers are set to 4% and charge and discharge slots 2, 3 and 4 are disabled in the portal by setting the start and end times to 00:00 (if you have them).
+- Predbat does not use Freeze Export on GivEnergy 3-phase inverters, whether controlled through GE Cloud or through the Predbat hub.
+  On the 3-phase hybrid there is no battery pause setting and the charge rate only limits charging from the grid, so solar carries on charging the battery during a Freeze Export slot.
+  The AC-coupled 3-phase model is treated the same way as a precaution; it has not been checked and may in fact be able to hold.
+  Predbat detects these inverters, logs that Freeze Export is not supported and stops planning it; forced export is not affected.
+  If any inverter in a multi-inverter system does not support Freeze Export then it is turned off for all of them.
 - If you have set **ge_cloud_automatic** to `true` and the GE Cloud does not return accurate **load_today** energy information, you can [override the GE Cloud load data](apps-yaml.md) by creating a custom template sensor and setting **ge_cloud_load_today_ignore** to true in `apps.yaml`.
 - The charge/export slot start and end times are stored by GivEnergy in the timezone set on your GivEnergy account. Predbat reads this timezone from the GivEnergy account details and translates the slot times into
   the Predbat **timezone** setting, so the times shown on the Predbat select entities may differ from those shown in the GivEnergy portal if the two timezones do not match.
