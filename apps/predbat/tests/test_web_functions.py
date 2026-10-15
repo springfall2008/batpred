@@ -10,6 +10,7 @@
 
 import asyncio
 import os
+from unittest.mock import MagicMock, patch
 
 from web import WebInterface, is_data_numerical
 from web_helper import get_plan_renderer_js
@@ -337,6 +338,37 @@ def run_compare_empty_state_tests(my_predbat, web):
         failed += 1
     if "Loading chart (please wait)" not in text:
         print(f"  ERROR: expected the genuine loading message when compare_list is set but not yet computed")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: a numeric compare id finds its string-keyed result, and a malformed entry doesn't break the page (#5472)")
+    my_predbat.args["compare_list"] = ["not_a_dict", {"name": "No Id"}, {"id": 2024, "name": "Numeric Id Tariff"}]
+    fake_comparison = MagicMock()
+    fake_comparison.get_comparison.side_effect = lambda tariff_id: {"entity_id": "predbat.compare_tariff_2024", "html": "NUMERIC_ID_PLAN"} if tariff_id == "2024" else {}
+    try:
+        with patch.object(my_predbat, "comparison", fake_comparison):
+            text = asyncio.run(web.html_compare(None)).text
+    except Exception as exc:
+        text = None
+        print(f"  ERROR: html_compare() raised {exc!r} on a compare_list with malformed entries")
+        failed += 1
+    if text is not None:
+        if "NUMERIC_ID_PLAN" not in text:
+            print(f"  ERROR: expected the plan stored under '2024' to be shown for the numeric id")
+            failed += 1
+        if "compare_list entry 1 must be a dictionary" not in text or "compare_list entry 2 requires a non-empty &#x27;id&#x27;" not in text:
+            print(f"  ERROR: expected the page to say why entries 1 and 2 were skipped")
+            failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: a compare_list with only malformed entries explains them instead of 'not configured' or a stuck loading message (#5472)")
+    my_predbat.args["compare_list"] = [{"name": "No Id"}]
+    text = asyncio.run(web.html_compare(None)).text
+    if "No tariffs configured yet" in text or "Loading chart (please wait)" in text:
+        print(f"  ERROR: should not say 'not configured' or 'loading' when the configured entries are all malformed")
+        failed += 1
+    if "compare_list entry 1 requires a non-empty" not in text:
+        print(f"  ERROR: expected the page to say why the only entry was skipped")
         failed += 1
 
     my_predbat.args = original_args

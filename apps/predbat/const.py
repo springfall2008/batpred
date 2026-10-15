@@ -39,6 +39,9 @@ DYNAMIC_LOAD_CAR_LOW_FACTOR = 0.85
 # A car_charging_now reading only confirms the half hour it is in (keeping that half hour cheap once the car
 # stops, GH#5316) from this many minutes into it: the sensor can lag a car that stopped just before the boundary
 DYNAMIC_LOAD_CAR_CONFIRM_MINUTES = 2
+# How long a half hour an Octopus Intelligent planned dispatch ran in keeps the dispatch rate after it ends,
+# while waiting for Octopus to list it as a completed dispatch - seen to take 15 to 60 minutes (GH#5520)
+OCTOPUS_DISPATCH_HOLD_MINUTES = 90
 
 # Extra cloud divergence applied to the PV10 scenario on top of the computed cloud factor, so the
 # downside case diverges harder than the central one
@@ -62,6 +65,7 @@ PV_SCENARIO_NOMINAL = 0
 PV_SCENARIO_PV10 = 1
 PV_SCENARIO_PV90 = 2
 LOAD_FORECAST_HISTORY_MAX_DAYS = 30  # Max days of history used by the weighted-bucket load forecast (days_previous_auto)
+LOAD_FORECAST_RECORDED_MIN_MINUTES = 60  # Recorded load needed before its average fills slots no history covers (new installs, batpred#5548)
 CONFIG_ROOTS = ["/config", "/conf", "/homeassistant", "./"]
 TIME_FORMAT_HA = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_HA_TZ = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -171,3 +175,7 @@ PREDBAT_MODE_CONTROL_CHARGEDISCHARGE = 3
 # need the same answer to "which of these two states is the more significant one to show".
 CHARGE_STATE_PRECEDENCE = ["Charging", "Freeze charging", "Hold charging"]
 EXPORT_STATE_PRECEDENCE = ["Exporting", "Freeze exporting", "Hold exporting"]
+
+# A log text that repeats (an API response, an Intelligent slot list) is logged in full again after this long, so
+# the full text is never only in a rotated-out log file; in between it is logged as one short line
+REPEAT_FULL_LOG_SECONDS = 3600
