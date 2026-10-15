@@ -4016,22 +4016,26 @@ class Fetch:
         """
         Warn when car_energy_reported_load is On but the load sensor evidently does not include the car charger (GH#5318,
         from #5317). Warned once, and not again until no window shows it: the windows move with now, so a borderline count
-        can dip below the threshold and back from one cycle to the next.
+        can dip below the threshold and back from one cycle to the next. A cycle with no data for either series (a failed
+        history fetch) is no evidence either way, so it leaves the flag alone; turning the switch Off clears it.
 
         With the switch On, Predbat subtracts car_charging_energy from the load history (when car_charging_hold is also On,
         the default) and, for an Octopus Intelligent car
         without a car_charging_now sensor, reads low house load as the car not charging. Against a load sensor that excludes
         the charger, the first empties the load history and the second cancels dispatches that are really charging.
         """
-        windows = 0
-        if self.car_energy_reported_load and self.car_charging_energy and self.load_minutes:
-            windows = self.car_energy_exceeds_load_windows()
-            if windows >= CAR_ENERGY_LOAD_CHECK_WINDOWS and not self.car_energy_reported_load_warned:
-                self.log(
-                    "Warn: car_charging_energy recorded more than twice the house load in {} half hours of the last day, so the load sensor cannot include that charging, "
-                    "but switch.predbat_car_energy_reported_load is On. If car_charging_energy is only the car charger, turn the switch Off, and set car_charging_now to the charger's "
-                    "charging power or status sensor so Octopus Intelligent dispatches are checked against the car rather than the house load".format(windows)
-                )
-                self.car_energy_reported_load_warned = True
-        if windows == 0:
+        if not self.car_energy_reported_load:
+            self.car_energy_reported_load_warned = False
+            return
+        if not self.car_charging_energy or not self.load_minutes:
+            return
+        windows = self.car_energy_exceeds_load_windows()
+        if windows >= CAR_ENERGY_LOAD_CHECK_WINDOWS and not self.car_energy_reported_load_warned:
+            self.log(
+                "Warn: car_charging_energy recorded more than twice the house load in {} half hours of the last day, so the load sensor cannot include that charging, "
+                "but switch.predbat_car_energy_reported_load is On. If car_charging_energy is only the car charger, turn the switch Off, and set car_charging_now to the charger's "
+                "charging power or status sensor so Octopus Intelligent dispatches are checked against the car rather than the house load".format(windows)
+            )
+            self.car_energy_reported_load_warned = True
+        elif windows == 0:
             self.car_energy_reported_load_warned = False

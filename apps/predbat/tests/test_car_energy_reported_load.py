@@ -182,6 +182,21 @@ def test_car_energy_reported_load(my_predbat):
         _setup(my_predbat, load_includes_car=False, sessions=((70, 190),))
         windows = my_predbat.car_energy_exceeds_load_windows()
         check("t12 counts", windows == 5, "windows {}".format(windows))
+
+        print("Test 14: a cycle whose history fetch came back empty does not re-arm the warning")
+        logged.clear()
+        my_predbat.car_energy_reported_load_warned = False
+        _setup(my_predbat, load_includes_car=False)
+        my_predbat.check_car_energy_reported_load()
+        check("t14 warns", len(_warnings(logged)) == 1, "logged {}".format(logged))
+        for field in ("car_charging_energy", "load_minutes"):
+            _setup(my_predbat, load_includes_car=False)
+            setattr(my_predbat, field, {})
+            my_predbat.check_car_energy_reported_load()
+            check("t14 {} empty keeps the flag".format(field), my_predbat.car_energy_reported_load_warned)
+            _setup(my_predbat, load_includes_car=False)
+            my_predbat.check_car_energy_reported_load()
+            check("t14 not repeated after {} empty".format(field), len(_warnings(logged)) == 1, "logged {}".format(logged))
     finally:
         for field, value in saved.items():
             setattr(my_predbat, field, value)
