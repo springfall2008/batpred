@@ -137,8 +137,12 @@ def test_car_energy_reported_load(my_predbat):
         my_predbat.load_minutes = {}
         my_predbat.check_car_energy_reported_load()
         check("t6 silent without data", not _warnings(logged), "logged {}".format(logged))
-        _setup(my_predbat, load_includes_car=False, history=120)
-        check("t6 end of history", my_predbat.car_energy_exceeds_load_windows() == 2, "windows {}".format(my_predbat.car_energy_exceeds_load_windows()))
+        # The car charges from one to three hours ago, but the load history only starts two hours ago: the two half
+        # hours before that have car energy and no load, and must not count
+        _setup(my_predbat, load_includes_car=False)
+        my_predbat.load_minutes = _incrementing(lambda minute: HOUSE_KW / 60, 120)
+        windows = my_predbat.car_energy_exceeds_load_windows()
+        check("t6 end of history", windows == 2, "windows {}".format(windows))
 
         print("Test 7: an 11 kW charger over two sessions, with the load sensor lagging 5 or 10 minutes, is silent")
         for lag in (5, 10, -5, -10):
