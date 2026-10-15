@@ -1098,9 +1098,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         """
         recompute = False
         status_extra = ""
-        self.had_errors = False
-        self.status_warning = None
-        self.status_warning_debug = ""
+        self.reset_run_status()
 
         self.update_time()
         self.save_current_config()

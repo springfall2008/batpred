@@ -280,6 +280,54 @@ def test_record_status_concurrent(my_predbat):
     return failed
 
 
+def test_record_status_reset_locked(my_predbat):
+    """
+    Verify the start-of-run reset of had_errors and the recorded warning waits for the status lock.
+
+    A component thread records its warning under the lock. If the reset ran outside it, the thread's
+    warning could land between clearing had_errors and clearing the warning text, leaving had_errors
+    set with no warning to put the run's state in front of.
+    """
+    print("*** Running test: the start-of-run status reset takes the status lock")
+    failed = 0
+    saved = (my_predbat.had_errors, my_predbat.status_warning, my_predbat.status_warning_debug)
+    lock_held = threading.Event()
+    release_lock = threading.Event()
+
+    def _hold_lock():
+        with my_predbat.status_lock:
+            lock_held.set()
+            release_lock.wait(5)
+
+    holder = threading.Thread(target=_hold_lock)
+    resetter = threading.Thread(target=my_predbat.reset_run_status)
+    try:
+        my_predbat.had_errors = True
+        my_predbat.status_warning = "Warn: from a component thread"
+        my_predbat.status_warning_debug = "debug"
+        holder.start()
+        lock_held.wait(5)
+        resetter.start()
+        resetter.join(0.2)
+        if not resetter.is_alive() or not my_predbat.had_errors or my_predbat.status_warning is None:
+            print("ERROR: the reset ran while another thread held the status lock")
+            failed = 1
+        release_lock.set()
+        resetter.join(5)
+        if my_predbat.had_errors or my_predbat.status_warning is not None or my_predbat.status_warning_debug != "":
+            print("ERROR: the reset should clear had_errors and the warning once the lock is free, got {!r}".format((my_predbat.had_errors, my_predbat.status_warning, my_predbat.status_warning_debug)))
+            failed = 1
+        elif not failed:
+            print("OK: the reset waits for the status lock, then clears the run's error state")
+    finally:
+        release_lock.set()
+        holder.join(5)
+        resetter.join(5)
+        my_predbat.had_errors, my_predbat.status_warning, my_predbat.status_warning_debug = saved
+
+    return failed
+
+
 def test_component_health_status(my_predbat):
     """
     Verify record_final_run_status() marks the run as an error, naming the failed component(s),

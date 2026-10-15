@@ -69,7 +69,7 @@ from tests.test_battery_accuracy import run_battery_accuracy_tests
 from tests.test_plugin_startup import test_plugin_startup_order
 from tests.test_active_flag import test_active_flag
 from tests.test_time_loop_guard import test_time_loop_guard
-from tests.test_component_health_status import test_component_health_status, test_record_status_state_clamped, test_record_status_under_warning, test_record_status_concurrent
+from tests.test_component_health_status import test_component_health_status, test_record_status_state_clamped, test_record_status_under_warning, test_record_status_concurrent, test_record_status_reset_locked
 from tests.test_optimise_levels import run_optimise_levels_tests
 from tests.test_trim_export import run_trim_export_tests
 from tests.test_plan_tiebreak import run_plan_tiebreak_tests
@@ -530,6 +530,7 @@ def main():
         ("record_status_state_clamped", test_record_status_state_clamped, "Status sensor state is clamped at the 255 characters Home Assistant accepts", False),
         ("record_status_under_warning", test_record_status_under_warning, "A run's state is recorded in front of the warning it raised", False),
         ("record_status_concurrent", test_record_status_concurrent, "Concurrent record_status calls keep every error_count increment", False),
+        ("record_status_reset_locked", test_record_status_reset_locked, "The start-of-run status reset waits for the status lock", False),
         ("dynamic_load_car", test_dynamic_load_car_slot_cancellation, "Dynamic load car slot cancellation tests", False),
         ("dynamic_load_high", test_dynamic_load_high_load_baseline, "Dynamic load high-load baseline tests", False),
         ("dynamic_load_car_not_charging", test_dynamic_load_car_not_charging, "Dynamic load car not charging tests", False),

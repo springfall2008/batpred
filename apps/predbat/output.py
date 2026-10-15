@@ -2845,6 +2845,19 @@ class Output:
         if notify_message:
             self.call_notify(notify_message)
 
+    def reset_run_status(self):
+        """
+        Clear the run's error flag and the warning it recorded, at the start of a plan update.
+
+        Taken under the status lock, as record_status() is: a component thread recording a warning
+        between these resets would otherwise leave had_errors set with its warning text cleared, so
+        the end of the run could not put its state back in front of that warning.
+        """
+        with self.status_lock:
+            self.had_errors = False
+            self.status_warning = None
+            self.status_warning_debug = ""
+
     def record_status_under_warning(self, run_status):
         """
         Put the state a run executed back on the status sensor, in front of the warning it raised.
