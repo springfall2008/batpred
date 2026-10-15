@@ -2787,12 +2787,16 @@ class Output:
             # state in front of it, rather than flipping the sensor back to the bare warning for the few
             # seconds until this run's own state is put back - two state changes every cycle for as long
             # as the warning recurs. Any different warning or error, including the ones a run records
-            # when it bails out without executing, is shown bare.
+            # when it bails out without executing, is shown bare. The state's detail is kept with it.
             state_message = message
-            if had_errors and self.current_status and self.current_status != message and self.current_status.endswith(", " + message):
-                state_message = self.current_status
+            detail = extra
+            if had_errors and self.status_state and self.status_state != message and self.status_state.endswith(", " + message):
+                state_message = self.status_state
+                detail = self.status_detail
 
-            self.current_status = state_message + extra
+            self.status_state = state_message
+            self.status_detail = detail
+            self.current_status = state_message + detail
             if notify and self.previous_status != message and self.set_status_notify:
                 if self.had_errors and had_errors:
                     # Already in error state, do not notify second error in a single run (spam)
@@ -2821,7 +2825,7 @@ class Output:
                 state=state_message[:255],
                 attributes={
                     "friendly_name": "Status",
-                    "detail": extra,
+                    "detail": detail,
                     "icon": "mdi:information",
                     "last_updated": self.now_utc_real.strftime(TIME_FORMAT),
                     "debug": debug,
@@ -2858,7 +2862,7 @@ class Output:
             self.status_warning = None
             self.status_warning_debug = ""
 
-    def record_status_under_warning(self, run_status):
+    def record_status_under_warning(self, run_status, extra=""):
         """
         Put the state a run executed back on the status sensor, in front of the warning it raised.
 
@@ -2868,7 +2872,8 @@ class Output:
         sensor's history and had nothing to show. The state leads and the warning follows after a
         comma, the same form as ", Hold for car", so the History view's first-comma split still
         finds the state. The warning's own debug is kept, error_count is not counted again and no
-        notification is sent - this is the same warning, not a new one.
+        notification is sent - this is the same warning, not a new one. extra is the run's detail
+        (e.g. its target SoC), written as the sensor's detail as a clean run would.
 
         Does nothing when no warning was recorded this run (e.g. a component thread set had_errors
         on its own), leaving the sensor as it was.
@@ -2882,14 +2887,18 @@ class Output:
                 error_count = int(error_count)
             except (ValueError, TypeError):
                 error_count = 0
+            if not extra:
+                extra = ""
             message = "{}, {}".format(run_status, self.status_warning)
-            self.current_status = message
+            self.status_state = message
+            self.status_detail = extra
+            self.current_status = message + extra
             self.dashboard_item(
                 self.prefix + ".status",
                 state=message[:255],
                 attributes={
                     "friendly_name": "Status",
-                    "detail": "",
+                    "detail": extra,
                     "icon": "mdi:information",
                     "last_updated": self.now_utc_real.strftime(TIME_FORMAT),
                     "debug": self.status_warning_debug,

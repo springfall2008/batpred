@@ -113,7 +113,7 @@ def test_record_status_under_warning(my_predbat):
     status_entity = my_predbat.prefix + ".status"
     saved_item = my_predbat.ha_interface.dummy_items.get(status_entity)
     saved_value = my_predbat.dashboard_values.get(status_entity)
-    saved = (my_predbat.current_status, my_predbat.had_errors, my_predbat.status_warning, my_predbat.status_warning_debug, my_predbat.components)
+    saved = (my_predbat.current_status, my_predbat.status_state, my_predbat.status_detail, my_predbat.had_errors, my_predbat.status_warning, my_predbat.status_warning_debug, my_predbat.components)
     warning = "Warn: Return bad float value unavailable from car_charging_soc"
 
     try:
@@ -124,11 +124,14 @@ def test_record_status_under_warning(my_predbat):
         published = my_predbat.dashboard_values[status_entity]
         error_count_before = published["attributes"]["error_count"]
 
-        my_predbat.record_final_run_status("Exporting", "target 20%")
+        my_predbat.record_final_run_status("Exporting", " target 20%")
         published = my_predbat.dashboard_values[status_entity]
         attributes = published["attributes"]
         if published["state"] != "Exporting, " + warning:
             print("ERROR: expected the state in front of the warning, got {!r}".format(published["state"]))
+            failed = 1
+        elif attributes["detail"] != " target 20%":
+            print("ERROR: the run's detail should be shown with its state, got {!r}".format(attributes["detail"]))
             failed = 1
         elif attributes["debug"] != "https://example.invalid/failing":
             print("ERROR: the warning's own debug should be kept, got {!r}".format(attributes["debug"]))
@@ -139,11 +142,11 @@ def test_record_status_under_warning(my_predbat):
         elif not attributes["error"]:
             print("ERROR: the sensor should still show the run as in error")
             failed = 1
-        elif my_predbat.current_status != "Exporting, " + warning:
-            print("ERROR: current_status should follow the sensor, got {!r}".format(my_predbat.current_status))
+        elif my_predbat.current_status != "Exporting, " + warning + " target 20%":
+            print("ERROR: current_status should follow the sensor's state and detail, got {!r}".format(my_predbat.current_status))
             failed = 1
         else:
-            print("OK: state recorded in front of the warning, debug and error_count kept")
+            print("OK: state and detail recorded in front of the warning, debug and error_count kept")
 
         # The next run raises the same warning mid-run: the state stays in front of it, so the sensor
         # doesn't flip to the bare warning and back every cycle
@@ -153,16 +156,24 @@ def test_record_status_under_warning(my_predbat):
         if my_predbat.dashboard_values[status_entity]["state"] != "Exporting, " + warning:
             print("ERROR: a repeated warning should keep the state in front of it, got {!r}".format(my_predbat.dashboard_values[status_entity]["state"]))
             failed = 1
+        elif my_predbat.dashboard_values[status_entity]["attributes"]["detail"] != " target 20%":
+            print("ERROR: a repeated warning should keep the state's detail too, got {!r}".format(my_predbat.dashboard_values[status_entity]["attributes"]["detail"]))
+            failed = 1
 
         # A different warning or error - e.g. a run bailing out without executing - is shown bare
         my_predbat.record_status("Error: Failed to fetch inverter data, not able to execute the plan", had_errors=True)
         if my_predbat.dashboard_values[status_entity]["state"] != "Error: Failed to fetch inverter data, not able to execute the plan":
             print("ERROR: a different error should be shown bare, got {!r}".format(my_predbat.dashboard_values[status_entity]["state"]))
             failed = 1
+        elif my_predbat.dashboard_values[status_entity]["attributes"]["detail"] != "":
+            print("ERROR: a bare error should not carry the previous state's detail, got {!r}".format(my_predbat.dashboard_values[status_entity]["attributes"]["detail"]))
+            failed = 1
 
         # had_errors set by a component thread with no warning recorded, right after a restart
         my_predbat.dashboard_values[status_entity] = {"state": "Demand", "attributes": {}}
         my_predbat.current_status = None
+        my_predbat.status_state = None
+        my_predbat.status_detail = ""
         my_predbat.had_errors = True
         my_predbat.status_warning = None
         my_predbat.record_final_run_status("Exporting", "")
@@ -172,7 +183,7 @@ def test_record_status_under_warning(my_predbat):
         else:
             print("OK: no warning recorded, sensor left alone")
     finally:
-        my_predbat.current_status, my_predbat.had_errors, my_predbat.status_warning, my_predbat.status_warning_debug, my_predbat.components = saved
+        my_predbat.current_status, my_predbat.status_state, my_predbat.status_detail, my_predbat.had_errors, my_predbat.status_warning, my_predbat.status_warning_debug, my_predbat.components = saved
         if saved_item is None:
             my_predbat.ha_interface.dummy_items.pop(status_entity, None)
         else:

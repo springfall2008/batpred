@@ -368,6 +368,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.dashboard_values = {}
         self.prefix = self.args.get("prefix", "predbat")
         self.current_status = None
+        # The status sensor's state (unclamped) and detail as last written, so a repeated warning can keep both
+        self.status_state = None
+        self.status_detail = ""
         self.previous_status = None
         self.had_errors = False
         self.status_warning = None
@@ -1047,7 +1050,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
         if self.had_errors:
             self.log("Error: Completed run status {} with Errors reported (check log)".format(status))
-            self.record_status_under_warning(status)
+            self.record_status_under_warning(status, status_extra)
         elif failed_components:
             error_status = COMPONENT_ERROR_STATUS_PREFIX + status + COMPONENT_ERROR_STATUS_SUFFIX + ", ".join(failed_components)
             self.log(error_status)
