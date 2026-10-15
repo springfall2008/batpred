@@ -4093,6 +4093,7 @@ class Octopus:
         when it is not cancelled), and for a minute no car needs - see octopus_surplus_minutes().
         """
         return (strip_from is not None and minute >= strip_from) or minute in self.octopus_surplus
+
     def octopus_planned_running(self, car_n, planned):
         """
         The source of the planned dispatch that is pricing the current half hour off-peak for car_n, or None
