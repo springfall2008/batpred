@@ -1642,7 +1642,7 @@ export default function PlanTable({
                   <ColumnHeading
                     label="Car"
                     icon={faCar}
-                    help="Predicted energy used to charge the car during this plan slot."
+                    help="Predicted energy used to charge the car during this plan slot. A clock marks estimated energy from a slot that is not guaranteed."
                   />
                 </th>
               )}
@@ -2024,11 +2024,27 @@ export default function PlanTable({
                           .filter(Boolean)
                           .join(' ')}
                       >
-                        {(row.car_charging ?? 0) > 0 ? (
+                        {(row.car_charging ?? 0) > 0 || (row.car_charging_cancelled ?? 0) > 0 ? (
                           <span className="plan-car-value">
                             <FontAwesomeIcon icon={faCar} />
 
-                            <span>{row.car_charging?.toFixed(2)}</span>
+                            <span>
+                              {(row.car_charging ?? 0) > 0 && row.car_charging?.toFixed(2)}
+                              {(row.car_charging_cancelled ?? 0) > 0 && (
+                                <>
+                                  {(row.car_charging ?? 0) > 0 ? ' +' : ''}
+                                  <span
+                                    className="plan-car-value"
+                                    title="Scheduled car charging slot, not guaranteed"
+                                    role="img"
+                                    aria-label={`${row.car_charging_cancelled?.toFixed(2)} kWh — Scheduled car charging slot, not guaranteed`}
+                                  >
+                                    {row.car_charging_cancelled?.toFixed(2)}
+                                    <FontAwesomeIcon icon={faClock} />
+                                  </span>
+                                </>
+                              )}
+                            </span>
                           </span>
                         ) : (
                           '—'

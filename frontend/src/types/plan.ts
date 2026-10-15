@@ -40,6 +40,7 @@ export type PlanRow = {
   show_limit?: string
 
   car_charging?: number
+  car_charging_cancelled?: number
 
   iboost?: number
   iboost_change?: number

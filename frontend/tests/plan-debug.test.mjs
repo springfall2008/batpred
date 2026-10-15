@@ -140,6 +140,33 @@ function renderPlanTable(debugEnabled, selectedPlan = plan) {
   )
 }
 
+test('EV cells preserve uncertain energy alongside confirmed charging', () => {
+  for (const [charging, uncertain, expected] of [
+    [0, 2.63, '2.63'],
+    [1, 2.63, '1.00 +2.63'],
+    [1, undefined, '1.00'],
+    [0, 0, '—'],
+    [undefined, undefined, '—']
+  ]) {
+    const html = renderPlanTable(false, {
+      ...plan,
+      num_cars: 1,
+      rows: [{ ...row, car_charging: charging, car_charging_cancelled: uncertain }],
+      totals: { ...plan.totals, car_charging: charging ?? 0 }
+    })
+    const cell = html.match(/<td class="[^"]*plan-car[^"]*">(.*?)<\/td>/)?.[1]
+    assert.ok(cell)
+    assert.equal(cell.replace(/<[^>]*>/g, ''), expected)
+    assert.equal(cell.includes('data-icon="car"'), (charging ?? 0) > 0 || (uncertain ?? 0) > 0)
+    assert.equal(cell.includes('data-icon="clock"'), (uncertain ?? 0) > 0)
+    if ((uncertain ?? 0) > 0) {
+      assert.match(cell, /title="Scheduled car charging slot, not guaranteed"/)
+      assert.match(cell, /aria-label="2\.63 kWh — Scheduled car charging slot, not guaranteed"/)
+    }
+    assert.match(html, new RegExp(`<td>${(charging ?? 0).toFixed(2).replace('.', '\\.')}</td>`))
+  }
+})
+
 test('debug mode exposes the diagnostic plan values supplied by Predbat', () => {
   const html = renderPlanTable(true)
 

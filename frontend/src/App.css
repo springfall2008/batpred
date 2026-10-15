@@ -135,11 +135,19 @@
   width: calc(100% - 72px);
 }
 
-@media (min-width: 701px) {
+@media (min-width: 1080px) {
   .app-shell.navigation-horizontal .app-content {
     width: 100%;
     margin-left: 0;
     padding-top: 56px;
+  }
+}
+
+@media (width < 1080px) {
+  .app-content,
+  .app-shell.navigation-collapsed .app-content {
+    margin-left: 0;
+    width: 100%;
   }
 }
 
