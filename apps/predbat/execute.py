@@ -390,8 +390,9 @@ class Execute:
                 for call in immediate_calls or []:
                     call()
                 immediate_calls = None
-                # Those writes go through the ordinary helpers, so they CONFER ownership - in
-                # exactly the mode where the inverter's own firmware is driving its settings.
+                # The writes above - calibration's and the queued calls' - go through the ordinary helpers,
+                # so they CONFER ownership - in exactly the mode where the inverter's own firmware is driving
+                # its settings.
                 # A value found moved next cycle is the inverter calibrating, not a third
                 # party, so ownership is dropped after the writes rather than before them.
                 self.clear_control_ledger("inverter {} is calibrating, so its own firmware is driving the settings".format(inverter.id))

@@ -2551,6 +2551,7 @@ def run_execute_tests(my_predbat):
         """Wrap an immediate call so that, like write_solis_energy_control(), it confers ownership of a control."""
 
         def wrapped(target_soc, freeze=False):
+            """Record ownership of the control, then make the call."""
             my_predbat.control_ledger.record_write("select.energy_control_{}".format(inverter.id), "energy_control", target_soc, now=1.0)
             call(target_soc, freeze=freeze)
 
