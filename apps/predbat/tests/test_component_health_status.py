@@ -72,6 +72,8 @@ def test_record_status_state_clamped(my_predbat):
     try:
         long_message = "Warn: Inverter 0 unable to read charge window time - " + "x" * 300
         my_predbat.current_status = ""
+        my_predbat.status_state = None
+        my_predbat.status_detail = ""
         my_predbat.record_status(long_message, had_errors=True)
 
         state = my_predbat.dashboard_values.get(my_predbat.prefix + ".status", {}).get("state", None)
@@ -91,6 +93,8 @@ def test_record_status_state_clamped(my_predbat):
             print("OK: state clamped to 255 characters ({}), full text kept in current_status ({})".format(len(state), len(my_predbat.current_status)))
     finally:
         my_predbat.current_status = ""
+        my_predbat.status_state = None
+        my_predbat.status_detail = ""
         my_predbat.had_errors = False
         my_predbat.status_warning = None
 
@@ -210,7 +214,7 @@ def test_record_status_concurrent(my_predbat):
     status_entity = my_predbat.prefix + ".status"
     saved_item = my_predbat.ha_interface.dummy_items.get(status_entity)
     saved_value = my_predbat.dashboard_values.get(status_entity)
-    saved = (my_predbat.current_status, my_predbat.had_errors, my_predbat.status_warning, my_predbat.status_warning_debug)
+    saved = (my_predbat.current_status, my_predbat.status_state, my_predbat.status_detail, my_predbat.had_errors, my_predbat.status_warning, my_predbat.status_warning_debug)
     original_get_state_wrapper = my_predbat.get_state_wrapper
     original_call_notify = my_predbat.call_notify
     saved_notify_flag = my_predbat.set_status_notify
@@ -278,7 +282,7 @@ def test_record_status_concurrent(my_predbat):
         my_predbat.call_notify = original_call_notify
         my_predbat.set_status_notify = saved_notify_flag
         my_predbat.previous_status = saved_previous_status
-        my_predbat.current_status, my_predbat.had_errors, my_predbat.status_warning, my_predbat.status_warning_debug = saved
+        my_predbat.current_status, my_predbat.status_state, my_predbat.status_detail, my_predbat.had_errors, my_predbat.status_warning, my_predbat.status_warning_debug = saved
         if saved_item is None:
             my_predbat.ha_interface.dummy_items.pop(status_entity, None)
         else:
