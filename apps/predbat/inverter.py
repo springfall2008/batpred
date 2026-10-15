@@ -2146,7 +2146,8 @@ class Inverter:
         Get the current discharge rate in watts
         """
 
-        if self.rate_controls("discharge_rate")[1]:
+        # A rate Predbat holds is read back from what it set, as this inverter has no percentage of its own to read
+        if self.rate_controls("discharge_rate")[1] and not self.rate_without_entity("discharge"):
             current_rate = int(self.base.get_arg("discharge_rate_percent", index=self.id, default=100.0, required_unit="%") * self.battery_rate_max_raw / 100)
         else:
             current_rate = self.rate_or_last_set("discharge")
@@ -2163,7 +2164,8 @@ class Inverter:
         """
         Get the current charge rate in watts
         """
-        if self.rate_controls("charge_rate")[1]:
+        # A rate Predbat holds is read back from what it set, as this inverter has no percentage of its own to read
+        if self.rate_controls("charge_rate")[1] and not self.rate_without_entity("charge"):
             current_rate = self.base.get_arg("charge_rate_percent", index=self.id, default=100.0, required_unit="%") * self.battery_rate_max_raw / 100
         else:
             current_rate = self.rate_or_last_set("charge")
@@ -2187,8 +2189,10 @@ class Inverter:
         """
         if self.inv_output_charge_control != "power" or not services_send_power(self.base.args, direction):
             return False
-        # get_current_*_rate() reads the percentage when this inverter's entry is bound to it (rate_controls()), so this does too
-        if self.rate_controls(direction + "_rate")[1]:
+        # This inverter's own percentage entry, not the setting's presence: in a mixed fleet it can be bound for
+        # another inverter only (#5359). rate_controls() falls back to that presence for an inverter bound to
+        # neither control, which would read this one's empty entry as 100% and send the maximum as {power}.
+        if self.base.get_arg(direction + "_rate_percent", indirect=False, index=self.id, default=None):
             return False
         # A plain number is not somewhere to store a rate: in a mixed fleet create_missing_arg() fills the
         # other inverters' entries with a "current" inverter's default, which is not this inverter's rate
@@ -2290,7 +2294,7 @@ class Inverter:
                     required_unit="W",
                     fuzzy_below=fuzzy_below,
                 )
-            if write_percent:
+            if write_percent and not held_by_predbat:
                 self.write_and_poll_value("charge_rate_percent", self.base.get_arg("charge_rate_percent", indirect=False, index=self.id, required_unit="%"), min(int(new_rate / self.battery_rate_max_raw * 100), 100), fuzzy=5, required_unit="%")
 
             if notify and self.base.set_inverter_notify:
@@ -2343,7 +2347,7 @@ class Inverter:
                     required_unit="W",
                     fuzzy_below=fuzzy_below,
                 )
-            if write_percent:
+            if write_percent and not held_by_predbat:
                 self.write_and_poll_value("discharge_rate_percent", self.base.get_arg("discharge_rate_percent", indirect=False, index=self.id, required_unit="%"), min(int(new_rate / self.battery_rate_max_raw * 100), 100), fuzzy=5, required_unit="%")
 
             if notify and self.base.set_inverter_notify:

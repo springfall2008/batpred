@@ -291,11 +291,29 @@ def test_other_inverters_percentage_not_this_ones(test_name, my_predbat):
     print("**** Running Test: {} ****".format(test_name))
     ha = my_predbat.ha_interface
     ha.dummy_items["number.other_inverter_charge_rate_percent"] = 100
-    inv = _build_script_inverter(my_predbat, {"charge_rate": [6000.0, 6000.0], "charge_rate_percent": [None, "number.other_inverter_charge_rate_percent"]})
-    inv.adjust_charge_rate(2500, notify=False)
     failed = False
-    failed |= _check(test_name, "charge rate read back", inv.get_current_charge_rate(), 2500)
-    failed |= _check(test_name, "charge_start_service power", _service_power(my_predbat, inv, "charge"), [2500])
+    try:
+        for label, rates in (
+            # A "current" inverter elsewhere in the fleet filled this inverter's rate entry with its default
+            ("a plain number in the rate entry", {"charge_rate": [6000.0, 6000.0], "charge_rate_percent": [None, "number.other_inverter_charge_rate_percent"]}),
+            # Only "power" inverters, so nothing fills the rate entry, and this inverter is bound to neither control
+            ("no rate entry", {"charge_rate_percent": [None, "number.other_inverter_charge_rate_percent"]}),
+            ("an empty rate entry", {"charge_rate": [None, 6000.0], "charge_rate_percent": [None, "number.other_inverter_charge_rate_percent"]}),
+        ):
+            inv = _build_script_inverter(my_predbat, rates)
+            logged = []
+            base_log = my_predbat.log
+            my_predbat.log = lambda message, *args, **kwargs: (logged.append(str(message)), base_log(message, *args, **kwargs))
+            try:
+                inv.adjust_charge_rate(2500, notify=False)
+            finally:
+                my_predbat.log = base_log
+            failed |= _check(test_name, "charge rate read back with " + label, inv.get_current_charge_rate(), 2500)
+            failed |= _check(test_name, "charge_start_service power with " + label, _service_power(my_predbat, inv, "charge"), [2500])
+            # Nothing of this inverter's to write the rate to, so no write is attempted
+            failed |= _check(test_name, "missing entity warnings with " + label, [message for message in logged if "No entity_id" in message], [])
+    finally:
+        ha.dummy_items.pop("number.other_inverter_charge_rate_percent", None)
     return failed
 
 
