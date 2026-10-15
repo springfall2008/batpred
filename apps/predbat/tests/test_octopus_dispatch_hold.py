@@ -71,6 +71,15 @@ def _dispatch(my_predbat, start_minute, end_minute, kwh=2.0, source="smart-charg
     return {"start": start.strftime(TIME_FORMAT), "end": end.strftime(TIME_FORMAT), "charge_in_kwh": kwh, "source": source, "location": location}
 
 
+def _untagged(my_predbat, start_minute, end_minute):
+    """
+    A dispatch from a charger's own sensor (octopus_intelligent_planned_slot), which carries no source.
+    """
+    slot = _dispatch(my_predbat, start_minute, end_minute)
+    del slot["source"]
+    return slot
+
+
 def _reset(my_predbat):
     """
     One Octopus Intelligent car on a 6.57p / 27.7p tariff, with nothing held.
@@ -257,6 +266,24 @@ def _run(my_predbat):
     failed |= _check("t12 entry ended since minutes_now not recorded", not my_predbat.octopus_slots_held.get(0), "held {}".format(my_predbat.octopus_slots_held))
     rates = _cycle(my_predbat, 1100)
     failed |= _check("t12 day rate once the entry has gone", _day(rates, 1080, 1110), "rate {}".format(rates[1080]))
+
+    print("Test 13: Smart Control off - a charger's own slots, re-tagged as its schedule, do not end a hold (#5339)")
+    _reset(my_predbat)
+    # 18:10, Smart Control on: the charger's sensor (octopus_intelligent_planned_slot) follows Octopus's dispatch
+    _cycle(my_predbat, 1090, planned=[_untagged(my_predbat, 1080, 1200)])
+    failed |= _check("t13 half hour recorded", 0 in my_predbat.octopus_slots_held and len(my_predbat.octopus_slots_held[0]) == 1, "held {}".format(my_predbat.octopus_slots_held))
+    # 18:25, Smart Control off: the charger's plan and what it has seen finish are kept, re-tagged at the normal rate
+    planned = my_predbat.smart_control_off_slots([_untagged(my_predbat, 1103, 1170)], True)
+    completed = my_predbat.smart_control_off_slots([_untagged(my_predbat, 1080, 1103)], True)
+    rates = _cycle(my_predbat, 1105, planned=planned, completed=completed)
+    failed |= _check("t13 half hour Octopus dispatched still cheap", _low(rates, 1080, 1105), "rate {}".format(rates[1080]))
+    failed |= _check("t13 held", len(_held(my_predbat)) == 1, "held {}".format(_held(my_predbat)))
+    failed |= _check("t13 charger's plan at the day rate", _day(rates, 1110, 1170), "rate {}".format(rates[1110]))
+    # Octopus lists the dispatch as completed: that is the record, so the hold ends
+    completed = completed + [_dispatch(my_predbat, 1080, 1103, kwh=2.5)]
+    rates = _cycle(my_predbat, 1125, planned=planned, completed=completed)
+    failed |= _check("t13 hold ends once the completed list has it", _held(my_predbat) == [], "held {}".format(_held(my_predbat)))
+    failed |= _check("t13 completed dispatch cheap", _low(rates, 1080, 1110), "rate {}".format(rates[1080]))
 
     return failed
 
