@@ -1620,7 +1620,8 @@ mode: single
 Occasionally, when a Manual Freeze Charge is requested, Predbat may immediately decide that **Hold Charging** is the more appropriate state based on current conditions.
 In this case, Freeze Charging automations may remain enabled even though Predbat reports Hold Charging.
 The watchdog safely exits Freeze Charging after a short grace period.
-Like the exit automation, it ignores a bare `Warn:` or `Error:` status, which Predbat can show for a moment part way through a plan update; the state written after it changes the status, so the exit automation still cleans up.
+It ignores a bare `Warn:` or `Error:` status, which Predbat can show for a moment part way through a plan update; the state written after it changes the status, so the exit automation still cleans up.
+While a component is failing, the status reads `Error: Complete run status <state> with component errors: ...` every update, so the watchdog reads the state out of it rather than ignoring it.
 
 - Create the **Freeze Charge Watchdog** automation to handle cases where Manual Freeze Charging immediately transitions to **Hold Charging**.
 
@@ -1642,7 +1643,8 @@ actions:
     if:
       - condition: template
         value_template: |
-          {% set s = states('predbat.status') %} {{
+          {% set s = states('predbat.status') %}
+          {% set s = s[27:] if s.startswith('Error: Complete run status ') else s %} {{
             s not in ['unknown','unavailable'] and
             not s.startswith('Warn') and
             not s.startswith('Error') and
