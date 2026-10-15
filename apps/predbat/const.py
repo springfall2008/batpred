@@ -65,6 +65,7 @@ PV_SCENARIO_NOMINAL = 0
 PV_SCENARIO_PV10 = 1
 PV_SCENARIO_PV90 = 2
 LOAD_FORECAST_HISTORY_MAX_DAYS = 30  # Max days of history used by the weighted-bucket load forecast (days_previous_auto)
+LOAD_FORECAST_RECORDED_MIN_MINUTES = 60  # Recorded load needed before its average fills slots no history covers (new installs, batpred#5548)
 CONFIG_ROOTS = ["/config", "/conf", "/homeassistant", "./"]
 TIME_FORMAT_HA = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_HA_TZ = "%Y-%m-%dT%H:%M:%S.%f%z"
