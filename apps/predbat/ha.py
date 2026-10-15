@@ -45,8 +45,10 @@ HA_OUTAGE_LIMIT_SECONDS = 15 * 60
 # about whether Home Assistant was down in between
 HA_OUTAGE_GAP_SECONDS = 10 * 60
 
-# HTTP statuses a gateway in front of Home Assistant returns while it is restarting
-HA_RESTARTING_STATUSES = (502, 503, 504)
+# HTTP statuses a gateway or proxy in front of Home Assistant returns while it is restarting: 502/503/504, and
+# Cloudflare's 520-530 (origin unreachable, timed out, tunnel down...). Not 500 or 501, which a proxy that is
+# misconfigured or cannot do the Web Socket upgrade keeps sending, and which Home Assistant itself can send.
+HA_RESTARTING_STATUSES = (502, 503, 504) + tuple(range(520, 531))
 
 # Pause between attempts to reach Home Assistant while it is not ready, doubling up to the maximum
 HA_RETRY_SECONDS = 5
@@ -836,15 +838,14 @@ class HAInterface(ComponentBase):
                                         error_count += 1
 
                 except (ClientError, asyncio.TimeoutError, ConnectionError) as e:
-                    if isinstance(e, WSServerHandshakeError) and e.status < 500:
-                        # Home Assistant answered but refused the upgrade (wrong URL path, a proxy rejecting us...), which waiting will not fix.
-                        # Any 5xx is a server-side failure, not ours: besides the usual 502/503/504, proxies answer for a restarting
-                        # Home Assistant with others (a plain 500, Cloudflare's 520-530), so those are ridden out as an outage below.
+                    if isinstance(e, WSServerHandshakeError) and e.status not in HA_RESTARTING_STATUSES:
+                        # Home Assistant answered but refused the upgrade (wrong URL path, a proxy rejecting us...), which waiting will not fix
                         self.log("Error: Web Socket handshake rejected with HTTP {}: {}".format(e.status, e))
                         error_count += 1
                     else:
                         # Home Assistant is down or restarting (connection refused, 502 on the upgrade...), so this is
-                        # an outage to ride out rather than a count towards giving up (#5437). Only the first failure is logged.
+                        # an outage to ride out rather than a count towards giving up (#5437). Only the first failure logs the outage
+                        # warning; each reconnect attempt still logs its own Info/Warn lines below.
                         self.outage_failure(ws_outage, "Web Socket could not connect: {}".format(e))
                 except Exception as e:
                     self.log("Error: Web Socket exception in startup: {}".format(e))

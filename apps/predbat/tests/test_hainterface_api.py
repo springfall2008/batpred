@@ -432,6 +432,14 @@ def test_hainterface_initialize_retries_until_ready(my_predbat=None):
     else:
         print("✓ interface registered after the retries")
 
+    # initialize() does its own retrying, so its failures must not also run the runtime outage timer
+    outage_warnings = [m for m in mock_base.log_messages if "Home Assistant is unavailable" in m]
+    if outage_warnings:
+        print(f"ERROR: initialize()'s retries should not be tracked as a runtime outage, logged {outage_warnings}")
+        failed += 1
+    else:
+        print("✓ retries not tracked as a runtime outage")
+
     return failed
 
 
@@ -778,37 +786,50 @@ def test_hainterface_api_call_gateway_status_is_outage(my_predbat=None):
 
     mock_base = MockBase()
     ha_interface = create_ha_interface(mock_base, ha_key="test_key", db_enable=False, db_mirror_ha=False, db_primary=False)
+    clock = [1000.0]
 
-    with patch("ha.requests.get") as mock_get:
-        mock_get.return_value = create_mock_requests_response(503, {"message": "Service Unavailable"})
-        result = ha_interface.api_call("/api/states")
+    with patch("ha.time", make_fake_time(clock)):
+        with patch("ha.requests.get") as mock_get:
+            mock_get.return_value = create_mock_requests_response(503, {"message": "Service Unavailable"})
+            result = ha_interface.api_call("/api/states")
 
-    if result is not None or ha_interface.outage.since is None:
-        print(f"ERROR: expected None and a recorded outage, got {result} / {ha_interface.outage.since}")
-        failed += 1
-    else:
-        print("✓ JSON 503 recorded as an outage")
+        if result is not None or ha_interface.outage.since != 1000.0:
+            print(f"ERROR: expected None and an outage from 1000, got {result} / {ha_interface.outage.since}")
+            failed += 1
+        else:
+            print("✓ JSON 503 recorded as an outage")
 
-    # A further 503 continues the same outage rather than ending it or starting a new one
-    since = ha_interface.outage.since
-    with patch("ha.requests.get") as mock_get:
-        mock_get.return_value = create_mock_requests_response(503, {"message": "Service Unavailable"})
-        ha_interface.api_call("/api/states")
-    if ha_interface.outage.since != since:
-        print(f"ERROR: a second 503 should continue the outage from {since}, got {ha_interface.outage.since}")
-        failed += 1
-    else:
-        print("✓ a second JSON 503 continues the outage")
+        # A further 503 a minute later continues the same outage rather than ending it or starting a new one
+        clock[0] += 60
+        with patch("ha.requests.get") as mock_get:
+            mock_get.return_value = create_mock_requests_response(503, {"message": "Service Unavailable"})
+            ha_interface.api_call("/api/states")
+        if ha_interface.outage.since != 1000.0:
+            print(f"ERROR: a second 503 should continue the outage from 1000, got {ha_interface.outage.since}")
+            failed += 1
+        else:
+            print("✓ a second JSON 503 continues the outage")
 
-    # Only a real reply clears it
-    with patch("ha.requests.get") as mock_get:
-        mock_get.return_value = create_mock_requests_response(200, {"ok": True})
-        ha_interface.api_call("/api/states")
-    if ha_interface.outage.since is not None:
-        print("ERROR: a 200 should end the outage")
-        failed += 1
-    else:
-        print("✓ ended by a real reply")
+        # Cloudflare's origin-unreachable statuses are the same thing, JSON body or not
+        clock[0] += 60
+        with patch("ha.requests.get") as mock_get:
+            mock_get.return_value = create_mock_requests_response(530, {"message": "Origin unreachable"})
+            result = ha_interface.api_call("/api/states")
+        if result is not None or ha_interface.outage.since != 1000.0:
+            print(f"ERROR: a JSON 530 should continue the outage, got {result} / {ha_interface.outage.since}")
+            failed += 1
+        else:
+            print("✓ a JSON 530 continues the outage")
+
+        # Only a real reply clears it
+        with patch("ha.requests.get") as mock_get:
+            mock_get.return_value = create_mock_requests_response(200, {"ok": True})
+            ha_interface.api_call("/api/states")
+        if ha_interface.outage.since is not None:
+            print("ERROR: a 200 should end the outage")
+            failed += 1
+        else:
+            print("✓ ended by a real reply")
 
     return failed
 
