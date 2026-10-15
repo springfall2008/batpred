@@ -884,6 +884,13 @@ CONFIG_ITEMS = [
         "default": True,
     },
     {
+        "name": "octopus_intelligent_charger_follows_car",
+        "friendly_name": "Drive the charger to the Intelligent dispatches when Octopus drives the car",
+        "type": "switch",
+        "default": False,
+        "enable": "expert_mode",
+    },
+    {
         "name": "octopus_saving_auto_join",
         "friendly_name": "Octopus Saving Session Auto Join",
         "type": "switch",

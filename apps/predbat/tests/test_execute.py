@@ -2394,9 +2394,27 @@ def run_execute_tests(my_predbat):
         inverter_charge_time_minutes_start=12 * 60,
         minutes_now=0,
     )
+    # The inverter still holds a window that finished, which now reads as tomorrow's, and the next planned
+    # charge is hours away. With a charge enable switch the switch goes off between windows: left on it arms
+    # every other slot the inverter has, and a GivEnergy 3-phase unit's unused 00:00-00:00 slots are live for
+    # the first minute of the day (#5371)
     failed |= run_execute_test(
         my_predbat,
         "charge_midnight2d",
+        charge_window_best=charge_window_best7d,
+        charge_limit_best=charge_limit_best,
+        assert_charge_time_enable=False,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Demand",
+        inverter_charge_time_minutes_start=30 + 24 * 60,
+    )
+    # With no switch, turning the charge off means rewriting the window, so it is left alone as before (#2993)
+    for inverter in my_predbat.inverters:
+        inverter.charge_time_enable = True
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_midnight2d_no_enable_switch",
         charge_window_best=charge_window_best7d,
         charge_limit_best=charge_limit_best,
         assert_charge_time_enable=True,
@@ -2406,6 +2424,22 @@ def run_execute_tests(my_predbat):
         assert_charge_start_time_minutes=30 + 24 * 60,
         assert_charge_end_time_minutes=-1,
         inverter_charge_time_minutes_start=30 + 24 * 60,
+        has_charge_enable_time=False,
+    )
+    # And the switch comes back on once the next window is close enough to program
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_midnight2d_window_close",
+        charge_window_best=charge_window_best7d,
+        charge_limit_best=charge_limit_best,
+        assert_charge_time_enable=True,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Demand",
+        assert_charge_start_time_minutes=22 * 60,
+        assert_charge_end_time_minutes=23 * 60,
+        inverter_charge_time_minutes_start=30 + 24 * 60,
+        minutes_now=22 * 60 - 10,
     )
 
     for inverter in my_predbat.inverters:
@@ -3707,8 +3741,31 @@ def run_execute_tests(my_predbat):
         assert_immediate_soc_target=100,
         has_timed_pause=False,
         assert_pause_discharge=False,
-        assert_discharge_rate=0,
         assert_reserve=0,
+    )
+    # #5419: nor may it pin the discharge rate to 0 while charging - a charging battery cannot feed the car, and
+    # some GivEnergy inverters will not grid-charge at all with the rate at 0 and the SoC on the reserve. The
+    # scenario above asserts the rate staying at its maximum. Once the battery stops charging and holds instead,
+    # it can feed the car again, so the rate hold must still apply there:
+    failed |= run_execute_test(
+        my_predbat,
+        "car_charge2_no_pause",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best2,
+        soc_kw=10,
+        car_slot=charge_window_best_slot,
+        assert_charge_time_enable=False,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Hold charging, Hold for car",
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=-1,
+        assert_immediate_soc_target=50,
+        assert_soc_target=100,
+        assert_reserve=100,
+        has_timed_pause=False,
+        assert_pause_discharge=False,
+        assert_discharge_rate=0,
     )
     failed |= run_execute_test(
         my_predbat,
