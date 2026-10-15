@@ -8,7 +8,7 @@ Where a charger below has a **car_charging_now** example, it tells Predbat when 
 See [car_charging_now](car-charging.md#planned-car-charging) for the kinds of sensor it accepts (on/off, a charger status, or a charging power) and when the hold applies.
 If your charger is not listed, look on its device page in Home Assistant for one of these, and check its history while the car charges.
 
-**car_charging_now_response** and **car_charging_planned_response** are each one list for every car. Predbat uses its built-in default only when you have not set a list. If an example below sets one, merge that example's values into your list (or into the default, `yes`, `on` and `true` among them) rather than replacing it, so your other cars' sensors still match.
+**car_charging_now_response** and **car_charging_planned_response** are each one list for every car. Predbat uses its built-in default only when you have not set a list. If an example below sets one, merge that example's values into your list (or, if you have none, into the default: `yes`, `on`, `enable`, `true` and `charging` for **car_charging_now_response**, the same without `charging` for **car_charging_planned_response**) rather than replacing it, so your other cars' sensors still match.
 
 If more than one car uses the same charger, see [One charger shared by more than one car](car-charging.md#one-charger-shared-by-more-than-one-car).
 
