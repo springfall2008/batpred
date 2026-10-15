@@ -418,8 +418,8 @@ def run_test_plan_why_reason(my_predbat):
 
     # --- Test 2b: #4445 - a full-rate charge that can't finish within the window carries a "target"
     # (plan.py's predicted end-of-window SoC) below the real charge_limit_best. Chrg vs HoldChrg must be
-    # decided from the real limit, while the Limit cell, reason and state_target keep showing the
-    # predicted SoC, as docs/predbat-plan-card.md describes the Limit column ---
+    # decided from the real limit, while the Limit cell, reason and state_target of a Chrg row keep
+    # showing the predicted SoC, as before ---
     print("Test Chrg vs HoldChrg is decided by the real limit, with the predicted SoC displayed (#4445)")
     my_predbat.charge_window_best[0]["target"] = 6.0  # predicted to only reach 60% (6kWh of 10kWh soc_max) by window end
 
