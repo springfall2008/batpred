@@ -280,10 +280,25 @@ def _run(my_predbat):
     failed |= _check("t13 held", len(_held(my_predbat)) == 1, "held {}".format(_held(my_predbat)))
     failed |= _check("t13 charger's plan at the day rate", _day(rates, 1110, 1170), "rate {}".format(rates[1110]))
     # Octopus lists the dispatch as completed: that is the record, so the hold ends
-    completed = completed + [_dispatch(my_predbat, 1080, 1103, kwh=2.5)]
+    # The slot sensor's own completed list goes in ahead of what the charger's sensor has seen finish
+    completed = [_dispatch(my_predbat, 1080, 1103, kwh=2.5)] + completed
     rates = _cycle(my_predbat, 1125, planned=planned, completed=completed)
     failed |= _check("t13 hold ends once the completed list has it", _held(my_predbat) == [], "held {}".format(_held(my_predbat)))
     failed |= _check("t13 completed dispatch cheap", _low(rates, 1080, 1110), "rate {}".format(rates[1080]))
+
+    print("Test 14: Smart Control off - a held half hour does not stop a charger's running slot counting only what is left (#5339)")
+    _reset(my_predbat)
+    # An Ohme slot keeps its real start while it runs: 18:00-19:30, 9 kWh
+    _cycle(my_predbat, 1090, planned=[_untagged(my_predbat, 1080, 1170)])
+    slot = _untagged(my_predbat, 1080, 1170)
+    slot["charge_in_kwh"] = 9.0
+    planned = my_predbat.smart_control_off_slots([slot], True)
+    rates = _cycle(my_predbat, 1105, planned=planned)
+    failed |= _check("t14 held", len(_held(my_predbat)) == 1, "held {}".format(_held(my_predbat)))
+    failed |= _check("t14 half hour Octopus dispatched still cheap", _low(rates, 1080, 1105), "rate {}".format(rates[1080]))
+    car_slots = my_predbat.load_octopus_slots(0, my_predbat.octopus_slots[0], True)
+    future_kwh = sum(car_slot["kwh"] for car_slot in car_slots if car_slot["end"] > my_predbat.minutes_now)
+    failed |= _check("t14 only the 65 minutes left of the slot are car load", abs(future_kwh - 6.5) < 0.01, "kWh {} slots {}".format(future_kwh, car_slots))
 
     return failed
 

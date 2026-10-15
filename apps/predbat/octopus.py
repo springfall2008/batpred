@@ -3879,6 +3879,8 @@ class Octopus:
         car_soc = self.car_charging_soc[car_n]
         limit = self.car_charging_limit[car_n]
         slots_decoded = []
+        # Which of slots_decoded are held half hours (octopus_held_dispatches()), see below
+        held_decoded = set()
 
         # Decode the slots
         for slot in octopus_slots:
@@ -3903,7 +3905,12 @@ class Octopus:
                 # much longer still-active planned interval.
                 original_span = end_minutes - start_minutes
                 segments = [(start_minutes, end_minutes)]
-                for current_slot in slots_decoded:
+                for index, current_slot in enumerate(slots_decoded):
+                    if index in held_decoded:
+                        # A held half hour has already run and only keeps its rate: it does not trim a slot it
+                        # overlaps, which only a charger's own schedule can (#5339), so a running one is still
+                        # counted from now rather than keeping all of its energy for what is left of it
+                        continue
                     current_start, current_end, current_kwh, current_source, current_location = current_slot
                     remaining = []
                     for seg_start, seg_end in segments:
@@ -3924,6 +3931,8 @@ class Octopus:
                     if seg_start == seg_end:
                         continue
                     seg_kwh = kwh * (seg_end - seg_start) / original_span if (split and original_span > 0) else kwh
+                    if slot.get("held", False):
+                        held_decoded.add(len(slots_decoded))
                     slots_decoded.append((seg_start, seg_end, seg_kwh, source, location))
 
         # Sort slots by start time
@@ -4228,10 +4237,10 @@ class Octopus:
         A half hour is covered from when it was seen running (octopus_held_update()) until a completed
         dispatch overlaps it - which is then the record, including one of no energy, which is treated as
         never having happened - or the hold runs out. It is left out while a planned dispatch still reaches
-        it, so it is not counted twice against the daily slot cap. A charger's own schedule does neither:
-        it is never priced off-peak or counted against the cap, and while Smart Control is off a charger's
-        own slots are re-tagged as one (#5339), though Octopus did dispatch the half hour it ran in before
-        then. The one in progress ends at now: it has finished, so load_octopus_slots() plans no car
+        it, so it is not counted twice against the daily slot cap. A slot of a charger's own schedule does
+        not end a hold: it is not Octopus's record of a dispatch, and is never priced off-peak or counted
+        against the cap. While Smart Control is off a charger's own slots are re-tagged as one (#5339),
+        though Octopus did dispatch the half hour they ran in before then. The one in progress ends at now: it has finished, so load_octopus_slots() plans no car
         charging in it, and rate_add_io_slots() prices the rest of the half hour as Octopus bills it once a
         dispatch has started in it (GH#5316).
         """
