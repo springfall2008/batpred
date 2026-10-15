@@ -2187,8 +2187,8 @@ class Inverter:
         """
         if self.inv_output_charge_control != "power" or not services_send_power(self.base.args, direction):
             return False
-        # get_current_*_rate() reads the percentage whenever the key is present, so this does too
-        if direction + "_rate_percent" in self.base.args:
+        # get_current_*_rate() reads the percentage when this inverter's entry is bound to it (rate_controls()), so this does too
+        if self.rate_controls(direction + "_rate")[1]:
             return False
         # A plain number is not somewhere to store a rate: in a mixed fleet create_missing_arg() fills the
         # other inverters' entries with a "current" inverter's default, which is not this inverter's rate

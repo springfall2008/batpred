@@ -279,6 +279,26 @@ def test_number_in_rate_entry_is_not_an_entity(test_name, my_predbat):
     return failed
 
 
+def test_other_inverters_percentage_not_this_ones(test_name, my_predbat):
+    """
+    A rate percentage bound for another inverter only leaves this one holding its rate, as it is not read from that percentage either (#5359).
+
+    In a mixed fleet the percentage setting exists for the fleet but this inverter's entry is empty, and
+    its rate entry is a plain number (another inverter's default). get_current_charge_rate() asks the
+    inverter's own entry which control it has, so the hold has to ask the same way, or the number is
+    read back as this inverter's rate and sent as {power}.
+    """
+    print("**** Running Test: {} ****".format(test_name))
+    ha = my_predbat.ha_interface
+    ha.dummy_items["number.other_inverter_charge_rate_percent"] = 100
+    inv = _build_script_inverter(my_predbat, {"charge_rate": [6000.0, 6000.0], "charge_rate_percent": [None, "number.other_inverter_charge_rate_percent"]})
+    inv.adjust_charge_rate(2500, notify=False)
+    failed = False
+    failed |= _check(test_name, "charge rate read back", inv.get_current_charge_rate(), 2500)
+    failed |= _check(test_name, "charge_start_service power", _service_power(my_predbat, inv, "charge"), [2500])
+    return failed
+
+
 def test_rate_not_held_without_power_services(test_name, my_predbat):
     """With no start or freeze service to send {power}, nothing applies a rate Predbat would hold, so it reads back the maximum as before."""
     print("**** Running Test: {} ****".format(test_name))
@@ -389,6 +409,7 @@ def run_inverter_rate_no_entity_tests(my_predbat):
         failed |= test_rate_held_per_direction("inverter_rate_no_entity_per_direction", my_predbat)
         failed |= test_queue_immediate("inverter_rate_no_entity_queue_immediate", my_predbat)
         failed |= test_number_in_rate_entry_is_not_an_entity("inverter_rate_no_entity_number_entry", my_predbat)
+        failed |= test_other_inverters_percentage_not_this_ones("inverter_rate_no_entity_other_inverters_percentage", my_predbat)
         failed |= test_rate_not_held_without_power_services("inverter_rate_no_entity_no_power_services", my_predbat)
         return failed
     finally:
