@@ -123,9 +123,9 @@ COMPONENT_LIST = {
             "solcast_host": {"required": False, "config": "solcast_host", "default": "https://api.solcast.com.au/"},
             "solcast_api_key": {"required": False, "secret": True, "config": "solcast_api_key"},
             "solcast_sites": {"required": False, "config": "solcast_sites"},
-            "solcast_poll_hours": {"required": False, "config": "solcast_poll_hours", "default": 8},
+            "solcast_poll_hours": {"required": False, "config": "solcast_poll_hours", "default": 8.0},
             "forecast_solar": {"required": False, "config": "forecast_solar", "default": False},
-            "forecast_solar_max_age": {"required": False, "config": "forecast_solar_max_age", "default": 8},
+            "forecast_solar_max_age": {"required": False, "config": "forecast_solar_max_age", "default": 8.0},
             "forecast_solar_open_meteo_backup": {"required": False, "config": "forecast_solar_open_meteo_backup", "default": False},
             "forecast_solar_open_meteo_first": {"required": False, "config": "forecast_solar_open_meteo_first", "default": False},
             "pv_forecast_today": {"required": False, "config": "pv_forecast_today"},
@@ -134,7 +134,7 @@ COMPONENT_LIST = {
             "pv_forecast_d4": {"required": False, "config": "pv_forecast_d4"},
             "pv_scaling": {"required": False, "config": "pv_scaling", "default": 1.0},
             "open_meteo_forecast": {"required": False, "config": "open_meteo_forecast", "default": False},
-            "open_meteo_forecast_max_age": {"required": False, "config": "open_meteo_forecast_max_age", "default": 4},
+            "open_meteo_forecast_max_age": {"required": False, "config": "open_meteo_forecast_max_age", "default": 4.0},
         },
         "required_or": ["solcast_api_key", "forecast_solar", "pv_forecast_today", "open_meteo_forecast"],
         "phase": 2,  # Solar component moved to phase 2 so that any Predbat cloud components (such as GEcloud) have been started and initialised pv_today, etc
@@ -286,6 +286,20 @@ COMPONENT_LIST = {
         # token_hash has to be listed too: a refresh-only OAuth setup carries no key, and
         # initialize() accepts that, so gating on key alone would never construct it.
         "required_or": ["api_key", "key", "token_hash"],
+        "phase": 1,
+        "can_restart": True,
+    },
+    "wallbox": {
+        "class": "wallbox.WallboxAPI",
+        "name": "Wallbox Charger",
+        "event_filter": "predbat_wallbox_",
+        "args": {
+            "username": {"required": True, "secret": True, "config": "wallbox_username"},
+            "password": {"required": True, "secret": True, "config": "wallbox_password"},
+            "automatic": {"required": False, "config": "wallbox_automatic", "default": True},
+            "wallbox_control": {"required": False, "config": "wallbox_control", "default": False},
+            "poll_seconds": {"required": False, "config": "wallbox_poll_seconds", "default": 120},
+        },
         "phase": 1,
         "can_restart": True,
     },
@@ -444,7 +458,7 @@ COMPONENT_LIST = {
             # one from, so it is estimated from poinv. This is the escape hatch for a user
             # who knows their pack's real limit.
             "battery_rate_max": {"required": False, "config": "alphaess_battery_rate_max"},
-            "api_delay": {"required": False, "default": 2, "config": "alphaess_api_delay"},
+            "api_delay": {"required": False, "default": 2.0, "config": "alphaess_api_delay"},
             "min_write_interval": {"required": False, "default": 300, "config": "alphaess_min_write_interval"},
         },
         # Gate activation on having an AppID. Without this the component would start for
@@ -591,7 +605,7 @@ COMPONENT_LIST = {
         "event_filter": "predbat_axle_",
         "args": {
             "api_key": {"required": False, "secret": True, "config": "axle_api_key"},
-            "pence_per_kwh": {"required": False, "config": "axle_pence_per_kwh", "default": 100},
+            "pence_per_kwh": {"required": False, "config": "axle_pence_per_kwh", "default": 100.0},
             "automatic": {"required": False, "config": "axle_automatic", "default": True},
             "managed_mode": {"required": False, "config": "axle_managed_mode", "default": False},
             "site_id": {"required": False, "secret": True, "config": "axle_site_id"},
@@ -697,6 +711,7 @@ COMPONENT_LIST = {
             "load_ml_source": {"required": False, "config": "load_ml_source", "default": False},
             "load_ml_max_days_history": {"required": False, "config": "load_ml_max_days_history", "default": 28},
             "load_ml_database_days": {"required": False, "config": "load_ml_database_days", "default": 90},
+            "load_ml_retrain_interval_hours": {"required": False, "config": "load_ml_retrain_interval_hours", "default": 2},
         },
         "phase": 2,  # Load ML in phase 2 so that any Predbat cloud components (such as GEcloud) have been started and initialised pv_today, etc
         "can_restart": True,
@@ -712,8 +727,11 @@ COMPONENT_LIST = {
             "mqtt_port": {"required": False, "config": "gateway_mqtt_port", "default": 8883},
             "mqtt_token": {"required": True, "secret": True, "config": "gateway_mqtt_token"},
             "gateway_inverter_serial": {"required": False, "config": "gateway_inverter_serial", "default": None},
+            "gateway_display_only": {"required": False, "config": "gateway_display_only", "default": False},
             "gateway_evc_automatic": {"required": False, "config": "gateway_evc_automatic", "default": False},
             "gateway_evc_control": {"required": False, "config": "gateway_evc_control", "default": False},
+            "gateway_shared_ct": {"required": False, "config": "gateway_shared_ct", "default": True},
+            "gateway_integrate_power": {"required": False, "config": "gateway_integrate_power", "default": False},
         },
         "phase": 1,
         "can_restart": True,
@@ -1022,11 +1040,11 @@ class Components:
         question rather than a per-inverter one: a component serves whichever inverters it
         discovered, and Inverter only needs to know whether to keep waiting.
         """
-        return any(COMPONENT_LIST.get(name, {}).get("inverter", False) and component for name, component in self.components.items())
+        return any(COMPONENT_LIST.get(name, {}).get("inverter", False) and component and getattr(component, "gateway_display_only", False) is not True for name, component in self.components.items())
 
     def inverter_source_names(self):
         """The display names of every active inverter component, for user-facing messages."""
-        return [COMPONENT_LIST[name]["name"] for name, component in self.components.items() if component and COMPONENT_LIST.get(name, {}).get("inverter", False)]
+        return [COMPONENT_LIST[name]["name"] for name, component in self.components.items() if component and COMPONENT_LIST.get(name, {}).get("inverter", False) and getattr(component, "gateway_display_only", False) is not True]
 
     def inverter_source_status(self):
         """
@@ -1059,6 +1077,8 @@ class Components:
                 continue
             load_error = self.load_error(name)
             component = self.components.get(name, None)
+            if component and getattr(component, "gateway_display_only", False) is True:
+                continue
             if load_error is not None:
                 state = "failed to start: {}".format(load_error)
             elif not component:

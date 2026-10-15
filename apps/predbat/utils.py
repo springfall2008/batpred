@@ -40,7 +40,9 @@ from const import (
     POWER_SERVICES,
 )
 import copy
+import hashlib
 import json
+import time as time_module
 
 DAY_OF_WEEK_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
@@ -174,6 +176,50 @@ SECRET_MASK = "xxx"
 
 # Use datetime.fromisoformat in str2time rather than strptime, set False to revert to strptime
 STR2TIME_USE_FROMISOFORMAT = True
+
+
+class RepeatLogGate:
+    """Decide whether a text that tends to repeat (an API response, a slot list) should be logged in full again.
+
+    A text is logged in full the first time it is seen for a key, and again once interval_seconds have passed, so
+    the full text is never only in a rotated-out log file; in between, the caller logs one short line instead.
+    Only a hash of each text is kept, per key, so several texts can alternate under one key (one request context
+    serving several devices, or tariff comparison runs) without each one forcing the others out, and entries older
+    than the interval are dropped so the memory used stays bounded. Expiry runs on a monotonic clock, so a clock
+    change cannot stretch or shorten it; the time reported is local wall-clock time, matching the log's own stamps.
+    """
+
+    def __init__(self, interval_seconds):
+        """Create an empty gate that logs each text in full again at most every interval_seconds."""
+        self.interval_seconds = interval_seconds
+        self.logged = {}
+
+    def last_full(self, key, text, always_full=False):
+        """Return when text was last logged in full for key, or None when it should be logged in full now (recorded as such).
+
+        always_full forces a full log, e.g. for an error response. text may be any value; it is compared as str().
+        """
+        now = time_module.monotonic()
+        for entry in [entry for entry, (logged_at, _wall) in self.logged.items() if now - logged_at >= self.interval_seconds]:
+            del self.logged[entry]
+        entry = (key, hashlib.sha1(str(text).encode("utf-8", "replace")).hexdigest())
+        previous = self.logged.get(entry)
+        if previous is not None and not always_full:
+            return previous[1]
+        self.logged[entry] = (now, datetime.now())
+        return None
+
+    def log(self, log, key, text, full_lines, brief_line, always_full=False):
+        """Log full_lines through log when text is new for key or due again, else the one line brief_line(time of the
+        last full log) returns, or nothing when brief_line is None. Returns True when logged in full."""
+        last = self.last_full(key, text, always_full=always_full)
+        if last is None:
+            for line in full_lines:
+                log(line)
+            return True
+        if brief_line is not None:
+            log(brief_line(last.strftime("%H:%M:%S")))
+        return False
 
 
 class MinuteArray:
@@ -1793,8 +1839,8 @@ CAR_PLAN_YEAR_MARGIN = timedelta(days=180)
 def parse_car_plan_windows(planned, now, local_tz):
     """Turn one car's published charging plan into a list of localised (start, end) pairs.
 
-    Shared by the components that drive a charger from the plan (myenergi, GivEnergy EVC)
-    so the awkward parts stay in one place: the plan carries no year, so each window is
+    Shared by the components that drive a charger from the plan (myenergi, GivEnergy EVC,
+    Ohme, Wallbox, the gateway EVC) so the awkward parts stay in one place: the plan carries no year, so each window is
     rebuilt around now - without that, a plan read either side of New Year lands eleven
     months out - and a malformed entry is skipped rather than costing the rest of the plan.
 
@@ -1813,20 +1859,23 @@ def parse_car_plan_windows(planned, now, local_tz):
     parsed = []
     for window in planned or []:
         try:
-            start = local_tz.localize(datetime.strptime(window["start"], CAR_PLAN_TIME_FORMAT).replace(year=now.year))
-            end = local_tz.localize(datetime.strptime(window["end"], CAR_PLAN_TIME_FORMAT).replace(year=now.year))
+            # Parsed with now's year in the string, not stamped on afterwards: strptime without a
+            # year assumes 1900, which has no 29 February, so a leap-day window was dropped
+            start = local_tz.localize(datetime.strptime("{}-{}".format(now.year, window["start"]), "%Y-" + CAR_PLAN_TIME_FORMAT))
+            end = local_tz.localize(datetime.strptime("{}-{}".format(now.year, window["end"]), "%Y-" + CAR_PLAN_TIME_FORMAT))
+            # Shift both ends together so their spacing survives, then close a window whose
+            # end is in January while its start is still in December. Inside the try, as a stale
+            # 29 February entry has no counterpart in the neighbouring year.
+            if start > now + CAR_PLAN_YEAR_MARGIN:
+                start = start.replace(year=start.year - 1)
+                end = end.replace(year=end.year - 1)
+            elif start < now - CAR_PLAN_YEAR_MARGIN:
+                start = start.replace(year=start.year + 1)
+                end = end.replace(year=end.year + 1)
+            if end < start:
+                end = end.replace(year=end.year + 1)
         except (KeyError, TypeError, ValueError):
             continue
-        # Shift both ends together so their spacing survives, then close a window whose
-        # end is in January while its start is still in December
-        if start > now + CAR_PLAN_YEAR_MARGIN:
-            start = start.replace(year=start.year - 1)
-            end = end.replace(year=end.year - 1)
-        elif start < now - CAR_PLAN_YEAR_MARGIN:
-            start = start.replace(year=start.year + 1)
-            end = end.replace(year=end.year + 1)
-        if end < start:
-            end = end.replace(year=end.year + 1)
         parsed.append((start, end))
     return parsed
 
