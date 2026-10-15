@@ -383,6 +383,13 @@ class Execute:
                     inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
                     inverter.adjust_battery_target(100.0, False)
                     inverter.adjust_reserve(0)
+                # The start/stop services the earlier inverters queued still run, as they did before they
+                # were queued - dropping them would also drop a stop - so they carry calibration's full rates.
+                # They run here, before ownership is dropped below, as a write they make (Solis FB00's
+                # energy control) would otherwise stay owned for as long as calibration lasts.
+                for call in immediate_calls or []:
+                    call()
+                immediate_calls = None
                 # Those writes go through the ordinary helpers, so they CONFER ownership - in
                 # exactly the mode where the inverter's own firmware is driving its settings.
                 # A value found moved next cycle is the inverter calibrating, not a third
@@ -393,8 +400,6 @@ class Execute:
                 # calibration settings above, and keeping it as the poll baseline would have the
                 # 60s poll re-apply them for as long as calibration lasts.
                 intent.clear()
-                # The start/stop services the earlier inverters queued still run, as they did before they
-                # were queued - dropping them would also drop a stop - so they carry calibration's full rates.
                 break
 
             charge_rate = None

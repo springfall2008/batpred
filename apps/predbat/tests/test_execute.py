@@ -2543,6 +2543,52 @@ def run_execute_tests(my_predbat):
     )
     if failed:
         return failed
+
+    # The calibration branch drops control ownership after its own writes. Inverter 0's queued immediate
+    # calls must land before that drop, as they did when they were made inline: a write they make (the
+    # Solis FB00 energy control switch) would otherwise be owned while the firmware drives the settings.
+    def owning_immediate(inverter, call):
+        """Wrap an immediate call so that, like write_solis_energy_control(), it confers ownership of a control."""
+
+        def wrapped(target_soc, freeze=False):
+            my_predbat.control_ledger.record_write("select.energy_control_{}".format(inverter.id), "energy_control", target_soc, now=1.0)
+            call(target_soc, freeze=freeze)
+
+        return wrapped
+
+    for inverter in inverters:
+        inverter.adjust_charge_immediate = owning_immediate(inverter, inverter.adjust_charge_immediate)
+        inverter.adjust_export_immediate = owning_immediate(inverter, inverter.adjust_export_immediate)
+    my_predbat.control_ledger.clear()
+    try:
+        failed |= run_execute_test(
+            my_predbat,
+            "calibration_after_charging_inverter_drops_ownership",
+            charge_window_best=charge_window_best,
+            charge_limit_best=charge_limit_best,
+            set_charge_window=True,
+            set_export_window=True,
+            in_calibration_array=[False, True],
+            assert_charge_time_enable_array=[True, False],
+            assert_status="Calibration",
+            assert_reserve=0,
+            assert_soc_target=100,
+            assert_charge_start_time_minutes=-1,
+            assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+            assert_immediate_charge_soc_target_array=[100, -1],
+            assert_immediate_discharge_soc_target_array=[100, -1],
+            assert_is_charging=True,
+        )
+        if my_predbat.control_ledger.records:
+            print("ERROR: calibration should leave no control owned, got {}".format(sorted(my_predbat.control_ledger.records)))
+            failed = True
+    finally:
+        for inverter in inverters:
+            del inverter.adjust_charge_immediate
+            del inverter.adjust_export_immediate
+        my_predbat.control_ledger.clear()
+    if failed:
+        return failed
     failed |= run_execute_test(my_predbat, "no_charge3", set_charge_window=True, set_export_window=True)
     failed |= run_execute_test(
         my_predbat,
