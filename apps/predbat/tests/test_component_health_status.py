@@ -291,6 +291,71 @@ def test_record_status_concurrent(my_predbat):
     return failed
 
 
+class FakeComparison:
+    """Stand-in tariff comparison that records the given warnings, as re-reading a bad sensor would."""
+
+    def __init__(self, my_predbat, warnings):
+        self.my_predbat = my_predbat
+        self.warnings = warnings
+
+    def run_all(self):
+        """Record each warning on the live instance."""
+        for warning in self.warnings:
+            self.my_predbat.record_status(warning, had_errors=True)
+
+
+def test_record_status_after_comparison(my_predbat):
+    """
+    Verify a warning the midnight tariff comparison records, after the run's final status, ends up
+    behind the run's state rather than replacing it until the next run.
+
+    The comparison runs after record_final_run_status() and re-reads sensors and rates, so a
+    comparison-only warning (or a different one than the run raised) took over the status sensor
+    with no state in front of it, which status-following automations read as no state at all.
+    """
+    print("*** Running test: a warning from the tariff comparison stays behind the run's state")
+    failed = 0
+    status_entity = my_predbat.prefix + ".status"
+    saved_item = my_predbat.ha_interface.dummy_items.get(status_entity)
+    saved_value = my_predbat.dashboard_values.get(status_entity)
+    saved = (my_predbat.current_status, my_predbat.status_state, my_predbat.status_detail, my_predbat.had_errors, my_predbat.status_warning, my_predbat.status_warning_debug, my_predbat.components, my_predbat.comparison)
+    run_warning = "Warn: Return bad float value unavailable from car_charging_soc"
+    compare_warning = "Warn: Bad rate x provided in energy rates"
+
+    try:
+        my_predbat.components = None
+        for run_warnings, compare_warnings, expected in [
+            ([], [compare_warning], "Exporting, " + compare_warning),
+            ([run_warning], [compare_warning, run_warning], "Exporting, " + run_warning),
+            ([run_warning], [run_warning], "Exporting, " + run_warning),
+            ([], [], "Exporting"),
+        ]:
+            my_predbat.reset_run_status()
+            for warning in run_warnings:
+                my_predbat.record_status(warning, had_errors=True)
+            my_predbat.record_final_run_status("Exporting", " target 20%")
+            my_predbat.comparison = FakeComparison(my_predbat, compare_warnings)
+            my_predbat.run_comparison("Exporting", " target 20%")
+            published = my_predbat.dashboard_values[status_entity]
+            if published["state"] != expected or published["attributes"]["detail"] != " target 20%":
+                print("ERROR: run warnings {} then comparison warnings {}: expected {!r} with its detail, got {!r} detail {!r}".format(run_warnings, compare_warnings, expected, published["state"], published["attributes"]["detail"]))
+                failed = 1
+        if not failed:
+            print("OK: comparison warnings stay behind the run's state and detail")
+    finally:
+        my_predbat.current_status, my_predbat.status_state, my_predbat.status_detail, my_predbat.had_errors, my_predbat.status_warning, my_predbat.status_warning_debug, my_predbat.components, my_predbat.comparison = saved
+        if saved_item is None:
+            my_predbat.ha_interface.dummy_items.pop(status_entity, None)
+        else:
+            my_predbat.ha_interface.dummy_items[status_entity] = saved_item
+        if saved_value is None:
+            my_predbat.dashboard_values.pop(status_entity, None)
+        else:
+            my_predbat.dashboard_values[status_entity] = saved_value
+
+    return failed
+
+
 def test_record_status_reset_locked(my_predbat):
     """
     Verify the start-of-run reset of had_errors and the recorded warning waits for the status lock.

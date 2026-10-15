@@ -1086,14 +1086,24 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                         soc_next = min(soc_next, self.car_charging_limit[car_n])
                     self.expose_config("car_charging_manual_soc_kwh" + car_postfix, dp3(soc_next))
 
-    def run_comparison(self):
-        """Run the tariff comparison, clearing compare_active afterwards even if it raises (#5472)."""
+    def run_comparison(self, status=None, status_extra=""):
+        """
+        Run the tariff comparison, clearing compare_active afterwards even if it raises (#5472).
+
+        status and status_extra are the run's final status, already recorded. The comparison runs after
+        that and re-reads sensors and rates, so it can record a warning that takes over the status
+        sensor; when it does, the run's state is put back in front of it, as for a warning raised
+        during the run itself.
+        """
+        status_before = self.current_status
         # Without the finally, a crashed comparison leaves compare_active on and re-triggers itself every cycle
         self.expose_config("compare_active", True)
         try:
             self.comparison.run_all()
         finally:
             self.expose_config("compare_active", False)
+        if status is not None and self.current_status != status_before:
+            self.record_status_under_warning(status, status_extra)
 
     def update_pred(self, scheduled=True):
         """
@@ -1458,7 +1468,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         if self.comparison:
             if (scheduled and self.minutes_now < RUN_EVERY) or self.get_arg("compare_active", False):
                 # Compare tariffs either when triggered or daily at midnight
-                self.run_comparison()
+                self.run_comparison(status, status_extra)
             else:
                 # Otherwise just update HA sensors to prevent then expiring
                 self.comparison.publish_only()
