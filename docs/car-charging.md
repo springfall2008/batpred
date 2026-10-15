@@ -267,6 +267,7 @@ A single charger sensor listed for both cars shows both cars as plugged in (in *
 With **car_charging_exclusive** set to `true` Predbat then plans only one of them, but it goes through the cars in order, so it plans car 0 whenever car 0 has charging to plan, whichever car is actually on the charger.
 
 This applies to a charger whose car settings you set yourself in `apps.yaml` - not one set up by Predbat's own charger integrations (Ohme, myenergi, Wallbox, GivEnergy Gateway or GivEnergy Cloud EV charger), whose automatic setup and charger control assume one car per charger.
+To use it with a Zappi on Predbat's own myenergi integration, set **myenergi_automatic_zappi** to `false` so the integration leaves your Zappi's car settings to you (Zappi charger control then stays off, as it needs that setting on).
 
 To fix it, tell Predbat which car is on the charger, and give each car its own sensors that follow the charger only while that car is the one on it (keep **car_charging_exclusive** set to `true` as well).
 For example, with an `input_select` helper of your own, with options `Car 0`, `Car 1` and `None`, which you or an automation set to the car on the charger:
@@ -286,8 +287,8 @@ template:
         availability: "{{ has_value('input_select.car_on_charger') and (not is_state('input_select.car_on_charger', 'Car 1') or has_value('sensor.your_charger_power')) }}"
         state: "{{ states('sensor.your_charger_power') if is_state('input_select.car_on_charger', 'Car 1') else 0 }}"
   - binary_sensor:
-      # Use your charger's plugged-in sensor; with a status sensor instead, test for its "no car" state,
-      # e.g. has_value('sensor.your_charger_status') and not is_state('sensor.your_charger_status', 'Disconnected')
+      # Use your charger's plugged-in sensor; with a status sensor instead, test for its exact "no car" state,
+      # e.g. for a Zappi's plug status: has_value('sensor.your_charger_status') and not is_state('sensor.your_charger_status', 'EV Disconnected')
       - name: "Car 0 plugged in"
         state: "{{ is_state('input_select.car_on_charger', 'Car 0') and is_state('binary_sensor.your_charger_plugged_in', 'on') }}"
       - name: "Car 1 plugged in"
