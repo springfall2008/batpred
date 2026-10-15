@@ -947,7 +947,15 @@ def services_send_power(args, direction=None):
 
     A service given by name alone is passed every default option, power included. A template entry
     passes only the keys it lists, so it sends the rate only where one of its values references {power}.
+    Only a string value is formatted, or each string in a per-inverter list; a nested mapping is passed
+    as it is, so a {power} inside one is never filled in and does not count.
     """
+
+    def formats_power(value):
+        """Whether call_service_template() fills in {power} for this template value."""
+        # {power}, or with a format spec or conversion such as {power:.0f}, as str.format() takes it
+        return any(isinstance(item, str) and re.search(r"\{power[}:!]", item) for item in (value if isinstance(value, list) else [value]))
+
     for service in POWER_SERVICES:
         if direction and not service.startswith(direction + "_"):
             continue
@@ -957,8 +965,7 @@ def services_send_power(args, direction=None):
         for template in templates if isinstance(templates, list) else [templates]:
             if isinstance(template, str):
                 return True
-            # {power}, or with a format spec or conversion such as {power:.0f}, as str.format() takes it
-            if isinstance(template, dict) and any(re.search(r"\{power[}:!]", str(value)) for key, value in template.items() if key != "service"):
+            if isinstance(template, dict) and any(formats_power(value) for key, value in template.items() if key != "service"):
                 return True
     return False
 

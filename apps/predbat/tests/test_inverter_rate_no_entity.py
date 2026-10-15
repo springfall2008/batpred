@@ -328,6 +328,9 @@ def test_services_send_power(test_name, my_predbat):
         ("template without {power}", {"charge_start_service": {"service": "switch.turn_on", "entity_id": "switch.grid_charge"}}, False),
         ("template with {power_max}", {"charge_start_service": {"service": "script.rate", "limit": "{power_max}"}}, False),
         ("stop service only", {"charge_stop_service": "script.stop"}, False),
+        # A list value is taken per inverter and each entry formatted, but a nested mapping is passed as it is
+        ("template with a per-inverter list using {power}", {"charge_start_service": {"service": "script.rate", "power": ["{power}", "{power}"]}}, True),
+        ("template with {power} nested in a mapping", {"charge_start_service": {"service": "script.rate", "data": {"power": "{power}"}}}, False),
     ):
         failed |= _check(test_name, label, services_send_power(args), expect)
     # Per direction: a {power} on the charge hooks says nothing about the discharge side, and the reverse
