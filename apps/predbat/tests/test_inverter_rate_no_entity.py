@@ -360,6 +360,10 @@ def test_services_send_power(test_name, my_predbat):
         ("discharge freeze {power}, charge", {"discharge_freeze_service": "script.hold"}, "charge", False),
     ):
         failed |= _check(test_name, label, services_send_power(args, direction), expect)
+    # Per inverter: each inverter is sent only its own entry of a per-inverter list
+    second_only = {"charge_start_service": {"service": "script.rate", "power": ["", "{power}"]}}
+    for label, index, expect in (("fleet", None, True), ("inverter 0", 0, False), ("inverter 1", 1, True), ("inverter 2, past the list", 2, False)):
+        failed |= _check(test_name, "{power} in the second inverter's list entry, " + label, services_send_power(second_only, "charge", index), expect)
     return failed
 
 
@@ -415,6 +419,10 @@ def test_rate_held_per_direction(test_name, my_predbat):
         # Even one recorded by mistake is not read back
         inv.rate_last_set["discharge"] = 1234
         failed |= _check(test_name, "discharge read back ignoring a recorded rate", inv.get_current_discharge_rate(), RATE_MAX)
+        # A {power} in another inverter's entry of a per-inverter list is not sent to this one
+        my_predbat.args["charge_start_service"] = {"service": "script.rate", "power": ["", "{power}"]}
+        inv.adjust_charge_rate(2500, notify=False)
+        failed |= _check(test_name, "charge read back when only inverter 1 is sent {power}", inv.get_current_charge_rate(), RATE_MAX)
     finally:
         my_predbat.args.update(saved)
     return failed

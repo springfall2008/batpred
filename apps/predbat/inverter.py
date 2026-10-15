@@ -2187,7 +2187,7 @@ class Inverter:
         reading one back would claim a rate the inverter never got. "current" inverters get a rate entity
         of their own, and a "none" inverter (Sofar over MQTT, Solar Assistant, Tesla) is left as it was.
         """
-        if self.inv_output_charge_control != "power" or not services_send_power(self.base.args, direction):
+        if self.inv_output_charge_control != "power" or not services_send_power(self.base.args, direction, self.id):
             return False
         # This inverter's own percentage entry, not the setting's presence: in a mixed fleet it can be bound for
         # another inverter only (#5359). rate_controls() falls back to that presence for an inverter bound to
