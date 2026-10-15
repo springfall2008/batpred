@@ -391,8 +391,12 @@ def test_rate_held_per_direction(test_name, my_predbat):
         failed |= _check(test_name, "charge held (its service sends {power})", inv.rate_without_entity("charge"), True)
         failed |= _check(test_name, "discharge not held (its services do not)", inv.rate_without_entity("discharge"), False)
         # Setting a discharge rate records nothing, so it still reads back as the battery maximum
-        inv.rate_last_set["discharge"] = 1234
+        inv.adjust_discharge_rate(1234, notify=False)
+        failed |= _check(test_name, "discharge rate recorded", inv.rate_last_set.get("discharge"), None)
         failed |= _check(test_name, "discharge read back as before", inv.get_current_discharge_rate(), RATE_MAX)
+        # Even one recorded by mistake is not read back
+        inv.rate_last_set["discharge"] = 1234
+        failed |= _check(test_name, "discharge read back ignoring a recorded rate", inv.get_current_discharge_rate(), RATE_MAX)
     finally:
         my_predbat.args.update(saved)
     return failed
