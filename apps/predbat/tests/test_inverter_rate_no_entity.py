@@ -284,9 +284,10 @@ def test_other_inverters_percentage_not_this_ones(test_name, my_predbat):
     A rate percentage bound for another inverter only leaves this one holding its rate, as it is not read from that percentage either (#5359).
 
     In a mixed fleet the percentage setting exists for the fleet but this inverter's entry is empty, and
-    its rate entry is a plain number (another inverter's default). get_current_charge_rate() asks the
-    inverter's own entry which control it has, so the hold has to ask the same way, or the number is
-    read back as this inverter's rate and sent as {power}.
+    its rate entry is a plain number (another inverter's default), missing or empty. The hold asks this
+    inverter's own percentage entry, as rate_controls() falls back to the setting's presence for an
+    inverter bound to neither control - which would read the empty entry as 100% and send the maximum
+    as {power} - and a held rate is read back ahead of the percentage and written to neither control.
     """
     print("**** Running Test: {} ****".format(test_name))
     ha = my_predbat.ha_interface
@@ -312,8 +313,22 @@ def test_other_inverters_percentage_not_this_ones(test_name, my_predbat):
             failed |= _check(test_name, "charge_start_service power with " + label, _service_power(my_predbat, inv, "charge"), [2500])
             # Nothing of this inverter's to write the rate to, so no write is attempted
             failed |= _check(test_name, "missing entity warnings with " + label, [message for message in logged if "No entity_id" in message], [])
+        # The discharge side mirrors it, with no discharge rate entry
+        ha.dummy_items["number.other_inverter_discharge_rate_percent"] = 100
+        inv = _build_script_inverter(my_predbat, {"discharge_rate_percent": [None, "number.other_inverter_discharge_rate_percent"]})
+        logged = []
+        base_log = my_predbat.log
+        my_predbat.log = lambda message, *args, **kwargs: (logged.append(str(message)), base_log(message, *args, **kwargs))
+        try:
+            inv.adjust_discharge_rate(1500, notify=False)
+        finally:
+            my_predbat.log = base_log
+        failed |= _check(test_name, "discharge rate read back with no rate entry", inv.get_current_discharge_rate(), 1500)
+        failed |= _check(test_name, "discharge_start_service power with no rate entry", _service_power(my_predbat, inv, "discharge"), [1500])
+        failed |= _check(test_name, "missing entity warnings for discharge with no rate entry", [message for message in logged if "No entity_id" in message], [])
     finally:
         ha.dummy_items.pop("number.other_inverter_charge_rate_percent", None)
+        ha.dummy_items.pop("number.other_inverter_discharge_rate_percent", None)
     return failed
 
 
