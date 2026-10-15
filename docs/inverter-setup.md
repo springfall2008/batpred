@@ -1620,8 +1620,8 @@ mode: single
 Occasionally, when a Manual Freeze Charge is requested, Predbat may immediately decide that **Hold Charging** is the more appropriate state based on current conditions.
 In this case, Freeze Charging automations may remain enabled even though Predbat reports Hold Charging.
 The watchdog safely exits Freeze Charging after a short grace period.
-It ignores a bare `Warn:` or `Error:` status, which Predbat can show for a moment part way through a plan update; the state written after it changes the status, so the exit automation still cleans up.
-While a component is failing, the status reads `Error: Complete run status <state> with component errors: ...` every update, so the watchdog reads the state out of it rather than ignoring it.
+It ignores a bare warning or error status, which Predbat can show for a moment part way through a plan update; the state written after it changes the status, so the exit automation still cleans up.
+While a component is failing, the status reads `Error: Complete run status <state> with component errors: ...` every update, so the watchdog reads the state out of that and acts on it.
 
 - Create the **Freeze Charge Watchdog** automation to handle cases where Manual Freeze Charging immediately transitions to **Hold Charging**.
 
@@ -1639,17 +1639,18 @@ conditions: []
 actions:
   - alias: 'Watchdog: Grace period'
     delay: '00:00:30'
+  - alias: 'Watchdog: Read the state out of a component error'
+    variables:
+      status: >-
+        {% set s = states('predbat.status') %}{{ s[27:] if s.startswith('Error: Complete run status ') else s }}
   - alias: 'Watchdog: Abort if no Freeze charging'
     if:
       - condition: template
         value_template: |
-          {% set s = states('predbat.status') %}
-          {% set s = s[27:] if s.startswith('Error: Complete run status ') else s %} {{
-            s not in ['unknown','unavailable'] and
-            not s.startswith('Warn') and
-            not s.startswith('Error') and
-            not s.startswith('Freeze charging')
-          }}
+          {{ status not in ['unknown','unavailable'] and
+             not status.startswith('Warn') and
+             not status.startswith('Error') and
+             not status.startswith('Freeze charging') }}
     then:
       - alias: 'Watchdog: Trace cancellation'
         action: system_log.write
@@ -1674,8 +1675,8 @@ actions:
           - conditions:
               - condition: template
                 value_template: |
-                  {{ states('predbat.status').startswith('Charging')
-                     or states('predbat.status').startswith('Hold charging') }}
+                  {{ status.startswith('Charging')
+                     or status.startswith('Hold charging') }}
             sequence:
               - if:
                   - condition: state
@@ -1699,7 +1700,7 @@ actions:
           - conditions:
               - condition: template
                 value_template: |
-                  {{ states('predbat.status').startswith('Charging') }}
+                  {{ status.startswith('Charging') }}
             sequence:
               - action: number.set_value
                 target:
@@ -1709,7 +1710,7 @@ actions:
           - conditions:
               - condition: template
                 value_template: |
-                  {{ states('predbat.status').startswith('Hold charging') }}
+                  {{ status.startswith('Hold charging') }}
             sequence:
               - action: number.set_value
                 target:
