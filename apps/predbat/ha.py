@@ -53,8 +53,9 @@ HA_RETRY_SECONDS = 5
 HA_RETRY_MAX_SECONDS = 30
 
 # requests errors that are not Home Assistant being down, so waiting will not fix them: a malformed ha_url or ha_key
-# (e.g. a trailing newline), a redirect loop, or a body we cannot encode (InvalidJSONError; its JSONDecodeError
-# subclass, a reply we cannot decode, is caught before these in api_call())
+# (e.g. a trailing newline), a redirect loop, or a body requests refuses to encode (InvalidJSONError, raised for a NaN or
+# infinity; its JSONDecodeError subclass, a reply we cannot decode, is caught before these in api_call()). A value json
+# cannot serialise at all (a datetime, a set) raises TypeError instead, which is not caught here.
 HA_NOT_OUTAGE_ERRORS = (
     requests.exceptions.InvalidURL,
     requests.exceptions.MissingSchema,
