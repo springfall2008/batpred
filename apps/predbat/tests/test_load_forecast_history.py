@@ -640,7 +640,9 @@ def run_new_install_tests(my_predbat):
             failed |= check_step(forecast, 24 * 60 + 13 * 60 + 30, 5 * 0.03, "tomorrow 13:30 from today's 13:30")
             failed |= check_step(forecast, 24 * 60 + 180, average, "tonight 03:00 from the recorded average")
             failed |= check_step(forecast, 18 * 60, average, "later today 18:00 from the recorded average")
-            failed |= check_step(forecast, 8 * 60, average, "today 08:00 (before install) from the recorded average")
+            # Elapsed hours before the install stay at base load (0 here): load_today_comparison counts them as
+            # base load actual, so the recorded average there would drag the in-day adjustment down (Test 17)
+            failed |= check_step(forecast, 8 * 60, 0.0, "today 08:00 (elapsed, before install) at base load")
 
         # Base load lifts each sample before averaging, exactly as for any other history sample
         setup_midday(3 * 60, three_hours, 0)
@@ -674,6 +676,52 @@ def run_new_install_tests(my_predbat):
         average = 5 * (0.01 + 0.02 + 0.03) / 3
         failed |= check_step(forecast, 24 * 60 + 13 * 60 + 30, 5 * 0.03 * 0.5, "holiday tomorrow 13:30 scaled")
         failed |= check_step(forecast, 24 * 60 + 180, average * 0.5, "holiday tonight 03:00 average scaled")
+        my_predbat.holiday_days_left = 0
+
+        # ---------------------------------------------------------------
+        # Test 16: installed at 20:00 yesterday - under 24 hours, so load_minutes_age is still 0, but yesterday's
+        # evening is recorded and must be searched rather than replaced by the recorded average
+        # ---------------------------------------------------------------
+        print("Test 16: installed 18 hours ago (age 0) - yesterday's recorded evening is still used")
+
+        def evening_heavy(tod):
+            """2.4 kW 20:00-24:00, 0.6 kW otherwise."""
+            return 0.04 if tod >= 20 * 60 else 0.01
+
+        setup_midday(18 * 60, evening_heavy, 0)
+        forecast = my_predbat.compute_load_forecast_history(now_utc)
+        average = 5 * (4 * 0.04 + 14 * 0.01) / 18
+        failed |= check_step(forecast, 21 * 60, 5 * 0.04, "tonight 21:00 from yesterday's 21:00")
+        failed |= check_step(forecast, 24 * 60 + 180, 5 * 0.01, "tomorrow 03:00 from today's 03:00")
+        failed |= check_step(forecast, 16 * 60, average, "later today 16:00 from the recorded average")
+
+        # ---------------------------------------------------------------
+        # Test 17: the forecast leaves the in-day adjustment neutral on an install made earlier today
+        # ---------------------------------------------------------------
+        print("Test 17: in-day adjustment stays neutral for a same-day install")
+        setup_midday(3 * 60, lambda tod: 0.02, 0)  # installed 11:00, constant 1.2 kW
+        forecast = my_predbat.compute_load_forecast_history(now_utc)
+        saved = {name: getattr(my_predbat, name, None) for name in ("load_forecast_only", "midnight_utc", "calculate_inday_adjustment", "metric_inday_adjust_damping", "load_scaling", "load_scaling_dynamic", "manual_load_adjust", "get_history_wrapper")}
+        try:
+            my_predbat.load_forecast_only = True
+            my_predbat.midnight_utc = now_utc - timedelta(minutes=minutes_now)
+            my_predbat.calculate_inday_adjustment = True
+            my_predbat.metric_inday_adjust_damping = 1.0
+            my_predbat.load_scaling = 1.0
+            my_predbat.load_scaling_dynamic = {}
+            my_predbat.manual_load_adjust = {}
+            my_predbat.get_history_wrapper = lambda entity_id, days=30, required=True, tracked=True: None  # no yesterday factor
+            factor = my_predbat.load_today_comparison(my_predbat.load_minutes, forecast, {}, {}, minutes_now, save=False)
+            # Today's weight at 14:00 is 1 - 10/24, so a pre-install forecast of the 1.2 kW average across 00:00-11:00
+            # (13.2 kWh predicted against nothing recorded) would pull this to about 0.65
+            if abs(factor - 1.0) > 0.02:
+                print("ERROR: in-day adjustment for a same-day install expected ~1.0 got {}".format(factor))
+                failed = True
+            else:
+                print("PASS: in-day adjustment neutral for a same-day install ({})".format(round(factor, 4)))
+        finally:
+            for name, value in saved.items():
+                setattr(my_predbat, name, value)
     finally:
         my_predbat.get_holiday_minutes = original_get_holiday_minutes
         my_predbat.holiday_days_left = 0

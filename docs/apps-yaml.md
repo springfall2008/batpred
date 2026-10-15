@@ -534,6 +534,9 @@ times Predbat uses today's load instead, so you don't have to wait for a full da
   The first hours after an install may not be typical of the whole day, but this is a better guess than base
   load and it improves every cycle.
 - With less than an hour recorded, the [base load](#base-load) is used.
+- The hours earlier today before Predbat was installed also stay at base load. That way the
+  [in-day adjustment](customisation.md#battery-margins-and-metrics-options) isn't thrown off by comparing a forecast for those hours against
+  load that was never recorded.
 
 As with every other sample, the base load is applied as a minimum and holiday mode is matched or scaled. Today
 is only used while no previous day has data for that time of day, so once a full day is recorded the forecast

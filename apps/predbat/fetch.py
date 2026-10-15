@@ -3386,7 +3386,9 @@ class Fetch:
         A slot with no recorded sample on any previous day - a new install whose history starts part-way
         through yesterday, or today - is filled from today instead (batpred#5548): today's sample at the same
         time of day when that time has already passed, otherwise the average of everything recorded so far
-        once at least LOAD_FORECAST_RECORDED_MIN_MINUTES exist, otherwise base load. Today never contributes
+        once at least LOAD_FORECAST_RECORDED_MIN_MINUTES exist, otherwise base load. Elapsed slots of today
+        with nothing recorded (before the install) stay at base load, as that is what load_today_comparison
+        counts as their actual load - the average there would drag the in-day adjustment down. Today never contributes
         while a previous day has data for the slot, so once a full day is recorded these fall away and an
         established install is unaffected. Today's elapsed slots read today's own load, which keeps the in-day
         adjustment neutral rather than letting it scale up a forecast that is already built from today.
@@ -3396,8 +3398,9 @@ class Fetch:
         if not self.load_minutes:
             return {}
         # Search window comes from max_days_previous (derived from days_previous), bounded by available history.
-        # Zero on a system installed today, which then forecasts from today's recorded load alone.
-        num_days = max(min(self.load_minutes_age, self.max_days_previous - 1), 0)
+        # load_minutes_age counts whole 24-hour periods, so it is still 0 at 14:00 for a 20:00 install yesterday;
+        # yesterday is always searched so its recorded evening is used (unrecorded buckets are skipped anyway).
+        num_days = max(min(max(self.load_minutes_age, 1), self.max_days_previous - 1), 0)
 
         today_dow = now_utc.weekday()
         holiday_minutes = self.get_holiday_minutes(now_utc, num_days)
@@ -3478,6 +3481,11 @@ class Fetch:
                 # the assumed holiday ratio - or divided by it when we are home and the whole window was holiday.
                 per_step[minute_absolute] = (all_total / all_weight) * (holiday_load_scaling if slot_holiday else 1.0 / holiday_load_scaling)
                 has_history = True
+            elif minute_absolute < self.minutes_now:
+                # Elapsed today with nothing recorded (before the install). load_today_comparison counts these as
+                # base load actual, so forecasting the recorded average here would read as a large over-forecast
+                # and pull the in-day adjustment - and through it tonight's plan - down.
+                per_step[minute_absolute] = base_step
             else:
                 # Nothing recorded at this time of day yet: project the average of everything recorded so far,
                 # with the same holiday matching and scaling as above, or base load until there is enough of it.
