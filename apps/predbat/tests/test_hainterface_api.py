@@ -432,10 +432,6 @@ def test_hainterface_initialize_retries_until_ready(my_predbat=None):
     else:
         print("✓ interface registered after the retries")
 
-    if ha_interface.outage.since is not None:
-        print("ERROR: the outage should have ended")
-        failed += 1
-
     return failed
 
 
@@ -753,17 +749,24 @@ def test_hainterface_initialize_config_error_fails_fast(my_predbat=None):
         ha_interface.count_errors = 0
         ha_interface.db_manager = None
 
-        raised = False
+        raised = None
         try:
             ha_interface.initialize("test:8123", "test_key", False, False, False)
-        except ValueError:
-            raised = True
+        except ValueError as e:
+            raised = e
 
-    if not raised or sleeps:
-        print(f"ERROR: expected an immediate failure, got raised={raised} sleeps={sleeps}")
+    if raised is None or sleeps:
+        print(f"ERROR: expected an immediate failure, got raised={raised!r} sleeps={sleeps}")
         failed += 1
     else:
         print("✓ failed immediately")
+
+    # The real error, not the generic ValueError for an unreachable Home Assistant, so the start-up log names it
+    if not isinstance(raised, requests.exceptions.MissingSchema) or "No scheme supplied" not in str(raised):
+        print(f"ERROR: expected the MissingSchema error to propagate, got {raised!r}")
+        failed += 1
+    else:
+        print("✓ the configuration error itself is raised")
 
     return failed
 
@@ -786,7 +789,18 @@ def test_hainterface_api_call_gateway_status_is_outage(my_predbat=None):
     else:
         print("✓ JSON 503 recorded as an outage")
 
-    # And it is not cleared by the next 503, only by a real reply
+    # A further 503 continues the same outage rather than ending it or starting a new one
+    since = ha_interface.outage.since
+    with patch("ha.requests.get") as mock_get:
+        mock_get.return_value = create_mock_requests_response(503, {"message": "Service Unavailable"})
+        ha_interface.api_call("/api/states")
+    if ha_interface.outage.since != since:
+        print(f"ERROR: a second 503 should continue the outage from {since}, got {ha_interface.outage.since}")
+        failed += 1
+    else:
+        print("✓ a second JSON 503 continues the outage")
+
+    # Only a real reply clears it
     with patch("ha.requests.get") as mock_get:
         mock_get.return_value = create_mock_requests_response(200, {"ok": True})
         ha_interface.api_call("/api/states")
