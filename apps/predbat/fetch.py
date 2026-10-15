@@ -1464,6 +1464,9 @@ class Fetch:
         # Dynamic load: cancel the Octopus Intelligent slots of a car that is in one but not charging -
         # before the rates are built, so a cancelled dispatch never gets its cheap rate
         dynamic_load_car_changed = self.dynamic_load_car_check(save=save)
+        if save:
+            # Remember the half hour a dispatch is running in, now it is known whether the car was cancelled
+            self.octopus_held_update()
         octopus_surplus_changed = False
 
         if "rates_export_octopus_url" in self.args:
@@ -1806,6 +1809,8 @@ class Fetch:
         # Cars whose charging plan came from Octopus Intelligent dispatch slots this cycle - used
         # below to decide which cars get a model-facing charge limit override (#4967)
         iog_slot_cars = []
+        # The planned dispatches each car's plan used this cycle, for octopus_held_update()
+        self.octopus_slots_planned = {}
 
         if entity_id_list:
             # Process each car's intelligent slot configuration
@@ -1857,10 +1862,16 @@ class Fetch:
                 # Completed and planned slots - merge from all cars
                 if completed:
                     self.octopus_slots[car_n] += completed
+                planned_used = []
                 if planned and (not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n] or self.car_charging_now[car_n]):
                     # We only count planned slots if the car is plugged in or we are ignoring unplugged cars. A car
                     # charging now is plugged in, even before car_charging_planned catches up with an ad-hoc dispatch
-                    self.octopus_slots[car_n] += planned
+                    planned_used = planned
+                # The half hours a planned dispatch has already run in, until the completed list has them (#5520).
+                # After the completed list, which is the record once it arrives, and ahead of the planned one
+                self.octopus_slots[car_n] += self.octopus_held_dispatches(car_n, completed or [], planned_used)
+                self.octopus_slots[car_n] += planned_used
+                self.octopus_slots_planned[car_n] = planned_used
 
                 # Extract vehicle data if we can get it
                 size = self.get_state_wrapper(entity_id=entity_id, attribute="vehicle_battery_size_in_kwh")
@@ -3599,7 +3610,7 @@ class Fetch:
             elif not self.set_export_freeze:
                 # Ask the inverter rather than the switch: an unsupported inverter forces set_export_freeze off
                 # whatever the switch says, so advising the user to turn the switch on would change nothing.
-                if self.inverters and not self.inverters[0].inv_support_discharge_freeze:
+                if any(not inverter.inv_support_discharge_freeze for inverter in self.inverters):
                     reason = "the inverter does not support Freeze Export. Turn export_more_solar off."
                 else:
                     reason = "set_export_freeze is off. Enable set_export_freeze, or turn export_more_solar off."

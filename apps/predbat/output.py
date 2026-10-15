@@ -167,9 +167,11 @@ class Output:
         """
         Publish the car charging plan
         """
-        plan = []
         postfix = ""
         for car_n in range(self.num_cars):
+            # A list of its own per car - shared, every car after the first also carried the windows of
+            # the cars before it, and a charger driven from its car's plan would charge in them
+            plan = []
             if car_n > 0:
                 postfix = "_" + str(car_n)
             if not self.car_charging_slots[car_n]:

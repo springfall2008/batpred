@@ -581,6 +581,16 @@ class Inverter:
                 rate_step = 0
             if 0 < rate_step <= 100:
                 self.inv_rate_step_percent_of_capacity = rate_step
+        # The rate entity can also say that its rate only limits charging from the grid, as on the GivEnergy
+        # 3-phase units: with no pause register either, a zero charge rate leaves PV filling the battery, so
+        # Freeze Export cannot be carried out and must not be planned (#5082)
+        for rate_arg in ["charge_rate", "charge_rate_percent"]:
+            grid_only_entity = self.base.get_arg(rate_arg, indirect=False, index=self.id)
+            if grid_only_entity and str(self.base.get_state_wrapper(grid_only_entity, attribute="grid_charge_only")).lower() in ["true", "on", "1"]:
+                if self.inv_support_discharge_freeze:
+                    self.log("Inverter {} charge rate only limits grid charging and cannot stop solar charging - Freeze Export is not supported".format(self.id))
+                self.inv_support_discharge_freeze = False
+                break
 
         # If it's not a GE inverter then turn Quiet off
         if self.inverter_type != "GE":
@@ -2110,12 +2120,30 @@ class Inverter:
         else:
             self.base.log("Inverter {} Current reserve is {}%, already at target".format(self.id, dp0(current_reserve)))
 
+    def rate_controls(self, rate_arg):
+        """
+        Which of a rate's two controls this inverter uses: (watts, percent) for "charge_rate" or "discharge_rate".
+
+        Asked of this inverter's own entry rather than of whether the setting exists at all: a fleet can mix
+        inverters with a power register and ones with only the percentage (GivEnergy 3-phase), leaving each
+        setting bound for some inverters and empty for the rest (#5359). An inverter bound to neither keeps
+        the answer the setting's presence used to give, so a missing entity is still reported when written.
+        """
+        percent_arg = rate_arg + "_percent"
+        has_watts = rate_arg in self.base.args
+        has_percent = percent_arg in self.base.args
+        bound_watts = bool(has_watts and self.base.get_arg(rate_arg, indirect=False, index=self.id))
+        bound_percent = bool(has_percent and self.base.get_arg(percent_arg, indirect=False, index=self.id))
+        if bound_watts != bound_percent:
+            return bound_watts, bound_percent
+        return has_watts, has_percent
+
     def get_current_discharge_rate(self):
         """
         Get the current discharge rate in watts
         """
 
-        if "discharge_rate_percent" in self.base.args:
+        if self.rate_controls("discharge_rate")[1]:
             current_rate = int(self.base.get_arg("discharge_rate_percent", index=self.id, default=100.0, required_unit="%") * self.battery_rate_max_raw / 100)
         else:
             current_rate = self.base.get_arg("discharge_rate", index=self.id, default=self.battery_rate_max_raw, required_unit="W")
@@ -2132,7 +2160,7 @@ class Inverter:
         """
         Get the current charge rate in watts
         """
-        if "charge_rate_percent" in self.base.args:
+        if self.rate_controls("charge_rate")[1]:
             current_rate = self.base.get_arg("charge_rate_percent", index=self.id, default=100.0, required_unit="%") * self.battery_rate_max_raw / 100
         else:
             current_rate = self.base.get_arg("charge_rate", index=self.id, default=self.battery_rate_max_raw, required_unit="W")
@@ -2195,7 +2223,8 @@ class Inverter:
         fuzzy, fuzzy_below = self.rate_tolerances(self.battery_rate_max_charge)
         if not within_fuzzy(current_rate, new_rate, fuzzy, fuzzy_below):
             self.base.log("Inverter {} current charge rate is {}W and new target is {}W".format(self.id, current_rate, new_rate))
-            if "charge_rate" in self.base.args:
+            write_watts, write_percent = self.rate_controls("charge_rate")
+            if write_watts:
                 self.write_and_poll_value(
                     "charge_rate",
                     self.base.get_arg("charge_rate", indirect=False, index=self.id, required_unit="W"),
@@ -2204,7 +2233,7 @@ class Inverter:
                     required_unit="W",
                     fuzzy_below=fuzzy_below,
                 )
-            if "charge_rate_percent" in self.base.args:
+            if write_percent:
                 self.write_and_poll_value("charge_rate_percent", self.base.get_arg("charge_rate_percent", indirect=False, index=self.id, required_unit="%"), min(int(new_rate / self.battery_rate_max_raw * 100), 100), fuzzy=5, required_unit="%")
 
             if notify and self.base.set_inverter_notify:
@@ -2244,7 +2273,8 @@ class Inverter:
         fuzzy, fuzzy_below = self.rate_tolerances(self.battery_rate_max_discharge)
         if not within_fuzzy(current_rate, new_rate, fuzzy, fuzzy_below):
             self.base.log("Inverter {} current discharge rate is {}W and new target is {}W".format(self.id, current_rate, new_rate))
-            if "discharge_rate" in self.base.args:
+            write_watts, write_percent = self.rate_controls("discharge_rate")
+            if write_watts:
                 self.write_and_poll_value(
                     "discharge_rate",
                     self.base.get_arg("discharge_rate", indirect=False, index=self.id),
@@ -2253,7 +2283,7 @@ class Inverter:
                     required_unit="W",
                     fuzzy_below=fuzzy_below,
                 )
-            if "discharge_rate_percent" in self.base.args:
+            if write_percent:
                 self.write_and_poll_value("discharge_rate_percent", self.base.get_arg("discharge_rate_percent", indirect=False, index=self.id, required_unit="%"), min(int(new_rate / self.battery_rate_max_raw * 100), 100), fuzzy=5, required_unit="%")
 
             if notify and self.base.set_inverter_notify:
@@ -2927,6 +2957,87 @@ class Inverter:
                 self.write_and_poll_option("idle_end_time", idle_end_time_id, idle_end)
                 self.idle_end_minutes = idle_end_minutes
 
+    def write_and_poll_gateway_discharge_window(self, new_start, new_end):
+        """Verify a complete Hub slot together, or return None for another provider.
+
+        A start equal to the old end cannot be sent alone while discharging is enabled:
+        it temporarily disables the slot and the Hub correctly refuses it. Sending
+        both bounds also handles swapping the bounds of a midnight-spanning slot.
+        """
+        from ha import run_async
+
+        entities = [self.base.get_arg(name, indirect=False, index=self.id) for name in ("discharge_start_time", "discharge_end_time")]
+        owners = [getattr(self.base, "dashboard_index_app", {}).get(entity) for entity in entities]
+        if "gateway" not in owners:
+            return None
+        components = getattr(self.base, "components", None)
+        gateway = components.get_component("gateway") if components else None
+        names = ("discharge_start_time", "discharge_end_time")
+        target = (new_start, new_end)
+        if gateway is not None and gateway.discharge_window_uses_staging(*entities):
+            return None  # Coordinator slot staging must precede its enable write.
+        if owners != ["gateway", "gateway"] or gateway is None:
+            self.base.record_status(f"Warn: Inverter {self.id} Hub discharge window has inconsistent entity ownership", had_errors=True)
+            return False
+        if not all(self.check_write_entity("write_and_poll_gateway_discharge_window", name, entity, value) for name, entity, value in zip(names, entities, target)):
+            return False
+
+        def read_pair():
+            """Read both endpoint entities without substituting desired values."""
+            return tuple(self.base.get_state_wrapper(entity, refresh=True) for entity in entities)
+
+        before = read_pair()
+        ledger = self.base.control_ledger
+        if ledger is not None:
+            for name, entity, value, wanted in zip(names, entities, before, target):
+                self._ledger_observe(ledger, name, entity, value)
+                if value != wanted:
+                    ledger.note_write_attempt(entity)
+        key = "|".join(entities)
+        verified = before == target
+        for _retry in range(0 if verified else self._write_attempts("discharge_window", key, target)):
+            try:
+                published = run_async(gateway.update_discharge_window(*entities, *target))
+            except Exception as error:
+                # Only reached without a running event loop: inside one, run_async's thread hands
+                # the exception to the thread exception hook and returns None, handled just below
+                self.base.log(f"Warn: Inverter {self.id} Hub discharge window publication failed: {error}")
+                break
+            if published is not True:
+                break
+            # A refusal is final for this cycle (the identical command is not re-sent within the
+            # ack window), so stop waiting as soon as it arrives rather than polling to the timeout
+            self._poll_after_write(entities[0], lambda state: (state == new_start and self.base.get_state_wrapper(entities[1], refresh=True) == new_end) or gateway.discharge_window_refused(*entities, *target))
+            verified = read_pair() == target
+            if not verified and gateway.discharge_window_refused(*entities, *target):
+                break
+            if verified:
+                self.count_register_writes += 1
+                self.registers_moved += sum(old != wanted for old, wanted in zip(before, target))
+                break
+        self._write_backoff_result("discharge_window", key, target, verified)
+        if ledger is not None:
+            for name, entity, value in zip(names, entities, target):
+                if verified:
+                    if before == target:
+                        ledger.record_ownership_from_read(entity, name, value, now=time.time(), generation=self._ledger_generation(entity))
+                    else:
+                        ledger.record_write(entity, name, value, now=time.time(), generation=self._ledger_generation(entity))
+                else:
+                    ledger.clear(entity)
+        if not verified:
+            message = f"Warn: Inverter {self.id} write to Hub discharge window failed: wanted {target}, got {read_pair()}"
+            self.base.log(message)
+            self.base.record_status(message, had_errors=True)
+        return verified
+
+    def gateway_discharge_window_refused(self, new_start, new_end):
+        """Whether the Hub explicitly refused this exact paired discharge window just now."""
+        entities = [self.base.get_arg(name, indirect=False, index=self.id) for name in ("discharge_start_time", "discharge_end_time")]
+        components = getattr(self.base, "components", None)
+        gateway = components.get_component("gateway") if components else None
+        return gateway is not None and gateway.discharge_window_refused(*entities, new_start, new_end)
+
     def adjust_force_export(self, force_export, new_start_time=None, new_end_time=None):
         """
         Adjust force export on/off and set the time window correctly
@@ -3024,8 +3135,33 @@ class Inverter:
         else:
             self.adjust_idle_time(discharge_start="00:00:00", discharge_end="00:00:00")
 
+        # Direct Hub batteries accept the complete slot as one physical write. Do not
+        # enable or enter export mode after a refused, staged or incomplete read-back.
+        # Coordinators retain their existing staged-endpoint then enable sequence.
+        gateway_window = None
+        if (new_start and new_start != old_start) or (new_end and new_end != old_end):
+            gateway_window = self.write_and_poll_gateway_discharge_window(new_start or old_start, new_end or old_end)
+            if gateway_window is False:
+                refused = self.gateway_discharge_window_refused(new_start or old_start, new_end or old_end)
+                if force_export and old_discharge_enable and refused and not getattr(self.base, "set_read_only", False):
+                    # The Hub refused the move, so the previous window is still armed: leaving it
+                    # would keep exporting on a schedule the plan has moved away from, so stop
+                    # exporting until a write lands. Only an explicit refusal does this - a write
+                    # that is merely not confirmed yet (slow ACK, telemetry lag) may well have
+                    # applied, and the plan still wants to export, so it is left running and the
+                    # pending commit retries it. (Without force_export the schedule was already
+                    # turned off above.) The caller is not told: execute.py still reports
+                    # "Exporting" for this cycle, and the next cycle retries the window.
+                    self.log("Warn: Inverter {} Hub refused the discharge window, turning off scheduled export".format(self.id))
+                    self.write_and_poll_switch("scheduled_discharge_enable", self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id), False)
+                    self.adjust_inverter_mode(False)
+                self.record_commit("export_window", (new_start, new_end, force_export), False)
+                return
+            if gateway_window is True:
+                changed_start_end = True
+
         # Change start time
-        if new_start and (new_start != old_start or is_hm_format):
+        if gateway_window is None and new_start and (new_start != old_start or is_hm_format):
             self.base.log("Inverter {} set new export start time to {}".format(self.id, new_start))
             if "discharge_start_time" in self.base.args:
                 # Always write to this as it is the GE default
@@ -3047,7 +3183,7 @@ class Inverter:
                 self.log("Warn: Inverter {} unable write export start time as neither REST or discharge_start_time are set".format(self.id))
 
         # Change end time
-        if new_end and (new_end != old_end or is_hm_format):
+        if gateway_window is None and new_end and (new_end != old_end or is_hm_format):
             self.base.log("Inverter {} Set new export end time to {} was {}".format(self.id, new_end, old_end))
             if "discharge_end_time" in self.base.args:
                 # Always write to this as it is the GE default
@@ -3485,6 +3621,74 @@ class Inverter:
             if not self.call_service_template("discharge_stop_service", service_data_stop, domain="discharge"):
                 self.call_service_template("charge_stop_service", service_data_stop, domain="discharge")
 
+    def write_and_poll_gateway_charge_window(self, new_start, new_end):
+        """Verify a complete Hub slot together, or return None for another provider.
+
+        A start equal to the old end cannot be sent alone while charging is enabled:
+        it temporarily disables the slot and the Hub correctly refuses it. Sending
+        both bounds also handles swapping the bounds of a midnight-spanning slot.
+        """
+        from ha import run_async
+
+        entities = [self.base.get_arg(name, indirect=False, index=self.id) for name in ("charge_start_time", "charge_end_time")]
+        owners = [getattr(self.base, "dashboard_index_app", {}).get(entity) for entity in entities]
+        if "gateway" not in owners:
+            return None
+        components = getattr(self.base, "components", None)
+        gateway = components.get_component("gateway") if components else None
+        names = ("charge_start_time", "charge_end_time")
+        target = (new_start, new_end)
+        if gateway is not None and gateway.charge_window_uses_staging(*entities):
+            return None  # Coordinator slot staging must precede its enable write.
+        if owners != ["gateway", "gateway"] or gateway is None:
+            self.base.record_status(f"Warn: Inverter {self.id} Hub charge window has inconsistent entity ownership", had_errors=True)
+            return False
+        if not all(self.check_write_entity("write_and_poll_gateway_charge_window", name, entity, value) for name, entity, value in zip(names, entities, target)):
+            return False
+
+        def read_pair():
+            """Read both endpoint entities without substituting desired values."""
+            return tuple(self.base.get_state_wrapper(entity, refresh=True) for entity in entities)
+
+        before = read_pair()
+        ledger = self.base.control_ledger
+        if ledger is not None:
+            for name, entity, value, wanted in zip(names, entities, before, target):
+                self._ledger_observe(ledger, name, entity, value)
+                if value != wanted:
+                    ledger.note_write_attempt(entity)
+        key = "|".join(entities)
+        verified = before == target
+        for _retry in range(0 if verified else self._write_attempts("charge_window", key, target)):
+            try:
+                published = run_async(gateway.update_charge_window(*entities, *target))
+            except Exception as error:
+                self.base.log(f"Warn: Inverter {self.id} Hub charge window publication failed: {error}")
+                break
+            if published is not True:
+                break
+            self._poll_after_write(entities[0], lambda state: state == new_start and self.base.get_state_wrapper(entities[1], refresh=True) == new_end)
+            verified = read_pair() == target
+            if verified:
+                self.count_register_writes += 1
+                self.registers_moved += sum(old != wanted for old, wanted in zip(before, target))
+                break
+        self._write_backoff_result("charge_window", key, target, verified)
+        if ledger is not None:
+            for name, entity, value in zip(names, entities, target):
+                if verified:
+                    if before == target:
+                        ledger.record_ownership_from_read(entity, name, value, now=time.time(), generation=self._ledger_generation(entity))
+                    else:
+                        ledger.record_write(entity, name, value, now=time.time(), generation=self._ledger_generation(entity))
+                else:
+                    ledger.clear(entity)
+        if not verified:
+            message = f"Warn: Inverter {self.id} write to Hub charge window failed: wanted {target}, got {read_pair()}"
+            self.base.log(message)
+            self.base.record_status(message, had_errors=True)
+        return verified
+
     def adjust_charge_window(self, charge_start_time, charge_end_time, minutes_now):
         """
         Adjust the charging window times (start and end) in GivTCP
@@ -3556,8 +3760,14 @@ class Inverter:
         # Some inverters have an idle time setting
         self.adjust_idle_time(charge_start=new_start, charge_end=new_end)
 
+        gateway_window = None
+        if new_start != old_start or new_end != old_end:
+            gateway_window = self.write_and_poll_gateway_charge_window(new_start, new_end)
+            if gateway_window is False:
+                return
+
         # Disable charging if required to avoid a blip while the start/end entities are written
-        if not in_new_window and ((new_start != old_start) or (new_end != old_end)) and self.inv_has_charge_enable_time:
+        if gateway_window is None and not in_new_window and ((new_start != old_start) or (new_end != old_end)) and self.inv_has_charge_enable_time:
             self.disable_charge_window(notify=False)
             have_disabled = True
 
@@ -3571,7 +3781,7 @@ class Inverter:
         # Registers this cycle's writes actually moved, for commit_needed() below
         moved_before = self.registers_moved
 
-        if new_start != old_start or (self.inv_charge_time_format in ["H M", "H:M-H:M"]):
+        if gateway_window is None and (new_start != old_start or (self.inv_charge_time_format in ["H M", "H:M-H:M"])):
             if "charge_start_time" in self.base.args:
                 # Always write to this as it is the GE default
                 entity_id_start = self.base.get_arg("charge_start_time", indirect=False, index=self.id)
@@ -3589,7 +3799,7 @@ class Inverter:
                 self.log("Warn: Inverter {} unable write charge window start as neither REST or charge_start_time are set".format(self.id))
 
         # Program end slot
-        if new_end != old_end or (self.inv_charge_time_format in ["H M", "H:M-H:M"]):
+        if gateway_window is None and (new_end != old_end or (self.inv_charge_time_format in ["H M", "H:M-H:M"])):
             if "charge_end_time" in self.base.args:
                 # Always write to this as it is the GE default
                 entity_id_end = self.base.get_arg("charge_end_time", indirect=False, index=self.id)

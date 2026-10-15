@@ -624,6 +624,12 @@ See also **ge_cloud_automatic_split_ct** which takes priority over this setting 
 Use this to override automatic shared-CT detection if Predbat incorrectly identifies your system as sharing a CT clamp (e.g. when duplicate meter serials are reported by the cloud API but the inverters actually have separate CT clamps).
 This setting takes priority over **ge_cloud_automatic_shared_ct** if both are set.
 
+- **gateway_display_only** - Optional, defaults to false. Set to `true` to send prices, costs and the plan timeline to a paired Hub while another integration controls the battery.
+The Hub does not need a discovered inverter. This mode does not configure inverter or EV charger entities, change the selected inverter integration, or publish commands or executable schedules.
+Keep the Hub in enforced standby (including passive mode on supported firmware) before enabling this option or handing control to another integration. The option only prevents this Predbat component from sending writes; it cannot stop an old schedule or autonomous fallback already running on the Hub.
+The existing firmware still needs a local inverter connection for live power flow and battery readings; cloud-fed live readings and pairing without inverter discovery are separate changes.
+This is a display option, not automatic backup switching.
+
 - **gateway_shared_ct** - Optional, defaults to true. The equivalent of **ge_cloud_automatic_shared_ct** for inverters controlled through the Predbat Gateway.
 When `true`, Predbat treats multiple inverters as sharing a single physical CT clamp for grid and load measurement,
 so only the first inverter's grid and load power readings are used (the rest are zeroed out), preventing double-counting of grid import/export and house load.
@@ -655,7 +661,7 @@ See [Components - GivEnergy Cloud Direct](components.md#ev-chargers-gecloud) for
 - **ge_cloud_evc_control** - Optional, defaults to false. When set to `true`, Predbat starts and stops your GivEnergy EV charger from its
 car charging plan, in the same way it can drive a myenergi Zappi or an Ohme charger. Charger N follows car N. Needs **ge_cloud_automatic_evc**,
 since it is that setting which maps each charger to a car.
-A `switch.predbat_gecloud_evc_control` entity appears when this is set, on by default, so you can hand the charger back without editing
+A `switch.predbat_gecloud_evc_control` entity appears when control is on, on by default, so you can hand the charger back without editing
 `apps.yaml`; releasing sends a start command if Predbat had stopped the charger, so a car is never left unable to charge.
 Read only mode releases the chargers in the same way.
 See [Components - Charger control](components.md#charger-control-gecloud) for the details.
@@ -2170,7 +2176,7 @@ no hub, use the serial of the device acting as one, which is the Zappi or Eddi t
 - **myenergi_automatic_eddi** - Set to `false` to wire only the Zappi half of the automatic configuration, leaving your Eddi out of **iboost_energy_today** (default: `true`). This is what to use if your hot water diversion is handled elsewhere but you still want your Zappis wired as cars
 - **myenergi_enable_controls** - Set to `false` for monitor-only operation (default: `true`)
 - **myenergi_poll_seconds** - Poll interval in seconds, rounded to the nearest whole multiple of 60, minimum 60 and maximum 1800 (default: `60`)
-- **myenergi_zappi_control** - Set to `true` to let Predbat drive your Zappi from its car charging plan: Fast inside a planned charging window, Stopped outside one (default: `false`). Needs **myenergi_automatic**, **myenergi_automatic_zappi** and **myenergi_enable_controls**, since it is automatic configuration that maps each Zappi to a car. A `switch.predbat_myenergi_zappi_control` entity appears when this is set, on by default, so you can hand the Zappi back without editing apps.yaml; releasing restores the mode the Zappi had before Predbat took over, or Eco+ when nothing was saved. Note the manual boost switch will refuse while control is on, as myenergi only accepts a boost in Eco or Eco+.
+- **myenergi_zappi_control** - Lets Predbat drive your Zappi from its car charging plan: Fast inside a planned charging window, Stopped outside one (default: `false`). Leave it off to keep Eco/Eco+ solar diversion between charging windows. Needs **myenergi_automatic**, **myenergi_automatic_zappi** and **myenergi_enable_controls**, since it is automatic configuration that maps each Zappi to a car. A `switch.predbat_myenergi_zappi_control` entity appears when control is on, on by default, so you can hand the Zappi back without editing apps.yaml; releasing restores the mode the Zappi had before Predbat took over, or Eco+ when nothing was saved. Note the manual boost switch will refuse while control is on, as myenergi only accepts a boost in Eco or Eco+.
 
 The component only starts when at least one of `myenergi_api_key`, `myenergi_key` or `myenergi_token_hash` is set. That test is a plain any-of and does not look at `myenergi_auth_method`, so a credential belonging to the transport you did not select still starts the component — it then logs which setting is missing rather than failing silently.
 
