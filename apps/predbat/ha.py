@@ -836,8 +836,10 @@ class HAInterface(ComponentBase):
                                         error_count += 1
 
                 except (ClientError, asyncio.TimeoutError, ConnectionError) as e:
-                    if isinstance(e, WSServerHandshakeError) and e.status not in HA_RESTARTING_STATUSES:
-                        # Home Assistant answered but refused the upgrade (wrong URL path, a proxy rejecting us...), which waiting will not fix
+                    if isinstance(e, WSServerHandshakeError) and e.status < 500:
+                        # Home Assistant answered but refused the upgrade (wrong URL path, a proxy rejecting us...), which waiting will not fix.
+                        # Any 5xx is a server-side failure, not ours: besides the usual 502/503/504, proxies answer for a restarting
+                        # Home Assistant with others (a plain 500, Cloudflare's 520-530), so those are ridden out as an outage below.
                         self.log("Error: Web Socket handshake rejected with HTTP {}: {}".format(e.status, e))
                         error_count += 1
                     else:
