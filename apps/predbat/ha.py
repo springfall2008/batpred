@@ -46,9 +46,10 @@ HA_OUTAGE_LIMIT_SECONDS = 15 * 60
 HA_OUTAGE_GAP_SECONDS = 10 * 60
 
 # HTTP statuses a gateway or proxy in front of Home Assistant returns while it is restarting: 502/503/504, and
-# Cloudflare's 520-530 (origin unreachable, timed out, tunnel down...). Not 500 or 501, which a proxy that is
-# misconfigured or cannot do the Web Socket upgrade keeps sending, and which Home Assistant itself can send.
-HA_RESTARTING_STATUSES = (502, 503, 504) + tuple(range(520, 531))
+# Cloudflare's origin-down family (520 empty reply, 521 refused, 522/524 timed out, 523 unreachable, 530 tunnel down).
+# Not Cloudflare's 525/526 (TLS to the origin failed, a certificate problem waiting will not fix), nor 500 or 501,
+# which a misconfigured proxy or one that cannot do the Web Socket upgrade keeps sending, and Home Assistant itself can send 500.
+HA_RESTARTING_STATUSES = (502, 503, 504, 520, 521, 522, 523, 524, 530)
 
 # Pause between attempts to reach Home Assistant while it is not ready, doubling up to the maximum
 HA_RETRY_SECONDS = 5

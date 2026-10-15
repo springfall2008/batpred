@@ -1191,11 +1191,11 @@ def test_hainterface_socketloop_auth_ok_ends_outage(my_predbat=None):
 
 
 def test_hainterface_socketloop_handshake_rejection(my_predbat=None):
-    """Test a Web Socket upgrade refused for good (404/401, or a 500/501 a proxy will keep sending) stops after 10 attempts, but a gateway answering for a restarting Home Assistant (502-504, Cloudflare's 520-530) is an outage"""
+    """Test a refused Web Socket upgrade (404/401/500/501, Cloudflare 526) stops after 10 attempts, but a gateway status for a restarting HA (HA_RESTARTING_STATUSES) is an outage"""
     print("\n=== Testing HAInterface socketLoop() handshake rejection ===")
     failed = 0
 
-    for status, expect_fatal_after in ((404, 10), (401, 10), (500, 10), (501, 10), (502, None), (503, None), (504, None), (520, None), (530, None)):
+    for status, expect_fatal_after in ((404, 10), (401, 10), (500, 10), (501, 10), (526, 10), (502, None), (503, None), (504, None), (520, None), (530, None)):
         mock_base = MockBase()
         ha_interface = create_ha_interface(mock_base, ha_key="test_key", ha_url="http://localhost:8123")
         error = WSServerHandshakeError(MagicMock(), (), status=status, message="handshake")
