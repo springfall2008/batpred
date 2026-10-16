@@ -17,8 +17,10 @@ import tracemalloc
 import yaml
 
 from coordinator import Coordinator
+from const import REPEAT_FULL_LOG_SECONDS
 from inverter import Inverter
 from userinterface import dump_debug_yaml
+from utils import RepeatLogGate
 
 
 def _plant_inverter(my_predbat):
@@ -358,6 +360,52 @@ def test_debug_yaml_includes_redacted_discovery_catalogue(my_predbat=None):
     return 1 if failed else 0
 
 
+def test_debug_yaml_with_a_populated_log_gate_loads(my_predbat=None):
+    """
+    A debug yaml written after an Intelligent slot list has been logged must still load (#5569).
+
+    io_slot_log_gate keys its history by tuples such as (("slots", car_n), hash). yaml.dump() writes
+    the gate out as a python/object whose dict keys are YAML sequences, and loading that back fails
+    with "found unhashable key" - so no dump from an Octopus Intelligent user could be replayed. The
+    gate's history is runtime bookkeeping a replay does not need, so it is kept out of the dump.
+
+    Mutation check: removing "io_slot_log_gate" from DEBUG_EXCLUDE_LIST fails this.
+    """
+    failed = False
+    print("**** Testing a debug yaml with a populated io_slot_log_gate loads back ****")
+
+    original_gate = my_predbat.io_slot_log_gate
+    try:
+        my_predbat.io_slot_log_gate = RepeatLogGate(REPEAT_FULL_LOG_SECONDS)
+        my_predbat.io_slot_log_gate.log(lambda line: None, ("slots", 0), "Intelligent slot at 23:30", ["Intelligent slot at 23:30"], None)
+        if not my_predbat.io_slot_log_gate.logged:
+            print("ERROR: the gate recorded nothing, so this test is not exercising a populated gate")
+            return 1
+
+        text = my_predbat.create_debug_yaml(write_file=False)
+        try:
+            debug = yaml.unsafe_load(text)
+        except yaml.YAMLError as e:
+            print("ERROR: the debug yaml with a populated log gate does not load: {}".format(e))
+            return 1
+
+        if "io_slot_log_gate" in debug:
+            print("ERROR: io_slot_log_gate was written into the debug yaml")
+            failed = True
+        if "RepeatLogGate" in text:
+            print("ERROR: a RepeatLogGate was written into the debug yaml")
+            failed = True
+        if "CONFIG_ITEMS" not in debug:
+            print("ERROR: the debug yaml lost CONFIG_ITEMS")
+            failed = True
+    finally:
+        my_predbat.io_slot_log_gate = original_gate
+
+    if not failed:
+        print("PASS: the debug yaml leaves out io_slot_log_gate and loads back")
+    return 1 if failed else 0
+
+
 def run_debug_yaml_scope_tests(my_predbat):
     """Run every create_debug_yaml() scope test, returning a non-zero count on failure."""
     failed = 0
@@ -367,4 +415,5 @@ def run_debug_yaml_scope_tests(my_predbat):
     failed += test_per_key_dump_bounds_the_node_tree(my_predbat)
     failed += test_create_debug_yaml_file_matches_the_string(my_predbat)
     failed += test_debug_yaml_includes_redacted_discovery_catalogue(my_predbat)
+    failed += test_debug_yaml_with_a_populated_log_gate_loads(my_predbat)
     return failed
