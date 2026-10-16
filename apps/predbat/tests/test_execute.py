@@ -1431,6 +1431,7 @@ def test_control_monitor_charging_counts_once(my_predbat):
     """
     saved_monitor = my_predbat.control_monitor
     saved_log = my_predbat.log
+    saved_power = [inverter.battery_power for inverter in my_predbat.inverters]
     my_predbat.control_monitor = ControlMonitor()
     lines = []
     failed = False
@@ -1461,8 +1462,8 @@ def test_control_monitor_charging_counts_once(my_predbat):
     finally:
         my_predbat.log = saved_log
         my_predbat.control_monitor = saved_monitor
-        for inverter in my_predbat.inverters:
-            inverter.battery_power = 0
+        for inverter, power in zip(my_predbat.inverters, saved_power):
+            inverter.battery_power = power
     return failed
 
 
@@ -1545,6 +1546,7 @@ def test_control_monitor_read_only_between_plan_runs(my_predbat):
     """Read-only switched on after the plan ran: the next poll clears the expectations and counts nothing."""
     saved_monitor = my_predbat.control_monitor
     saved_read_only = my_predbat.set_read_only
+    saved_power = [inverter.battery_power for inverter in my_predbat.inverters]
     my_predbat.control_monitor = ControlMonitor()
     failed = False
     try:
@@ -1563,6 +1565,8 @@ def test_control_monitor_read_only_between_plan_runs(my_predbat):
     finally:
         my_predbat.set_read_only = saved_read_only
         my_predbat.control_monitor = saved_monitor
+        for inverter, power in zip(my_predbat.inverters, saved_power):
+            inverter.battery_power = power
     return failed
 
 
@@ -4587,6 +4591,18 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
+    for control_monitor_test in (
+        test_control_monitor_charging_counts_once,
+        test_control_monitor_exporting_expectation,
+        test_control_monitor_read_only_records_nothing,
+        test_control_monitor_read_only_between_plan_runs,
+        test_control_monitor_calibration_records_nothing,
+        test_control_monitor_uses_written_rate,
+    ):
+        failed |= control_monitor_test(my_predbat)
+        if failed:
+            return failed
+
     return failed
 
 
@@ -4683,17 +4699,5 @@ def test_freeze_flags_do_not_leak_between_scenarios(my_predbat):
         if actual != expected:
             print("ERROR: {} leaked from the previous scenario - is {} but config says {}".format(name, actual, expected))
             failed = True
-
-    for control_monitor_test in (
-        test_control_monitor_charging_counts_once,
-        test_control_monitor_exporting_expectation,
-        test_control_monitor_read_only_records_nothing,
-        test_control_monitor_read_only_between_plan_runs,
-        test_control_monitor_calibration_records_nothing,
-        test_control_monitor_uses_written_rate,
-    ):
-        failed |= control_monitor_test(my_predbat)
-        if failed:
-            return failed
 
     return failed
