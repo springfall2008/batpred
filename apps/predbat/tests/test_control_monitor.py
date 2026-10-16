@@ -13,6 +13,10 @@ ignored Predbat when it was ramping up, legitimately limited, or simply not yet 
 these tests therefore assert SILENCE, and the ones that expect a failure check it fires exactly once.
 """
 
+import json
+
+import pytz
+
 from control_monitor import (
     ControlMonitor,
     judge_reading,
@@ -22,6 +26,8 @@ from control_monitor import (
     MODE_FREEZE_EXPORTING,
     GRACE_S,
     FLOOR_W,
+    format_failure,
+    DEFAULT_WINDOW_S,
 )
 
 # 2023-11-14 00:00:00 UTC, so slot times format as 00:00-01:00 in UTC
@@ -314,6 +320,127 @@ def test_clear_keeps_events():
     return False
 
 
+def make_event(at, mode=MODE_CHARGING, inverter_id=0, slot_start=SLOT_START, failed_minutes=2.0):
+    """A well-formed event as it would be read back from the sensor attribute."""
+    return {"inverter": inverter_id, "mode": mode, "slot_start": slot_start, "slot_end": slot_start + 3600, "at": at, "requested_w": 3000, "measured_w": 0, "failed_minutes": failed_minutes}
+
+
+def test_recent_and_prune():
+    """recent_events() and prune() use the 24h window; prune keeps an event a live slot still owns."""
+    monitor = ControlMonitor()
+    monitor.events = [make_event(T0, slot_start=T0), make_event(T0 + DEFAULT_WINDOW_S + 100, slot_start=T0 + DEFAULT_WINDOW_S)]
+    now = T0 + DEFAULT_WINDOW_S + 200
+    if [event["at"] for event in monitor.recent_events(now)] != [T0 + DEFAULT_WINDOW_S + 100]:
+        print("ERROR: recent_events returned {}".format(monitor.recent_events(now)))
+        return True
+    monitor.tracking[0] = {"event": monitor.events[0]}
+    monitor.prune(now)
+    if len(monitor.events) != 2:
+        print("ERROR: prune dropped an event still attached to a live slot")
+        return True
+    monitor.tracking.clear()
+    monitor.prune(now)
+    if len(monitor.events) != 1:
+        print("ERROR: prune kept an expired event: {}".format(monitor.events))
+        return True
+    return False
+
+
+def test_newest_events_and_by_mode():
+    """newest_events keeps the newest N oldest-first; by_mode counts per mode."""
+    monitor = ControlMonitor()
+    monitor.events = [make_event(T0 + i, slot_start=T0 + i) for i in range(25)]
+    newest = monitor.newest_events(20)
+    if len(newest) != 20 or newest[0]["at"] != T0 + 5 or newest[-1]["at"] != T0 + 24:
+        print("ERROR: newest_events(20) returned the wrong slice")
+        return True
+    counts = ControlMonitor.by_mode([make_event(T0), make_event(T0 + 1, mode=MODE_EXPORTING), make_event(T0 + 2)])
+    if counts != {MODE_CHARGING: 2, MODE_EXPORTING: 1}:
+        print("ERROR: by_mode returned {}".format(counts))
+        return True
+    return False
+
+
+def test_restore_merges_and_dedupes():
+    """Restore merges valid events by key (keeping the larger minutes), skips junk, sorts by time."""
+    monitor = ControlMonitor()
+    monitor.events = [make_event(T0 + 50, slot_start=T0, failed_minutes=2.0)]
+    restored = [
+        make_event(T0 + 50, slot_start=T0, failed_minutes=5.0),
+        make_event(T0 + 10, slot_start=T0 + 7200),
+        {"inverter": 0, "mode": "Demand", "slot_start": T0, "slot_end": T0, "at": T0, "failed_minutes": 0},
+        {"inverter": True, "mode": MODE_CHARGING, "slot_start": T0, "slot_end": T0, "at": T0, "failed_minutes": 0},
+        "not an event",
+    ]
+    if not monitor.restore(restored, "7"):
+        print("ERROR: restore with a numeric total did not resolve")
+        return True
+    if len(monitor.events) != 2 or monitor.events[0]["at"] != T0 + 10:
+        print("ERROR: merged events wrong or unsorted: {}".format(monitor.events))
+        return True
+    if not close(monitor.events[1]["failed_minutes"], 5.0):
+        print("ERROR: duplicate did not keep the larger failed_minutes")
+        return True
+    if monitor.total != 7 or not monitor.restored:
+        print("ERROR: total {} restored {}".format(monitor.total, monitor.restored))
+        return True
+    return False
+
+
+def test_restore_total_adds_once():
+    """The total merges as restored + counted, once; unreadable totals leave it unresolved."""
+    monitor = ControlMonitor()
+    for unreadable in (None, "unavailable", "nan", "inf", "-3"):
+        if monitor.restore([], unreadable) or monitor.restored:
+            print("ERROR: restore resolved on unreadable total {!r}".format(unreadable))
+            return True
+    monitor.total = 2  # failures counted by this process before the restore resolved
+    if not monitor.restore([], "5") or monitor.total != 7:
+        print("ERROR: expected restored + counted = 7, got {}".format(monitor.total))
+        return True
+    monitor.restore([], "5")
+    if monitor.total != 7:
+        print("ERROR: a second restore added the total again: {}".format(monitor.total))
+        return True
+    return False
+
+
+def test_restart_mid_slot_does_not_recount():
+    """After a restart mid-slot (plan now on the next contiguous window) the slot is not re-counted."""
+    first = charging_monitor()
+    feed(first, [240, GRACE_S, GRACE_S + 60, GRACE_S + 120], power=0)
+    stored = json.loads(json.dumps(first.newest_events(20)))  # what HA hands back
+
+    second = ControlMonitor()
+    second.restore(stored, "1")
+    second.set_expectation(0, MODE_CHARGING, SLOT_START + 1800, SLOT_END + 1800, 80.0, T0 + 2000)
+    if feed(second, [2300, 2360, 2420, 2480], power=0) or second.total != 1:
+        print("ERROR: restart re-counted the slot, total {}".format(second.total))
+        return True
+    if not second.events[0]["failed_minutes"] > stored[0]["failed_minutes"]:
+        print("ERROR: restored event did not keep accruing minutes")
+        return True
+    return False
+
+
+def test_format_failure():
+    """The Warn: line names the inverter, mode, slot and the power shortfall."""
+    failed = False
+    cases = [
+        (make_event(T0), "Warn: Control failure: inverter 0 Charging 00:00-01:00 - battery idle vs 3000W charge requested"),
+        (dict(make_event(T0), measured_w=-120), "Warn: Control failure: inverter 0 Charging 00:00-01:00 - battery charging at 120W vs 3000W charge requested"),
+        (dict(make_event(T0, mode=MODE_EXPORTING), requested_w=2000, measured_w=300), "Warn: Control failure: inverter 0 Exporting 00:00-01:00 - battery discharging at 300W vs 2000W discharge requested"),
+        (dict(make_event(T0, mode=MODE_FREEZE_CHARGING), requested_w=None, measured_w=450), "Warn: Control failure: inverter 0 Freeze charging 00:00-01:00 - battery discharging at 450W, Freeze charging allows at most 200W discharge"),
+        (dict(make_event(T0, mode=MODE_FREEZE_EXPORTING, inverter_id=1), requested_w=None, measured_w=-450), "Warn: Control failure: inverter 1 Freeze exporting 00:00-01:00 - battery charging at 450W, Freeze exporting allows at most 200W charge"),
+    ]
+    for event, expected in cases:
+        got = format_failure(event, pytz.utc)
+        if got != expected:
+            print("ERROR: format_failure gave\n  {}\nexpected\n  {}".format(got, expected))
+            failed = True
+    return failed
+
+
 def run_control_monitor_tests(my_predbat):
     """Run all control failure monitor tests."""
     failed = False
@@ -334,6 +461,12 @@ def run_control_monitor_tests(my_predbat):
         ("gap_is_capped", test_gap_is_capped),
         ("close_readings_ignored", test_close_readings_are_ignored),
         ("clear_keeps_events", test_clear_keeps_events),
+        ("recent_and_prune", test_recent_and_prune),
+        ("newest_and_by_mode", test_newest_events_and_by_mode),
+        ("restore_merges_dedupes", test_restore_merges_and_dedupes),
+        ("restore_total_adds_once", test_restore_total_adds_once),
+        ("restart_mid_slot", test_restart_mid_slot_does_not_recount),
+        ("format_failure", test_format_failure),
     ]:
         print("**** control_monitor: {} ****".format(name))
         if fn():

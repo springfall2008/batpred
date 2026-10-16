@@ -20,6 +20,8 @@ before anything is reported. Each failed slot is reported, and counted, once.
 This module has no engine dependencies so it can be tested standalone.
 """
 
+from datetime import datetime
+
 
 MODE_CHARGING = "Charging"
 MODE_EXPORTING = "Exporting"
@@ -51,6 +53,23 @@ def event_key(event):
     return (event.get("inverter"), event.get("mode"), event.get("slot_start"))
 
 
+def _is_number(value):
+    """True for an int or float that is not a bool."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def is_valid_event(event):
+    """True when a restored event has every field the monitor relies on, with sane types."""
+    if not isinstance(event, dict):
+        return False
+    inverter_id = event.get("inverter")
+    if not isinstance(inverter_id, int) or isinstance(inverter_id, bool):
+        return False
+    if event.get("mode") not in JUDGED_MODES:
+        return False
+    return all(_is_number(event.get(field)) for field in ("slot_start", "slot_end", "at", "failed_minutes"))
+
+
 def judge_reading(mode, requested_w, target_percent, battery_power_w, soc_percent):
     """
     Judge one reading against the mode Predbat commanded.
@@ -74,6 +93,32 @@ def judge_reading(mode, requested_w, target_percent, battery_power_w, soc_percen
     if mode == MODE_FREEZE_EXPORTING:
         return -battery_power_w > FLOOR_W
     return None
+
+
+def format_failure(event, tz=None):
+    """Return the one-line Warn: log message for a newly confirmed failure."""
+
+    def clock(timestamp):
+        """Format an epoch timestamp as HH:MM in tz."""
+        return datetime.fromtimestamp(timestamp, tz).strftime("%H:%M")
+
+    measured = int(event.get("measured_w") or 0)
+    if measured < 0:
+        power_text = "battery charging at {}W".format(-measured)
+    elif measured > 0:
+        power_text = "battery discharging at {}W".format(measured)
+    else:
+        power_text = "battery idle"
+    mode = event["mode"]
+    if mode == MODE_CHARGING:
+        detail = "{} vs {}W charge requested".format(power_text, int(event["requested_w"]))
+    elif mode == MODE_EXPORTING:
+        detail = "{} vs {}W discharge requested".format(power_text, int(event["requested_w"]))
+    elif mode == MODE_FREEZE_CHARGING:
+        detail = "{}, {} allows at most {}W discharge".format(power_text, mode, FLOOR_W)
+    else:
+        detail = "{}, {} allows at most {}W charge".format(power_text, mode, FLOOR_W)
+    return "Warn: Control failure: inverter {} {} {}-{} - {}".format(event["inverter"], mode, clock(event["slot_start"]), clock(event["slot_end"]), detail)
 
 
 class ControlMonitor:
@@ -196,3 +241,58 @@ class ControlMonitor:
         track["event"] = event
         self.total += 1
         return event
+
+    def recent_events(self, now, window_s=DEFAULT_WINDOW_S):
+        """Return the events confirmed within the last window_s seconds, oldest first."""
+        return [event for event in self.events if event["at"] >= now - window_s]
+
+    def newest_events(self, limit):
+        """Return the newest limit events, oldest first - the list published as the durable store."""
+        return self.events[-limit:] if limit > 0 else []
+
+    def prune(self, now, window_s=DEFAULT_WINDOW_S):
+        """Drop events older than the window, except one still attached to a live slot."""
+        live = [track.get("event") for track in self.tracking.values() if track.get("event") is not None]
+        self.events = [event for event in self.events if event["at"] >= now - window_s or any(event is owned for owned in live)]
+
+    @staticmethod
+    def by_mode(events):
+        """Count events per mode."""
+        counts = {}
+        for event in events:
+            counts[event["mode"]] = counts.get(event["mode"], 0) + 1
+        return counts
+
+    def restore(self, events, total):
+        """
+        Merge the events and lifetime total read back from the sensors after a restart.
+
+        Events are merged on every call, de-duplicated by event_key and keeping the larger
+        failed_minutes. The total is merged once, the first time it reads as a number, as
+        restored + total: until then the in-memory total holds only failures counted by this
+        process, and taking the max would drop them.
+
+        Returns:
+            True once the total has been restored, now or on an earlier call.
+        """
+        if isinstance(events, list):
+            for item in events:
+                if not is_valid_event(item):
+                    continue
+                existing = next((event for event in self.events if event_key(event) == event_key(item)), None)
+                if existing is None:
+                    self.events.append(dict(item))
+                else:
+                    existing["failed_minutes"] = max(existing["failed_minutes"], item["failed_minutes"])
+            self.events.sort(key=lambda event: event["at"])
+        if self.restored:
+            return True
+        try:
+            restored_total = int(float(total))
+        except (TypeError, ValueError, OverflowError):
+            return False
+        if restored_total < 0:
+            return False
+        self.total += restored_total
+        self.restored = True
+        return True
