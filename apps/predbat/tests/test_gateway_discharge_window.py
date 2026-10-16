@@ -9,7 +9,7 @@ import types
 import unittest
 from unittest.mock import MagicMock, patch
 
-from gateway import GatewayMQTT, GATEWAY_COORDINATOR_TYPES
+from gateway import GatewayMQTT
 from inverter import Inverter
 from tests.test_gateway import TestCommandAck
 
@@ -249,28 +249,6 @@ class TestGatewayDischargeWindow(unittest.TestCase):
         self.assertEqual(len(wire), 1)
         self.assertFalse(base.services)
         inv.adjust_inverter_mode.assert_not_called()
-
-    def test_other_provider_and_coordinator_keep_individual_sequence(self):
-        """Only direct Hub inverters opt into the new pair and verification gate."""
-        for kind in (None, *GATEWAY_COORDINATOR_TYPES):
-            inv, gw, base, wire, mode = self.fixture()
-            if kind is None:
-                base.dashboard_index_app = {entity: "gecloud" for entity in base.args.values()}
-            else:
-                gw._discovery = {"CE123456789": {"type": kind}}
-            self.apply(inv)
-            self.assertEqual([json.loads(command["schedule_json"]) for command in wire if command["command"] == "set_discharge_slot"], [{"start": 255}, {"end": 301}])
-            self.assertEqual(wire[-1]["command"], "set_discharge_enable")
-
-    def test_coordinator_with_partial_ownership_keeps_staged_sequence(self):
-        """A coordinator is identified before ownership checks, so it is never refused by them."""
-        for kind in GATEWAY_COORDINATOR_TYPES:
-            inv, gw, base, wire, mode = self.fixture()
-            gw._discovery = {"CE123456789": {"type": kind}}
-            base.dashboard_index_app[base.END] = None
-            self.apply(inv)
-            self.assertFalse(any("inconsistent entity ownership" in error for error in base.errors), kind)
-            self.assertEqual([json.loads(command["schedule_json"]) for command in wire if command["command"] == "set_discharge_slot"], [{"start": 255}, {"end": 301}])
 
     def test_disable_and_midnight_zero_window_remain_valid(self):
         """A disable request never activates export and may program midnight endpoints."""

@@ -66,6 +66,11 @@ _COMMAND_ACK_WINDOW = 30
 # counts (matches the number of recent ids the hub remembers for replay protection)
 _COMMAND_ACK_IDS_KEPT = 16
 
+# A slot window staged by a select write is shown in place of the Hub's schedule until the
+# schedule write switch sends it. One nobody sends (a manual edit with no press) is dropped
+# after this long, so the selects show the Hub's own schedule again (seconds).
+_STAGED_EXPIRY_SECONDS = 600
+
 
 def _split_same_day_plan_entries(entries):
     """Split native EMS windows into same-day pieces on the plan's absolute timeline.
@@ -422,6 +427,9 @@ class GatewayMQTT(ComponentBase):
         self._ack_subscribed = False  # broker granted the ack subscription on this connection
         self._acks_seen = False  # at least one ack matched a tracked command on this connection
         self._ack_subscribe_warned = False  # the denied-subscription warning is logged once
+        # Slot windows written but not yet sent to the Hub: (serial suffix, "charge"|"discharge") ->
+        # {start, end (HHMM or None), enable (bool or None), at (_monotonic)}. See _stage_slot().
+        self._staged = {}
 
         # Predbat data publish state (price/timeline for device display)
         self._last_predbat_data = None
@@ -1382,8 +1390,12 @@ class GatewayMQTT(ComponentBase):
             self.dashboard_item(f"sensor.{pfx}_inverter_rate_max", inverter_rate_max, attributes=GATEWAY_ATTRIBUTE_TABLE.get("inverter_rate_max", {}), app="gateway")
 
         control = inv.control
-        self.dashboard_item(f"switch.{pfx}_charge_enabled", "on" if control.charge_enabled else "off", attributes=GATEWAY_ATTRIBUTE_TABLE.get("charge_enabled", {}), app="gateway")
-        self.dashboard_item(f"switch.{pfx}_discharge_enabled", "on" if control.discharge_enabled else "off", attributes=GATEWAY_ATTRIBUTE_TABLE.get("discharge_enabled", {}), app="gateway")
+        # A window waiting for the schedule write shows its staged values, not telemetry
+        for side, enabled in (("charge", control.charge_enabled), ("discharge", control.discharge_enabled)):
+            staged = self._staged_entry(suffix, side)
+            if staged is not None and staged["enable"] is not None:
+                enabled = staged["enable"]
+            self.dashboard_item(f"switch.{pfx}_{side}_enabled", "on" if enabled else "off", attributes=GATEWAY_ATTRIBUTE_TABLE.get(f"{side}_enabled", {}), app="gateway")
         # Proto sentinel: 0=undefined→publish 99999 (unlimited), 1=zero limit→publish 0, otherwise use value as-is.
         # Undefined only means unlimited for an inverter that has never reported a limit.
         _raw_export_limit = self._last_rating(suffix, "export_limit", control.export_limit_w) or record.get("export_limit_w") or 0
@@ -1427,12 +1439,11 @@ class GatewayMQTT(ComponentBase):
             ("discharge_end", "discharge_slot1_end"),
         ]:
             hhmm = getattr(sched, field, 0) if sched else 0
-            attributes = GATEWAY_ATTRIBUTE_TABLE.get(name, {}).copy()
-            # An EMS only accepts same-day windows, even though other Hub inverters
-            # can cross midnight. Keep the capability on this device's entities.
-            if inv.type == pb.INVERTER_TYPE_GIVENERGY_EMS:
-                attributes["can_span_midnight"] = False
-            self.dashboard_item(f"select.{pfx}_{name}", self._hhmm_to_time_str(hhmm), attributes=attributes, app="gateway")
+            side, endpoint = field.split("_")
+            staged = self._staged_entry(suffix, side)
+            if staged is not None and staged[endpoint] is not None:
+                hhmm = staged[endpoint]
+            self.dashboard_item(f"select.{pfx}_{name}", self._hhmm_to_time_str(hhmm), attributes=self._slot_attributes(name, inv.type), app="gateway")
 
         # Inverter time (from GatewayStatus timestamp for clock drift detection)
         if self._last_status and self._last_status.timestamp:
@@ -2729,6 +2740,10 @@ class GatewayMQTT(ComponentBase):
     async def select_event(self, entity_id, value):
         """Handle schedule select entity changes.
 
+        A slot start or end is staged, not sent: the Hub only ever gets the complete window,
+        when the schedule write switch is pressed. A start sent on its own that equals the
+        old end is a zero-length window, which an enabled EMS refuses.
+
         Args:
             entity_id: The entity ID that changed.
             value: The new selected value (HH:MM:SS).
@@ -2739,20 +2754,66 @@ class GatewayMQTT(ComponentBase):
         if serial is None:
             self.log(f"Warn: GatewayMQTT: select_event: cannot resolve serial for entity '{entity_id}' — command not sent")
             return
-        # Schedule time changes — convert HH:MM:SS to HHMM and send slot command
-        time_str = str(value).strip()
-        parts = time_str.split(":")
-        if len(parts) >= 2:
-            try:
-                hhmm = int(parts[0]) * 100 + int(parts[1])
-            except (ValueError, IndexError):
-                return
+        hhmm = self._time_str_to_hhmm(value)
+        if hhmm is None:
+            return
+        for side in ("discharge", "charge"):
+            for field in ("start", "end"):
+                if entity_id.endswith(f"_{side}_slot1_{field}"):
+                    self._stage_slot(entity_id, serial, side, field, hhmm)
+                    return
 
-            if "_discharge_slot1_start" in entity_id or "_discharge_slot1_end" in entity_id:
-                await self._update_discharge_slot(entity_id, hhmm, serial=serial)
-            elif "_charge_slot1_start" in entity_id or "_charge_slot1_end" in entity_id:
-                # Read current charge slot times to send both start and end
-                await self._update_charge_slot(entity_id, hhmm, serial=serial)
+    @staticmethod
+    def _time_str_to_hhmm(value):
+        """Convert an HH:MM[:SS] string to an HHMM integer, or None if it does not parse."""
+        parts = str(value).strip().split(":")
+        if len(parts) < 2:
+            return None
+        try:
+            return int(parts[0]) * 100 + int(parts[1])
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _slot_attributes(name, inv_type):
+        """Attributes for a slot select; an EMS only accepts same-day windows, unlike other Hub inverters."""
+        attributes = GATEWAY_ATTRIBUTE_TABLE.get(name, {}).copy()
+        if inv_type == pb.INVERTER_TYPE_GIVENERGY_EMS:
+            attributes["can_span_midnight"] = False
+        return attributes
+
+    def _staged_entry(self, suffix, side):
+        """The staged window for one side of an inverter, or None. Drops one that has expired."""
+        key = (suffix, side)
+        entry = getattr(self, "_staged", {}).get(key)
+        if entry is not None and _monotonic() - entry["at"] > _STAGED_EXPIRY_SECONDS:
+            self.log(f"Warn: GatewayMQTT: staged {side} window for {suffix} was never written to the Hub, showing the Hub's schedule again")
+            self._staged = {kept_key: kept for kept_key, kept in self._staged.items() if kept_key != key}
+            return None
+        return entry
+
+    def _stage_slot(self, entity_id, serial, side, field, hhmm):
+        """Hold one slot endpoint until the schedule write switch sends the complete window.
+
+        The other endpoint starts from what its select shows, so the staged pair is always the
+        complete window the Hub should end up with.
+        """
+        suffix = _serial_suffix(serial)
+        entry = self._staged_entry(suffix, side)
+        if entry is None:
+            other = "end" if field == "start" else "start"
+            entry = {"start": None, "end": None, "enable": None}
+            entry[other] = self._time_str_to_hhmm(self.get_state_wrapper(entity_id[: -len(field)] + other))
+        entry = {**entry, field: hhmm, "at": _monotonic()}
+        self._staged = {**getattr(self, "_staged", {}), (suffix, side): entry}
+        inv_type = getattr(self, "_discovery", {}).get(serial.upper(), {}).get("type")
+        self.dashboard_item(entity_id, self._hhmm_to_time_str(hhmm), attributes=self._slot_attributes(f"{side}_slot1_{field}", inv_type), app="gateway")
+        self.log(f"Info: GatewayMQTT: {side} slot {field} {hhmm:04d} for {serial} staged until the schedule is written")
+
+    def _clear_staged(self, serial, side):
+        """Forget a staged window, so its selects follow the Hub's schedule again."""
+        key = (_serial_suffix(serial), side)
+        self._staged = {kept_key: kept for kept_key, kept in getattr(self, "_staged", {}).items() if kept_key != key}
 
     def charge_window_uses_staging(self, start_entity, end_entity):
         """Identify a coordinator synchronously, before crossing an async bridge."""
@@ -2791,16 +2852,6 @@ class GatewayMQTT(ComponentBase):
         schedule = {field: value.hour * 100 + value.minute for field, value in zip(("start", "end"), times)}
         await self._send_control(start_entity, "set_charge_slot", schedule_json=json.dumps(schedule), serial=serial)
         return True
-
-    async def _update_charge_slot(self, entity_id, hhmm, serial):
-        """Send set_charge_slot command with updated start or end time."""
-        # Determine which field changed
-        if "_start" in entity_id:
-            schedule = {"start": hhmm}
-        else:
-            schedule = {"end": hhmm}
-        await self._send_control(entity_id, "set_charge_slot", schedule_json=json.dumps(schedule), serial=serial)
-        self.log(f"Info: GatewayMQTT: Charge slot update: {schedule}")
 
     def discharge_window_uses_staging(self, start_entity, end_entity):
         """Identify a coordinator synchronously, before crossing an async bridge."""
@@ -2863,15 +2914,6 @@ class GatewayMQTT(ComponentBase):
             if entry is None or entry["command"] != "set_discharge_slot" or entry["kwargs"] != kwargs:
                 return False
             return entry["state"] == "refused" and _monotonic() - entry["sent_at"] < _COMMAND_ACK_WINDOW
-
-    async def _update_discharge_slot(self, entity_id, hhmm, serial):
-        """Send set_discharge_slot command with updated start or end time."""
-        if "_start" in entity_id:
-            schedule = {"start": hhmm}
-        else:
-            schedule = {"end": hhmm}
-        await self._send_control(entity_id, "set_discharge_slot", schedule_json=json.dumps(schedule), serial=serial)
-        self.log(f"Info: GatewayMQTT: Discharge slot update: {schedule}")
 
     async def number_event(self, entity_id, value):
         """Handle number entity changes (e.g. charge rate, target SOC).
@@ -2959,12 +3001,20 @@ class GatewayMQTT(ComponentBase):
         if serial is None:
             self.log(f"Warn: GatewayMQTT: switch_event: cannot resolve serial for entity '{entity_id}' — command not sent")
             return
-        if "_charge_enabled" in entity_id:
-            await self._send_control(entity_id, "set_charge_enable", enable=is_on, serial=serial)
-            self.log(f"Info: GatewayMQTT: Charge {'enabled' if is_on else 'disabled'}")
-        elif "_discharge_enabled" in entity_id:
-            await self._send_control(entity_id, "set_discharge_enable", enable=is_on, serial=serial)
-            self.log(f"Info: GatewayMQTT: Discharge {'enabled' if is_on else 'disabled'}")
+        side = "charge" if "_charge_enabled" in entity_id else "discharge" if "_discharge_enabled" in entity_id else None
+        if side is None:
+            return
+        suffix = _serial_suffix(serial)
+        entry = self._staged_entry(suffix, side)
+        if entry is not None:
+            # Written alongside a staged window: an EMS will not enable onto a window it does
+            # not have yet, so the enable goes after the window when the schedule is written
+            self._staged = {**self._staged, (suffix, side): {**entry, "enable": is_on, "at": _monotonic()}}
+            self.dashboard_item(entity_id, "on" if is_on else "off", attributes=GATEWAY_ATTRIBUTE_TABLE.get(f"{side}_enabled", {}), app="gateway")
+            self.log(f"Info: GatewayMQTT: {side.capitalize()} {'enable' if is_on else 'disable'} for {serial} staged until the schedule is written")
+            return
+        await self._send_control(entity_id, f"set_{side}_enable", enable=is_on, serial=serial)
+        self.log(f"Info: GatewayMQTT: {side.capitalize()} {'enabled' if is_on else 'disabled'}")
 
     async def _send_control(self, entity_id, command, **kwargs):
         """Publish a control write once and let the hub's ack confirm it.
