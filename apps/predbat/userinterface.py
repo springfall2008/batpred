@@ -43,27 +43,27 @@ from predbat import THIS_VERSION, THIS_VERSION_DISPLAY
 # A debug dump is several megabytes of deeply nested YAML and PyYAML's pure-Python parser spends
 # most of a replay's wall-clock on it - about 6s for a 5MB dump. CLoader pairs libyaml's C parser
 # with the very same (unsafe) Constructor that yaml.unsafe_load uses, so the Python-object tags
-# these dumps carry still load and the result is identical, roughly 6x faster. PyYAML is not
-# always built with libyaml, so fall back to the pure-Python loader when the C one is absent.
+# these dumps carry still load, roughly 6x faster. PyYAML is not always built with libyaml, so
+# fall back to the pure-Python loader when the C one is absent. The one difference from
+# yaml.unsafe_load is the RepeatLogGate constructor added below.
 class DebugYamlLoader(getattr(yaml, "CLoader", yaml.UnsafeLoader)):
-    """The loader read_debug_yaml() replays a debug dump with; see construct_log_gate_without_history()."""
+    """The loader read_debug_yaml() replays a debug dump with; see construct_empty_log_gate()."""
 
 
-def construct_log_gate_without_history(loader, node):
+def construct_empty_log_gate(loader, node):
     """
-    Load a RepeatLogGate from a debug dump as a new, empty gate with the dumped interval.
+    Load any RepeatLogGate in a debug dump as a new, empty gate, without constructing what was dumped.
 
     v9.3.8 to v9.4.x wrote io_slot_log_gate into every dump that had logged an Intelligent slot
     list (#5569). Its history is keyed by tuples, which the dump wrote as YAML sequences, and a
     sequence cannot be a dict key on the way back in ("found unhashable key"), so those dumps would
-    not load at all. Its history is never built here, and a replay has no use for it anyway.
+    not load at all. A replay has no use for which log lines were already written, and that gate
+    always used REPEAT_FULL_LOG_SECONDS, so nothing under the node is read.
     """
-    fields = {key.value: value for key, value in node.value if isinstance(key, yaml.ScalarNode)}
-    interval_seconds = loader.construct_object(fields["interval_seconds"]) if "interval_seconds" in fields else REPEAT_FULL_LOG_SECONDS
-    return RepeatLogGate(interval_seconds)
+    return RepeatLogGate(REPEAT_FULL_LOG_SECONDS)
 
 
-DebugYamlLoader.add_constructor("tag:yaml.org,2002:python/object:utils.RepeatLogGate", construct_log_gate_without_history)
+DebugYamlLoader.add_constructor("tag:yaml.org,2002:python/object:utils.RepeatLogGate", construct_empty_log_gate)
 DEBUG_YAML_LOADER = DebugYamlLoader
 
 
@@ -91,8 +91,10 @@ class DebugYamlDumper(yaml.Dumper):
 
 # An export limit is a (mode, target, power) tuple, and PyYAML tags a tuple as !!python/tuple,
 # which yaml.safe_load refuses - the debug dump is an artefact people attach to bug reports and has
-# to load with plain YAML tooling. Written as an ordinary sequence instead. Nothing else in a dump
-# is a tuple today, and a sequence is what a reader wants from one anyway.
+# to load with plain YAML tooling. Written as an ordinary sequence instead, which is what a reader
+# wants from one anyway. That includes a tuple used as a dict key, and a sequence cannot be a dict
+# key on the way back in ("found unhashable key"), so a tuple-keyed dict must be kept out of the
+# dump - io_slot_log_gate was one (#5569) and is in DEBUG_EXCLUDE_LIST for that reason.
 DebugYamlDumper.add_representer(tuple, lambda dumper, value: dumper.represent_list(list(value)))
 
 

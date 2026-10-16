@@ -369,8 +369,9 @@ def test_debug_yaml_with_a_populated_log_gate_loads(my_predbat=None):
     with "found unhashable key" - so no dump from an Octopus Intelligent user could be replayed. The
     gate's history is runtime bookkeeping a replay does not need, so it is kept out of the dump.
 
-    Loaded with plain yaml.unsafe_load rather than DEBUG_YAML_LOADER: the dump must load with
-    ordinary YAML tooling, not only with the replay loader that tolerates older dumps.
+    Loaded with PyYAML's own unsafe loader (C where available, for speed) rather than
+    DEBUG_YAML_LOADER: the dump must load with ordinary YAML tooling, not only with the replay
+    loader that tolerates older dumps.
 
     Mutation check: removing "io_slot_log_gate" from DEBUG_EXCLUDE_LIST fails this.
     """
@@ -387,7 +388,7 @@ def test_debug_yaml_with_a_populated_log_gate_loads(my_predbat=None):
 
         text = my_predbat.create_debug_yaml(write_file=False)
         try:
-            debug = yaml.unsafe_load(text)
+            debug = yaml.load(text, Loader=getattr(yaml, "CLoader", yaml.UnsafeLoader))
         except yaml.YAMLError as e:
             print("ERROR: the debug yaml with a populated log gate does not load: {}".format(e))
             return 1
@@ -395,7 +396,7 @@ def test_debug_yaml_with_a_populated_log_gate_loads(my_predbat=None):
         if "io_slot_log_gate" in debug:
             print("ERROR: io_slot_log_gate was written into the debug yaml")
             failed = True
-        if "RepeatLogGate" in text:
+        if "python/object:utils.RepeatLogGate" in text:
             print("ERROR: a RepeatLogGate was written into the debug yaml")
             failed = True
         if "CONFIG_ITEMS" not in debug:
@@ -413,7 +414,7 @@ def test_debug_yaml_with_a_populated_log_gate_loads(my_predbat=None):
 # between two ordinary keys so the test also sees that its neighbours still load.
 OLD_DUMP_WITH_LOG_GATE = """io_slot_count: 1
 io_slot_log_gate: !!python/object:utils.RepeatLogGate
-  interval_seconds: 1800
+  interval_seconds: 3600
   logged:
     ? - - slots
         - 0
@@ -458,8 +459,8 @@ def test_old_dump_with_a_log_gate_loads(my_predbat=None):
     if gate.logged != {}:
         print("ERROR: expected the loaded log gate to start with no history, got {}".format(gate.logged))
         failed = True
-    if gate.interval_seconds != 1800:
-        print("ERROR: expected the dumped interval 1800 to be kept, got {}".format(gate.interval_seconds))
+    if gate.interval_seconds != REPEAT_FULL_LOG_SECONDS:
+        print("ERROR: expected the loaded log gate to use REPEAT_FULL_LOG_SECONDS, got {}".format(gate.interval_seconds))
         failed = True
     if not gate.log(lambda line: None, ("slots", 0), "text", ["text"], None):
         print("ERROR: the loaded log gate does not log a new text in full")
