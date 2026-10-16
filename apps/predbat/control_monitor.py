@@ -1,0 +1,198 @@
+# -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+# Control failure monitor - detect Predbat's own commands not taking effect
+# -----------------------------------------------------------------------------
+
+"""Detect when the battery is not doing what Predbat commanded.
+
+The control ledger (control_ledger.py) catches settings changed OUTSIDE Predbat. This catches the
+other half: Predbat asked for Charging, Exporting, Freeze charging or Freeze exporting, and the
+battery's measured power says it is not happening.
+
+The expensive failure here is a false alarm, so judgement is deliberately conservative: a grace
+period after entering a mode, a shortfall measured against the rate actually written (so low-power
+and temperature-limited charging are not failures), and several consecutive failing readings
+before anything is reported. Each failed slot is reported, and counted, once.
+
+This module has no engine dependencies so it can be tested standalone.
+"""
+
+
+MODE_CHARGING = "Charging"
+MODE_EXPORTING = "Exporting"
+MODE_FREEZE_CHARGING = "Freeze charging"
+MODE_FREEZE_EXPORTING = "Freeze exporting"
+JUDGED_MODES = (MODE_CHARGING, MODE_EXPORTING, MODE_FREEZE_CHARGING, MODE_FREEZE_EXPORTING)
+
+# Seconds after entering a mode in a slot before any reading is judged - the inverter needs time to
+# act on the command, and cloud integrations can take minutes to report it.
+GRACE_S = 300
+# Consecutive failing readings after grace before a slot is declared failed.
+CONFIRM_READINGS = 3
+# Charging/Exporting fail when the measured power is below this fraction of the rate written.
+FAIL_FRACTION = 0.25
+# Below this requested rate there is too little power to judge; also the wrong-way flow a Freeze
+# mode tolerates before it counts as failing.
+FLOOR_W = 200
+# Cap on the failed time credited between two readings, so a long gap in polling is not counted.
+MAX_GAP_S = 120
+# A reading closer than this to the previous one is ignored - a plan-cycle fetch and the 60s poll
+# can land seconds apart and return the same sensor value.
+MIN_GAP_S = 30
+# The rolling window the 24h sensor reports over.
+DEFAULT_WINDOW_S = 86400
+
+
+def event_key(event):
+    """Return the identity of a failure event: (inverter, mode, slot_start)."""
+    return (event.get("inverter"), event.get("mode"), event.get("slot_start"))
+
+
+def judge_reading(mode, requested_w, target_percent, battery_power_w, soc_percent):
+    """
+    Judge one reading against the mode Predbat commanded.
+
+    Battery power follows Predbat's convention: negative is charging, positive is discharging.
+
+    Returns:
+        True if the reading is failing, False if it is passing, None if it cannot be judged (the
+        target is already reached, or too little power was requested to tell).
+    """
+    if mode == MODE_CHARGING:
+        if requested_w is None or requested_w < FLOOR_W or target_percent is None or soc_percent >= target_percent:
+            return None
+        return -battery_power_w < FAIL_FRACTION * requested_w
+    if mode == MODE_EXPORTING:
+        if requested_w is None or requested_w < FLOOR_W or target_percent is None or soc_percent <= target_percent:
+            return None
+        return battery_power_w < FAIL_FRACTION * requested_w
+    if mode == MODE_FREEZE_CHARGING:
+        return battery_power_w > FLOOR_W
+    if mode == MODE_FREEZE_EXPORTING:
+        return -battery_power_w > FLOOR_W
+    return None
+
+
+class ControlMonitor:
+    """Track, per inverter, whether the battery is following the mode Predbat commanded."""
+
+    def __init__(self):
+        """Start with nothing tracked, no events and a total of zero."""
+        self.tracking = {}  # inverter id -> per-slot tracking state
+        self.events = []  # oldest first; also the durable store published in the sensor attributes
+        self.total = 0  # lifetime count of failed slots
+        self.restored = False  # True once the total has been read back from its entity, or first written
+
+    def _find_event(self, inverter_id, mode, slot_start):
+        """Return the newest event for this inverter and mode whose slot contains slot_start, or None."""
+        for event in reversed(self.events):
+            if event.get("inverter") == inverter_id and event.get("mode") == mode and event["slot_start"] <= slot_start <= event["slot_end"]:
+                return event
+        return None
+
+    def set_expectation(self, inverter_id, mode, slot_start, slot_end, target_percent, now):
+        """
+        Record what this inverter should be doing until the next plan run.
+
+        The same mode with a start inside the current slot is the same slot - the planner splits a
+        long charge into back-to-back windows - so it is extended in place and keeps its grace and
+        counters. Anything else starts fresh tracking, attached to any existing event for that slot
+        so that a re-entry, or a restart, cannot count it twice.
+        """
+        current = self.tracking.get(inverter_id)
+        if current and current["mode"] == mode and current["slot_start"] <= slot_start <= current["slot_end"]:
+            current["slot_end"] = max(current["slot_end"], slot_end)
+            current["target_percent"] = target_percent
+            if current["event"] is not None:
+                current["event"]["slot_end"] = max(current["event"]["slot_end"], current["slot_end"])
+            return
+        event = self._find_event(inverter_id, mode, slot_start)
+        if event is not None:
+            slot_start = event["slot_start"]
+            slot_end = max(slot_end, event["slot_end"])
+            event["slot_end"] = slot_end
+        self.tracking[inverter_id] = {
+            "mode": mode,
+            "slot_start": slot_start,
+            "slot_end": slot_end,
+            "target_percent": target_percent,
+            "entered_at": now,
+            "consecutive": 0,
+            "pending_s": 0.0,
+            "last_observed_at": None,
+            "event": event,
+        }
+
+    def clear_expectation(self, inverter_id=None):
+        """Stop judging one inverter, or every inverter when inverter_id is None. Recorded events are kept."""
+        if inverter_id is None:
+            self.tracking.clear()
+        else:
+            self.tracking.pop(inverter_id, None)
+
+    def observe(self, inverter_id, battery_power_w, soc_percent, requested_charge_w, requested_discharge_w, now):
+        """
+        Judge one reading for one inverter.
+
+        The requested rates are passed per reading rather than fixed when the expectation is set,
+        because the 60s balancer can change them between plan runs. Charging is judged against the
+        charge rate, Exporting against the discharge rate; the Freeze modes ignore both.
+
+        Returns:
+            The new event dict when this reading confirms the slot as failed, otherwise None. A slot
+            returns an event at most once.
+        """
+        track = self.tracking.get(inverter_id)
+        if track is None:
+            return None
+        last = track["last_observed_at"]
+        if last is not None and now - last < MIN_GAP_S:
+            return None
+        track["last_observed_at"] = now
+        grace_end = track["entered_at"] + GRACE_S
+        if now < grace_end:
+            return None
+
+        mode = track["mode"]
+        if mode == MODE_CHARGING:
+            requested_w = requested_charge_w
+        elif mode == MODE_EXPORTING:
+            requested_w = requested_discharge_w
+        else:
+            requested_w = None
+        if not judge_reading(mode, requested_w, track["target_percent"], battery_power_w, soc_percent):
+            track["consecutive"] = 0
+            track["pending_s"] = 0.0
+            return None
+
+        credited = 0.0
+        if last is not None:
+            credited = max(0.0, min(now - max(last, grace_end), MAX_GAP_S))
+
+        event = track["event"]
+        if event is not None:
+            event["failed_minutes"] += credited / 60.0
+            return None
+
+        track["consecutive"] += 1
+        track["pending_s"] += credited
+        if track["consecutive"] < CONFIRM_READINGS:
+            return None
+
+        event = {
+            "inverter": inverter_id,
+            "mode": mode,
+            "slot_start": track["slot_start"],
+            "slot_end": track["slot_end"],
+            "at": now,
+            "requested_w": requested_w,
+            "measured_w": battery_power_w,
+            "failed_minutes": track["pending_s"] / 60.0,
+        }
+        self.events.append(event)
+        track["event"] = event
+        self.total += 1
+        return event

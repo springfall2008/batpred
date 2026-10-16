@@ -221,6 +221,7 @@ from tests.test_sunsynk_auth import run_sunsynk_auth_tests
 from tests.test_sunsynk_api import run_sunsynk_api_tests
 from tests.test_sunsynk_control import run_sunsynk_control_tests
 from tests.test_control_ledger import run_control_ledger_tests
+from tests.test_control_monitor import run_control_monitor_tests
 from tests.test_sunsynk_publish import run_sunsynk_publish_tests
 from tests.test_sunsynk_storage import run_sunsynk_storage_tests
 from tests.test_sunsynk_config import run_sunsynk_config_tests
@@ -631,6 +632,7 @@ def main():
         ("sunsynk_api", run_sunsynk_api_tests, "Sunsynk API tests", False),
         ("sunsynk_control", run_sunsynk_control_tests, "Sunsynk control-logic tests", False),
         ("control_ledger", run_control_ledger_tests, "Control ownership ledger tests", False),
+        ("control_monitor", run_control_monitor_tests, "Control failure monitor tests", False),
         ("sunsynk_publish", run_sunsynk_publish_tests, "Sunsynk publish tests", False),
         ("sunsynk_storage", run_sunsynk_storage_tests, "Sunsynk storage tests", False),
         ("sunsynk_config", run_sunsynk_config_tests, "Sunsynk config/INVERTER_DEF tests", False),
