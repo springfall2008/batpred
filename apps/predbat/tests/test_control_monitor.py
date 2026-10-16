@@ -441,6 +441,110 @@ def test_format_failure():
     return failed
 
 
+class RestoreSource:
+    """Stands in for load_previous_value_from_ha so a test decides exactly what the restore reads."""
+
+    def __init__(self, my_predbat, events=None, total=None):
+        """Wrap my_predbat's loader, answering for the two control-failure entities only."""
+        self.my_predbat = my_predbat
+        self.events = events
+        self.total = total
+        self.original = my_predbat.load_previous_value_from_ha
+        my_predbat.load_previous_value_from_ha = self.load
+
+    def load(self, entity, attribute=None):
+        """Return the configured value for the control-failure entities, defer for anything else."""
+        if entity == self.my_predbat.prefix + ".control_failures" and attribute == "events":
+            return self.events
+        if entity == self.my_predbat.prefix + ".control_failures_total" and attribute is None:
+            return self.total
+        return self.original(entity, attribute=attribute)
+
+    def close(self):
+        """Put the real loader back."""
+        self.my_predbat.load_previous_value_from_ha = self.original
+
+
+def publish_setup(my_predbat):
+    """Give my_predbat a fresh monitor and forget any earlier publish of the two entities."""
+    saved = my_predbat.control_monitor
+    my_predbat.control_monitor = ControlMonitor()
+    for suffix in (".control_failures", ".control_failures_total"):
+        my_predbat.dashboard_values.pop(my_predbat.prefix + suffix, None)
+    return saved
+
+
+def published(my_predbat, suffix):
+    """The state last published for an entity, or None if it was never written."""
+    item = my_predbat.dashboard_values.get(my_predbat.prefix + suffix)
+    return None if item is None else item["state"]
+
+
+def test_publish_fresh_install(my_predbat):
+    """Nothing to restore and nothing counted: the 24h sensor publishes 0, the total is not written."""
+    saved = publish_setup(my_predbat)
+    source = RestoreSource(my_predbat)
+    failed = False
+    try:
+        my_predbat.publish_control_failures(T0)
+        if published(my_predbat, ".control_failures") != 0:
+            print("ERROR: 24h sensor not published as 0")
+            failed = True
+        if published(my_predbat, ".control_failures_total") is not None or my_predbat.control_monitor.restored:
+            print("ERROR: a 0 total was written over a total that could not be read")
+            failed = True
+        # The first counted failure is written, and resolves the restore
+        my_predbat.control_monitor.events.append(make_event(T0 + 60))
+        my_predbat.control_monitor.total = 1
+        my_predbat.publish_control_failures(T0 + 120)
+        if published(my_predbat, ".control_failures_total") != 1 or not my_predbat.control_monitor.restored:
+            print("ERROR: first failure on a fresh install did not publish the total")
+            failed = True
+        attributes = my_predbat.dashboard_values[my_predbat.prefix + ".control_failures"]["attributes"]
+        if published(my_predbat, ".control_failures") != 1 or attributes["by_mode"] != {MODE_CHARGING: 1} or len(attributes["events"]) != 1:
+            print("ERROR: 24h sensor attributes wrong: {}".format(attributes))
+            failed = True
+    finally:
+        source.close()
+        my_predbat.control_monitor = saved
+    return failed
+
+
+def test_publish_restores_total_and_events(my_predbat):
+    """A readable total and events are restored and re-published."""
+    saved = publish_setup(my_predbat)
+    source = RestoreSource(my_predbat, events=[make_event(T0 - 60)], total="7")
+    failed = False
+    try:
+        my_predbat.publish_control_failures(T0)
+        if published(my_predbat, ".control_failures_total") != 7 or published(my_predbat, ".control_failures") != 1:
+            print("ERROR: restore not published: total {} 24h {}".format(published(my_predbat, ".control_failures_total"), published(my_predbat, ".control_failures")))
+            failed = True
+    finally:
+        source.close()
+        my_predbat.control_monitor = saved
+    return failed
+
+
+def test_publish_late_restore_adds_counted(my_predbat):
+    """Unreadable at first, readable later, with a failure counted in between: total = restored + counted."""
+    saved = publish_setup(my_predbat)
+    source = RestoreSource(my_predbat)
+    failed = False
+    try:
+        my_predbat.publish_control_failures(T0)
+        my_predbat.control_monitor.total = 1  # counted between the two publish cycles
+        source.total = "5"
+        my_predbat.publish_control_failures(T0 + 300)
+        if published(my_predbat, ".control_failures_total") != 6:
+            print("ERROR: late restore published {} expected 6".format(published(my_predbat, ".control_failures_total")))
+            failed = True
+    finally:
+        source.close()
+        my_predbat.control_monitor = saved
+    return failed
+
+
 def run_control_monitor_tests(my_predbat):
     """Run all control failure monitor tests."""
     failed = False
@@ -470,6 +574,15 @@ def run_control_monitor_tests(my_predbat):
     ]:
         print("**** control_monitor: {} ****".format(name))
         if fn():
+            print("ERROR: control_monitor test {} failed".format(name))
+            failed = True
+    for name, fn in [
+        ("publish_fresh_install", test_publish_fresh_install),
+        ("publish_restores", test_publish_restores_total_and_events),
+        ("publish_late_restore", test_publish_late_restore_adds_counted),
+    ]:
+        print("**** control_monitor: {} ****".format(name))
+        if fn(my_predbat):
             print("ERROR: control_monitor test {} failed".format(name))
             failed = True
     return failed
