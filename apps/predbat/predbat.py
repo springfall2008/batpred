@@ -505,6 +505,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.current_charge_limit_kwh = 0.0
         self.inverter_limit = 0.0
         self.export_limit = 0.0
+        # Whole-site diagnostic threshold, stored in W (not kWh/minute). 0 disables reporting.
+        self.import_limit = 0.0
         self.charge_limit = []
         self.charge_limit_best = []
         self.charge_window = []

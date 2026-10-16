@@ -18,7 +18,7 @@ plans and select the one with the lowest cost metric.
 """
 
 from datetime import timedelta
-from const import PREDICT_STEP, PV_SCENARIO_PV10, PV_SCENARIO_PV90, RUN_EVERY, TIME_FORMAT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
+from const import PREDICT_STEP, PV_SCENARIO_PV10, PV_SCENARIO_PV90, RUN_EVERY, TIME_FORMAT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, MINUTE_WATT
 
 from utils import (
     remove_intersecting_windows,
@@ -172,6 +172,8 @@ class Prediction(PredictionBatch):
             self.inverter_hybrid = base.inverter_hybrid
             self.inverter_limit = base.inverter_limit
             self.export_limit = base.export_limit
+            # Diagnostic only, in W. It does not modify dispatch, costs or candidate selection.
+            self.import_limit = getattr(base, "import_limit", 0.0)
             self.pv_ac_limit = base.pv_ac_limit
             self.battery_rate_min = base.battery_rate_min
             self.battery_rate_max_charge = base.battery_rate_max_charge
@@ -520,6 +522,10 @@ class Prediction(PredictionBatch):
         if save and self.pending_batch:
             self.flush_batch()
 
+        # Only saved Python runs report this diagnostic. Clear it even on a cache/kernel return
+        # so a later trial cannot appear to have inherited a successful check of a different plan.
+        self.import_limit_diagnostics = None
+
         # The cache key is only wanted when the cache is actually in play - a saving run always
         # simulates - so it is not computed otherwise. Building it as one tuple hash keeps the
         # per-window hashing in C rather than looping in Python, which matters because this runs on
@@ -578,6 +584,19 @@ class Prediction(PredictionBatch):
         predict_pv_power = {}
         predict_state = {}
         predict_grid_power = {}
+        import_diagnostics = None
+        if save and self.import_limit > 0:
+            import_diagnostics = {
+                "limit_w": self.import_limit,
+                "peak_w": 0.0,
+                "excess_kwh": 0.0,
+                "minutes_over": 0,
+                "first_exceeded": None,
+                "step_minutes": step,
+                "checked_minutes": 0,
+                "start": (self.midnight_utc + timedelta(minutes=self.minutes_now)).strftime(TIME_FORMAT),
+                "end": (self.midnight_utc + timedelta(minutes=self.minutes_now + self.forecast_minutes)).strftime(TIME_FORMAT),
+            }
         predict_load_power = {}
         predict_iboost = {}
         predict_carbon_g = {}
@@ -1361,6 +1380,21 @@ class Prediction(PredictionBatch):
                 # The car in a dispatch that has gone away is met by the grid (or PV surplus), never the battery
                 diff += car_gone_kwh
 
+            # Observe the raw whole-site AC balance, before presentation rounding. Do not clamp
+            # grid demand, invent battery discharge, or change a candidate's cost. This covers the
+            # full displayed forecast, including steps after the optimiser's end_record boundary.
+            if import_diagnostics is not None:
+                # A modelled car outside the house CT is absent from diff; it still shares the
+                # grid connection. Net it against any surplus, without counting metered cars twice.
+                import_w = max(diff + car_load_energy_bypass, 0.0) * MINUTE_WATT / step
+                import_diagnostics["peak_w"] = max(import_diagnostics["peak_w"], import_w)
+                import_diagnostics["checked_minutes"] += step
+                if import_w - self.import_limit > 1e-6:
+                    import_diagnostics["excess_kwh"] += (import_w - self.import_limit) * step / MINUTE_WATT
+                    import_diagnostics["minutes_over"] += step
+                    if import_diagnostics["first_exceeded"] is None:
+                        import_diagnostics["first_exceeded"] = stamp
+
             # Metric keep - pretend the battery is empty and you have to import instead of using the battery
             if best_soc_keep > 0 and soc <= best_soc_keep:
                 metric_keep += (best_soc_keep - soc) * import_rate * keep_minute_scaling * step / 60.0
@@ -1474,6 +1508,7 @@ class Prediction(PredictionBatch):
             minute += step
 
         hours_left = minute_left / 60.0
+        self.import_limit_diagnostics = import_diagnostics
         if self.debug_enable or save:
             self.hours_left = hours_left
             self.final_car_soc = final_car_soc
