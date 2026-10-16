@@ -2095,12 +2095,6 @@ class TestAutomaticConfig:
         assert gw._args["ems_total_pv"] == f"sensor.{pfx}_ems_total_pv"
         assert gw._args["ems_total_load"] == f"sensor.{pfx}_ems_total_load"
 
-        # idle_*_time should have one entry per inverter (1 in this case)
-        assert len(gw._args["idle_start_time"]) == 1
-        assert len(gw._args["idle_end_time"]) == 1
-        assert "discharge_slot1_start" in gw._args["idle_start_time"][0]
-        assert "discharge_slot1_end" in gw._args["idle_end_time"][0]
-
     def test_non_ems_does_not_set_aggregate_args(self):
         """Standard GivEnergy inverter does NOT register ems_* args."""
         gw = self._make_gateway()
@@ -2108,7 +2102,30 @@ class TestAutomaticConfig:
         gw.automatic_config()
 
         assert "ems_total_soc" not in gw._args
-        assert "idle_start_time" not in gw._args
+
+    def test_hub_does_not_bind_idle_time(self):
+        """The Hub manages idle time itself, so no Hub inverter type binds idle_*_time.
+
+        On an EMS the old binding pointed idle_*_time at the export slot selects, so every
+        idle write from adjust_idle_time() overwrote the export window.
+        """
+        ems = self._make_gateway()
+        status = pb.GatewayStatus()
+        status.device_id = "pbgw_ems"
+        status.firmware = "1.0.0"
+        status.schema_version = 1
+        inv = self._make_inverter(status, serial="EM123456", primary=True, inv_type=pb.INVERTER_TYPE_GIVENERGY_EMS)
+        inv.ems.num_inverters = 2
+        ems._last_status = status
+        ems.automatic_config()
+
+        direct = self._make_gateway()
+        direct._last_status = self._basic_status()
+        direct.automatic_config()
+
+        for gw in (ems, direct):
+            assert gw._args["idle_start_time"] is None
+            assert gw._args["idle_end_time"] is None
 
     def test_export_limit_nonzero_maps_to_sensor_entity(self):
         """export_limit_w is always mapped to the sensor entity regardless of value."""

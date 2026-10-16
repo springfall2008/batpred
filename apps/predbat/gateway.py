@@ -2140,18 +2140,13 @@ class GatewayMQTT(ComponentBase):
             self.set_arg("ems_total_grid", f"sensor.{pfx}_ems_total_grid")
             self.set_arg("ems_total_pv", f"sensor.{pfx}_ems_total_pv")
             self.set_arg("ems_total_load", f"sensor.{pfx}_ems_total_load")
-            # EMS idle slots (discharge pause windows) — use same slot entities for all inverters
-            self.set_arg(
-                "idle_start_time",
-                [f"select.{base0}_discharge_slot1_start" for _ in range(num_inverters)],
-            )
-            self.set_arg(
-                "idle_end_time",
-                [f"select.{base0}_discharge_slot1_end" for _ in range(num_inverters)],
-            )
             self.log(f"Info: GatewayMQTT: EMS mode with {inv0.ems.num_inverters} sub-inverters")
 
         # Explicitly set unsupported features to None
+        # The Hub manages idle (demand) time itself. On an EMS the discharge slot selects are
+        # the export slot, so binding idle time to them overwrote the export window.
+        self.set_arg("idle_start_time", None)
+        self.set_arg("idle_end_time", None)
         self.set_arg("givtcp_rest", None)
         self.set_arg("charge_rate_percent", None)
         self.set_arg("discharge_rate_percent", None)
