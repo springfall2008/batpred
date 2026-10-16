@@ -2313,6 +2313,47 @@ def test_charge_window_none_illegal_time(test_name, my_predbat, dummy_items):
     return failed
 
 
+def test_battery_power_validity(test_name, my_predbat, dummy_items):
+    """
+    update_status() records whether battery_power was actually read: a number (or numeric string)
+    is valid, an unavailable sensor or an unconfigured one is not - and both still read as 0W, as
+    before, so nothing else that uses battery_power changes.
+    """
+    failed = False
+    print(f"**** Running Test: {test_name} ****")
+
+    saved_state = dummy_items.get("sensor.battery_power")
+    saved_arg = my_predbat.args.get("battery_power")
+    try:
+        inv = Inverter(my_predbat, 0)
+        inv.sleep = dummy_sleep
+        if inv.battery_power_valid is not False or inv.requested_charge_w is not None or inv.requested_discharge_w is not None:
+            print(f"ERROR: {test_name} - a new inverter should start with no valid power and no requested rates")
+            failed = True
+
+        for state, expect_power, expect_valid in ((1500.0, 1500.0, True), ("-750", -750.0, True), ("unavailable", 0.0, False), ("unknown", 0.0, False), (None, 0.0, False)):
+            dummy_items["sensor.battery_power"] = state
+            inv.update_status(my_predbat.minutes_now, quiet=True)
+            if inv.battery_power != expect_power or inv.battery_power_valid is not expect_valid:
+                print(f"ERROR: {test_name} - state {state!r}: battery_power {inv.battery_power} valid {inv.battery_power_valid}, expected {expect_power} {expect_valid}")
+                failed = True
+
+        dummy_items["sensor.battery_power"] = 1500.0
+        my_predbat.args.pop("battery_power", None)
+        inv.update_status(my_predbat.minutes_now, quiet=True)
+        if inv.battery_power != 0.0 or inv.battery_power_valid is not False:
+            print(f"ERROR: {test_name} - unconfigured battery_power: {inv.battery_power} valid {inv.battery_power_valid}, expected 0.0 False")
+            failed = True
+    finally:
+        dummy_items["sensor.battery_power"] = saved_state
+        if saved_arg is None:
+            my_predbat.args.pop("battery_power", None)
+        else:
+            my_predbat.args["battery_power"] = saved_arg
+
+    return failed
+
+
 def test_charge_window_none_value(test_name, my_predbat, dummy_items):
     """
     Test charge window handling when value is None from get_arg returning None
@@ -6078,6 +6119,10 @@ charge_start_service:
         return failed
 
     failed |= test_charge_window_none_value("charge_window_none_value", my_predbat, dummy_items)
+    if failed:
+        return failed
+
+    failed |= test_battery_power_validity("battery_power_validity", my_predbat, dummy_items)
     if failed:
         return failed
 

@@ -344,7 +344,8 @@ class Execute:
 
         Called at the end of fetch_inverter_data(), quick or full. Read-only mode or calibration that
         started since the last plan run clears every expectation here, so nothing is counted in the
-        minutes before execute_plan() next runs.
+        minutes before execute_plan() next runs. A reading whose battery_power could not be read is
+        skipped - judging its stand-in 0W would report an idle battery that may not be idle.
 
         Args:
             now (float): epoch seconds, defaults to time.time()
@@ -358,6 +359,10 @@ class Execute:
             monitor.clear_expectation()
             return
         for inverter in self.inverters:
+            # Untracked inverters have nothing to judge. getattr: the test doubles predate
+            # battery_power_valid; a real Inverter always has it
+            if inverter.id not in monitor.tracking or not getattr(inverter, "battery_power_valid", True):
+                continue
             event = monitor.observe(
                 inverter.id,
                 inverter.battery_power,

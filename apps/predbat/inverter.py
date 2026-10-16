@@ -463,6 +463,11 @@ class Inverter:
         # second source of truth for it - this seed is only "not read yet", and set_current_from_power()
         # checks for that explicitly rather than silently dividing by a placeholder.
         self.battery_power = 0
+        self.battery_power_valid = False  # True only when update_status() actually read battery_power
+        # The rates execute_plan() last wrote, in W, which the control-failure monitor judges against;
+        # None until written (and in Monitor mode, where nothing is)
+        self.requested_charge_w = None
+        self.requested_discharge_w = None
         self.battery_voltage = None
         self.pv_power = 0
         self.load_power = 0
@@ -1663,6 +1668,7 @@ class Inverter:
         """
 
         self.battery_power = 0
+        self.battery_power_valid = False
         self.pv_power = 0
         self.load_power = 0
         self.grid_power = 0
@@ -1692,8 +1698,20 @@ class Inverter:
         else:
             self.soc_percent = calc_percent_limit(self.soc_kw, self.soc_max)
 
-        # Battery power
-        self.battery_power = self.base.get_arg("battery_power", default=0.0, index=self.id, required_unit="W")
+        # Battery power. Read with no default so a reading that is not there can be told apart from a
+        # real 0W: an unconfigured or unavailable sensor still becomes 0W as it always has (with the
+        # same warning get_arg gives for an unparseable value), but battery_power_valid is False, so
+        # the control-failure monitor does not judge that 0W as an idle battery.
+        battery_power = self.base.get_arg("battery_power", default=None, index=self.id, required_unit="W")
+        try:
+            self.battery_power = float(battery_power)
+            self.battery_power_valid = math.isfinite(self.battery_power)
+        except (TypeError, ValueError):
+            if battery_power is not None:
+                self.base.log("Warn: Return bad float value {} from {} using default {}".format(battery_power, "battery_power", 0.0))
+                self.base.record_status("Warn: Return bad float value {} from {}".format(battery_power, "battery_power"), had_errors=True)
+            self.battery_power = 0.0
+            self.battery_power_valid = False
         if self.base.get_arg("battery_power_invert", default=False, index=self.id):
             # If battery power is inverted then invert it
             self.battery_power = -self.battery_power

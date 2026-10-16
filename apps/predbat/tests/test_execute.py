@@ -1635,6 +1635,44 @@ def test_control_monitor_uses_written_rate(my_predbat):
     return failed
 
 
+def expected_rate_inverter(my_predbat, soc_kw=5.0, soc_max=10.0):
+    """A standalone 1kW inverter, written 1000W each way, for the control-monitor observation tests."""
+    inverter = ActiveTestInverter(0, soc_kw, soc_max, my_predbat.now_utc)
+    inverter.requested_charge_w = 1000
+    inverter.requested_discharge_w = 1000
+    return inverter
+
+
+def test_control_monitor_invalid_battery_power_not_judged(my_predbat):
+    """An unreadable battery_power (read as 0W) is not judged at all, so it can never fail a slot."""
+    saved_monitor = my_predbat.control_monitor
+    saved_inverters = my_predbat.inverters
+    failed = False
+    try:
+        inverter = expected_rate_inverter(my_predbat)
+        inverter.battery_power = 0
+        inverter.battery_power_valid = False
+        my_predbat.inverters = [inverter]
+        monitor = ControlMonitor()
+        my_predbat.control_monitor = monitor
+        monitor.set_expectation(0, MODE_CHARGING, 0, 10**10, 100.0, 0)
+        for offset in (GRACE_S, GRACE_S + 60, GRACE_S + 120, GRACE_S + 180):
+            my_predbat.observe_control_failures(now=offset)
+        if monitor.total != 0 or monitor.tracking[0]["last_observed_at"] is not None:
+            print("ERROR: an invalid battery_power reading was judged: total {} tracking {}".format(monitor.total, monitor.tracking[0]))
+            failed = True
+        inverter.battery_power_valid = True
+        for offset in (GRACE_S + 240, GRACE_S + 300, GRACE_S + 360):
+            my_predbat.observe_control_failures(now=offset)
+        if monitor.total != 1:
+            print("ERROR: a valid 0W reading should be judged once readable again, total {}".format(monitor.total))
+            failed = True
+    finally:
+        my_predbat.control_monitor = saved_monitor
+        my_predbat.inverters = saved_inverters
+    return failed
+
+
 def run_execute_tests(my_predbat):
     print("**** Running execute tests ****\n")
 
@@ -4611,6 +4649,7 @@ def run_execute_tests(my_predbat):
         test_control_monitor_read_only_between_plan_runs,
         test_control_monitor_calibration_records_nothing,
         test_control_monitor_uses_written_rate,
+        test_control_monitor_invalid_battery_power_not_judged,
     ):
         failed |= control_monitor_test(my_predbat)
         if failed:
