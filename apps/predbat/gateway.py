@@ -2996,16 +2996,18 @@ class GatewayMQTT(ComponentBase):
             if snapshot["start"] is None or snapshot["end"] is None:
                 return await self._commit_failed(serial, side, f"incomplete window {snapshot['start']}-{snapshot['end']}")
             if snapshot["enable"] is False:
-                if await self._send_and_await(enable_entity, f"set_{side}_enable", enable=False, serial=serial) is None:
-                    return await self._commit_failed(serial, side, "disable not acknowledged")
+                state, _ = await self._send_and_await(enable_entity, f"set_{side}_enable", enable=False, serial=serial)
+                if state != "applied":
+                    return await self._commit_failed(serial, side, f"disable {state or 'not acknowledged'}")
             window = f"{snapshot['start']:04d}-{snapshot['end']:04d}"
-            outcome = await self._send_and_await(slot_entity, f"set_{side}_slot", schedule_json=json.dumps({"start": snapshot["start"], "end": snapshot["end"]}), serial=serial)
-            if outcome is None:
-                return await self._commit_failed(serial, side, f"window {window} refused or not acknowledged")
-            recorded = isinstance(outcome, dict) and bool(outcome.get("recorded"))
+            state, outcome = await self._send_and_await(slot_entity, f"set_{side}_slot", schedule_json=json.dumps({"start": snapshot["start"], "end": snapshot["end"]}), serial=serial)
+            if state != "applied":
+                return await self._commit_failed(serial, side, f"window {window} {state or 'not acknowledged'}", window_refused=state == "refused")
+            recorded = bool(outcome.get("recorded"))
             if snapshot["enable"] is True:
-                if await self._send_and_await(enable_entity, f"set_{side}_enable", enable=True, serial=serial) is None:
-                    return await self._commit_failed(serial, side, f"enable after window {window} refused or not acknowledged")
+                state, _ = await self._send_and_await(enable_entity, f"set_{side}_enable", enable=True, serial=serial)
+                if state != "applied":
+                    return await self._commit_failed(serial, side, f"enable after window {window} {state or 'not acknowledged'}")
             current = self._staged_entry(suffix, side)
             if current is not None and {field: current[field] for field in snapshot} != snapshot:
                 continue  # written again while this was in flight: send the newer window too
@@ -3013,18 +3015,20 @@ class GatewayMQTT(ComponentBase):
             self.log(f"Info: GatewayMQTT: {side} window {window} for {serial} written to the Hub{' (recorded while off)' if recorded else ''}")
             return True
 
-    async def _commit_failed(self, serial, side, reason):
+    async def _commit_failed(self, serial, side, reason, window_refused=False):
         """Give up on a staged window: show the Hub's schedule again so the next cycle retries.
 
-        An export window that could not be moved while the old one is still armed would export
+        An export window the Hub refused to move while the old one is still armed would export
         on a schedule the plan has left, so export is turned off until a window lands (#5532).
+        Only an explicit refusal does this: an unanswered window may well have applied (a slow
+        EMS write), and the plan still wants to export, so it is left running.
 
         Returns:
             bool: False.
         """
         self.log(f"Warn: GatewayMQTT: {side} window for {serial} not written to the Hub: {reason}")
         self._clear_staged(serial, side)
-        if side == "discharge" and self._telemetry_enabled(_serial_suffix(serial), side):
+        if window_refused and side == "discharge" and self._telemetry_enabled(_serial_suffix(serial), side):
             self.log(f"Warn: GatewayMQTT: turning off scheduled export for {serial} until its window is written")
             await self._send_control(f"switch.{self.prefix}_gateway_{_serial_suffix(serial)}_discharge_enabled", "set_discharge_enable", enable=False, serial=serial)
         if self._last_status is not None:
@@ -3049,19 +3053,19 @@ class GatewayMQTT(ComponentBase):
         done and the next telemetry shows whether it landed.
 
         Returns:
-            The ack's "applied" payload ({} if none) once applied, or None if refused or unanswered.
+            tuple: ("applied", the ack's applied payload or {}), ("refused", None) or (None, None) if unanswered.
         """
         acks = getattr(self, "_ack_subscribed", False) and self._mqtt_connected and self._acks_seen
         for _attempt in range(_COMMIT_ATTEMPTS):
             await self._send_control(entity_id, command, **kwargs)
             if not acks:
-                return {}
+                return "applied", {}
             state, applied = await self._await_command_outcome(entity_id, command, kwargs)
             if state == "applied":
-                return applied if isinstance(applied, dict) else {}
+                return state, applied if isinstance(applied, dict) else {}
             if state == "refused":
-                return None
-        return None
+                return state, None
+        return None, None
 
     async def _await_command_outcome(self, entity_id, command, kwargs, timeout=_COMMAND_ACK_WINDOW):
         """Wait up to one ack window for the tracked command's outcome.

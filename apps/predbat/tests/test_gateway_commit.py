@@ -368,6 +368,15 @@ class TestGatewayCommit:
         assert sent(gw) == [("set_discharge_slot", slot_json(1700, 1900)), ("set_discharge_enable", False)]
 
     @hub_test
+    def test_unanswered_export_move_leaves_export_running(self):
+        """Only a refusal turns export off: an unanswered window may well have applied (#5532)."""
+        gw, hub = self.setup_hub(make_status(discharge_enabled=True), responder=lambda command, kwargs: None)
+        self.stage(gw, "discharge", "17:00:00", "19:00:00")
+        self.press(gw)
+        assert sent(gw) == [("set_discharge_slot", slot_json(1700, 1900))] * 3
+        assert gw._staged == {}
+
+    @hub_test
     def test_refused_charge_move_does_not_disable_charge(self):
         """A refused charge move leaves the charge enable alone, as before."""
         gw, hub = self.setup_hub(make_status(charge_enabled=True), responder=lambda command, kwargs: (False, None))
