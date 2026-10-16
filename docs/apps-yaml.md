@@ -1674,6 +1674,12 @@ discharge_update_button:
   - button.solis_discharge
 ```
 
+The Predbat Gateway (Hub) sets this up itself: automatic configuration binds **schedule_write_button** to `switch.predbat_gateway_<serial>_schedule_write`.
+A change to a charge or export slot start or end time, and an enable switched alongside it, is held by the Gateway and shown straight away on its select or switch, but not sent to the inverter until the schedule write switch is turned on.
+The Gateway then sends the complete window in one command, followed by the enable, and the switch returns to off.
+If the inverter refuses the window, the selects go back to showing the inverter's own schedule and Predbat writes the window again on its next update.
+If you change a slot time by hand, turn the schedule write switch on afterwards; a change that is never written goes back to the inverter's schedule after 10 minutes.
+
 *TIP:* Some older GivEnergy inverters such as the Gen 1 hybrid and AC3 inverter that have had firmware upgrades to introduce battery pause functionality do not have sufficient memory on the inverter to provide control of battery pause start and end times.
 GivTCP does not recognise this and so still provides the select.givtcp_xxxx_battery_pause_start_time_slot and end_time_slot controls, but they do not work.<BR>
 Predbat can report an error trying to set them, or they revert back to 00:00:00 after being changed by Predbat and there will also be errors setting these controls reported in the GivTCP log.<BR>
