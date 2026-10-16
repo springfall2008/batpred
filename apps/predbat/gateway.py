@@ -3072,8 +3072,9 @@ class GatewayMQTT(ComponentBase):
 
         The window always goes as a complete start/end pair. An EMS that is off only records it
         (ack "recorded"), and does not enable onto a window it does not have, so a staged enable
-        goes after the window, and also whenever it differs from what the inverter reports. A
-        staged disable goes first, so a refused window cannot leave the side enabled. Success or
+        goes after the window. A staged disable goes first, so a refused window cannot leave the
+        side enabled. A staged enable is always sent: Predbat only writes one when it saw the
+        other state, and the last status frame may predate a disable sent this cycle. Success or
         failure, the staging is then dropped: on failure the selects show the Hub's schedule
         again, so Predbat sees the mismatch on its next cycle and writes it again.
 
@@ -3091,8 +3092,7 @@ class GatewayMQTT(ComponentBase):
             snapshot = {field: entry[field] for field in ("start", "end", "enable")}
             if snapshot["start"] is None or snapshot["end"] is None:
                 return await self._commit_failed(serial, side, f"incomplete window {snapshot['start']}-{snapshot['end']}")
-            enabled = self._telemetry_enabled(suffix, side)
-            if snapshot["enable"] is False and enabled is not False:
+            if snapshot["enable"] is False:
                 if await self._send_and_await(enable_entity, f"set_{side}_enable", enable=False, serial=serial) is None:
                     return await self._commit_failed(serial, side, "disable not acknowledged")
             window = f"{snapshot['start']:04d}-{snapshot['end']:04d}"
@@ -3100,7 +3100,7 @@ class GatewayMQTT(ComponentBase):
             if outcome is None:
                 return await self._commit_failed(serial, side, f"window {window} refused or not acknowledged")
             recorded = isinstance(outcome, dict) and bool(outcome.get("recorded"))
-            if snapshot["enable"] is True and (recorded or enabled is not True):
+            if snapshot["enable"] is True:
                 if await self._send_and_await(enable_entity, f"set_{side}_enable", enable=True, serial=serial) is None:
                     return await self._commit_failed(serial, side, f"enable after window {window} refused or not acknowledged")
             current = self._staged_entry(suffix, side)

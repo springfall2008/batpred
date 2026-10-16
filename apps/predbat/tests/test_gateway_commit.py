@@ -403,6 +403,16 @@ class TestGatewayCommit:
         assert gw._staged == {}
 
     @hub_test
+    def test_staged_enable_is_sent_although_telemetry_still_reports_on(self):
+        """Moving a future window disables, then re-enables with the window: the stale "on" frame must not skip the enable."""
+        gw, hub = self.setup_hub(make_status(charge_enabled=True))
+        run(gw.switch_event(CHARGE_ENABLED, "turn_off"))  # disable_charge_window(), sent at once
+        self.stage(gw, "charge", "02:30:00", "03:05:00", enable=True)
+        self.press(gw)
+        assert sent(gw) == [("set_charge_enable", False), ("set_charge_slot", slot_json(230, 305)), ("set_charge_enable", True)]
+        assert gw.cache[CHARGE_ENABLED] == "on"
+
+    @hub_test
     def test_press_without_staging_publishes_nothing(self):
         """A press with nothing staged (e.g. after a target SOC change) sends nothing."""
         gw, hub = self.setup_hub()
