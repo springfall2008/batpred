@@ -797,6 +797,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         m.control_conflicts_events = self.control_ledger.newest_events(20)
         m.control_conflicts_sustained_controls = sustained
 
+        # Control failure monitor
+        m.control_failures_24h.set(len(self.control_monitor.recent_events(time.time())))
+        m.control_failures_total.set(self.control_monitor.total)
+        m.control_failures_events = self.control_monitor.newest_events(20)
+
     def publish_control_failures(self, now):
         """
         Publish the control-failure sensors, restoring their history first if not yet done.

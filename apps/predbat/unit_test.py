@@ -264,6 +264,7 @@ from tests.test_integer_config import (
 )
 from tests.test_predbat_metrics_data_age import test_data_age_metrics_round_trip
 from tests.test_metrics_dashboard_control_conflicts import test_control_conflicts_metrics_round_trip, test_control_conflicts_dashboard_renders_section
+from tests.test_metrics_dashboard_control_failures import test_control_failures_metrics_round_trip, test_control_failures_dashboard_renders_section
 from tests.test_validate_config import test_validate_config, test_validate_config_retry, test_validate_config_secrets
 from tests.test_get_arg_missing_index import test_get_arg_missing_index_uses_default_quietly
 from tests.test_plan_json_rate_adjust import run_test_plan_json_rate_adjust
@@ -690,6 +691,8 @@ def main():
         ("data_age_metrics", test_data_age_metrics_round_trip, "Metrics dashboard data_age_days/data_age_required_days tests", False),
         ("control_conflicts_metrics", test_control_conflicts_metrics_round_trip, "Metrics dashboard control_conflicts round-trip tests", False),
         ("control_conflicts_dashboard", test_control_conflicts_dashboard_renders_section, "Metrics dashboard control_conflicts section render tests", False),
+        ("control_failures_metrics", test_control_failures_metrics_round_trip, "Metrics dashboard control_failures round-trip tests", False),
+        ("control_failures_dashboard", test_control_failures_dashboard_renders_section, "Metrics dashboard control_failures section render tests", False),
         ("plan_json_rate_adjust", run_test_plan_json_rate_adjust, "Plan JSON rate adjust type field tests", False),
         ("plan_why_reason", run_test_plan_why_reason, "Plan JSON per-slot 'why' reason text tests", False),
         ("plan_scenario_summary", run_test_plan_scenario_summary, "Plan scenario_summary_state export-limit tuple regression test", False),
