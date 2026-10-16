@@ -16,6 +16,9 @@ def make_mock_base():
     base.prefix = "predbat"
     base.local_tz = "Europe/London"
     base.args = {"user_id": "test-instance-123"}
+    # A real clock, as update_time() sets before any component runs - the component's midnight_utc
+    # is derived from it, and the published rate window is measured from that midnight.
+    base.now_utc = datetime.now(timezone.utc).replace(second=0, microsecond=0)
     # No storage component by default — the `storage` property returns None, so cache
     # load/save are no-ops. Tests that exercise caching inject a fake storage explicitly.
     base.components = None
@@ -2025,6 +2028,142 @@ def test_run_no_devices_does_not_save_cache_every_cycle():
 
     assert result is True
     api.save_kraken_cache.assert_not_called()
+
+
+def _fixed_contract_rates(first_day, last_day):
+    """Rates shaped like the fixed EDF day/night contract in #5534: three periods a day, newest first.
+
+    Each day D has 05:00-22:00Z day, 22:00-23:00Z cheap and 23:00Z-05:00Z (D+1) night periods.
+    """
+    rates = []
+    day = first_day
+    while day <= last_day:
+        d = day.strftime("%Y-%m-%d")
+        n = (day + timedelta(days=1)).strftime("%Y-%m-%d")
+        rates.append({"value_exc_vat": 29.634, "value_inc_vat": 29.634, "valid_from": f"{d}T05:00:00Z", "valid_to": f"{d}T22:00:00Z", "payment_method": None})
+        rates.append({"value_exc_vat": 6.66, "value_inc_vat": 6.66, "valid_from": f"{d}T22:00:00Z", "valid_to": f"{d}T23:00:00Z", "payment_method": None})
+        rates.append({"value_exc_vat": 6.66, "value_inc_vat": 6.66, "valid_from": f"{d}T23:00:00Z", "valid_to": f"{n}T05:00:00Z", "payment_method": None})
+        day += timedelta(days=1)
+    rates.reverse()
+    return rates
+
+
+def _make_publishing_api(now_utc, forecast_hours=48):
+    """A KrakenAPI with a known tariff, clock and forecast_hours, recording dashboard_item calls."""
+    api = make_kraken_api()
+    api.base.now_utc = now_utc
+    api.get_arg = MagicMock(side_effect=lambda arg, default=None, **kwargs: forecast_hours if arg == "forecast_hours" else default)
+    api.current_tariff = {"tariff_code": "E-1R-EDF_EV_FIX_GOELEC_12M_V2_HH-A", "product_code": "EDF_EV_FIX_GOELEC_12M_V2_HH"}
+    api.import_standing_charge = None
+    api.dashboard_item = MagicMock()
+    return api
+
+
+def _published(api, suffix):
+    """Return (state, attributes) of the last dashboard_item call for the given sensor suffix."""
+    entity = api.get_entity_name("sensor", suffix)
+    calls = [c for c in api.dashboard_item.call_args_list if c.args[0] == entity]
+    assert calls, f"{entity} was not published"
+    return calls[-1].kwargs["state"], calls[-1].kwargs["attributes"]
+
+
+def _utc(text):
+    """Parse a Kraken ...Z timestamp."""
+    return datetime.fromisoformat(text.replace("Z", "+00:00"))
+
+
+def test_publish_rate_sensors_bounds_long_contract_to_window():
+    """#5534: a months-long fixed contract publishes only midnight -1 day to midnight + (forecast_days + 1) days.
+
+    The issue's sensor carried 255 rows (~38 KB), past Home Assistant's 16,384-byte attribute limit.
+    """
+    import json
+    import pytz
+
+    now = pytz.timezone("Europe/London").localize(datetime(2026, 10, 13, 10, 15))
+    api = _make_publishing_api(now)
+    # Contract started 20 July; rates known up to the end of tomorrow (night period runs into 15 Oct)
+    api.import_rates = _fixed_contract_rates(datetime(2026, 7, 20), datetime(2026, 10, 14))
+    full = list(api.import_rates)
+    assert len(json.dumps(full)) > 16384, "fixture must reproduce the oversized payload"
+
+    api._publish_rate_sensors()
+    state, attributes = _published(api, "import_rates")
+    rates = attributes["rates"]
+
+    # Local midnight 13 Oct BST is 12 Oct 23:00Z, so the window is 11 Oct 23:00Z to 15 Oct 23:00Z (48h -> 2 days, + 1)
+    window_start = datetime(2026, 10, 11, 23, 0, tzinfo=timezone.utc)
+    window_end = datetime(2026, 10, 15, 23, 0, tzinfo=timezone.utc)
+    expected = [r for r in full if _utc(r["valid_to"]) > window_start and _utc(r["valid_from"]) < window_end]
+    assert rates == expected, f"published {[(r['valid_from'], r['valid_to']) for r in rates]}"
+    # 11 Oct 23:00Z night, then three periods a day for 12-14 Oct, newest first as fetched
+    assert len(rates) == 10
+    assert rates[0]["valid_from"] == "2026-10-14T23:00:00Z"
+    assert rates[-1]["valid_from"] == "2026-10-11T23:00:00Z"
+    assert state == len(rates)
+    assert len(json.dumps(attributes)) < 16384
+    # The in-memory list (and so the cache) keeps the full contract
+    assert api.import_rates == full
+
+
+def test_publish_rate_sensors_keeps_periods_straddling_window_edges():
+    """Periods overlapping either edge are kept whole; periods only touching an edge are dropped."""
+    import pytz
+
+    now = pytz.timezone("Europe/London").localize(datetime(2026, 1, 13, 10, 15))
+    api = _make_publishing_api(now)
+    # GMT: midnight is 13 Jan 00:00Z, so the window is 12 Jan 00:00Z to 16 Jan 00:00Z
+    straddle_start = {"value_inc_vat": 1.0, "valid_from": "2026-01-11T23:00:00Z", "valid_to": "2026-01-12T01:00:00Z"}
+    ends_at_start = {"value_inc_vat": 2.0, "valid_from": "2026-01-11T22:00:00Z", "valid_to": "2026-01-12T00:00:00Z"}
+    inside = {"value_inc_vat": 3.0, "valid_from": "2026-01-13T05:00:00Z", "valid_to": "2026-01-13T22:00:00Z"}
+    straddle_end = {"value_inc_vat": 4.0, "valid_from": "2026-01-15T23:00:00Z", "valid_to": "2026-01-16T05:00:00Z"}
+    starts_at_end = {"value_inc_vat": 5.0, "valid_from": "2026-01-16T00:00:00Z", "valid_to": "2026-01-16T05:00:00Z"}
+    open_ended = {"value_inc_vat": 6.0, "valid_from": "2025-06-01T00:00:00Z", "valid_to": None}
+    ancient = {"value_inc_vat": 7.0, "valid_from": "2025-06-01T00:00:00Z", "valid_to": "2025-06-02T00:00:00Z"}
+    unparseable = {"value_inc_vat": 8.0, "valid_from": "not-a-time", "valid_to": "2025-06-02T00:00:00Z"}
+    api.import_rates = [straddle_start, ends_at_start, inside, straddle_end, starts_at_end, open_ended, ancient, unparseable]
+
+    api._publish_rate_sensors()
+    state, attributes = _published(api, "import_rates")
+
+    assert attributes["rates"] == [straddle_start, inside, straddle_end, open_ended, unparseable]
+    assert state == 5
+
+
+def test_publish_rate_sensors_bounds_export_rates():
+    """The export rates sensor gets the same window as import."""
+    import pytz
+
+    now = pytz.timezone("Europe/London").localize(datetime(2026, 10, 13, 10, 15))
+    api = _make_publishing_api(now)
+    api.import_rates = _fixed_contract_rates(datetime(2026, 10, 12), datetime(2026, 10, 14))
+    api.export_tariff = {"tariff_code": "E-1R-EDF_SEG-A", "product_code": "EDF_SEG"}
+    api.export_rates = _fixed_contract_rates(datetime(2026, 7, 20), datetime(2026, 10, 14))
+
+    api._publish_rate_sensors()
+    state, attributes = _published(api, "export_rates")
+
+    assert len(attributes["rates"]) == 10
+    assert state == 10
+    assert len(api.export_rates) == 87 * 3
+
+
+def test_publish_rate_sensors_window_follows_forecast_hours():
+    """forecast_hours=72 is forecast_days=3, so the window runs to midnight + 4 days - what minute_data() keeps."""
+    import pytz
+
+    now = pytz.timezone("Europe/London").localize(datetime(2026, 1, 13, 10, 15))
+    api = _make_publishing_api(now, forecast_hours=72)
+    api.import_rates = _fixed_contract_rates(datetime(2026, 1, 1), datetime(2026, 1, 20))
+
+    api._publish_rate_sensors()
+    _, attributes = _published(api, "import_rates")
+    rates = attributes["rates"]
+
+    # GMT window 12 Jan 00:00Z to 17 Jan 00:00Z: from the 11 Jan night period to the 16 Jan night period
+    assert rates[-1]["valid_from"] == "2026-01-11T23:00:00Z"
+    assert rates[0]["valid_from"] == "2026-01-16T23:00:00Z"
+    assert len(rates) == 1 + 5 * 3
 
 
 def run_kraken_tests(my_predbat=None):
