@@ -559,6 +559,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.load_minutes = {}
         self.load_minutes_now = 0
         self.load_minutes_age = 0
+        self.load_minutes_source = None
         self.load_last_period = 0
         self.load_last_status = "baseline"
         self.dynamic_load_car_since = {}
@@ -634,6 +635,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.pv_today = {}
         self.load_minutes = {}
         self.load_minutes_age = 0
+        self.load_minutes_source = None
         self.load_forecast = {}
         self.load_forecast_array = []
         self.pv_forecast_minute = {}
@@ -678,6 +680,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.pv_today = {}
         self.load_minutes = {}
         self.load_minutes_age = 0
+        self.load_minutes_source = None
         self.battery_temperature_charge_curve = {}
         self.battery_temperature_discharge_curve = {}
         self.battery_temperature_history = {}

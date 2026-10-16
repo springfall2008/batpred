@@ -1283,11 +1283,20 @@ To disable, set it to 1440.
 out load_today sensors that update infrequently (e.g., sensors that increment in kWh units may only update every hour). This preprocessing happens before
 the main load data analysis and can significantly improve prediction accuracy, especially for systems with coarse-grained energy sensors. Set to 'false' to turn this feature off.
 
+- **load_history_fill_enable** (default true) fills gaps in the load_today history from the history of Predbat's own `predbat.load_energy_h0` sensor, which records
+today's measured load every cycle and keeps its name when your load sensor changes. This helps when you switch load_today to a different sensor (for example after
+changing inverter), where the new sensor has no history for the days before the switch, or when you cut over to another sensor and back again, leaving a stretch where
+load_today did not count. Any stretch of at least **load_filter_threshold** minutes where load_today did not move is filled with the load predbat.load_energy_h0 recorded
+at the time, and the days before load_today's own history started are counted as available history again. Stretches where predbat.load_energy_h0 did not move either
+are left for load_power_fill_enable and the average gap filling above. How far back this can reach depends on how long Home Assistant keeps history (10 days by default).
+Set to 'false' to turn this feature off.
+
 e.g.
 
 ```yaml
   load_filter_threshold: 60
   load_power_fill_enable: false
+  load_history_fill_enable: false
 ```
 
 See [Load filtering warning in FAQ's](faq.md#i-see-repeated-log-messages-warn-found-1-periods-of-zero-load-with-power-data-filling-using-power-integration).
