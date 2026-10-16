@@ -246,6 +246,8 @@ def run_execute_test(
     assert_immediate_charge_soc_freeze_array=None,
     pv_forecast=0.0,
     set_charge_freeze_only=False,
+    inverter_discharge_time_minutes_start=None,
+    inverter_discharge_time_minutes_end=None,
 ):
     if assert_immediate_charge_soc_freeze_array is None:
         assert_immediate_charge_soc_freeze_array = []
@@ -314,6 +316,10 @@ def run_execute_test(
     for inverter in my_predbat.inverters:
         inverter.charge_start_time_minutes = inverter_charge_time_minutes_start
         inverter.charge_end_time_minutes = inverter_charge_time_minutes_end
+        if inverter_discharge_time_minutes_start is not None:
+            inverter.discharge_start_time_minutes = inverter_discharge_time_minutes_start
+        if inverter_discharge_time_minutes_end is not None:
+            inverter.discharge_end_time_minutes = inverter_discharge_time_minutes_end
         # Reset the immediate-control sentinels so a scenario that doesn't call
         # adjust_charge_immediate()/adjust_export_immediate() this cycle reads as "untouched" (-1)
         # rather than inheriting whatever the previous scenario in this run happened to leave behind.
@@ -2347,9 +2353,49 @@ def run_execute_tests(my_predbat):
         assert_charge_start_time_minutes=my_predbat.minutes_now,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 23 * 60,
     )
+    # Reproduce an EMS which still holds yesterday's 23:30 start after midnight.
+    # A capable inverter keeps the overnight window; a same-day device starts at 00:00.
+    for can_span_midnight in [False, True]:
+        for inverter in my_predbat.inverters:
+            inverter.inv_can_span_midnight = can_span_midnight
+        failed |= run_execute_test(
+            my_predbat,
+            "charge_retained_yesterday_start_{}".format(can_span_midnight),
+            charge_window_best=[{"start": 0, "end": 330, "average": 1}],
+            charge_limit_best=charge_limit_best,
+            set_charge_window=True,
+            set_export_window=True,
+            minutes_now=45,
+            inverter_charge_time_minutes_start=-30,
+            inverter_charge_time_minutes_end=330,
+            assert_charge_time_enable=True,
+            assert_status="Charging",
+            assert_charge_start_time_minutes=-30 if can_span_midnight else 0,
+            assert_charge_end_time_minutes=330,
+        )
+        if failed:
+            return failed
+
     # Can span midnight false test
     for inverter in my_predbat.inverters:
         inverter.inv_can_span_midnight = False
+    if failed:
+        return failed
+
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_tomorrow_crosses_its_midnight",
+        charge_window_best=[{"start": 1450, "end": 3210, "average": 1}],
+        charge_limit_best=charge_limit_best,
+        set_charge_window=True,
+        set_export_window=True,
+        minutes_now=1430,
+        inverter_charge_time_minutes_start=1450,
+        assert_charge_time_enable=True,
+        assert_status="Demand",
+        assert_charge_start_time_minutes=1450,
+        assert_charge_end_time_minutes=2879,
+    )
     if failed:
         return failed
 
@@ -3601,6 +3647,51 @@ def run_execute_tests(my_predbat):
     # Can span midnight false test
     for inverter in my_predbat.inverters:
         inverter.inv_can_span_midnight = False
+
+    for can_span_midnight in [False, True]:
+        for inverter in my_predbat.inverters:
+            inverter.inv_can_span_midnight = can_span_midnight
+        failed |= run_execute_test(
+            my_predbat,
+            "export_retained_yesterday_start_{}".format(can_span_midnight),
+            export_window_best=[{"start": 0, "end": 330, "average": 1}],
+            export_limits_best=export_limits_best,
+            set_charge_window=True,
+            set_export_window=True,
+            soc_kw=10,
+            minutes_now=45,
+            inverter_charge_time_minutes_start=720,
+            inverter_charge_time_minutes_end=780,
+            inverter_discharge_time_minutes_start=-30,
+            inverter_discharge_time_minutes_end=330,
+            assert_force_export=True,
+            assert_status="Exporting",
+            assert_immediate_soc_target=0,
+            assert_discharge_start_time_minutes=-30 if can_span_midnight else 0,
+            assert_discharge_end_time_minutes=331 if can_span_midnight else 330,
+        )
+        if failed:
+            return failed
+    for inverter in my_predbat.inverters:
+        inverter.inv_can_span_midnight = False
+
+    failed |= run_execute_test(
+        my_predbat,
+        "export_tomorrow_crosses_its_midnight",
+        export_window_best=[{"start": 1450, "end": 3210, "average": 1}],
+        export_limits_best=export_limits_best,
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=10,
+        minutes_now=1430,
+        inverter_discharge_time_minutes_start=1450,
+        assert_status="Demand",
+        assert_force_export=True,
+        assert_discharge_start_time_minutes=1450,
+        assert_discharge_end_time_minutes=2879,
+    )
+    if failed:
+        return failed
 
     failed |= run_execute_test(
         my_predbat,
