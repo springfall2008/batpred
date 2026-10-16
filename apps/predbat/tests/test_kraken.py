@@ -551,6 +551,57 @@ def test_standing_charge_converts_pence_to_pounds():
     assert result == 0.53
 
 
+def _fetch_standing_charge_with_rows(rows):
+    """Run async_fetch_standing_charges() against a REST response carrying the given rows."""
+    api = make_kraken_api()
+    api.current_tariff = {"tariff_code": "E-1R-EDF_STANDARD_VARIABLE-J", "product_code": "EDF_STANDARD_VARIABLE"}
+
+    mock_response = AsyncMock()
+    mock_response.status = 200
+    mock_response.json = AsyncMock(return_value={"results": rows})
+
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_response),
+            __aexit__=AsyncMock(return_value=None),
+        )
+    )
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        return asyncio.run(api.async_fetch_standing_charges())
+
+
+def test_standing_charge_prefers_direct_debit_when_listed_second():
+    """GH#5502: EDF lists the NON_DIRECT_DEBIT row first; the Direct Debit charge must still be chosen."""
+    rows = [
+        {"value_inc_vat": 61.186, "valid_from": "2026-10-01T00:00:00Z", "valid_to": None, "payment_method": "NON_DIRECT_DEBIT"},
+        {"value_inc_vat": 52.317, "valid_from": "2026-10-01T00:00:00Z", "valid_to": None, "payment_method": "DIRECT_DEBIT"},
+        {"value_inc_vat": 60.0, "valid_from": "2026-07-01T00:00:00Z", "valid_to": "2026-10-01T00:00:00Z", "payment_method": "NON_DIRECT_DEBIT"},
+        {"value_inc_vat": 51.0, "valid_from": "2026-07-01T00:00:00Z", "valid_to": "2026-10-01T00:00:00Z", "payment_method": "DIRECT_DEBIT"},
+    ]
+    assert _fetch_standing_charge_with_rows(rows) == 52.317 / 100.0
+
+
+def test_standing_charge_single_payment_method_unchanged():
+    """A response offering only NON_DIRECT_DEBIT rows is used as-is rather than discarded."""
+    rows = [
+        {"value_inc_vat": 61.186, "valid_from": "2026-10-01T00:00:00Z", "valid_to": None, "payment_method": "NON_DIRECT_DEBIT"},
+    ]
+    assert _fetch_standing_charge_with_rows(rows) == 61.186 / 100.0
+
+
+def test_standing_charge_null_payment_method_unchanged():
+    """Rows with a null payment_method keep the existing first-row behaviour."""
+    rows = [
+        {"value_inc_vat": 48.0, "valid_from": "2026-10-01T00:00:00Z", "valid_to": None, "payment_method": None},
+        {"value_inc_vat": 47.0, "valid_from": "2026-07-01T00:00:00Z", "valid_to": "2026-10-01T00:00:00Z", "payment_method": None},
+    ]
+    assert _fetch_standing_charge_with_rows(rows) == 48.0 / 100.0
+
+
 def test_fetch_standing_charges_rest_404_falls_back_to_graphql():
     """async_fetch_standing_charges() falls back to GraphQL when REST returns 404.
 
