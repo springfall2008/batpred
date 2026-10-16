@@ -567,6 +567,13 @@ class Inverter:
         self.inv_write_backoff = INVERTER_DEF[self.inverter_type].get("write_backoff", False)
         self.inv_has_idle_time = INVERTER_DEF[self.inverter_type]["has_idle_time"]
         self.inv_can_span_midnight = INVERTER_DEF[self.inverter_type]["can_span_midnight"]
+        # A device can restrict its own profile via a can_span_midnight attribute on its charge
+        # start time entity, e.g. a same-day EMS behind a Hub whose other inverters can span
+        # midnight. It may only restrict: an attribute never loosens a profile that cannot span.
+        time_entity = self.base.get_arg("charge_start_time", indirect=False, index=self.id)
+        # Some templates give a fixed time rather than an entity, which has no attributes to read
+        if is_entity_id(time_entity) and self.base.get_state_wrapper(time_entity, attribute="can_span_midnight") is False:
+            self.inv_can_span_midnight = False
         self.inv_charge_discharge_with_rate = INVERTER_DEF[self.inverter_type].get("charge_discharge_with_rate", False)
         self.inv_target_soc_used_for_discharge = INVERTER_DEF[self.inverter_type].get("target_soc_used_for_discharge", True)
         self.inv_has_solis_energy_control = INVERTER_DEF[self.inverter_type].get("has_solis_energy_control", False)

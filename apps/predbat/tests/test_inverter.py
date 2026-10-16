@@ -1219,6 +1219,64 @@ def test_grid_charge_only_disables_discharge_freeze(test_name, my_predbat, ha):
     return failed
 
 
+def test_hub_midnight_capability_from_entity(test_name, my_predbat, ha):
+    """Read a device's can_span_midnight restriction per inverter and refresh, preserving other profiles."""
+    failed = False
+    print("Test: {}".format(test_name))
+    saved_args = copy.deepcopy(my_predbat.args)
+    saved_items = copy.deepcopy(ha.dummy_items)
+    orig_log = my_predbat.log
+    try:
+        my_predbat.args["charge_start_time"] = ["select.ems_start", "select.other_start"]
+        my_predbat.args["inverter_type"] = ["GWMQTT", "GWMQTT"]
+        ha.dummy_items["select.ems_start"] = {"state": "00:00:00", "can_span_midnight": False}
+        ha.dummy_items["select.other_start"] = {"state": "00:00:00"}
+        first = Inverter(my_predbat, 0, quiet=True)
+        second = Inverter(my_predbat, 1, quiet=True)
+        if first.inv_can_span_midnight or not second.inv_can_span_midnight or not INVERTER_DEF["GWMQTT"]["can_span_midnight"]:
+            print("ERROR: {} the EMS capability must not affect another inverter or the GWMQTT profile".format(test_name))
+            failed = True
+        for value, expect in [(None, True), (False, False), (True, True), ("false", True), (0, True)]:
+            ha.dummy_items["select.ems_start"] = {"state": "00:00:00", "can_span_midnight": value}
+            first.refresh_config(quiet=True)
+            if first.inv_can_span_midnight is not expect:
+                print("ERROR: {} capability {} expected {} got {}".format(test_name, value, expect, first.inv_can_span_midnight))
+                failed = True
+        my_predbat.args["inverter_type"] = ["GEE", "GWMQTT"]
+        ha.dummy_items["select.ems_start"] = {"state": "00:00:00", "can_span_midnight": True}
+        first.refresh_config(quiet=True)
+        if first.inv_can_span_midnight:
+            print("ERROR: {} an entity must not loosen the direct EMS profile".format(test_name))
+            failed = True
+        # Any inverter type can be restricted, not only a Hub device
+        my_predbat.args["inverter_type"] = ["GE", "GWMQTT"]
+        for value, expect in [(None, True), (False, False), (True, True)]:
+            ha.dummy_items["select.ems_start"] = {"state": "00:00:00", "can_span_midnight": value}
+            first.refresh_config(quiet=True)
+            if first.inv_can_span_midnight is not expect:
+                print("ERROR: {} GE capability {} expected {} got {}".format(test_name, value, expect, first.inv_can_span_midnight))
+                failed = True
+        if not INVERTER_DEF["GE"]["can_span_midnight"]:
+            print("ERROR: {} an entity must not change the shared GE profile".format(test_name))
+            failed = True
+        # A fixed time (as the Sofar templates use) has no attributes, and must not warn every refresh
+        my_predbat.args["charge_start_time"] = ["00:00:00", "select.other_start"]
+        log_messages = []
+        my_predbat.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
+        first.refresh_config(quiet=True)
+        my_predbat.log = orig_log
+        if not first.inv_can_span_midnight or any("fixed value" in message for message in log_messages):
+            print("ERROR: {} a fixed charge start time should be skipped quietly, logged {}".format(test_name, log_messages))
+            failed = True
+    finally:
+        my_predbat.log = orig_log
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        ha.dummy_items.clear()
+        ha.dummy_items.update(saved_items)
+    return failed
+
+
 def test_rate_step_from_charge_rate_entity(test_name, my_predbat, ha):
     """
     The charge_rate entity's step_percent_of_capacity attribute sets the rate step per inverter, for a type that
@@ -5601,6 +5659,7 @@ def run_inverter_tests(my_predbat_dummy):
     # #5324: GivEnergy stores the rate as a whole percent of capacity, so 1300W reads back 1206W
     failed |= test_rate_tolerances("rate_tolerances", inv)
     failed |= test_custom_inverter_def_drops_rate_step("custom_inverter_def_drops_rate_step", my_predbat, ha)
+    failed |= test_hub_midnight_capability_from_entity("hub_midnight_capability_from_entity", my_predbat, ha)
     failed |= test_rate_step_from_charge_rate_entity("rate_step_from_charge_rate_entity", my_predbat, ha)
     failed |= test_grid_charge_only_disables_discharge_freeze("grid_charge_only_disables_discharge_freeze", my_predbat, ha)
     failed |= test_rate_control_is_per_inverter("rate_control_is_per_inverter", my_predbat, ha)

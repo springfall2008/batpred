@@ -531,6 +531,29 @@ class TestInjectEntities:
         _, attrs = gw._dashboard_calls[f"sensor.predbat_gateway_{suffix}_battery_temperature"]
         assert attrs == GATEWAY_ATTRIBUTE_TABLE.get("battery_temperature", {})
 
+    def test_ems_midnight_capability_stays_with_its_schedule_entities(self):
+        """An EMS carries the same-day restriction without changing other Hub inverters or shared attributes."""
+        from gateway import GATEWAY_ATTRIBUTE_TABLE
+
+        gw = self._make_gateway()
+        status = self._make_status()
+        status.inverters[0].type = pb.INVERTER_TYPE_GIVENERGY_EMS
+        gw._inject_entities(status)
+        names = ["charge_slot1_start", "charge_slot1_end", "discharge_slot1_start", "discharge_slot1_end"]
+        for name in names:
+            _, attrs = gw._dashboard_calls[f"select.predbat_gateway_456789_{name}"]
+            assert attrs["can_span_midnight"] is False
+            assert "can_span_midnight" not in GATEWAY_ATTRIBUTE_TABLE.get(name, {})
+
+        # Reclassification must remove a previous EMS restriction, including when
+        # an entity id is reused after discovery refresh.
+        for inv_type in [pb.INVERTER_TYPE_GIVENERGY, pb.INVERTER_TYPE_GIVENERGY_GATEWAY, pb.INVERTER_TYPE_SOLIS_HYBRID]:
+            status.inverters[0].type = inv_type
+            gw._inject_entities(status)
+            for name in names:
+                _, attrs = gw._dashboard_calls[f"select.predbat_gateway_456789_{name}"]
+                assert "can_span_midnight" not in attrs
+
     def test_schedule_select_entities(self):
         """Schedule select entities are published with correct HH:MM:SS state and table attributes."""
         from gateway import GATEWAY_ATTRIBUTE_TABLE
@@ -1121,6 +1144,60 @@ class TestPlanHookConversion:
         gw._last_plan_data = None
         gw._last_plan_publish_time = 0
         return gw
+
+    def test_same_day_hub_plan_splits_charge_and_export_at_midnight(self):
+        """The native backup plan preserves rate, target and absolute days across midnight."""
+        from types import SimpleNamespace
+
+        gw = self._make_gateway()
+        gw.base.inverters = [SimpleNamespace(inverter_type="GWMQTT", inv_can_span_midnight=False)]
+        gw._on_plan_executed(
+            charge_windows=[{"start": 1410, "end": 1770}],
+            charge_limits=[8],
+            export_windows=[{"start": 2820, "end": 2910}],
+            export_limits=[(0, 20, 0.5)],
+            charge_rate_w=3000,
+            discharge_rate_w=2000,
+            soc_max=10,
+        )
+        entries, _ = gw._pending_plan
+        assert [(e["start_hour"], e["start_minute"], e["end_hour"], e["end_minute"]) for e in entries] == [(23, 30, 23, 59), (24, 0, 29, 30), (47, 0, 47, 59), (48, 0, 48, 30)]
+        assert [(e["mode"], e["power_w"], e["target_soc"]) for e in entries] == [(1, 3000, 80), (1, 3000, 80), (2, 1000, 20), (2, 1000, 20)]
+        # Exercise the real protobuf serialiser, including absolute hours >= 24.
+        encoded = gw.build_execution_plan(entries, plan_version=1, timezone="Europe/London")
+        plan = pb.ExecutionPlan.FromString(encoded)
+        assert len(plan.entries) == 4
+        assert plan.entries[1].start_hour == 24 and plan.entries[3].end_hour == 48
+
+    def test_same_day_plan_drops_expired_starts_and_caps_after_sorting(self):
+        """Retained negative starts cannot enter an unsigned protobuf field or consume future capacity."""
+        from types import SimpleNamespace
+
+        gw = self._make_gateway()
+        gw.base.inverters = [SimpleNamespace(inverter_type="GWMQTT", inv_can_span_midnight=False)]
+        gw._on_plan_executed(
+            charge_windows=[{"start": 1410, "end": 1770}, {"start": -30, "end": 330}, {"start": 2820, "end": 2910}, {"start": -90, "end": -30}],
+            charge_limits=[8, 8, 8, 8],
+            export_windows=[{"start": 600, "end": 660}, {"start": 700, "end": 760}],
+            export_limits=[(0, 20, 1.0), (0, 20, 1.0)],
+        )
+        entries, _ = gw._pending_plan
+        starts = [e["start_hour"] * 60 + e["start_minute"] for e in entries]
+        assert starts == [0, 600, 700, 1410, 1440, 2820]
+        assert len(entries) == 6
+        assert all(e["start_hour"] <= e["end_hour"] for e in entries)
+        gw.build_execution_plan(entries, plan_version=1, timezone="Europe/London")
+
+    def test_midnight_capable_hub_plan_keeps_overnight_window(self):
+        """Hub hardware which supports overnight windows retains the unsplit plan."""
+        from types import SimpleNamespace
+
+        gw = self._make_gateway()
+        gw.base.inverters = [SimpleNamespace(inverter_type="GWMQTT", inv_can_span_midnight=True)]
+        gw._on_plan_executed(charge_windows=[{"start": 1410, "end": 1770}], charge_limits=[8])
+        entries, _ = gw._pending_plan
+        assert len(entries) == 1
+        assert (entries[0]["start_hour"], entries[0]["end_hour"]) == (23, 29)
 
     def test_charge_window_conversion(self):
         """Charge windows are converted to mode=1 plan entries."""
