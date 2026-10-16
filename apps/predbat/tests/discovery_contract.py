@@ -25,6 +25,7 @@ ROW_DEFAULTS = {
     "has_ge_eco_toggle": False,
     "charge_discharge_with_rate": False,
     "target_soc_used_for_discharge": True,
+    "rate_step_percent_of_capacity": 0,
 }
 
 # Row fields the record is not expected to rebuild: the display name, and two fields nothing reads

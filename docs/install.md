@@ -133,9 +133,11 @@ uncomment the Solcast cloud interface settings in `apps.yaml` and set the API ke
 
 ```yaml
   solcast_host: 'https://api.solcast.com.au/'
-  solcast_api_key: 'xxxx'
+  solcast_api_key: !secret solcast_api_key
   solcast_poll_hours: 8
 ```
+
+Keep the API key in `secrets.yaml` rather than in `apps.yaml` - see [Storing secrets](apps-yaml.md#storing-secrets).
 
 NB: If you use Predbat to obtain your Solcast solar forecast then you can't
 [include the Solar Forecast within the Home Assistant Energy dashboard](https://www.home-assistant.io/dashboards/energy/#solar-production-graph)
@@ -188,7 +190,7 @@ Optionally you can set an api_key for personal or professional accounts and you 
 ``` yaml
   forecast_solar:
     - postcode: SW1A 2AB
-      api_key: 'xxxxx'
+      api_key: !secret forecast_solar_api_key
       days: 3
 ```
 

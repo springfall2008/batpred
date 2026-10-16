@@ -723,6 +723,20 @@ These sensors can be ignored and excluded from the recorder history if you wish.
 
 - sensor.predbat_alertfeed_status - Gives you data on the currently active weather alert (if configured) and in the attributes a list of all active alerts with their details
 
+## Control failure data
+
+Predbat checks that the battery actually does what it was commanded during each Charging, Exporting (force export), Freeze charging and Freeze exporting slot.
+Five minutes after an inverter enters one of these modes, Predbat compares the measured battery power against the rate it asked that inverter for, allowing for the battery's charge curve, temperature and solar.
+If the battery stays well short of it (below 25% of that rate) or, in a freeze mode, flows the wrong way by more than 200W, for three readings in a row, the slot is counted as a control failure.
+Each failed slot logs one warning and is counted once, however long it lasts.
+Nothing is checked in read-only mode, while an inverter is calibrating, after the slot has ended, or when the inverter's battery power sensor cannot be read.
+
+- **predbat.control_failures** - the number of failed slots in the last 24 hours. The `events` attribute lists recent failures (inverter, mode, slot times, requested and measured power, and how many minutes the battery was not following the command) and `by_mode` breaks the count down by mode.
+- **predbat.control_failures_total** - the lifetime count of failed slots, suitable for Home Assistant long-term statistics.
+
+Common causes are an inverter app or schedule overriding Predbat's mode, a battery management system limiting the charge or discharge rate, a command that never reached the inverter, or a cloud integration that reports battery power several minutes late.
+The same data is shown in the Control Failures section of the [Metrics view](web-interface.md#metrics-view).
+
 ## Predbat Logfile
 
 Predbat writes detailed logging, status and progress activity information to a logfile as it runs and so this file should be checked if **predbat.status** reports an error,
