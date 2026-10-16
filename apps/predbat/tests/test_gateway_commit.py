@@ -1,6 +1,8 @@
 """Hub slot windows stage in the gateway and are sent when the schedule write switch is pressed."""
 
 import asyncio
+import functools
+import json
 from unittest.mock import MagicMock, patch
 
 import pytz
@@ -37,6 +39,9 @@ def make_gateway(subscribed=True, acks_seen=True):
     gw._last_read_only = None
     gw._read_only_mismatch_logged = False
     gw._loop = None
+    gw._staged = {}
+    gw._commit_inflight = set()
+    gw._commit_tasks = set()
     gw._published = []  # (command, command_id, kwargs)
     gw.cache = {}  # entity_id -> state, as the generic write loop reads it back
     gw.attrs = {}  # entity_id -> attributes of the last publish
@@ -163,3 +168,307 @@ class TestGatewayStaging:
         run(direct.select_event(SLOT_END, "05:00:00"))
         assert direct._published == []
         assert (direct._staged[(SUFFIX, "charge")]["start"], direct._staged[(SUFFIX, "charge")]["end"]) == (130, 500)
+
+
+WRITE = "switch.predbat_gateway_456789_schedule_write"
+
+
+def slot_json(start, end):
+    """The schedule_json a complete window is sent as."""
+    return json.dumps({"start": start, "end": end})
+
+
+def applies(command, kwargs):
+    """A Hub that applies every command."""
+    if command.endswith("_slot"):
+        return True, json.loads(kwargs["schedule_json"])
+    return True, {"enable": kwargs["enable"]}
+
+
+class FakeHub:
+    """Answers published commands each time the commit waits for an ack, as the Hub would.
+
+    responder(command, kwargs) returns (ok, applied), or None for no answer.
+    """
+
+    def __init__(self, gw, now, responder=applies):
+        self.gw = gw
+        self.now = now
+        self.responder = responder
+        self.answered = 0
+        self.waits = 0
+        self.during = None  # coroutine function run once, on the first wait
+
+    async def pause(self):
+        """One ack wait: time moves on a second and the Hub answers what it has been sent."""
+        self.waits += 1
+        self.now["now"] += 1
+        if self.during is not None:
+            during, self.during = self.during, None
+            await during()
+        while self.answered < len(self.gw._published):
+            command, command_id, kwargs = self.gw._published[self.answered]
+            self.answered += 1
+            reply = self.responder(command, kwargs)
+            if reply is None:
+                continue
+            ok, applied = reply
+            ack = {"command_id": f"PBAT{command_id}", "command": command, "ok": ok}
+            if ok:
+                ack["applied"] = applied
+            else:
+                ack["error"] = "would_disable_charge_zero_length_slot"
+            self.gw._process_ack(json.dumps(ack).encode("utf-8"))
+
+
+def sent(gw):
+    """Published (command, payload) pairs, without command ids or serial."""
+    result = []
+    for command, _, kwargs in gw._published:
+        payload = kwargs.get("schedule_json", kwargs.get("enable"))
+        result.append((command, payload))
+    return result
+
+
+def hub_test(method):
+    """Stop the patches setup_hub() started once the test ends; run_gateway_tests calls no tearDown."""
+
+    @functools.wraps(method)
+    def wrapper(self):
+        """Run the test, then stop its patches."""
+        try:
+            return method(self)
+        finally:
+            self.tearDown()
+
+    return wrapper
+
+
+class TestGatewayCommit:
+    """Pressing the schedule write switch sends each staged window to the Hub, on the gateway's own loop."""
+
+    def setup_hub(self, status=None, responder=applies, **kwargs):
+        """A gateway with telemetry injected, a controllable clock and a fake Hub answering acks."""
+        gw = make_gateway(**kwargs)
+        now, clock_patch = clock()
+        hub = FakeHub(gw, now, responder)
+        patches = [clock_patch, patch("gateway._commit_pause", hub.pause)]
+        for active in patches:
+            active.start()
+        self._patches = patches
+        inject(gw, status or make_status())
+        return gw, hub
+
+    def tearDown(self):
+        """Stop the clock and pause patches."""
+        for active in getattr(self, "_patches", []):
+            active.stop()
+        self._patches = []
+
+    def stage(self, gw, side, start, end, enable=None):
+        """Write a window (and optionally its enable) the way Predbat does, before pressing."""
+        run(gw.select_event(f"select.predbat_gateway_456789_{side}_slot1_start", start))
+        run(gw.select_event(f"select.predbat_gateway_456789_{side}_slot1_end", end))
+        if enable is not None:
+            run(gw.switch_event(f"switch.predbat_gateway_456789_{side}_enabled", "turn_on" if enable else "turn_off"))
+
+    def press(self, gw):
+        """Press the schedule write switch as press_and_poll_button does."""
+        run(gw.switch_event(WRITE, "turn_on"))
+
+    @hub_test
+    def test_write_switch_publishes_full_pair_and_resets(self):
+        """One press sends the complete window once, clears the staging and leaves the switch off."""
+        gw, hub = self.setup_hub()
+        self.stage(gw, "charge", "02:30:00", "03:05:00")
+        self.press(gw)
+        assert sent(gw) == [("set_charge_slot", slot_json(230, 305))]
+        assert gw._published[0][2]["serial"] == SERIAL
+        assert gw.cache[WRITE] == "off"
+        assert gw._staged == {}
+        assert (gw.cache[SLOT_START], gw.cache[SLOT_END]) == ("02:30:00", "03:05:00")
+
+    @hub_test
+    def test_ems_enabled_full_pair_avoids_zero_length_refusal(self):
+        """Moving 00:00-02:30 to 02:30-03:05 on an enabled EMS never sends the start on its own."""
+
+        def ems(command, kwargs):
+            """An enabled EMS refuses a window with a missing or equal end (ems_plan_update)."""
+            schedule = json.loads(kwargs["schedule_json"])
+            if "end" not in schedule or schedule["start"] == schedule["end"]:
+                return False, None
+            return True, schedule
+
+        gw, hub = self.setup_hub(make_status(inv_type=pb.INVERTER_TYPE_GIVENERGY_EMS, charge=(0, 230), charge_enabled=True), responder=ems)
+        self.stage(gw, "charge", "02:30:00", "03:05:00")
+        self.press(gw)
+        assert sent(gw) == [("set_charge_slot", slot_json(230, 305))]
+        assert gw._staged == {}
+        assert gw.cache[SLOT_START] == "02:30:00"
+
+    @hub_test
+    def test_ems_disabled_recorded_then_enable(self):
+        """A disabled EMS records the window; the staged enable then goes out after it."""
+
+        def ems(command, kwargs):
+            """A disabled EMS records a complete window, and applies the enable."""
+            if command == "set_charge_slot":
+                return True, {**json.loads(kwargs["schedule_json"]), "recorded": True}
+            return True, {"enable": kwargs["enable"]}
+
+        gw, hub = self.setup_hub(make_status(inv_type=pb.INVERTER_TYPE_GIVENERGY_EMS, charge_enabled=False), responder=ems)
+        self.stage(gw, "charge", "02:30:00", "03:05:00", enable=True)
+        assert gw._published == []
+        self.press(gw)
+        assert sent(gw) == [("set_charge_slot", slot_json(230, 305)), ("set_charge_enable", True)]
+        assert gw._staged == {}
+        assert gw.cache[CHARGE_ENABLED] == "on"
+
+    @hub_test
+    def test_ems_inactive_export_preparation_never_enables(self):
+        """An export window prepared while export is off is recorded and never enabled."""
+
+        def ems(command, kwargs):
+            """A disabled EMS records the export window."""
+            return True, {**json.loads(kwargs["schedule_json"]), "recorded": True}
+
+        gw, hub = self.setup_hub(make_status(inv_type=pb.INVERTER_TYPE_GIVENERGY_EMS, discharge_enabled=False), responder=ems)
+        self.stage(gw, "discharge", "17:00:00", "19:00:00")
+        self.press(gw)
+        assert sent(gw) == [("set_discharge_slot", slot_json(1700, 1900))]
+        assert gw._staged == {}
+
+    @hub_test
+    def test_refused_pair_drops_staging(self):
+        """A refused window is not re-sent; the selects show the Hub's schedule again for the next cycle."""
+        gw, hub = self.setup_hub(responder=lambda command, kwargs: (False, None))
+        self.stage(gw, "charge", "02:30:00", "03:05:00")
+        self.press(gw)
+        assert sent(gw) == [("set_charge_slot", slot_json(230, 305))]
+        assert gw._staged == {}
+        assert (gw.cache[SLOT_START], gw.cache[SLOT_END]) == ("01:30:00", "04:30:00")
+        assert any("Warn:" in str(call.args[0]) and "charge window" in str(call.args[0]) for call in gw.log.call_args_list)
+
+    @hub_test
+    def test_missing_ack_resends_up_to_three_times(self):
+        """An unanswered window is re-sent once per ack window, three sends in all, then given up."""
+        gw, hub = self.setup_hub(responder=lambda command, kwargs: None)
+        self.stage(gw, "charge", "02:30:00", "03:05:00")
+        self.press(gw)
+        assert sent(gw) == [("set_charge_slot", slot_json(230, 305))] * 3
+        assert gw._staged == {}
+        assert gw.cache[SLOT_START] == "01:30:00"
+
+    @hub_test
+    def test_refused_export_move_while_armed_disables_export(self):
+        """A refused export move with the old export window armed turns export off (#5532)."""
+        gw, hub = self.setup_hub(make_status(discharge_enabled=True), responder=lambda command, kwargs: (False, None) if command.endswith("_slot") else (True, {"enable": kwargs["enable"]}))
+        self.stage(gw, "discharge", "17:00:00", "19:00:00")
+        self.press(gw)
+        assert sent(gw) == [("set_discharge_slot", slot_json(1700, 1900)), ("set_discharge_enable", False)]
+
+    @hub_test
+    def test_refused_charge_move_does_not_disable_charge(self):
+        """A refused charge move leaves the charge enable alone, as before."""
+        gw, hub = self.setup_hub(make_status(charge_enabled=True), responder=lambda command, kwargs: (False, None))
+        self.stage(gw, "charge", "02:30:00", "03:05:00")
+        self.press(gw)
+        assert sent(gw) == [("set_charge_slot", slot_json(230, 305))]
+
+    @hub_test
+    def test_staged_disable_is_sent_before_the_pair(self):
+        """A disable held with a window goes out first, so a refused window cannot leave the side enabled."""
+        gw, hub = self.setup_hub(make_status(charge_enabled=True), responder=lambda command, kwargs: (False, None) if command.endswith("_slot") else (True, {"enable": kwargs["enable"]}))
+        self.stage(gw, "charge", "00:00:00", "00:00:00", enable=False)
+        self.press(gw)
+        assert sent(gw)[0] == ("set_charge_enable", False)
+        assert ("set_charge_slot", slot_json(0, 0)) in sent(gw)
+
+    @hub_test
+    def test_second_press_during_commit_is_not_lost(self):
+        """A press while one side is committing commits the other side, and a newer window follows the current one."""
+        gw, hub = self.setup_hub()
+        self.stage(gw, "charge", "02:30:00", "03:05:00")
+
+        async def meanwhile():
+            """Predbat writes the export window and a later charge end, then presses again."""
+            await gw.select_event(DISCHARGE_START, "17:00:00")
+            await gw.select_event(DISCHARGE_END, "19:00:00")
+            await gw.select_event(SLOT_END, "03:30:00")
+            await gw.switch_event(WRITE, "turn_on")
+
+        hub.during = meanwhile
+        self.press(gw)
+        assert sent(gw) == [("set_charge_slot", slot_json(230, 305)), ("set_discharge_slot", slot_json(1700, 1900)), ("set_charge_slot", slot_json(230, 330))]
+        assert gw._staged == {}
+
+    @hub_test
+    def test_press_without_staging_publishes_nothing(self):
+        """A press with nothing staged (e.g. after a target SOC change) sends nothing."""
+        gw, hub = self.setup_hub()
+        self.press(gw)
+        assert gw._published == []
+        assert gw.cache[WRITE] == "off"
+
+    @hub_test
+    def test_commit_without_acks_publishes_once_and_clears_staging(self):
+        """Without an ack subscription the window and enable are published once each and staging is dropped."""
+        gw, hub = self.setup_hub(make_status(charge_enabled=False), subscribed=False)
+        self.stage(gw, "charge", "02:30:00", "03:05:00", enable=True)
+        self.press(gw)
+        assert sent(gw) == [("set_charge_slot", slot_json(230, 305)), ("set_charge_enable", True)]
+        assert hub.waits == 0
+        assert gw._staged == {}
+
+    @hub_test
+    def test_direct_battery_uses_same_commit(self):
+        """A directly controlled AIO commits the same way, and the applied ack updates its selects."""
+        gw, hub = self.setup_hub(make_status(inv_type=pb.INVERTER_TYPE_GIVENERGY, charge_enabled=True))
+        self.stage(gw, "charge", "23:30:00", "05:30:00")
+        self.press(gw)
+        assert sent(gw) == [("set_charge_slot", slot_json(2330, 530))]
+        assert (gw.cache[SLOT_START], gw.cache[SLOT_END]) == ("23:30:00", "05:30:00")
+
+    @hub_test
+    def test_schedule_write_switch_published_per_control_target(self):
+        """Telemetry publishes the schedule write switch, always off, beside the slot selects."""
+        gw, hub = self.setup_hub()
+        assert gw.cache[WRITE] == "off"
+        assert gw.attrs[WRITE]["friendly_name"] == "Schedule Write"
+
+    @hub_test
+    def test_write_switch_handler_does_not_block(self):
+        """With the gateway's loop running elsewhere, the switch handler returns before the Hub answers."""
+        import threading
+        import time
+
+        gw, hub = self.setup_hub(responder=lambda command, kwargs: None)
+        for active in self._patches[1:]:
+            active.stop()  # real ack waits on the gateway's own loop
+        self._patches = self._patches[:1]
+        loop = asyncio.new_event_loop()
+        thread = threading.Thread(target=loop.run_forever, daemon=True)
+        thread.start()
+        gw._loop = loop
+        try:
+            self.stage(gw, "charge", "02:30:00", "03:05:00")
+            started = time.time()
+            self.press(gw)
+            assert time.time() - started < 1
+            for _ in range(200):
+                if gw._published:
+                    break
+                time.sleep(0.01)
+            assert sent(gw) == [("set_charge_slot", slot_json(230, 305))]
+            assert (SUFFIX, "charge") in gw._commit_inflight
+            command_id = gw._published[0][1]
+            gw._process_ack(json.dumps({"command_id": f"PBAT{command_id}", "command": "set_charge_slot", "ok": True, "applied": {"start": 230, "end": 305}}).encode("utf-8"))
+            for _ in range(300):
+                if not gw._staged:
+                    break
+                time.sleep(0.01)
+            assert gw._staged == {}
+        finally:
+            loop.call_soon_threadsafe(loop.stop)
+            thread.join(timeout=2)
+            loop.close()

@@ -7552,10 +7552,11 @@ def run_gateway_tests(my_predbat=None):
     from tests.test_gateway_charge_window import TestGatewayChargeWindow
     from tests.test_gateway_discharge_window import TestGatewayDischargeWindow
     from tests.test_gateway_display import TestGatewayDisplayOnly
-    from tests.test_gateway_commit import TestGatewayStaging
+    from tests.test_gateway_commit import TestGatewayStaging, TestGatewayCommit
 
     test_classes = [
         TestGatewayStaging,
+        TestGatewayCommit,
         TestGatewayChargeWindow,
         TestGatewayDischargeWindow,
         TestGatewayDisplayOnly,
