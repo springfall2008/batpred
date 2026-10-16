@@ -1315,6 +1315,9 @@ class Execute:
         self.current_charge_limit = calc_percent_limit(self.current_charge_limit_kwh, self.soc_max)
         self.inverter_support_feedin_first = inverter_support_feedin_first
 
+        # The device Max SoC caps the planner ceiling; best_soc_max was read fresh in fetch_config_options()
+        self.apply_battery_max_soc_ceiling()
+
         # Additional PVs without inverters
         pv_power_sensors = self.get_arg("pv_power", [], indirect=False)
         if pv_power_sensors and isinstance(pv_power_sensors, list):
