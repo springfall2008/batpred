@@ -467,6 +467,68 @@ COMPONENT_LIST = {
         "phase": 1,
         "can_restart": True,
     },
+    "sungrow": {
+        "class": "sungrow.SungrowAPI",
+        "name": "Sungrow iSolarCloud",
+        "inverter": True,
+        "event_filter": "predbat_sungrow_",
+        "args": {
+            # appkey and x-access-key identify the APPLICATION and are issued together on the
+            # developer portal. They are not OAuth credentials - the bearer token below is -
+            # and a request needs all three.
+            "appkey": {"required": False, "secret": True, "config": "sungrow_appkey"},
+            "access_key": {"required": False, "secret": True, "config": "sungrow_access_key"},
+            # In oauth mode OAuthMixin assigns 'key' straight to access_token (see
+            # oauth_mixin._init_oauth). Predbat.com injects the access token as sungrow_key;
+            # without this entry it is dropped and every call is rejected as unauthorised.
+            "key": {"required": False, "secret": True, "config": "sungrow_key"},
+            "auth_method": {"required": False, "default": "oauth", "config": "sungrow_auth_method"},
+            "token_expires_at": {"required": False, "config": "sungrow_token_expires_at"},
+            "token_hash": {"required": False, "secret": True, "config": "sungrow_token_hash"},
+            # sungrow_auth_method: password. The component logs in with these and renews its own
+            # token; a refused login is not sent again until Predbat restarts (see SungrowAPI.login).
+            "user_account": {"required": False, "secret": True, "config": "sungrow_user_account"},
+            "user_password": {"required": False, "secret": True, "config": "sungrow_user_password"},
+            # The account is tied to one regional gateway, so this cannot be inferred: pointing
+            # at the wrong region authenticates and then finds no plants, which reads as an
+            # empty account rather than as a misconfiguration.
+            "gateway": {"required": False, "default": "europe", "config": "sungrow_gateway"},
+            "inverter_sn": {"required": False, "config": "sungrow_inverter_sn"},
+            "automatic": {"required": False, "default": False, "config": "sungrow_automatic"},
+            "automatic_ignore_pv": {"required": False, "default": False, "config": "sungrow_automatic_ignore_pv"},
+            # On by default, matching alphaess_control_enable: an inverter component that does
+            # not drive the inverter is not what a user configuring it expects. Set false for
+            # monitoring only. switch.predbat_set_read_only still gates every write, and it
+            # also stops the external EMS heartbeat, so the inverter reverts to
+            # self-consumption rather than being held in external dispatch unattended.
+            "control_enable": {"required": False, "default": True, "config": "sungrow_control_enable"},
+            # Parameter 10017, in seconds. This is a dead-man's switch, not a poll interval:
+            # the value written here is the window Predbat promises to keep beating inside, and
+            # letting it lapse returns the inverter to self-consumption.
+            "heartbeat_interval": {"required": False, "default": 300, "config": "sungrow_heartbeat_interval"},
+            # Off by default on purpose. The forced-charging window is stored IN THE INVERTER
+            # and survives Predbat stopping, which defeats the heartbeat's safe revert.
+            "forced_charge_schedule": {"required": False, "default": False, "config": "sungrow_forced_charge_schedule"},
+            # The measuring points carry no battery power limit on every model, so this is the
+            # escape hatch for a user who knows their pack's real limit.
+            "battery_rate_max": {"required": False, "config": "sungrow_battery_rate_max"},
+            # Both in watts. The inverter rating is otherwise read from the model name, and the
+            # export limit from the inverter's own feed-in limitation when that can be trusted.
+            "inverter_limit": {"required": False, "config": "sungrow_inverter_limit"},
+            "export_limit": {"required": False, "config": "sungrow_export_limit"},
+            "api_delay": {"required": False, "default": 2.0, "config": "sungrow_api_delay"},
+            "min_write_interval": {"required": False, "default": 300, "config": "sungrow_min_write_interval"},
+            # On by default while the integration is unverified against hardware: a tester's log
+            # is the only evidence there is. Credentials and location fields are masked.
+            "api_debug": {"required": False, "default": True, "config": "sungrow_api_debug"},
+        },
+        # Gate activation on having the application credential. Without this the component
+        # would start for every instance, since all individual args are optional to allow the
+        # SaaS token-injection path alongside a self-hosted one.
+        "required_or": ["appkey"],
+        "phase": 1,
+        "can_restart": True,
+    },
     "enphase": {
         "class": "enphase.EnphaseAPI",
         "name": "Enphase API",

@@ -28,6 +28,7 @@ This document provides a comprehensive overview of all Predbat components, their
     - [DEYE Cloud API (deye)](#deye-cloud-api-deye)
     - [Sunsynk Cloud API (sunsynk)](#sunsynk-cloud-api-sunsynk)
     - [AlphaESS Cloud API (alphaess)](#alphaess-cloud-api-alphaess)
+    - [Sungrow iSolarCloud API (sungrow)](#sungrow-isolarcloud-api-sungrow)
     - [Alert Feed (alert_feed)](#alert-feed-alert_feed)
     - [Carbon Intensity API (carbon)](#carbon-intensity-api-carbon)
     - [Temperature API (temperature)](#temperature-api-temperature)
@@ -1552,6 +1553,31 @@ A schedule is committed in stages (window, then enable, then target SoC), so a s
 | `min_write_interval` | Integer | No | 300 | `alphaess_min_write_interval` | Minimum spacing, in seconds, between writes to the same inverter and direction |
 
 See [AlphaESS Cloud setup](inverter-setup.md#alphaess-cloud) for the full walkthrough, including how to run the standalone diagnostics CLI and how to bind or unbind a system.
+
+---
+
+### Sungrow iSolarCloud API (sungrow)
+
+**Can be restarted:** Yes
+
+#### What it does (sungrow)
+
+Integrates with Sungrow hybrid (energy-storage) inverters through the official iSolarCloud OpenAPI. Predbat discovers every energy-storage inverter on the account, publishes monitoring sensors and derived ratings, and controls charging and exporting through Sungrow's external energy dispatch, keeping control with a regular heartbeat.
+
+#### When to enable (sungrow)
+
+- You have a Sungrow hybrid inverter with a battery registered on iSolarCloud
+- You have registered an application at <https://developer-api.isolarcloud.com/> and have its appkey and access key
+- You have no local Modbus integration feeding Predbat already
+
+#### Important notes (sungrow)
+
+- **EXPERIMENTAL:** not confirmed against real hardware. Run the [diagnostics CLI](inverter-setup.md#verifying-with-the-sungrow-diagnostics-cli) before trusting Predbat with control
+- **A change of plan reaches the inverter within about a minute**, because commands are sent by the component's own once-a-minute cycle
+- **Control needs Predbat running.** If Predbat stops or loses its network, the heartbeat lapses and the inverter reverts to self-consumption by itself within about five minutes. Turning on `switch.predbat_set_read_only` stops Predbat sending any new command from that moment; an inverter it was controlling is then handed back to self-consumption within half the heartbeat interval (about two and a half minutes at the default), falling back to the same five-minute heartbeat lapse only if that hand-back cannot be delivered
+- **Stale telemetry does not stop control.** When telemetry is more than 15 minutes old the component reports itself unhealthy - shown as a component error with the reason `telemetry is N minutes old` - and logs a warning once; it keeps running rather than failing its cycle
+- **Freeze Export is not supported**, and the inverter's own reserve only covers 0-50%
+- Configuration options are listed under [Sungrow iSolarCloud API](apps-yaml.md#sungrow-isolarcloud-api)
 
 ---
 
