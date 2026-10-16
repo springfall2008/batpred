@@ -515,27 +515,51 @@ def test_format_failure():
 
 
 class RestoreSource:
-    """Stands in for load_previous_value_from_ha so a test decides exactly what the restore reads."""
+    """
+    Stands in for load_previous_value_from_ha (the full state + history read) and get_state_wrapper
+    (the state-only read) so a test decides exactly what the restore reads, and counts each kind.
+    """
 
     def __init__(self, my_predbat, events=None, total=None):
-        """Wrap my_predbat's loader, answering for the two control-failure entities only."""
+        """Wrap my_predbat's loaders, answering for the two control-failure entities only."""
         self.my_predbat = my_predbat
         self.events = events
         self.total = total
+        self.full_reads = 0
+        self.state_reads = 0
         self.original = my_predbat.load_previous_value_from_ha
+        self.original_state = my_predbat.get_state_wrapper
         my_predbat.load_previous_value_from_ha = self.load
+        my_predbat.get_state_wrapper = self.state
 
-    def load(self, entity, attribute=None):
-        """Return the configured value for the control-failure entities, defer for anything else."""
+    def answer(self, entity, attribute):
+        """The configured value for a control-failure entity, or the string NOT_OURS for anything else."""
         if entity == self.my_predbat.prefix + ".control_failures" and attribute == "events":
             return self.events
         if entity == self.my_predbat.prefix + ".control_failures_total" and attribute is None:
             return self.total
-        return self.original(entity, attribute=attribute)
+        return "NOT_OURS"
+
+    def load(self, entity, attribute=None):
+        """Full read: return the configured value for the control-failure entities, defer for anything else."""
+        value = self.answer(entity, attribute)
+        if value == "NOT_OURS":
+            return self.original(entity, attribute=attribute)
+        self.full_reads += 1
+        return value
+
+    def state(self, entity_id=None, default=None, attribute=None, **kwargs):
+        """State-only read: as load(), counted separately; unreadable reads as 'unavailable' as HA would."""
+        value = self.answer(entity_id, attribute)
+        if value == "NOT_OURS":
+            return self.original_state(entity_id=entity_id, default=default, attribute=attribute, **kwargs)
+        self.state_reads += 1
+        return "unavailable" if value is None else value
 
     def close(self):
-        """Put the real loader back."""
+        """Put the real loaders back."""
         self.my_predbat.load_previous_value_from_ha = self.original
+        self.my_predbat.get_state_wrapper = self.original_state
 
 
 def publish_setup(my_predbat):
@@ -618,6 +642,45 @@ def test_publish_late_restore_adds_counted(my_predbat):
     return failed
 
 
+def test_publish_history_read_cadence(my_predbat):
+    """
+    While the total is unresolved the full (state + 30-day history) read runs on the first attempt
+    and every 12th after it; the cycles in between read state only - and a state-only read that
+    finds the total still resolves the restore.
+    """
+    saved = publish_setup(my_predbat)
+    source = RestoreSource(my_predbat)
+    failed = False
+    try:
+        for cycle in range(25):
+            my_predbat.publish_control_failures(T0 + cycle * 300)
+        # Full reads on attempts 1, 13 and 25; two entities each
+        if source.full_reads != 6 or source.state_reads != 44:
+            print("ERROR: expected 6 full and 44 state-only reads, got {} full {} state".format(source.full_reads, source.state_reads))
+            failed = True
+        if my_predbat.control_monitor.restored:
+            print("ERROR: restore resolved with nothing to read")
+            failed = True
+        source.total = "4"
+        source.events = [make_event(T0 + 7000)]
+        my_predbat.publish_control_failures(T0 + 7500)  # attempt 26: state-only
+        if source.full_reads != 6 or not my_predbat.control_monitor.restored or published(my_predbat, ".control_failures_total") != 4:
+            print("ERROR: state-only read did not resolve the restore: full {} restored {} total {}".format(source.full_reads, my_predbat.control_monitor.restored, published(my_predbat, ".control_failures_total")))
+            failed = True
+        if len(my_predbat.control_monitor.events) != 1:
+            print("ERROR: state-only read did not restore the events: {}".format(my_predbat.control_monitor.events))
+            failed = True
+        reads = source.full_reads + source.state_reads
+        my_predbat.publish_control_failures(T0 + 7800)
+        if source.full_reads + source.state_reads != reads:
+            print("ERROR: a resolved restore kept reading")
+            failed = True
+    finally:
+        source.close()
+        my_predbat.control_monitor = saved
+    return failed
+
+
 def run_control_monitor_tests(my_predbat):
     """Run all control failure monitor tests."""
     failed = False
@@ -656,6 +719,7 @@ def run_control_monitor_tests(my_predbat):
         ("publish_fresh_install", test_publish_fresh_install),
         ("publish_restores", test_publish_restores_total_and_events),
         ("publish_late_restore", test_publish_late_restore_adds_counted),
+        ("publish_history_read_cadence", test_publish_history_read_cadence),
     ]:
         print("**** control_monitor: {} ****".format(name))
         if fn(my_predbat):

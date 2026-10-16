@@ -810,16 +810,27 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         restore() reads back after a restart. The restore is retried every cycle until the total
         reads back as a number, and while it is unresolved a total of 0 is not written - publishing
         0 over a total that merely could not be read yet would register as a reset in HA long-term
-        statistics.
+        statistics. Only the first attempt and every 12th after it fall back to history; the rest
+        read current state only, so an install that has never failed does not search 30 days of
+        history every cycle.
 
         Args:
             now (float): epoch seconds
         """
         monitor = self.control_monitor
         if not monitor.restored:
+            if monitor.history_read_due():
+                read = self.load_previous_value_from_ha
+            else:
+
+                def read(entity, attribute=None):
+                    """Current state only, filtered the way load_previous_value_from_ha filters it."""
+                    value = self.get_state_wrapper(entity, attribute=attribute)
+                    return None if value in ("unavailable", "unknown") else value
+
             monitor.restore(
-                self.load_previous_value_from_ha(self.prefix + ".control_failures", attribute="events"),
-                self.load_previous_value_from_ha(self.prefix + ".control_failures_total"),
+                read(self.prefix + ".control_failures", attribute="events"),
+                read(self.prefix + ".control_failures_total"),
             )
         monitor.prune(now)
         recent = monitor.recent_events(now)

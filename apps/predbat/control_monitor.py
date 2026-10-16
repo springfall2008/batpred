@@ -49,6 +49,10 @@ MAX_GAP_S = 120
 MIN_GAP_S = 30
 # The rolling window the 24h sensor reports over.
 DEFAULT_WINDOW_S = 86400
+# While the restore is unresolved, every this-many attempts (and the first) also searches history;
+# the attempts in between read the entities' current state only. At one attempt per plan cycle this
+# is roughly hourly, so a fresh install that never fails does not query 30 days of history forever.
+RESTORE_HISTORY_EVERY = 12
 
 
 def event_key(event):
@@ -133,6 +137,7 @@ class ControlMonitor:
         self.events = []  # oldest first; also the durable store published in the sensor attributes
         self.total = 0  # lifetime count of failed slots
         self.restored = False  # True once the total has been read back from its entity, or first written
+        self.restore_attempts = 0  # restore reads made while unresolved, for the history cadence
 
     def _find_event(self, inverter_id, mode, slot_start):
         """Return the newest event for this inverter and mode whose slot contains slot_start, or None."""
@@ -327,3 +332,14 @@ class ControlMonitor:
         self.total += restored_total
         self.restored = True
         return True
+
+    def history_read_due(self):
+        """
+        Count one restore attempt and say whether it should also search history.
+
+        True on the first attempt and every RESTORE_HISTORY_EVERY attempts after it; the attempts
+        in between read current state only.
+        """
+        due = self.restore_attempts % RESTORE_HISTORY_EVERY == 0
+        self.restore_attempts += 1
+        return due
