@@ -19,7 +19,7 @@ service calls) to the appropriate handlers.
 
 import os
 from datetime import timedelta
-from utils import get_override_time_from_string, mask_secret_args, is_debug_excluded_key, export_limits_from_stored, export_limits_to_stored, is_secret_key, SECRET_MASK
+from utils import get_override_time_from_string, mask_secret_args, is_debug_excluded_key, export_limits_from_stored, export_limits_to_stored, is_secret_key, SECRET_MASK, RepeatLogGate
 import functools
 import io
 import itertools
@@ -34,16 +34,37 @@ from const import (
     DEBUG_SCHEMA_VERSION,
     MANUAL_RATE_MAX_MINUTES,
     MANUAL_TIME_MAX_MINUTES,
+    REPEAT_FULL_LOG_SECONDS,
 )
 from config import APPS_SCHEMA, CONFIG_API_OVERRIDE
 from predbat import THIS_VERSION, THIS_VERSION_DISPLAY
+
 
 # A debug dump is several megabytes of deeply nested YAML and PyYAML's pure-Python parser spends
 # most of a replay's wall-clock on it - about 6s for a 5MB dump. CLoader pairs libyaml's C parser
 # with the very same (unsafe) Constructor that yaml.unsafe_load uses, so the Python-object tags
 # these dumps carry still load and the result is identical, roughly 6x faster. PyYAML is not
 # always built with libyaml, so fall back to the pure-Python loader when the C one is absent.
-DEBUG_YAML_LOADER = getattr(yaml, "CLoader", yaml.UnsafeLoader)
+class DebugYamlLoader(getattr(yaml, "CLoader", yaml.UnsafeLoader)):
+    """The loader read_debug_yaml() replays a debug dump with; see construct_log_gate_without_history()."""
+
+
+def construct_log_gate_without_history(loader, node):
+    """
+    Load a RepeatLogGate from a debug dump as a new, empty gate with the dumped interval.
+
+    v9.3.8 to v9.4.x wrote io_slot_log_gate into every dump that had logged an Intelligent slot
+    list (#5569). Its history is keyed by tuples, which the dump wrote as YAML sequences, and a
+    sequence cannot be a dict key on the way back in ("found unhashable key"), so those dumps would
+    not load at all. Its history is never built here, and a replay has no use for it anyway.
+    """
+    fields = {key.value: value for key, value in node.value if isinstance(key, yaml.ScalarNode)}
+    interval_seconds = loader.construct_object(fields["interval_seconds"]) if "interval_seconds" in fields else REPEAT_FULL_LOG_SECONDS
+    return RepeatLogGate(interval_seconds)
+
+
+DebugYamlLoader.add_constructor("tag:yaml.org,2002:python/object:utils.RepeatLogGate", construct_log_gate_without_history)
+DEBUG_YAML_LOADER = DebugYamlLoader
 
 
 class DebugYamlDumper(yaml.Dumper):

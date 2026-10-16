@@ -19,7 +19,7 @@ import yaml
 from coordinator import Coordinator
 from const import REPEAT_FULL_LOG_SECONDS
 from inverter import Inverter
-from userinterface import dump_debug_yaml
+from userinterface import dump_debug_yaml, DEBUG_YAML_LOADER
 from utils import RepeatLogGate
 
 
@@ -369,6 +369,9 @@ def test_debug_yaml_with_a_populated_log_gate_loads(my_predbat=None):
     with "found unhashable key" - so no dump from an Octopus Intelligent user could be replayed. The
     gate's history is runtime bookkeeping a replay does not need, so it is kept out of the dump.
 
+    Loaded with plain yaml.unsafe_load rather than DEBUG_YAML_LOADER: the dump must load with
+    ordinary YAML tooling, not only with the replay loader that tolerates older dumps.
+
     Mutation check: removing "io_slot_log_gate" from DEBUG_EXCLUDE_LIST fails this.
     """
     failed = False
@@ -406,6 +409,70 @@ def test_debug_yaml_with_a_populated_log_gate_loads(my_predbat=None):
     return 1 if failed else 0
 
 
+# The io_slot_log_gate block exactly as Predbat v9.3.8 to v9.4.x writes it into a debug yaml (#5569),
+# between two ordinary keys so the test also sees that its neighbours still load.
+OLD_DUMP_WITH_LOG_GATE = """io_slot_count: 1
+io_slot_log_gate: !!python/object:utils.RepeatLogGate
+  interval_seconds: 1800
+  logged:
+    ? - - slots
+        - 0
+      - 8f4d14202e49ec5efaf29fc659b4be5e605ee147
+    : - 4310095.674016051
+      - 2026-10-16 11:35:01.321928
+iog_last_action_status: success
+"""
+
+
+def test_old_dump_with_a_log_gate_loads(my_predbat=None):
+    """
+    A debug yaml that already carries an io_slot_log_gate block must still replay (#5569).
+
+    Dumps written by v9.3.8 to v9.4.x carry the gate, and users keep attaching them to bug reports
+    after the fix ships. DEBUG_YAML_LOADER builds any dumped RepeatLogGate as a new, empty gate
+    without constructing its history, so the tuple keys that cannot be loaded are never built.
+
+    Mutation check: dropping the RepeatLogGate constructor from DebugYamlLoader fails this.
+    """
+    failed = False
+    print("**** Testing an old debug yaml carrying a log gate loads with the replay loader ****")
+
+    # First confirm the hazard is real, so a pass below means the loader did something
+    try:
+        yaml.unsafe_load(OLD_DUMP_WITH_LOG_GATE)
+        print("ERROR: the old log gate block loaded with plain yaml.unsafe_load, so the hazard this guards is gone")
+        failed = True
+    except yaml.YAMLError:
+        pass
+
+    try:
+        debug = yaml.load(OLD_DUMP_WITH_LOG_GATE, Loader=DEBUG_YAML_LOADER)
+    except yaml.YAMLError as e:
+        print("ERROR: the replay loader cannot load an old dump carrying a log gate: {}".format(e))
+        return 1
+
+    gate = debug.get("io_slot_log_gate")
+    if not isinstance(gate, RepeatLogGate):
+        print("ERROR: expected the log gate to load as a RepeatLogGate, got {!r}".format(gate))
+        return 1
+    if gate.logged != {}:
+        print("ERROR: expected the loaded log gate to start with no history, got {}".format(gate.logged))
+        failed = True
+    if gate.interval_seconds != 1800:
+        print("ERROR: expected the dumped interval 1800 to be kept, got {}".format(gate.interval_seconds))
+        failed = True
+    if not gate.log(lambda line: None, ("slots", 0), "text", ["text"], None):
+        print("ERROR: the loaded log gate does not log a new text in full")
+        failed = True
+    if debug.get("io_slot_count") != 1 or debug.get("iog_last_action_status") != "success":
+        print("ERROR: the keys around the log gate did not load, got {}".format(debug))
+        failed = True
+
+    if not failed:
+        print("PASS: an old dump's log gate loads as an empty gate")
+    return 1 if failed else 0
+
+
 def run_debug_yaml_scope_tests(my_predbat):
     """Run every create_debug_yaml() scope test, returning a non-zero count on failure."""
     failed = 0
@@ -416,4 +483,5 @@ def run_debug_yaml_scope_tests(my_predbat):
     failed += test_create_debug_yaml_file_matches_the_string(my_predbat)
     failed += test_debug_yaml_includes_redacted_discovery_catalogue(my_predbat)
     failed += test_debug_yaml_with_a_populated_log_gate_loads(my_predbat)
+    failed += test_old_dump_with_a_log_gate_loads(my_predbat)
     return failed
