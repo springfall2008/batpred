@@ -435,6 +435,69 @@ def test_event_dispatch_respects_configured_prefix(my_predbat):
     return False
 
 
+class _TaskMockBase(LoggingMockBase):
+    """LoggingMockBase that also records the component tasks Components.start() creates."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.created_tasks = []
+
+    def create_task(self, coroutine, name=None):
+        """Record the task instead of running it, closing the coroutine so it is never left un-awaited."""
+        coroutine.close()
+        self.created_tasks.append(name)
+        return FakeComponentTask()
+
+
+class _WaitRecordingComponent(ComponentBase):
+    """A component that records whether Components.start() waited for its API."""
+
+    def initialize(self, **kwargs):
+        """Nothing to set up."""
+        self.waited = False
+
+    async def start(self):
+        """Never run, _TaskMockBase.create_task() closes the coroutine."""
+
+    def wait_api_started(self, timeout=10 * 60):
+        """Record the wait and report the API as started."""
+        self.waited = True
+        return True
+
+
+def test_start_does_not_wait_when_a_dependency_is_missing(my_predbat):
+    """A component whose dependency never constructed fails its start at once instead of waiting out wait_api_started().
+
+    After a Home Assistant restart HAInterface cannot construct while core is still coming up, and
+    HAHistory, which cannot run without it, held phase 0 in wait_api_started() for the full 10 minute
+    timeout before Predbat reached "HA interface not found" and restarted (#5134).
+    """
+    base = _TaskMockBase()
+    comps = Components(base)
+    history = _WaitRecordingComponent(base)
+    comps.components["ha"] = None
+    comps.component_errors["ha"] = "Unable to connect to Home Assistant"
+    comps.components["ha_history"] = history
+
+    assert comps.start(only="ha_history", phase=0) is False, "the phase must report the failed start"
+    assert not history.waited, "a component whose dependency is missing must not be waited for"
+    assert not base.created_tasks, f"no task may be started for it, got {base.created_tasks}"
+    errors = [message for message in base.log_messages if message.startswith("Error: Home Assistant History")]
+    assert len(errors) == 1 and "needs ha" in errors[0], base.log_messages
+
+    # With its dependency present the same component starts and is waited for as before
+    base = _TaskMockBase()
+    comps = Components(base)
+    history = _WaitRecordingComponent(base)
+    comps.components["ha"] = _WaitRecordingComponent(base)
+    comps.components["ha_history"] = history
+
+    assert comps.start(only="ha_history", phase=0) is True, base.log_messages
+    assert history.waited, "a component with its dependencies present is waited for"
+    assert base.created_tasks == ["ha_history_component_task"], base.created_tasks
+    return False
+
+
 def test_components_all(my_predbat):
     """Run all components.py tests"""
     tests = [
@@ -443,6 +506,7 @@ def test_components_all(my_predbat):
         ("import_failure_is_an_error_not_disabled", test_import_failure_is_an_error_not_disabled, "an ImportError from a component module leaves it inactive and recorded as an error"),
         ("broken_component_does_not_take_the_others_down", test_broken_component_does_not_take_the_others_down, "a constructor exception is contained and the rest of the phase initialises"),
         ("load_error_is_reported_as_a_component_error", test_load_error_is_reported_as_a_component_error, "record_final_run_status() shows a load failure as a component error"),
+        ("start_does_not_wait_when_a_dependency_is_missing", test_start_does_not_wait_when_a_dependency_is_missing, "a component whose dependency never constructed fails at once, not after the wait timeout (#5134)"),
         ("gecloud_data_no_warning_from_global_days_previous", test_gecloud_data_no_warning_from_global_days_previous, "days_previous alone must not trigger a GE Cloud Data warning"),
         ("gecloud_data_warns_when_actually_misconfigured", test_gecloud_data_warns_when_actually_misconfigured, "GE Cloud Data still warns once genuinely (partially) configured"),
         ("event_dispatch_respects_configured_prefix", test_event_dispatch_respects_configured_prefix, "event dispatch matches the configured prefix, not the literal word 'predbat' (#4939)"),
