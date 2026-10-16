@@ -436,8 +436,8 @@ def test_pv90_load_scaling_clamp_invariant(my_predbat):
 
     Two violating configurations are exercised, one per side. load_scaling90 (0.7) above load_scaling (0.5)
     is the pv90-side inversion, and exactly the numbers coverage/cases/predbat_debug_agile1.yaml hit under the
-    0.7 default that applied before #5566 - it
-    made pv90 carry 40% MORE load than nominal, a harsher case than pv10. load_scaling (2.0) above
+    0.7 default that applied before #5566 - it made pv90 carry 40% MORE load than nominal, a harsher case than
+    pv10. load_scaling (2.0) above
     load_scaling10 (1.1) is the symmetric pv10-side inversion, which predates the PV90 work.
     """
     failed = False
