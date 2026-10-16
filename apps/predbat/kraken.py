@@ -1150,11 +1150,14 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
 
     @staticmethod
     def _rates_in_window(rates, window_start, window_end):
-        """Return the rate periods that overlap [window_start, window_end), in their original order.
+        """Return the rate periods that overlap [window_start, window_end], in their original order.
+
+        The end is inclusive because minute_data() keeps its last minute too: a period starting
+        exactly there still sets it. A period ending exactly at window_start sets nothing inside.
 
         A period with no valid_to is open-ended and a period with no valid_from has no start, so
         each is kept if the rest of it overlaps. A period whose timestamps cannot be parsed is kept
-        too: it is not ours to judge, and minute_data() skips it the same way it always has.
+        too, so that minute_data() meets it just as it did before the trim was added.
         """
         kept = []
         for rate in rates:
@@ -1164,7 +1167,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             except (ValueError, TypeError):
                 kept.append(rate)
                 continue
-            if valid_from is not None and valid_from >= window_end:
+            if valid_from is not None and valid_from > window_end:
                 continue
             if valid_to is not None and valid_to <= window_start:
                 continue

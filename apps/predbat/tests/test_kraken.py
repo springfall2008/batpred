@@ -2109,7 +2109,8 @@ def test_publish_rate_sensors_bounds_long_contract_to_window():
 
 
 def test_publish_rate_sensors_keeps_periods_straddling_window_edges():
-    """Periods overlapping either edge are kept whole; periods only touching an edge are dropped."""
+    """Periods overlapping either edge are kept whole. One ending exactly at the start is dropped, but one
+    starting exactly at the end is kept, because minute_data() keeps its last minute inclusively."""
     import pytz
 
     now = pytz.timezone("Europe/London").localize(datetime(2026, 1, 13, 10, 15))
@@ -2120,16 +2121,28 @@ def test_publish_rate_sensors_keeps_periods_straddling_window_edges():
     inside = {"value_inc_vat": 3.0, "valid_from": "2026-01-13T05:00:00Z", "valid_to": "2026-01-13T22:00:00Z"}
     straddle_end = {"value_inc_vat": 4.0, "valid_from": "2026-01-16T23:00:00Z", "valid_to": "2026-01-17T05:00:00Z"}
     starts_at_end = {"value_inc_vat": 5.0, "valid_from": "2026-01-17T00:00:00Z", "valid_to": "2026-01-17T05:00:00Z"}
+    starts_after_end = {"value_inc_vat": 9.0, "valid_from": "2026-01-17T00:30:00Z", "valid_to": "2026-01-17T05:00:00Z"}
     open_ended = {"value_inc_vat": 6.0, "valid_from": "2025-06-01T00:00:00Z", "valid_to": None}
     ancient = {"value_inc_vat": 7.0, "valid_from": "2025-06-01T00:00:00Z", "valid_to": "2025-06-02T00:00:00Z"}
     unparseable = {"value_inc_vat": 8.0, "valid_from": "not-a-time", "valid_to": "2025-06-02T00:00:00Z"}
-    api.import_rates = [straddle_start, ends_at_start, inside, straddle_end, starts_at_end, open_ended, ancient, unparseable]
+    api.import_rates = [straddle_start, ends_at_start, inside, straddle_end, starts_at_end, starts_after_end, open_ended, ancient, unparseable]
 
     api._publish_rate_sensors()
     state, attributes = _published(api, "import_rates")
 
-    assert attributes["rates"] == [straddle_start, inside, straddle_end, open_ended, unparseable]
-    assert state == 5
+    assert attributes["rates"] == [straddle_start, inside, straddle_end, starts_at_end, open_ended, unparseable]
+    assert state == 6
+
+    # minute_data() agrees at both edges. Read from 13 Jan midnight its first minute is the window start (10 Jan);
+    # read from 14 Jan midnight, before a republish, its last minute is the window end (17 Jan).
+    from utils import minute_data
+
+    parseable = [r for r in api.import_rates if r is not unparseable]
+    published = [r for r in attributes["rates"] if r is not unparseable]
+    for read_midnight in (datetime(2026, 1, 13, tzinfo=timezone.utc), datetime(2026, 1, 14, tzinfo=timezone.utc)):
+        loaded_full, _ = minute_data(parseable, 3, read_midnight, "value_inc_vat", "valid_from", backwards=False, to_key="valid_to")
+        loaded_trimmed, _ = minute_data(published, 3, read_midnight, "value_inc_vat", "valid_from", backwards=False, to_key="valid_to")
+        assert loaded_trimmed == loaded_full, f"loaded rates differ when read from midnight {read_midnight}"
 
 
 def test_publish_rate_sensors_bounds_export_rates():
