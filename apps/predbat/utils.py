@@ -1360,6 +1360,9 @@ def filter_payment_method(rates, preferred="DIRECT_DEBIT"):
     """
     Keep one payment method variant when Octopus returns overlapping rows for the same window.
 
+    Also used for the other Kraken suppliers (EDF lists NON_DIRECT_DEBIT first, GH#5502), where
+    the Kraken component takes the first standing charge row as well as merging unit rates.
+
     The REST tariff endpoints return a DIRECT_DEBIT row and a NON_DIRECT_DEBIT row covering the
     same validity window. minute_data() writes each row over its range, so whichever row comes last
     in the response wins, and that order is not stable across periods. Rows with no payment_method

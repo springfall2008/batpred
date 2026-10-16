@@ -591,17 +591,8 @@ def _fetch_standing_charge_with_rows(rows):
     api = make_kraken_api()
     api.current_tariff = {"tariff_code": "E-1R-EDF_STANDARD_VARIABLE-J", "product_code": "EDF_STANDARD_VARIABLE"}
 
-    mock_response = AsyncMock()
-    mock_response.status = 200
-    mock_response.json = AsyncMock(return_value={"results": rows})
-
     mock_session = AsyncMock()
-    mock_session.get = MagicMock(
-        return_value=AsyncMock(
-            __aenter__=AsyncMock(return_value=mock_response),
-            __aexit__=AsyncMock(return_value=None),
-        )
-    )
+    mock_session.get = MagicMock(return_value=_mk_get_ctx(200, {"results": rows}))
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session.__aexit__ = AsyncMock(return_value=None)
 
