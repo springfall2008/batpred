@@ -2075,7 +2075,7 @@ def _utc(text):
 
 
 def test_publish_rate_sensors_bounds_long_contract_to_window():
-    """#5534: a months-long fixed contract publishes only midnight -1 day to midnight + (forecast_days + 1) days.
+    """#5534: a months-long fixed contract publishes only the (forecast_days + 1) days either side of midnight that Predbat reads, plus a spare day.
 
     The issue's sensor carried 255 rows (~38 KB), past Home Assistant's 16,384-byte attribute limit.
     """
@@ -2093,15 +2093,15 @@ def test_publish_rate_sensors_bounds_long_contract_to_window():
     state, attributes = _published(api, "import_rates")
     rates = attributes["rates"]
 
-    # Local midnight 13 Oct BST is 12 Oct 23:00Z, so the window is 11 Oct 23:00Z to 16 Oct 23:00Z (48h -> 2 days, + 1, + 1 spare)
-    window_start = datetime(2026, 10, 11, 23, 0, tzinfo=timezone.utc)
+    # Local midnight 13 Oct BST is 12 Oct 23:00Z; 48h is forecast_days=2, so the window is 9 Oct 23:00Z (- 3 days) to 16 Oct 23:00Z (+ 3 days + 1 spare)
+    window_start = datetime(2026, 10, 9, 23, 0, tzinfo=timezone.utc)
     window_end = datetime(2026, 10, 16, 23, 0, tzinfo=timezone.utc)
     expected = [r for r in full if _utc(r["valid_to"]) > window_start and _utc(r["valid_from"]) < window_end]
     assert rates == expected, f"published {[(r['valid_from'], r['valid_to']) for r in rates]}"
-    # 11 Oct 23:00Z night, then three periods a day for 12-14 Oct, newest first as fetched
-    assert len(rates) == 10
+    # 9 Oct 23:00Z night, then three periods a day for 10-14 Oct, newest first as fetched
+    assert len(rates) == 1 + 5 * 3
     assert rates[0]["valid_from"] == "2026-10-14T23:00:00Z"
-    assert rates[-1]["valid_from"] == "2026-10-11T23:00:00Z"
+    assert rates[-1]["valid_from"] == "2026-10-09T23:00:00Z"
     assert state == len(rates)
     assert len(json.dumps(attributes)) < 16384
     # The in-memory list (and so the cache) keeps the full contract
@@ -2114,9 +2114,9 @@ def test_publish_rate_sensors_keeps_periods_straddling_window_edges():
 
     now = pytz.timezone("Europe/London").localize(datetime(2026, 1, 13, 10, 15))
     api = _make_publishing_api(now)
-    # GMT: midnight is 13 Jan 00:00Z, so the window is 12 Jan 00:00Z to 17 Jan 00:00Z
-    straddle_start = {"value_inc_vat": 1.0, "valid_from": "2026-01-11T23:00:00Z", "valid_to": "2026-01-12T01:00:00Z"}
-    ends_at_start = {"value_inc_vat": 2.0, "valid_from": "2026-01-11T22:00:00Z", "valid_to": "2026-01-12T00:00:00Z"}
+    # GMT: midnight is 13 Jan 00:00Z, so the window is 10 Jan 00:00Z to 17 Jan 00:00Z
+    straddle_start = {"value_inc_vat": 1.0, "valid_from": "2026-01-09T23:00:00Z", "valid_to": "2026-01-10T01:00:00Z"}
+    ends_at_start = {"value_inc_vat": 2.0, "valid_from": "2026-01-09T22:00:00Z", "valid_to": "2026-01-10T00:00:00Z"}
     inside = {"value_inc_vat": 3.0, "valid_from": "2026-01-13T05:00:00Z", "valid_to": "2026-01-13T22:00:00Z"}
     straddle_end = {"value_inc_vat": 4.0, "valid_from": "2026-01-16T23:00:00Z", "valid_to": "2026-01-17T05:00:00Z"}
     starts_at_end = {"value_inc_vat": 5.0, "valid_from": "2026-01-17T00:00:00Z", "valid_to": "2026-01-17T05:00:00Z"}
@@ -2145,8 +2145,8 @@ def test_publish_rate_sensors_bounds_export_rates():
     api._publish_rate_sensors()
     state, attributes = _published(api, "export_rates")
 
-    assert len(attributes["rates"]) == 10
-    assert state == 10
+    assert len(attributes["rates"]) == 1 + 5 * 3
+    assert state == 1 + 5 * 3
     assert len(api.export_rates) == 87 * 3
 
 
@@ -2162,10 +2162,10 @@ def test_publish_rate_sensors_window_follows_forecast_hours():
     _, attributes = _published(api, "import_rates")
     rates = attributes["rates"]
 
-    # GMT window 12 Jan 00:00Z to 18 Jan 00:00Z: from the 11 Jan night period to the 17 Jan night period
-    assert rates[-1]["valid_from"] == "2026-01-11T23:00:00Z"
+    # GMT window 9 Jan 00:00Z (- 4 days) to 18 Jan 00:00Z (+ 4 days + 1 spare): from the 8 Jan night period to the 17 Jan night period
+    assert rates[-1]["valid_from"] == "2026-01-08T23:00:00Z"
     assert rates[0]["valid_from"] == "2026-01-17T23:00:00Z"
-    assert len(rates) == 1 + 6 * 3
+    assert len(rates) == 1 + 9 * 3
 
 
 def test_publish_rate_sensors_window_clamps_forecast_hours_like_fetch():
@@ -2179,8 +2179,48 @@ def test_publish_rate_sensors_window_clamps_forecast_hours_like_fetch():
     api._publish_rate_sensors()
     _, attributes = _published(api, "import_rates")
 
-    # forecast_days=1: window 12 Jan 00:00Z to 16 Jan 00:00Z (+ 1 + 1 spare), so up to the 15 Jan night period
+    # forecast_days=1: the window ends 16 Jan 00:00Z (+ 2 days + 1 spare), so up to the 15 Jan night period
     assert attributes["rates"][0]["valid_from"] == "2026-01-15T23:00:00Z"
+
+
+def test_publish_rate_sensors_trimmed_rates_load_identically():
+    """What fetch_octopus_rates() loads through minute_data() is the same from the trimmed list as from the full one.
+
+    Checked as read at the publish time and just after the next midnight, before any republish.
+    """
+    import pytz
+    from utils import minute_data
+
+    london = pytz.timezone("Europe/London")
+    publish_time = london.localize(datetime(2026, 10, 12, 23, 50))
+    forecast_days = 2
+    for full in (_fixed_contract_rates(datetime(2026, 7, 20), datetime(2026, 10, 13)), _fixed_contract_rates(datetime(2026, 7, 20), datetime(2026, 10, 8))):
+        api = _make_publishing_api(publish_time)
+        api.import_rates = full
+        api._publish_rate_sensors()
+        _, attributes = _published(api, "import_rates")
+        assert len(attributes["rates"]) < len(full)
+        for read_midnight in (london.localize(datetime(2026, 10, 12)), london.localize(datetime(2026, 10, 13))):
+            loaded_full, _ = minute_data(full, forecast_days + 1, read_midnight, "value_inc_vat", "valid_from", backwards=False, to_key="valid_to")
+            loaded_trimmed, _ = minute_data(attributes["rates"], forecast_days + 1, read_midnight, "value_inc_vat", "valid_from", backwards=False, to_key="valid_to")
+            assert loaded_trimmed == loaded_full, f"loaded rates differ when read from midnight {read_midnight}"
+
+
+def test_publish_rate_sensors_keeps_stale_rates_rate_replicate_can_use():
+    """When fetches keep failing, rates from two days back are still published for rate_replicate() to copy forward."""
+    import pytz
+
+    now = pytz.timezone("Europe/London").localize(datetime(2026, 1, 13, 10, 15))
+    api = _make_publishing_api(now)
+    # Last successful fetch was days ago: nothing newer than the 10 Jan periods
+    api.import_rates = _fixed_contract_rates(datetime(2025, 12, 1), datetime(2026, 1, 10))
+
+    api._publish_rate_sensors()
+    state, attributes = _published(api, "import_rates")
+
+    # Window starts 10 Jan 00:00Z (- 3 days): the 9 Jan night period and all of 10 Jan survive
+    assert [r["valid_from"] for r in attributes["rates"]] == ["2026-01-10T23:00:00Z", "2026-01-10T22:00:00Z", "2026-01-10T05:00:00Z", "2026-01-09T23:00:00Z"]
+    assert state == 4
 
 
 def test_publish_rate_sensors_before_midnight_still_covers_next_day():
@@ -2196,8 +2236,8 @@ def test_publish_rate_sensors_before_midnight_still_covers_next_day():
 
     # At 00:05 on 13 Jan minute_data() keeps up to 13 Jan + 3 days = 16 Jan 00:00Z; the 15 Jan night period runs into it
     assert max(_utc(r["valid_to"]) for r in attributes["rates"]) >= datetime(2026, 1, 16, 0, 0, tzinfo=timezone.utc)
-    # and from 00:05 the -24h start is 12 Jan 00:00Z, which the 11 Jan night period still covers
-    assert min(_utc(r["valid_from"]) for r in attributes["rates"]) <= datetime(2026, 1, 12, 0, 0, tzinfo=timezone.utc)
+    # and from 00:05 its - 3 days start is 10 Jan 00:00Z, which the window from the old midnight (9 Jan 00:00Z) covers
+    assert min(_utc(r["valid_from"]) for r in attributes["rates"]) <= datetime(2026, 1, 10, 0, 0, tzinfo=timezone.utc)
 
 
 def run_kraken_tests(my_predbat=None):

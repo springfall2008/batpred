@@ -1177,10 +1177,11 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         A long fixed contract returns every period since it started - about three a day, so a few
         months reaches 255+ periods (~38 KB), past Home Assistant's 16 KB recorder limit for a
         state's attributes (#5534). Predbat reads the sensor back through fetch_octopus_rates(),
-        whose minute_data() keeps only midnight + (forecast_days + 1) days going forward, and
-        nothing reads earlier than 24 hours before midnight (rate_replicate(), the yesterday
-        savings and the rate chart all start there - the Octopus component publishes the same
-        -24h). So publish from midnight - 1 day, and drop the rest. The in-memory list and the
+        whose minute_data() keeps only (forecast_days + 1) days either side of midnight and drops
+        the rest, so publish just that and the plan sees exactly the rates it did before. The
+        back end is deliberately wider than the Octopus component's -24h: when fetches keep
+        failing, rate_replicate() copies the last real day forward from up to two days back, and
+        trimming that away would lose the rates sooner than before. The in-memory list and the
         cache keep the full set.
 
         The forward end has one day to spare: the sensor is only republished when rates are
@@ -1191,7 +1192,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         forecast_hours = max(self.get_arg("forecast_hours", 48), 24)
         forecast_days = int((forecast_hours + 23) / 24)
         midnight = self.midnight_utc
-        return self._rates_in_window(rates, midnight - timedelta(days=1), midnight + timedelta(days=forecast_days + 2))
+        return self._rates_in_window(rates, midnight - timedelta(days=forecast_days + 1), midnight + timedelta(days=forecast_days + 2))
 
     def _publish_rate_sensors(self):
         """Publish the import/export rate + standing-charge sensors from the current in-memory data.
