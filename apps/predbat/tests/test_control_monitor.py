@@ -405,12 +405,16 @@ def test_restore_total_adds_once():
     return False
 
 
-def test_restart_mid_slot_does_not_recount():
-    """After a restart mid-slot (plan now on the next contiguous window) the slot is not re-counted."""
+def failed_slot_store():
+    """The events a monitor that saw the slot T0..T0+1h fail would leave in the sensor attribute."""
     first = charging_monitor()
     feed(first, [240, GRACE_S, GRACE_S + 60, GRACE_S + 120], power=0)
-    stored = json.loads(json.dumps(first.newest_events(20)))  # what HA hands back
+    return json.loads(json.dumps(first.newest_events(20)))  # what HA hands back
 
+
+def test_restart_mid_slot_does_not_recount():
+    """After a restart mid-slot (plan now on the next contiguous window) the slot is not re-counted - restore first."""
+    stored = failed_slot_store()
     second = ControlMonitor()
     second.restore(stored, "1")
     second.set_expectation(0, MODE_CHARGING, SLOT_START + 1800, SLOT_END + 1800, 80.0, T0 + 2000)
@@ -419,6 +423,54 @@ def test_restart_mid_slot_does_not_recount():
         return True
     if not second.events[0]["failed_minutes"] > stored[0]["failed_minutes"]:
         print("ERROR: restored event did not keep accruing minutes")
+        return True
+    return False
+
+
+def test_restart_mid_slot_production_order():
+    """
+    The production order after a restart: execute_plan sets the expectation BEFORE the publish
+    cycle restores the events, and later plan runs extend that tracking in place. The restored
+    event must still own the slot, so it is neither re-counted nor duplicated.
+    """
+    stored = failed_slot_store()
+    second = ControlMonitor()
+    second.set_expectation(0, MODE_CHARGING, SLOT_START + 1800, SLOT_END + 1800, 80.0, T0 + 2000)
+    second.restore(stored, "1")
+    second.set_expectation(0, MODE_CHARGING, SLOT_START + 2100, SLOT_END + 2100, 80.0, T0 + 2100)
+    events = feed(second, [2300, 2360, 2420, 2480, 2540], power=0)
+    if events or second.total != 1 or len(second.events) != 1:
+        print("ERROR: production-order restart re-counted the slot: total {} events {}".format(second.total, second.events))
+        return True
+    if not second.events[0]["failed_minutes"] > stored[0]["failed_minutes"]:
+        print("ERROR: restored event did not keep accruing minutes")
+        return True
+    if second.tracking[0]["slot_start"] != SLOT_START or second.events[0]["slot_end"] != SLOT_END + 2100:
+        print("ERROR: attached tracking/event slot not merged: tracking {} event {}".format(second.tracking[0], second.events[0]))
+        return True
+    return False
+
+
+def test_extend_attaches_existing_event():
+    """
+    An event for the slot that appears while unattached tracking already exists is picked up by
+    the next contiguous extension. The event is put in directly, bypassing restore()'s own
+    attach, so the extend path is proven on its own.
+    """
+    stored = failed_slot_store()
+    monitor = ControlMonitor()
+    monitor.set_expectation(0, MODE_CHARGING, SLOT_START + 1800, SLOT_END + 1800, 80.0, T0 + 2000)
+    monitor.events.append(dict(stored[0]))
+    monitor.total = 1
+    monitor.set_expectation(0, MODE_CHARGING, SLOT_START + 2100, SLOT_END + 2100, 80.0, T0 + 2100)
+    if monitor.tracking[0]["event"] is not monitor.events[0]:
+        print("ERROR: contiguous extension did not attach the existing event: {}".format(monitor.tracking[0]))
+        return True
+    if feed(monitor, [2300, 2360, 2420, 2480], power=0) or monitor.total != 1 or len(monitor.events) != 1:
+        print("ERROR: extension re-counted the slot: total {} events {}".format(monitor.total, monitor.events))
+        return True
+    if monitor.tracking[0]["slot_start"] != SLOT_START or monitor.events[0]["slot_end"] != SLOT_END + 2100:
+        print("ERROR: attached slot not merged: tracking {} event {}".format(monitor.tracking[0], monitor.events[0]))
         return True
     return False
 
@@ -570,6 +622,8 @@ def run_control_monitor_tests(my_predbat):
         ("restore_merges_dedupes", test_restore_merges_and_dedupes),
         ("restore_total_adds_once", test_restore_total_adds_once),
         ("restart_mid_slot", test_restart_mid_slot_does_not_recount),
+        ("restart_mid_slot_production_order", test_restart_mid_slot_production_order),
+        ("extend_attaches_existing_event", test_extend_attaches_existing_event),
         ("format_failure", test_format_failure),
     ]:
         print("**** control_monitor: {} ****".format(name))

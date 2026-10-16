@@ -138,6 +138,25 @@ class ControlMonitor:
                 return event
         return None
 
+    def _attach_event(self, inverter_id, track):
+        """
+        Attach unattached tracking to an existing event for its slot, if there is one.
+
+        Tracking can exist before the event that owns its slot does - after a restart execute_plan()
+        sets the expectation before the publish cycle restores the events - so this is retried
+        wherever such an event may have appeared. The two then share the merged slot.
+        """
+        if track["event"] is not None:
+            return
+        event = self._find_event(inverter_id, track["mode"], track["slot_start"])
+        if event is None:
+            return
+        slot_end = max(event["slot_end"], track["slot_end"])
+        track["event"] = event
+        track["slot_start"] = event["slot_start"]
+        track["slot_end"] = slot_end
+        event["slot_end"] = slot_end
+
     def set_expectation(self, inverter_id, mode, slot_start, slot_end, target_percent, now):
         """
         Record what this inverter should be doing until the next plan run.
@@ -151,7 +170,9 @@ class ControlMonitor:
         if current and current["mode"] == mode and current["slot_start"] <= slot_start <= current["slot_end"]:
             current["slot_end"] = max(current["slot_end"], slot_end)
             current["target_percent"] = target_percent
-            if current["event"] is not None:
+            if current["event"] is None:
+                self._attach_event(inverter_id, current)
+            else:
                 current["event"]["slot_end"] = max(current["event"]["slot_end"], current["slot_end"])
             return
         event = self._find_event(inverter_id, mode, slot_start)
@@ -268,9 +289,11 @@ class ControlMonitor:
         Merge the events and lifetime total read back from the sensors after a restart.
 
         Events are merged on every call, de-duplicated by event_key and keeping the larger
-        failed_minutes. The total is merged once, the first time it reads as a number, as
-        restored + total: until then the in-memory total holds only failures counted by this
-        process, and taking the max would drop them.
+        failed_minutes, and any tracking not yet attached to an event is attached to a restored
+        event for its slot - so a slot that failed before the restart is not counted again. The
+        total is merged once, the first time it reads as a number, as restored + total: until then
+        the in-memory total holds only failures counted by this process, and taking the max would
+        drop them.
 
         Returns:
             True once the total has been restored, now or on an earlier call.
@@ -285,6 +308,8 @@ class ControlMonitor:
                 else:
                     existing["failed_minutes"] = max(existing["failed_minutes"], item["failed_minutes"])
             self.events.sort(key=lambda event: event["at"])
+        for inverter_id, track in self.tracking.items():
+            self._attach_event(inverter_id, track)
         if self.restored:
             return True
         try:
