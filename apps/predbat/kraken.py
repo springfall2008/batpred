@@ -1180,13 +1180,18 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         whose minute_data() keeps only midnight + (forecast_days + 1) days going forward, and
         nothing reads earlier than 24 hours before midnight (rate_replicate(), the yesterday
         savings and the rate chart all start there - the Octopus component publishes the same
-        -24h). So publish midnight - 1 day to midnight + (forecast_days + 1) days, and drop the
-        rest. The in-memory list and the cache keep the full set.
+        -24h). So publish from midnight - 1 day, and drop the rest. The in-memory list and the
+        cache keep the full set.
+
+        The forward end has one day to spare: the sensor is only republished when rates are
+        refreshed, so one published just before midnight is still what Predbat reads just after
+        it, when its own window has moved on a day. forecast_days is worked out as fetch.py does,
+        including its 24 hour minimum.
         """
-        forecast_hours = self.get_arg("forecast_hours", 48)
+        forecast_hours = max(self.get_arg("forecast_hours", 48), 24)
         forecast_days = int((forecast_hours + 23) / 24)
         midnight = self.midnight_utc
-        return self._rates_in_window(rates, midnight - timedelta(days=1), midnight + timedelta(days=forecast_days + 1))
+        return self._rates_in_window(rates, midnight - timedelta(days=1), midnight + timedelta(days=forecast_days + 2))
 
     def _publish_rate_sensors(self):
         """Publish the import/export rate + standing-charge sensors from the current in-memory data.
