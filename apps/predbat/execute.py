@@ -17,7 +17,7 @@ reserve level adjustments, and multi-inverter balancing.
 
 from datetime import timedelta, datetime
 from const import MINUTE_WATT, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
-from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate, balance_inverters, allocate_export_rates, export_mode_of, export_power_of, export_target_of
+from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate, balance_inverters, allocate_export_rates, export_mode_of, export_power_of, export_target_of, get_charge_rate_curve, get_discharge_rate_curve
 from predbat_metrics import metrics
 from inverter import Inverter
 import time
@@ -338,6 +338,40 @@ class Execute:
             slot_end = (self.midnight_utc + timedelta(minutes=end_minutes)).timestamp()
             monitor.set_expectation(inverter.id, mode, slot_start, slot_end, target_percent, now)
 
+    def expected_battery_rates(self, inverter):
+        """
+        The charge and discharge power, in W, this inverter's battery can be expected to deliver now.
+
+        The control-failure monitor judges measured power against these rather than the raw rates
+        written, which stay at maximum outside low-power mode: the battery's charge and discharge
+        curves taper near full and empty, a cold battery is temperature-capped, and while exporting
+        strong solar leaves the battery only the AC headroom (hybrid inverters) and export headroom
+        that the PV is not already using. None of those are a failure to follow the command.
+
+        Args:
+            inverter: the Inverter, with requested_charge_w / requested_discharge_w as last written
+
+        Returns:
+            (charge_w, discharge_w): each the written rate capped as above, or None where no rate was written
+        """
+        charge_w = getattr(inverter, "requested_charge_w", None)
+        discharge_w = getattr(inverter, "requested_discharge_w", None)
+        if charge_w is not None:
+            curve_w = MINUTE_WATT * get_charge_rate_curve(inverter.soc_kw, charge_w / MINUTE_WATT, inverter.soc_max, inverter.battery_rate_max_charge, self.battery_charge_power_curve, 0, inverter.battery_temperature, self.battery_temperature_charge_curve)
+            charge_w = int(round(min(charge_w, curve_w)))
+        if discharge_w is not None:
+            curve_w = MINUTE_WATT * get_discharge_rate_curve(
+                inverter.soc_kw, discharge_w / MINUTE_WATT, inverter.soc_max, inverter.battery_rate_max_discharge, self.battery_discharge_power_curve, 0, inverter.battery_temperature, self.battery_temperature_discharge_curve
+            )
+            limit_w = min(discharge_w, curve_w)
+            # inverter_limit / export_limit are kW-per-minute like the rates; 0 means not set
+            if self.inverter_hybrid and inverter.inverter_limit:
+                limit_w = min(limit_w, max(0, inverter.inverter_limit * MINUTE_WATT - inverter.pv_power))
+            if inverter.export_limit:
+                limit_w = min(limit_w, max(0, inverter.export_limit * MINUTE_WATT + inverter.load_power - inverter.pv_power))
+            discharge_w = int(round(limit_w))
+        return charge_w, discharge_w
+
     def observe_control_failures(self, now=None):
         """
         Judge each inverter's fresh reading against what it was last told to do.
@@ -363,14 +397,8 @@ class Execute:
             # battery_power_valid; a real Inverter always has it
             if inverter.id not in monitor.tracking or not getattr(inverter, "battery_power_valid", True):
                 continue
-            event = monitor.observe(
-                inverter.id,
-                inverter.battery_power,
-                inverter.soc_percent,
-                getattr(inverter, "requested_charge_w", None),
-                getattr(inverter, "requested_discharge_w", None),
-                now,
-            )
+            charge_w, discharge_w = self.expected_battery_rates(inverter)
+            event = monitor.observe(inverter.id, inverter.battery_power, inverter.soc_percent, charge_w, discharge_w, now)
             if event is not None:
                 self.log(format_failure(event, self.local_tz))
 

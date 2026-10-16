@@ -13,9 +13,12 @@ other half: Predbat asked for Charging, Exporting, Freeze charging or Freeze exp
 battery's measured power says it is not happening.
 
 The expensive failure here is a false alarm, so judgement is deliberately conservative: a grace
-period after entering a mode, a shortfall measured against the rate actually written (so low-power
-and temperature-limited charging are not failures), and several consecutive failing readings
-before anything is reported. Each failed slot is reported, and counted, once.
+period after entering a mode, a shortfall measured against the rate the battery can actually
+deliver (the rate written, capped by the charge/discharge curve and battery temperature, and when
+exporting by the AC and export headroom left after solar - so low-power, tapering, cold and
+solar-limited batteries are not failures; the caller works that rate out and passes it in), no
+judgement once the slot has ended, and several consecutive failing readings before anything is
+reported. Each failed slot is reported, and counted, once.
 
 This module has no engine dependencies so it can be tested standalone.
 """

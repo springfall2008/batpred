@@ -1635,12 +1635,130 @@ def test_control_monitor_uses_written_rate(my_predbat):
     return failed
 
 
+EXPECTED_RATE_SETTINGS = ("battery_charge_power_curve", "battery_discharge_power_curve", "battery_temperature_charge_curve", "battery_temperature_discharge_curve", "inverter_hybrid")
+
+
 def expected_rate_inverter(my_predbat, soc_kw=5.0, soc_max=10.0):
     """A standalone 1kW inverter, written 1000W each way, for the control-monitor observation tests."""
     inverter = ActiveTestInverter(0, soc_kw, soc_max, my_predbat.now_utc)
     inverter.requested_charge_w = 1000
     inverter.requested_discharge_w = 1000
     return inverter
+
+
+def test_expected_battery_rates(my_predbat):
+    """
+    The rate the monitor judges against is what the battery can deliver: the written rate capped
+    by the charge/discharge curve and temperature, and for discharge by the AC and export headroom
+    left after PV. A rate that was never written stays None.
+    """
+    failed = False
+    saved = {name: getattr(my_predbat, name) for name in EXPECTED_RATE_SETTINGS}
+
+    def check(name, inverter, expect):
+        """Compare expected_battery_rates() for inverter against expect, reporting a mismatch."""
+        got = my_predbat.expected_battery_rates(inverter)
+        if got != expect:
+            print("ERROR: expected_battery_rates {}: got {} expected {}".format(name, got, expect))
+            return True
+        return False
+
+    try:
+        my_predbat.battery_charge_power_curve = {}
+        my_predbat.battery_discharge_power_curve = {}
+        my_predbat.battery_temperature_charge_curve = {}
+        my_predbat.battery_temperature_discharge_curve = {}
+        my_predbat.inverter_hybrid = True
+
+        failed |= check("no limits", expected_rate_inverter(my_predbat), (1000, 1000))
+
+        inverter = expected_rate_inverter(my_predbat)
+        inverter.requested_charge_w = None
+        inverter.requested_discharge_w = None
+        failed |= check("unwritten rates", inverter, (None, None))
+
+        # Taper near full: the curve allows 40% of max at this SoC
+        my_predbat.battery_charge_power_curve = {percent: 0.4 for percent in range(101)}
+        my_predbat.battery_discharge_power_curve = {percent: 0.5 for percent in range(101)}
+        failed |= check("charge/discharge curve", expected_rate_inverter(my_predbat, soc_kw=9.5), (400, 500))
+        my_predbat.battery_charge_power_curve = {}
+        my_predbat.battery_discharge_power_curve = {}
+
+        # Cold battery: 0C allows 0.05C on a 10kWh battery = 500W charge, 0.03C = 300W discharge
+        my_predbat.battery_temperature_charge_curve = {0: 0.05}
+        my_predbat.battery_temperature_discharge_curve = {0: 0.03}
+        inverter = expected_rate_inverter(my_predbat)
+        inverter.battery_temperature = 0
+        failed |= check("temperature cap", inverter, (500, 300))
+        my_predbat.battery_temperature_charge_curve = {}
+        my_predbat.battery_temperature_discharge_curve = {}
+
+        # Hybrid with 3kW of PV on a 3.6kW AC limit: only 600W of AC headroom left for the battery
+        inverter = expected_rate_inverter(my_predbat)
+        inverter.inverter_limit = 3600 / MINUTE_WATT
+        inverter.pv_power = 3000
+        failed |= check("AC headroom", inverter, (1000, 600))
+
+        # PV beyond the AC limit leaves no headroom at all
+        inverter.pv_power = 5000
+        failed |= check("no AC headroom", inverter, (1000, 0))
+
+        # Not hybrid: the AC limit does not cap the battery, the export limit still does - 2kW export
+        # plus 500W of load less 1.8kW of PV leaves 700W
+        my_predbat.inverter_hybrid = False
+        inverter = expected_rate_inverter(my_predbat)
+        inverter.inverter_limit = 1000 / MINUTE_WATT
+        inverter.export_limit = 2000 / MINUTE_WATT
+        inverter.load_power = 500
+        inverter.pv_power = 1800
+        failed |= check("export headroom, not hybrid", inverter, (1000, 700))
+
+        # A limit of 0 is unset: no cap from it
+        inverter.export_limit = 0
+        failed |= check("export limit unset", inverter, (1000, 1000))
+    finally:
+        for name, value in saved.items():
+            setattr(my_predbat, name, value)
+    return failed
+
+
+def test_control_monitor_tapered_charge_not_failing(my_predbat):
+    """
+    A battery near full charging at its tapered rate is not a failure: 150W against 1000W written
+    would be, but the curve only allows 400W here and 150W is well within that.
+    """
+    saved_monitor = my_predbat.control_monitor
+    saved_inverters = my_predbat.inverters
+    saved = {name: getattr(my_predbat, name) for name in EXPECTED_RATE_SETTINGS}
+    failed = False
+
+    def run_slot():
+        """Charge one inverter at 150W for a slot past grace, returning the count the monitor reached."""
+        inverter = expected_rate_inverter(my_predbat, soc_kw=9.5)
+        inverter.battery_power = -150
+        my_predbat.inverters = [inverter]
+        my_predbat.control_monitor = ControlMonitor()
+        my_predbat.control_monitor.set_expectation(0, MODE_CHARGING, 0, 10**10, 100.0, 0)
+        for offset in (GRACE_S, GRACE_S + 60, GRACE_S + 120, GRACE_S + 180):
+            my_predbat.observe_control_failures(now=offset)
+        return my_predbat.control_monitor.total
+
+    try:
+        my_predbat.battery_charge_power_curve = {}
+        if run_slot() != 1:
+            print("ERROR: setup - 150W against a flat-curve 1000W should fail, so this test proves nothing")
+            failed = True
+        my_predbat.battery_charge_power_curve = {percent: 0.4 for percent in range(101)}
+        total = run_slot()
+        if total != 0:
+            print("ERROR: charging at the tapered rate was judged a failure, total {}".format(total))
+            failed = True
+    finally:
+        my_predbat.control_monitor = saved_monitor
+        my_predbat.inverters = saved_inverters
+        for name, value in saved.items():
+            setattr(my_predbat, name, value)
+    return failed
 
 
 def test_control_monitor_invalid_battery_power_not_judged(my_predbat):
@@ -4649,6 +4767,8 @@ def run_execute_tests(my_predbat):
         test_control_monitor_read_only_between_plan_runs,
         test_control_monitor_calibration_records_nothing,
         test_control_monitor_uses_written_rate,
+        test_expected_battery_rates,
+        test_control_monitor_tapered_charge_not_failing,
         test_control_monitor_invalid_battery_power_not_judged,
     ):
         failed |= control_monitor_test(my_predbat)
