@@ -421,6 +421,134 @@ class TestGatewayCommit:
         assert sent(gw) == [("set_charge_enable", False), ("set_charge_slot", slot_json(230, 305)), ("set_charge_enable", True)]
         assert gw.cache[CHARGE_ENABLED] == "on"
 
+    def logged(self, gw, text, level="Warn:"):
+        """Whether a log line at this level contains text."""
+        return any(str(call.args[0]).startswith(level) and text in str(call.args[0]) for call in gw.log.call_args_list)
+
+    @hub_test
+    def test_disconnected_commit_is_not_reported_written(self):
+        """With the Hub disconnected nothing is sent, so the window is not reported written and the selects revert."""
+        gw, hub = self.setup_hub()
+        self.stage(gw, "charge", "02:30:00", "03:05:00")
+        gw._mqtt_connected = False
+        self.press(gw)
+        assert gw._published == []
+        assert gw._staged == {}
+        assert gw.cache[SLOT_START] == "01:30:00"
+        assert self.logged(gw, "not written to the Hub")
+        assert not self.logged(gw, "written to the Hub", level="Info:")
+
+    @hub_test
+    def test_first_commit_after_reconnect_waits_for_ack(self):
+        """Before any ack on a new connection the commit still waits for one, so a refusal is seen and the export fail-safe runs."""
+        gw, hub = self.setup_hub(make_status(discharge_enabled=True), responder=lambda command, kwargs: (False, None) if command.endswith("_slot") else (True, {"enable": kwargs["enable"]}), acks_seen=False)
+        self.stage(gw, "discharge", "17:00:00", "19:00:00")
+        self.press(gw)
+        assert sent(gw) == [("set_discharge_slot", slot_json(1700, 1900)), ("set_discharge_enable", False)]
+
+    @hub_test
+    def test_hub_that_never_acks_is_reported_published(self):
+        """A Hub that has sent no ack on this connection gets one ack window; then the window counts as published, not written."""
+        gw, hub = self.setup_hub(responder=lambda command, kwargs: None, acks_seen=False)
+        self.stage(gw, "charge", "02:30:00", "03:05:00")
+        self.press(gw)
+        assert sent(gw) == [("set_charge_slot", slot_json(230, 305))]
+        assert gw._staged == {}
+        assert self.logged(gw, "published to the Hub", level="Info:")
+        assert not self.logged(gw, "not written")
+
+    @hub_test
+    def test_export_fail_safe_runs_when_telemetry_is_unknown(self):
+        """A refused export move with the inverter missing from the last status frame still turns export off."""
+        gw, hub = self.setup_hub(make_status(discharge_enabled=True), responder=lambda command, kwargs: (False, None) if command.endswith("_slot") else (True, {"enable": kwargs["enable"]}))
+        self.stage(gw, "discharge", "17:00:00", "19:00:00")
+        empty = pb.GatewayStatus()
+        empty.device_id = "pbgw_abc123"
+        gw._last_status = empty
+        self.press(gw)
+        assert sent(gw)[-1] == ("set_discharge_enable", False)
+
+    @hub_test
+    def test_clear_staged_keeps_a_newer_entry(self):
+        """Clearing by identity leaves a window staged after the one being cleared."""
+        gw, hub = self.setup_hub()
+        self.stage(gw, "charge", "02:30:00", "03:05:00")
+        sent_entry = gw._staged[(SUFFIX, "charge")]
+        run(gw.select_event(SLOT_END, "03:30:00"))
+        assert gw._clear_staged(SERIAL, "charge", sent_entry) is False
+        assert gw._staged[(SUFFIX, "charge")]["end"] == 330
+        assert gw._clear_staged(SERIAL, "charge", gw._staged[(SUFFIX, "charge")]) is True
+        assert gw._staged == {}
+
+    @hub_test
+    def test_newer_window_staged_during_a_failed_commit_is_sent(self):
+        """A window written while a refused one was in flight is sent, not dropped with the failure."""
+        refusals = {"left": 1}
+
+        def refuse_once(command, kwargs):
+            """Refuse the first window, apply everything after."""
+            if command.endswith("_slot") and refusals["left"]:
+                refusals["left"] -= 1
+                return False, None
+            return applies(command, kwargs)
+
+        gw, hub = self.setup_hub(responder=refuse_once)
+        self.stage(gw, "charge", "02:30:00", "03:05:00")
+
+        async def meanwhile():
+            """A later end is written before the Hub answers."""
+            await gw.select_event(SLOT_END, "03:30:00")
+
+        hub.during = meanwhile
+        self.press(gw)
+        assert sent(gw) == [("set_charge_slot", slot_json(230, 305)), ("set_charge_slot", slot_json(230, 330))]
+        assert gw._staged == {}
+        assert gw.cache[SLOT_END] == "03:30:00"
+
+    @hub_test
+    def test_press_on_a_closed_loop_does_not_raise(self):
+        """After the gateway loop has closed a press is handled inline and fails cleanly instead of raising."""
+        gw, hub = self.setup_hub()
+        self.stage(gw, "charge", "02:30:00", "03:05:00")
+        loop = asyncio.new_event_loop()
+        loop.close()
+        gw._loop = loop
+        gw._mqtt_connected = False
+        self.press(gw)
+        assert gw._published == []
+        assert gw._staged == {}
+
+    @hub_test
+    def test_final_drops_staging(self):
+        """Stopping the component drops staged windows so nothing waits on a loop that is going away."""
+        gw, hub = self.setup_hub()
+        gw._mqtt_task = None
+        self.stage(gw, "charge", "02:30:00", "03:05:00")
+        run(gw.final())
+        assert gw._staged == {}
+        assert gw._commit_inflight == set()
+
+    @hub_test
+    def test_unknown_other_endpoint_warns_when_staged(self):
+        """Staging one endpoint while the other select reads nothing usable warns straight away."""
+        gw, hub = self.setup_hub()
+        gw.cache[SLOT_END] = "unknown"
+        run(gw.select_event(SLOT_START, "02:30:00"))
+        assert self.logged(gw, "charge slot end")
+
+    @hub_test
+    def test_staged_entry_read_has_no_side_effects(self):
+        """Reading a staged entry never drops or logs; an expired entry is pruned once, by the next status frame."""
+        gw, hub = self.setup_hub()
+        self.stage(gw, "charge", "02:30:00", "03:05:00")
+        hub.now["now"] += 601
+        assert gw._staged_entry(SUFFIX, "charge") is not None
+        assert gw._staged_entry(SUFFIX, "charge") is not None
+        assert not self.logged(gw, "never written")
+        inject(gw, make_status())
+        assert gw._staged == {}
+        assert sum("never written" in str(call.args[0]) for call in gw.log.call_args_list) == 1
+
     @hub_test
     def test_press_without_staging_publishes_nothing(self):
         """A press with nothing staged (e.g. after a target SOC change) sends nothing."""

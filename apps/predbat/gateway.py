@@ -266,6 +266,9 @@ class GatewayMQTT(ComponentBase):
     # Guards the command id counter and the in-flight command map, which are touched both by
     # control writes (engine thread) and by acks arriving on the MQTT listener's loop.
     _command_lock = threading.Lock()
+    # Guards _staged: select and switch events arrive on Home Assistant's thread, commits and
+    # telemetry run on the gateway's own loop
+    _staged_lock = threading.Lock()
 
     # Defaults for an instance built without initialize()
     gateway_shared_ct = True
@@ -1023,6 +1026,7 @@ class GatewayMQTT(ComponentBase):
         """
         device_id = status.device_id
         firmware = status.firmware
+        self._prune_staged()
 
         # Read-only as the gateway actually enforces it. Absent on firmware predating
         # the field, which is UNKNOWN and not False — publishing False there would claim
@@ -2801,14 +2805,23 @@ class GatewayMQTT(ComponentBase):
         return attributes
 
     def _staged_entry(self, suffix, side):
-        """The staged window for one side of an inverter, or None. Drops one that has expired."""
-        key = (suffix, side)
-        entry = getattr(self, "_staged", {}).get(key)
-        if entry is not None and _monotonic() - entry["at"] > _STAGED_EXPIRY_SECONDS:
+        """The staged window for one side of an inverter, or None. Expiry is _prune_staged()'s job."""
+        return getattr(self, "_staged", {}).get((suffix, side))
+
+    def _prune_staged(self):
+        """Drop staged windows nobody wrote to the Hub within _STAGED_EXPIRY_SECONDS.
+
+        Called once per status frame and before each commit or new staged write, so an entry
+        for an inverter that has left the status frame is dropped too.
+        """
+        now = _monotonic()
+        with self._staged_lock:
+            staged = getattr(self, "_staged", {})
+            expired = [key for key, entry in staged.items() if now - entry["at"] > _STAGED_EXPIRY_SECONDS]
+            if expired:
+                self._staged = {key: entry for key, entry in staged.items() if key not in expired}
+        for suffix, side in expired:
             self.log(f"Warn: GatewayMQTT: staged {side} window for {suffix} was never written to the Hub, showing the Hub's schedule again")
-            self._staged = {kept_key: kept for kept_key, kept in self._staged.items() if kept_key != key}
-            return None
-        return entry
 
     def _stage_slot(self, entity_id, serial, side, field, hhmm):
         """Hold one slot endpoint until the schedule write switch sends the complete window.
@@ -2817,21 +2830,37 @@ class GatewayMQTT(ComponentBase):
         complete window the Hub should end up with.
         """
         suffix = _serial_suffix(serial)
-        entry = self._staged_entry(suffix, side)
-        if entry is None:
-            other = "end" if field == "start" else "start"
-            entry = {"start": None, "end": None, "enable": None}
-            entry[other] = self._time_str_to_hhmm(self.get_state_wrapper(entity_id[: -len(field)] + other))
-        entry = {**entry, field: hhmm, "at": _monotonic()}
-        self._staged = {**getattr(self, "_staged", {}), (suffix, side): entry}
+        other = "end" if field == "start" else "start"
+        self._prune_staged()
+        with self._staged_lock:
+            entry = self._staged_entry(suffix, side)
+            if entry is None:
+                entry = {"start": None, "end": None, "enable": None}
+                entry[other] = self._time_str_to_hhmm(self.get_state_wrapper(entity_id[: -len(field)] + other))
+            entry = {**entry, field: hhmm, "at": _monotonic()}
+            self._staged = {**getattr(self, "_staged", {}), (suffix, side): entry}
+        if entry[other] is None:
+            self.log(f"Warn: GatewayMQTT: {side} slot {other} for {serial} is unknown, so the staged {side} window stays incomplete until it is written too")
         inv_type = getattr(self, "_discovery", {}).get(serial.upper(), {}).get("type")
         self.dashboard_item(entity_id, self._hhmm_to_time_str(hhmm), attributes=self._slot_attributes(f"{side}_slot1_{field}", inv_type), app="gateway")
         self.log(f"Info: GatewayMQTT: {side} slot {field} {hhmm:04d} for {serial} staged until the schedule is written")
 
-    def _clear_staged(self, serial, side):
-        """Forget a staged window, so its selects follow the Hub's schedule again."""
+    def _clear_staged(self, serial, side, entry=None):
+        """Forget a staged window, so its selects follow the Hub's schedule again.
+
+        Given the entry that was sent, only that entry is cleared: a window staged after it
+        stays, to be sent in turn.
+
+        Returns:
+            bool: True if the side has nothing staged now.
+        """
         key = (_serial_suffix(serial), side)
-        self._staged = {kept_key: kept for kept_key, kept in getattr(self, "_staged", {}).items() if kept_key != key}
+        with self._staged_lock:
+            staged = getattr(self, "_staged", {})
+            if entry is not None and staged.get(key) is not entry:
+                return key not in staged
+            self._staged = {kept_key: kept for kept_key, kept in staged.items() if kept_key != key}
+        return True
 
     async def number_event(self, entity_id, value):
         """Handle number entity changes (e.g. charge rate, target SOC).
@@ -2928,11 +2957,14 @@ class GatewayMQTT(ComponentBase):
         if side is None:
             return
         suffix = _serial_suffix(serial)
-        entry = self._staged_entry(suffix, side)
+        self._prune_staged()
+        with self._staged_lock:
+            entry = self._staged_entry(suffix, side)
+            if entry is not None:
+                # Written alongside a staged window: an EMS will not enable onto a window it does
+                # not have yet, so the enable goes after the window when the schedule is written
+                self._staged = {**self._staged, (suffix, side): {**entry, "enable": is_on, "at": _monotonic()}}
         if entry is not None:
-            # Written alongside a staged window: an EMS will not enable onto a window it does
-            # not have yet, so the enable goes after the window when the schedule is written
-            self._staged = {**self._staged, (suffix, side): {**entry, "enable": is_on, "at": _monotonic()}}
             self.dashboard_item(entity_id, "on" if is_on else "off", attributes=GATEWAY_ATTRIBUTE_TABLE.get(f"{side}_enabled", {}), app="gateway")
             self.log(f"Info: GatewayMQTT: {side.capitalize()} {'enable' if is_on else 'disable'} for {serial} staged until the schedule is written")
             return
@@ -2943,9 +2975,10 @@ class GatewayMQTT(ComponentBase):
         """Write what is staged for an inverter to the Hub, without making the caller wait.
 
         The press comes from Predbat's control loop, which must not block on Hub acks, so the
-        commit runs on the gateway's own loop. With no loop running yet (tests), it runs inline.
+        commit runs on the gateway's own loop. With no loop running (tests), or one that has
+        closed with the component, it runs inline, where a stopped connection fails it at once.
         """
-        if self._loop is None:
+        if self._loop is None or self._loop.is_closed():
             await self._commit_staged(serial)
         elif self._loop is not asyncio.get_running_loop():
             asyncio.run_coroutine_threadsafe(self._commit_staged(serial), self._loop)
@@ -2957,6 +2990,7 @@ class GatewayMQTT(ComponentBase):
     async def _commit_staged(self, serial):
         """Write each staged side of an inverter to the Hub. A side already being written is left to that commit."""
         suffix = _serial_suffix(serial)
+        self._prune_staged()
         for side in ("charge", "discharge"):
             key = (suffix, side)
             if key in self._commit_inflight or self._staged_entry(suffix, side) is None:
@@ -2978,8 +3012,9 @@ class GatewayMQTT(ComponentBase):
         goes after the window. A staged disable goes first, so a refused window cannot leave the
         side enabled. A staged enable is always sent: Predbat only writes one when it saw the
         other state, and the last status frame may predate a disable sent this cycle. Success or
-        failure, the staging is then dropped: on failure the selects show the Hub's schedule
-        again, so Predbat sees the mismatch on its next cycle and writes it again.
+        failure, the staged entry that was sent is then dropped: on failure the selects show the
+        Hub's schedule again, so Predbat sees the mismatch on its next cycle and writes it again.
+        A window staged while this one was in flight is sent next.
 
         Returns:
             bool: True if the Hub took the window (and enable).
@@ -2992,48 +3027,66 @@ class GatewayMQTT(ComponentBase):
             entry = self._staged_entry(suffix, side)
             if entry is None:
                 return True
-            snapshot = {field: entry[field] for field in ("start", "end", "enable")}
-            if snapshot["start"] is None or snapshot["end"] is None:
-                return await self._commit_failed(serial, side, f"incomplete window {snapshot['start']}-{snapshot['end']}")
-            if snapshot["enable"] is False:
+            if entry["start"] is None or entry["end"] is None:
+                if await self._commit_failed(serial, side, entry, f"incomplete window {entry['start']}-{entry['end']}"):
+                    return False
+                continue
+            confirmed = True
+            if entry["enable"] is False:
                 state, _ = await self._send_and_await(enable_entity, f"set_{side}_enable", enable=False, serial=serial)
-                if state != "applied":
-                    return await self._commit_failed(serial, side, f"disable {state or 'not acknowledged'}")
-            window = f"{snapshot['start']:04d}-{snapshot['end']:04d}"
-            state, outcome = await self._send_and_await(slot_entity, f"set_{side}_slot", schedule_json=json.dumps({"start": snapshot["start"], "end": snapshot["end"]}), serial=serial)
-            if state != "applied":
-                return await self._commit_failed(serial, side, f"window {window} {state or 'not acknowledged'}", window_refused=state == "refused")
+                if state not in ("applied", "published"):
+                    if await self._commit_failed(serial, side, entry, f"disable {state or 'not acknowledged'}"):
+                        return False
+                    continue
+                confirmed = state == "applied"
+            window = f"{entry['start']:04d}-{entry['end']:04d}"
+            state, outcome = await self._send_and_await(slot_entity, f"set_{side}_slot", schedule_json=json.dumps({"start": entry["start"], "end": entry["end"]}), serial=serial)
+            if state not in ("applied", "published"):
+                if await self._commit_failed(serial, side, entry, f"window {window} {state or 'not acknowledged'}", window_refused=state == "refused"):
+                    return False
+                continue
+            confirmed = confirmed and state == "applied"
             recorded = bool(outcome.get("recorded"))
-            if snapshot["enable"] is True:
+            if entry["enable"] is True:
                 state, _ = await self._send_and_await(enable_entity, f"set_{side}_enable", enable=True, serial=serial)
-                if state != "applied":
-                    return await self._commit_failed(serial, side, f"enable after window {window} {state or 'not acknowledged'}")
-            current = self._staged_entry(suffix, side)
-            if current is not None and {field: current[field] for field in snapshot} != snapshot:
+                if state not in ("applied", "published"):
+                    if await self._commit_failed(serial, side, entry, f"enable after window {window} {state or 'not acknowledged'}"):
+                        return False
+                    continue
+                confirmed = confirmed and state == "applied"
+            if not self._clear_staged(serial, side, entry):
                 continue  # written again while this was in flight: send the newer window too
-            self._clear_staged(serial, side)
-            self.log(f"Info: GatewayMQTT: {side} window {window} for {serial} written to the Hub{' (recorded while off)' if recorded else ''}")
+            if confirmed:
+                self.log(f"Info: GatewayMQTT: {side} window {window} for {serial} written to the Hub{' (recorded while off)' if recorded else ''}")
+            else:
+                self.log(f"Info: GatewayMQTT: {side} window {window} for {serial} published to the Hub without an ack; the next status frame shows whether it landed")
             return True
 
-    async def _commit_failed(self, serial, side, reason, window_refused=False):
+    async def _commit_failed(self, serial, side, entry, reason, window_refused=False):
         """Give up on a staged window: show the Hub's schedule again so the next cycle retries.
 
-        An export window the Hub refused to move while the old one is still armed would export
-        on a schedule the plan has left, so export is turned off until a window lands (#5532).
-        Only an explicit refusal does this: an unanswered window may well have applied (a slow
-        EMS write), and the plan still wants to export, so it is left running.
+        If a newer window was staged while this one was in flight, that one is sent instead.
+
+        An export window the Hub refused to move while the old one may still be armed would
+        export on a schedule the plan has left, so export is turned off until a window lands
+        (#5532). That includes the inverter being missing from the last status frame: turning
+        export off is the safe direction. Only an explicit refusal does this: an unanswered
+        window may well have applied (a slow EMS write), and the plan still wants to export,
+        so it is left running.
 
         Returns:
-            bool: False.
+            bool: True if the commit has given up, False if a newer staged window is to be sent.
         """
         self.log(f"Warn: GatewayMQTT: {side} window for {serial} not written to the Hub: {reason}")
-        self._clear_staged(serial, side)
-        if window_refused and side == "discharge" and self._telemetry_enabled(_serial_suffix(serial), side):
+        if not self._clear_staged(serial, side, entry):
+            self.log(f"Info: GatewayMQTT: a newer {side} window for {serial} was staged meanwhile, sending that")
+            return False
+        if window_refused and side == "discharge" and self._telemetry_enabled(_serial_suffix(serial), side) is not False:
             self.log(f"Warn: GatewayMQTT: turning off scheduled export for {serial} until its window is written")
             await self._send_control(f"switch.{self.prefix}_gateway_{_serial_suffix(serial)}_discharge_enabled", "set_discharge_enable", enable=False, serial=serial)
         if self._last_status is not None:
             self._inject_entities(self._last_status)
-        return False
+        return True
 
     def _telemetry_enabled(self, suffix, side):
         """Whether the inverter last reported this side's schedule enabled, or None if unknown."""
@@ -3049,22 +3102,29 @@ class GatewayMQTT(ComponentBase):
         """Send a schedule-write command and wait for the Hub to apply it.
 
         Unanswered, it is sent again, up to _COMMIT_ATTEMPTS sends one ack window apart. With
-        no acks on this connection there is nothing to wait for, so publishing is taken as
-        done and the next telemetry shows whether it landed.
+        the Hub disconnected nothing can be sent, so it fails at once. Without an ack
+        subscription there is nothing to wait for, and on a connection where nothing has been
+        acknowledged yet the Hub gets one ack window to answer: after that the command counts as
+        published, and the next status frame shows whether it landed.
 
         Returns:
-            tuple: ("applied", the ack's applied payload or {}), ("refused", None) or (None, None) if unanswered.
+            tuple: ("applied", the ack's applied payload or {}), ("published", {}) when sent with
+            no ack to wait for, ("refused", None), or (None, None) if unanswered or not sent.
         """
-        acks = getattr(self, "_ack_subscribed", False) and self._mqtt_connected and self._acks_seen
+        answered_before = self._acks_seen  # a Hub that stops answering mid-commit is not one that never sends acks
         for _attempt in range(_COMMIT_ATTEMPTS):
+            if not self._mqtt_connected:
+                return None, None
             await self._send_control(entity_id, command, **kwargs)
-            if not acks:
-                return "applied", {}
+            if not getattr(self, "_ack_subscribed", False):
+                return "published", {}
             state, applied = await self._await_command_outcome(entity_id, command, kwargs)
             if state == "applied":
                 return state, applied if isinstance(applied, dict) else {}
             if state == "refused":
                 return state, None
+            if not answered_before and not self._acks_seen:
+                return "published", {}
         return None, None
 
     async def _await_command_outcome(self, entity_id, command, kwargs, timeout=_COMMAND_ACK_WINDOW):
@@ -3309,6 +3369,12 @@ class GatewayMQTT(ComponentBase):
 
         self._mqtt_connected = False
         self._mqtt_client = None
+        # Staged windows can no longer be written, and a commit in flight dies with this loop
+        for task in list(self._commit_tasks):
+            task.cancel()
+        with self._staged_lock:
+            self._staged = {}
+        self._commit_inflight = set()
         self.log("Info: GatewayMQTT: Finalized")
 
     async def _check_token_refresh(self):
