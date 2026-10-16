@@ -475,6 +475,27 @@ def test_extend_attaches_existing_event():
     return False
 
 
+def test_nothing_after_slot_end():
+    """
+    Readings at or after slot_end are not judged: the slot is over, and a stale expectation (a
+    skipped plan run) must neither fire nor credit minutes to an existing event.
+    """
+    monitor = charging_monitor()
+    if feed(monitor, [SLOT_END - SLOT_START + offset for offset in (0, 60, 120, 180, 240)], power=0) or monitor.total != 0:
+        print("ERROR: readings after slot_end fired: total {}".format(monitor.total))
+        return True
+    monitor = charging_monitor()
+    if len(feed(monitor, [GRACE_S, GRACE_S + 60, GRACE_S + 120], power=0)) != 1:
+        print("ERROR: setup - the slot did not fail inside its window")
+        return True
+    minutes = monitor.events[0]["failed_minutes"]
+    feed(monitor, [SLOT_END - SLOT_START + offset for offset in (0, 60, 120)], power=0)
+    if not close(monitor.events[0]["failed_minutes"], minutes) or monitor.total != 1:
+        print("ERROR: readings after slot_end credited minutes: {} -> {}".format(minutes, monitor.events[0]["failed_minutes"]))
+        return True
+    return False
+
+
 def test_format_failure():
     """The Warn: line names the inverter, mode, slot and the power shortfall."""
     failed = False
@@ -624,6 +645,7 @@ def run_control_monitor_tests(my_predbat):
         ("restart_mid_slot", test_restart_mid_slot_does_not_recount),
         ("restart_mid_slot_production_order", test_restart_mid_slot_production_order),
         ("extend_attaches_existing_event", test_extend_attaches_existing_event),
+        ("nothing_after_slot_end", test_nothing_after_slot_end),
         ("format_failure", test_format_failure),
     ]:
         print("**** control_monitor: {} ****".format(name))

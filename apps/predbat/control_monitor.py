@@ -207,12 +207,15 @@ class ControlMonitor:
         because the 60s balancer can change them between plan runs. Charging is judged against the
         charge rate, Exporting against the discharge rate; the Freeze modes ignore both.
 
+        Nothing is judged once the slot has ended: the 60s poll keeps observing when a plan run is
+        skipped, and the battery has rightly left the mode by then.
+
         Returns:
             The new event dict when this reading confirms the slot as failed, otherwise None. A slot
             returns an event at most once.
         """
         track = self.tracking.get(inverter_id)
-        if track is None:
+        if track is None or now >= track["slot_end"]:
             return None
         last = track["last_observed_at"]
         if last is not None and now - last < MIN_GAP_S:

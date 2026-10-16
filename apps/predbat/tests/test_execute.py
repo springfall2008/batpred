@@ -1424,6 +1424,19 @@ def control_monitor_charging_scenario(my_predbat, name):
     )
 
 
+def align_entry_to_slot(monitor):
+    """
+    Re-anchor every expectation's entry time to its slot start and return inverter 0's.
+
+    execute_plan() enters the slot at the wall clock, but the fixture's plan clock is pinned to noon
+    today, so on a run after the slot's end every reading would fall past slot_end and be ignored.
+    Entering at the slot start keeps the readings the test feeds inside the slot whatever the time.
+    """
+    for track in monitor.tracking.values():
+        track["entered_at"] = track["slot_start"]
+    return monitor.tracking[0]["entered_at"]
+
+
 def test_control_monitor_charging_counts_once(my_predbat):
     """
     Charging with no battery power: each inverter fails once, with one Warn: line each, and a later
@@ -1449,7 +1462,7 @@ def test_control_monitor_charging_counts_once(my_predbat):
                 failed = True
         if failed:
             return failed
-        entered = monitor.tracking[0]["entered_at"]
+        entered = align_entry_to_slot(monitor)
         for inverter in my_predbat.inverters:
             inverter.battery_power = 0
         my_predbat.log = lambda message, *args, **kwargs: lines.append(message)
@@ -1553,7 +1566,7 @@ def test_control_monitor_read_only_between_plan_runs(my_predbat):
         if control_monitor_charging_scenario(my_predbat, "control_monitor_read_only_poll"):
             return True
         monitor = my_predbat.control_monitor
-        entered = monitor.tracking[0]["entered_at"]
+        entered = align_entry_to_slot(monitor)
         for inverter in my_predbat.inverters:
             inverter.battery_power = 0
         my_predbat.set_read_only = True
