@@ -159,10 +159,46 @@ prune / recent / newest split:
 | `predbat.control_failures` | count of events in the last 24h; `state_class: measurement`, unit `failures` | `friendly_name: "Control failures (24h)"`, `icon: mdi:battery-alert`, `events` (newest 20 — the durable store restore reads), `by_mode` (24h count per mode) |
 | `predbat.control_failures_total` | lifetime count; `state_class: total_increasing`, unit `failures` | `friendly_name: "Control failures (total)"`, `icon: mdi:battery-alert` |
 
-Restore happens once per process from the `events` attribute and the total's state. A restored
-event whose slot is still live is re-attached to that inverter's state when the matching expectation
-is next set, so a restart mid-slot neither re-warns nor re-counts. The total is restored numerically
-and never goes backwards, which would otherwise register as a reset in HA long-term statistics.
+### Restart behaviour
+
+All durable data lives in the two entities; nothing goes through the Storage component (an async
+component-side cache the core loop does not use). Restore reads them with
+`load_previous_value_from_ha`, which tries the current state and falls back to the last history
+entry. On Predbat.com the same calls are served by the DB component (`DatabaseManager`), so one
+mechanism covers both deployments, as it does for control conflicts and the savings totals.
+
+What survives a restart:
+
+- **24h events** — restored from the `events` attribute. A restored event whose slot is still live is
+  re-attached to that inverter's state when the matching expectation is next set (matched on
+  `(inverter, mode, slot_start)`), so a restart mid-slot neither re-warns nor re-counts, and its
+  `failed_minutes` continue to accumulate.
+- **Lifetime total** — restored numerically from the total entity's state.
+
+What a restart deliberately drops: the in-flight per-inverter state (expectation, `entered_at`,
+`consecutive_failing`, unconfirmed failed time). A slot that was failing but not yet confirmed starts
+again with a fresh grace once the first plan run sets its expectation. Predbat re-sends its commands
+on start-up, so the inverter is owed the same grace as on first entry. The cost is detection up to
+`GRACE_S` + `CONFIRM_READINGS` minutes later than without the restart, and the pre-restart minutes of
+an unconfirmed slot are not counted.
+
+Guarding the total against a failed restore. If the restore reads nothing (HA unreachable or the
+entity momentarily `unavailable` at start-up) and Predbat then publishes its in-memory total of 0,
+the real value is overwritten and HA long-term statistics record a reset. Checking just before each
+publish cannot recover from that once the 0 is written, so the guard is:
+
+1. Until a restore read returns a value, the restore is retried on every publish cycle rather than
+   once per process. A value read on any attempt is merged as `total = max(total, restored)`.
+2. While the restore is unresolved and the in-memory total is 0, the total entity is **not written**.
+   On a genuinely fresh install this means `predbat.control_failures_total` first appears with the
+   first counted failure; after that write, the restore is considered resolved.
+3. Every write of the total publishes `max(in-memory total, last value read back)`, so the published
+   total never goes backwards.
+
+The 24h `events` attribute gets only rule 1 (events read on a later attempt are merged in,
+de-duplicated by slot key). If an empty list was already published over them they are lost, which is
+acceptable: the 24h sensor is a rolling window and recovers within a day, and no statistics depend on
+it.
 
 ### Metrics and dashboard
 
@@ -196,8 +232,17 @@ Monitor in isolation:
 - the `MAX_GAP_S` cap on credited time
 - `clear_expectation` mid-slot stops observation but keeps the event
 - prune and the 24h window
-- restore of a mid-slot event does not double-count
-- total survives restore and never decreases
+- restore of a mid-slot event does not double-count, and its `failed_minutes` continue
+- restore merges by slot key without duplicating events
+- total survives restore and never decreases (`max` merge)
+
+Restart guard (wired into Predbat):
+
+- restore read returns nothing: the total entity is not written while the total is 0, and the
+  restore is retried next cycle
+- restore succeeds on a later cycle after a failure was counted: published total is
+  `max(in-memory, restored)`
+- fresh install: the total entity first appears with the first counted failure
 
 Wired into Predbat (`create_predbat`):
 
