@@ -78,3 +78,46 @@ for (const legacy of [false, true]) {
 checkAppearance(page(null, false, false, false), false, 'system');
 checkAppearance(page('true', false, false, false), true, 'dark');
 console.log('PASS: theme choices, persistence, pre-CSS appearance, logo, live OS changes, legacy listener and missing matchMedia');
+
+// Run the actual generated Editor storage listener with an already-open editor.
+const editorJs = execFileSync(process.argv[2] || 'python3', ['-c',
+    'from web_helper import get_editor_js; print(get_editor_js())'
+], { cwd: path.resolve(__dirname, '..'), encoding: 'utf8' });
+const storageListener = editorJs.match(/window.addEventListener\('storage', function\(e\) \{[\s\S]*?\n    \}\);/);
+assert.ok(storageListener, 'Editor storage listener must exist');
+const editorPage = page('true', true);
+const wrapper = { style: { backgroundColor: '#2d2d2d' } };
+const gutter = { style: {} };
+const tooltip = { style: {} };
+let editorTheme = 'monokai';
+let lintRuns = 0;
+let refreshes = 0;
+let onStorage;
+editorPage.context.window.addEventListener = (event, callback) => {
+    assert.equal(event, 'storage');
+    onStorage = callback;
+};
+editorPage.document.querySelectorAll = selector => selector === '.CodeMirror-gutters' ? [gutter] : [tooltip];
+editorPage.context.editor = {
+    setOption: (option, value) => { assert.equal(option, 'theme'); editorTheme = value; },
+    getWrapperElement: () => wrapper,
+    performLint: () => { lintRuns++; },
+    refresh: () => { refreshes++; }
+};
+vm.runInContext(storageListener[0], editorPage.context);
+checkAppearance(editorPage, true, 'dark');
+// Another tab selects System: shared storage changes, then the Editor receives the event.
+const otherTab = page('true', true);
+otherTab.context.localStorage = editorPage.context.localStorage;
+otherTab.context.setThemeMode('system');
+assert.equal(editorPage.context.localStorage.getItem('darkMode'), null);
+onStorage({ key: 'darkMode', oldValue: 'true', newValue: null });
+assert.equal(editorTheme, 'monokai');
+assert.equal(wrapper.style.backgroundColor, '#2d2d2d');
+assert.equal(gutter.style.backgroundColor, '#2d2d2d');
+assert.equal(tooltip.style.backgroundColor, '#2d2d2d');
+assert.equal(lintRuns, 1);
+assert.equal(refreshes, 1);
+assert.equal(editorPage.reloads(), 0);
+assert.equal(otherTab.reloads(), 1);
+console.log('PASS: clearing Dark override in another tab keeps the open Editor dark on a Dark OS');

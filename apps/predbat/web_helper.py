@@ -6122,7 +6122,7 @@ document.addEventListener('DOMContentLoaded', function() {
     window.addEventListener('storage', function(e) {
         if (e.key === 'darkMode') {
             if (editor) {
-                const isDarkMode = localStorage.getItem('darkMode') === 'true';
+                const isDarkMode = getDarkModePreference();
                 editor.setOption('theme', isDarkMode ? 'monokai' : 'default');
 
                 // Update the editor's wrapper element styling
