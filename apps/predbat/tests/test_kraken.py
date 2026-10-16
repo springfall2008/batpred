@@ -327,6 +327,41 @@ def test_fetch_rates_single_page():
     assert result[0]["value_inc_vat"] == 24.5
 
 
+def test_fetch_rates_keeps_direct_debit_rows_only():
+    """GH#5502: REST unit rates carry overlapping DIRECT_DEBIT / NON_DIRECT_DEBIT rows; keep Direct Debit.
+
+    Downstream minute_data() merges overlapping rows last-write-wins, so leaving both in makes the
+    rate depend on response order. Here NON_DIRECT_DEBIT comes last and would win.
+    """
+    api = make_kraken_api()
+    api.current_tariff = {"tariff_code": "E-1R-EDF_STANDARD_VARIABLE-J", "product_code": "EDF_STANDARD_VARIABLE"}
+    rows = [
+        {"value_inc_vat": 26.879, "valid_from": "2026-10-01T00:00:00Z", "valid_to": None, "payment_method": "DIRECT_DEBIT"},
+        {"value_inc_vat": 28.2, "valid_from": "2026-10-01T00:00:00Z", "valid_to": None, "payment_method": "NON_DIRECT_DEBIT"},
+    ]
+    api._fetch_rates_rest = AsyncMock(return_value=(rows, None))
+
+    result = asyncio.run(api.async_fetch_rates())
+
+    assert [rate["payment_method"] for rate in result] == ["DIRECT_DEBIT"]
+    assert result[0]["value_inc_vat"] == 26.879
+
+
+def test_fetch_rates_single_payment_method_unchanged():
+    """REST unit rates offering only one payment method (or none) are all kept."""
+    api = make_kraken_api()
+    api.current_tariff = {"tariff_code": "E-1R-VAR-01", "product_code": "VAR-01"}
+    rows = [
+        {"value_inc_vat": 28.2, "valid_from": "2026-10-01T00:00:00Z", "valid_to": "2026-10-02T00:00:00Z", "payment_method": "NON_DIRECT_DEBIT"},
+        {"value_inc_vat": 27.0, "valid_from": "2026-10-02T00:00:00Z", "valid_to": "2026-10-03T00:00:00Z", "payment_method": None},
+    ]
+    api._fetch_rates_rest = AsyncMock(return_value=(rows, None))
+
+    result = asyncio.run(api.async_fetch_rates())
+
+    assert [rate["value_inc_vat"] for rate in result] == [28.2, 27.0]
+
+
 def test_fetch_rates_no_tariff():
     api = make_kraken_api()
     assert api.current_tariff is None

@@ -963,7 +963,9 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             self.failures_total += 1
             return None
 
-        results = self._normalize_rate_timestamps(results)
+        # Same DIRECT_DEBIT / NON_DIRECT_DEBIT overlap as the standing charges (GH#5502): the rows
+        # are merged last-write-wins downstream, so without this the rate depends on row order.
+        results = self._normalize_rate_timestamps(filter_payment_method(results))
         self.log(f"Kraken: Fetched {len(results)} rate periods for {tariff['tariff_code']}")
         return results
 
