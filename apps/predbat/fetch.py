@@ -30,6 +30,7 @@ from const import (
     PREDBAT_MODE_CONTROL_CHARGE,
     PREDBAT_MODE_MONITOR,
     LOAD_FORECAST_HISTORY_MAX_DAYS,
+    LOAD_FORECAST_RECORDED_MIN_MINUTES,
     PREDBAT_MAX_CARS,
     CAR_CHARGING_LIMIT_UNCAPPED,
     CAR_CHARGING_NOW_POWER_W,
@@ -1661,7 +1662,8 @@ class Fetch:
 
         # Weighted-bucket historical load forecast (days_previous_auto). Built here as it needs load_minutes
         # after the power fill. load_ml takes precedence if it already set the forecast-only load source.
-        if self.load_forecast_history and self.load_minutes and self.load_minutes_age >= 1 and not self.load_forecast_only:
+        # Also runs with under a day of history, forecasting from what has been recorded today (batpred#5548).
+        if self.load_forecast_history and self.load_minutes and not self.load_forecast_only:
             hist_forecast = self.compute_load_forecast_history(self.now_utc)
             if hist_forecast:
                 self.load_forecast_only = True
@@ -3315,6 +3317,49 @@ class Fetch:
         holiday_minutes, _ = minute_data(history[0], history_days, now_utc, "state", "last_updated", backwards=True)
         return holiday_minutes or None
 
+    def sample_load_history_bucket(self, minute_previous, holiday_minutes, max_holiday_index):
+        """
+        Read one 5-minute load history bucket (minute_previous minutes ago) for the weighted-bucket forecast.
+
+        Returns (sample, holiday_active), or None for a zero (missing-data) bucket - those are skipped entirely
+        so gaps in the history do not drag the estimate down. base_in_raw=False keeps raw at the true measured
+        load so genuine gaps are detected even when a base load is configured (the sample still has it applied).
+
+        holiday_active is the holiday state at the moment this individual sample was recorded. A sample older
+        than the holiday history we hold is treated as not on holiday, the same default minute_data gives for a
+        gap inside the window - treating it as matching instead would hand full weight to exactly the
+        pre-holiday days holiday mode exists to discount.
+        """
+        sample, raw = self.get_filtered_load_minute(self.load_minutes, minute_previous, historical=False, step=PREDICT_STEP, base_in_raw=False)
+        if raw <= 0:
+            return None
+        if holiday_minutes is None or minute_previous > max_holiday_index:
+            holiday_active = False
+        else:
+            holiday_active = holiday_minutes.get(minute_previous, 0) > 0
+        return sample, holiday_active
+
+    def recorded_load_average(self, num_days, holiday_minutes, max_holiday_index):
+        """
+        Average 5-minute load over every bucket recorded in the search window, today so far included, kept apart
+        by holiday state. Used to fill forecast slots whose time of day has never been recorded (batpred#5548).
+
+        Returns {holiday_active: average kWh per 5 minutes} for each state with at least
+        LOAD_FORECAST_RECORDED_MIN_MINUTES of recorded load, so the first few minutes after an install cannot
+        set the whole forecast on their own.
+        """
+        totals = {False: 0.0, True: 0.0}
+        counts = {False: 0, True: 0}
+        for minute_previous in range(0, (num_days + 1) * 24 * 60, PREDICT_STEP):
+            bucket = self.sample_load_history_bucket(minute_previous, holiday_minutes, max_holiday_index)
+            if bucket is None:
+                continue
+            sample, holiday_active = bucket
+            totals[holiday_active] += sample
+            counts[holiday_active] += 1
+        min_buckets = LOAD_FORECAST_RECORDED_MIN_MINUTES // PREDICT_STEP
+        return {state: totals[state] / counts[state] for state in totals if counts[state] >= min_buckets}
+
     def compute_load_forecast_history(self, now_utc):
         """
         Build a forward load estimate from all available history (up to LOAD_FORECAST_HISTORY_MAX_DAYS days)
@@ -3338,14 +3383,24 @@ class Fetch:
         holiday_load_scaling (or divided by it when coming home), so holiday mode acts from the moment it
         is switched on rather than waiting for a day of holiday history to accumulate (batpred#4732).
 
+        A slot with no recorded sample on any previous day - a new install whose history starts part-way
+        through yesterday, or today - is filled from today instead (batpred#5548): today's sample at the same
+        time of day when that time has already passed, otherwise the average of everything recorded so far
+        once at least LOAD_FORECAST_RECORDED_MIN_MINUTES exist, otherwise base load. Elapsed slots of today
+        with nothing recorded (before the install) stay at base load, as that is what load_today_comparison
+        counts as their actual load - the average there would drag the in-day adjustment down. Today never contributes
+        while a previous day has data for the slot, so once a full day is recorded these fall away and an
+        established install is unaffected. Today's elapsed slots read today's own load, which keeps the in-day
+        adjustment neutral rather than letting it scale up a forecast that is already built from today.
+
         Returns a cumulative-from-midnight kWh dict (same format as the ML load forecast), or {} if no data.
         """
-        if not self.load_minutes or self.load_minutes_age < 1:
+        if not self.load_minutes:
             return {}
-        # Search window comes from max_days_previous (derived from days_previous), bounded by available history
-        num_days = min(self.load_minutes_age, self.max_days_previous - 1)
-        if num_days < 1:
-            return {}
+        # Search window comes from max_days_previous (derived from days_previous), bounded by available history.
+        # load_minutes_age counts whole 24-hour periods, so it is still 0 at 14:00 for a 20:00 install yesterday;
+        # yesterday is always searched so its recorded evening is used (unrecorded buckets are skipped anyway).
+        num_days = max(min(max(self.load_minutes_age, 1), self.max_days_previous - 1), 0)
 
         today_dow = now_utc.weekday()
         holiday_minutes = self.get_holiday_minutes(now_utc, num_days)
@@ -3378,6 +3433,11 @@ class Fetch:
         # cumulative-from-midnight (consumers such as load_today_comparison read minutes before minutes_now too).
         horizon_end = self.minutes_now + self.forecast_minutes + self.plan_interval_minutes
         per_step = {}
+        has_history = False
+        today_slots = 0
+        average_slots = 0
+        recorded_average = None  # built on first use - only slots no previous day covers need it
+        base_step = self.base_load * PREDICT_STEP / 60.0
         for minute_absolute in range(0, horizon_end, PREDICT_STEP):
             tod = minute_absolute % (24 * 60)  # time of day of this slot
             # Holiday state of the day this slot falls on, not of today. holiday_days_left counts whole days
@@ -3392,35 +3452,60 @@ class Fetch:
                 # Sample d whole days ago at this slot's time of day. Counting in whole days from today keeps
                 # each day distinct and handles midnight crossings (the slot may be tomorrow or later).
                 minute_previous = (self.minutes_now - tod) + d * 24 * 60
-                # Skip zero (missing-data) buckets entirely so gaps in the history do not drag the estimate down.
-                # base_in_raw=False keeps raw at the true measured load so genuine gaps are detected even when
-                # a base load is configured (the filtered sample still has the base load applied).
-                sample, raw = self.get_filtered_load_minute(self.load_minutes, minute_previous, historical=False, step=PREDICT_STEP, base_in_raw=False)
-                if raw <= 0:
+                bucket = self.sample_load_history_bucket(minute_previous, holiday_minutes, max_holiday_index)
+                if bucket is None:
                     continue
-                # Holiday state at the moment this individual sample was recorded (per bucket). A sample older
-                # than the holiday history we hold is treated as not on holiday, the same default minute_data
-                # gives for a gap inside the window - treating it as matching instead would hand full weight to
-                # exactly the pre-holiday days holiday mode exists to discount.
-                if holiday_minutes is None or minute_previous > max_holiday_index:
-                    holiday_active = False
-                else:
-                    holiday_active = holiday_minutes.get(minute_previous, 0) > 0
+                sample, holiday_active = bucket
                 all_total += sample * day_static_weight[d]
                 all_weight += day_static_weight[d]
                 if holiday_active == slot_holiday:
                     weight = day_age_weight[d] if slot_holiday else day_static_weight[d]
                     match_total += sample * weight
                     match_weight += weight
+            if all_weight == 0 and tod <= self.minutes_now:
+                # No previous day recorded this time of day, but today already has (new install, batpred#5548).
+                # A time of day still ahead of us today would be a future minute, so it is never read.
+                bucket = self.sample_load_history_bucket(self.minutes_now - tod, holiday_minutes, max_holiday_index)
+                if bucket is not None:
+                    sample, holiday_active = bucket
+                    all_total, all_weight = sample, 1.0
+                    if holiday_active == slot_holiday:
+                        match_total, match_weight = sample, 1.0
+                    today_slots += 1
             if match_weight > 0:
                 per_step[minute_absolute] = match_total / match_weight
+                has_history = True
             elif all_weight > 0:
                 # Nothing in the window shares this slot's holiday state. Rather than leaving holiday mode inert
                 # (a normalised mean cannot express "all of my data is wrong"), fall back to every day scaled by
                 # the assumed holiday ratio - or divided by it when we are home and the whole window was holiday.
                 per_step[minute_absolute] = (all_total / all_weight) * (holiday_load_scaling if slot_holiday else 1.0 / holiday_load_scaling)
+                has_history = True
+            elif minute_absolute < self.minutes_now:
+                # Elapsed today with nothing recorded (before the install). load_today_comparison counts these as
+                # base load actual, so forecasting the recorded average here would read as a large over-forecast
+                # and pull the in-day adjustment - and through it tonight's plan - down.
+                per_step[minute_absolute] = base_step
             else:
-                per_step[minute_absolute] = 0.0
+                # Nothing recorded at this time of day yet: project the average of everything recorded so far,
+                # with the same holiday matching and scaling as above, or base load until there is enough of it.
+                if recorded_average is None:
+                    recorded_average = self.recorded_load_average(num_days, holiday_minutes, max_holiday_index)
+                if slot_holiday in recorded_average:
+                    per_step[minute_absolute] = recorded_average[slot_holiday]
+                elif (not slot_holiday) in recorded_average:
+                    per_step[minute_absolute] = recorded_average[not slot_holiday] * (holiday_load_scaling if slot_holiday else 1.0 / holiday_load_scaling)
+                else:
+                    per_step[minute_absolute] = base_step
+                    continue
+                has_history = True
+                average_slots += 1
+
+        if not has_history:
+            # Nothing recorded at all - leave the forecast to the days_previous fallback
+            return {}
+        if today_slots or average_slots:
+            self.log("Load forecast: no previous-day history for some times of day, {} slots filled from today's load at the same time and {} from the average of all recorded load".format(today_slots, average_slots))
 
         # Convert per-step kWh buckets into a cumulative-from-midnight dict, filling every minute by linear
         # interpolation across each 5-minute span so get_from_incrementing(..., backwards=False) reproduces

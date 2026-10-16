@@ -2712,7 +2712,9 @@ INVERTER_DEF = {
         "soc_units": "%",
         "num_load_entities": 1,
         "has_ge_inverter_mode": False,
-        "time_button_press": False,
+        # Slot times stage in the gateway; pressing schedule_write_button sends the complete
+        # window (and its enable) to the Hub, as on Fox. See gateway.py _commit_side().
+        "time_button_press": True,
         "clock_time_format": "%H:%M:%S",
         # The hub applies register writes one at a time and a single write can take 10-20s (longer
         # under an EMS), so re-sending every couple of seconds only queues more work ahead of the

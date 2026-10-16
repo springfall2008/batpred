@@ -375,6 +375,8 @@ It's recommended that you don't include the Solcast forecast within your GivEner
 If you get the message "Info: Cannot find battery charge curve, one of the required settings for soc_kw, battery_power and charge_rate are missing from apps.yaml" in the logfile
 then Predbat is trying to create a battery charge curve but does not have access to the required history information in Home Assistant.
 
+**Note:** The battery charge curve cannot be calculated if Predbat is in Read Only mode. Even though required history may be available, the log message will continue to appear until Predbat is out of read only mode and has calculated the curve.
+
 [Creating the battery charge curve](apps-yaml.md#battery-chargedischarge-curves) is described in the `apps.yaml` document.
 
 One cause of the above message appearing in the logfile is that you are controlling a GivEnergy inverter in REST mode
