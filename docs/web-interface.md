@@ -326,6 +326,7 @@ The System Health row includes a **Data Age** card, showing how many days of his
 - **Cost & Savings** - shows electricity cost today and yesterday, and savings achieved yesterday from having solar and battery and from using predbat
 - **API & Solar Status** - shows API health (requests, failures and last call) made by Predbat to Axle, Solcast/Forecast.Solar, GivEnergy Cloud, Fox ESS Cloud, Solis Cloud, and Open Meteo (Temperature for LoadML). Data is only shown for components that are active, i.e. if Predbat is not using the GivEnergy Cloud integration, no API call metrics are shown.<BR>
 Solar status shows Solcast API calls (Predbat Solcast direct only) and PV Calibration Scaling (worst day, best day and total)
+- **Control Conflicts** - shows how many inverter settings were changed outside Predbat in the last 24 hours and which controls are being changed repeatedly (sustained controls), with a table of recent changes showing what Predbat set and what the setting now reads
 - **Control Failures** - shows how many charge, export and freeze slots in the last 24 hours (and in total) the battery did not follow Predbat's command, with a table of recent failures - see [control failure data](output-data.md#control-failure-data)
 
 ![image](images/web-interface-metrics-view.png)

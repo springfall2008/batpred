@@ -1,7 +1,7 @@
 # Control failure detection — design
 
 Date: 2026-10-16
-Status: approved design, awaiting implementation plan
+Status: implemented
 
 ## Purpose
 
@@ -47,14 +47,25 @@ The monitor holds no expectation for an inverter — so nothing is observed or c
 - Predbat is not driving that window type: `set_charge_window` off for the charge modes,
   `set_export_window` off for the export modes.
 - No plan has run since process start (no expectation exists yet).
-- For Charging and Exporting, the requested rate is below the floor (too little power to judge).
+- For Charging and Exporting, the requested rate (`P_req`, below) is below the floor (too little
+  power to judge).
+- The reading's `battery_power` could not be read — the sensor is unconfigured, `unavailable` or not
+  a number. It still reads as 0 W elsewhere, as it always has, but `Inverter.update_status` records
+  `battery_power_valid = False` and that reading is skipped entirely (not judged, no minutes, the
+  consecutive count untouched): judging the stand-in 0 W would report an idle battery that may not be.
+- The slot has ended (`now >= slot_end`) — see Timing.
 
 An expectation cleared mid-slot simply stops further observation; an event already recorded stays.
 
 ### Per-mode rules
 
 Battery power sign convention: negative = charging, positive = discharging (as used by the charge
-curve learner, `inverter.py`). `P_req` is the rate actually written to that inverter.
+curve learner, `inverter.py`). `P_req` is the rate that inverter's battery can actually deliver:
+the rate written to it, capped by the battery's charge (or discharge) power curve at the current SoC
+and by its temperature cap — so a battery tapering near full, or a cold one, is not failing — and for
+Exporting also by the headroom solar leaves: `AC limit − PV` on a hybrid inverter and
+`export limit + load − PV` (a limit of 0 is treated as not set). It is computed on the engine side
+(`Execute.expected_battery_rates`) on every reading and passed in, so the monitor stays engine-free.
 
 | Mode | Judged only while | Failing reading when |
 |---|---|---|
@@ -79,6 +90,10 @@ which the SoC condition is false is not failing and resets the consecutive count
   Minutes from the readings that led up to confirmation are included in the event.
 - **Once per slot:** on confirmation the event is created, the `Warn:` line logged and both counters
   incremented. Later failing readings in the same slot only add to that event's `failed_minutes`.
+- **Slot end:** a reading at or after the expectation's `slot_end` is not judged and credits no
+  minutes. The 60s poll keeps observing when a plan run is skipped (several `update_pred` early
+  exits skip `execute_plan`), and by then the battery has rightly left the mode, so the stale
+  expectation must not read the revert to Demand as a failure.
 - **Reading spacing:** a reading less than `MIN_GAP_S = 30` seconds after the previous one for the
   same inverter is ignored entirely. A plan cycle's fetch and the 60s quick poll can land seconds
   apart, often returning the same sensor value; without this "3 in a row" could be met in about a
@@ -190,9 +205,12 @@ mechanism covers both deployments, as it does for control conflicts and the savi
 What survives a restart:
 
 - **24h events** — restored from the `events` attribute. A restored event whose slot is still live is
-  re-attached to that inverter's state when the matching expectation is next set (matched on
-  `(inverter, mode, slot_start)`), so a restart mid-slot neither re-warns nor re-counts, and its
-  `failed_minutes` continue to accumulate.
+  re-attached to that inverter's state (matched on inverter and mode, with the tracked slot start
+  inside the event's slot), so a restart mid-slot neither re-warns nor re-counts, and its
+  `failed_minutes` continue to accumulate. In production the first plan run after a restart sets
+  the expectation *before* the publish cycle restores the events, so the attach is tried in three
+  places: when an expectation is set fresh, at the end of every `restore()` for any tracking not yet
+  attached, and when a contiguous window extends tracking that is still unattached.
 - **Lifetime total** — restored numerically from the total entity's state.
 
 What a restart deliberately drops: the in-flight per-inverter state (expectation, `entered_at`,
@@ -208,7 +226,10 @@ the real value is overwritten and HA long-term statistics record a reset. Checki
 publish cannot recover from that once the 0 is written, so the guard is:
 
 1. Until a restore read returns a value, the restore is retried on every publish cycle rather than
-   once per process. The first value read is merged as `total = restored + total`: before the
+   once per process. The first attempt, and every 12th after it (`RESTORE_HISTORY_EVERY`, roughly
+   hourly), uses the full `load_previous_value_from_ha` (state, then a history fallback); the
+   attempts in between read current state only, filtering `unavailable`/`unknown` the same way, so
+   an install that has never had a failure does not search 30 days of history every cycle. The first value read is merged as `total = restored + total`: before the
    restore resolves, the in-memory total holds only failures counted since this process started,
    so adding (not `max`) keeps them. The merge happens once; later restore calls merge events only.
 2. While the restore is unresolved and the in-memory total is 0, the total entity is **not written**.
@@ -219,7 +240,8 @@ publish cannot recover from that once the 0 is written, so the guard is:
 
 Residual risk, accepted: if the entity exists but stays unreadable until a failure is counted, rule 2
 lets that first write through and the old total is lost. That needs HA state and history both
-unreadable for the whole period before the first failure, while the restore is retried every cycle.
+unreadable for the whole period before the first failure, while the restore is retried every cycle
+(with history consulted on the first attempt and about hourly after it).
 
 The 24h `events` attribute gets only rule 1 (events read on a later attempt are merged in,
 de-duplicated by slot key). If an empty list was already published over them they are lost, which is
