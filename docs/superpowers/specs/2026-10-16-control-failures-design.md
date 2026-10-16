@@ -41,7 +41,9 @@ Out of scope:
 The monitor holds no expectation for an inverter — so nothing is observed or counted — when:
 
 - Read-only mode is on (`set_read_only`). This is a hard requirement: read-only must never count.
-- The inverter is calibrating.
+- The inverter is calibrating. On the 60s poll this is read live from the `battery_calibration`
+  sensor, not only the flag cached by the last plan run, so a calibration that starts between plan
+  runs is seen at once.
 - The inverter's status is anything other than the four judged modes (Demand, Hold charging, Hold
   exporting, Hold for car/iBoost, etc.).
 - Predbat is not driving that window type: `set_charge_window` off for the charge modes,
@@ -53,7 +55,7 @@ The monitor holds no expectation for an inverter — so nothing is observed or c
   a number. It still reads as 0 W elsewhere, as it always has, but `Inverter.update_status` records
   `battery_power_valid = False` and that reading is skipped entirely (not judged, no minutes, the
   consecutive count untouched): judging the stand-in 0 W would report an idle battery that may not be.
-- The slot has ended (`now >= slot_end`) — see Timing.
+- The commanded end has passed (`now >= deadline`) — see Timing.
 
 An expectation cleared mid-slot simply stops further observation; an event already recorded stays.
 
@@ -78,6 +80,10 @@ The SoC condition is evaluated on every reading using the fresh SoC, so reaching
 runs stops judgement immediately instead of waiting for the status to flip to Hold. A reading for
 which the SoC condition is false is not failing and resets the consecutive count.
 
+For Exporting, `target_percent` is the fleet export target raised to at least that inverter's own
+`reserve_percent`: `adjust_reserve()` clamps each inverter to its own minimum, so on a fleet with
+20% and 4% reserves the first battery rightly stops at 20% while the fleet target is lower.
+
 ### Timing
 
 - **Grace:** `GRACE_S = 300`, measured from `entered_at` — when this inverter entered this
@@ -90,8 +96,10 @@ which the SoC condition is false is not failing and resets the consecutive count
   Minutes from the readings that led up to confirmation are included in the event.
 - **Once per slot:** on confirmation the event is created, the `Warn:` line logged and both counters
   incremented. Later failing readings in the same slot only add to that event's `failed_minutes`.
-- **Slot end:** a reading at or after the expectation's `slot_end` is not judged and credits no
-  minutes. The 60s poll keeps observing when a plan run is skipped (several `update_pred` early
+- **Slot end:** a reading at or after the expectation's `deadline` — the end most recently
+  commanded — is not judged and credits no minutes. The `deadline` is kept separately from
+  `slot_end` (the span covered, only ever widened, which events are matched on), so a replan that
+  shortens the active window stops judgement at the new end. The 60s poll keeps observing when a plan run is skipped (several `update_pred` early
   exits skip `execute_plan`), and by then the battery has rightly left the mode, so the stale
   expectation must not read the revert to Demand as a failure.
 - **Reading spacing:** a reading less than `MIN_GAP_S = 30` seconds after the previous one for the
@@ -103,7 +111,10 @@ Slot identity is `(inverter_id, mode, slot_start)`, where a slot is a **contiguo
 mode. The planner splits a long charge into back-to-back windows, so when the next window's start
 falls inside the current slot's `[slot_start, slot_end]` the slot is extended rather than replaced:
 the key, grace and counters carry on, and one sustained failure is counted once, not once per
-half-hour window.
+half-hour window. For a charge slot the run stops where the charge/freeze instruction changes:
+the inverter's schedule combines Charging, Freeze charging and Charging windows into one, but the
+monitor treats each Charging run as its own slot, so a failure in the second is not absorbed into
+the first one's event.
 
 ### Constants
 
@@ -141,7 +152,8 @@ Per-inverter state: the current expectation, `entered_at`, `consecutive_failing`
 reference to the slot's event once fired.
 
 `set_expectation` for the same mode with a `slot_start` inside the current slot updates
-`target_percent` and extends `slot_end` in place, keeping `entered_at` and the counters; anything
+`target_percent`, extends `slot_end` and sets `deadline` to the new commanded end in place, keeping
+`entered_at` and the counters; anything
 else starts fresh tracking. Fresh tracking first looks for an existing event for that inverter and
 mode whose slot contains the new start, and attaches to it (adopting its `slot_start`), so neither a
 Hold-then-Charging re-entry nor a restart re-counts the slot. `slot_start`/`slot_end` are epoch
@@ -171,8 +183,9 @@ Event record (a plain dict, JSON-serialisable for the HA attribute):
    `set_expectation(...)` when its status is one of the four judged modes and the matching
    `set_*_window` is on, otherwise `clear_expectation(inverter.id)`. Inputs: mode from
    `status_per_inverter`; slot start from `charge_window_best[0]` / `export_window_best[0]`, slot
-   end from the combined contiguous charge window end / the export window end; target from
-   `inv_target_soc_percent` (Charging) or the export target percent (Exporting).
+   end from the contiguous charge windows that share the first one's charge/freeze instruction /
+   the export window end; target from `inv_target_soc_percent` (Charging) or the export target
+   percent raised to the inverter's own reserve (Exporting).
 4. **Read-only and calibration early exits** in `execute_plan` (where `clear_control_ledger` is
    called today): `clear_expectation()` for all inverters.
 5. **End of `fetch_inverter_data`** (quick and full): `observe(...)` for each inverter with its

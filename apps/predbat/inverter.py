@@ -66,6 +66,16 @@ def within_fuzzy(value, target, fuzzy, fuzzy_below=None):
     return abs(value - target) <= fuzzy
 
 
+def calibration_reported(value):
+    """
+    True when a battery_calibration reading means a calibration cycle is running.
+
+    Shared by refresh_config(), which caches the result per plan cycle, and the control-failure
+    monitor's 60s poll, which must see a calibration that starts between plan runs.
+    """
+    return value in ("on", "On", "true", "True", True)
+
+
 class Inverter:
     """Unified inverter control abstraction for multiple brands.
 
@@ -648,7 +658,7 @@ class Inverter:
         # cycles (#4712), this has to be the one place that clears it too, or a real device leaving
         # calibration would leave Predbat stuck thinking it never did.
         was_in_calibration = self.in_calibration
-        self.in_calibration = self.base.get_arg("battery_calibration", default=None, index=self.id) in ("on", "On", "true", "True", True)
+        self.in_calibration = calibration_reported(self.base.get_arg("battery_calibration", default=None, index=self.id))
         if self.in_calibration and not was_in_calibration:
             self.log("Warn: Inverter {} is in calibration mode, Predbat will not function correctly and will be disabled".format(self.id))
         elif was_in_calibration and not self.in_calibration:

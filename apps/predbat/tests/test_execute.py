@@ -8,6 +8,8 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+from datetime import timedelta
+
 from tests.test_infra import reset_inverter
 from const import EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, MINUTE_WATT
 from utils import pack_export_limit
@@ -1480,33 +1482,56 @@ def test_control_monitor_charging_counts_once(my_predbat):
     return failed
 
 
+def control_monitor_exporting_scenario(my_predbat, name):
+    """
+    Put the two-inverter test fleet into Exporting through the real execute path.
+
+    execute_plan keeps an already-started discharge start; the preceding scenario leaves -1, so the
+    fleet is first returned to the "no discharge window set" state a fresh inverter starts in. Undo
+    with undo_control_monitor_exporting() using the state this returns.
+
+    Returns:
+    - (bool, list): whether the scenario's own assertions failed, and the saved discharge windows
+    """
+    saved = [(inverter.discharge_start_time_minutes, inverter.discharge_end_time_minutes) for inverter in my_predbat.inverters]
+    for inverter in my_predbat.inverters:
+        inverter.discharge_start_time_minutes = my_predbat.forecast_minutes
+    failed = run_execute_test(
+        my_predbat,
+        name,
+        export_window_best=[{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 1}],
+        export_limits_best=[pack_export_limit(EXPORT_MODE_TARGET, 0)],
+        assert_force_export=True,
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=10,
+        assert_status="Exporting",
+        assert_immediate_soc_target=0,
+        assert_discharge_start_time_minutes=my_predbat.minutes_now,
+        assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,
+    )
+    return failed, saved
+
+
+def undo_control_monitor_exporting(my_predbat, saved):
+    """Turn force-export back off and restore the discharge windows control_monitor_exporting_scenario() saved."""
+    for inverter in my_predbat.inverters:
+        inverter.adjust_force_export(False)
+    for inverter, (start, end) in zip(my_predbat.inverters, saved):
+        inverter.discharge_start_time_minutes = start
+        inverter.discharge_end_time_minutes = end
+
+
 def test_control_monitor_exporting_expectation(my_predbat):
     """Exporting sets an Exporting expectation, with the discharge rate written recorded on the inverter."""
     saved_monitor = my_predbat.control_monitor
     my_predbat.control_monitor = ControlMonitor()
     failed = False
-    saved_starts = [inverter.discharge_start_time_minutes for inverter in my_predbat.inverters]
-    saved_ends = [inverter.discharge_end_time_minutes for inverter in my_predbat.inverters]
+    saved = []
     try:
-        # execute_plan keeps an already-started discharge start; the preceding scenario leaves -1, so
-        # return the fleet to the "no discharge window set" state that a fresh inverter starts in
-        for inverter in my_predbat.inverters:
-            inverter.discharge_start_time_minutes = my_predbat.forecast_minutes
-        if run_execute_test(
-            my_predbat,
-            "control_monitor_exporting",
-            export_window_best=[{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 1}],
-            export_limits_best=[pack_export_limit(EXPORT_MODE_TARGET, 0)],
-            assert_force_export=True,
-            set_charge_window=True,
-            set_export_window=True,
-            soc_kw=10,
-            assert_status="Exporting",
-            assert_immediate_soc_target=0,
-            assert_discharge_start_time_minutes=my_predbat.minutes_now,
-            assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,
-        ):
-            return True
+        failed, saved = control_monitor_exporting_scenario(my_predbat, "control_monitor_exporting")
+        if failed:
+            return failed
         for inverter in my_predbat.inverters:
             track = my_predbat.control_monitor.tracking.get(inverter.id)
             if track is None or track["mode"] != MODE_EXPORTING:
@@ -1517,11 +1542,118 @@ def test_control_monitor_exporting_expectation(my_predbat):
                 failed = True
     finally:
         my_predbat.control_monitor = saved_monitor
+        undo_control_monitor_exporting(my_predbat, saved)
+    return failed
+
+
+def test_control_monitor_export_target_respects_inverter_reserve(my_predbat):
+    """
+    Each inverter's export cut-off is at least its own reserve.
+
+    adjust_reserve() clamps the hardware reserve to each inverter's own minimum, so on a fleet whose
+    reserves are 20% and 4% the first battery rightly stops at 20% while the fleet target is lower.
+    Judging it against the fleet target would report that correct stop as a control failure.
+    """
+    saved_monitor = my_predbat.control_monitor
+    saved_reserves = [inverter.reserve_percent for inverter in my_predbat.inverters]
+    my_predbat.control_monitor = ControlMonitor()
+    failed = False
+    saved = []
+    try:
+        failed, saved = control_monitor_exporting_scenario(my_predbat, "control_monitor_exporting_mixed_reserve")
+        if failed:
+            return failed
+        # run_execute_test() gives every inverter the same reserve, so set the mixed reserves on the
+        # fleet it left behind and run the same plan again
+        my_predbat.inverters[0].reserve_percent = 20.0
+        my_predbat.inverters[1].reserve_percent = 4.0
+        my_predbat.execute_plan()
+        tracking = my_predbat.control_monitor.tracking
+        if tracking[0]["target_percent"] != 20.0:
+            print("ERROR: inverter 0 export target {} should be its own 20% reserve".format(tracking[0]["target_percent"]))
+            failed = True
+        if not tracking[1]["target_percent"] < 20.0:
+            print("ERROR: inverter 1 export target {} should stay at the fleet target, below 20%".format(tracking[1]["target_percent"]))
+            failed = True
+    finally:
+        my_predbat.control_monitor = saved_monitor
+        undo_control_monitor_exporting(my_predbat, saved)
+        for inverter, reserve in zip(my_predbat.inverters, saved_reserves):
+            inverter.reserve_percent = reserve
+    return failed
+
+
+def test_control_monitor_slot_stops_at_freeze_window(my_predbat):
+    """
+    Charging -> Freeze charging -> Charging back to back.
+
+    The inverter's schedule still combines the three windows, but the monitored Charging slot ends
+    where the freeze window starts. Otherwise the first Charging event spans the later Charging run,
+    which re-attaches to it, and a genuine failure there is never counted.
+    """
+    saved_monitor = my_predbat.control_monitor
+    my_predbat.control_monitor = ControlMonitor()
+    failed = False
+    start = 12 * 60
+    try:
+        windows = [{"start": start + 30 * n, "end": start + 30 * (n + 1), "average": 1} for n in range(3)]
+        if run_execute_test(
+            my_predbat,
+            "control_monitor_charge_freeze_charge",
+            charge_window_best=windows,
+            charge_limit_best=[10, 1, 10],
+            assert_charge_time_enable=True,
+            set_charge_window=True,
+            set_export_window=True,
+            assert_status="Charging",
+            assert_charge_start_time_minutes=-1,
+            assert_charge_end_time_minutes=start + 90,
+        ):
+            return True
+        expected_end = (my_predbat.midnight_utc + timedelta(minutes=start + 30)).timestamp()
         for inverter in my_predbat.inverters:
-            inverter.adjust_force_export(False)
-        for inverter, start, end in zip(my_predbat.inverters, saved_starts, saved_ends):
-            inverter.discharge_start_time_minutes = start
-            inverter.discharge_end_time_minutes = end
+            track = my_predbat.control_monitor.tracking.get(inverter.id)
+            if track is None or track["mode"] != MODE_CHARGING or track["slot_end"] != expected_end:
+                print("ERROR: inverter {} Charging slot should end at the freeze window, got {}".format(inverter.id, track))
+                failed = True
+    finally:
+        my_predbat.control_monitor = saved_monitor
+    return failed
+
+
+def test_control_monitor_calibration_seen_on_quick_poll(my_predbat):
+    """
+    Calibration that starts between plan runs is seen by the 60s poll.
+
+    The quick poll skips refresh_config(), where battery_calibration is read, so the cached
+    in_calibration is still False when calibration begins mid-slot. The monitor must read the live
+    sensor and stop judging, rather than count the firmware's own charge/discharge as a failure.
+    """
+    saved_monitor = my_predbat.control_monitor
+    had_arg = "battery_calibration" in my_predbat.args
+    saved_arg = my_predbat.args.get("battery_calibration")
+    entity = "sensor.test_control_monitor_battery_calibration"
+    my_predbat.control_monitor = ControlMonitor()
+    failed = False
+    try:
+        if control_monitor_charging_scenario(my_predbat, "control_monitor_calibration_quick_poll"):
+            return True
+        if not my_predbat.control_monitor.tracking or any(inverter.in_calibration for inverter in my_predbat.inverters):
+            print("ERROR: setup - expected Charging expectations and no cached calibration")
+            return True
+        my_predbat.args["battery_calibration"] = entity
+        my_predbat.ha_interface.dummy_items[entity] = "on"
+        my_predbat.fetch_inverter_data(quick=True)
+        if my_predbat.control_monitor.tracking:
+            print("ERROR: the quick poll judged through a calibration it could see on the sensor: {}".format(my_predbat.control_monitor.tracking))
+            failed = True
+    finally:
+        my_predbat.control_monitor = saved_monitor
+        my_predbat.ha_interface.dummy_items.pop(entity, None)
+        if had_arg:
+            my_predbat.args["battery_calibration"] = saved_arg
+        else:
+            my_predbat.args.pop("battery_calibration", None)
     return failed
 
 
@@ -4770,6 +4902,9 @@ def run_execute_tests(my_predbat):
         test_expected_battery_rates,
         test_control_monitor_tapered_charge_not_failing,
         test_control_monitor_invalid_battery_power_not_judged,
+        test_control_monitor_export_target_respects_inverter_reserve,
+        test_control_monitor_slot_stops_at_freeze_window,
+        test_control_monitor_calibration_seen_on_quick_poll,
     ):
         failed |= control_monitor_test(my_predbat)
         if failed:

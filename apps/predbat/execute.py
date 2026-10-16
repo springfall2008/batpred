@@ -19,7 +19,7 @@ from datetime import timedelta, datetime
 from const import MINUTE_WATT, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
 from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate, balance_inverters, allocate_export_rates, export_mode_of, export_power_of, export_target_of, get_charge_rate_curve, get_discharge_rate_curve
 from predbat_metrics import metrics
-from inverter import Inverter
+from inverter import Inverter, calibration_reported
 import time
 from control_monitor import MODE_CHARGING, MODE_EXPORTING, MODE_FREEZE_CHARGING, MODE_FREEZE_EXPORTING, format_failure
 
@@ -378,7 +378,8 @@ class Execute:
 
         Called at the end of fetch_inverter_data(), quick or full. Read-only mode or calibration that
         started since the last plan run clears every expectation here, so nothing is counted in the
-        minutes before execute_plan() next runs. A reading whose battery_power could not be read is
+        minutes before execute_plan() next runs. Calibration is read live from the sensor: the quick
+        poll skips refresh_config(), so the cached in_calibration can lag a cycle that just began. A reading whose battery_power could not be read is
         skipped - judging its stand-in 0W would report an idle battery that may not be idle.
 
         Args:
@@ -389,7 +390,7 @@ class Execute:
             return
         if now is None:
             now = time.time()
-        if self.set_read_only or any(inverter.in_calibration for inverter in self.inverters):
+        if self.set_read_only or any(inverter.in_calibration or calibration_reported(self.get_arg("battery_calibration", default=None, index=inverter.id)) for inverter in self.inverters):
             monitor.clear_expectation()
             return
         for inverter in self.inverters:
@@ -514,8 +515,18 @@ class Execute:
                         if self.debug_enable:
                             self.log("Combine window with next window {}-{}".format(self.time_abs_str(windows["start"]), self.time_abs_str(windows["end"])))
 
-                # The slot as planned, before the register adjustments below move the start/end
-                charge_slot = (window["start"], minutes_end)
+                # The slot the control-failure monitor judges: the planned windows, before the register
+                # adjustments below move the start/end, but only while the charge/freeze instruction
+                # stays the same. The inverter schedule above combines across a freeze window; the
+                # monitor must not, or a Charging run after it re-attaches to the first run's event.
+                charge_slot_freeze = self.is_freeze_charge(self.charge_limit_best[0])
+                charge_slot_end = window["end"]
+                for window_n in range(1, min(len(self.charge_window_best), len(self.charge_limit_best))):
+                    next_window = self.charge_window_best[window_n]
+                    if next_window["start"] != charge_slot_end or self.is_freeze_charge(self.charge_limit_best[window_n]) != charge_slot_freeze:
+                        break
+                    charge_slot_end = next_window["end"]
+                charge_slot = (window["start"], charge_slot_end)
 
                 # Avoid adjust avoid start time forward when it's already started
                 if (inverter.charge_start_time_minutes <= self.minutes_now) and (self.minutes_now >= minutes_start):
@@ -822,7 +833,10 @@ class Execute:
 
                         status = "Exporting"
                         status_per_inverter[inverter.id] = status
-                        monitor_slots[inverter.id] = (MODE_EXPORTING, window["start"], window["end"], calc_percent_limit(discharge_soc, self.soc_max))
+                        # adjust_reserve() clamps to each inverter's own minimum, so an inverter with
+                        # a higher reserve rightly stops above the fleet target - judge it at its own
+                        monitor_target = max(calc_percent_limit(discharge_soc, self.soc_max), inverter.reserve_percent or 0)
+                        monitor_slots[inverter.id] = (MODE_EXPORTING, window["start"], window["end"], monitor_target)
                         status_extra_parts.append((inverter.id, "target", status, "{}%-{}%".format(inverter.soc_percent, int(target))))  # append multi-inverter target SoC's together
                         # Immediate export mode
                     else:

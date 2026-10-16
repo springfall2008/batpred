@@ -496,6 +496,37 @@ def test_nothing_after_slot_end():
     return False
 
 
+def test_shortened_slot_stops_judgement():
+    """
+    A replan that shortens the active window moves the observation deadline in, even though the
+    slot's span (kept for de-duplicating events) still reaches the old end. Otherwise a skipped plan
+    run leaves the inverter, correctly back in Demand, judged against the old window.
+    """
+    monitor = charging_monitor()
+    monitor.set_expectation(0, MODE_CHARGING, SLOT_START, SLOT_START + 600, 80.0, T0 + 60)
+    if monitor.tracking[0]["slot_end"] != SLOT_END:
+        print("ERROR: the slot span should still reach the old end, got {}".format(monitor.tracking[0]["slot_end"]))
+        return True
+    if feed(monitor, [660, 720, 780, 840], power=0) or monitor.total != 0:
+        print("ERROR: readings after the shortened end were judged: total {}".format(monitor.total))
+        return True
+
+    # Attaching to an existing (restored) event must not widen the deadline back to the event's end
+    stored = [make_event(T0 + 400, slot_start=SLOT_START)]
+    monitor = ControlMonitor()
+    monitor.restore(stored, "1")
+    monitor.set_expectation(0, MODE_CHARGING, SLOT_START + 300, SLOT_START + 900, 80.0, T0 + 300)
+    if monitor.tracking[0]["event"] is None or monitor.tracking[0]["deadline"] != SLOT_START + 900:
+        print("ERROR: attach changed the deadline: {}".format(monitor.tracking[0]))
+        return True
+    before = monitor.events[0]["failed_minutes"]
+    feed(monitor, [960, 1020, 1080], power=0)
+    if not close(monitor.events[0]["failed_minutes"], before):
+        print("ERROR: readings past the commanded end credited minutes to the restored event")
+        return True
+    return False
+
+
 def test_format_failure():
     """The Warn: line names the inverter, mode, slot and the power shortfall."""
     failed = False
@@ -709,6 +740,7 @@ def run_control_monitor_tests(my_predbat):
         ("restart_mid_slot_production_order", test_restart_mid_slot_production_order),
         ("extend_attaches_existing_event", test_extend_attaches_existing_event),
         ("nothing_after_slot_end", test_nothing_after_slot_end),
+        ("shortened_slot_stops_judgement", test_shortened_slot_stops_judgement),
         ("format_failure", test_format_failure),
     ]:
         print("**** control_monitor: {} ****".format(name))

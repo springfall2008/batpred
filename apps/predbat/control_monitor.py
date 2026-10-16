@@ -173,16 +173,23 @@ class ControlMonitor:
         long charge into back-to-back windows - so it is extended in place and keeps its grace and
         counters. Anything else starts fresh tracking, attached to any existing event for that slot
         so that a re-entry, or a restart, cannot count it twice.
+
+        Two ends are kept. slot_end is the span the slot has covered, only ever widened, which is what
+        events are matched and de-duplicated on. deadline is the end most recently commanded, which
+        is what judgement stops at: a replan can shorten the active window, and the inverter then
+        rightly leaves the mode at the new end even if the next plan run is skipped.
         """
         current = self.tracking.get(inverter_id)
         if current and current["mode"] == mode and current["slot_start"] <= slot_start <= current["slot_end"]:
             current["slot_end"] = max(current["slot_end"], slot_end)
+            current["deadline"] = slot_end
             current["target_percent"] = target_percent
             if current["event"] is None:
                 self._attach_event(inverter_id, current)
             else:
                 current["event"]["slot_end"] = max(current["event"]["slot_end"], current["slot_end"])
             return
+        deadline = slot_end
         event = self._find_event(inverter_id, mode, slot_start)
         if event is not None:
             slot_start = event["slot_start"]
@@ -192,6 +199,7 @@ class ControlMonitor:
             "mode": mode,
             "slot_start": slot_start,
             "slot_end": slot_end,
+            "deadline": deadline,
             "target_percent": target_percent,
             "entered_at": now,
             "consecutive": 0,
@@ -215,15 +223,15 @@ class ControlMonitor:
         because the 60s balancer can change them between plan runs. Charging is judged against the
         charge rate, Exporting against the discharge rate; the Freeze modes ignore both.
 
-        Nothing is judged once the slot has ended: the 60s poll keeps observing when a plan run is
-        skipped, and the battery has rightly left the mode by then.
+        Nothing is judged once the commanded end (the deadline) has passed: the 60s poll keeps
+        observing when a plan run is skipped, and the battery has rightly left the mode by then.
 
         Returns:
             The new event dict when this reading confirms the slot as failed, otherwise None. A slot
             returns an event at most once.
         """
         track = self.tracking.get(inverter_id)
-        if track is None or now >= track["slot_end"]:
+        if track is None or now >= track["deadline"]:
             return None
         last = track["last_observed_at"]
         if last is not None and now - last < MIN_GAP_S:
