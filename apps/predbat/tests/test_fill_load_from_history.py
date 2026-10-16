@@ -7,7 +7,7 @@ import sys
 import os
 
 # Add the apps/predbat directory to the path
-sys.path.append(os.path.join(os.path.dirname(__file__), "..", "apps", "predbat"))
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from datetime import datetime, timedelta, timezone
 from fetch import Fetch
@@ -47,13 +47,15 @@ class TestFetch(Fetch):
         return self.history
 
 
-def h0_history(power_kw, days, step=5, source=None, switch_minute_ago=None):
+def h0_history(power_kw, days, step=5, source=None, switch_minute_ago=None, missing=None):
     """
     Build a predbat.load_energy_h0 history: the since-midnight load total, recorded every step minutes
     for days back from NOW_UTC, oldest first as Home Assistant returns it.
 
     power_kw(minutes_ago) gives the load at that time. switch_minute_ago simulates a load sensor change
     mid-day: from then on the total restarts from zero, as the new sensor only has history since the switch.
+    source is the source attribute, or a function of minutes_ago giving it. Records whose minutes_ago falls in
+    missing (start, end) are left out, as when Predbat was not running.
     """
     records = []
     start = NOW_UTC - timedelta(days=days)
@@ -68,9 +70,11 @@ def h0_history(power_kw, days, step=5, source=None, switch_minute_ago=None):
         if switch_minute_ago is not None and minutes_ago == switch_minute_ago:
             total = 0.0
         attributes = {"unit_of_measurement": "kWh"}
-        if source:
-            attributes["source"] = source
-        records.append({"state": str(round(total, 3)), "last_updated": when.isoformat(), "attributes": attributes})
+        record_source = source(minutes_ago) if callable(source) else source
+        if record_source:
+            attributes["source"] = record_source
+        if not (missing and missing[0] <= minutes_ago < missing[1]):
+            records.append({"state": str(round(total, 3)), "last_updated": when.isoformat(), "attributes": attributes})
         # The next step minutes are backwards minute indices minutes_ago - 1 down to minutes_ago - step
         for minute in range(step):
             total += power_kw(minutes_ago - 1 - minute) / 60.0
@@ -285,6 +289,60 @@ def test_load_energy_h0_published_unscaled_with_source(my_predbat):
             setattr(my_predbat, name, value)
 
 
+def test_forecast_interval_not_bridged():
+    """
+    Measured records either side of a stretch published from load_forecast must not be joined into one counter:
+    what was consumed in between is unknown, so it is left for the later fillers rather than interpolated
+    """
+    fetch = TestFetch(history=h0_history(lambda m: 1.0, 4, source=lambda m: "load_forecast" if 200 <= m < 500 else "load_today"))
+    load = load_today_minutes(lambda m: 1.0, SIZE, flat=[(200, 500)])
+
+    result, _age = fetch.fill_load_from_history(load, 4)
+
+    assert energy(result, 200, 500) == 0, "the forecast-only stretch should stay unfilled, got {}".format(energy(result, 200, 500))
+
+
+def test_missing_records_not_bridged():
+    """A stretch longer than load_filter_threshold with no load_energy_h0 records (Predbat not running) is unknown, not interpolated"""
+    fetch = TestFetch(history=h0_history(lambda m: 1.0, 4, missing=(205, 500)))
+    load = load_today_minutes(lambda m: 1.0, SIZE, flat=[(200, 500)])
+
+    result, _age = fetch.fill_load_from_history(load, 4)
+
+    assert energy(result, 200, 500) == 0, "the stretch with no records should stay unfilled, got {}".format(energy(result, 200, 500))
+
+
+def test_short_record_gaps_still_bridged():
+    """Records a few cycles apart (Home Assistant only records changes) are still joined up"""
+    fetch = TestFetch(history=h0_history(lambda m: 1.0, 4, step=15))
+    load = load_today_minutes(lambda m: 1.0, SIZE, flat=[(200, 500)])
+
+    result, _age = fetch.fill_load_from_history(load, 4)
+
+    assert abs(energy(result, 200, 500) - 5.0) < 0.05, "gap should hold ~5kWh, got {}".format(energy(result, 200, 500))
+
+
+def test_stalled_sensor_does_not_feed_back():
+    """
+    A new load_today sensor that has reported nothing is built from load_energy_h0, whose value is then
+    republished each cycle. Today's load so far must hold still, not keep climbing at the last rate seen by
+    extrapolating each cycle past the value it published the cycle before
+    """
+    history = h0_history(lambda m: 1.0, 2)
+    fetch = TestFetch(history=history)
+    fetch.minute_data_load = lambda now_utc, entity_name, max_days_previous, **kwargs: ({}, 0)
+    seen = []
+    for cycle in range(12):
+        fetch.now_utc = NOW_UTC + timedelta(minutes=5 * cycle)
+        fetch.minutes_now = 12 * 60 + 5 * cycle
+        fetch.fetch_load_today()
+        seen.append(fetch.load_minutes_now)
+        # Publish today's load so far as load_energy_h0, as run_prediction() does
+        history[0].append({"state": str(round(fetch.load_minutes_now, 3)), "last_updated": fetch.now_utc.isoformat(), "attributes": {"unit_of_measurement": "kWh", "source": "load_today"}})
+
+    assert max(seen) - min(seen) < 0.01, "today's load should hold still while the sensor reports nothing, got {}".format(seen)
+
+
 def run_all_tests(my_predbat=None):
     """Run all tests"""
     print("\n" + "=" * 60)
@@ -304,6 +362,10 @@ def run_all_tests(my_predbat=None):
         test_disabled_by_config()
         test_short_flat_below_threshold_ignored()
         test_fetch_load_today_backfills_before_today_so_far()
+        test_forecast_interval_not_bridged()
+        test_missing_records_not_bridged()
+        test_short_record_gaps_still_bridged()
+        test_stalled_sensor_does_not_feed_back()
         if my_predbat is not None:
             test_load_energy_h0_published_unscaled_with_source(my_predbat)
 
@@ -327,5 +389,4 @@ def run_all_tests(my_predbat=None):
 
 
 if __name__ == "__main__":
-    success = run_all_tests()
-    sys.exit(0 if success else 1)
+    sys.exit(run_all_tests())

@@ -661,23 +661,43 @@ class Fetch:
         history = self.get_history_wrapper(entity_id, days=self.max_days_previous, required=False)
         if not (isinstance(history, list) and history and history[0]):
             return load_minutes, load_minutes_age
-        records = [record for record in history[0] if (record.get("attributes") or {}).get("source") != "load_forecast"]
+        # Keep the measured records, and note where consecutive ones are too far apart to join up: the smoothing
+        # below would otherwise spread the difference between them across a stretch nobody measured, whether
+        # Predbat was not running or was publishing a forecast. Those stretches are left to the later fillers.
+        records = []
+        unknown = []
+        previous_minute = None
+        bridged_forecast = False
+        try:
+            for record in sorted(history[0], key=lambda record: str2time(record["last_updated"])):
+                record_minute = int((self.now_utc - str2time(record["last_updated"])).total_seconds() / 60)
+                if (record.get("attributes") or {}).get("source") == "load_forecast":
+                    bridged_forecast = True
+                    continue
+                if previous_minute is not None and (bridged_forecast or previous_minute - record_minute > gap_size):
+                    unknown.append((max(record_minute, 0), previous_minute))
+                records.append(record)
+                previous_minute = record_minute
+                bridged_forecast = False
+        except (ValueError, TypeError, KeyError):
+            return load_minutes, load_minutes_age
         if not records:
             return load_minutes, load_minutes_age
 
-        try:
-            oldest = min(str2time(record["last_updated"]) for record in records)
-        except (ValueError, TypeError, KeyError):
-            return load_minutes, load_minutes_age
-        history_age = (self.now_utc - oldest).days
-        history_minutes, _ = minute_data(records, self.max_days_previous, self.now_utc, "state", "last_updated", backwards=True, smoothing=True, clean_increment=True, required_unit="kWh", interpolate=True)
+        history_age = (self.now_utc - str2time(records[0]["last_updated"])).days
+        # No extrapolation past the newest record: load_energy_h0 is republished every cycle, so extrapolating
+        # it would add the last rate seen on top of what was published from the last fill, cycle after cycle
+        history_minutes, _ = minute_data(records, self.max_days_previous, self.now_utc, "state", "last_updated", backwards=True, smoothing=True, clean_increment=True, required_unit="kWh", interpolate=False)
 
-        # Mark the gap minutes, then walk from oldest to newest carrying the energy added so far forward,
-        # so the data keeps incrementing all the way to minute 0
+        # Mark the gap minutes load_energy_h0 measured, then walk from oldest to newest carrying the energy added
+        # so far forward, so the data keeps incrementing all the way to minute 0
         in_gap = bytearray(max_minute + 1)
         for newest, oldest_minute in gaps:
             for minute in range(newest, oldest_minute):
                 in_gap[minute] = 1
+        for newest, oldest_minute in unknown:
+            for minute in range(newest, min(oldest_minute, max_minute + 1)):
+                in_gap[minute] = 0
         added = 0.0
         for minute in range(max_minute, -1, -1):
             if in_gap[minute]:
