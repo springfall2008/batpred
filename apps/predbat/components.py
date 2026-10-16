@@ -467,6 +467,38 @@ COMPONENT_LIST = {
         "phase": 1,
         "can_restart": True,
     },
+    "fronius": {
+        "class": "fronius.FroniusCloud",
+        "name": "Fronius Solar.web",
+        "inverter": True,
+        "event_filter": "predbat_fronius_",
+        "args": {
+            # One key pair authenticates both the Query API (telemetry) and the Flexibility API
+            # (control); it is sent as two headers on every call.
+            "access_key_id": {"required": False, "secret": True, "config": "fronius_access_key_id"},
+            "access_key_value": {"required": False, "secret": True, "config": "fronius_access_key_value"},
+            # The Solar.web PV system (GUID) this component drives. Exactly one per component.
+            "pv_system_id": {"required": False, "config": "fronius_pv_system_id"},
+            "automatic": {"required": False, "default": False, "config": "fronius_automatic"},
+            "automatic_ignore_pv": {"required": False, "default": False, "config": "fronius_automatic_ignore_pv"},
+            # On by default, matching the other cloud inverters. Set false for monitoring only;
+            # switch.predbat_set_read_only still gates every write.
+            "control_enable": {"required": False, "default": True, "config": "fronius_control_enable"},
+            # Escape hatch when the battery metadata carries no (or a wrong) power limit.
+            "battery_rate_max": {"required": False, "config": "fronius_battery_rate_max"},
+            # Opt-in: cap grid export at this many watts whenever no battery command is running.
+            "grid_export_limit": {"required": False, "config": "fronius_grid_export_limit"},
+            # Daily energy is billed per channel read, so it is polled less often than power.
+            "energy_interval": {"required": False, "default": 30, "config": "fronius_energy_interval"},
+            "query_url": {"required": False, "config": "fronius_query_url"},
+            "control_url": {"required": False, "config": "fronius_control_url"},
+        },
+        # Gate activation on having a key. Without this the component would start for every
+        # instance, since all individual args are optional.
+        "required_or": ["access_key_id"],
+        "phase": 1,
+        "can_restart": True,
+    },
     "enphase": {
         "class": "enphase.EnphaseAPI",
         "name": "Enphase API",
