@@ -2055,6 +2055,7 @@ class GatewayMQTT(ComponentBase):
         discharge_end_entities = []
         charge_enable_entities = []
         discharge_enable_entities = []
+        schedule_write_entities = []
         export_limit_entities = []
         inverter_limit_entities = []
         battery_scaling_entities = []
@@ -2083,6 +2084,7 @@ class GatewayMQTT(ComponentBase):
             discharge_end_entities.append(f"select.{base}_discharge_slot1_end")
             charge_enable_entities.append(f"switch.{base}_charge_enabled")
             discharge_enable_entities.append(f"switch.{base}_discharge_enabled")
+            schedule_write_entities.append(f"switch.{base}_schedule_write")
             export_limit_entities.append(f"sensor.{base}_export_limit_w")
 
             # soc_max: from battery capacity entity
@@ -2131,6 +2133,7 @@ class GatewayMQTT(ComponentBase):
         self.set_arg("discharge_end_time", discharge_end_entities)
         self.set_arg("scheduled_charge_enable", charge_enable_entities)
         self.set_arg("scheduled_discharge_enable", discharge_enable_entities)
+        self.set_arg("schedule_write_button", schedule_write_entities)
         self.set_arg("export_limit", export_limit_entities)
         self.set_arg("inverter_limit", inverter_limit_entities)
 
@@ -2829,106 +2832,6 @@ class GatewayMQTT(ComponentBase):
         """Forget a staged window, so its selects follow the Hub's schedule again."""
         key = (_serial_suffix(serial), side)
         self._staged = {kept_key: kept for kept_key, kept in getattr(self, "_staged", {}).items() if kept_key != key}
-
-    def charge_window_uses_staging(self, start_entity, end_entity):
-        """Identify a coordinator synchronously, before crossing an async bridge."""
-        if not isinstance(start_entity, str) or not start_entity.endswith("_charge_slot1_start"):
-            return False
-        if end_entity != start_entity.removesuffix("_start") + "_end":
-            return False
-        serial = self._serial_from_entity_id(start_entity)
-        record = getattr(self, "_discovery", {}).get((serial or "").upper(), {})
-        return bool(serial) and record.get("type") in GATEWAY_COORDINATOR_TYPES
-
-    async def update_charge_window(self, start_entity, end_entity, start, end):
-        """Send an engine charge window as one full-serial command, not two partial slots.
-
-        True means publication was attempted, not that the inverter applied it. The
-        caller must verify both endpoint entities, which only an applied ACK or
-        physical telemetry updates. Coordinators use their existing separate path:
-        those devices can stage a disabled slot and apply it only on enable.
-        Manual single-endpoint selects keep their path.
-        """
-        if getattr(self.base, "set_read_only", False):
-            return False
-        if not isinstance(start_entity, str) or not start_entity.endswith("_charge_slot1_start"):
-            return False
-        if end_entity != start_entity.removesuffix("_start") + "_end":
-            return False
-        serial = self._serial_from_entity_id(start_entity)
-        if not serial or self._serial_from_entity_id(end_entity) != serial:
-            return False
-        if self.charge_window_uses_staging(start_entity, end_entity):
-            return False
-        try:
-            times = [datetime.datetime.strptime(value, "%H:%M:%S") for value in (start, end)]
-        except (ValueError, TypeError):
-            return False
-        schedule = {field: value.hour * 100 + value.minute for field, value in zip(("start", "end"), times)}
-        await self._send_control(start_entity, "set_charge_slot", schedule_json=json.dumps(schedule), serial=serial)
-        return True
-
-    def discharge_window_uses_staging(self, start_entity, end_entity):
-        """Identify a coordinator synchronously, before crossing an async bridge."""
-        if not isinstance(start_entity, str) or not start_entity.endswith("_discharge_slot1_start"):
-            return False
-        if end_entity != start_entity.removesuffix("_start") + "_end":
-            return False
-        serial = self._serial_from_entity_id(start_entity)
-        record = getattr(self, "_discovery", {}).get((serial or "").upper(), {})
-        return bool(serial) and record.get("type") in GATEWAY_COORDINATOR_TYPES
-
-    async def update_discharge_window(self, start_entity, end_entity, start, end):
-        """Send an engine discharge window as one full-serial command, not two partial slots.
-
-        True means publication was attempted, not that the inverter applied it. The
-        caller must verify both endpoint entities, which only an applied ACK or
-        physical telemetry updates. Coordinators use their existing separate path:
-        those devices can stage a disabled slot and apply it only on enable.
-        Manual single-endpoint selects keep their path.
-        """
-        if getattr(self.base, "set_read_only", False):
-            return False
-        if self.discharge_window_uses_staging(start_entity, end_entity):
-            return False
-        kwargs = self._discharge_window_kwargs(start_entity, end_entity, start, end)
-        if kwargs is None:
-            return False
-        if self.discharge_window_refused(start_entity, end_entity, start, end):
-            # _send_control would not re-send it inside the ack window, so polling again
-            # would only wait out the timeout for an answer that has already arrived
-            self.log(f"Info: GatewayMQTT: discharge window {start}-{end} for {kwargs['serial']} was just refused, not retrying yet")
-            return False
-        await self._send_control(start_entity, "set_discharge_slot", **kwargs)
-        return True
-
-    def _discharge_window_kwargs(self, start_entity, end_entity, start, end):
-        """The paired set_discharge_slot fields for a slot1 start/end entity pair, or None."""
-        # The end entity name is derived from the start, so both carry the same serial
-        if not isinstance(start_entity, str) or not start_entity.endswith("_discharge_slot1_start"):
-            return None
-        if end_entity != start_entity.removesuffix("_start") + "_end":
-            return None
-        serial = self._serial_from_entity_id(start_entity)
-        if not serial:
-            return None
-        try:
-            times = [datetime.datetime.strptime(value, "%H:%M:%S") for value in (start, end)]
-        except (ValueError, TypeError):
-            return None
-        schedule = {field: value.hour * 100 + value.minute for field, value in zip(("start", "end"), times)}
-        return {"schedule_json": json.dumps(schedule), "serial": serial}
-
-    def discharge_window_refused(self, start_entity, end_entity, start, end):
-        """Whether the hub refused this exact paired window within the ack window."""
-        kwargs = self._discharge_window_kwargs(start_entity, end_entity, start, end)
-        if kwargs is None or not (getattr(self, "_ack_subscribed", False) and self._mqtt_connected and self._acks_seen):
-            return False
-        with self._command_lock:
-            entry = self._pending_commands.get(start_entity)
-            if entry is None or entry["command"] != "set_discharge_slot" or entry["kwargs"] != kwargs:
-                return False
-            return entry["state"] == "refused" and _monotonic() - entry["sent_at"] < _COMMAND_ACK_WINDOW
 
     async def number_event(self, entity_id, value):
         """Handle number entity changes (e.g. charge rate, target SOC).

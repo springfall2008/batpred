@@ -1827,6 +1827,14 @@ class TestAutomaticConfig:
         assert gw._args["num_inverters"] == 1
         assert gw._args["inverter_type"] == ["GWMQTT"]
 
+    def test_gwmqtt_automatic_config_sets_schedule_write_button(self):
+        """Each control target's schedule write switch is bound as its schedule_write_button."""
+        gw = self._make_gateway()
+        gw._last_status = self._basic_status(serial="CE123456789", primary=False)
+        gw.automatic_config()
+
+        assert gw._args["schedule_write_button"] == ["switch.predbat_gateway_456789_schedule_write"]
+
     def test_single_inverter_energy_and_health_args(self):
         """Energy counter, battery health, and inverter_time args use first inverter's suffix."""
         gw = self._make_gateway()
@@ -7549,16 +7557,14 @@ class TestIntegratePower:
 def run_gateway_tests(my_predbat=None):
     """Run all GatewayMQTT tests. Returns True on failure, False on success."""
     from tests.test_gateway_token_refresh import TestIsAuthFailure, TestApplyRefreshResponse, TestMaybeRefreshOnAuthError
-    from tests.test_gateway_charge_window import TestGatewayChargeWindow
-    from tests.test_gateway_discharge_window import TestGatewayDischargeWindow
+    from tests.test_gateway_window_commit import TestHubWindowCommit
     from tests.test_gateway_display import TestGatewayDisplayOnly
     from tests.test_gateway_commit import TestGatewayStaging, TestGatewayCommit
 
     test_classes = [
         TestGatewayStaging,
         TestGatewayCommit,
-        TestGatewayChargeWindow,
-        TestGatewayDischargeWindow,
+        TestHubWindowCommit,
         TestGatewayDisplayOnly,
         TestProtobufDecode,
         TestPlanSerialization,
