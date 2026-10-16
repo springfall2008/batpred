@@ -412,7 +412,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         # DC array size in kWp, capping the p90 cloud model's extrapolation. Auto-detected from the
         # forecast provider (see resolve_pv_array_kwp); 0 leaves the cap inert.
         self.pv_array_kwp = 0.0
-        self.load_scaling90 = 0.7
+        self.load_scaling90 = 0.9
         self.metric_future_rate_offset_import = 0.0
         self.metric_future_rate_offset_export = 0.0
         self.metric_inday_adjust_damping = 1.0
