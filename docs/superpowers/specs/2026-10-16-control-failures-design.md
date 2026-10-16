@@ -208,12 +208,18 @@ the real value is overwritten and HA long-term statistics record a reset. Checki
 publish cannot recover from that once the 0 is written, so the guard is:
 
 1. Until a restore read returns a value, the restore is retried on every publish cycle rather than
-   once per process. A value read on any attempt is merged as `total = max(total, restored)`.
+   once per process. The first value read is merged as `total = restored + total`: before the
+   restore resolves, the in-memory total holds only failures counted since this process started,
+   so adding (not `max`) keeps them. The merge happens once; later restore calls merge events only.
 2. While the restore is unresolved and the in-memory total is 0, the total entity is **not written**.
    On a genuinely fresh install this means `predbat.control_failures_total` first appears with the
    first counted failure; after that write, the restore is considered resolved.
-3. Every write of the total publishes `max(in-memory total, last value read back)`, so the published
-   total never goes backwards.
+3. Once resolved, the in-memory total starts from the restored value and only increments, so the
+   published total never goes backwards.
+
+Residual risk, accepted: if the entity exists but stays unreadable until a failure is counted, rule 2
+lets that first write through and the old total is lost. That needs HA state and history both
+unreadable for the whole period before the first failure, while the restore is retried every cycle.
 
 The 24h `events` attribute gets only rule 1 (events read on a later attempt are merged in,
 de-duplicated by slot key). If an empty list was already published over them they are lost, which is
@@ -254,14 +260,14 @@ Monitor in isolation:
 - prune and the 24h window
 - restore of a mid-slot event does not double-count, and its `failed_minutes` continue
 - restore merges by slot key without duplicating events
-- total survives restore and never decreases (`max` merge)
+- total survives restore (`restored + counted`, merged once) and never decreases
 
 Restart guard (wired into Predbat):
 
 - restore read returns nothing: the total entity is not written while the total is 0, and the
   restore is retried next cycle
-- restore succeeds on a later cycle after a failure was counted: published total is
-  `max(in-memory, restored)`
+- restore succeeds on a later cycle after a failure was counted while unresolved: published total is
+  `restored + counted`
 - fresh install: the total entity first appears with the first counted failure
 
 Wired into Predbat (`create_predbat`):
