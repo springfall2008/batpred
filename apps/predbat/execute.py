@@ -21,6 +21,7 @@ from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate, balance_i
 from predbat_metrics import metrics
 from inverter import Inverter
 import time
+from control_monitor import MODE_CHARGING, MODE_EXPORTING, MODE_FREEZE_CHARGING, MODE_FREEZE_EXPORTING, format_failure
 
 """
 Execute Predbat plan
@@ -294,6 +295,80 @@ class Execute:
         else:
             inverter.adjust_discharge_rate(int(discharge_rate), notify=notify_discharge)
 
+        # The rate this inverter was actually asked for, after balancing - what the control-failure
+        # monitor judges measured power against. None when nothing was written (Monitor mode).
+        if charge_rate is not None:
+            inverter.requested_charge_w = int(charge_rate)
+        else:
+            inverter.requested_charge_w = int(inverter.battery_rate_max_charge * MINUTE_WATT) if reset_rates else None
+        if discharge_rate is not None:
+            inverter.requested_discharge_w = int(discharge_rate)
+        else:
+            inverter.requested_discharge_w = int(inverter.battery_rate_max_discharge * MINUTE_WATT) if reset_rates else None
+
+    def record_control_expectations(self, status_per_inverter, monitor_slots, now=None):
+        """
+        Tell the control-failure monitor what each inverter should now be doing.
+
+        Called at the end of execute_plan() once every inverter's status is final. An inverter is
+        judged only while its final status is the mode its slot was recorded for; in read-only mode
+        or while any inverter is calibrating nothing is judged at all.
+
+        Args:
+            status_per_inverter (dict): inverter id -> final core status from execute_plan()
+            monitor_slots (dict): inverter id -> (mode, slot start minutes, slot end minutes, target percent)
+            now (float): epoch seconds, defaults to time.time()
+        """
+        # getattr: partial Execute stubs in the tests never create a monitor
+        monitor = getattr(self, "control_monitor", None)
+        if monitor is None:
+            return
+        if now is None:
+            now = time.time()
+        if self.set_read_only or any(inverter.in_calibration for inverter in self.inverters):
+            monitor.clear_expectation()
+            return
+        for inverter in self.inverters:
+            slot = monitor_slots.get(inverter.id)
+            if slot is None or slot[0] != status_per_inverter.get(inverter.id):
+                monitor.clear_expectation(inverter.id)
+                continue
+            mode, start_minutes, end_minutes, target_percent = slot
+            slot_start = (self.midnight_utc + timedelta(minutes=start_minutes)).timestamp()
+            slot_end = (self.midnight_utc + timedelta(minutes=end_minutes)).timestamp()
+            monitor.set_expectation(inverter.id, mode, slot_start, slot_end, target_percent, now)
+
+    def observe_control_failures(self, now=None):
+        """
+        Judge each inverter's fresh reading against what it was last told to do.
+
+        Called at the end of fetch_inverter_data(), quick or full. Read-only mode or calibration that
+        started since the last plan run clears every expectation here, so nothing is counted in the
+        minutes before execute_plan() next runs.
+
+        Args:
+            now (float): epoch seconds, defaults to time.time()
+        """
+        monitor = getattr(self, "control_monitor", None)
+        if monitor is None or not monitor.tracking or not self.inverters:
+            return
+        if now is None:
+            now = time.time()
+        if self.set_read_only or any(inverter.in_calibration for inverter in self.inverters):
+            monitor.clear_expectation()
+            return
+        for inverter in self.inverters:
+            event = monitor.observe(
+                inverter.id,
+                inverter.battery_power,
+                inverter.soc_percent,
+                getattr(inverter, "requested_charge_w", None),
+                getattr(inverter, "requested_discharge_w", None),
+                now,
+            )
+            if event is not None:
+                self.log(format_failure(event, self.local_tz))
+
     def execute_plan(self):
         # Per-inverter detail segments, assembled into the status text after the headline status is
         # resolved - see build_status_extra() for why they can't be concatenated inline.
@@ -342,6 +417,9 @@ class Execute:
         isExporting = False
         intent = {}
         export_rate_alloc = self.allocate_fleet_export_rates()
+        # Inverter id -> (mode, slot start minutes, slot end minutes, target percent), for the
+        # control-failure monitor. Only the four judged modes are recorded.
+        monitor_slots = {}
         for inverter in self.inverters:
             if inverter.id not in self.count_inverter_writes:
                 self.count_inverter_writes[inverter.id] = 0
@@ -402,6 +480,9 @@ class Execute:
                         minutes_end = windows["end"]
                         if self.debug_enable:
                             self.log("Combine window with next window {}-{}".format(self.time_abs_str(windows["start"]), self.time_abs_str(windows["end"])))
+
+                # The slot as planned, before the register adjustments below move the start/end
+                charge_slot = (window["start"], minutes_end)
 
                 # Avoid adjust avoid start time forward when it's already started
                 if (inverter.charge_start_time_minutes <= self.minutes_now) and (self.minutes_now >= minutes_start):
@@ -518,6 +599,7 @@ class Execute:
 
                             status = "Freeze charging"
                             status_per_inverter[inverter.id] = status
+                            monitor_slots[inverter.id] = (MODE_FREEZE_CHARGING, charge_slot[0], charge_slot[1], None)
                             status_extra_parts.append((inverter.id, "target", status, "{}%".format(inverter.soc_percent)))  # Append multi-inverter target SoC's together
                             self.log("Inverter {} Freeze charging with SoC {}%".format(inverter.id, inverter.soc_percent))
                         else:
@@ -561,6 +643,7 @@ class Execute:
                             else:
                                 status = "Charging"
                                 status_per_inverter[inverter.id] = status
+                                monitor_slots[inverter.id] = (MODE_CHARGING, charge_slot[0], charge_slot[1], inv_target_soc_percent)
                                 inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
 
                             status_extra_parts.append((inverter.id, "target", status, "{}%-{}%".format(inverter.soc_percent, inv_target_soc_percent)))  # append multi-inverter target SoC's together
@@ -706,6 +789,7 @@ class Execute:
 
                         status = "Exporting"
                         status_per_inverter[inverter.id] = status
+                        monitor_slots[inverter.id] = (MODE_EXPORTING, window["start"], window["end"], calc_percent_limit(discharge_soc, self.soc_max))
                         status_extra_parts.append((inverter.id, "target", status, "{}%-{}%".format(inverter.soc_percent, int(target))))  # append multi-inverter target SoC's together
                         # Immediate export mode
                     else:
@@ -725,6 +809,7 @@ class Execute:
                             self.log("Export Freeze as exporting is now at/below target - current SoC {}kWh and target {}kWh".format(self.soc_kw, discharge_soc))
                             status = "Freeze exporting"
                             status_per_inverter[inverter.id] = status
+                            monitor_slots[inverter.id] = (MODE_FREEZE_EXPORTING, window["start"], window["end"], None)
                             # Discharge limit (99) is meaningless when Freeze Exporting so don't display it
                             status_extra_parts.append((inverter.id, "current SoC", status, "{}%".format(inverter.soc_percent)))  # append multi-inverter target SoC's together
                             isExporting = True
@@ -1000,6 +1085,7 @@ class Execute:
         # the whole fleet before anything is written. Inverters that were skipped by the read-only
         # branch (continue) or the calibration branch (break) recorded no intent and are not written.
         self.apply_rate_intent(intent)
+        self.record_control_expectations(status_per_inverter, monitor_slots)
 
         # Count register writes - after the apply pass so the rate writes land in this cycle's count
         for inverter in self.inverters:
@@ -1352,6 +1438,7 @@ class Execute:
         self.publish_charge_limit(self.charge_limit, self.charge_window, best=False)
         self.publish_inverter_data()
         self.publish_inverter_config()
+        self.observe_control_failures()
         return True
 
     def is_template_mode(self):

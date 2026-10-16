@@ -109,6 +109,7 @@ from plugin_system import PluginSystem
 from github import GitHub
 from ha import run_async
 from control_ledger import ControlLedger
+from control_monitor import ControlMonitor
 
 
 class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, Marginal, Execute, Output, UserInterface, GitHub):
@@ -346,6 +347,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.clock_skew_warn_time = {}  # Per-inverter time the moderate clock-skew warning was last logged, so it repeats hourly rather than every cycle
         self.control_ledger = ControlLedger()
         self.control_ledger_restored = False
+        self.control_monitor = ControlMonitor()
         self.inverter_needs_reset = False
         self.inverter_needs_reset_force = ""
         self.inverters = []

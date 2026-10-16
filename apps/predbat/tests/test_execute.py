@@ -12,6 +12,7 @@ from tests.test_infra import reset_inverter
 from const import EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, MINUTE_WATT
 from utils import pack_export_limit
 from utils import calc_percent_limit
+from control_monitor import ControlMonitor, MODE_CHARGING, MODE_EXPORTING, GRACE_S
 
 
 class ActiveTestInverter:
@@ -1399,6 +1400,221 @@ def test_stored_intent_is_the_executor_baseline(my_predbat):
             inverter.battery_power = power
             inverter.grid_power = grid
             inverter.soc_percent = soc
+    return failed
+
+
+def control_monitor_charging_scenario(my_predbat, name):
+    """
+    Put the two-inverter test fleet into Charging through the real execute path.
+
+    Same arguments as the charge_iboost_no_hold_text scenario, which is known to resolve to Charging
+    on this fleet. soc_kw defaults to 0, so both inverters are below target.
+    """
+    return run_execute_test(
+        my_predbat,
+        name,
+        charge_window_best=[{"start": 12 * 60, "end": 13 * 60, "average": 1}],
+        charge_limit_best=[10, 10],
+        assert_charge_time_enable=True,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Charging",
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=13 * 60,
+    )
+
+
+def test_control_monitor_charging_counts_once(my_predbat):
+    """
+    Charging with no battery power: each inverter fails once, with one Warn: line each, and a later
+    reading in the same slot neither warns nor counts again.
+    """
+    saved_monitor = my_predbat.control_monitor
+    saved_log = my_predbat.log
+    my_predbat.control_monitor = ControlMonitor()
+    lines = []
+    failed = False
+    try:
+        if control_monitor_charging_scenario(my_predbat, "control_monitor_charging"):
+            return True
+        monitor = my_predbat.control_monitor
+        for inverter in my_predbat.inverters:
+            track = monitor.tracking.get(inverter.id)
+            if track is None or track["mode"] != MODE_CHARGING:
+                print("ERROR: inverter {} has no Charging expectation: {}".format(inverter.id, track))
+                failed = True
+            if inverter.requested_charge_w != 1000:
+                print("ERROR: inverter {} requested_charge_w {} expected 1000".format(inverter.id, inverter.requested_charge_w))
+                failed = True
+        if failed:
+            return failed
+        entered = monitor.tracking[0]["entered_at"]
+        for inverter in my_predbat.inverters:
+            inverter.battery_power = 0
+        my_predbat.log = lambda message, *args, **kwargs: lines.append(message)
+        for offset in (GRACE_S, GRACE_S + 60, GRACE_S + 120, GRACE_S + 180):
+            my_predbat.observe_control_failures(now=entered + offset)
+        warns = [line for line in lines if line.startswith("Warn: Control failure")]
+        if len(warns) != 2 or monitor.total != 2:
+            print("ERROR: expected one warning and one count per inverter, got {} warnings, total {}".format(len(warns), monitor.total))
+            failed = True
+    finally:
+        my_predbat.log = saved_log
+        my_predbat.control_monitor = saved_monitor
+        for inverter in my_predbat.inverters:
+            inverter.battery_power = 0
+    return failed
+
+
+def test_control_monitor_exporting_expectation(my_predbat):
+    """Exporting sets an Exporting expectation, with the discharge rate written recorded on the inverter."""
+    saved_monitor = my_predbat.control_monitor
+    my_predbat.control_monitor = ControlMonitor()
+    failed = False
+    saved_starts = [inverter.discharge_start_time_minutes for inverter in my_predbat.inverters]
+    saved_ends = [inverter.discharge_end_time_minutes for inverter in my_predbat.inverters]
+    try:
+        # execute_plan keeps an already-started discharge start; the preceding scenario leaves -1, so
+        # return the fleet to the "no discharge window set" state that a fresh inverter starts in
+        for inverter in my_predbat.inverters:
+            inverter.discharge_start_time_minutes = my_predbat.forecast_minutes
+        if run_execute_test(
+            my_predbat,
+            "control_monitor_exporting",
+            export_window_best=[{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 1}],
+            export_limits_best=[pack_export_limit(EXPORT_MODE_TARGET, 0)],
+            assert_force_export=True,
+            set_charge_window=True,
+            set_export_window=True,
+            soc_kw=10,
+            assert_status="Exporting",
+            assert_immediate_soc_target=0,
+            assert_discharge_start_time_minutes=my_predbat.minutes_now,
+            assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,
+        ):
+            return True
+        for inverter in my_predbat.inverters:
+            track = my_predbat.control_monitor.tracking.get(inverter.id)
+            if track is None or track["mode"] != MODE_EXPORTING:
+                print("ERROR: inverter {} has no Exporting expectation: {}".format(inverter.id, track))
+                failed = True
+            if inverter.requested_discharge_w != 1000:
+                print("ERROR: inverter {} requested_discharge_w {} expected 1000".format(inverter.id, inverter.requested_discharge_w))
+                failed = True
+    finally:
+        my_predbat.control_monitor = saved_monitor
+        for inverter in my_predbat.inverters:
+            inverter.adjust_force_export(False)
+        for inverter, start, end in zip(my_predbat.inverters, saved_starts, saved_ends):
+            inverter.discharge_start_time_minutes = start
+            inverter.discharge_end_time_minutes = end
+    return failed
+
+
+def test_control_monitor_read_only_records_nothing(my_predbat):
+    """A read-only plan run clears every expectation, so nothing can be counted."""
+    saved_monitor = my_predbat.control_monitor
+    saved_read_only = my_predbat.set_read_only
+    my_predbat.control_monitor = ControlMonitor()
+    failed = False
+    try:
+        my_predbat.control_monitor.set_expectation(0, MODE_CHARGING, 0, 3600, 80.0, 0)
+        failed = run_execute_test(
+            my_predbat,
+            "control_monitor_read_only",
+            charge_window_best=[{"start": 12 * 60, "end": 13 * 60, "average": 1}],
+            charge_limit_best=[10, 10],
+            set_charge_window=True,
+            set_export_window=True,
+            read_only=True,
+            assert_status="Read-Only",
+            reserve=0,
+            assert_immediate_charge_soc_target_array=[-1, -1],
+            assert_immediate_discharge_soc_target_array=[-1, -1],
+        )
+        if my_predbat.control_monitor.tracking:
+            print("ERROR: read-only plan run left expectations {}".format(my_predbat.control_monitor.tracking))
+            failed = True
+    finally:
+        my_predbat.control_monitor = saved_monitor
+        my_predbat.set_read_only = saved_read_only
+    return failed
+
+
+def test_control_monitor_read_only_between_plan_runs(my_predbat):
+    """Read-only switched on after the plan ran: the next poll clears the expectations and counts nothing."""
+    saved_monitor = my_predbat.control_monitor
+    saved_read_only = my_predbat.set_read_only
+    my_predbat.control_monitor = ControlMonitor()
+    failed = False
+    try:
+        if control_monitor_charging_scenario(my_predbat, "control_monitor_read_only_poll"):
+            return True
+        monitor = my_predbat.control_monitor
+        entered = monitor.tracking[0]["entered_at"]
+        for inverter in my_predbat.inverters:
+            inverter.battery_power = 0
+        my_predbat.set_read_only = True
+        for offset in (GRACE_S, GRACE_S + 60, GRACE_S + 120):
+            my_predbat.observe_control_failures(now=entered + offset)
+        if monitor.total != 0 or monitor.tracking:
+            print("ERROR: counted in read-only mode: total {} tracking {}".format(monitor.total, monitor.tracking))
+            failed = True
+    finally:
+        my_predbat.set_read_only = saved_read_only
+        my_predbat.control_monitor = saved_monitor
+    return failed
+
+
+def test_control_monitor_calibration_records_nothing(my_predbat):
+    """Calibration on any inverter clears every expectation."""
+    failed = balance_fixture(my_predbat, "control_monitor_calibration_setup")
+    if failed:
+        return failed
+    saved_monitor = my_predbat.control_monitor
+    saved_calibration = [inverter.in_calibration for inverter in my_predbat.inverters]
+    my_predbat.control_monitor = ControlMonitor()
+    try:
+        my_predbat.control_monitor.set_expectation(0, MODE_CHARGING, 0, 3600, 80.0, 0)
+        my_predbat.inverters[1].in_calibration = True
+        my_predbat.execute_plan()
+        if my_predbat.control_monitor.tracking:
+            print("ERROR: calibration left expectations {}".format(my_predbat.control_monitor.tracking))
+            failed = True
+    finally:
+        my_predbat.control_monitor = saved_monitor
+        for inverter, calibration in zip(my_predbat.inverters, saved_calibration):
+            inverter.in_calibration = calibration
+            inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
+            inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
+    return failed
+
+
+def test_control_monitor_uses_written_rate(my_predbat):
+    """
+    The rate judged is the one apply_inverter_rates actually wrote: a balancer hold at 0W is not
+    judged, an unclaimed rate resolves to max when rates are reset, and to None when they are not.
+    """
+    failed = False
+    inverter = my_predbat.inverters[0]
+    try:
+        my_predbat.apply_inverter_rates(inverter, {"charge_rate": 0, "discharge_rate": None, "reset_rates": True})
+        if inverter.requested_charge_w != 0 or inverter.requested_discharge_w != int(inverter.battery_rate_max_discharge * MINUTE_WATT):
+            print("ERROR: written rates not recorded: charge {} discharge {}".format(inverter.requested_charge_w, inverter.requested_discharge_w))
+            failed = True
+        monitor = ControlMonitor()
+        monitor.set_expectation(0, MODE_CHARGING, 0, 3600, 80.0, 0)
+        for offset in (GRACE_S, GRACE_S + 60, GRACE_S + 120):
+            monitor.observe(0, 0, 10.0, inverter.requested_charge_w, inverter.requested_discharge_w, offset)
+        if monitor.total != 0:
+            print("ERROR: a balancer hold at 0W was judged as a failure")
+            failed = True
+        my_predbat.apply_inverter_rates(inverter, {"charge_rate": None, "discharge_rate": None, "reset_rates": False})
+        if inverter.requested_charge_w is not None or inverter.requested_discharge_w is not None:
+            print("ERROR: an unwritten rate should record None, got {} / {}".format(inverter.requested_charge_w, inverter.requested_discharge_w))
+            failed = True
+    finally:
+        my_predbat.apply_inverter_rates(inverter, {"charge_rate": None, "discharge_rate": None, "reset_rates": True})
     return failed
 
 
@@ -4467,5 +4683,17 @@ def test_freeze_flags_do_not_leak_between_scenarios(my_predbat):
         if actual != expected:
             print("ERROR: {} leaked from the previous scenario - is {} but config says {}".format(name, actual, expected))
             failed = True
+
+    for control_monitor_test in (
+        test_control_monitor_charging_counts_once,
+        test_control_monitor_exporting_expectation,
+        test_control_monitor_read_only_records_nothing,
+        test_control_monitor_read_only_between_plan_runs,
+        test_control_monitor_calibration_records_nothing,
+        test_control_monitor_uses_written_rate,
+    ):
+        failed |= control_monitor_test(my_predbat)
+        if failed:
+            return failed
 
     return failed
