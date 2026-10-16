@@ -415,10 +415,8 @@ class Execute:
 
                 # Span midnight allowed?
                 if not inverter.inv_can_span_midnight:
-                    # A running overnight window can retain yesterday's start. Start
-                    # at today's midnight, and cap future windows at their own day end.
-                    minutes_start = max(minutes_start, 0)
-                    minutes_end = min(minutes_end, (minutes_start // (24 * 60) + 1) * (24 * 60) - 1)
+                    if minutes_start < 24 * 60 and minutes_end >= 24 * 60:
+                        minutes_end = 24 * 60 - 1
 
                 # Are we currently in the export window?
                 inExportWindow = False
@@ -671,10 +669,8 @@ class Execute:
                 export_adjust = 1
                 # Span midnight allowed?
                 if not inverter.inv_can_span_midnight:
-                    # A running overnight window can retain yesterday's start. Start
-                    # at today's midnight, and cap future windows at their own day end.
-                    minutes_start = max(minutes_start, 0)
-                    minutes_end = min(minutes_end, (minutes_start // (24 * 60) + 1) * (24 * 60) - 1)
+                    if minutes_start < 24 * 60 and minutes_end >= 24 * 60:
+                        minutes_end = 24 * 60 - 1
                     export_adjust = 0
 
                 # Overlap into charge slot if 1 minute was added, then don't add the 1 minute
