@@ -119,6 +119,7 @@ COMPARE_RESTORED_STATE = (
         "manual_demand_times",
         "manual_all_times",
         "cost_today_sofar",
+        "net_settlement_seed",
         "carbon_today_sofar",
         "iboost_today",
         "iboost_plan",
@@ -527,6 +528,7 @@ class Compare:
 
         # Reset totals
         my_predbat.cost_today_sofar = 0
+        my_predbat.net_settlement_seed = None
         my_predbat.carbon_today_sofar = 0
         my_predbat.iboost_today = 0
         my_predbat.import_today_now = 0
