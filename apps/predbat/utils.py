@@ -277,7 +277,9 @@ class MinuteArray:
 
 
 # Predbat member variables never included in a debug dump or served over MCP - live object
-# graphs, the HA interface, loaded secrets and the URL caches. Shared with is_debug_excluded_key().
+# graphs, the HA interface, loaded secrets, the URL caches and log-gate bookkeeping (whose
+# tuple-keyed dicts dump as YAML sequence keys that no loader can read back, #5569).
+# Shared with is_debug_excluded_key().
 DEBUG_EXCLUDE_LIST = [
     "ha_interface",
     "components",
@@ -298,6 +300,7 @@ DEBUG_EXCLUDE_LIST = [
     "github_url_cache",
     "octopus_url_cache",
     "secrets",
+    "io_slot_log_gate",
 ]
 
 
