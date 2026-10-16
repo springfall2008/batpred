@@ -460,6 +460,9 @@ COMPONENT_LIST = {
             "battery_rate_max": {"required": False, "config": "alphaess_battery_rate_max"},
             "api_delay": {"required": False, "default": 2.0, "config": "alphaess_api_delay"},
             "min_write_interval": {"required": False, "default": 300, "config": "alphaess_min_write_interval"},
+            "startup_write_delay": {"required": False, "default": 300, "config": "alphaess_startup_write_delay"},
+            "hold_power": {"required": False, "default": 100, "config": "alphaess_hold_power"},
+            "shutdown_mode": {"required": False, "default": "none", "config": "alphaess_shutdown_mode"},
         },
         # Gate activation on having an AppID. Without this the component would start for
         # every instance, since all individual args are optional.

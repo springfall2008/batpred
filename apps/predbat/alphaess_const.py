@@ -74,6 +74,8 @@ ALPHAESS_SIGN_WINDOW_SECONDS = 300
 # Tier TTLs in minutes.
 ALPHAESS_TTL_STATIC = 8 * 60
 ALPHAESS_TTL_CONFIG = 30
+# Check the real schedule more often while Predbat is actively controlling a system.
+ALPHAESS_TTL_CONTROL_CONFIG = 5
 ALPHAESS_TTL_POWER = 1
 ALPHAESS_TTL_ENERGY = 5
 # Power tier interval once a serial has been demoted to the history path - matches the
@@ -92,6 +94,8 @@ ALPHAESS_CACHE_CONTROL = "control"
 # Polls a written payload is considered pending for before an unexpected read-back counts
 # as external interference (the phone app, or another Predbat instance).
 ALPHAESS_SETTLE_POLLS = 3
+# Inverter cloud propagation takes minutes, not three 30-minute config-tier polls.
+ALPHAESS_CONFIG_SETTLE_SECONDS = 5 * 60
 
 # How long after a SUCCESSFUL write a further difference still counts as the rest of the
 # SAME schedule update, and is therefore let through alphaess_min_write_interval.
