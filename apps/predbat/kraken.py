@@ -1187,9 +1187,9 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         trimming that away would lose the rates sooner than before. The in-memory list and the
         cache keep the full set.
 
-        The forward end has one day to spare: the sensor is only republished when rates are
-        refreshed, so one published just before midnight is still what Predbat reads just after
-        it, when its own window has moved on a day. forecast_days is worked out as fetch.py does,
+        The forward end has one day to spare: the sensor is republished only on the first run and
+        when a rates refresh is due (every 30 minutes), so one published just before midnight can
+        still be what Predbat reads just after it, when its own window has moved on a day. forecast_days is worked out as fetch.py does,
         including its 24 hour minimum.
         """
         forecast_hours = max(self.get_arg("forecast_hours", 48), 24)

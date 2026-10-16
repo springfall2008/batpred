@@ -1773,7 +1773,7 @@ All entities use the pattern `sensor.predbat_kraken_{account_id}_{suffix}` (acco
 
 Predbat is automatically configured to use these energy rates once Kraken is enabled.
 
-The `rates` attribute of the import and export rates sensors holds only the rate periods Predbat can use: those within N + 1 days either side of today's midnight, plus one spare day ahead, where N is `forecast_hours` (at least 24) rounded up to whole days - so 3 days back and 4 days ahead with the default 48 hours.
+The `rates` attribute of the import and export rates sensors holds only the rate periods Predbat can use: those within N + 1 days either side of today's midnight, plus one spare day ahead, where N is `forecast_hours` (at least 24) rounded up to whole days - so at most 3 days back and 4 days ahead with the default 48 hours (fewer when the provider has not returned that many).
 Older periods are left out, so a long fixed contract does not grow the attribute past Home Assistant's 16 KB recorder limit. The sensor's state is the number of periods in that attribute.
 
 ---
