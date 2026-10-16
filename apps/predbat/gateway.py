@@ -67,6 +67,28 @@ _COMMAND_ACK_WINDOW = 30
 _COMMAND_ACK_IDS_KEPT = 16
 
 
+def _split_same_day_plan_entries(entries):
+    """Split native EMS windows into same-day pieces on the plan's absolute timeline.
+
+    The EMS requires a 23:59 end followed by a separate 00:00 start. Keep hours
+    above 23 on later days so the Hub still expires each piece on its intended day.
+    """
+    split_entries = []
+    for entry in entries:
+        start = max(0, entry["start_hour"] * 60 + entry["start_minute"])
+        end = entry["end_hour"] * 60 + entry["end_minute"]
+        while start < end:
+            next_midnight = (start // (24 * 60) + 1) * (24 * 60)
+            piece_end = min(end, next_midnight - 1)
+            if start < piece_end:
+                piece = entry.copy()
+                piece["start_hour"], piece["start_minute"] = divmod(start, 60)
+                piece["end_hour"], piece["end_minute"] = divmod(piece_end, 60)
+                split_entries.append(piece)
+            start = next_midnight
+    return split_entries
+
+
 def _monotonic():
     """Clock for the ack window: immune to wall-clock corrections, and patchable in tests."""
     return time.monotonic()
@@ -531,6 +553,11 @@ class GatewayMQTT(ComponentBase):
                     "use_native": True,
                 }
             )
+
+        # The cached plan also drives native registers if the cloud goes away.
+        # Restrict its windows for the same Hub devices as the live executor.
+        if any(inv.inverter_type == "GWMQTT" and inv.inv_can_span_midnight is False for inv in getattr(self.base, "inverters", [])):
+            plan_entries = _split_same_day_plan_entries(plan_entries)
 
         # Sort entries chronologically (earliest start first) — charge and export windows
         # are appended in separate passes above, so without this the gateway would receive
@@ -1400,7 +1427,12 @@ class GatewayMQTT(ComponentBase):
             ("discharge_end", "discharge_slot1_end"),
         ]:
             hhmm = getattr(sched, field, 0) if sched else 0
-            self.dashboard_item(f"select.{pfx}_{name}", self._hhmm_to_time_str(hhmm), attributes=GATEWAY_ATTRIBUTE_TABLE.get(name, {}), app="gateway")
+            attributes = GATEWAY_ATTRIBUTE_TABLE.get(name, {}).copy()
+            # An EMS only accepts same-day windows, even though other Hub inverters
+            # can cross midnight. Keep the capability on this device's entities.
+            if inv.type == pb.INVERTER_TYPE_GIVENERGY_EMS:
+                attributes["can_span_midnight"] = False
+            self.dashboard_item(f"select.{pfx}_{name}", self._hhmm_to_time_str(hhmm), attributes=attributes, app="gateway")
 
         # Inverter time (from GatewayStatus timestamp for clock drift detection)
         if self._last_status and self._last_status.timestamp:

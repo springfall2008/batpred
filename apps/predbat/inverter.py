@@ -567,6 +567,12 @@ class Inverter:
         self.inv_write_backoff = INVERTER_DEF[self.inverter_type].get("write_backoff", False)
         self.inv_has_idle_time = INVERTER_DEF[self.inverter_type]["has_idle_time"]
         self.inv_can_span_midnight = INVERTER_DEF[self.inverter_type]["can_span_midnight"]
+        if self.inverter_type == "GWMQTT":
+            time_entity = self.base.get_arg("charge_start_time", indirect=False, index=self.id)
+            if time_entity:
+                can_span_midnight = self.base.get_state_wrapper(time_entity, attribute="can_span_midnight")
+                if isinstance(can_span_midnight, bool):
+                    self.inv_can_span_midnight = can_span_midnight
         self.inv_charge_discharge_with_rate = INVERTER_DEF[self.inverter_type].get("charge_discharge_with_rate", False)
         self.inv_target_soc_used_for_discharge = INVERTER_DEF[self.inverter_type].get("target_soc_used_for_discharge", True)
         self.inv_has_solis_energy_control = INVERTER_DEF[self.inverter_type].get("has_solis_energy_control", False)
