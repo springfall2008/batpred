@@ -1220,11 +1220,12 @@ def test_grid_charge_only_disables_discharge_freeze(test_name, my_predbat, ha):
 
 
 def test_hub_midnight_capability_from_entity(test_name, my_predbat, ha):
-    """Read the Hub device's schedule capability per inverter and refresh, preserving other profiles."""
+    """Read a device's can_span_midnight restriction per inverter and refresh, preserving other profiles."""
     failed = False
     print("Test: {}".format(test_name))
     saved_args = copy.deepcopy(my_predbat.args)
     saved_items = copy.deepcopy(ha.dummy_items)
+    orig_log = my_predbat.log
     try:
         my_predbat.args["charge_start_time"] = ["select.ems_start", "select.other_start"]
         my_predbat.args["inverter_type"] = ["GWMQTT", "GWMQTT"]
@@ -1247,7 +1248,28 @@ def test_hub_midnight_capability_from_entity(test_name, my_predbat, ha):
         if first.inv_can_span_midnight:
             print("ERROR: {} an entity must not loosen the direct EMS profile".format(test_name))
             failed = True
+        # Any inverter type can be restricted, not only a Hub device
+        my_predbat.args["inverter_type"] = ["GE", "GWMQTT"]
+        for value, expect in [(None, True), (False, False), (True, True)]:
+            ha.dummy_items["select.ems_start"] = {"state": "00:00:00", "can_span_midnight": value}
+            first.refresh_config(quiet=True)
+            if first.inv_can_span_midnight is not expect:
+                print("ERROR: {} GE capability {} expected {} got {}".format(test_name, value, expect, first.inv_can_span_midnight))
+                failed = True
+        if not INVERTER_DEF["GE"]["can_span_midnight"]:
+            print("ERROR: {} an entity must not change the shared GE profile".format(test_name))
+            failed = True
+        # A fixed time (as the Sofar templates use) has no attributes, and must not warn every refresh
+        my_predbat.args["charge_start_time"] = ["00:00:00", "select.other_start"]
+        log_messages = []
+        my_predbat.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
+        first.refresh_config(quiet=True)
+        my_predbat.log = orig_log
+        if not first.inv_can_span_midnight or any("fixed value" in message for message in log_messages):
+            print("ERROR: {} a fixed charge start time should be skipped quietly, logged {}".format(test_name, log_messages))
+            failed = True
     finally:
+        my_predbat.log = orig_log
         my_predbat.args.clear()
         my_predbat.args.update(saved_args)
         ha.dummy_items.clear()
