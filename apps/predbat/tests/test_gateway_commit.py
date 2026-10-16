@@ -550,6 +550,82 @@ class TestGatewayCommit:
         assert sum("never written" in str(call.args[0]) for call in gw.log.call_args_list) == 1
 
     @hub_test
+    def test_refused_export_move_after_an_enable_ack_disables_export(self):
+        """Export armed by an ack the last status frame predates is still turned off when the next move is refused."""
+        refuse = {"slot": False}
+
+        def hub_reply(command, kwargs):
+            """Apply everything until told to refuse windows."""
+            if command.endswith("_slot") and refuse["slot"]:
+                return False, None
+            return applies(command, kwargs)
+
+        gw, hub = self.setup_hub(make_status(discharge_enabled=False), responder=hub_reply)
+        self.stage(gw, "discharge", "17:00:00", "19:00:00", enable=True)
+        self.press(gw)
+        assert sent(gw)[-1] == ("set_discharge_enable", True)
+        refuse["slot"] = True
+        self.stage(gw, "discharge", "18:00:00", "20:00:00")  # no status frame in between: it still says export off
+        self.press(gw)
+        assert sent(gw)[-1] == ("set_discharge_enable", False)
+
+    @hub_test
+    def test_earlier_ack_does_not_mask_a_refused_retry(self):
+        """A pair applied in an earlier cycle, then changed outside Predbat, is refused on retry: export is not enabled onto it."""
+        refuse = {"slot": False}
+
+        def hub_reply(command, kwargs):
+            """Apply everything until told to refuse windows."""
+            if command.endswith("_slot") and refuse["slot"]:
+                return False, None
+            return applies(command, kwargs)
+
+        gw, hub = self.setup_hub(make_status(discharge_enabled=False), responder=hub_reply)
+        self.stage(gw, "discharge", "17:00:00", "19:00:00", enable=True)
+        self.press(gw)
+        before = len(gw._published)
+        hub.now["now"] += 300  # next cycle; the Hub's schedule was changed and export turned off meanwhile
+        inject(gw, make_status(discharge=(1600, 1900), discharge_enabled=False))
+        refuse["slot"] = True
+        self.stage(gw, "discharge", "17:00:00", "19:00:00", enable=True)
+        self.press(gw)
+        retry = sent(gw)[before:]
+        assert retry[0] == ("set_discharge_slot", slot_json(1700, 1900))
+        assert ("set_discharge_enable", True) not in retry
+
+    @hub_test
+    def test_late_unit_refusal_of_an_export_window_disables_export(self):
+        """One unit applies the export window, another refuses it after the commit has finished: export is turned off."""
+        gw, hub = self.setup_hub(make_status(discharge_enabled=True))
+        self.stage(gw, "discharge", "17:00:00", "19:00:00")
+        self.press(gw)
+        command, command_id, kwargs = gw._published[0]
+        assert command == "set_discharge_slot"
+        gw._process_ack(json.dumps({"command_id": f"PBAT{command_id}", "command": command, "ok": False, "error": "modbus_write_failed"}).encode("utf-8"))
+        assert sent(gw)[-1] == ("set_discharge_enable", False)
+
+    @hub_test
+    def test_publish_failure_keeps_a_newer_staged_window(self):
+        """A publish that raises after a newer window was staged fails only the old window; the newer one is sent."""
+        gw, hub = self.setup_hub()
+        self.stage(gw, "charge", "02:30:00", "03:05:00")
+        calls = {"n": 0}
+        original = gw.publish_command
+
+        async def flaky_publish(command, command_id=None, **kwargs):
+            """Stage a later end, then fail the first publish."""
+            calls["n"] += 1
+            if calls["n"] == 1:
+                await gw.select_event(SLOT_END, "03:30:00")
+                raise OSError("synthetic MQTT failure")
+            await original(command, command_id=command_id, **kwargs)
+
+        gw.publish_command = flaky_publish
+        self.press(gw)
+        assert sent(gw) == [("set_charge_slot", slot_json(230, 330))]
+        assert gw._staged == {}
+
+    @hub_test
     def test_press_without_staging_publishes_nothing(self):
         """A press with nothing staged (e.g. after a target SOC change) sends nothing."""
         gw, hub = self.setup_hub()

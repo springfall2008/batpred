@@ -3040,13 +3040,19 @@ class GatewayMQTT(ComponentBase):
                     continue
                 confirmed = state == "applied"
             window = f"{entry['start']:04d}-{entry['end']:04d}"
-            state, outcome = await self._send_and_await(slot_entity, f"set_{side}_slot", schedule_json=json.dumps({"start": entry["start"], "end": entry["end"]}), serial=serial)
+            state, outcome = await self._send_and_await(slot_entity, f"set_{side}_slot", **{"schedule_json": json.dumps({"start": entry["start"], "end": entry["end"]}), "serial": serial})
             if state not in ("applied", "published"):
                 if await self._commit_failed(serial, side, entry, f"window {window} {state or 'not acknowledged'}", window_refused=state == "refused"):
                     return False
                 continue
             confirmed = confirmed and state == "applied"
             recorded = bool(outcome.get("recorded"))
+            slot_kwargs = {"schedule_json": json.dumps({"start": entry["start"], "end": entry["end"]}), "serial": serial}
+            if entry["enable"] is True and self._attempt_outcome(slot_entity, f"set_{side}_slot", slot_kwargs)[0] == "refused":
+                # Another unit refused the window after one applied it: do not enable onto it
+                if await self._commit_failed(serial, side, entry, f"window {window} refused by another unit", window_refused=True):
+                    return False
+                continue
             if entry["enable"] is True:
                 state, _ = await self._send_and_await(enable_entity, f"set_{side}_enable", enable=True, serial=serial)
                 if state not in ("applied", "published"):
@@ -3069,10 +3075,10 @@ class GatewayMQTT(ComponentBase):
 
         An export window the Hub refused to move while the old one may still be armed would
         export on a schedule the plan has left, so export is turned off until a window lands
-        (#5532). That includes the inverter being missing from the last status frame: turning
-        export off is the safe direction. Only an explicit refusal does this: an unanswered
-        window may well have applied (a slow EMS write), and the plan still wants to export,
-        so it is left running.
+        (#5532). Telemetry is not consulted: the last status frame can predate an enable ack,
+        and turning export off when it is already off changes nothing. Only an explicit
+        refusal does this: an unanswered window may well have applied (a slow EMS write), and
+        the plan still wants to export, so it is left running.
 
         Returns:
             bool: True if the commit has given up, False if a newer staged window is to be sent.
@@ -3081,22 +3087,30 @@ class GatewayMQTT(ComponentBase):
         if not self._clear_staged(serial, side, entry):
             self.log(f"Info: GatewayMQTT: a newer {side} window for {serial} was staged meanwhile, sending that")
             return False
-        if window_refused and side == "discharge" and self._telemetry_enabled(_serial_suffix(serial), side) is not False:
-            self.log(f"Warn: GatewayMQTT: turning off scheduled export for {serial} until its window is written")
-            await self._send_control(f"switch.{self.prefix}_gateway_{_serial_suffix(serial)}_discharge_enabled", "set_discharge_enable", enable=False, serial=serial)
+        if window_refused and side == "discharge":
+            await self._export_fail_safe(serial)
         if self._last_status is not None:
             self._inject_entities(self._last_status)
         return True
 
-    def _telemetry_enabled(self, suffix, side):
-        """Whether the inverter last reported this side's schedule enabled, or None if unknown."""
-        status = self._last_status
-        if status is None:
-            return None
-        for inv in status.inverters:
-            if _serial_suffix(inv.serial) == suffix:
-                return bool(getattr(inv.control, f"{side}_enabled"))
-        return None
+    async def _export_fail_safe(self, serial):
+        """Turn scheduled export off after the Hub refused an export window (#5532)."""
+        self.log(f"Warn: GatewayMQTT: turning off scheduled export for {serial} until its window is written")
+        try:
+            await self._send_control(f"switch.{self.prefix}_gateway_{_serial_suffix(serial)}_discharge_enabled", "set_discharge_enable", enable=False, serial=serial)
+        except Exception as error:
+            self.log(f"Warn: GatewayMQTT: turning off scheduled export for {serial} failed: {error}")
+
+    def _spawn(self, coro):
+        """Run a coroutine from synchronous code: as a task on the running loop, else to completion."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(coro)
+            return
+        task = loop.create_task(coro)
+        self._commit_tasks.add(task)
+        task.add_done_callback(self._commit_tasks.discard)
 
     async def _send_and_await(self, entity_id, command, **kwargs):
         """Send a schedule-write command and wait for the Hub to apply it.
@@ -3115,7 +3129,11 @@ class GatewayMQTT(ComponentBase):
         for _attempt in range(_COMMIT_ATTEMPTS):
             if not self._mqtt_connected:
                 return None, None
-            await self._send_control(entity_id, command, **kwargs)
+            try:
+                await self._send_control(entity_id, command, **kwargs)
+            except Exception as error:
+                self.log(f"Warn: GatewayMQTT: {command} for {kwargs.get('serial')} could not be published: {error}")
+                return None, None
             if not getattr(self, "_ack_subscribed", False):
                 return "published", {}
             state, applied = await self._await_command_outcome(entity_id, command, kwargs)
@@ -3127,20 +3145,43 @@ class GatewayMQTT(ComponentBase):
                 return "published", {}
         return None, None
 
+    def _attempt_outcome(self, entity_id, command, kwargs):
+        """The outcome of the latest attempt at a tracked command, judged on that attempt's ids only.
+
+        The tracked entry keeps the outcomes of earlier attempts at the same value (so a late ack
+        still matches), which makes its overall state "applied" after any earlier success: a
+        refused retry of a window applied in an earlier cycle would read as applied. Any refusal
+        in the attempt outranks an ok, as when one unit applies a fanned-out command and another
+        refuses it.
+
+        Returns:
+            tuple: ("applied" or "refused", the ack's applied payload), (None, None) while unanswered,
+            or ("gone", None) if the entry was dropped (a replay) or replaced by another value.
+        """
+        with self._command_lock:
+            entry = self._pending_commands.get(entity_id)
+            if entry is None or entry["command"] != command or entry["kwargs"] != kwargs:
+                return "gone", None
+            outcomes = [entry["outcomes"].get(ref) for ref in entry["attempt_ids"]]
+            if "refused" in outcomes:
+                return "refused", None
+            if "ok" in outcomes:
+                return "applied", entry.get("applied")
+        return None, None
+
     async def _await_command_outcome(self, entity_id, command, kwargs, timeout=_COMMAND_ACK_WINDOW):
-        """Wait up to one ack window for the tracked command's outcome.
+        """Wait up to one ack window for the latest attempt's outcome (see _attempt_outcome()).
 
         Returns:
             tuple: ("applied" or "refused", the ack's applied payload), or (None, None) if unanswered.
         """
         deadline = _monotonic() + timeout
         while True:
-            with self._command_lock:
-                entry = self._pending_commands.get(entity_id)
-                if entry is None or entry["command"] != command or entry["kwargs"] != kwargs:
-                    return None, None  # dropped (a replay) or replaced by another value
-                if entry["state"] != "sent":
-                    return entry["state"], entry.get("applied")
+            state, applied = self._attempt_outcome(entity_id, command, kwargs)
+            if state == "gone":
+                return None, None
+            if state is not None:
+                return state, applied
             if _monotonic() >= deadline:
                 return None, None
             await _commit_pause()
@@ -3247,7 +3288,7 @@ class GatewayMQTT(ComponentBase):
         ok = ack.get("ok") is True
         error = ack.get("error") or "unknown"
         replay = not ok and error == "replay"
-        apply_cache = restore_status = keep_entry = False
+        apply_cache = restore_status = keep_entry = late_refusal = False
 
         with self._command_lock:
             entity_id, entry = next(((e, r) for e, r in self._pending_commands.items() if command_id in r["command_ids"]), (None, None))
@@ -3272,6 +3313,9 @@ class GatewayMQTT(ComponentBase):
             else:
                 if ok and entry["outcomes"].get(command_id) == "refused":
                     return  # a refusal for this id outranks any other unit's ok
+                # A refusal after this attempt was already applied by another unit: a commit may
+                # have moved on and armed export onto the window, so the fail-safe must run here
+                late_refusal = not ok and any(entry["outcomes"].get(ref) == "ok" for ref in entry["attempt_ids"])
                 entry["outcomes"][command_id] = "ok" if ok else "refused"
                 entry["state"] = "applied" if "ok" in entry["outcomes"].values() else "refused"
                 if ok:
@@ -3303,6 +3347,8 @@ class GatewayMQTT(ComponentBase):
             self.log(f"Warn: GatewayMQTT: {command} for {serial} refused by hub: replay ({command_id} already used), {action}")
         else:
             self.log(f"Warn: GatewayMQTT: {command} for {serial} refused by hub: {error}")
+            if late_refusal and command == "set_discharge_slot" and serial:
+                self._spawn(self._export_fail_safe(serial))
             if command == "set_reserve" and zero_reserve and serial:
                 # The reserve of 0 was not applied, so a 0 from the hub is a gap again and the
                 # reserve it had before is still the last real one
