@@ -54,8 +54,8 @@ def construct_empty_log_gate(loader, node):
     """
     Load any RepeatLogGate in a debug dump as a new, empty gate, without constructing what was dumped.
 
-    v9.3.8 to v9.4.x wrote io_slot_log_gate into every dump that had logged an Intelligent slot
-    list (#5569). Its history is keyed by tuples, which the dump wrote as YAML sequences, and a
+    From v9.3.8 until #5569, io_slot_log_gate went into every dump that had logged an Intelligent slot
+    list. Its history is keyed by tuples, which the dump wrote as YAML sequences, and a
     sequence cannot be a dict key on the way back in ("found unhashable key"), so those dumps would
     not load at all. A replay has no use for which log lines were already written, and that gate
     always used REPEAT_FULL_LOG_SECONDS, so nothing under the node is read.

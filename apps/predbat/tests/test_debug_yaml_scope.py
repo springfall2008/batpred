@@ -410,7 +410,7 @@ def test_debug_yaml_with_a_populated_log_gate_loads(my_predbat=None):
     return 1 if failed else 0
 
 
-# The io_slot_log_gate block exactly as Predbat v9.3.8 to v9.4.x writes it into a debug yaml (#5569),
+# The io_slot_log_gate block exactly as Predbat wrote it into a debug yaml from v9.3.8 until #5569,
 # between two ordinary keys so the test also sees that its neighbours still load.
 OLD_DUMP_WITH_LOG_GATE = """io_slot_count: 1
 io_slot_log_gate: !!python/object:utils.RepeatLogGate
@@ -429,7 +429,7 @@ def test_old_dump_with_a_log_gate_loads(my_predbat=None):
     """
     A debug yaml that already carries an io_slot_log_gate block must still replay (#5569).
 
-    Dumps written by v9.3.8 to v9.4.x carry the gate, and users keep attaching them to bug reports
+    Dumps written from v9.3.8 until this fix carry the gate, and users keep attaching them to bug reports
     after the fix ships. DEBUG_YAML_LOADER builds any dumped RepeatLogGate as a new, empty gate
     without constructing its history, so the tuple keys that cannot be loaded are never built.
 
@@ -440,8 +440,8 @@ def test_old_dump_with_a_log_gate_loads(my_predbat=None):
 
     # First confirm the hazard is real, so a pass below means the loader did something
     try:
-        yaml.unsafe_load(OLD_DUMP_WITH_LOG_GATE)
-        print("ERROR: the old log gate block loaded with plain yaml.unsafe_load, so the hazard this guards is gone")
+        yaml.load(OLD_DUMP_WITH_LOG_GATE, Loader=getattr(yaml, "CLoader", yaml.UnsafeLoader))
+        print("ERROR: the old log gate block loaded with PyYAML's own unsafe loader, so the hazard this guards is gone")
         failed = True
     except yaml.YAMLError:
         pass
