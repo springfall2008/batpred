@@ -79,8 +79,16 @@ which the SoC condition is false is not failing and resets the consecutive count
   Minutes from the readings that led up to confirmation are included in the event.
 - **Once per slot:** on confirmation the event is created, the `Warn:` line logged and both counters
   incremented. Later failing readings in the same slot only add to that event's `failed_minutes`.
+- **Reading spacing:** a reading less than `MIN_GAP_S = 30` seconds after the previous one for the
+  same inverter is ignored entirely. A plan cycle's fetch and the 60s quick poll can land seconds
+  apart, often returning the same sensor value; without this "3 in a row" could be met in about a
+  minute.
 
-Slot identity is `(inverter_id, mode, slot_start)`.
+Slot identity is `(inverter_id, mode, slot_start)`, where a slot is a **contiguous run** of the same
+mode. The planner splits a long charge into back-to-back windows, so when the next window's start
+falls inside the current slot's `[slot_start, slot_end]` the slot is extended rather than replaced:
+the key, grace and counters carry on, and one sustained failure is counted once, not once per
+half-hour window.
 
 ### Constants
 
@@ -91,6 +99,7 @@ Slot identity is `(inverter_id, mode, slot_start)`.
 | `FAIL_FRACTION` | 0.25 | Charging/Exporting fail below this fraction of `P_req` |
 | `FLOOR_W` | 200 | minimum `P_req` to judge; wrong-way flow threshold for Freeze modes |
 | `MAX_GAP_S` | 120 | cap on minutes credited between two readings |
+| `MIN_GAP_S` | 30 | readings closer together than this are ignored |
 | `DEFAULT_WINDOW_S` | 86400 | rolling window for the 24h sensor |
 
 ## Architecture
@@ -101,9 +110,10 @@ No engine dependencies, so it is unit-testable with plain numbers, mirroring `co
 
 ```python
 class ControlMonitor:
-    def set_expectation(self, inverter_id, mode, slot_start, slot_end, requested_w, target_percent, now)
+    def set_expectation(self, inverter_id, mode, slot_start, slot_end, target_percent, now)
     def clear_expectation(self, inverter_id=None)   # None clears every inverter
-    def observe(self, inverter_id, battery_power_w, soc_percent, now)  # -> event dict on first failure of a slot, else None
+    def observe(self, inverter_id, battery_power_w, soc_percent, requested_charge_w, requested_discharge_w, now)
+        # -> event dict on first failure of a slot, else None
     def recent_events(self, now, window_s=DEFAULT_WINDOW_S)
     def newest_events(self, limit)
     def prune(self, now, window_s=DEFAULT_WINDOW_S)
@@ -115,9 +125,16 @@ Per-inverter state: the current expectation, `entered_at`, `consecutive_failing`
 `pending_failed_s` (failed time accumulated before confirmation), `last_observed_at`, and a
 reference to the slot's event once fired.
 
-`set_expectation` with the same `(mode, slot_start)` as the current expectation updates
-`requested_w`, `target_percent` and `slot_end` in place and keeps `entered_at` and the counters; a
-different key resets them. `slot_start`/`slot_end` are epoch seconds.
+`set_expectation` for the same mode with a `slot_start` inside the current slot updates
+`target_percent` and extends `slot_end` in place, keeping `entered_at` and the counters; anything
+else starts fresh tracking. Fresh tracking first looks for an existing event for that inverter and
+mode whose slot contains the new start, and attaches to it (adopting its `slot_start`), so neither a
+Hold-then-Charging re-entry nor a restart re-counts the slot. `slot_start`/`slot_end` are epoch
+seconds.
+
+The requested rate is passed to `observe` rather than fixed at `set_expectation`, because the 60s
+balancer can change it between plan runs. `observe` picks the charge rate for Charging and the
+discharge rate for Exporting; Freeze modes ignore both.
 
 Event record (a plain dict, JSON-serialisable for the HA attribute):
 
@@ -129,7 +146,8 @@ Event record (a plain dict, JSON-serialisable for the HA attribute):
 ### Wiring
 
 1. **`PredBat.__init__`** (`predbat.py`, beside `control_ledger`): `self.control_monitor =
-   ControlMonitor()` and `self.control_monitor_restored = False`.
+   ControlMonitor()`. Whether the restore has resolved is tracked on the monitor itself
+   (`control_monitor.restored`).
 2. **`apply_inverter_rates`** (`execute.py`): store the rate actually written on the inverter as
    `inverter.requested_charge_w` / `inverter.requested_discharge_w`, with `None` resolved to the
    inverter maximum when rates are reset. This is the per-inverter value after the 60s balancer, not
@@ -137,13 +155,15 @@ Event record (a plain dict, JSON-serialisable for the HA attribute):
 3. **End of `execute_plan`** (`execute.py`), after per-inverter status is final: for each inverter,
    `set_expectation(...)` when its status is one of the four judged modes and the matching
    `set_*_window` is on, otherwise `clear_expectation(inverter.id)`. Inputs: mode from
-   `status_per_inverter`; slot start/end from `charge_window_best[0]` / `export_window_best[0]`;
-   `requested_w` from step 2 (charge rate for Charging, discharge rate for Exporting); target from
+   `status_per_inverter`; slot start from `charge_window_best[0]` / `export_window_best[0]`, slot
+   end from the combined contiguous charge window end / the export window end; target from
    `inv_target_soc_percent` (Charging) or the export target percent (Exporting).
 4. **Read-only and calibration early exits** in `execute_plan` (where `clear_control_ledger` is
    called today): `clear_expectation()` for all inverters.
 5. **End of `fetch_inverter_data`** (quick and full): `observe(...)` for each inverter with its
-   fresh `battery_power` and `soc_percent`. On a plan cycle this runs before `execute_plan`, so the
+   fresh `battery_power`, `soc_percent` and the requested rates from step 2. If read-only mode or
+   calibration has started since the last plan run, all expectations are cleared here instead, so
+   nothing is counted in the minutes before the next `execute_plan`. On a plan cycle this runs before `execute_plan`, so the
    reading is judged against the command in force when it was taken. A returned event is logged as
    `Warn: Control failure: inverter {id} {mode} {HH:MM}-{HH:MM} - battery {charging|discharging}
    {measured}W vs {requested}W requested` (Freeze modes describe the wrong-way flow against the
