@@ -9479,19 +9479,12 @@ function krakenKeyRender(result) {
         p.appendChild(krakenKeyEl('code', result.masked));
         box.appendChild(p);
         box.appendChild(krakenKeyEl('p', 'Kraken never shows an existing key in full, so the only way to get one is to generate a new key. That replaces the old key: anything else using it (another app, or another copy of Predbat) will stop working until you give it the new one.'));
-        const label = krakenKeyEl('label');
-        const confirm = document.createElement('input');
-        confirm.type = 'checkbox';
-        label.appendChild(confirm);
-        label.appendChild(document.createTextNode(' I understand the old key will stop working'));
-        box.appendChild(label);
-        box.appendChild(document.createElement('br'));
-        const button = krakenKeyEl('button', 'Generate new key');
-        button.type = 'button';
-        button.disabled = true;
-        confirm.onchange = () => { button.disabled = !confirm.checked; };
-        button.onclick = krakenKeyGenerate;
-        box.appendChild(button);
+        krakenKeyConfirmGenerate(box, 'I understand the old key will stop working', 'Generate new key');
+    } else if (result.status === 'unknown') {
+        // Kraken answered without saying whether a key exists, so treat it like an existing key
+        const box = krakenKeyResult('warning');
+        box.appendChild(krakenKeyEl('p', 'Predbat could not tell whether this account already has an API key. If it does, generating a new one replaces it: anything else using the old key (another app, or another copy of Predbat) will stop working until you give it the new one.'));
+        krakenKeyConfirmGenerate(box, 'I understand any existing key will stop working', 'Generate key');
     } else if (result.status === 'full') {
         krakenKeyShow(result.key, true, 'This account already has an API key and Kraken returned it in full, so nothing was changed.');
     } else if (result.status === 'generated') {
@@ -9501,6 +9494,23 @@ function krakenKeyRender(result) {
     }
 }
 
+// A Generate button that stays disabled until the user ticks a confirmation box
+function krakenKeyConfirmGenerate(box, confirmText, buttonText) {
+    const label = krakenKeyEl('label');
+    const confirm = document.createElement('input');
+    confirm.type = 'checkbox';
+    label.appendChild(confirm);
+    label.appendChild(document.createTextNode(' ' + confirmText));
+    box.appendChild(label);
+    box.appendChild(document.createElement('br'));
+    const button = krakenKeyEl('button', buttonText);
+    button.type = 'button';
+    button.disabled = true;
+    confirm.onchange = () => { button.disabled = !confirm.checked; };
+    button.onclick = krakenKeyGenerate;
+    box.appendChild(button);
+}
+
 function krakenKeyShow(key, verified, heading) {
     // The token is no longer needed once the key is on screen
     document.getElementById('kraken-key-token').value = '';
@@ -9508,7 +9518,7 @@ function krakenKeyShow(key, verified, heading) {
     const box = krakenKeyResult(verified ? 'success' : 'warning');
     box.appendChild(krakenKeyEl('p', heading + ' This is the only time Predbat shows it, so copy it now.'));
     if (!verified) {
-        box.appendChild(krakenKeyEl('p', 'Signing in with the new key did not work straight away. It may take a minute to become active; if Predbat still cannot sign in with it, generate another.'));
+        box.appendChild(krakenKeyEl('p', 'Signing in with the new key did not work straight away. It may take a minute to become active; if Predbat still cannot sign in with it, generate another - you will need a fresh token from your browser, as this one has been cleared.'));
     }
     const input = krakenKeyEl('input', null, 'kraken-key-value');
     input.type = 'text';
@@ -9520,19 +9530,25 @@ function krakenKeyShow(key, verified, heading) {
     copy.onclick = () => krakenKeyCopy(input, copy);
     box.appendChild(copy);
     box.appendChild(krakenKeyEl('p', 'Add to apps.yaml:'));
-    box.appendChild(krakenKeyEl('pre', 'kraken_provider: ' + provider + '\\nkraken_auth_method: api_key\\nkraken_key: !secret kraken_key'));
+    box.appendChild(krakenKeyEl('pre', 'kraken_provider: ' + provider + '\\nkraken_account_id: A-12345678  # your account number, from your bill\\nkraken_auth_method: api_key\\nkraken_key: !secret kraken_key'));
     box.appendChild(krakenKeyEl('p', 'And to secrets.yaml:'));
     box.appendChild(krakenKeyEl('pre', 'kraken_key: ' + key));
 }
 
 function krakenKeyCopy(input, button) {
     const done = () => { button.textContent = 'Copied'; };
+    // Copying can be refused (clipboard permission, an older browser): select the key so the user
+    // can copy it by hand, since it is only shown this once
+    const failed = () => { input.select(); button.textContent = 'Copy failed - press Ctrl+C (Cmd+C on a Mac)'; };
     if (navigator.clipboard && window.isSecureContext) {
-        navigator.clipboard.writeText(input.value).then(done);
+        navigator.clipboard.writeText(input.value).then(done).catch(failed);
     } else {
         input.select();
-        document.execCommand('copy');
-        done();
+        try {
+            if (document.execCommand('copy')) { done(); } else { failed(); }
+        } catch (e) {
+            failed();
+        }
     }
 }
 </script>

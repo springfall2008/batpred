@@ -207,9 +207,61 @@ def test_generate_reports_a_refused_regenerate():
     assert len(session.requests) == 1
 
 
+def test_normalise_strips_internal_whitespace():
+    """A header value copied wrapped across lines loses its line breaks (#5585 review).
+
+    JWTs never contain whitespace, and aiohttp refuses a header containing a newline with a plain
+    ValueError, which used to escape the handler as a 500.
+    """
+    from kraken_key import normalise_kraken_token
+
+    assert normalise_kraken_token("JWT " + TOKEN[:20] + "\n  " + TOKEN[20:] + "\r\n") == TOKEN
+
+
+def test_check_reports_unknown_when_kraken_does_not_answer_the_question():
+    """A 200 with no viewer is 'unknown', not 'no key' - it must not unlock an unconfirmed generate (#5585 review)."""
+    from kraken_key import check_kraken_key
+
+    for body in ({"data": None}, {"data": {"viewer": None}}, {"data": {}}):
+        result, _ = run_kraken(lambda: check_kraken_key("https://kraken.example", TOKEN), [(200, body)])
+        assert result == {"status": "unknown"}, (body, result)
+
+
+def test_non_dict_data_is_an_error_not_a_crash():
+    """A 200 whose data is a list or scalar is reported as an error on check and generate (#5585 review)."""
+    from kraken_key import check_kraken_key, generate_kraken_key
+
+    for data in ([1, 2], "text", 3):
+        result, _ = run_kraken(lambda: check_kraken_key("https://kraken.example", TOKEN), [(200, {"data": data})])
+        assert result["status"] == "error", (data, result)
+        result, _ = run_kraken(lambda: generate_kraken_key("https://kraken.example", TOKEN), [(200, {"data": data})])
+        assert result["status"] == "error", (data, result)
+
+
 # ---------------------------------------------------------------------------
 # /api/kraken_key and /kraken_key
 # ---------------------------------------------------------------------------
+
+
+def test_api_check_with_a_wrapped_token_reaches_kraken(web):
+    """A token pasted with a line break is cleaned before it becomes a header, so no 500 (#5585 review)."""
+    session = fake_kraken_session([(200, {"data": {"viewer": {"liveSecretKey": None}}})])
+    with patch("aiohttp.ClientSession", return_value=session):
+        status, data, _ = post_api(web, {"provider": "eon", "token": TOKEN[:20] + "\n" + TOKEN[20:], "action": "check"})
+    assert status == 200 and data == {"status": "none"}, data
+    assert session.requests[0]["headers"]["Authorization"] == TOKEN
+
+
+def test_api_check_failure_never_logs_the_token(web):
+    """The check path logs Kraken's reason on failure - with the token scrubbed even if Kraken echoes it (#5585 review)."""
+    web.log = MagicMock()
+    body = {"errors": [{"message": "Token {} is invalid".format(TOKEN), "extensions": {"errorCode": "KT-CT-1139"}}]}
+    with patch("aiohttp.ClientSession", return_value=fake_kraken_session([(200, body)])):
+        status, data, _ = post_api(web, {"provider": "eon", "token": TOKEN, "action": "check"})
+    assert status == 200 and data["status"] == "error", data
+    text = logged_text(web.log)
+    assert "KT-CT-1139" in text, text
+    assert TOKEN not in text and "test-payload" not in text, text
 
 
 def post_api(web, body):
@@ -262,6 +314,22 @@ def test_page_explains_how_to_find_the_token(web):
     assert "./api/kraken_key" in html
     assert 'http-equiv="refresh"' not in html.lower() and "http-equiv='refresh'" not in html.lower()
     assert response.headers.get("Cache-Control") == "no-store"
+
+
+def test_page_snippet_and_messages():
+    """The apps.yaml snippet is complete and the page's recovery messages are actionable (#5585 review)."""
+    from web_helper import get_kraken_key_page_html
+
+    html = get_kraken_key_page_html()
+    # components.py declares kraken_account_id required, so a snippet without it fails validation
+    assert "kraken_account_id:" in html
+    # An indeterminate check result asks for the same confirmation as an existing key
+    assert "result.status === 'unknown'" in html
+    # A refused clipboard write says how to copy by hand instead of failing silently
+    copy_start = html.index("function krakenKeyCopy")
+    assert ".catch(" in html[copy_start : html.index("</script>", copy_start)]
+    # Generating again after a failed sign-in check needs a new token from the browser
+    assert "fresh token" in html
 
 
 def unterminated_js_strings(script):

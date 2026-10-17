@@ -19,6 +19,12 @@ see a full key is regenerateSecretKey, which REPLACES the old one and so stops e
 it - which is why checking and generating are separate steps.
 
 Nothing here logs or stores the token or the key; callers must not either.
+
+_kraken_request() is a second GraphQL POST path beside KrakenAPI.async_graphql_query() in kraken.py,
+on purpose: that one is bound to the component's own token lifecycle (refresh, retry on auth errors),
+while this uses a one-off token the user pasted and must never refresh or retry with it. They share
+the error redaction (summarise_token_errors); a fix to how Kraken responses are read in one may well
+belong in the other too.
 """
 
 import asyncio
@@ -50,7 +56,9 @@ def normalise_kraken_token(text):
             if token.lower().startswith(prefix):
                 token = token[len(prefix) :].strip()
                 stripped = True
-    return token
+    # A JWT never contains whitespace, and a header copied wrapped across lines would otherwise keep
+    # its line breaks - which aiohttp refuses with a plain ValueError rather than a ClientError
+    return "".join(token.split())
 
 
 async def _kraken_request(base_url, payload, secrets, token=None):
@@ -77,21 +85,33 @@ async def _kraken_request(base_url, payload, secrets, token=None):
         return None, summarise_token_errors(body.get("errors"), secrets) or "Kraken refused the request"
     if status != 200:
         return None, "Kraken returned HTTP {}".format(status)
-    return body.get("data") or {}, None
+    data = body.get("data")
+    if data is None:
+        return {}, None
+    if not isinstance(data, dict):
+        return None, "Kraken returned an unexpected response"
+    return data, None
 
 
 async def check_kraken_key(base_url, token):
     """Report the account's current API key without changing it.
 
     Returns {"status": "none"} when there is no key, {"status": "existing", "masked": ...} when Kraken
-    only shows it masked, {"status": "full", "key": ...} if it comes back whole, or {"status": "error", "error": ...}.
+    only shows it masked, {"status": "full", "key": ...} if it comes back whole, {"status": "unknown"} when
+    the reply does not answer the question (no viewer, or no liveSecretKey field), or {"status": "error", "error": ...}.
+    "unknown" is kept apart from "none" because only "none" lets the page generate without a confirmation.
     """
     data, error = await _kraken_request(base_url, {"query": KRAKEN_LIVE_SECRET_KEY_QUERY}, [token], token=token)
     if error:
         return {"status": "error", "error": error}
-    key = ((data or {}).get("viewer") or {}).get("liveSecretKey")
-    if not isinstance(key, str) or not key:
+    viewer = data.get("viewer")
+    if not isinstance(viewer, dict) or "liveSecretKey" not in viewer:
+        return {"status": "unknown"}
+    key = viewer.get("liveSecretKey")
+    if key is None or key == "":
         return {"status": "none"}
+    if not isinstance(key, str):
+        return {"status": "unknown"}
     if "*" in key:
         return {"status": "existing", "masked": key}
     return {"status": "full", "key": key}
@@ -106,11 +126,12 @@ async def generate_kraken_key(base_url, token):
     data, error = await _kraken_request(base_url, {"query": KRAKEN_REGENERATE_SECRET_KEY_MUTATION}, [token], token=token)
     if error:
         return {"status": "error", "error": error}
-    key = ((data or {}).get("regenerateSecretKey") or {}).get("key")
+    regenerated = data.get("regenerateSecretKey")
+    key = regenerated.get("key") if isinstance(regenerated, dict) else None
     if not isinstance(key, str) or not key:
         return {"status": "error", "error": "Kraken did not return a key"}
 
     verify_payload = {"query": KRAKEN_OBTAIN_TOKEN_MUTATION, "variables": {"input": {"APIKey": key}}}
     data, error = await _kraken_request(base_url, verify_payload, [token, key])
-    verified = not error and bool(((data or {}).get("obtainKrakenToken") or {}).get("token"))
+    verified = not error and isinstance(data.get("obtainKrakenToken"), dict) and bool(data["obtainKrakenToken"].get("token"))
     return {"status": "generated", "key": key, "verified": verified}
