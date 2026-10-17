@@ -317,7 +317,7 @@ These are intended for debugging and developer activities, in normal use you can
 ### Metrics View
 
 The Metrics view provides a dashboard giving an overview of Predbat internal metrics, including application health, plan status, battery state, energy totals, costs, savings and API status.
-The dashboard auto-refreshes every 30 seconds and contains the following 5 sections:
+The dashboard auto-refreshes every 30 seconds and contains the following sections:
 
 - **System Health** - shows a set of system health cards including confirming that Predbat is running, the configuration and plan are valid, how long since the last Predbat run, that there are no component errors and the amount of data history that Predbat is using.
 The System Health row includes a **Data Age** card, showing how many days of historical load data (`load_today`) Predbat was able to retrieve from Home Assistant, going back from now. This is a measure of how much history is *available*, not how stale the latest reading is - a higher number generally means better load forecasting, since day-of-week weighted forecasts (the `days_previous` setting) need enough history to match against. The card is only flagged as a warning when the retrieved depth falls short of what your `days_previous` configuration actually needs (shown in the "need Xd" sub-label) - for example, if `days_previous` includes `7`, Predbat needs at least 7 days of history, and a shortfall usually means Home Assistant's recorder purged old data before Predbat could read it, or a load sensor is newly added.
@@ -326,6 +326,8 @@ The System Health row includes a **Data Age** card, showing how many days of his
 - **Cost & Savings** - shows electricity cost today and yesterday, and savings achieved yesterday from having solar and battery and from using predbat
 - **API & Solar Status** - shows API health (requests, failures and last call) made by Predbat to Axle, Solcast/Forecast.Solar, GivEnergy Cloud, Fox ESS Cloud, Solis Cloud, and Open Meteo (Temperature for LoadML). Data is only shown for components that are active, i.e. if Predbat is not using the GivEnergy Cloud integration, no API call metrics are shown.<BR>
 Solar status shows Solcast API calls (Predbat Solcast direct only) and PV Calibration Scaling (worst day, best day and total)
+- **Control Conflicts** - shows how many inverter settings were changed outside Predbat in the last 24 hours and which controls are being changed repeatedly (sustained controls), with a table of recent changes showing what Predbat set and what the setting now reads
+- **Control Failures** - shows how many charge, export and freeze slots in the last 24 hours (and in total) the battery did not follow Predbat's command, with a table of recent failures - see [control failure data](output-data.md#control-failure-data)
 
 ![image](images/web-interface-metrics-view.png)
 

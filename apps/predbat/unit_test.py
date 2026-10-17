@@ -49,6 +49,7 @@ from tests.test_window2minutes import test_window2minutes
 from tests.test_car_plan_windows import test_car_plan_windows
 from tests.test_hass_watcher import test_hass_watcher
 from tests.test_new_install_detection import test_new_install_detection
+from tests.test_config_json_format import test_config_json_format
 from tests.test_history_attribute import test_history_attribute
 from tests.test_inverter import run_inverter_tests
 from tests.test_basic_rates import test_basic_rates
@@ -123,6 +124,7 @@ from tests.test_chat import run_chat_tests
 from tests.test_web_chat import run_web_chat_tests
 from tests.test_web_mcp import run_web_mcp_tests
 from tests.test_debug_history_client_js import test_debug_history_client_js
+from tests.test_plan_staleness_js import test_plan_staleness_js
 from tests.test_metrics_dashboard_soc_refresh import test_soc_chart_center_text_reads_live_data
 from tests.test_web_functions import run_web_functions_tests, run_web_logo_image_tests, run_web_dark_mode_preference_tests
 from tests.test_web_power_flow import run_web_power_flow_tests
@@ -174,6 +176,7 @@ from tests.test_holiday_mode import test_holiday_mode
 from tests.test_inday_adjustment_carry import test_inday_adjustment_carry
 from tests.test_filtered_load_minute import test_filtered_load_minute
 from tests.test_fill_load_from_power import run_all_tests as test_fill_load_from_power
+from tests.test_fill_load_from_history import run_all_tests as test_fill_load_from_history
 from tests.test_fetch_pv_forecast import run_all_tests as test_fetch_pv_forecast
 from tests.test_octopus_free import test_octopus_free
 from tests.test_prune_today import test_prune_today
@@ -204,6 +207,8 @@ from tests.test_car_charging_now import test_car_charging_now
 from tests.test_octopus_slots_change import test_octopus_slots_change
 from tests.test_dynamic_load import test_dynamic_load_car_slot_cancellation, test_dynamic_load_high_load_baseline
 from tests.test_dynamic_load_car import test_dynamic_load_car_not_charging
+from tests.test_octopus_dispatch_hold import test_octopus_dispatch_hold
+from tests.test_dispatch_billing_window import test_dispatch_billing_window
 from tests.test_fox_api import run_fox_api_tests
 from tests.test_deye_const import run_deye_const_tests
 from tests.test_deye_config import run_deye_config_tests
@@ -218,6 +223,7 @@ from tests.test_sunsynk_auth import run_sunsynk_auth_tests
 from tests.test_sunsynk_api import run_sunsynk_api_tests
 from tests.test_sunsynk_control import run_sunsynk_control_tests
 from tests.test_control_ledger import run_control_ledger_tests
+from tests.test_control_monitor import run_control_monitor_tests
 from tests.test_sunsynk_publish import run_sunsynk_publish_tests
 from tests.test_sunsynk_storage import run_sunsynk_storage_tests
 from tests.test_sunsynk_config import run_sunsynk_config_tests
@@ -260,6 +266,7 @@ from tests.test_integer_config import (
 )
 from tests.test_predbat_metrics_data_age import test_data_age_metrics_round_trip
 from tests.test_metrics_dashboard_control_conflicts import test_control_conflicts_metrics_round_trip, test_control_conflicts_dashboard_renders_section
+from tests.test_metrics_dashboard_control_failures import test_control_failures_metrics_round_trip, test_control_failures_dashboard_renders_section
 from tests.test_validate_config import test_validate_config, test_validate_config_retry, test_validate_config_secrets
 from tests.test_get_arg_missing_index import test_get_arg_missing_index_uses_default_quietly
 from tests.test_plan_json_rate_adjust import run_test_plan_json_rate_adjust
@@ -277,11 +284,13 @@ from tests.test_download import test_download
 from tests.test_ohme import test_ohme
 from tests.test_givtcp_component import test_givtcp_component
 from tests.test_debug_yaml_scope import run_debug_yaml_scope_tests
+from tests.test_log_replay_inputs import run_log_replay_inputs_tests
 from tests.test_memory_release import run_memory_release_tests
 from tests.test_inverter_write_poll import run_inverter_write_poll_tests
 from tests.test_givtcp_rest import run_givtcp_rest_tests
 from tests.test_myenergi import test_myenergi
 from tests.test_wallbox import test_wallbox
+from tests.test_car_charger_control import run_car_charger_control_tests
 from tests.test_component_base import test_component_base_all
 from tests.test_components import test_components_all
 from tests.test_coordinator import test_coordinator_all
@@ -468,6 +477,7 @@ def main():
         ("car_plan_windows", test_car_plan_windows, "parse_car_plan_windows year anchoring: New Year either side, long windows, leap day", False),
         ("hass_watcher", test_hass_watcher, "Standalone-mode file watcher tests (#4397/#4396)", False),
         ("new_install_detection", test_new_install_detection, "New-install misdetection tests (Bug B, #4397/#4396, #3259, #3306)", False),
+        ("config_json_format", test_config_json_format, "predbat_config.json written one setting per line and loads back", False),
         ("compute_metric", run_compute_metric_tests, "Compute metric tests", False),
         ("pv90", run_pv90_tests, "pv90 upside scenario tests", False),
         ("performance_tweaks", run_performance_tweaks_tests, "performance_tweaks toggle tests", False),
@@ -492,6 +502,7 @@ def main():
         ("inday_adjustment_carry", test_inday_adjustment_carry, "In-day adjustment midnight carry-over tests", False),
         ("filtered_load_minute", test_filtered_load_minute, "Filtered load minute / window tests", False),
         ("fill_load_from_power", test_fill_load_from_power, "Fill load from power sensor tests", False),
+        ("fill_load_from_history", test_fill_load_from_history, "Fill load_today gaps from load_energy_h0 history tests", False),
         ("fetch_pv_forecast", test_fetch_pv_forecast, "Fetch PV forecast with relative_time offset tests", False),
         # Octopus Energy URL/API tests
         ("octopus_url", test_octopus_url, "Octopus URL/API comprehensive tests (downloads, day/night rates, saving sessions, intelligent dispatch, tariffs, EDF)", False),
@@ -527,6 +538,8 @@ def main():
         ("dynamic_load_car", test_dynamic_load_car_slot_cancellation, "Dynamic load car slot cancellation tests", False),
         ("dynamic_load_high", test_dynamic_load_high_load_baseline, "Dynamic load high-load baseline tests", False),
         ("dynamic_load_car_not_charging", test_dynamic_load_car_not_charging, "Dynamic load car not charging tests", False),
+        ("octopus_dispatch_hold", test_octopus_dispatch_hold, "Octopus dispatch hold tests", False),
+        ("dispatch_billing_window", test_dispatch_billing_window, "Dispatch billing window tests (E.ON)", False),
         ("car_charging_now", test_car_charging_now, "car_charging_now holds the battery and feeds the model but never adds a car slot", False),
         ("units", run_test_units, "Unit tests", False),
         ("manual_api", run_test_manual_api, "Manual API tests", False),
@@ -547,6 +560,7 @@ def main():
         ("web_chat", run_web_chat_tests, "Chat tab route, SSE framing and markdown escaping tests", False),
         ("web_mcp", run_web_mcp_tests, "MCP get_log and apps.yaml redaction tests (issue #4768)", False),
         ("debug_history_client_js", test_debug_history_client_js, "Debug-history client-side JS structure tests (#4438 review item 22)", False),
+        ("plan_staleness_js", test_plan_staleness_js, "Plan page stale-data warning JS: per-view data and refresh interval", False),
         ("metrics_dashboard_soc_refresh", test_soc_chart_center_text_reads_live_data, "Metrics dashboard SoC chart live-refresh tests", False),
         ("web_functions", run_web_functions_tests, "Web function unit tests", False),
         ("web_power_flow", run_web_power_flow_tests, "Power flow diagram car charging tests", False),
@@ -623,6 +637,7 @@ def main():
         ("sunsynk_api", run_sunsynk_api_tests, "Sunsynk API tests", False),
         ("sunsynk_control", run_sunsynk_control_tests, "Sunsynk control-logic tests", False),
         ("control_ledger", run_control_ledger_tests, "Control ownership ledger tests", False),
+        ("control_monitor", run_control_monitor_tests, "Control failure monitor tests", False),
         ("sunsynk_publish", run_sunsynk_publish_tests, "Sunsynk publish tests", False),
         ("sunsynk_storage", run_sunsynk_storage_tests, "Sunsynk storage tests", False),
         ("sunsynk_config", run_sunsynk_config_tests, "Sunsynk config/INVERTER_DEF tests", False),
@@ -680,6 +695,8 @@ def main():
         ("data_age_metrics", test_data_age_metrics_round_trip, "Metrics dashboard data_age_days/data_age_required_days tests", False),
         ("control_conflicts_metrics", test_control_conflicts_metrics_round_trip, "Metrics dashboard control_conflicts round-trip tests", False),
         ("control_conflicts_dashboard", test_control_conflicts_dashboard_renders_section, "Metrics dashboard control_conflicts section render tests", False),
+        ("control_failures_metrics", test_control_failures_metrics_round_trip, "Metrics dashboard control_failures round-trip tests", False),
+        ("control_failures_dashboard", test_control_failures_dashboard_renders_section, "Metrics dashboard control_failures section render tests", False),
         ("plan_json_rate_adjust", run_test_plan_json_rate_adjust, "Plan JSON rate adjust type field tests", False),
         ("plan_why_reason", run_test_plan_why_reason, "Plan JSON per-slot 'why' reason text tests", False),
         ("plan_scenario_summary", run_test_plan_scenario_summary, "Plan scenario_summary_state export-limit tuple regression test", False),
@@ -713,9 +730,11 @@ def main():
         ("ohme", test_ohme, "Ohme EV charger comprehensive tests (helper functions, client methods, API operations, event handlers)", False),
         ("givtcp_component", test_givtcp_component, "GivTCP component tests (entity publishing, automatic_config, event handlers)", False),
         ("debug_yaml_scope", run_debug_yaml_scope_tests, "create_debug_yaml() reachability/scope tests", False),
+        ("log_replay_inputs", run_log_replay_inputs_tests, "Replay-input log lines (forecasts, rates, plan state, cars, inverter)", False),
         ("memory_release", run_memory_release_tests, "glibc malloc_trim()/arena cap helper tests", False),
         ("inverter_write_poll", run_inverter_write_poll_tests, "Inverter write-and-poll timing tests", False),
         ("givtcp_rest", run_givtcp_rest_tests, "GivTCP REST client write/retry/transport tests", False),
+        ("car_charger_control", run_car_charger_control_tests, "Shared Predbat-led EV charger control tests", False),
         # myenergi Zappi and Eddi unit tests
         ("myenergi", test_myenergi, "myenergi Zappi and Eddi comprehensive tests (normalisation, transports, publishing, auto-config, controls)", False),
         ("wallbox", test_wallbox, "Wallbox EV charger tests (transport, normalisation, publishing, auto-config, controls, plan-led charging)", False),

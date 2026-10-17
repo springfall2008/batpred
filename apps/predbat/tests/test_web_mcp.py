@@ -1219,7 +1219,7 @@ def _fat_log(now):
     stamp = now.replace(microsecond=0)
     lines = [
         "{}: Info: short line before".format(stamp - timedelta(minutes=3)),
-        "{}: OctopusAPI: Fetched saving sessions data from GraphQL API: {}".format(stamp - timedelta(minutes=2), "x" * 20000),
+        "{}: OctopusAPI: GraphQL response for get-saving-sessions (status 200): {}".format(stamp - timedelta(minutes=2), "x" * 20000),
         "{}: Info: short line after".format(stamp - timedelta(minutes=1)),
     ]
     return "\n".join(lines) + "\n"

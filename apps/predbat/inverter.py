@@ -66,6 +66,16 @@ def within_fuzzy(value, target, fuzzy, fuzzy_below=None):
     return abs(value - target) <= fuzzy
 
 
+def calibration_reported(value):
+    """
+    True when a battery_calibration reading means a calibration cycle is running.
+
+    Shared by refresh_config(), which caches the result per plan cycle, and the control-failure
+    monitor's 60s poll, which must see a calibration that starts between plan runs.
+    """
+    return value in ("on", "On", "true", "True", True)
+
+
 class Inverter:
     """Unified inverter control abstraction for multiple brands.
 
@@ -317,10 +327,8 @@ class Inverter:
         if (arg not in self.base.args) or (not isinstance(self.base.args[arg], list)):
             # Padded with None rather than the default, for the same reason as the short-list branch
             # below: the caller overwrites [self.id] with its dummy entity straight afterwards, so a
-            # bare default left in another inverter's slot reads back as "configured" there too. On a
-            # mixed fleet that turns a plain number into a phantom per-entry entity for a sibling
-            # inverter that never asked for one, which the per-entry rate path then treats as
-            # set (#5359)
+            # bare default left in another inverter's slot reads back as "configured" there too - and
+            # rate_controls() then takes a sibling's default number for a bound entity (#5359)
             self.base.args[arg] = [default if i == self.id else None for i in range(4)]
         elif len(self.base.args[arg]) <= self.id:
             # A list that stops short of this inverter is just as missing for it as no list at all,
@@ -469,6 +477,11 @@ class Inverter:
         # second source of truth for it - this seed is only "not read yet", and set_current_from_power()
         # checks for that explicitly rather than silently dividing by a placeholder.
         self.battery_power = 0
+        self.battery_power_valid = False  # True only when update_status() actually read battery_power
+        # The rates execute_plan() last wrote, in W, which the control-failure monitor judges against;
+        # None until written (and in Monitor mode, where nothing is)
+        self.requested_charge_w = None
+        self.requested_discharge_w = None
         self.battery_voltage = None
         self.pv_power = 0
         self.load_power = 0
@@ -573,6 +586,13 @@ class Inverter:
         self.inv_write_backoff = INVERTER_DEF[self.inverter_type].get("write_backoff", False)
         self.inv_has_idle_time = INVERTER_DEF[self.inverter_type]["has_idle_time"]
         self.inv_can_span_midnight = INVERTER_DEF[self.inverter_type]["can_span_midnight"]
+        # A device can restrict its own profile via a can_span_midnight attribute on its charge
+        # start time entity, e.g. a same-day EMS behind a Hub whose other inverters can span
+        # midnight. It may only restrict: an attribute never loosens a profile that cannot span.
+        time_entity = self.base.get_arg("charge_start_time", indirect=False, index=self.id)
+        # Some templates give a fixed time rather than an entity, which has no attributes to read
+        if is_entity_id(time_entity) and self.base.get_state_wrapper(time_entity, attribute="can_span_midnight") is False:
+            self.inv_can_span_midnight = False
         self.inv_charge_discharge_with_rate = INVERTER_DEF[self.inverter_type].get("charge_discharge_with_rate", False)
         self.inv_target_soc_used_for_discharge = INVERTER_DEF[self.inverter_type].get("target_soc_used_for_discharge", True)
         self.inv_has_solis_energy_control = INVERTER_DEF[self.inverter_type].get("has_solis_energy_control", False)
@@ -587,6 +607,16 @@ class Inverter:
                 rate_step = 0
             if 0 < rate_step <= 100:
                 self.inv_rate_step_percent_of_capacity = rate_step
+        # The rate entity can also say that its rate only limits charging from the grid, as on the GivEnergy
+        # 3-phase units: with no pause register either, a zero charge rate leaves PV filling the battery, so
+        # Freeze Export cannot be carried out and must not be planned (#5082)
+        for rate_arg in ["charge_rate", "charge_rate_percent"]:
+            grid_only_entity = self.base.get_arg(rate_arg, indirect=False, index=self.id)
+            if grid_only_entity and str(self.base.get_state_wrapper(grid_only_entity, attribute="grid_charge_only")).lower() in ["true", "on", "1"]:
+                if self.inv_support_discharge_freeze:
+                    self.log("Inverter {} charge rate only limits grid charging and cannot stop solar charging - Freeze Export is not supported".format(self.id))
+                self.inv_support_discharge_freeze = False
+                break
 
         # If it's not a GE inverter then turn Quiet off
         if self.inverter_type != "GE":
@@ -639,7 +669,7 @@ class Inverter:
         # cycles (#4712), this has to be the one place that clears it too, or a real device leaving
         # calibration would leave Predbat stuck thinking it never did.
         was_in_calibration = self.in_calibration
-        self.in_calibration = self.base.get_arg("battery_calibration", default=None, index=self.id) in ("on", "On", "true", "True", True)
+        self.in_calibration = calibration_reported(self.base.get_arg("battery_calibration", default=None, index=self.id))
         if self.in_calibration and not was_in_calibration:
             self.log("Warn: Inverter {} is in calibration mode, Predbat will not function correctly and will be disabled".format(self.id))
         elif was_in_calibration and not self.in_calibration:
@@ -1659,6 +1689,7 @@ class Inverter:
         """
 
         self.battery_power = 0
+        self.battery_power_valid = False
         self.pv_power = 0
         self.load_power = 0
         self.grid_power = 0
@@ -1688,8 +1719,20 @@ class Inverter:
         else:
             self.soc_percent = calc_percent_limit(self.soc_kw, self.soc_max)
 
-        # Battery power
-        self.battery_power = self.base.get_arg("battery_power", default=0.0, index=self.id, required_unit="W")
+        # Battery power. Read with no default so a reading that is not there can be told apart from a
+        # real 0W: an unconfigured or unavailable sensor still becomes 0W as it always has (with the
+        # same warning get_arg gives for an unparseable value), but battery_power_valid is False, so
+        # the control-failure monitor does not judge that 0W as an idle battery.
+        battery_power = self.base.get_arg("battery_power", default=None, index=self.id, required_unit="W")
+        try:
+            self.battery_power = float(battery_power)
+            self.battery_power_valid = math.isfinite(self.battery_power)
+        except (TypeError, ValueError):
+            if battery_power is not None:
+                self.base.log("Warn: Return bad float value {} from {} using default {}".format(battery_power, "battery_power", 0.0))
+                self.base.record_status("Warn: Return bad float value {} from {}".format(battery_power, "battery_power"), had_errors=True)
+            self.battery_power = 0.0
+            self.battery_power_valid = False
         if self.base.get_arg("battery_power_invert", default=False, index=self.id):
             # If battery power is inverted then invert it
             self.battery_power = -self.battery_power
@@ -2116,15 +2159,30 @@ class Inverter:
         else:
             self.base.log("Inverter {} Current reserve is {}%, already at target".format(self.id, dp0(current_reserve)))
 
+    def rate_controls(self, rate_arg):
+        """
+        Which of a rate's two controls this inverter uses: (watts, percent) for "charge_rate" or "discharge_rate".
+
+        Asked of this inverter's own entry rather than of whether the setting exists at all: a fleet can mix
+        inverters with a power register and ones with only the percentage (GivEnergy 3-phase), leaving each
+        setting bound for some inverters and empty for the rest (#5359). An inverter bound to neither keeps
+        the answer the setting's presence used to give, so a missing entity is still reported when written.
+        """
+        percent_arg = rate_arg + "_percent"
+        has_watts = rate_arg in self.base.args
+        has_percent = percent_arg in self.base.args
+        bound_watts = bool(has_watts and self.base.get_arg(rate_arg, indirect=False, index=self.id))
+        bound_percent = bool(has_percent and self.base.get_arg(percent_arg, indirect=False, index=self.id))
+        if bound_watts != bound_percent:
+            return bound_watts, bound_percent
+        return has_watts, has_percent
+
     def get_current_discharge_rate(self):
         """
         Get the current discharge rate in watts
         """
 
-        # Pick the percent vs watts path from this inverter's own entry, not from whether the key
-        # exists anywhere in args - on a mixed fleet another inverter can set the key while this
-        # one's own slot is empty, which used to fall through to the percent default of 100% (#5359)
-        if self.base.get_arg("discharge_rate_percent", indirect=False, index=self.id):
+        if self.rate_controls("discharge_rate")[1]:
             current_rate = int(self.base.get_arg("discharge_rate_percent", index=self.id, default=100.0, required_unit="%") * self.battery_rate_max_raw / 100)
         else:
             current_rate = self.base.get_arg("discharge_rate", index=self.id, default=self.battery_rate_max_raw, required_unit="W")
@@ -2141,8 +2199,7 @@ class Inverter:
         """
         Get the current charge rate in watts
         """
-        # See get_current_discharge_rate() above - same per-entry rule (#5359)
-        if self.base.get_arg("charge_rate_percent", indirect=False, index=self.id):
+        if self.rate_controls("charge_rate")[1]:
             current_rate = self.base.get_arg("charge_rate_percent", index=self.id, default=100.0, required_unit="%") * self.battery_rate_max_raw / 100
         else:
             current_rate = self.base.get_arg("charge_rate", index=self.id, default=self.battery_rate_max_raw, required_unit="W")
@@ -2205,22 +2262,18 @@ class Inverter:
         fuzzy, fuzzy_below = self.rate_tolerances(self.battery_rate_max_charge)
         if not within_fuzzy(current_rate, new_rate, fuzzy, fuzzy_below):
             self.base.log("Inverter {} current charge rate is {}W and new target is {}W".format(self.id, current_rate, new_rate))
-            # Write only the register(s) this inverter's own entry actually configures - checking
-            # "key in args" writes both registers on a mixed fleet whenever ANY inverter sets the
-            # other one, which hits an empty entry and logs a spurious "No entity_id" error (#5359)
-            charge_rate_entity = self.base.get_arg("charge_rate", indirect=False, index=self.id, required_unit="W")
-            if charge_rate_entity:
+            write_watts, write_percent = self.rate_controls("charge_rate")
+            if write_watts:
                 self.write_and_poll_value(
                     "charge_rate",
-                    charge_rate_entity,
+                    self.base.get_arg("charge_rate", indirect=False, index=self.id, required_unit="W"),
                     new_rate,
                     fuzzy=fuzzy,
                     required_unit="W",
                     fuzzy_below=fuzzy_below,
                 )
-            charge_rate_percent_entity = self.base.get_arg("charge_rate_percent", indirect=False, index=self.id, required_unit="%")
-            if charge_rate_percent_entity:
-                self.write_and_poll_value("charge_rate_percent", charge_rate_percent_entity, min(int(new_rate / self.battery_rate_max_raw * 100), 100), fuzzy=5, required_unit="%")
+            if write_percent:
+                self.write_and_poll_value("charge_rate_percent", self.base.get_arg("charge_rate_percent", indirect=False, index=self.id, required_unit="%"), min(int(new_rate / self.battery_rate_max_raw * 100), 100), fuzzy=5, required_unit="%")
 
             if notify and self.base.set_inverter_notify:
                 self.base.call_notify(f"{self.base.prefix.capitalize()}: Inverter {self.id} charge rate changes to {new_rate}W at {self.base.time_now_str()}")
@@ -2259,21 +2312,18 @@ class Inverter:
         fuzzy, fuzzy_below = self.rate_tolerances(self.battery_rate_max_discharge)
         if not within_fuzzy(current_rate, new_rate, fuzzy, fuzzy_below):
             self.base.log("Inverter {} current discharge rate is {}W and new target is {}W".format(self.id, current_rate, new_rate))
-            # See adjust_charge_rate() above - write only the register(s) this inverter's own entry
-            # actually configures, not whichever happen to be set anywhere in the fleet (#5359)
-            discharge_rate_entity = self.base.get_arg("discharge_rate", indirect=False, index=self.id)
-            if discharge_rate_entity:
+            write_watts, write_percent = self.rate_controls("discharge_rate")
+            if write_watts:
                 self.write_and_poll_value(
                     "discharge_rate",
-                    discharge_rate_entity,
+                    self.base.get_arg("discharge_rate", indirect=False, index=self.id),
                     new_rate,
                     fuzzy=fuzzy,
                     required_unit="W",
                     fuzzy_below=fuzzy_below,
                 )
-            discharge_rate_percent_entity = self.base.get_arg("discharge_rate_percent", indirect=False, index=self.id, required_unit="%")
-            if discharge_rate_percent_entity:
-                self.write_and_poll_value("discharge_rate_percent", discharge_rate_percent_entity, min(int(new_rate / self.battery_rate_max_raw * 100), 100), fuzzy=5, required_unit="%")
+            if write_percent:
+                self.write_and_poll_value("discharge_rate_percent", self.base.get_arg("discharge_rate_percent", indirect=False, index=self.id, required_unit="%"), min(int(new_rate / self.battery_rate_max_raw * 100), 100), fuzzy=5, required_unit="%")
 
             if notify and self.base.set_inverter_notify:
                 self.base.call_notify(f"{self.base.prefix.capitalize()}: Inverter {self.id} discharge rate changes to {new_rate}W at {self.base.time_now_str()}")
@@ -3445,7 +3495,11 @@ class Inverter:
                 if not self.call_service_template("charge_freeze_service", service_data, domain="charge", extra_data=extra_data):
                     self.call_service_template("charge_start_service", service_data, domain="charge", extra_data=extra_data)
             elif not self.inv_has_target_soc and target_soc < self.soc_percent:
-                self.call_service_template("charge_stop_service", service_data_stop, domain="charge")
+                # Software-controlled charging can overshoot between updates. Hold with the
+                # configured freeze service, as at equality, instead of resuming house discharge.
+                # Without a freeze service, preserve the existing stop fallback.
+                if not self.call_service_template("charge_freeze_service", service_data, domain="charge", extra_data=extra_data):
+                    self.call_service_template("charge_stop_service", service_data_stop, domain="charge")
             else:
                 self.call_service_template("charge_start_service", service_data, domain="charge", extra_data=extra_data)
         else:

@@ -884,6 +884,13 @@ CONFIG_ITEMS = [
         "default": True,
     },
     {
+        "name": "octopus_intelligent_charger_follows_car",
+        "friendly_name": "Drive the charger to the Intelligent dispatches when Octopus drives the car",
+        "type": "switch",
+        "default": False,
+        "enable": "expert_mode",
+    },
+    {
         "name": "octopus_saving_auto_join",
         "friendly_name": "Octopus Saving Session Auto Join",
         "type": "switch",
@@ -2529,7 +2536,9 @@ INVERTER_DEF = {
         "soc_units": "%",
         "num_load_entities": 1,
         "has_ge_inverter_mode": False,
-        "time_button_press": False,
+        # Slot times stage in the gateway; pressing schedule_write_button sends the complete
+        # window (and its enable) to the Hub, as on Fox. See gateway.py _commit_side().
+        "time_button_press": True,
         "clock_time_format": "%H:%M:%S",
         # The hub applies register writes one at a time and a single write can take 10-20s (longer
         # under an EMS), so re-sending every couple of seconds only queues more work ahead of the
@@ -2839,10 +2848,12 @@ APPS_SCHEMA = {
     "enphase_automatic": {"type": "boolean"},
     "enphase_automatic_ignore_pv": {"type": "boolean"},
     "octopus_intelligent_slot": {"type": "sensor|sensor_list", "sensor_type": "boolean|action", "entries": "num_cars", "optional_entries": True},
+    "octopus_intelligent_planned_slot": {"type": "sensor|sensor_list", "sensor_type": "boolean", "entries": "num_cars", "optional_entries": True},
     "octopus_ready_time": {"type": "sensor|sensor_list", "sensor_type": "string", "entries": "num_cars", "optional_entries": True},
     "octopus_charge_limit": {"type": "sensor|sensor_list", "sensor_type": "float", "entries": "num_cars", "optional_entries": True},
     "octopus_slot_low_rate": {"type": "boolean"},
     "octopus_slot_max": {"type": "integer"},
+    "intelligent_dispatch_billing": {"type": "string", "empty": False},
     "octopus_saving_session_octopoints_per_penny": {"type": "integer"},
     "octopus_saving_session_min_octopoints_per_kwh": {"type": "float"},
     "octopus_saving_session_rate": {"type": "float"},
@@ -2896,7 +2907,9 @@ APPS_SCHEMA = {
     "open_meteo_forecast_max_age": {"type": "float"},
     "enable_coarse_fine_levels": {"type": "boolean"},
     "load_power_fill_enable": {"type": "boolean"},
+    "load_history_fill_enable": {"type": "boolean"},
     "load_ml_enable": {"type": "boolean"},
+    "load_ml_retrain_interval_hours": {"type": "integer", "min": 1, "max": 48},
     "gateway_device_id": {"type": "string", "empty": False},
     "gateway_mqtt_host": {"type": "string", "empty": False},
     "gateway_mqtt_port": {"type": "integer", "zero": False},
