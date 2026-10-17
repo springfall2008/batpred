@@ -173,8 +173,11 @@ def run_car_plan_published_per_car_test(my_predbat):
     saved_num_cars = my_predbat.num_cars
     saved_slots = my_predbat.car_charging_slots
     saved_dashboard = copy.deepcopy(my_predbat.dashboard_values)
+    saved_solar = my_predbat.car_charging_solar
     try:
         my_predbat.num_cars = 3
+        # The per-car solar settings must cover every car; off keeps the solar decision out of this test
+        my_predbat.car_charging_solar = [False] * 3
         window = {"start": my_predbat.minutes_now + 60, "end": my_predbat.minutes_now + 120, "kwh": 5.0, "average": 10.0, "cost": 50.0}
         my_predbat.car_charging_slots = [[window], [], [dict(window, start=window["start"] + 120, end=window["end"] + 120)]]
         my_predbat.publish_car_plan()
@@ -187,6 +190,7 @@ def run_car_plan_published_per_car_test(my_predbat):
     finally:
         my_predbat.num_cars = saved_num_cars
         my_predbat.car_charging_slots = saved_slots
+        my_predbat.car_charging_solar = saved_solar
         my_predbat.dashboard_values.clear()
         my_predbat.dashboard_values.update(saved_dashboard)
     return failed

@@ -374,6 +374,23 @@ def test_fetch_config_options(my_predbat):
     # Restore num_cars for any tests appended after this one
     mock_config.config["num_cars"] = 2
 
+    # Test 15: car_charging_hold only means anything when the car is inside the CT clamp
+    print("\n*** Test 15: car_charging_hold follows car_energy_reported_load ***")
+
+    # There is nothing to strip out of the load data when the car is not in it, so hold is forced off.
+    for hold, reported, expect in [(True, True, True), (True, False, False), (False, False, False), (False, True, False)]:
+        mock_config.config["car_charging_hold"] = hold
+        mock_config.config["car_energy_reported_load"] = reported
+        my_predbat.fetch_config_options()
+        assert my_predbat.car_charging_hold == expect, "car_charging_hold should be {} with car_charging_hold {} and car_energy_reported_load {}, got {}".format(expect, hold, reported, my_predbat.car_charging_hold)
+
+    # Restore the defaults so later tests are unaffected, and put them back on my_predbat itself
+    mock_config.config["car_charging_hold"] = True
+    mock_config.config["car_energy_reported_load"] = True
+    my_predbat.fetch_config_options()
+
+    print("✓ car_charging_hold derivation test passed")
+
     # Restore original methods
     my_predbat.get_arg = original_get_arg
     my_predbat.manual_times = original_manual_times
