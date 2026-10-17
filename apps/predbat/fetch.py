@@ -1209,6 +1209,51 @@ class Fetch:
 
         self.log_replay_changed("replay_rates_signature", lambda: hash(tuple(tuple(sorted((rates or {}).items())) for _, rates in series)), build, "rates")
 
+    def log_replay_rate_sessions(self):
+        """Log which minutes a saving, free or Axle session priced, and each one's tariff rate beneath, whenever they change.
+
+        set_rate_thresholds() works out the tariff's own min/max/average with the session minutes mapped back to
+        their pre-session rate, so an event reward does not read as the tariff. The rates line carries the session
+        prices but not which minutes they are, so without this a replay counts a new event as tariff and sets the
+        thresholds far too high. Each side is logged as [minutes from now, value] at every change over the span of
+        its session minutes, then the minute it runs to: None outside a session, the pre-session rate inside one,
+        True for a session minute the tariff has no rate for. Never raises - this runs every cycle on the main loop.
+        """
+
+        def sides():
+            """Each side's name, session minutes and pre-session rates, read inside the caller's try."""
+            return (("import", self.rate_import_saving_minutes, self.rate_import_pre_saving), ("export", self.rate_export_saving_minutes, self.rate_export_pre_saving))
+
+        def value_at(minute, saving_minutes, pre_saving):
+            """None outside a session, else the pre-session rate, or True where the tariff has none."""
+            if minute not in saving_minutes:
+                return None
+            return pre_saving.get(minute, True) if pre_saving is not None else True
+
+        def build():
+            """The sessions line: each side as change points over the span of its session minutes, then the minute it runs to."""
+            start = self.minutes_now
+            parts = []
+            for name, saving_minutes, pre_saving in sides():
+                points = []
+                end = 0
+                if saving_minutes:
+                    last = object()
+                    for minute in range(min(saving_minutes), max(saving_minutes) + 1):
+                        value = value_at(minute, saving_minutes, pre_saving)
+                        if value != last or type(value) is not type(last):
+                            last = value
+                            points.append([minute - start, value])
+                    end = max(saving_minutes) + 1 - start
+                parts.append("{} {} {}".format(name, points, end))
+            return "Replay input: rate sessions changed, from {} {}".format(self.replay_clock(start), " ".join(parts))
+
+        def signature():
+            """The session minutes and their pre-session rates on both sides; the type keeps True apart from a rate of 1.0."""
+            return hash(tuple(tuple((minute, value, type(value).__name__) for minute in sorted(saving_minutes or ()) for value in [value_at(minute, saving_minutes, pre_saving)]) for _, saving_minutes, pre_saving in sides()))
+
+        self.log_replay_changed("replay_rate_sessions_signature", signature, build, "rate sessions")
+
     def log_replay_inverter(self):
         """Log the inverter's programmed state whenever it changes: the windows it holds now, whether it is charging or
         exporting and to what target, the reserve and the battery rate limits.
@@ -1701,6 +1746,7 @@ class Fetch:
         # Not for the tariff comparison, which fetches with save off and would log every tariff it tries
         if save:
             self.log_replay_rates()
+            self.log_replay_rate_sessions()
 
         # Set rate thresholds
         if self.rate_import or self.rate_export:

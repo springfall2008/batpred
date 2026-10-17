@@ -8,6 +8,10 @@ from datetime import timedelta
 
 SAVED = (
     "midnight_utc",
+    "rate_import_saving_minutes",
+    "rate_export_saving_minutes",
+    "rate_import_pre_saving",
+    "rate_export_pre_saving",
     "pv_light_dark",
     "iboost_today",
     "load_forecast_only",
@@ -232,6 +236,53 @@ def test_rates_logged_on_change(my_predbat):
     return 0
 
 
+def test_rate_sessions_logged_on_change(my_predbat):
+    """The session minutes and their pre-session rates are logged on a change, so a replay can keep event prices out of the thresholds.
+
+    Each side runs over the span of its session minutes: None outside a session, the tariff rate beneath inside one,
+    True for a session minute the tariff has no rate for.
+    """
+    my_predbat.minutes_now = 14 * 60 + 20
+    my_predbat.replay_rate_sessions_signature = None
+    my_predbat.rate_import_saving_minutes = set(range(17 * 60, 18 * 60)) | set(range(19 * 60, 19 * 60 + 30))
+    my_predbat.rate_import_pre_saving = {minute: 31.16 if minute < 17 * 60 + 30 else 7.62 for minute in range(0, 19 * 60 + 15)}
+    my_predbat.rate_export_saving_minutes = set()
+    my_predbat.rate_export_pre_saving = {}
+    lines = capture(my_predbat, my_predbat.log_replay_rate_sessions)
+    expected = "Replay input: rate sessions changed, from 14:20 import [[160, 31.16], [190, 7.62], [220, None], [280, 7.62], [295, True]] 310 export [] 0"
+    if lines != [expected]:
+        print("ERROR: rate sessions line wrong:\n  got      {}\n  expected {}".format(lines, expected))
+        return 1
+    if ast.literal_eval(lines[0].split(" import ")[1].split("]] ")[0] + "]]")[-1] != [295, True]:
+        print("ERROR: the sessions line should read back with ast.literal_eval")
+        return 1
+    if capture(my_predbat, my_predbat.log_replay_rate_sessions):
+        print("ERROR: unchanged sessions should not be logged again")
+        return 1
+    my_predbat.rate_export_saving_minutes = {16 * 60 + 30}
+    my_predbat.rate_export_pre_saving = {16 * 60 + 30: 15.0}
+    lines = capture(my_predbat, my_predbat.log_replay_rate_sessions)
+    if len(lines) != 1 or not lines[0].endswith("export [[130, 15.0]] 131"):
+        print("ERROR: a new export session should be logged: {}".format(lines))
+        return 1
+    my_predbat.rate_import_saving_minutes = set()
+    my_predbat.rate_export_saving_minutes = set()
+    lines = capture(my_predbat, my_predbat.log_replay_rate_sessions)
+    if lines != ["Replay input: rate sessions changed, from 14:20 import [] 0 export [] 0"]:
+        print("ERROR: sessions ending should be logged as empty: {}".format(lines))
+        return 1
+    # A pre-session rate of exactly 1.0 is not the same as no tariff rate (True), in the line or as a change
+    my_predbat.rate_import_saving_minutes = {17 * 60, 17 * 60 + 1}
+    my_predbat.rate_import_pre_saving = {17 * 60: 1.0, 17 * 60 + 1: 1.0}
+    capture(my_predbat, my_predbat.log_replay_rate_sessions)
+    del my_predbat.rate_import_pre_saving[17 * 60 + 1]
+    lines = capture(my_predbat, my_predbat.log_replay_rate_sessions)
+    if lines != ["Replay input: rate sessions changed, from 14:20 import [[160, 1.0], [161, True]] 162 export [] 0"]:
+        print("ERROR: a rate of 1.0 losing its tariff rate should be logged as a change: {}".format(lines))
+        return 1
+    return 0
+
+
 def test_unchanged_inputs_logged_each_new_day(my_predbat):
     """Inputs keyed from midnight are logged again on a new day even when they match yesterday's, as a fixed tariff does.
 
@@ -369,11 +420,13 @@ def test_logging_never_raises(my_predbat):
     my_predbat.car_charging_slots = [[{"start": object()}]]
     my_predbat.replay_inverter_text = None
     my_predbat.charge_window = [{"start": object()}]
+    my_predbat.replay_rate_sessions_signature = None
+    my_predbat.rate_import_saving_minutes = {"bad", 1}
     lines = capture(my_predbat, my_predbat.log_replay_pv_forecast) + capture(my_predbat, my_predbat.log_replay_load_forecast)
     lines += capture(my_predbat, my_predbat.log_replay_rates) + capture(my_predbat, my_predbat.log_replay_state) + capture(my_predbat, my_predbat.log_replay_cars)
-    lines += capture(my_predbat, my_predbat.log_replay_inverter)
-    if len(lines) != 6 or not all(line.startswith("Warn:") for line in lines):
-        print("ERROR: expected six warnings, got {}".format(lines))
+    lines += capture(my_predbat, my_predbat.log_replay_inverter) + capture(my_predbat, my_predbat.log_replay_rate_sessions)
+    if len(lines) != 7 or not all(line.startswith("Warn:") for line in lines):
+        print("ERROR: expected seven warnings, got {}".format(lines))
         return 1
     return 0
 
@@ -445,7 +498,7 @@ def test_comparison_runs_not_logged(my_predbat):
 def run_log_replay_inputs_tests(my_predbat):
     """Run the replay-input logging tests, restoring the shared fixture afterwards."""
     missing = object()
-    saved = {key: getattr(my_predbat, key, missing) for key in SAVED + ("replay_pv_signature", "replay_ml_signature", "replay_rates_signature", "replay_cars_text", "replay_inverter_text", "replay_load_empty", "replay_baseline_text")}
+    saved = {key: getattr(my_predbat, key, missing) for key in SAVED + ("replay_pv_signature", "replay_ml_signature", "replay_rates_signature", "replay_rate_sessions_signature", "replay_cars_text", "replay_inverter_text", "replay_load_empty", "replay_baseline_text")}
     failed = 0
     try:
         failed += test_pv_forecast_logged_on_change(my_predbat)
@@ -454,6 +507,7 @@ def run_log_replay_inputs_tests(my_predbat):
         failed += test_load_forecast_exact(my_predbat)
         failed += test_load_forecast_compact(my_predbat)
         failed += test_rates_logged_on_change(my_predbat)
+        failed += test_rate_sessions_logged_on_change(my_predbat)
         failed += test_unchanged_inputs_logged_each_new_day(my_predbat)
         failed += test_state_logged(my_predbat)
         failed += test_cars_logged_on_change(my_predbat)
