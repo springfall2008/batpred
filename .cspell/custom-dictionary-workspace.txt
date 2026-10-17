@@ -310,6 +310,7 @@ idxs
 iflux
 importlimit
 inday
+indevolt
 inteless
 INTELLI
 intelligentdevice
@@ -500,6 +501,7 @@ poinv
 popv
 postdata
 powercontrolmode
+Powerflex
 powerline
 Powerwall
 ppdetails
@@ -745,6 +747,7 @@ WIFEXITED
 WNOHANG
 workmode
 worktree
+woutervg
 writeonly
 wrongsha
 wwxxabcdefyyzz
