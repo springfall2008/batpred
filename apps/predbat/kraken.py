@@ -19,6 +19,7 @@ import types as _types
 from datetime import datetime, timedelta, timezone
 
 from component_base import ComponentBase
+from utils import filter_payment_method
 from mock_base import MockBase as KrakenMockBase
 
 # Auth strategy selection — OAuthMixin for SaaS OAuth, KrakenAuthMixin for local auth.
@@ -980,7 +981,9 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             self.failures_total += 1
             return None
 
-        results = self._normalize_rate_timestamps(results)
+        # Same DIRECT_DEBIT / NON_DIRECT_DEBIT overlap as the standing charges (GH#5502): the rows
+        # are merged last-write-wins downstream, so without this the rate depends on row order.
+        results = self._normalize_rate_timestamps(filter_payment_method(results))
         self.log(f"Kraken: Fetched {len(results)} rate periods for {tariff['tariff_code']}")
         return results
 
@@ -1074,7 +1077,9 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                 return await self.async_fetch_standing_charges_graphql(self.import_mpan)
             return None
 
-        results = data.get("results", [])
+        # The REST endpoint returns a DIRECT_DEBIT and a NON_DIRECT_DEBIT row for each period, and
+        # EDF lists the NON_DIRECT_DEBIT one first, so keep the Direct Debit row (GH#5502).
+        results = filter_payment_method(data.get("results", []))
         if results:
             # API returns pence/day; fetch.py multiplies by 100 expecting pounds/day
             value = results[0].get("value_inc_vat")
