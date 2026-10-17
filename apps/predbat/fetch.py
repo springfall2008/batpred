@@ -2044,7 +2044,11 @@ class Fetch:
                         except (ValueError, TypeError):
                             self.log("Warn: octopus_charge_limit is set to a bad value {} for car {} in apps.yaml, must be a number".format(octopus_limit, car_n))
                             octopus_limit = None
-                    if octopus_limit:
+                    # Charger requests are charge to add, not an absolute SoC ceiling (#3034).
+                    # Follow their dispatch energy and retain the configured car ceiling; adding the
+                    # live SoC here would move the target upwards on every refresh.
+                    charge_limit_is_additive = self.get_arg("octopus_charge_limit_is_additive", self.get_state_wrapper(entity_id=entity_id, attribute="is_charger") is True, index=car_n)
+                    if octopus_limit and not charge_limit_is_additive:
                         octopus_limit = dp3(float(octopus_limit) * self.car_charging_battery_size[car_n] / 100.0)
                         self.car_charging_limit[car_n] = min(self.car_charging_limit[car_n], octopus_limit)
                     if octopus_ready_time:

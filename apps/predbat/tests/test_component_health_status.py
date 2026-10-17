@@ -84,6 +84,20 @@ def test_record_status_state_clamped(my_predbat):
             failed = 1
         else:
             print("OK: state clamped to 255 characters ({}), full text kept in current_status ({})".format(len(state), len(my_predbat.current_status)))
+
+        expected_icons = [
+            ("Demand", "", "mdi:house"),
+            ("Charging", "", "mdi:battery-charging"),
+            ("Exporting", "", "mdi:transmission-tower-export"),
+            ("Demand", ", Hold for car", "mdi:car"),
+            ("Idle", "", "mdi:information"),
+        ]
+        for message, extra, expected_icon in expected_icons:
+            my_predbat.record_status(message, extra=extra)
+            icon = my_predbat.dashboard_values.get(my_predbat.prefix + ".status", {}).get("attributes", {}).get("icon")
+            if icon != expected_icon:
+                print("ERROR: Status {}{} used icon {}, expected {}".format(message, extra, icon, expected_icon))
+                failed = 1
     finally:
         my_predbat.current_status = ""
 

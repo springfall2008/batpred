@@ -852,6 +852,20 @@ def run_test_plan_why_reason(my_predbat):
         print("ERROR: expected toggleForceDropdown to null-guard document.getElementById(id) before using it")
         failed = True
 
+    # --- Test 17: shared reason templates use the configured currency unit ---
+    print("Test reason templates use the configured minor currency symbol")
+    original_currency_symbols = my_predbat.currency_symbols
+    try:
+        my_predbat.currency_symbols = "€c"
+        _, currency_plan = render()
+        currency_templates = currency_plan["reason_templates"]
+        currency_text = " ".join(currency_templates.values())
+        if "c/kWh" not in currency_text or "p/kWh" in currency_text:
+            print("ERROR: reason templates did not replace pence with the configured cents unit: {}".format(currency_templates))
+            failed = True
+    finally:
+        my_predbat.currency_symbols = original_currency_symbols
+
     if not failed:
         print("All plan why-reason tests passed")
     return failed

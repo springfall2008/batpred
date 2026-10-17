@@ -1,0 +1,305 @@
+.app-content > main:has(> .components-page) {
+  max-width: none;
+  margin-block: 0;
+  padding: 1.5rem clamp(0.75rem, 2vw, 2rem);
+}
+
+.components-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  width: 100%;
+}
+
+.components-page-header,
+.component-summary,
+.component-card > header,
+.component-actions,
+.component-status,
+.component-meta > div {
+  display: flex;
+  align-items: center;
+}
+
+.components-page-header {
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.components-page-header h1,
+.components-page-header p,
+.component-card h2,
+.component-error-detail {
+  margin: 0;
+}
+
+.components-page-header h1 {
+  color: var(--color-text);
+  font-size: 1.5rem;
+}
+
+.components-page-header p {
+  margin-top: 0.2rem;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+}
+
+.components-page-header button,
+.component-actions button,
+.component-actions a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.42rem 0.65rem;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.components-page-header button:hover,
+.component-actions button:hover,
+.component-actions a:hover {
+  border-color: var(--color-current);
+  color: var(--color-current);
+}
+
+.component-summary {
+  gap: 0.6rem;
+  padding: 0.8rem;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface);
+}
+
+.component-summary > div {
+  display: grid;
+  grid-template-columns: auto auto;
+  align-items: baseline;
+  gap: 0.35rem;
+  flex: 0 0 auto;
+  width: max-content;
+  min-width: 5.5rem;
+  padding: 0.45rem 0.65rem;
+  border-radius: 7px;
+  background: var(--color-bg);
+}
+
+.component-summary strong {
+  font-size: 1.1rem;
+}
+
+.component-summary span,
+.component-summary label {
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.component-summary .is-active strong { color: var(--color-success); }
+.component-summary .is-error strong { color: var(--color-danger); }
+.component-summary .is-disabled strong { color: var(--color-text-muted); }
+
+.component-summary label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-left: auto;
+}
+
+.components-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 28rem), 1fr));
+  gap: 0.9rem;
+}
+
+.component-card {
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid var(--color-border);
+  border-left: 4px solid var(--color-text-subtle);
+  border-radius: 10px;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+}
+
+.component-card.is-active { border-left-color: var(--color-success); }
+.component-card.is-error { border-left-color: var(--color-danger); }
+.component-card.is-disabled { opacity: 0.72; }
+
+.component-card > header {
+  gap: 0.7rem;
+}
+
+.component-icon {
+  display: grid;
+  width: 2.15rem;
+  height: 2.15rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+}
+
+.component-card h2 {
+  color: var(--color-text);
+  font-size: 0.95rem;
+}
+
+.component-status {
+  gap: 0.3rem;
+  margin-top: 0.15rem;
+  color: var(--color-text-muted);
+  font-size: 0.66rem;
+  font-weight: 700;
+}
+
+.component-status i {
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 50%;
+  background: var(--color-text-subtle);
+}
+
+.component-status.is-active i { background: var(--color-success); }
+.component-status.is-error i { background: var(--color-danger); }
+
+.component-actions {
+  gap: 0.4rem;
+  margin-left: auto;
+}
+
+.component-actions button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.component-meta {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+  margin: 1rem 0;
+}
+
+.component-meta > div {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+  padding: 0.5rem;
+  border-radius: 7px;
+  background: var(--color-bg);
+}
+
+.component-meta dt {
+  color: var(--color-text-muted);
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.component-meta dd {
+  max-width: 100%;
+  margin: 0;
+  overflow: hidden;
+  color: var(--color-text);
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.component-meta dd.is-error,
+.component-error-detail {
+  color: var(--color-danger);
+}
+
+.component-error-detail {
+  padding: 0.65rem;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--color-danger) 9%, transparent);
+  font-size: 0.72rem;
+}
+
+.component-card details {
+  border-top: 1px solid var(--color-border);
+  padding-top: 0.65rem;
+}
+
+.component-card summary {
+  color: var(--color-text-secondary);
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.component-settings {
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 0.65rem;
+}
+
+.component-settings > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0.6rem;
+  font-size: 0.7rem;
+}
+
+.component-settings span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-text-secondary);
+}
+
+.component-settings strong {
+  overflow: hidden;
+  color: var(--color-text);
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.component-settings em {
+  margin-left: 0.35rem;
+  color: var(--color-warning);
+  font-size: 0.58rem;
+  font-style: normal;
+  text-transform: uppercase;
+}
+
+.components-error,
+.components-empty {
+  padding: 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 9px;
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  font-size: 0.8rem;
+}
+
+.components-error { border-color: var(--color-danger); }
+
+@media (max-width: 680px) {
+  .components-page-header,
+  .component-card > header {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .component-summary {
+    flex-wrap: wrap;
+  }
+
+  .component-summary label,
+  .component-actions {
+    width: 100%;
+    margin-left: 0;
+  }
+}

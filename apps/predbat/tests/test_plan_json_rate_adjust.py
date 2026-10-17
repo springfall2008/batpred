@@ -8,6 +8,8 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+from datetime import timedelta
+
 from prediction import Prediction
 from tests.test_infra import reset_inverter, reset_rates, update_rates_import
 
@@ -140,7 +142,45 @@ def run_test_plan_json_rate_adjust(my_predbat):
     my_predbat.rate_import_replicated = {}
     my_predbat.rate_export_replicated = {}
 
-    # --- Test 3: car rate diverging from the house rate (batpred#4646) ---
+    # --- Test 3: the generic saving tag retains its source event in the JSON row ---
+    print("Test plan JSON output identifies the source energy event")
+    event_start = (my_predbat.midnight_utc + timedelta(minutes=test_minute - 5)).isoformat()
+    event_end = (my_predbat.midnight_utc + timedelta(minutes=test_minute + 60)).isoformat()
+    original_saving_slots = my_predbat.octopus_saving_slots
+    original_free_slots = my_predbat.octopus_free_slots
+    original_axle_sessions = my_predbat.axle_sessions
+    event_cases = [
+        ("octopus_power_down", [{"start": event_start, "end": event_end}], [], []),
+        ("octopus_free_electricity", [], [{"start": event_start, "end": event_end}], []),
+        ("octopus_power_up", [], [{"start": event_start, "end": event_end, "event_type": "POWER_UP"}], []),
+        ("octopus_free_electricity", [], [{"start": event_start, "end": event_end, "event_type": "FREE_ELECTRICITY"}], []),
+        ("octopus_happy_hour", [], [{"start": event_start, "end": event_end, "event_type": "WEEKEND_HAPPY_HOUR"}], []),
+        (
+            "octopus_happy_hour",
+            [],
+            [{"start": event_start, "end": event_end}, {"start": event_start, "end": event_end, "event_type": "WEEKEND_HAPPY_HOUR"}],
+            [],
+        ),
+        ("axle_export", [], [], [{"start_time": event_start, "end_time": event_end, "import_export": "export"}]),
+    ]
+    try:
+        my_predbat.rate_import_replicated = {test_minute: "saving"}
+        for expected_type, saving_slots, free_slots, axle_sessions in event_cases:
+            my_predbat.octopus_saving_slots = saving_slots
+            my_predbat.octopus_free_slots = free_slots
+            my_predbat.axle_sessions = axle_sessions
+            _, event_plan = my_predbat.publish_html_plan(pv_step, pv_step, load_step, load_step, my_predbat.end_record, publish=False)
+            event_row = next((row for row in event_plan["rows"] if row.get("slot_minute") == test_minute), None)
+            if event_row is None or event_row.get("rate_event_type") != expected_type:
+                print("ERROR: Expected rate_event_type='{}' got '{}'".format(expected_type, event_row and event_row.get("rate_event_type")))
+                failed = True
+    finally:
+        my_predbat.rate_import_replicated = {}
+        my_predbat.octopus_saving_slots = original_saving_slots
+        my_predbat.octopus_free_slots = original_free_slots
+        my_predbat.axle_sessions = original_axle_sessions
+
+    # --- Test 4: car rate diverging from the house rate (batpred#4646) ---
     print("Test plan JSON output with a car rate that diverges from the house rate")
     my_predbat.num_cars = 1
     car_minute = my_predbat.minutes_now

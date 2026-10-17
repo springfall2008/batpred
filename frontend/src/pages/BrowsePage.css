@@ -1,0 +1,92 @@
+.app-content > main:has(> .browse-page) {
+  display: flex;
+  max-width: none;
+  min-height: 100dvh;
+  margin-block: 0;
+  padding: 1.5rem clamp(0.75rem, 2vw, 2rem);
+}
+
+.browse-page {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.browse-page-header h1,
+.browse-page-header p {
+  margin: 0;
+}
+
+.browse-page-header h1 {
+  color: var(--color-text);
+  font-size: 1.5rem;
+}
+
+.browse-page-header p {
+  margin-top: 0.2rem;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+}
+
+.browse-page-error {
+  padding: 0.8rem 1rem;
+  border: 1px solid var(--color-danger);
+  border-radius: 8px;
+  background: var(--color-surface);
+  color: var(--color-danger);
+  font-size: 0.8rem;
+}
+
+.browse-file-manager {
+  min-height: 32rem;
+  border-color: var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-shadow: var(--shadow-card);
+}
+
+.browse-file-manager .toolbar,
+.browse-file-manager .folders-preview,
+.browse-file-manager .files.list .files-header,
+.browse-file-manager .navigation-pane {
+  border-color: var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.browse-file-manager .file-item:hover,
+.browse-file-manager .file-item-container:hover,
+.browse-file-manager .sb-folders-list-item:hover {
+  background: color-mix(in srgb, var(--color-text) 6%, transparent);
+}
+
+.browse-file-manager .file-selected,
+.browse-file-manager .active-list-item {
+  background: var(--color-current);
+  color: white;
+}
+
+.browse-file-preview {
+  width: min(70rem, 80vw);
+  height: 40dvh;
+  margin: 0;
+  overflow: auto;
+  padding: 1rem;
+  background: #0d1117;
+  color: #d1d5db;
+  font: 0.74rem/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 680px) {
+  .app-content > main:has(> .browse-page) {
+    min-height: calc(100dvh - 52px);
+    padding: 1rem 0.75rem;
+  }
+
+  .browse-file-manager {
+    height: calc(100dvh - 7rem) !important;
+  }
+}

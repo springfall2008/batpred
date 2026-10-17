@@ -332,7 +332,7 @@ pred_bat:
   # is used for car_charging_hold feature to filter out car charging from the previous load data
   # Automatically set to detect Wallbox and Zappi, if it doesn't match manually enter your sensor name
   # Also adjust car_charging_energy_scale if it's not in kwH to fix the units
-  car_charging_energy: 're:(sensor.myenergi_zappi_[0-9a-z]+_charge_added_session|sensor.wallbox_portal_added_energy)'
+  car_charging_energy: 're:(sensor.myenergi_zappi_[0-9a-z]+_charge_added_session|sensor.[0-9a-z_]+_myenergi_zappi_[0-9a-z]+_session_energy|sensor.wallbox_portal_added_energy)'
 
   # Defines the number of cars modelled by the system, set to 0 for no car
   num_cars: 1
@@ -344,6 +344,10 @@ pred_bat:
   # One entry per car
   car_charging_planned:
     - 're:(sensor.wallbox_portal_status_description|sensor.myenergi_zappi_[0-9a-z]+_plug_status|sensor.tesla_wall_connector_status)'
+
+  # Optional live charger state used by the modern Overview page.
+  car_charging_status:
+    - 're:(sensor.wallbox_portal_status_description|sensor.myenergi_zappi_[0-9a-z]+_plug_status|sensor.[0-9a-z_]+_myenergi_zappi_[0-9a-z]+_plug_status|sensor.tesla_wall_connector_status)'
 
   car_charging_planned_response:
     - 'yes'

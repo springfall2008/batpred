@@ -1,0 +1,319 @@
+.status-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+  border-radius: 16px;
+  padding: 1.5rem;
+  margin: 1.5rem 0;
+  box-shadow: var(--shadow-card);
+}
+
+.status-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.status-card-header h2 {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.status-card-version {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+
+.status-card-version-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.6rem;
+}
+
+.status-card-update {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-height: 1.75rem;
+  padding: 0.25rem 0.55rem;
+  color: var(--color-success);
+  background: color-mix(in srgb, var(--color-success) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-success) 45%, transparent);
+  border-radius: 999px;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.status-card-update:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-success) 20%, transparent);
+}
+
+.status-card-update:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.status-card-update:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+.status-card-label,
+.status-card-detail > span {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-muted);
+}
+
+.status-card-status-section {
+  margin-top: 1.25rem;
+}
+
+.status-card-status-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-top: 0.25rem;
+}
+
+.status-dot {
+  width: 0.7rem;
+  height: 0.7rem;
+  flex-shrink: 0;
+  border-radius: 50%;
+  transform: translateY(3px);
+}
+
+.status-ok {
+  background: var(--color-success);
+}
+
+.status-warning {
+  background: var(--color-warning);
+}
+
+.status-error {
+  background: var(--color-danger);
+}
+
+
+.status-card-details {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.status-card-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0 1rem;
+  min-width: 0;
+}
+
+.status-card-detail:first-child {
+  padding-left: 0;
+}
+
+.status-card-detail:last-child {
+  padding-right: 0;
+}
+
+.status-card-detail + .status-card-detail {
+  border-left: 1px solid var(--color-border);
+}
+
+.status-card-detail span {
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+}
+
+.status-card-detail strong {
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.status-card-controls {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.status-control-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0 1.25rem;
+}
+
+/* Remove padding from the outer edges */
+.status-control-row:first-child {
+  padding-left: 0;
+}
+
+.status-control-row:last-child {
+  padding-right: 0;
+}
+
+/* Divider between controls */
+.status-control-row + .status-control-row {
+  border-left: 1px solid var(--color-border);
+}
+
+.status-control-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.status-control-label {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.status-control-description {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+
+.status-card-select {
+  width: 100%;
+  max-width: 240px;
+  padding: 0.45rem 0.6rem;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+}
+
+/* Toggle switch */
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 42px;
+  height: 24px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+/* Hide the native checkbox visually */
+.toggle-switch input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+/* Switch track */
+.toggle-slider {
+  position: absolute;
+  inset: 0;
+  background: var(--color-border);
+  border-radius: 999px;
+  transition: background 0.2s ease;
+}
+
+/* Switch handle */
+.toggle-slider::before {
+  content: '';
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  left: 3px;
+  top: 3px;
+  background: var(--color-surface);
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  transition: transform 0.2s ease;
+}
+
+/* Enabled state */
+.toggle-switch input:checked + .toggle-slider {
+  background: var(--color-success);
+}
+
+/* Move handle when enabled */
+.toggle-switch input:checked + .toggle-slider::before {
+  transform: translateX(18px);
+}
+
+/* Keyboard focus */
+.toggle-switch input:focus-visible + .toggle-slider {
+  outline: 2px solid var(--color-success);
+  outline-offset: 2px;
+}
+
+@media (max-width: 700px) {
+  .status-card {
+    padding: 1rem;
+    margin: 1rem;
+  }
+
+  .status-card-details {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1rem 0;
+  }
+
+  .status-card-detail:nth-child(odd) {
+    padding-left: 0;
+    padding-right: 1rem;
+    border-left: none;
+  }
+
+  .status-card-detail:nth-child(even) {
+    padding-left: 1rem;
+    padding-right: 0;
+  }
+
+  .status-card-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .status-control-row,
+  .status-control-row:first-child,
+  .status-control-row:last-child {
+    padding: 0.75rem 0;
+  }
+
+  .status-control-row + .status-control-row {
+    border-left: none;
+    border-top: 1px solid var(--color-border);
+  }
+
+  .status-control-row:first-child {
+    padding-top: 0;
+  }
+
+  .status-control-row:last-child {
+    padding-bottom: 0;
+  }
+}
+
+@media (max-width: 400px) {
+  .status-card {
+    padding: 0.5rem;
+    margin: 0.5rem;
+  }
+
+  .status-card-details {
+    grid-template-columns: 1fr;
+    gap: 1rem 0;
+  }
+
+  .status-card-detail + .status-card-detail {
+    padding-left: 0;
+    border-left: none;
+  }
+}
