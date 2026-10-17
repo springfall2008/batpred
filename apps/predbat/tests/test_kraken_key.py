@@ -329,6 +329,24 @@ def test_menu_groups_advanced_pages():
     assert '<button class="menu-dropdown-toggle"' in html
 
 
+def test_menu_toggle_is_not_painted_by_the_dark_mode_button_rule():
+    """The Advanced toggle is a <button>, and dark mode paints every button red with !important.
+
+    Its own dark-mode colours must therefore be !important too, so it looks like the other tabs.
+    """
+    import re
+
+    from web_helper import get_menu_html
+
+    html = get_menu_html(False, "./dash", [], "v0.0.0", "")
+    for selector, colour in (("body.dark-mode .menu-dropdown-toggle", "transparent"), ("body.dark-mode .menu-dropdown-toggle:hover", "#2c652f"), ("body.dark-mode .menu-dropdown-toggle.active", "#4CAF50")):
+        match = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", html)
+        assert match, selector
+        rule = match.group(1)
+        assert re.search(r"background-color:\s*" + re.escape(colour) + r"\s*!important", rule), (selector, rule)
+        assert re.search(r"(^|[;\s])color:\s*white\s*!important", rule), (selector, rule)
+
+
 def run_kraken_key_tests(my_predbat):
     """Run the Kraken API key generator tests. Returns True on failure, False on success."""
     import inspect

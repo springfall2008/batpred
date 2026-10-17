@@ -8738,18 +8738,20 @@ display: flex;
 justify-content: flex-start;
 }
 
+/* !important because the shared dark-mode rule paints every button red with !important */
 body.dark-mode .menu-dropdown-toggle {
-color: white;
+background-color: transparent !important;
+color: white !important;
 }
 
 body.dark-mode .menu-dropdown-toggle:hover {
-background-color: #2c652f;
-color: white;
+background-color: #2c652f !important;
+color: white !important;
 }
 
 body.dark-mode .menu-dropdown-toggle.active {
-background-color: #4CAF50;
-color: white;
+background-color: #4CAF50 !important;
+color: white !important;
 }
 
 body.dark-mode .menu-dropdown-content {
