@@ -9,8 +9,14 @@ nothing here goes stale when the planning algorithm changes.
 
 The run uses its own PredBat instance and a temporary directory, so it leaves the shared fixture and the working
 directory as it found them.
+
+To debug a failure, set REPLAY_ROUNDTRIP_KEEP to a directory to keep the run's log, the replay's log and the debug yaml
+there, REPLAY_ROUNDTRIP_YAML_AT to an HH:MM to start the replay from a yaml taken at that run rather than the first,
+and REPLAY_ROUNDTRIP_DUMP_AT to an HH:MM to also write a debug yaml from the run and from the replay at that run
+(dump_live_*.yaml, dump_replay_*.yaml), for comparing key by key.
 """
 
+import json
 import math
 import os
 import tempfile
@@ -20,7 +26,8 @@ import pytz
 
 from dummy_inverter import DummyInverter
 from predbat import PredBat
-from tests.replay_forward import plan_trace, replay_forward, trace_differences
+from tests.replay_forward import plan_trace, replay_forward, trace_differences, rescan_rate_stats
+from tests.test_single_debug import rescan_rate_windows, rebuild_load_pv_models
 from tests.test_infra import FIXTURE_MINUTES_NOW, TestHAInterface
 
 TIMEZONE = "Europe/London"
@@ -120,6 +127,23 @@ def make_history(my_predbat, dummy, load_profile, pv_profile):
     return get_history
 
 
+def publish_pv_forecast(my_predbat, start, pv_profile):
+    """Publish a PV forecast of pv_profile (kW across the day) repeated over three days, as the forecast sensor holds it.
+
+    p50 is the profile itself, which the dummy inverter also generates, so the forecast is perfect; p10 and p90 are
+    fixed fractions of it, so the plan's uncertainty models have a spread to work with.
+    """
+    midnight = pytz.timezone(TIMEZONE).localize(datetime(start.year, start.month, start.day))
+    forecast, forecast10, forecast90 = {}, {}, {}
+    for minute in range(0, 3 * 24 * 60, 5):
+        per_minute = kw_at(pv_profile, minute) / 60.0
+        forecast[str(minute)] = round(per_minute, 6)
+        forecast10[str(minute)] = round(per_minute * 0.6, 6)
+        forecast90[str(minute)] = round(per_minute * 1.2, 6)
+    attributes = {"forecast": forecast, "forecast10": forecast10, "forecast90": forecast90, "relative_time": midnight.strftime("%Y-%m-%dT%H:%M:%S%z")}
+    my_predbat.ha_interface.set_state("sensor.{}_pv_forecast_raw".format(my_predbat.prefix), "on", attributes=attributes)
+
+
 def capture_log(my_predbat, lines):
     """Make my_predbat.log keep each line, with a timestamp in the live log's format, as well as logging it."""
     original = type(my_predbat).log
@@ -132,12 +156,20 @@ def capture_log(my_predbat, lines):
     my_predbat.log = log
 
 
-def roundtrip(start, cycles, load_profile, pv_peak, folder):
-    """Run cycles of update_pred() from start against the dummy inverter, then replay the log; return (live trace, replayed trace)."""
+def roundtrip(start, cycles, load_profile, pv_profile, battery, folder):
+    """Run cycles of update_pred() from start against the dummy inverter, then replay the log; return (live trace, replayed trace).
+
+    load_profile and pv_profile are kW spread evenly across the day; with no pv_profile there is no PV forecast and the
+    dummy generates no PV. battery is the dummy inverter's settings over a 50% starting SoC.
+    """
     my_predbat = new_predbat(folder)
-    dummy = DummyInverter(my_predbat, config={"battery_size": 10, "soc_initial": 50, "load": load_profile, "pv_peak": pv_peak})
+    config = {"soc_initial": 50, "load": load_profile, "pv_peak": 0.0}
+    config.update(battery)
+    dummy = DummyInverter(my_predbat, config=config)
     dummy.totals.update(START_TOTALS)
-    my_predbat.ha_interface.get_history = make_history(my_predbat, dummy, load_profile, [0.0])
+    my_predbat.ha_interface.get_history = make_history(my_predbat, dummy, load_profile, pv_profile or [0.0])
+    if pv_profile:
+        publish_pv_forecast(my_predbat, start, pv_profile)
     my_predbat.args["rates_import"] = [{"start": "00:30:00", "end": "05:30:00", "rate": 7.5}, {"start": "05:30:00", "end": "00:30:00", "rate": 30.0}]
     my_predbat.args["rates_export"] = [{"start": "00:00:00", "end": "00:00:00", "rate": 15.0}]
     # The weighted-bucket load forecast, as a live install without Load ML uses; the fixture's apps.yaml names a
@@ -148,6 +180,7 @@ def roundtrip(start, cycles, load_profile, pv_peak, folder):
     live_lines = []
     capture_log(my_predbat, live_lines)
     yaml_path = None
+    dump_at = os.environ.get("REPLAY_ROUNDTRIP_DUMP_AT")
     set_clock(my_predbat, start)
     dummy.publish_controls()
     dummy.automatic_config()
@@ -159,23 +192,51 @@ def roundtrip(start, cycles, load_profile, pv_peak, folder):
         # The inverter's clock is checked against the real one, not the simulated one
         my_predbat.ha_interface.set_state(dummy.entity("sensor", "time"), datetime.now(pytz.timezone(TIMEZONE)).strftime("%Y-%m-%d %H:%M:%S"))
         my_predbat.update_pred(scheduled=True)
-        if cycle == 0:
+        yaml_at = os.environ.get("REPLAY_ROUNDTRIP_YAML_AT")
+        if (cycle == 0 and not yaml_at) or (yaml_at and my_predbat.now_utc.strftime("%H:%M") == yaml_at and yaml_path is None):
             my_predbat.create_debug_yaml()
             yaml_path = os.path.join(folder, "debug", "predbat_debug_{}.yaml".format(my_predbat.now_utc.strftime("%H_%M_%S")))
+        if dump_at and cycle and my_predbat.now_utc.strftime("%H:%M") == dump_at:
+            dump_yaml(my_predbat, folder, "dump_live")
     log_path = os.path.join(folder, "predbat.log")
     with open(log_path, "w") as handle:
         handle.write("\n".join(live_lines) + "\n")
 
     replay_lines = []
     capture_log(my_predbat, replay_lines)
+    if dump_at:
+        replay_forward(my_predbat, yaml_path, log_path, until=dump_at, quiet=True)
+        # The replay's derived state is rebuilt as a live run's is before its yaml is written
+        rescan_rate_stats(my_predbat)
+        rescan_rate_windows(my_predbat)
+        rebuild_load_pv_models(my_predbat)
+        dump_yaml(my_predbat, folder, "dump_replay")
+        replay_lines.clear()
     replay_forward(my_predbat, yaml_path, log_path, quiet=True)
+    with open(os.path.join(folder, "replay.log"), "w") as handle:
+        handle.write("\n".join(replay_lines) + "\n")
     return plan_trace(live_lines), plan_trace(replay_lines, replay=True)
 
 
-def check_roundtrip(name, start, cycles, load_profile, pv_peak):
+def dump_yaml(my_predbat, folder, prefix):
+    """Write a debug yaml of my_predbat's state into folder, named prefix_HH_MM_SS.yaml."""
+    # Restoring a yaml for the replay points config_root back at the working directory
+    my_predbat.config_root = folder
+    my_predbat.config_root_p = folder
+    my_predbat.create_debug_yaml()
+    stamp = my_predbat.now_utc.strftime("%H_%M_%S")
+    os.replace(os.path.join(folder, "debug", "predbat_debug_{}.yaml".format(stamp)), os.path.join(folder, "{}_{}.yaml".format(prefix, stamp)))
+
+
+def check_roundtrip(name, start, cycles, load_profile, pv_profile=None, battery=None):
     """Run a round trip and report any re-plan whose plan lines differ; returns the number of failures."""
-    with tempfile.TemporaryDirectory() as folder:
-        live, replayed = roundtrip(start, cycles, load_profile, pv_peak, folder)
+    keep = os.environ.get("REPLAY_ROUNDTRIP_KEEP")
+    if keep:
+        os.makedirs(keep, exist_ok=True)
+        live, replayed = roundtrip(start, cycles, load_profile, pv_profile, battery or {"battery_size": 10}, os.path.abspath(keep))
+    else:
+        with tempfile.TemporaryDirectory() as folder:
+            live, replayed = roundtrip(start, cycles, load_profile, pv_profile, battery or {"battery_size": 10}, folder)
     compared = [label for label, lines in replayed.items() if lines]
     differences = trace_differences(live, replayed)
     if not compared:
@@ -193,6 +254,29 @@ def check_roundtrip(name, start, cycles, load_profile, pv_peak):
     return 0
 
 
+def day_profiles():
+    """The recorded day's load and PV as kW profiles from midnight (288 five-minute values each), and its start time."""
+    with open(os.path.join(os.path.dirname(__file__), "replay_roundtrip_day.json")) as handle:
+        day = json.load(handle)
+    step = day["step_minutes"]
+    start_minute = int(day["start"][:2]) * 60 + int(day["start"][3:5])
+    steps = len(day["load_kwh"])
+
+    def profile(series):
+        """kW from midnight, rotated from the recording's start."""
+        return [series[((index * step - start_minute) // step) % steps] * 60.0 / step for index in range(steps)]
+
+    return profile(day["load_kwh"]), profile(day["pv_kwh"]), start_minute
+
+
 def run_replay_roundtrip_tests(my_predbat):
     """An hour of the main loop against the dummy inverter with flat load, replayed from a yaml taken after the first cycle."""
-    return check_roundtrip("Round trip, one hour", datetime(2026, 6, 21, 6, 0), 13, [0.5], 4.0)
+    return check_roundtrip("Round trip, one hour", datetime(2026, 6, 21, 6, 0), 13, [0.5])
+
+
+def run_replay_roundtrip_day_tests(my_predbat):
+    """A recorded day of real load and PV, midday to midday so the replay crosses midnight, on an 18 kWh battery."""
+    load_profile, pv_profile, start_minute = day_profiles()
+    start = datetime(2026, 10, 4) + timedelta(minutes=start_minute)
+    cycles = int(os.environ.get("REPLAY_ROUNDTRIP_CYCLES", 24 * 12 + 1))
+    return check_roundtrip("Round trip, 24 hours", start, cycles, load_profile, pv_profile, {"battery_size": 18.08, "battery_rate_max": 5500, "inverter_limit": 6000, "export_limit": 6000})
