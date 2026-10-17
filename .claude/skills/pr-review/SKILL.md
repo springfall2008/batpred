@@ -70,6 +70,7 @@ Work through each angle below in turn, on the whole diff. Read the enclosing fun
     - New long-lived state on `PredBat` that the debug dump (`create_debug_yaml()`) would serialise and that holds secrets or tuple-keyed dicts. Those keys must go in `DEBUG_EXCLUDE_LIST` (`apps/predbat/utils.py`), or the dump either leaks or cannot be replayed (#5569).
     - A function or class with no docstring, or a non-`lower_case_with_underscores` name.
 - **Cloud integrations.** A cache filled from reads and also used to skip "redundant" writes goes wrong when a read lands shortly after a write and is still stale: the Fox scheduler lags 3–18 seconds. A field set or enum taken from vendor sample code rather than the published API spec. Retries or backoff that never reset.
+- **Use of storage.** Never write files directly, use the Storage class. Use it to save state so that when PredBat restarts it doesn't have to perform a lot of expensive operations again (e.g. re-download a tariff or scan registers on an inverter).
 - **Altitude.** Does the change fix the root cause, or patch one symptom of a mechanism that will produce the next one? If a deeper general fix exists, name it.
 - **Gaps.** Finally, re-read the diff once more looking only for defects not already listed: code moved or extracted that dropped a guard, setup/teardown asymmetry in tests, flipped config defaults, a golden case (`coverage/cases/*.expected.json`) that the change should have moved but did not.
 
