@@ -26,6 +26,8 @@ from evcc import (
     EVCC_MODE_NOW,
     EVCC_MODE_OFF,
     EVCC_MODE_PV,
+    EVCC_MODE_SMART,
+    EVCC_MODES,
     EvccAPI,
     EvccClient,
     derive_power_band,
@@ -590,6 +592,84 @@ def test_apply_modes_writes():
     check("override_no_write", len(writes), 4, failures)
     check("override_sensor", api.entities["binary_sensor.predbat_evcc_override"]["state"], "on", failures)
     check("override_forgets", api.restore_mode.get(0), None, failures)
+    return failures
+
+
+def test_smart_mode_schema():
+    """evcc 0.316+ reports smart for pv and minpv - it is borrowed from and handed back as smart"""
+    print("**** Running Test: evcc_smart_mode ****")
+    failures = []
+
+    writes = []
+
+    async def fake_set_mode(loadpoint_id, mode):
+        """Record the write instead of performing it."""
+        writes.append((loadpoint_id, mode))
+        return True
+
+    def build(always_charge="off"):
+        """A connected loadpoint resting in smart, as evcc 0.316+ reports it."""
+        api = MockEvccAPI(host="http://evcc", control=True, mode_refresh_minutes=15)
+        api.state = {"loadpoints": [dict(SAMPLE_STATE["loadpoints"][0], mode=EVCC_MODE_SMART, alwaysCharge=always_charge, connected=True)], "vehicles": SAMPLE_STATE["vehicles"]}
+        api.state_time = api.now_utc
+        api.loadpoint_map = {0: 0}
+        api.client.set_mode = fake_set_mode
+        return api
+
+    # The schema is told apart by the alwaysCharge field, which older evcc versions do not have
+    check("schema_new", EvccAPI.smart_schema({"mode": "smart", "alwaysCharge": "off"}), True, failures)
+    check("schema_old", EvccAPI.smart_schema({"mode": "pv"}), False, failures)
+    check("schema_none", EvccAPI.smart_schema(None), False, failures)
+
+    # Solar rests in smart, and use_minpv no longer applies - that is evcc's alwaysCharge now
+    api = build()
+    api.entities["sensor.predbat_car_charging_mode"] = {"state": "solar", "attributes": {"reason": "idle"}}
+    check("desired_smart", api.desired_mode(0, True), (EVCC_MODE_SMART, "idle"), failures)
+    api.use_minpv = True
+    check("desired_smart_minpv", api.desired_mode(0, True), (EVCC_MODE_SMART, "idle"), failures)
+    check("desired_old_minpv", api.desired_mode(0, False), (EVCC_MODE_MINPV, "idle"), failures)
+
+    # pv is translated for the new schema only; minpv still means smart with alwaysCharge on
+    loadpoint = api.state["loadpoints"][0]
+    check("translate_pv", api.schema_mode(EVCC_MODE_PV, loadpoint), EVCC_MODE_SMART, failures)
+    check("keep_minpv", api.schema_mode(EVCC_MODE_MINPV, loadpoint), EVCC_MODE_MINPV, failures)
+    check("keep_now", api.schema_mode(EVCC_MODE_NOW, loadpoint), EVCC_MODE_NOW, failures)
+    check("keep_old_pv", api.schema_mode(EVCC_MODE_PV, {"mode": "pv"}), EVCC_MODE_PV, failures)
+
+    # smart is a resting mode: a grid slot borrows it, and the slot ending hands back smart
+    for always_charge in ("off", "on"):
+        del writes[:]
+        api = build(always_charge)
+        api.entities["sensor.predbat_car_charging_mode"] = {"state": "now", "attributes": {"reason": "grid_slot"}}
+        run_async(api.apply_modes())
+        check("smart_borrowed_{}".format(always_charge), writes, [(1, EVCC_MODE_NOW)], failures)
+        check("smart_owed_{}".format(always_charge), api.restore_mode.get(0), EVCC_MODE_SMART, failures)
+        api.publish_car(0, api.state["loadpoints"][0])
+        check("always_charge_published_{}".format(always_charge), api.entities["sensor.predbat_evcc_mode"]["attributes"]["always_charge"], always_charge, failures)
+        api.state["loadpoints"][0]["mode"] = EVCC_MODE_NOW
+        api.entities["sensor.predbat_car_charging_mode"] = {"state": "solar", "attributes": {"reason": "idle"}}
+        run_async(api.apply_modes())
+        check("smart_handed_back_{}".format(always_charge), writes[-1], (1, EVCC_MODE_SMART), failures)
+        check("smart_nothing_owed_{}".format(always_charge), api.restore_mode.get(0), None, failures)
+
+    # A borrow recorded as pv before upgrading evcc is handed back as smart, so alwaysCharge survives
+    del writes[:]
+    upgraded = build("on")
+    upgraded.state["loadpoints"][0]["mode"] = EVCC_MODE_NOW
+    upgraded.saved_takeovers = {0: {"restore": EVCC_MODE_PV, "written": EVCC_MODE_NOW}}
+    upgraded.entities["sensor.predbat_car_charging_mode"] = {"state": "solar", "attributes": {"reason": "idle"}}
+    run_async(upgraded.apply_modes())
+    check("upgrade_hands_back_smart", writes, [(1, EVCC_MODE_SMART)], failures)
+
+    # And the same on a planned stop
+    del writes[:]
+    stopping = build("on")
+    stopping.restore_mode = {0: EVCC_MODE_PV}
+    run_async(stopping.final())
+    check("final_hands_back_smart", writes, [(1, EVCC_MODE_SMART)], failures)
+
+    # The client accepts smart as a mode it may write
+    check("smart_known", EVCC_MODE_SMART in EVCC_MODES, True, failures)
     return failures
 
 
@@ -1225,6 +1305,7 @@ def test_evcc(my_predbat=None):
         test_override_detection,
         test_apply_modes_writes,
         test_only_borrows_a_resting_loadpoint,
+        test_smart_mode_schema,
         test_only_plans_for_a_known_car,
         test_guest_car_battery_hold,
         test_client_http,

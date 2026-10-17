@@ -41,11 +41,18 @@ EVCC_MODE_OFF = "off"
 EVCC_MODE_NOW = "now"
 EVCC_MODE_MINPV = "minpv"
 EVCC_MODE_PV = "pv"
-EVCC_MODES = [EVCC_MODE_OFF, EVCC_MODE_NOW, EVCC_MODE_MINPV, EVCC_MODE_PV]
+# evcc 0.316 renamed pv to smart and folded minpv into a separate alwaysCharge setting. It still
+# accepts pv and minpv on a write, but pv also switches alwaysCharge off, so smart is written
+# wherever the loadpoint reports the new schema - smart leaves alwaysCharge as the user set it
+EVCC_MODE_SMART = "smart"
+EVCC_MODES = [EVCC_MODE_OFF, EVCC_MODE_NOW, EVCC_MODE_MINPV, EVCC_MODE_PV, EVCC_MODE_SMART]
 
 # The sun-following resting modes. These are the only ones Predbat will take a loadpoint out of:
 # off and now are settings the user made deliberately, and evcc is left holding them.
-EVCC_RESTING_MODES = [EVCC_MODE_PV, EVCC_MODE_MINPV]
+EVCC_RESTING_MODES = [EVCC_MODE_PV, EVCC_MODE_MINPV, EVCC_MODE_SMART]
+
+# The loadpoint field that only exists from evcc 0.316 on, and so tells the two mode schemas apart
+EVCC_ALWAYS_CHARGE = "alwaysCharge"
 
 # Predbat reasons that evcc cannot reach on its own, and the mode each one borrows the loadpoint for.
 # Everything else - the resting state, the home battery priority, an unplugged car - evcc does itself.
@@ -741,6 +748,8 @@ class EvccAPI(ComponentBase):
                 "loadpoint_id": self.loadpoint_map.get(car_n, 0) + 1,
                 "title": loadpoint.get("title"),
                 "predbat_written": self.written_mode.get(car_n),
+                # evcc 0.316+ only: off, on (the old minpv) or once - None on an older evcc
+                "always_charge": loadpoint.get(EVCC_ALWAYS_CHARGE),
                 # What evcc applies by itself when this vehicle connects - so a mode Predbat never
                 # wrote is not blamed on Predbat
                 "vehicle_default_mode": vehicle.get("mode"),
@@ -891,7 +900,24 @@ class EvccAPI(ComponentBase):
 
     # ------------------------------------------------------------------ mode control
 
-    def desired_mode(self, car_n):
+    @staticmethod
+    def smart_schema(loadpoint):
+        """True when the loadpoint comes from evcc 0.316 or later, where pv and minpv became smart."""
+        return isinstance(loadpoint, dict) and EVCC_ALWAYS_CHARGE in loadpoint
+
+    def schema_mode(self, mode, loadpoint):
+        """
+        Spell a mode the way this loadpoint's evcc wants it written.
+
+        Only pv is translated: a borrow recorded against an older evcc still hands back pv after an
+        upgrade, and writing pv now would also switch alwaysCharge off behind the user's back. minpv
+        is left alone, since evcc maps it to smart with alwaysCharge on - exactly what it was.
+        """
+        if mode == EVCC_MODE_PV and self.smart_schema(loadpoint):
+            return EVCC_MODE_SMART
+        return mode
+
+    def desired_mode(self, car_n, smart=False):
         """
         Work out the evcc mode Predbat wants for a car, returning (mode, reason).
 
@@ -905,6 +931,9 @@ class EvccAPI(ComponentBase):
         it only stops evcc acting on it itself, which Predbat is doing anyway through now. The reason
         to rest in pv is what happens when Predbat is not publishing at all: a loadpoint left in pv
         still charges from the sun, where one left off would sit idle until Predbat came back.
+
+        On evcc 0.316+ (smart=True) solar maps to smart instead, and use_minpv no longer applies:
+        minpv is evcc's own alwaysCharge setting now, which stays the user's to make in evcc.
         """
         postfix = self.car_postfix(car_n)
         entity_id = "sensor.{}_car_charging_mode{}".format(self.prefix, postfix)
@@ -917,6 +946,8 @@ class EvccAPI(ComponentBase):
         if mode == CAR_MODE_NOW:
             return EVCC_MODE_NOW, reason
         if mode == CAR_MODE_SOLAR:
+            if smart:
+                return EVCC_MODE_SMART, reason
             return (EVCC_MODE_MINPV if self.use_minpv else EVCC_MODE_PV), reason
         return EVCC_MODE_OFF, reason
 
@@ -1131,13 +1162,14 @@ class EvccAPI(ComponentBase):
                 self.last_write.pop(car_n, None)
                 self.drop_takeover(car_n, "disconnected")
 
-            mode, decision = self.desired_mode(car_n)
+            mode, decision = self.desired_mode(car_n, self.smart_schema(loadpoint))
             allowed, reason = self.should_write(car_n, mode, decision, connected)
             target = None
             written = False
 
             if allowed:
                 target, reason = self.write_target(car_n, decision, observed)
+                target = self.schema_mode(target, loadpoint)
 
             if target and self.restore_mode.get(car_n) and self.detect_override(car_n, observed):
                 # Only mid-episode is there anything to override - outside one Predbat is not writing,
@@ -1218,7 +1250,8 @@ class EvccAPI(ComponentBase):
             lp_index = self.loadpoint_map.get(car_n)
             if lp_index is None:
                 continue
-            mode = self.restore_mode[car_n]
+            loadpoints = (self.state or {}).get("loadpoints") or []
+            mode = self.schema_mode(self.restore_mode[car_n], loadpoints[lp_index] if lp_index < len(loadpoints) else None)
             if await self.client.set_mode(lp_index + 1, mode):
                 self.log("EvccAPI: car {} handing loadpoint {} back to {} before stopping".format(car_n, lp_index + 1, mode))
                 self.restore_mode.pop(car_n, None)

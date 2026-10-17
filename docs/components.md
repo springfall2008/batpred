@@ -1114,7 +1114,7 @@ becomes a 1.38kW minimum, 3.68kW maximum and a 0.23kW step - instead of you work
 | `control` | Boolean | No | `False` | `evcc_control` | Initial setting of **switch.predbat_evcc_control**. Mode control is turned on and off per loadpoint with those switches in the Predbat config |
 | `loadpoints` | List | No | - | `evcc_loadpoints` | One entry per Predbat car: an evcc loadpoint id (1-based) or title, or `off` to skip that car. Defaults to a one-to-one mapping |
 | `solar` | Boolean | No | `True` | `evcc_solar` | Model evcc's PV diversion by turning **switch.predbat_car_charging_solar** on - see the note above |
-| `use_minpv` | Boolean | No | `False` | `evcc_use_minpv` | Use evcc's `minpv` mode instead of `pv` when Predbat wants solar charging |
+| `use_minpv` | Boolean | No | `False` | `evcc_use_minpv` | Use evcc's `minpv` mode instead of `pv` when Predbat wants solar charging. Ignored from evcc 0.316 on, where `minpv` became evcc's own **Always charge** setting - set that in evcc instead |
 | `poll_seconds` | Integer | No | `60` | `evcc_poll_seconds` | How often to read the evcc state |
 | `mode_refresh_minutes` | Integer | No | `15` | `evcc_mode_refresh_minutes` | Re-assert the mode this often even when unchanged, so an evcc restart does not leave it wrong |
 | `override_minutes` | Integer | No | `60` | `evcc_override_minutes` | How long to stop writing after the mode is changed outside Predbat. `0` disables the backoff |
@@ -1166,7 +1166,9 @@ the charger. The decision itself is still Predbat's `sensor.predbat_car_charging
 [the charging mode](car-charging.md#the-charging-mode) - this is only about which parts of it are worth
 sending to a charger that is already doing the rest.
 
-**A loadpoint is only ever borrowed from `pv` or `minpv`.** Those are the sun-following resting states; `off`
+**A loadpoint is only ever borrowed from `pv` or `minpv`** - or from `smart`, which is what evcc 0.316 and
+later call both of them (`minpv` is now `smart` with **Always charge** on, and Predbat hands the loadpoint
+back as `smart` so that setting is left as you made it). Those are the sun-following resting states; `off`
 and `now` are settings you made deliberately, so Predbat leaves them exactly as they are, even for a planned
 grid slot (`sensor.predbat_evcc_target_mode` says `not_resting`). When the slot or the export window ends,
 the mode Predbat found is written back, and `sensor.predbat_evcc_restore_mode` shows what is owed in the
