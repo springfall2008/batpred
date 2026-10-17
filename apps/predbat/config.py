@@ -2853,6 +2853,7 @@ APPS_SCHEMA = {
     "octopus_charge_limit": {"type": "sensor|sensor_list", "sensor_type": "float", "entries": "num_cars", "optional_entries": True},
     "octopus_slot_low_rate": {"type": "boolean"},
     "octopus_slot_max": {"type": "integer"},
+    "intelligent_dispatch_billing": {"type": "string", "empty": False},
     "octopus_saving_session_octopoints_per_penny": {"type": "integer"},
     "octopus_saving_session_min_octopoints_per_kwh": {"type": "float"},
     "octopus_saving_session_rate": {"type": "float"},

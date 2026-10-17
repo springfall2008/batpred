@@ -576,6 +576,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.octopus_surplus = set()
         self.octopus_slots_planned = {}
         self.octopus_slots_held = {}
+        self.octopus_slots_held_saved = {}
+        self.dispatch_billing_warned = None
         self.battery_capacity_nominal = False
         self.battery_scaling_auto = False
         self.releases = {}
@@ -2186,6 +2188,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.load_plan()
             # And the Octopus Intelligent dispatch state, so a restart part-way through a dispatch carries on from it
             self.dynamic_load_car_load()
+            # And the half hours Octopus Intelligent dispatches ran in, so they keep the dispatch rate
+            self.octopus_held_load()
 
         except Exception as e:
             self.log("Error: Exception raised {}".format(e))

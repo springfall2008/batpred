@@ -19,7 +19,7 @@ import requests
 import re
 from datetime import datetime, timedelta, timezone
 from predbat_metrics import record_api_call
-from const import TIME_FORMAT, TIME_FORMAT_OCTOPUS, DISPATCH_SOURCE_CHARGER_SCHEDULE, REPEAT_FULL_LOG_SECONDS, OCTOPUS_DISPATCH_HOLD_MINUTES
+from const import TIME_FORMAT, TIME_FORMAT_OCTOPUS, DISPATCH_SOURCE_CHARGER_SCHEDULE, REPEAT_FULL_LOG_SECONDS, OCTOPUS_DISPATCH_HOLD_MINUTES, OCTOPUS_DISPATCH_WINDOW_HOLD_MINUTES, DISPATCH_BILLING_CHOICES
 from utils import RepeatLogGate, str2time, minutes_to_time, dp1, dp2, dp4, minute_data, round_out_to_period, filter_payment_method, is_edge_block_body, token_mint_backoff_seconds, TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS
 from component_base import ComponentBase
 from mock_base import MockBase as SharedMockBase
@@ -4114,6 +4114,35 @@ class Octopus:
                 return source
         return None
 
+    def dispatch_billing_window(self):
+        """
+        Whether planned dispatches are billed off-peak for every half hour they were in force, whether or not
+        the car charged in it - the window rule E.ON Next Drive Smart bills by (GH#5521) - rather than only
+        where the car charged, as Octopus Intelligent does.
+
+        From intelligent_dispatch_billing in apps.yaml: "window" or "octopus" force a rule, and "auto" (the
+        default) takes the window rule when the Kraken component is running on provider eon, which is then
+        where the dispatches come from. Anything else is warned about once and taken as auto.
+        """
+        setting = str(self.get_arg("intelligent_dispatch_billing", "auto", indirect=False)).strip().lower()
+        if setting not in DISPATCH_BILLING_CHOICES:
+            if self.dispatch_billing_warned != setting:
+                self.dispatch_billing_warned = setting
+                self.log("Warn: intelligent_dispatch_billing is set to {} - it should be one of {}, using auto".format(setting, ", ".join(DISPATCH_BILLING_CHOICES)))
+            setting = "auto"
+        if setting != "auto":
+            return setting == "window"
+        kraken = self.components.get_component("kraken") if self.components else None
+        return kraken is not None and str(getattr(kraken, "provider", "")).strip().lower() == "eon"
+
+    def octopus_hold_minutes(self):
+        """
+        How long a held half hour keeps the dispatch rate after it ends: until the completed dispatch can be
+        expected under the Octopus rule, and for a day under the window rule, where none ever comes for a half
+        hour the car did not charge in.
+        """
+        return OCTOPUS_DISPATCH_WINDOW_HOLD_MINUTES if self.dispatch_billing_window() else OCTOPUS_DISPATCH_HOLD_MINUTES
+
     def octopus_held_update(self):
         """
         Remember the half hour a planned Octopus Intelligent dispatch is running in, per car, so it keeps the
@@ -4121,16 +4150,18 @@ class Octopus:
 
         Called once per cycle after dynamic_load_car_check(), so that a half hour in which the car was seen
         in its dispatch but not charging is not kept - unless it charged earlier in the same half hour,
-        which Octopus bills off-peak whole (see dynamic_load_car_strip_from()). Half hours are kept by their
-        absolute start, as minutes since midnight_utc mean something else after midnight, and dropped
-        OCTOPUS_DISPATCH_HOLD_MINUTES after they end.
+        which Octopus bills off-peak whole (see dynamic_load_car_strip_from()). Under the window rule the car
+        is never cancelled (see dynamic_load_car_active()), so every half hour of a running dispatch is kept.
+        Half hours are kept by their absolute start, as minutes since midnight_utc mean something else after
+        midnight, dropped octopus_hold_minutes() after they end, and saved to storage when they change.
         """
+        hold_minutes = self.octopus_hold_minutes()
         period_minute = (self.minutes_now // 30) * 30
         period_start = self.midnight_utc + timedelta(minutes=period_minute)
         for car_n in range(self.num_cars):
             held = self.octopus_slots_held.setdefault(car_n, {})
             for start in list(held):
-                if start + timedelta(minutes=30 + OCTOPUS_DISPATCH_HOLD_MINUTES) <= self.now_utc:
+                if start + timedelta(minutes=30 + hold_minutes) <= self.now_utc:
                     del held[start]
             strip_from = self.dynamic_load_car_strip_from(car_n)
             if strip_from is not None and strip_from < period_minute + 30:
@@ -4139,6 +4170,83 @@ class Octopus:
             source = self.octopus_planned_running(car_n, self.octopus_slots_planned.get(car_n, []))
             if source is not None:
                 held[period_start] = source
+        self.octopus_held_save()
+
+    def octopus_held_state(self):
+        """
+        The held half hours in a form storage can hold: per car, the absolute start of each half hour and the
+        source of the dispatch that ran in it.
+        """
+        return {str(car_n): {start.isoformat(): source for start, source in sorted(held.items())} for car_n, held in sorted(self.octopus_slots_held.items()) if held}
+
+    def octopus_held_save(self):
+        """
+        Save the held half hours to storage when they have changed since the last save, so a restart neither
+        loses one Octopus has not listed yet nor, under the window rule, the record of the day. Called every
+        cycle, so it costs nothing when nothing has changed - and an install with no dispatches never writes.
+
+        Recorded as saved only once a write works: under the window rule the half hours can stay unchanged
+        for hours after the last dispatch, so a failed write is retried each cycle rather than left unsaved
+        until they expire. It runs once a cycle, so it needs none of the throttle dynamic_load_car_save() has
+        against its 15 second poll.
+        """
+        state = self.octopus_held_state()
+        if state == self.octopus_slots_held_saved:
+            return
+        storage = self.components.get_component("storage") if self.components else None
+        if not storage:
+            return
+
+        try:
+            # Expiry is on the real clock, as storage.load() checks it (see save_plan()). It only tidies up:
+            # octopus_held_load() decides what is still current
+            expiry = datetime.now(timezone.utc) + timedelta(minutes=30 + OCTOPUS_DISPATCH_WINDOW_HOLD_MINUTES)
+            if run_async(storage.save("predbat", "octopus_held", {"cars": state}, format="json", expiry=expiry)):
+                self.octopus_slots_held_saved = state
+            else:
+                self.log("Warn: Octopus Intelligent: failed to save the held dispatch half hours")
+        except Exception as e:
+            self.log("Warn: Octopus Intelligent: failed to save the held dispatch half hours: {}".format(e))
+
+    def octopus_held_load(self):
+        """
+        Restore the held half hours saved by octopus_held_save(), at start up, taking only those still inside
+        the hold of the billing rule in use.
+        """
+        storage = self.components.get_component("storage") if self.components else None
+        if not storage or self.now_utc is None:
+            return
+
+        try:
+            data = run_async(storage.load("predbat", "octopus_held"))
+        except Exception as e:
+            self.log("Warn: Octopus Intelligent: failed to load the held dispatch half hours: {}".format(e))
+            return
+        cars = data.get("cars") if isinstance(data, dict) else None
+        if not isinstance(cars, dict):
+            return
+
+        hold_minutes = self.octopus_hold_minutes()
+        restored = 0
+        for key, periods in cars.items():
+            try:
+                car_n = int(key)
+                items = list(periods.items())
+            except (ValueError, TypeError, AttributeError):
+                continue
+            held = self.octopus_slots_held.setdefault(car_n, {})
+            for start, source in items:
+                try:
+                    start = datetime.fromisoformat(start)
+                    current = start + timedelta(minutes=30 + hold_minutes) > self.now_utc
+                except (ValueError, TypeError):
+                    continue
+                if current:
+                    held[start] = source
+                    restored += 1
+        self.octopus_slots_held_saved = self.octopus_held_state()
+        if restored:
+            self.log("Octopus Intelligent: restored {} held dispatch half hour(s) from storage".format(restored))
 
     def octopus_held_dispatches(self, car_n, completed, planned):
         """
@@ -4157,12 +4265,20 @@ class Octopus:
         it, so it is not counted twice against the daily slot cap. The one in progress ends at now: it has
         finished, so load_octopus_slots() plans no car charging in it, and rate_add_io_slots() prices the
         rest of the half hour as Octopus bills it once a dispatch has started in it (GH#5316).
+
+        Under the window rule (dispatch_billing_window()) the half hour was billed off-peak whether the car
+        charged or not, so a completed dispatch of no energy does not take it back.
         """
         held = self.octopus_slots_held.get(car_n, {})
         if not held:
             return []
+        window = self.dispatch_billing_window()
+        hold_minutes = self.octopus_hold_minutes()
+        # Under the window rule a completed dispatch of no energy covers nothing: rate_add_io_slots() drops it
+        # as never having happened
+        covering = [slot for slot in completed if not window or self.decode_octopus_slot(car_n, slot, raw=True)[2] > 0]
         covered = []
-        for slot in list(completed) + list(planned):
+        for slot in covering + list(planned):
             start_minutes, end_minutes, _, _, _ = self.decode_octopus_slot(car_n, slot, raw=True, boundaries_only=True)
             if start_minutes != end_minutes:
                 covered.append(round_out_to_period(start_minutes, end_minutes))
@@ -4171,7 +4287,7 @@ class Octopus:
         for period_start in sorted(held):
             period_end = period_start + timedelta(minutes=30)
             end = min(period_end, self.now_utc)
-            if end <= period_start or period_end + timedelta(minutes=OCTOPUS_DISPATCH_HOLD_MINUTES) <= self.now_utc:
+            if end <= period_start or period_end + timedelta(minutes=hold_minutes) <= self.now_utc:
                 continue
             period_minute = minutes_to_time(period_start, self.midnight_utc)
             if any(start_minutes < period_minute + 30 and end_minutes > period_minute for start_minutes, end_minutes in covered):
@@ -4223,7 +4339,8 @@ class Octopus:
         Rounded out to whole 30 minute rate periods, from the half hour after the current one (the car may have
         charged earlier in it, making the whole period cheap) and outside the fixed window.
         """
-        if not self.octopus_intelligent_consider_full:
+        if not self.octopus_intelligent_consider_full or self.dispatch_billing_window():
+            # Under the window rule a dispatch is billed off-peak whether the car draws in it or not
             return set()
         dispatch_minutes = set()
         usable_minutes = set()
