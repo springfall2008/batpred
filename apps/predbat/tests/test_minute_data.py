@@ -539,6 +539,18 @@ def test_minute_data(my_predbat):
         print("ERROR: Same-minute counter test failed - minutes 0, 34, 35 were {} expected [0.2, 0.2, 0.2]".format(same_minute_inc_points))
         failed = True
 
+    # Test 30: forward data with smoothing (the load forecast shape). Smoothing starts each item at the previous
+    # item's time, so the first two items always tie on age; the same-minute rule above is for backwards history
+    # only and must not change the value that fills the tail past the last forecast point.
+    print("Test 30: Forward smoothing tail fill unchanged by the same-minute rule")
+    forward_start = datetime(2024, 10, 4, 0, 0, 0, tzinfo=utc)
+    forward_history = [{"energy": index * 0.25, "last_updated": "2024-10-04T{:02d}:{:02d}:00+00:00".format(index // 2, (index % 2) * 30)} for index in range(48)]
+    forward_result, ignore_io = minute_data(forward_history, 2, forward_start, "energy", "last_updated", backwards=False, clean_increment=False, smoothing=True, divide_by=1.0, scale=1.0)
+    forward_points = [dp4(forward_result.get(p)) for p in [0, 30, 1410, 2879]]
+    if forward_points != [0.0, 0.25, 0.0, 0.0]:
+        print("ERROR: Forward smoothing tail test failed - minutes 0, 30, 1410, 2879 were {} expected [0.0, 0.25, 0.0, 0.0]".format(forward_points))
+        failed = True
+
     print("**** minute_data tests completed ****")
     return failed
 
