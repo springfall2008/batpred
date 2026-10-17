@@ -313,20 +313,62 @@ def test_page_script_has_no_broken_string_literals():
 # ---------------------------------------------------------------------------
 
 
+def menu_popup(html, menu_id):
+    """Return the markup of one sub-menu popup."""
+    start = html.index('id="{}"'.format(menu_id))
+    return html[start : html.index("</div>", start)]
+
+
 def test_menu_groups_advanced_pages():
     """Discovery, Browse, Internals and Kraken API Key live under an Advanced sub-menu, not the top bar."""
     from web_helper import get_menu_html
 
     html = get_menu_html(False, "./dash", [], "v0.0.0", "")
-    start = html.index('class="menu-dropdown-content"')
-    end = html.index("</div>", start)
-    dropdown = html[start:end]
+    dropdown = menu_popup(html, "advanced-menu")
     for href in ("./discovery", "./browse", "./internals", "./kraken_key"):
         assert f"href='{href}'" in dropdown, href
         assert html.count(f"href='{href}'") == 1, f"{href} should appear only inside Advanced"
-    assert "Advanced" in html[:start]
     # The toggle is a button, not a link, so setActiveMenuItem() cannot match it to every page
-    assert '<button class="menu-dropdown-toggle"' in html
+    assert '<button class="menu-dropdown-toggle" type="button" data-menu="advanced-menu"' in html
+
+
+def test_menu_groups_settings_pages():
+    """Apps, Config, Components and Editor live under a Settings sub-menu, in that order."""
+    from web_helper import get_menu_html
+
+    html = get_menu_html(False, "./dash", [], "v0.0.0", "")
+    dropdown = menu_popup(html, "settings-menu")
+    positions = []
+    for href in ("./apps", "./config", "./components", "./apps_editor"):
+        assert f"href='{href}'" in dropdown, href
+        assert html.count(f"href='{href}'") == 1, f"{href} should appear only inside Settings"
+        positions.append(dropdown.index(f"href='{href}'"))
+    assert positions == sorted(positions), "Settings should list Apps, Config, Components, Editor"
+    assert '<button class="menu-dropdown-toggle" type="button" data-menu="settings-menu"' in html
+
+
+def test_menu_top_bar_order():
+    """Metrics follows Log, then Settings, then Advanced, then Docs."""
+    from web_helper import get_menu_html
+
+    html = get_menu_html(False, "./dash", [], "v0.0.0", "", chat_enabled=True)
+    order = ["href='./log'", "href='./metrics_dashboard'", 'data-menu="settings-menu"', 'data-menu="advanced-menu"', "springfall2008.github.io/batpred/'"]
+    positions = [html.index(marker) for marker in order]
+    assert positions == sorted(positions), list(zip(order, positions))
+    assert html.index("href='./chat'") < html.index("href='./log'")
+
+
+def test_menu_settings_toggle_carries_the_config_warning():
+    """An apps.yaml error flags the Settings toggle too, so the warning is visible with the menu closed."""
+    from web_helper import get_menu_html
+
+    warning = "&#9888;"
+    clean = get_menu_html(False, "./dash", [], "v0.0.0", "")
+    assert warning not in clean
+    html = get_menu_html(False, "./dash", {"some_arg": "bad value"}, "v0.0.0", "")
+    toggle_start = html.index('data-menu="settings-menu"')
+    assert warning in html[toggle_start : html.index("</button>", toggle_start)]
+    assert warning in menu_popup(html, "settings-menu"), "the Apps link keeps its warning too"
 
 
 def test_menu_popup_is_not_inside_the_menu_bar():
@@ -341,7 +383,7 @@ def test_menu_popup_is_not_inside_the_menu_bar():
     from web_helper import get_menu_html
 
     class AncestorFinder(HTMLParser):
-        """Record the class lists of every open element around id="advanced-menu"."""
+        """Record the class lists of every open element around each sub-menu popup."""
 
         VOID = {"img", "br", "input", "meta", "link", "hr"}
 
@@ -349,13 +391,13 @@ def test_menu_popup_is_not_inside_the_menu_bar():
             """Start with an empty element stack."""
             super().__init__()
             self.stack = []
-            self.ancestors = None
+            self.ancestors = {}
 
         def handle_starttag(self, tag, attrs):
-            """Push the element; note the ancestors when the popup opens."""
+            """Push the element; note the ancestors when a popup opens."""
             attrs = dict(attrs)
-            if attrs.get("id") == "advanced-menu":
-                self.ancestors = [classes for _, classes in self.stack]
+            if attrs.get("id") in ("advanced-menu", "settings-menu"):
+                self.ancestors[attrs["id"]] = [classes for _, classes in self.stack]
             if tag not in self.VOID:
                 self.stack.append((tag, attrs.get("class") or ""))
 
@@ -368,8 +410,9 @@ def test_menu_popup_is_not_inside_the_menu_bar():
 
     finder = AncestorFinder()
     finder.feed(get_menu_html(False, "./dash", [], "v0.0.0", ""))
-    assert finder.ancestors is not None, "the Advanced popup is missing"
-    assert not any("menu-bar" in classes.split() for classes in finder.ancestors), finder.ancestors
+    assert set(finder.ancestors) == {"advanced-menu", "settings-menu"}, finder.ancestors
+    for menu_id, ancestors in finder.ancestors.items():
+        assert not any("menu-bar" in classes.split() for classes in ancestors), (menu_id, ancestors)
 
 
 def test_menu_toggle_is_not_painted_by_the_dark_mode_button_rule():

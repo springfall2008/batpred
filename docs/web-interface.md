@@ -257,20 +257,28 @@ The Download tab gives the ability to download the logfile.
 
 Further details about the Predbat logfile and its location is [described in the output data document](output-data.md#predbat-logfile).
 
-### Config View
+### Metrics View
 
-The Config view provides a way to see and change all of Predbat's configuration entities in Home Assistant.  For each entity is displayed the name, entity type, the current entity value and Predbat's default value for that entity.
+The Metrics view provides a dashboard giving an overview of Predbat internal metrics, including application health, plan status, battery state, energy totals, costs, savings and API status.
+The dashboard auto-refreshes every 30 seconds and contains the following sections:
 
-Any entities that are coloured pale red simply denote entities where you have changed the value from Predbat's default value - it does not indicate that the entity value is in error, its just that its different from the default value.
+- **System Health** - shows a set of system health cards including confirming that Predbat is running, the configuration and plan are valid, how long since the last Predbat run, that there are no component errors and the amount of data history that Predbat is using.
+The System Health row includes a **Data Age** card, showing how many days of historical load data (`load_today`) Predbat was able to retrieve from Home Assistant, going back from now. This is a measure of how much history is *available*, not how stale the latest reading is - a higher number generally means better load forecasting, since day-of-week weighted forecasts (the `days_previous` setting) need enough history to match against. The card is only flagged as a warning when the retrieved depth falls short of what your `days_previous` configuration actually needs (shown in the "need Xd" sub-label) - for example, if `days_previous` includes `7`, Predbat needs at least 7 days of history, and a shortfall usually means Home Assistant's recorder purged old data before Predbat could read it, or a load sensor is newly added.
+- **Battery Status** - shows battery SoC doughnut and power meters for current battery charge, discharge, house load, PV, grid import and grid export
+- **Energy Today** - shows total energy today for house load, grid import, grid export and PV generation
+- **Cost & Savings** - shows electricity cost today and yesterday, and savings achieved yesterday from having solar and battery and from using predbat
+- **API & Solar Status** - shows API health (requests, failures and last call) made by Predbat to Axle, Solcast/Forecast.Solar, GivEnergy Cloud, Fox ESS Cloud, Solis Cloud, and Open Meteo (Temperature for LoadML). Data is only shown for components that are active, i.e. if Predbat is not using the GivEnergy Cloud integration, no API call metrics are shown.<BR>
+Solar status shows Solcast API calls (Predbat Solcast direct only) and PV Calibration Scaling (worst day, best day and total)
+- **Control Conflicts** - shows how many inverter settings were changed outside Predbat in the last 24 hours and which controls are being changed repeatedly (sustained controls), with a table of recent changes showing what Predbat set and what the setting now reads
+- **Control Failures** - shows how many charge, export and freeze slots in the last 24 hours (and in total) the battery did not follow Predbat's command, with a table of recent failures - see [control failure data](output-data.md#control-failure-data)
 
-Any entity name can be clicked to swap to the [Entities view](#entities-view) for that entity.
+![image](images/web-interface-metrics-view.png)
 
-![image](images/web-interface-config-view.png)
+### Settings Menu
 
-You can also create a [custom dashboard to see and update Predbat's control entities](output-data.md#creating-a-compact-predbat-control-dashboard);
-and full explanation of Predbat's control entities and what they do can be found in the [customisation documentation](customisation.md).
+The **Settings** menu groups the views for configuring Predbat. Click it to open the list. If `apps.yaml` has an error, a warning sign shows on **Settings** as well as on **Apps**.
 
-### Apps View
+#### Apps View
 
 The Apps view allows you to look at your `apps.yaml` configuration and to modify the values within the web browser without having to edit the YAML file directly.
 Click the edit button to change a value, when all the edits are complete hit save to save the `apps.yaml` and Predbat will automatically be restarted with the new configuration.
@@ -288,13 +296,26 @@ Predbat validates your `apps.yaml` every time it runs and if there are any confi
 
 Further details of the `apps.yaml` error can be found in the [Predbat Log](#log-view).
 
-### Components View
+#### Config View
+
+The Config view provides a way to see and change all of Predbat's configuration entities in Home Assistant.  For each entity is displayed the name, entity type, the current entity value and Predbat's default value for that entity.
+
+Any entities that are coloured pale red simply denote entities where you have changed the value from Predbat's default value - it does not indicate that the entity value is in error, its just that its different from the default value.
+
+Any entity name can be clicked to swap to the [Entities view](#entities-view) for that entity.
+
+![image](images/web-interface-config-view.png)
+
+You can also create a [custom dashboard to see and update Predbat's control entities](output-data.md#creating-a-compact-predbat-control-dashboard);
+and full explanation of Predbat's control entities and what they do can be found in the [customisation documentation](customisation.md).
+
+#### Components View
 
 The Components View enables you see the current status of the different [Predbat Components](components.md) and the key configuration settings being used by those components.
 
 You can restart individual Predbat components if required.
 
-### Editor View
+#### Editor View
 
 The editor view allows you to edit `apps.yaml` as text directly within the web interface. If you make a syntax error then the error will be highlighted and save will be disabled pending a fix.
 
@@ -333,23 +354,6 @@ The Kraken API key generator creates an API key for an E.ON Next or EDF account,
 5. Copy the key into `secrets.yaml` and set `kraken_auth_method: api_key` and `kraken_key: !secret kraken_key` in `apps.yaml`.
 
 The key is shown once. Predbat sends the token only to your supplier's Kraken API and does not store or log the token or the key.
-
-### Metrics View
-
-The Metrics view provides a dashboard giving an overview of Predbat internal metrics, including application health, plan status, battery state, energy totals, costs, savings and API status.
-The dashboard auto-refreshes every 30 seconds and contains the following sections:
-
-- **System Health** - shows a set of system health cards including confirming that Predbat is running, the configuration and plan are valid, how long since the last Predbat run, that there are no component errors and the amount of data history that Predbat is using.
-The System Health row includes a **Data Age** card, showing how many days of historical load data (`load_today`) Predbat was able to retrieve from Home Assistant, going back from now. This is a measure of how much history is *available*, not how stale the latest reading is - a higher number generally means better load forecasting, since day-of-week weighted forecasts (the `days_previous` setting) need enough history to match against. The card is only flagged as a warning when the retrieved depth falls short of what your `days_previous` configuration actually needs (shown in the "need Xd" sub-label) - for example, if `days_previous` includes `7`, Predbat needs at least 7 days of history, and a shortfall usually means Home Assistant's recorder purged old data before Predbat could read it, or a load sensor is newly added.
-- **Battery Status** - shows battery SoC doughnut and power meters for current battery charge, discharge, house load, PV, grid import and grid export
-- **Energy Today** - shows total energy today for house load, grid import, grid export and PV generation
-- **Cost & Savings** - shows electricity cost today and yesterday, and savings achieved yesterday from having solar and battery and from using predbat
-- **API & Solar Status** - shows API health (requests, failures and last call) made by Predbat to Axle, Solcast/Forecast.Solar, GivEnergy Cloud, Fox ESS Cloud, Solis Cloud, and Open Meteo (Temperature for LoadML). Data is only shown for components that are active, i.e. if Predbat is not using the GivEnergy Cloud integration, no API call metrics are shown.<BR>
-Solar status shows Solcast API calls (Predbat Solcast direct only) and PV Calibration Scaling (worst day, best day and total)
-- **Control Conflicts** - shows how many inverter settings were changed outside Predbat in the last 24 hours and which controls are being changed repeatedly (sustained controls), with a table of recent changes showing what Predbat set and what the setting now reads
-- **Control Failures** - shows how many charge, export and freeze slots in the last 24 hours (and in total) the battery did not follow Predbat's command, with a table of recent failures - see [control failure data](output-data.md#control-failure-data)
-
-![image](images/web-interface-metrics-view.png)
 
 ### Docs View
 

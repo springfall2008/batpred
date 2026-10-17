@@ -9085,13 +9085,12 @@ setTimeout(function() {
 """
         + ("<a href='./chat'>Chat</a>\n" if chat_enabled else "")
         + """<a href='./log'>Log</a>
-<a href='./config'>Config</a>
-<a href='./apps'>Apps"""
-        + config_warning
-        + """</a>
-<a href='./components'>Components</a>
-<a href='./apps_editor'>Editor</a>
 <a href='./metrics_dashboard'>Metrics</a>
+<div class="menu-dropdown">
+<button class="menu-dropdown-toggle" type="button" data-menu="settings-menu" onclick="toggleMenuDropdown(event, 'settings-menu')">Settings"""
+        + config_warning
+        + """ &#9662;</button>
+</div>
 <div class="menu-dropdown">
 <button class="menu-dropdown-toggle" type="button" data-menu="advanced-menu" onclick="toggleMenuDropdown(event, 'advanced-menu')">Advanced &#9662;</button>
 </div>
@@ -9103,7 +9102,15 @@ setTimeout(function() {
     <button onclick="toggleDarkMode()">Toggle Dark Mode</button>
 </div>
 </div>
-<!-- Outside .menu-bar on purpose: WebKit clips a position: fixed child of the fixed, scrolling bar -->
+<!-- Sub-menu popups sit outside .menu-bar on purpose: WebKit clips a position: fixed child of the fixed, scrolling bar -->
+<div class="menu-dropdown-content" id="settings-menu">
+<a href='./apps'>Apps"""
+        + config_warning
+        + """</a>
+<a href='./config'>Config</a>
+<a href='./components'>Components</a>
+<a href='./apps_editor'>Editor</a>
+</div>
 <div class="menu-dropdown-content" id="advanced-menu">
 <a href='./discovery'>Discovery</a>
 <a href='./browse'>Browse</a>
