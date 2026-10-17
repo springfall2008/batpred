@@ -9077,6 +9077,7 @@ setTimeout(function() {
     </div>
 </div>
 <a href='./dash'>Dash</a>
+<a href='./metrics_dashboard'>Metrics</a>
 <a href='./plan'>Plan</a>
 <a href='./charts'>Charts</a>
 <a href='./entity'>Entities</a>
@@ -9085,7 +9086,6 @@ setTimeout(function() {
 """
         + ("<a href='./chat'>Chat</a>\n" if chat_enabled else "")
         + """<a href='./log'>Log</a>
-<a href='./metrics_dashboard'>Metrics</a>
 <div class="menu-dropdown">
 <button class="menu-dropdown-toggle" type="button" data-menu="settings-menu" onclick="toggleMenuDropdown(event, 'settings-menu')">Settings"""
         + config_warning
