@@ -8691,8 +8691,9 @@ body.dark-mode .dark-mode-toggle button:hover {
 background-color: #666;
 }
 
-/* Advanced sub-menu. The popup is position: fixed and placed by toggleMenuDropdown(), because the
-   menu bar scrolls horizontally (overflow-x: auto), which would clip an absolutely positioned child. */
+/* Advanced sub-menu. The popup is a sibling of the menu bar, not a child, and is position: fixed and
+   placed under its toggle by positionMenuDropdown(): the bar scrolls horizontally and is itself fixed,
+   and WebKit clips a fixed child of such an element, so inside it the popup opened invisibly on iOS. */
 .menu-dropdown {
 display: flex;
 flex-shrink: 0;
@@ -8735,7 +8736,37 @@ display: flex;
 }
 
 .menu-dropdown-content a {
-justify-content: flex-start;
+color: #333;
+padding: 14px 16px;
+text-decoration: none;
+font-size: 16px;
+display: flex;
+align-items: center;
+white-space: nowrap;
+}
+
+.menu-dropdown-content a:hover {
+background-color: #f0f0f0;
+color: #4CAF50;
+}
+
+.menu-dropdown-content a.active {
+background-color: #4CAF50;
+color: white;
+}
+
+body.dark-mode .menu-dropdown-content a {
+color: white;
+}
+
+body.dark-mode .menu-dropdown-content a:hover {
+background-color: #2c652f;
+color: white;
+}
+
+body.dark-mode .menu-dropdown-content a.active {
+background-color: #4CAF50;
+color: white;
 }
 
 /* !important because the shared dark-mode rule paints every button red with !important */
@@ -8774,7 +8805,7 @@ function storeActiveMenuItem(path) {
 localStorage.setItem('activeMenuItem', path);
 }
 
-// Open or close a menu-bar sub-menu, placing the popup under its toggle
+// Open or close a menu-bar sub-menu (its popup is a sibling of the bar, see the CSS)
 function toggleMenuDropdown(event, contentId) {
 event.stopPropagation();
 const content = document.getElementById(contentId);
@@ -8784,35 +8815,47 @@ if (!content) {
 const opening = !content.classList.contains('open');
 closeMenuDropdowns();
 if (opening) {
-    const rect = event.currentTarget.getBoundingClientRect();
-    content.style.top = rect.bottom + 'px';
-    content.style.left = Math.max(0, Math.min(rect.left, window.innerWidth - 200)) + 'px';
     content.classList.add('open');
+    positionMenuDropdowns();
 }
+}
+
+// Place each open popup under its toggle
+function positionMenuDropdowns() {
+document.querySelectorAll('.menu-dropdown-content.open').forEach(content => {
+    const toggle = document.querySelector('.menu-dropdown-toggle[data-menu="' + content.id + '"]');
+    if (!toggle) {
+        return;
+    }
+    const rect = toggle.getBoundingClientRect();
+    content.style.top = rect.bottom + 'px';
+    content.style.left = Math.max(0, Math.min(rect.left, window.innerWidth - content.offsetWidth)) + 'px';
+});
 }
 
 function closeMenuDropdowns() {
 document.querySelectorAll('.menu-dropdown-content.open').forEach(content => content.classList.remove('open'));
 }
 
-// A click anywhere else, a resize or scrolling the menu bar closes an open sub-menu
+// A click anywhere else closes an open sub-menu. Scrolling the bar or resizing only moves it: on a
+// phone a tap right after a swipe, or the address bar hiding, fires those events just after it opens.
 document.addEventListener('click', function(event) {
-if (!event.target.closest('.menu-dropdown')) {
+if (!event.target.closest('.menu-dropdown, .menu-dropdown-content')) {
     closeMenuDropdowns();
 }
 });
-window.addEventListener('resize', closeMenuDropdowns);
+window.addEventListener('resize', positionMenuDropdowns);
 document.addEventListener('DOMContentLoaded', function() {
 const menuBar = document.querySelector('.menu-bar');
 if (menuBar) {
-    menuBar.addEventListener('scroll', closeMenuDropdowns);
+    menuBar.addEventListener('scroll', positionMenuDropdowns);
 }
 });
 
 // Function to set the active menu item
 function setActiveMenuItem() {
 // Get all menu links
-const menuLinks = document.querySelectorAll('.menu-bar a');
+const menuLinks = document.querySelectorAll('.menu-bar a, .menu-dropdown-content a');
 
 // Get current page path from window location
 let currentPath = window.location.pathname;
@@ -8905,18 +8948,13 @@ if (!activeFound && menuLinks.length > 0) {
 }
 
 // A page inside a sub-menu lights up the sub-menu's toggle too - its own link is hidden until opened
-document.querySelectorAll('.menu-dropdown').forEach(dropdown => {
-    const toggle = dropdown.querySelector('.menu-dropdown-toggle');
-    if (toggle) {
-        toggle.classList.toggle('active', !!dropdown.querySelector('.menu-dropdown-content a.active'));
-    }
+document.querySelectorAll('.menu-dropdown-toggle[data-menu]').forEach(toggle => {
+    const content = document.getElementById(toggle.dataset.menu);
+    toggle.classList.toggle('active', !!(content && content.querySelector('a.active')));
 });
 
-// Scroll active item into view (a hidden sub-menu link has no position, so use its toggle instead)
-let activeItem = document.querySelector('.menu-bar a.active');
-if (activeItem && activeItem.closest('.menu-dropdown')) {
-    activeItem = activeItem.closest('.menu-dropdown').querySelector('.menu-dropdown-toggle');
-}
+// Scroll active item into view (a sub-menu page has no link in the bar, so its lit toggle stands in)
+const activeItem = document.querySelector('.menu-bar a.active, .menu-bar .menu-dropdown-toggle.active');
 if (activeItem) {
     // Scroll with a slight offset to make it more visible
     const menuBar = document.querySelector('.menu-bar');
@@ -8974,7 +9012,7 @@ setActiveMenuItem();
 startStatusUpdates();
 
 // For each menu item, add click handler to set it as active
-const menuLinks = document.querySelectorAll('.menu-bar a');
+const menuLinks = document.querySelectorAll('.menu-bar a, .menu-dropdown-content a');
 menuLinks.forEach(link => {
     link.addEventListener('click', function(e) {
         // Don't override external links (like Docs)
@@ -9008,7 +9046,7 @@ applyDarkMode();
 window.addEventListener('resize', function() {
 // Don't reload the page, just make sure the active menu item is visible
 setTimeout(function() {
-    const activeItem = document.querySelector('.menu-bar a.active');
+    const activeItem = document.querySelector('.menu-bar a.active, .menu-bar .menu-dropdown-toggle.active');
     if (activeItem) {
         const menuBar = document.querySelector('.menu-bar');
         const activeItemLeft = activeItem.offsetLeft;
@@ -9055,13 +9093,7 @@ setTimeout(function() {
 <a href='./apps_editor'>Editor</a>
 <a href='./metrics_dashboard'>Metrics</a>
 <div class="menu-dropdown">
-<button class="menu-dropdown-toggle" type="button" onclick="toggleMenuDropdown(event, 'advanced-menu')">Advanced &#9662;</button>
-<div class="menu-dropdown-content" id="advanced-menu">
-<a href='./discovery'>Discovery</a>
-<a href='./browse'>Browse</a>
-<a href='./internals'>Internals</a>
-<a href='./kraken_key'>Kraken API Key</a>
-</div>
+<button class="menu-dropdown-toggle" type="button" data-menu="advanced-menu" onclick="toggleMenuDropdown(event, 'advanced-menu')">Advanced &#9662;</button>
 </div>
 <a href='https://springfall2008.github.io/batpred/'>Docs</a>
 <div class="dark-mode-toggle">
@@ -9070,6 +9102,13 @@ setTimeout(function() {
         + """
     <button onclick="toggleDarkMode()">Toggle Dark Mode</button>
 </div>
+</div>
+<!-- Outside .menu-bar on purpose: WebKit clips a position: fixed child of the fixed, scrolling bar -->
+<div class="menu-dropdown-content" id="advanced-menu">
+<a href='./discovery'>Discovery</a>
+<a href='./browse'>Browse</a>
+<a href='./internals'>Internals</a>
+<a href='./kraken_key'>Kraken API Key</a>
 </div>
 """
     )

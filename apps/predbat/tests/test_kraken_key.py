@@ -329,6 +329,49 @@ def test_menu_groups_advanced_pages():
     assert '<button class="menu-dropdown-toggle"' in html
 
 
+def test_menu_popup_is_not_inside_the_menu_bar():
+    """The Advanced popup must sit outside .menu-bar.
+
+    The bar is position: fixed with overflow-x: auto, and WebKit (Safari, the iOS companion app)
+    clips a position: fixed child to such a parent - so inside it the popup opened invisibly on
+    iPhones while Chrome showed it fine.
+    """
+    from html.parser import HTMLParser
+
+    from web_helper import get_menu_html
+
+    class AncestorFinder(HTMLParser):
+        """Record the class lists of every open element around id="advanced-menu"."""
+
+        VOID = {"img", "br", "input", "meta", "link", "hr"}
+
+        def __init__(self):
+            """Start with an empty element stack."""
+            super().__init__()
+            self.stack = []
+            self.ancestors = None
+
+        def handle_starttag(self, tag, attrs):
+            """Push the element; note the ancestors when the popup opens."""
+            attrs = dict(attrs)
+            if attrs.get("id") == "advanced-menu":
+                self.ancestors = [classes for _, classes in self.stack]
+            if tag not in self.VOID:
+                self.stack.append((tag, attrs.get("class") or ""))
+
+        def handle_endtag(self, tag):
+            """Pop back to the matching element."""
+            for index in range(len(self.stack) - 1, -1, -1):
+                if self.stack[index][0] == tag:
+                    del self.stack[index:]
+                    break
+
+    finder = AncestorFinder()
+    finder.feed(get_menu_html(False, "./dash", [], "v0.0.0", ""))
+    assert finder.ancestors is not None, "the Advanced popup is missing"
+    assert not any("menu-bar" in classes.split() for classes in finder.ancestors), finder.ancestors
+
+
 def test_menu_toggle_is_not_painted_by_the_dark_mode_button_rule():
     """The Advanced toggle is a <button>, and dark mode paints every button red with !important.
 
