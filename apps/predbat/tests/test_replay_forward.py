@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 from utils import MinuteArray
 from tests.test_single_debug import apply_overrides
-from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, plan_state_now, model_car_charging_now, rebuild_io_rates, run_soc, chart_replay, simulate_soc, install_logged_load_divergence, remove_logged_load_divergence, soc_rms_error, version_change, apply_logged_load_forecast, apply_logged_pv_forecast, parse_log, parse_override, rescan_rate_stats, counter_gain, crosses_midnight, shift_cumulative, shift_windows, roll_over_midnight, apply_run, today_values, apply_logged_rates, apply_logged_load_exact, apply_logged_pv_exact, apply_logged_sessions
+from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, plan_state_now, model_car_charging_now, rebuild_io_rates, run_soc, chart_replay, simulate_soc, install_logged_load_divergence, remove_logged_load_divergence, soc_rms_error, version_change, apply_logged_load_forecast, apply_logged_pv_forecast, parse_log, parse_override, rescan_rate_stats, counter_gain, crosses_midnight, shift_cumulative, shift_windows, roll_over_midnight, apply_run, today_values, apply_logged_rates, apply_logged_load_exact, apply_logged_pv_exact, apply_logged_sessions, apply_logged_dispatch
 
 SAMPLE_LOG = """2026-10-01 08:30:00.575570: --------------- PredBat - update at 2026-10-01 08:30:00+01:00 with clock skew 0 minutes, minutes now 510
 2026-10-01 08:30:00.577646: Predbat /config/github.py repository springfall2008/batpred version v9.3.3 currently running, latest version is v9.3.3, latest beta is v9.3.3
@@ -765,6 +765,39 @@ def test_rate_sessions_input():
     return 0
 
 
+def test_dispatch_input():
+    """A logged dispatch minutes line replaces io_adjusted, carries past a dropped run, and a line from before
+    midnight moves back a day."""
+    lines = """2026-10-16 19:36:00.000000: --------------- PredBat - update at 2026-10-16 19:35:00+01:00 with clock skew 0 minutes, minutes now 1175
+2026-10-16 19:36:01.000000: Replay input: dispatch minutes changed, from 19:35 [[145, 60], [325, 30]]
+2026-10-16 19:36:30.000000: --------------- PredBat - update at 2026-10-16 19:35:00+01:00 with clock skew 0 minutes, minutes now 1175
+2026-10-16 19:36:31.000000: Inverter 0 SoC: 9.0kWh 50%, current charge rate 5500W, current discharge rate 5500W, current battery power 0W
+"""
+    with tempfile.TemporaryDirectory() as folder:
+        path = os.path.join(folder, "predbat.log")
+        with open(path, "w") as handle:
+            handle.write(lines)
+        runs = parse_log(path)
+    if len(runs) != 1 or runs[0].get("dispatch") != (1175, [[145, 60], [325, 30]]):
+        print("ERROR: the dropped run's dispatch line should carry to the next run: {}".format(runs))
+        return 1
+    bat = SimpleNamespace(minutes_now=1175, io_adjusted={600: True})
+    apply_logged_dispatch(bat, runs[0]["dispatch"])
+    if set(bat.io_adjusted) != set(range(1320, 1380)) | set(range(1500, 1530)) or not all(bat.io_adjusted.values()):
+        print("ERROR: io_adjusted should be replaced by the logged dispatch minutes: {}".format(sorted(bat.io_adjusted)[:3]))
+        return 1
+    bat.minutes_now = 5
+    apply_logged_dispatch(bat, runs[0]["dispatch"])
+    if min(bat.io_adjusted) != 1320 - 1440:
+        print("ERROR: a line from before midnight should move back a day, got first minute {}".format(min(bat.io_adjusted)))
+        return 1
+    apply_logged_dispatch(bat, (1175, []))
+    if bat.io_adjusted != {}:
+        print("ERROR: an empty line should clear io_adjusted: {}".format(bat.io_adjusted))
+        return 1
+    return 0
+
+
 def test_inverter_input():
     """A logged inverter state carries past a dropped run and replaces the reconstructed export window; the exact
     divergence and the rates in force are applied too."""
@@ -968,6 +1001,7 @@ def run_replay_forward_tests(my_predbat):
     failed += test_cars_input()
     failed += test_inverter_input()
     failed += test_rate_sessions_input()
+    failed += test_dispatch_input()
     failed += test_model_car_charging_now(my_predbat)
     failed += test_old_log_formats()
     failed += test_rebuild_io_rates(my_predbat)

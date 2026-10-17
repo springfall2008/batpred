@@ -69,6 +69,7 @@ PV_INPUT_RE = re.compile(r"Replay input: PV forecast changed, 30-minute kWh from
 STATE_INPUT_RE = re.compile(r"Replay input: state (.*)$")
 # The rates from now, as change points, logged only when they change
 RATES_INPUT_RE = re.compile(r"Replay input: rates changed, from (\d\d):(\d\d) (.*)$")
+DISPATCH_INPUT_RE = re.compile(r"Replay input: dispatch minutes changed, from (\d\d):(\d\d) (\[.*\])$")
 SESSIONS_INPUT_RE = re.compile(r"Replay input: rate sessions changed, from (\d\d):(\d\d) (.*)$")
 SESSIONS_SERIES_RE = re.compile(r"(import|export) (\[\]|\[\[.*?\]\]) (-?\d+)")
 RATES_SERIES_RE = re.compile(r"(\w+) (\[\]|\[\[.*?\]\]) (\d+)")
@@ -122,6 +123,7 @@ DAY_KEYED_DICTS = (
     "rate_export_max_forward",
     "rate_import_pre_saving",
     "rate_export_pre_saving",
+    "io_adjusted",
     "future_energy_rates_import",
     "future_energy_rates_export",
     "manual_import_rates",
@@ -246,6 +248,7 @@ def parse_log(path):
                 (STATE_INPUT_RE, "state"),
                 (RATES_INPUT_RE, "rates"),
                 (SESSIONS_INPUT_RE, "sessions"),
+                (DISPATCH_INPUT_RE, "dispatch"),
                 (CARS_INPUT_RE, "cars"),
                 (INVERTER_INPUT_RE, "inverter"),
                 (FILTERED_RE, "filtered"),
@@ -262,6 +265,8 @@ def parse_log(path):
                         run[store] = parse_rates(found.groups())
                     elif store == "sessions":
                         run[store] = parse_sessions(found.groups())
+                    elif store == "dispatch":
+                        run[store] = (int(found.group(1)) * 60 + int(found.group(2)), ast.literal_eval(found.group(3)))
                     elif store in ("cars", "inverter"):
                         run[store] = ast.literal_eval(found.group(1))
                     else:
@@ -270,10 +275,10 @@ def parse_log(path):
     pending = {}
     for run in runs:
         # Rates, cars and dispatches are logged only when they change, so a change logged by a dropped run still holds for the runs after it
-        for store in ("rates", "sessions", "cars", "inverter", "octopus_slots"):
+        for store in ("rates", "sessions", "dispatch", "cars", "inverter", "octopus_slots"):
             pending[store] = run.get(store) or pending.get(store)
         if run.get("soc"):
-            for store in ("rates", "sessions", "cars", "inverter", "octopus_slots"):
+            for store in ("rates", "sessions", "dispatch", "cars", "inverter", "octopus_slots"):
                 if pending.get(store) and not run.get(store):
                     run[store] = pending[store]
             pending = {}
@@ -282,7 +287,7 @@ def parse_log(path):
 
 
 # The parsed "Replay input:" lines; a log with none of them comes from Predbat before they were added
-REPLAY_INPUT_STORES = ("state", "rates", "sessions", "cars", "inverter", "load_exact", "load_input", "pv_exact", "pv_input", "divergence_exact")
+REPLAY_INPUT_STORES = ("state", "rates", "sessions", "dispatch", "cars", "inverter", "load_exact", "load_input", "pv_exact", "pv_input", "divergence_exact")
 
 
 def parse_human_car_lines(run, line):
@@ -617,6 +622,8 @@ def apply_run(my_predbat, prev, run):
         apply_logged_rates(my_predbat, run["rates"])
     if run.get("sessions"):
         apply_logged_sessions(my_predbat, run["sessions"])
+    if run.get("dispatch"):
+        apply_logged_dispatch(my_predbat, run["dispatch"])
     for name, value in (run.get("cars") or {}).items():
         setattr(my_predbat, name, value)
     apply_human_car_lines(my_predbat, run)
@@ -1048,6 +1055,19 @@ def apply_logged_rates(my_predbat, rates_input):
             for minute in range(start + offset, start + until):
                 rates[minute] = rate
         setattr(my_predbat, attribute, rates)
+
+
+def apply_logged_dispatch(my_predbat, dispatch_input):
+    """Set the minutes marked as Intelligent dispatches (io_adjusted) from a logged "dispatch minutes changed" line.
+
+    The PV10 scenario treats a planned dispatch more than half an hour away as one that may be taken away, and finds
+    those minutes here. The line gives every marked minute, so it replaces the set. A line carried over from a run
+    before midnight moves back a day, as rates do.
+    """
+    start, runs = dispatch_input
+    if start > my_predbat.minutes_now:
+        start -= 24 * 60
+    my_predbat.io_adjusted = {start + offset + minute: True for offset, length in runs for minute in range(length)}
 
 
 def apply_logged_sessions(my_predbat, sessions_input):
