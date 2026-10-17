@@ -531,7 +531,27 @@ back home). This is what makes holiday mode act from the moment you switch it on
 for holiday history to accumulate.
 
 Buckets with no recorded data (zero) are ignored entirely so gaps in the history do not drag the estimate
-down. As with Load ML, this replaces the normal days_previous averaging; if [Load ML](load-ml.md) is enabled
+down.
+
+On a new install, some times of day won't have been recorded on any previous day yet - for example the hours
+before Predbat was installed part-way through yesterday, or every hour when it was installed today. For those
+times Predbat uses today's load instead, so you don't have to wait for a full day of history:
+
+- If that time of day has already passed today, today's load at that time is used. This is how tonight's
+  forecast picks up this morning's overnight load.
+- Otherwise, once at least an hour has been recorded, the average of all the load recorded so far is used.
+  The first hours after an install may not be typical of the whole day, but this is a better guess than base
+  load and it improves every cycle.
+- With less than an hour recorded, the [base load](#base-load) is used.
+- The hours earlier today before Predbat was installed also stay at base load. That way the
+  [in-day adjustment](customisation.md#battery-margins-and-metrics-options) isn't thrown off by comparing a forecast for those hours against
+  load that was never recorded.
+
+As with every other sample, the base load is applied as a minimum and holiday mode is matched or scaled. Today
+is only used while no previous day has data for that time of day, so once a full day is recorded the forecast
+works exactly as described above.
+
+As with Load ML, this replaces the normal days_previous averaging; if [Load ML](load-ml.md) is enabled
 it takes precedence over `days_previous_auto`.
 
 Because the holiday matching above already accounts for [holiday mode](customisation.md#holiday-mode) when
@@ -1272,11 +1292,20 @@ To disable, set it to 1440.
 out load_today sensors that update infrequently (e.g., sensors that increment in kWh units may only update every hour). This preprocessing happens before
 the main load data analysis and can significantly improve prediction accuracy, especially for systems with coarse-grained energy sensors. Set to 'false' to turn this feature off.
 
+- **load_history_fill_enable** (default true) fills gaps in the load_today history from the history of Predbat's own `predbat.load_energy_h0` sensor, which records
+today's measured load every cycle and keeps its name when your load sensor changes. This helps when you switch load_today to a different sensor (for example after
+changing inverter), where the new sensor has no history for the days before the switch, or when you cut over to another sensor and back again, leaving a stretch where
+load_today did not count. Any stretch of at least **load_filter_threshold** minutes where load_today did not move is filled with the load predbat.load_energy_h0 recorded
+at the time, and the days before load_today's own history started are counted as available history again. Stretches where predbat.load_energy_h0 did not move either
+are left for load_power_fill_enable and the average gap filling above. How far back this can reach depends on how long Home Assistant keeps history (10 days by default).
+Set to 'false' to turn this feature off.
+
 e.g.
 
 ```yaml
   load_filter_threshold: 60
   load_power_fill_enable: false
+  load_history_fill_enable: false
 ```
 
 See [Load filtering warning in FAQ's](faq.md#i-see-repeated-log-messages-warn-found-1-periods-of-zero-load-with-power-data-filling-using-power-integration).
@@ -1662,6 +1691,12 @@ charge_update_button:
 discharge_update_button:
   - button.solis_discharge
 ```
+
+The Predbat Gateway (Hub) sets this up itself: automatic configuration binds **schedule_write_button** to `switch.predbat_gateway_<serial>_schedule_write`.
+A change to a charge or export slot start or end time, and an enable switched alongside it, is held by the Gateway and shown straight away on its select or switch, but not sent to the inverter until the schedule write switch is turned on.
+The Gateway then sends the complete window in one command, followed by the enable, and the switch returns to off.
+If the inverter refuses the window, the selects go back to showing the inverter's own schedule and Predbat writes the window again on its next update.
+If you change a slot time by hand, turn the schedule write switch on afterwards; a change that is never written goes back to the inverter's schedule after 10 minutes.
 
 *TIP:* Some older GivEnergy inverters such as the Gen 1 hybrid and AC3 inverter that have had firmware upgrades to introduce battery pause functionality do not have sufficient memory on the inverter to provide control of battery pause start and end times.
 GivTCP does not recognise this and so still provides the select.givtcp_xxxx_battery_pause_start_time_slot and end_time_slot controls, but they do not work.<BR>
@@ -2128,7 +2163,9 @@ whether you are within an Octopus Energy "smart charge" slot
 - **octopus_charge_limit** - Octopus Energy integration sensor for car charging limit
 - **octopus_charge_limit_is_additive** - Optional list of booleans, one per car. Set to `true` when Octopus supplies a percentage to add rather than a final SOC target. Predbat then follows the dispatch energy and keeps `car_charging_limit` as the absolute SOC ceiling. Detected automatically from the `is_charger` attribute with Octopus Direct; set explicitly for other integrations without that attribute. Set to `false` to use an absolute Octopus target.
 - **octopus_slot_low_rate** - Whether Octopus Intelligent Slots reported will be at the lowest rate if at home
-- **octopus_slot_max** - Maximum number of 30-minute cheap rate slots per 24-hour period
+- **octopus_slot_max** - Maximum cheap rate dispatch time per 24-hour period, set in 30-minute slots (12 is 6 hours). It is counted in the minutes of each dispatch, so a 10-minute dispatch uses 10 minutes of it
+- **intelligent_dispatch_billing** - `auto` (default), `octopus` or `window`: whether a planned dispatch half hour is billed cheap only when the car charges in it (`octopus`) or whenever the dispatch was in force (`window`, E.ON Next Drive Smart). `auto` picks `window` for the Kraken component on `kraken_provider: eon`
+(see [car charging documentation](car-charging.md))
 - **car_charging_planned** - Indicates when your EV is plugged in and planned to charge during low-rate slots.
 - **car_charging_planned_response** - Values for the car_charging_planned sensor that indicate that the car is plugged in and will charge in the next low rate slot.
 - **car_charging_now** - Sensor to indicate when the EV is charging, used to hold the house battery for the car. Either an on/off sensor or a charging power sensor (W or kW, 200W or more counts as charging)
@@ -2587,7 +2624,7 @@ Note that the charge/discharge curves *only* affect the accuracy of the charging
 Predbat will still instruct the inverter to charge/discharge at full rate regardless of the charging curve so not having these curves only has an impact on plan accuracy.
 
 If you know the battery charge or discharge curves (e.g. manufacturer info or your own testing) then you can manually configure this in `apps.yaml`,
-or Predbat can calculate the curves based on historical inverter charging/discharging data in Home Assistant.
+or Predbat can calculate the curves based on historical inverter charging/discharging data in Home Assistant. Note the battery curves cannot be calculated if Predbat is in Read Only mode.
 
 If the battery has not recently been fully charged or fully discharged *at a charge/discharge rate that is at least 95% of your maximum charge/discharge rate* then Predbat will not be able to calculate the curves and you'll get a warning in the logfile.
 For some inverters you may not be able to practically charge/discharge at full rates so you'll keep getting the curve warning every time Predbat starts. Simply create dummy curves to stop this warning, e.g:

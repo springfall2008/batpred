@@ -124,8 +124,10 @@ If you are on the Octopus Intelligent Tariff set the following entries in `apps.
 
 - **octopus_slot_low_rate** - Default is `true`, meaning any Octopus Intelligent Slot reported will be at the lowest rate if at home. If `false` the existing rates only will be used which is only suitable for tariffs other than IOG.
 
-- **octopus_slot_max** - Sets the maximum number of 30-minute cheap rate slots per 24-hour period. Slots beyond this limit will use standard rates.
+- **octopus_slot_max** - Sets the maximum cheap rate dispatch time per 24-hour period, in 30-minute slots (12 is 6 hours). It is counted in the minutes of each dispatch as Octopus reports them, so a 10-minute dispatch uses 10 minutes of it. Dispatches beyond this limit will use standard rates.
 If unset, Predbat defaults this to 12 (6 hours) automatically for tariffs that Octopus enforces the 6-hour Intelligent cap on (tariff codes containing `IOG-SMB`), and to 48 (disabled) for other tariffs such as the older `INTELLI-VAR`. Set this explicitly to override the automatic default in either direction.
+
+- **intelligent_dispatch_billing** - How your supplier bills the half hours of a planned smart-charging dispatch. `octopus` bills a half hour at the cheap rate only when the car charges in it, as Octopus Intelligent does: Predbat keeps an elapsed half hour cheap until Octopus lists it as a completed dispatch, and stops treating a dispatch as cheap once it sees the car is not charging in it. `window` bills every half hour a planned dispatch was in force at the cheap rate, whether or not the car drew any power, as E.ON Next Drive Smart has been seen to do: Predbat keeps each of those half hours cheap for the rest of the day and never removes the cheap rate because the car is not charging. The default, `auto`, uses `window` when the [Kraken component](components.md#kraken-energy-kraken) is running with `kraken_provider: eon` and `octopus` otherwise. Set it explicitly if your supplier bills the other way.
 
 If you are using Octopus-led charging with the [Octopus Energy integration](energy-rates.md#octopus-energy-home-assistant-integration):
 
