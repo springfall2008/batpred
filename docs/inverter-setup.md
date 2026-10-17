@@ -4214,6 +4214,8 @@ When True, start and end times for charge and discharge can span midnight e.g. 2
 
 When False, start and end times can't span midnight and Predbat will control the inverter with separate charges/discharges up to and then after midnight if required by the plan.
 
+An individual inverter can also be restricted by giving its **charge_start_time** entity a `can_span_midnight` attribute set to `false`. This applies to that inverter only, so one device can be same-day while others of the same type still span midnight. The attribute can only restrict: setting it to `true` does not override an inverter type that cannot span midnight.
+
 ### clock_time_format
 
 Defines the time format of the inverter clock setting **inverter_time** in `apps.yaml`

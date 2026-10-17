@@ -34,7 +34,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v9.4.0"
+THIS_VERSION = "v9.4.1"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
 from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, DEFAULT_PREDBAT_REPOSITORY
@@ -109,6 +109,7 @@ from plugin_system import PluginSystem
 from github import GitHub
 from ha import run_async
 from control_ledger import ControlLedger
+from control_monitor import ControlMonitor
 
 
 class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, Marginal, Execute, Output, UserInterface, GitHub):
@@ -346,6 +347,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.clock_skew_warn_time = {}  # Per-inverter time the moderate clock-skew warning was last logged, so it repeats hourly rather than every cycle
         self.control_ledger = ControlLedger()
         self.control_ledger_restored = False
+        self.control_monitor = ControlMonitor()
         self.inverter_needs_reset = False
         self.inverter_needs_reset_force = ""
         self.inverters = []
@@ -794,6 +796,72 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         m.control_conflicts_sustained_total.set(len(sustained))
         m.control_conflicts_events = self.control_ledger.newest_events(20)
         m.control_conflicts_sustained_controls = sustained
+
+        # Control failure monitor
+        m.control_failures_24h.set(len(self.control_monitor.recent_events(time.time())))
+        m.control_failures_total.set(self.control_monitor.total)
+        m.control_failures_events = self.control_monitor.newest_events(20)
+
+    def publish_control_failures(self, now):
+        """
+        Publish the control-failure sensors, restoring their history first if not yet done.
+
+        The two entities ARE the durable store: the events attribute and the total's state are what
+        restore() reads back after a restart. The restore is retried every cycle until the total
+        reads back as a number, and while it is unresolved a total of 0 is not written - publishing
+        0 over a total that merely could not be read yet would register as a reset in HA long-term
+        statistics. Only the first attempt and every 12th after it fall back to history; the rest
+        read current state only, so an install that has never failed does not search 30 days of
+        history every cycle.
+
+        Args:
+            now (float): epoch seconds
+        """
+        monitor = self.control_monitor
+        if not monitor.restored:
+            if monitor.history_read_due():
+                read = self.load_previous_value_from_ha
+            else:
+
+                def read(entity, attribute=None):
+                    """Current state only, filtered the way load_previous_value_from_ha filters it."""
+                    value = self.get_state_wrapper(entity, attribute=attribute)
+                    return None if value in ("unavailable", "unknown") else value
+
+            monitor.restore(
+                read(self.prefix + ".control_failures", attribute="events"),
+                read(self.prefix + ".control_failures_total"),
+            )
+        monitor.prune(now)
+        recent = monitor.recent_events(now)
+        by_mode = monitor.by_mode(recent)
+        self.dashboard_item(
+            self.prefix + ".control_failures",
+            state=len(recent),
+            attributes={
+                "friendly_name": "Control failures (24h)",
+                "state_class": "measurement",
+                "unit_of_measurement": "failures",
+                "icon": "mdi:battery-alert",
+                "events": monitor.newest_events(20),
+                "by_mode": by_mode,
+            },
+        )
+        if monitor.restored or monitor.total > 0:
+            self.dashboard_item(
+                self.prefix + ".control_failures_total",
+                state=monitor.total,
+                attributes={
+                    "friendly_name": "Control failures (total)",
+                    "state_class": "total_increasing",
+                    "unit_of_measurement": "failures",
+                    "icon": "mdi:battery-alert",
+                },
+            )
+            # Once written, the entity holds our own value, so there is nothing left to restore
+            monitor.restored = True
+        if recent:
+            self.log("Control failures: {} slot(s) in the last 24h {}".format(len(recent), by_mode))
 
     def save_plan(self):
         """Save the current best plan via the storage component so it can be restored on next startup."""
@@ -1277,6 +1345,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         )
         if conflict_events:
             self.log("Control interference: {} change(s) in the last 24h, sustained on {}".format(len(conflict_events), sustained or "nothing"))
+
+        self.publish_control_failures(now_ts)
 
         if self.calculate_savings:
             # Get current totals

@@ -66,10 +66,47 @@ _COMMAND_ACK_WINDOW = 30
 # counts (matches the number of recent ids the hub remembers for replay protection)
 _COMMAND_ACK_IDS_KEPT = 16
 
+# A slot window staged by a select write is shown in place of the Hub's schedule until the
+# schedule write switch sends it. One nobody sends (a manual edit with no press) is dropped
+# after this long, so the selects show the Hub's own schedule again (seconds).
+_STAGED_EXPIRY_SECONDS = 600
+
+# Sends of one schedule-write command before it is given up as unanswered, one per
+# _COMMAND_ACK_WINDOW, and how often the commit looks for its ack (seconds)
+_COMMIT_ATTEMPTS = 3
+_COMMIT_POLL_SECONDS = 0.5
+
+
+def _split_same_day_plan_entries(entries):
+    """Split native EMS windows into same-day pieces on the plan's absolute timeline.
+
+    The EMS requires a 23:59 end followed by a separate 00:00 start. Keep hours
+    above 23 on later days so the Hub still expires each piece on its intended day.
+    """
+    split_entries = []
+    for entry in entries:
+        start = max(0, entry["start_hour"] * 60 + entry["start_minute"])
+        end = entry["end_hour"] * 60 + entry["end_minute"]
+        while start < end:
+            next_midnight = (start // (24 * 60) + 1) * (24 * 60)
+            piece_end = min(end, next_midnight - 1)
+            if start < piece_end:
+                piece = entry.copy()
+                piece["start_hour"], piece["start_minute"] = divmod(start, 60)
+                piece["end_hour"], piece["end_minute"] = divmod(piece_end, 60)
+                split_entries.append(piece)
+            start = next_midnight
+    return split_entries
+
 
 def _monotonic():
     """Clock for the ack window: immune to wall-clock corrections, and patchable in tests."""
     return time.monotonic()
+
+
+async def _commit_pause():
+    """Wait before looking again for a schedule-write command's ack (patchable in tests)."""
+    await asyncio.sleep(_COMMIT_POLL_SECONDS)
 
 
 # Total startup wait budget, in 0.5 s ticks, shared by the connection and auto-config waits
@@ -158,6 +195,7 @@ GATEWAY_ATTRIBUTE_TABLE = {
     "reserve_soc": {"friendly_name": "Reserve SOC", "icon": "mdi:battery-lock", "unit_of_measurement": "%", "min": 0, "max": 100, "step": 1},
     "target_soc": {"friendly_name": "Target SOC", "icon": "mdi:battery-arrow-up", "unit_of_measurement": "%", "min": 0, "max": 100, "step": 1},
     # Schedule selects (HH:MM:SS options)
+    "schedule_write": {"friendly_name": "Schedule Write", "icon": "mdi:calendar-sync"},
     "charge_slot1_start": {"friendly_name": "Charge Slot 1 Start", "icon": "mdi:clock-start", "options": _GATEWAY_OPTIONS_TIME},
     "charge_slot1_end": {"friendly_name": "Charge Slot 1 End", "icon": "mdi:clock-end", "options": _GATEWAY_OPTIONS_TIME},
     "discharge_slot1_start": {"friendly_name": "Discharge Slot 1 Start", "icon": "mdi:clock-start", "options": _GATEWAY_OPTIONS_TIME},
@@ -228,6 +266,9 @@ class GatewayMQTT(ComponentBase):
     # Guards the command id counter and the in-flight command map, which are touched both by
     # control writes (engine thread) and by acks arriving on the MQTT listener's loop.
     _command_lock = threading.Lock()
+    # Guards _staged: select and switch events arrive on Home Assistant's thread, commits and
+    # telemetry run on the gateway's own loop
+    _staged_lock = threading.Lock()
 
     # Defaults for an instance built without initialize()
     gateway_shared_ct = True
@@ -400,6 +441,11 @@ class GatewayMQTT(ComponentBase):
         self._ack_subscribed = False  # broker granted the ack subscription on this connection
         self._acks_seen = False  # at least one ack matched a tracked command on this connection
         self._ack_subscribe_warned = False  # the denied-subscription warning is logged once
+        # Slot windows written but not yet sent to the Hub: (serial suffix, "charge"|"discharge") ->
+        # {start, end (HHMM or None), enable (bool or None), at (_monotonic)}. See _stage_slot().
+        self._staged = {}
+        self._commit_inflight = set()  # (serial suffix, side) being written to the Hub right now
+        self._commit_tasks = set()  # commits started on this loop, kept until done
 
         # Predbat data publish state (price/timeline for device display)
         self._last_predbat_data = None
@@ -531,6 +577,11 @@ class GatewayMQTT(ComponentBase):
                     "use_native": True,
                 }
             )
+
+        # The cached plan also drives native registers if the cloud goes away.
+        # Restrict its windows for the same Hub devices as the live executor.
+        if any(inv.inverter_type == "GWMQTT" and inv.inv_can_span_midnight is False for inv in getattr(self.base, "inverters", [])):
+            plan_entries = _split_same_day_plan_entries(plan_entries)
 
         # Sort entries chronologically (earliest start first) — charge and export windows
         # are appended in separate passes above, so without this the gateway would receive
@@ -975,6 +1026,7 @@ class GatewayMQTT(ComponentBase):
         """
         device_id = status.device_id
         firmware = status.firmware
+        self._prune_staged()
 
         # Read-only as the gateway actually enforces it. Absent on firmware predating
         # the field, which is UNKNOWN and not False — publishing False there would claim
@@ -1355,8 +1407,12 @@ class GatewayMQTT(ComponentBase):
             self.dashboard_item(f"sensor.{pfx}_inverter_rate_max", inverter_rate_max, attributes=GATEWAY_ATTRIBUTE_TABLE.get("inverter_rate_max", {}), app="gateway")
 
         control = inv.control
-        self.dashboard_item(f"switch.{pfx}_charge_enabled", "on" if control.charge_enabled else "off", attributes=GATEWAY_ATTRIBUTE_TABLE.get("charge_enabled", {}), app="gateway")
-        self.dashboard_item(f"switch.{pfx}_discharge_enabled", "on" if control.discharge_enabled else "off", attributes=GATEWAY_ATTRIBUTE_TABLE.get("discharge_enabled", {}), app="gateway")
+        # A window waiting for the schedule write shows its staged values, not telemetry
+        for side, enabled in (("charge", control.charge_enabled), ("discharge", control.discharge_enabled)):
+            staged = self._staged_entry(suffix, side)
+            if staged is not None and staged["enable"] is not None:
+                enabled = staged["enable"]
+            self.dashboard_item(f"switch.{pfx}_{side}_enabled", "on" if enabled else "off", attributes=GATEWAY_ATTRIBUTE_TABLE.get(f"{side}_enabled", {}), app="gateway")
         # Proto sentinel: 0=undefined→publish 99999 (unlimited), 1=zero limit→publish 0, otherwise use value as-is.
         # Undefined only means unlimited for an inverter that has never reported a limit.
         _raw_export_limit = self._last_rating(suffix, "export_limit", control.export_limit_w) or record.get("export_limit_w") or 0
@@ -1400,7 +1456,13 @@ class GatewayMQTT(ComponentBase):
             ("discharge_end", "discharge_slot1_end"),
         ]:
             hhmm = getattr(sched, field, 0) if sched else 0
-            self.dashboard_item(f"select.{pfx}_{name}", self._hhmm_to_time_str(hhmm), attributes=GATEWAY_ATTRIBUTE_TABLE.get(name, {}), app="gateway")
+            side, endpoint = field.split("_")
+            staged = self._staged_entry(suffix, side)
+            if staged is not None and staged[endpoint] is not None:
+                hhmm = staged[endpoint]
+            self.dashboard_item(f"select.{pfx}_{name}", self._hhmm_to_time_str(hhmm), attributes=self._slot_attributes(name, inv.type), app="gateway")
+        # Pressed (turned on) by Predbat once it has written the slot selects: sends what is staged
+        self.dashboard_item(f"switch.{pfx}_schedule_write", "off", attributes=GATEWAY_ATTRIBUTE_TABLE.get("schedule_write", {}), app="gateway")
 
         # Inverter time (from GatewayStatus timestamp for clock drift detection)
         if self._last_status and self._last_status.timestamp:
@@ -1997,6 +2059,7 @@ class GatewayMQTT(ComponentBase):
         discharge_end_entities = []
         charge_enable_entities = []
         discharge_enable_entities = []
+        schedule_write_entities = []
         export_limit_entities = []
         inverter_limit_entities = []
         battery_scaling_entities = []
@@ -2025,6 +2088,7 @@ class GatewayMQTT(ComponentBase):
             discharge_end_entities.append(f"select.{base}_discharge_slot1_end")
             charge_enable_entities.append(f"switch.{base}_charge_enabled")
             discharge_enable_entities.append(f"switch.{base}_discharge_enabled")
+            schedule_write_entities.append(f"switch.{base}_schedule_write")
             export_limit_entities.append(f"sensor.{base}_export_limit_w")
 
             # soc_max: from battery capacity entity
@@ -2073,6 +2137,7 @@ class GatewayMQTT(ComponentBase):
         self.set_arg("discharge_end_time", discharge_end_entities)
         self.set_arg("scheduled_charge_enable", charge_enable_entities)
         self.set_arg("scheduled_discharge_enable", discharge_enable_entities)
+        self.set_arg("schedule_write_button", schedule_write_entities)
         self.set_arg("export_limit", export_limit_entities)
         self.set_arg("inverter_limit", inverter_limit_entities)
 
@@ -2108,18 +2173,13 @@ class GatewayMQTT(ComponentBase):
             self.set_arg("ems_total_grid", f"sensor.{pfx}_ems_total_grid")
             self.set_arg("ems_total_pv", f"sensor.{pfx}_ems_total_pv")
             self.set_arg("ems_total_load", f"sensor.{pfx}_ems_total_load")
-            # EMS idle slots (discharge pause windows) — use same slot entities for all inverters
-            self.set_arg(
-                "idle_start_time",
-                [f"select.{base0}_discharge_slot1_start" for _ in range(num_inverters)],
-            )
-            self.set_arg(
-                "idle_end_time",
-                [f"select.{base0}_discharge_slot1_end" for _ in range(num_inverters)],
-            )
             self.log(f"Info: GatewayMQTT: EMS mode with {inv0.ems.num_inverters} sub-inverters")
 
         # Explicitly set unsupported features to None
+        # The Hub manages idle (demand) time itself. On an EMS the discharge slot selects are
+        # the export slot, so binding idle time to them overwrote the export window.
+        self.set_arg("idle_start_time", None)
+        self.set_arg("idle_end_time", None)
         self.set_arg("givtcp_rest", None)
         self.set_arg("charge_rate_percent", None)
         self.set_arg("discharge_rate_percent", None)
@@ -2702,6 +2762,10 @@ class GatewayMQTT(ComponentBase):
     async def select_event(self, entity_id, value):
         """Handle schedule select entity changes.
 
+        A slot start or end is staged, not sent: the Hub only ever gets the complete window,
+        when the schedule write switch is pressed. A start sent on its own that equals the
+        old end is a zero-length window, which an enabled EMS refuses.
+
         Args:
             entity_id: The entity ID that changed.
             value: The new selected value (HH:MM:SS).
@@ -2712,139 +2776,91 @@ class GatewayMQTT(ComponentBase):
         if serial is None:
             self.log(f"Warn: GatewayMQTT: select_event: cannot resolve serial for entity '{entity_id}' — command not sent")
             return
-        # Schedule time changes — convert HH:MM:SS to HHMM and send slot command
-        time_str = str(value).strip()
-        parts = time_str.split(":")
-        if len(parts) >= 2:
-            try:
-                hhmm = int(parts[0]) * 100 + int(parts[1])
-            except (ValueError, IndexError):
-                return
+        hhmm = self._time_str_to_hhmm(value)
+        if hhmm is None:
+            return
+        for side in ("discharge", "charge"):
+            for field in ("start", "end"):
+                if entity_id.endswith(f"_{side}_slot1_{field}"):
+                    self._stage_slot(entity_id, serial, side, field, hhmm)
+                    return
 
-            if "_discharge_slot1_start" in entity_id or "_discharge_slot1_end" in entity_id:
-                await self._update_discharge_slot(entity_id, hhmm, serial=serial)
-            elif "_charge_slot1_start" in entity_id or "_charge_slot1_end" in entity_id:
-                # Read current charge slot times to send both start and end
-                await self._update_charge_slot(entity_id, hhmm, serial=serial)
-
-    def charge_window_uses_staging(self, start_entity, end_entity):
-        """Identify a coordinator synchronously, before crossing an async bridge."""
-        if not isinstance(start_entity, str) or not start_entity.endswith("_charge_slot1_start"):
-            return False
-        if end_entity != start_entity.removesuffix("_start") + "_end":
-            return False
-        serial = self._serial_from_entity_id(start_entity)
-        record = getattr(self, "_discovery", {}).get((serial or "").upper(), {})
-        return bool(serial) and record.get("type") in GATEWAY_COORDINATOR_TYPES
-
-    async def update_charge_window(self, start_entity, end_entity, start, end):
-        """Send an engine charge window as one full-serial command, not two partial slots.
-
-        True means publication was attempted, not that the inverter applied it. The
-        caller must verify both endpoint entities, which only an applied ACK or
-        physical telemetry updates. Coordinators use their existing separate path:
-        those devices can stage a disabled slot and apply it only on enable.
-        Manual single-endpoint selects keep their path.
-        """
-        if getattr(self.base, "set_read_only", False):
-            return False
-        if not isinstance(start_entity, str) or not start_entity.endswith("_charge_slot1_start"):
-            return False
-        if end_entity != start_entity.removesuffix("_start") + "_end":
-            return False
-        serial = self._serial_from_entity_id(start_entity)
-        if not serial or self._serial_from_entity_id(end_entity) != serial:
-            return False
-        if self.charge_window_uses_staging(start_entity, end_entity):
-            return False
-        try:
-            times = [datetime.datetime.strptime(value, "%H:%M:%S") for value in (start, end)]
-        except (ValueError, TypeError):
-            return False
-        schedule = {field: value.hour * 100 + value.minute for field, value in zip(("start", "end"), times)}
-        await self._send_control(start_entity, "set_charge_slot", schedule_json=json.dumps(schedule), serial=serial)
-        return True
-
-    async def _update_charge_slot(self, entity_id, hhmm, serial):
-        """Send set_charge_slot command with updated start or end time."""
-        # Determine which field changed
-        if "_start" in entity_id:
-            schedule = {"start": hhmm}
-        else:
-            schedule = {"end": hhmm}
-        await self._send_control(entity_id, "set_charge_slot", schedule_json=json.dumps(schedule), serial=serial)
-        self.log(f"Info: GatewayMQTT: Charge slot update: {schedule}")
-
-    def discharge_window_uses_staging(self, start_entity, end_entity):
-        """Identify a coordinator synchronously, before crossing an async bridge."""
-        if not isinstance(start_entity, str) or not start_entity.endswith("_discharge_slot1_start"):
-            return False
-        if end_entity != start_entity.removesuffix("_start") + "_end":
-            return False
-        serial = self._serial_from_entity_id(start_entity)
-        record = getattr(self, "_discovery", {}).get((serial or "").upper(), {})
-        return bool(serial) and record.get("type") in GATEWAY_COORDINATOR_TYPES
-
-    async def update_discharge_window(self, start_entity, end_entity, start, end):
-        """Send an engine discharge window as one full-serial command, not two partial slots.
-
-        True means publication was attempted, not that the inverter applied it. The
-        caller must verify both endpoint entities, which only an applied ACK or
-        physical telemetry updates. Coordinators use their existing separate path:
-        those devices can stage a disabled slot and apply it only on enable.
-        Manual single-endpoint selects keep their path.
-        """
-        if getattr(self.base, "set_read_only", False):
-            return False
-        if self.discharge_window_uses_staging(start_entity, end_entity):
-            return False
-        kwargs = self._discharge_window_kwargs(start_entity, end_entity, start, end)
-        if kwargs is None:
-            return False
-        if self.discharge_window_refused(start_entity, end_entity, start, end):
-            # _send_control would not re-send it inside the ack window, so polling again
-            # would only wait out the timeout for an answer that has already arrived
-            self.log(f"Info: GatewayMQTT: discharge window {start}-{end} for {kwargs['serial']} was just refused, not retrying yet")
-            return False
-        await self._send_control(start_entity, "set_discharge_slot", **kwargs)
-        return True
-
-    def _discharge_window_kwargs(self, start_entity, end_entity, start, end):
-        """The paired set_discharge_slot fields for a slot1 start/end entity pair, or None."""
-        # The end entity name is derived from the start, so both carry the same serial
-        if not isinstance(start_entity, str) or not start_entity.endswith("_discharge_slot1_start"):
-            return None
-        if end_entity != start_entity.removesuffix("_start") + "_end":
-            return None
-        serial = self._serial_from_entity_id(start_entity)
-        if not serial:
+    @staticmethod
+    def _time_str_to_hhmm(value):
+        """Convert an HH:MM[:SS] string to an HHMM integer, or None if it does not parse."""
+        parts = str(value).strip().split(":")
+        if len(parts) < 2:
             return None
         try:
-            times = [datetime.datetime.strptime(value, "%H:%M:%S") for value in (start, end)]
-        except (ValueError, TypeError):
+            return int(parts[0]) * 100 + int(parts[1])
+        except ValueError:
             return None
-        schedule = {field: value.hour * 100 + value.minute for field, value in zip(("start", "end"), times)}
-        return {"schedule_json": json.dumps(schedule), "serial": serial}
 
-    def discharge_window_refused(self, start_entity, end_entity, start, end):
-        """Whether the hub refused this exact paired window within the ack window."""
-        kwargs = self._discharge_window_kwargs(start_entity, end_entity, start, end)
-        if kwargs is None or not (getattr(self, "_ack_subscribed", False) and self._mqtt_connected and self._acks_seen):
-            return False
-        with self._command_lock:
-            entry = self._pending_commands.get(start_entity)
-            if entry is None or entry["command"] != "set_discharge_slot" or entry["kwargs"] != kwargs:
-                return False
-            return entry["state"] == "refused" and _monotonic() - entry["sent_at"] < _COMMAND_ACK_WINDOW
+    @staticmethod
+    def _slot_attributes(name, inv_type):
+        """Attributes for a slot select; an EMS only accepts same-day windows, unlike other Hub inverters."""
+        attributes = GATEWAY_ATTRIBUTE_TABLE.get(name, {}).copy()
+        if inv_type == pb.INVERTER_TYPE_GIVENERGY_EMS:
+            attributes["can_span_midnight"] = False
+        return attributes
 
-    async def _update_discharge_slot(self, entity_id, hhmm, serial):
-        """Send set_discharge_slot command with updated start or end time."""
-        if "_start" in entity_id:
-            schedule = {"start": hhmm}
-        else:
-            schedule = {"end": hhmm}
-        await self._send_control(entity_id, "set_discharge_slot", schedule_json=json.dumps(schedule), serial=serial)
-        self.log(f"Info: GatewayMQTT: Discharge slot update: {schedule}")
+    def _staged_entry(self, suffix, side):
+        """The staged window for one side of an inverter, or None. Expiry is _prune_staged()'s job."""
+        return getattr(self, "_staged", {}).get((suffix, side))
+
+    def _prune_staged(self):
+        """Drop staged windows nobody wrote to the Hub within _STAGED_EXPIRY_SECONDS.
+
+        Called once per status frame and before each commit or new staged write, so an entry
+        for an inverter that has left the status frame is dropped too.
+        """
+        now = _monotonic()
+        with self._staged_lock:
+            staged = getattr(self, "_staged", {})
+            expired = [key for key, entry in staged.items() if now - entry["at"] > _STAGED_EXPIRY_SECONDS]
+            if expired:
+                self._staged = {key: entry for key, entry in staged.items() if key not in expired}
+        for suffix, side in expired:
+            self.log(f"Warn: GatewayMQTT: staged {side} window for {suffix} was never written to the Hub, showing the Hub's schedule again")
+
+    def _stage_slot(self, entity_id, serial, side, field, hhmm):
+        """Hold one slot endpoint until the schedule write switch sends the complete window.
+
+        The other endpoint starts from what its select shows, so the staged pair is always the
+        complete window the Hub should end up with.
+        """
+        suffix = _serial_suffix(serial)
+        other = "end" if field == "start" else "start"
+        self._prune_staged()
+        with self._staged_lock:
+            entry = self._staged_entry(suffix, side)
+            if entry is None:
+                entry = {"start": None, "end": None, "enable": None}
+                entry[other] = self._time_str_to_hhmm(self.get_state_wrapper(entity_id[: -len(field)] + other))
+            entry = {**entry, field: hhmm, "at": _monotonic()}
+            self._staged = {**getattr(self, "_staged", {}), (suffix, side): entry}
+        if entry[other] is None:
+            self.log(f"Warn: GatewayMQTT: {side} slot {other} for {serial} is unknown, so the staged {side} window stays incomplete until it is written too")
+        inv_type = getattr(self, "_discovery", {}).get(serial.upper(), {}).get("type")
+        self.dashboard_item(entity_id, self._hhmm_to_time_str(hhmm), attributes=self._slot_attributes(f"{side}_slot1_{field}", inv_type), app="gateway")
+        self.log(f"Info: GatewayMQTT: {side} slot {field} {hhmm:04d} for {serial} staged until the schedule is written")
+
+    def _clear_staged(self, serial, side, entry=None):
+        """Forget a staged window, so its selects follow the Hub's schedule again.
+
+        Given the entry that was sent, only that entry is cleared: a window staged after it
+        stays, to be sent in turn.
+
+        Returns:
+            bool: True if the side has nothing staged now.
+        """
+        key = (_serial_suffix(serial), side)
+        with self._staged_lock:
+            staged = getattr(self, "_staged", {})
+            if entry is not None and staged.get(key) is not entry:
+                return key not in staged
+            self._staged = {kept_key: kept for kept_key, kept in staged.items() if kept_key != key}
+        return True
 
     async def number_event(self, entity_id, value):
         """Handle number entity changes (e.g. charge rate, target SOC).
@@ -2932,12 +2948,243 @@ class GatewayMQTT(ComponentBase):
         if serial is None:
             self.log(f"Warn: GatewayMQTT: switch_event: cannot resolve serial for entity '{entity_id}' — command not sent")
             return
-        if "_charge_enabled" in entity_id:
-            await self._send_control(entity_id, "set_charge_enable", enable=is_on, serial=serial)
-            self.log(f"Info: GatewayMQTT: Charge {'enabled' if is_on else 'disabled'}")
-        elif "_discharge_enabled" in entity_id:
-            await self._send_control(entity_id, "set_discharge_enable", enable=is_on, serial=serial)
-            self.log(f"Info: GatewayMQTT: Discharge {'enabled' if is_on else 'disabled'}")
+        if entity_id.endswith("_schedule_write"):
+            self.dashboard_item(entity_id, "off", attributes=GATEWAY_ATTRIBUTE_TABLE.get("schedule_write", {}), app="gateway")
+            if is_on:
+                await self._start_commit(serial)
+            return
+        side = "charge" if "_charge_enabled" in entity_id else "discharge" if "_discharge_enabled" in entity_id else None
+        if side is None:
+            return
+        suffix = _serial_suffix(serial)
+        self._prune_staged()
+        with self._staged_lock:
+            entry = self._staged_entry(suffix, side)
+            if entry is not None:
+                # Written alongside a staged window: an EMS will not enable onto a window it does
+                # not have yet, so the enable goes after the window when the schedule is written
+                self._staged = {**self._staged, (suffix, side): {**entry, "enable": is_on, "at": _monotonic()}}
+        if entry is not None:
+            self.dashboard_item(entity_id, "on" if is_on else "off", attributes=GATEWAY_ATTRIBUTE_TABLE.get(f"{side}_enabled", {}), app="gateway")
+            self.log(f"Info: GatewayMQTT: {side.capitalize()} {'enable' if is_on else 'disable'} for {serial} staged until the schedule is written")
+            return
+        await self._send_control(entity_id, f"set_{side}_enable", enable=is_on, serial=serial)
+        self.log(f"Info: GatewayMQTT: {side.capitalize()} {'enabled' if is_on else 'disabled'}")
+
+    async def _start_commit(self, serial):
+        """Write what is staged for an inverter to the Hub, without making the caller wait.
+
+        The press comes from Predbat's control loop, which must not block on Hub acks, so the
+        commit runs on the gateway's own loop. With no loop running (tests), or one that has
+        closed with the component, it runs inline, where a stopped connection fails it at once.
+        """
+        if self._loop is None or self._loop.is_closed():
+            await self._commit_staged(serial)
+        elif self._loop is not asyncio.get_running_loop():
+            asyncio.run_coroutine_threadsafe(self._commit_staged(serial), self._loop)
+        else:
+            task = asyncio.ensure_future(self._commit_staged(serial))
+            self._commit_tasks.add(task)
+            task.add_done_callback(self._commit_tasks.discard)
+
+    async def _commit_staged(self, serial):
+        """Write each staged side of an inverter to the Hub. A side already being written is left to that commit."""
+        suffix = _serial_suffix(serial)
+        self._prune_staged()
+        for side in ("charge", "discharge"):
+            key = (suffix, side)
+            if key in self._commit_inflight or self._staged_entry(suffix, side) is None:
+                continue
+            self._commit_inflight.add(key)
+            try:
+                await self._commit_side(serial, side)
+            except Exception as error:
+                self.log(f"Error: GatewayMQTT: writing the {side} window for {serial} failed: {error}")
+                self._clear_staged(serial, side)
+            finally:
+                self._commit_inflight.discard(key)
+
+    async def _commit_side(self, serial, side):
+        """Send one staged window, and its enable, to the Hub.
+
+        The window always goes as a complete start/end pair. An EMS that is off only records it
+        (ack "recorded"), and does not enable onto a window it does not have, so a staged enable
+        goes after the window. A staged disable goes first, so a refused window cannot leave the
+        side enabled. A staged enable is always sent: Predbat only writes one when it saw the
+        other state, and the last status frame may predate a disable sent this cycle. Success or
+        failure, the staged entry that was sent is then dropped: on failure the selects show the
+        Hub's schedule again, so Predbat sees the mismatch on its next cycle and writes it again.
+        A window staged while this one was in flight is sent next.
+
+        Returns:
+            bool: True if the Hub took the window (and enable).
+        """
+        suffix = _serial_suffix(serial)
+        base = f"{self.prefix}_gateway_{suffix}"
+        slot_entity = f"select.{base}_{side}_slot1_start"
+        enable_entity = f"switch.{base}_{side}_enabled"
+        while True:
+            entry = self._staged_entry(suffix, side)
+            if entry is None:
+                return True
+            if entry["start"] is None or entry["end"] is None:
+                if await self._commit_failed(serial, side, entry, f"incomplete window {entry['start']}-{entry['end']}"):
+                    return False
+                continue
+            confirmed = True
+            if entry["enable"] is False:
+                state, _ = await self._send_and_await(enable_entity, f"set_{side}_enable", enable=False, serial=serial)
+                if state not in ("applied", "published"):
+                    if await self._commit_failed(serial, side, entry, f"disable {state or 'not acknowledged'}"):
+                        return False
+                    continue
+                confirmed = state == "applied"
+            window = f"{entry['start']:04d}-{entry['end']:04d}"
+            state, outcome = await self._send_and_await(slot_entity, f"set_{side}_slot", **{"schedule_json": json.dumps({"start": entry["start"], "end": entry["end"]}), "serial": serial})
+            if state not in ("applied", "published"):
+                if await self._commit_failed(serial, side, entry, f"window {window} {state or 'not acknowledged'}", window_refused=state == "refused"):
+                    return False
+                continue
+            confirmed = confirmed and state == "applied"
+            recorded = bool(outcome.get("recorded"))
+            slot_kwargs = {"schedule_json": json.dumps({"start": entry["start"], "end": entry["end"]}), "serial": serial}
+            if entry["enable"] is True and self._attempt_outcome(slot_entity, f"set_{side}_slot", slot_kwargs)[0] == "refused":
+                # Another unit refused the window after one applied it: do not enable onto it
+                if await self._commit_failed(serial, side, entry, f"window {window} refused by another unit", window_refused=True):
+                    return False
+                continue
+            if entry["enable"] is True:
+                state, _ = await self._send_and_await(enable_entity, f"set_{side}_enable", enable=True, serial=serial)
+                if state not in ("applied", "published"):
+                    if await self._commit_failed(serial, side, entry, f"enable after window {window} {state or 'not acknowledged'}"):
+                        return False
+                    continue
+                confirmed = confirmed and state == "applied"
+            if not self._clear_staged(serial, side, entry):
+                continue  # written again while this was in flight: send the newer window too
+            if confirmed:
+                self.log(f"Info: GatewayMQTT: {side} window {window} for {serial} written to the Hub{' (recorded while off)' if recorded else ''}")
+            else:
+                self.log(f"Info: GatewayMQTT: {side} window {window} for {serial} published to the Hub without an ack; the next status frame shows whether it landed")
+            return True
+
+    async def _commit_failed(self, serial, side, entry, reason, window_refused=False):
+        """Give up on a staged window: show the Hub's schedule again so the next cycle retries.
+
+        If a newer window was staged while this one was in flight, that one is sent instead.
+
+        An export window the Hub refused to move while the old one may still be armed would
+        export on a schedule the plan has left, so export is turned off until a window lands
+        (#5532). Telemetry is not consulted: the last status frame can predate an enable ack,
+        and turning export off when it is already off changes nothing. Only an explicit
+        refusal does this: an unanswered window may well have applied (a slow EMS write), and
+        the plan still wants to export, so it is left running.
+
+        Returns:
+            bool: True if the commit has given up, False if a newer staged window is to be sent.
+        """
+        self.log(f"Warn: GatewayMQTT: {side} window for {serial} not written to the Hub: {reason}")
+        if not self._clear_staged(serial, side, entry):
+            self.log(f"Info: GatewayMQTT: a newer {side} window for {serial} was staged meanwhile, sending that")
+            return False
+        if window_refused and side == "discharge":
+            await self._export_fail_safe(serial)
+        if self._last_status is not None:
+            self._inject_entities(self._last_status)
+        return True
+
+    async def _export_fail_safe(self, serial):
+        """Turn scheduled export off after the Hub refused an export window (#5532)."""
+        self.log(f"Warn: GatewayMQTT: turning off scheduled export for {serial} until its window is written")
+        try:
+            await self._send_control(f"switch.{self.prefix}_gateway_{_serial_suffix(serial)}_discharge_enabled", "set_discharge_enable", enable=False, serial=serial)
+        except Exception as error:
+            self.log(f"Warn: GatewayMQTT: turning off scheduled export for {serial} failed: {error}")
+
+    def _spawn(self, coro):
+        """Run a coroutine from synchronous code: as a task on the running loop, else to completion."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(coro)
+            return
+        task = loop.create_task(coro)
+        self._commit_tasks.add(task)
+        task.add_done_callback(self._commit_tasks.discard)
+
+    async def _send_and_await(self, entity_id, command, **kwargs):
+        """Send a schedule-write command and wait for the Hub to apply it.
+
+        Unanswered, it is sent again, up to _COMMIT_ATTEMPTS sends one ack window apart. With
+        the Hub disconnected nothing can be sent, so it fails at once. Without an ack
+        subscription there is nothing to wait for, and on a connection where nothing has been
+        acknowledged yet the Hub gets one ack window to answer: after that the command counts as
+        published, and the next status frame shows whether it landed.
+
+        Returns:
+            tuple: ("applied", the ack's applied payload or {}), ("published", {}) when sent with
+            no ack to wait for, ("refused", None), or (None, None) if unanswered or not sent.
+        """
+        answered_before = self._acks_seen  # a Hub that stops answering mid-commit is not one that never sends acks
+        for _attempt in range(_COMMIT_ATTEMPTS):
+            if not self._mqtt_connected:
+                return None, None
+            try:
+                await self._send_control(entity_id, command, **kwargs)
+            except Exception as error:
+                self.log(f"Warn: GatewayMQTT: {command} for {kwargs.get('serial')} could not be published: {error}")
+                return None, None
+            if not getattr(self, "_ack_subscribed", False):
+                return "published", {}
+            state, applied = await self._await_command_outcome(entity_id, command, kwargs)
+            if state == "applied":
+                return state, applied if isinstance(applied, dict) else {}
+            if state == "refused":
+                return state, None
+            if not answered_before and not self._acks_seen:
+                return "published", {}
+        return None, None
+
+    def _attempt_outcome(self, entity_id, command, kwargs):
+        """The outcome of the latest attempt at a tracked command, judged on that attempt's ids only.
+
+        The tracked entry keeps the outcomes of earlier attempts at the same value (so a late ack
+        still matches), which makes its overall state "applied" after any earlier success: a
+        refused retry of a window applied in an earlier cycle would read as applied. Any refusal
+        in the attempt outranks an ok, as when one unit applies a fanned-out command and another
+        refuses it.
+
+        Returns:
+            tuple: ("applied" or "refused", the ack's applied payload), (None, None) while unanswered,
+            or ("gone", None) if the entry was dropped (a replay) or replaced by another value.
+        """
+        with self._command_lock:
+            entry = self._pending_commands.get(entity_id)
+            if entry is None or entry["command"] != command or entry["kwargs"] != kwargs:
+                return "gone", None
+            outcomes = [entry["outcomes"].get(ref) for ref in entry["attempt_ids"]]
+            if "refused" in outcomes:
+                return "refused", None
+            if "ok" in outcomes:
+                return "applied", entry.get("applied")
+        return None, None
+
+    async def _await_command_outcome(self, entity_id, command, kwargs, timeout=_COMMAND_ACK_WINDOW):
+        """Wait up to one ack window for the latest attempt's outcome (see _attempt_outcome()).
+
+        Returns:
+            tuple: ("applied" or "refused", the ack's applied payload), or (None, None) if unanswered.
+        """
+        deadline = _monotonic() + timeout
+        while True:
+            state, applied = self._attempt_outcome(entity_id, command, kwargs)
+            if state == "gone":
+                return None, None
+            if state is not None:
+                return state, applied
+            if _monotonic() >= deadline:
+                return None, None
+            await _commit_pause()
 
     async def _send_control(self, entity_id, command, **kwargs):
         """Publish a control write once and let the hub's ack confirm it.
@@ -2975,14 +3222,14 @@ class GatewayMQTT(ComponentBase):
                     self._acks_seen = False
                     self.log(f"Warn: GatewayMQTT: {command} for {kwargs.get('serial')} was never acknowledged, re-sending until telemetry confirms it")
             if not same:
-                entry = {"command_ids": [], "outcomes": {}, "command": command, "kwargs": dict(kwargs), "state": "sent", "sent_at": now, "resent": False, "cached": None, "cached_ids": [], "attempt_ids": [], "acks": 0}
+                entry = {"command_ids": [], "outcomes": {}, "command": command, "kwargs": dict(kwargs), "state": "sent", "sent_at": now, "resent": False, "cached": None, "cached_ids": [], "attempt_ids": [], "acks": 0, "applied": None}
                 self._pending_commands[entity_id] = entry
             previous = {"attempt_ids": list(entry["attempt_ids"]), "state": entry["state"], "sent_at": entry["sent_at"], "resent": entry["resent"], "cached": entry["cached"]}
             if entry["state"] != "sent":
                 # A fresh attempt after the previous one was answered. Earlier ids and their
                 # outcomes stay, so a late ack from another unit is still logged and acted on and
                 # a refusal still outranks that id's later ok.
-                entry.update(state="sent", resent=False, cached=None, attempt_ids=[])
+                entry.update(state="sent", resent=False, cached=None, attempt_ids=[], applied=None)
             elif self._acks_seen and entry["command_ids"]:
                 entry["resent"] = True  # the one re-send after an unanswered window
             command_id = self._command_id = self._command_id + 1
@@ -3041,7 +3288,7 @@ class GatewayMQTT(ComponentBase):
         ok = ack.get("ok") is True
         error = ack.get("error") or "unknown"
         replay = not ok and error == "replay"
-        apply_cache = restore_status = keep_entry = False
+        apply_cache = restore_status = keep_entry = late_refusal = False
 
         with self._command_lock:
             entity_id, entry = next(((e, r) for e, r in self._pending_commands.items() if command_id in r["command_ids"]), (None, None))
@@ -3066,8 +3313,13 @@ class GatewayMQTT(ComponentBase):
             else:
                 if ok and entry["outcomes"].get(command_id) == "refused":
                     return  # a refusal for this id outranks any other unit's ok
+                # A refusal after this attempt was already applied by another unit: a commit may
+                # have moved on and armed export onto the window, so the fail-safe must run here
+                late_refusal = not ok and any(entry["outcomes"].get(ref) == "ok" for ref in entry["attempt_ids"])
                 entry["outcomes"][command_id] = "ok" if ok else "refused"
                 entry["state"] = "applied" if "ok" in entry["outcomes"].values() else "refused"
+                if ok:
+                    entry["applied"] = ack.get("applied")  # e.g. {"recorded": true} from an EMS that is off
                 if not ok:
                     entry["sent_at"] = _monotonic()  # the window runs from the latest refusal
                     # Another unit refused an id whose ok updated the cache (in this attempt or an
@@ -3095,6 +3347,8 @@ class GatewayMQTT(ComponentBase):
             self.log(f"Warn: GatewayMQTT: {command} for {serial} refused by hub: replay ({command_id} already used), {action}")
         else:
             self.log(f"Warn: GatewayMQTT: {command} for {serial} refused by hub: {error}")
+            if late_refusal and command == "set_discharge_slot" and serial:
+                self._spawn(self._export_fail_safe(serial))
             if command == "set_reserve" and zero_reserve and serial:
                 # The reserve of 0 was not applied, so a 0 from the hub is a gap again and the
                 # reserve it had before is still the last real one
@@ -3161,6 +3415,12 @@ class GatewayMQTT(ComponentBase):
 
         self._mqtt_connected = False
         self._mqtt_client = None
+        # Staged windows can no longer be written, and a commit in flight dies with this loop
+        for task in list(self._commit_tasks):
+            task.cancel()
+        with self._staged_lock:
+            self._staged = {}
+        self._commit_inflight = set()
         self.log("Info: GatewayMQTT: Finalized")
 
     async def _check_token_refresh(self):
