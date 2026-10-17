@@ -485,8 +485,8 @@ DISALLOWED_TOOLS_CLEANUP = ",".join([item for item in _DISALLOWED_TOOLS_BASE if 
 # Correction, found on PR #5304 (2026-09-29): none of the above ever reached /code-review.
 # It reviews in a forked subagent, and --append-system-prompt only reaches the main session
 # (checked with a codeword: the main session saw it, the fork did not) - no review comment
-# ever carried the disclosure line. The review flow now runs /pr-review, which runs the
-# review without --comment and posts from the main session, where this prompt does apply.
+# ever carried the disclosure line. The review flow now runs /pr-review, which does the
+# review itself in the main session and posts from there, where this prompt does apply.
 # The daily journal flush. This is the only flow that can edit a file AND push, so its edit
 # scope is the narrowest of any: the journal itself, the cspell dictionary (a new vendor term
 # in an entry fails the pre-commit hook without it), and the queue it consumes. It gets no
@@ -522,9 +522,8 @@ DISALLOWED_TOOLS_JOURNAL = ",".join([rule for rule in _DISALLOWED_TOOLS_BASE if 
 
 # Appended to every flow's system prompt. Until this existed no skill asked for a journal
 # finding at all, so upkeep was self-motivated and happened in maybe one run in ten - and
-# a SKILL.md cannot carry it for every flow at once. For the review flow it reaches the
-# /pr-review session, not the forked /code-review subagent that does the reading, so that
-# flow captures only what the returned findings show.
+# a SKILL.md cannot carry it for every flow at once. It reaches the review flow too, now
+# that /pr-review reviews in the main session rather than in a forked /code-review.
 JOURNAL_CAPTURE_PROMPT = (
     "Before you finish, consider whether this investigation turned up something a future triage run would have wanted to know "
     "- a config item that explains a whole class of report, an API or firmware quirk, a symptom that maps to a module, a trap "
@@ -1917,14 +1916,15 @@ def process_bot_review_issue(issue):
 
 
 def review_pr(pr_number):
-    """Run the /pr-review skill against a PR: /code-review at the "high" effort level finds
-    the issues, and the skill posts them as one review. Read-only otherwise: no code
-    changes, no push, no PR actions.
+    """Run the /pr-review skill against a PR: it reviews the PR's head in this session and
+    posts the findings as one review. Read-only otherwise: no code changes, no push, no PR
+    actions.
 
-    Not "/code-review --comment" directly: the built-in skill reviews in a forked subagent,
-    which sees neither a SKILL.md we own nor the appended system prompt below, so it posted
-    with whatever gh api spelling it chose - PR #5304's run passed `-f body="$(cat ...)"` and
-    every call was denied. The wrapper runs in the main session, where both do reach it.
+    Not the built-in /code-review: it reviews in a forked subagent, which sees neither a
+    SKILL.md we own nor the appended system prompt below, so it posted with whatever gh api
+    spelling it chose - PR #5304's run passed `-f body="$(cat ...)"`, #5574's an inline body
+    holding backticks, and every call was denied. /pr-review does the whole review in the
+    main session, where both do reach it.
     """
     cmd = (
         [
