@@ -262,6 +262,28 @@ def _run_persistence(my_predbat):
         _restart(my_predbat)
         failed |= _check("t13 nothing restored", not any(my_predbat.octopus_slots_held.values()), "held {}".format(my_predbat.octopus_slots_held))
 
+        print("Test 15: a failed write is retried next cycle even though nothing has changed since")
+        _setup(my_predbat, storage=storage)
+        fail_next = [True]
+
+        async def failing_once_save(module, filename, data, **kwargs):
+            """Fail the first write, then count and make the rest."""
+            if fail_next[0]:
+                fail_next[0] = False
+                return False
+            return await counting_save(module, filename, data, **kwargs)
+
+        storage.backend.save = failing_once_save
+        saves.clear()
+        _cycle(my_predbat, 1085, planned=_running(my_predbat, 1085, 1110))
+        failed |= _check("t15 first write failed", saves == [], "saves {}".format(saves))
+        _cycle(my_predbat, 1115)
+        failed |= _check("t15 retried once the store works", saves == ["octopus_held"], "saves {}".format(saves))
+        _restart(my_predbat)
+        rates = _cycle(my_predbat, 1120)
+        failed |= _check("t15 18:00-18:30 cheap after the restart", _low(rates, 1080, 1110), "rate {}".format(rates[1080]))
+        storage.backend.save = counting_save
+
         print("Test 14: no storage component, nothing breaks")
         _setup(my_predbat, storage=None)
         _cycle(my_predbat, 1085, planned=_running(my_predbat, 1085, 1200))

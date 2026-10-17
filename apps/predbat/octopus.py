@@ -4184,6 +4184,11 @@ class Octopus:
         Save the held half hours to storage when they have changed since the last save, so a restart neither
         loses one Octopus has not listed yet nor, under the window rule, the record of the day. Called every
         cycle, so it costs nothing when nothing has changed - and an install with no dispatches never writes.
+
+        Recorded as saved only once a write works: under the window rule the half hours can stay unchanged
+        for hours after the last dispatch, so a failed write is retried each cycle rather than left unsaved
+        until they expire. It runs once a cycle, so it needs none of the throttle dynamic_load_car_save() has
+        against its 15 second poll.
         """
         state = self.octopus_held_state()
         if state == self.octopus_slots_held_saved:
@@ -4192,13 +4197,13 @@ class Octopus:
         if not storage:
             return
 
-        # Recorded whether or not the write works: a store that is failing is not retried every cycle
-        self.octopus_slots_held_saved = state
         try:
             # Expiry is on the real clock, as storage.load() checks it (see save_plan()). It only tidies up:
             # octopus_held_load() decides what is still current
             expiry = datetime.now(timezone.utc) + timedelta(minutes=30 + OCTOPUS_DISPATCH_WINDOW_HOLD_MINUTES)
-            if not run_async(storage.save("predbat", "octopus_held", {"cars": state}, format="json", expiry=expiry)):
+            if run_async(storage.save("predbat", "octopus_held", {"cars": state}, format="json", expiry=expiry)):
+                self.octopus_slots_held_saved = state
+            else:
                 self.log("Warn: Octopus Intelligent: failed to save the held dispatch half hours")
         except Exception as e:
             self.log("Warn: Octopus Intelligent: failed to save the held dispatch half hours: {}".format(e))
