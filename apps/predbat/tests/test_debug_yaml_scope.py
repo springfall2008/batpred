@@ -21,6 +21,7 @@ from const import REPEAT_FULL_LOG_SECONDS
 from inverter import Inverter
 from userinterface import dump_debug_yaml, DEBUG_YAML_LOADER
 from utils import RepeatLogGate
+from const import REPEAT_FULL_LOG_SECONDS
 
 
 def _plant_inverter(my_predbat):
@@ -293,6 +294,43 @@ def test_create_debug_yaml_file_matches_the_string(my_predbat=None):
     return 1 if failed else 0
 
 
+def test_debug_yaml_loads_after_an_intelligent_slot_log(my_predbat=None):
+    """
+    A debug yaml taken after the Intelligent slot list has been logged must load back with the replay loader.
+
+    io_slot_log_gate (#5428) keys its logged dict by (("slots", car_n), hash) tuples. yaml.dump()
+    writes tuple keys as YAML sequences, which the loader cannot hash, so every dump from an
+    Intelligent user failed "found unhashable key" before replaying anything (#5569). The gate is
+    runtime log bookkeeping that a replay never reads, so it stays out of the dump.
+
+    Mutation check: removing "io_slot_log_gate" from DEBUG_EXCLUDE_LIST fails this.
+    """
+    failed = False
+    print("**** Testing the debug yaml loads after an Intelligent slot list has been logged ****")
+
+    original_gate = my_predbat.io_slot_log_gate
+    try:
+        my_predbat.io_slot_log_gate = RepeatLogGate(REPEAT_FULL_LOG_SECONDS)
+        my_predbat.io_slot_log_gate.log(lambda line: None, ("slots", 0), "slot list", ["slot list"], None)
+
+        text = my_predbat.create_debug_yaml(write_file=False)
+        try:
+            debug = yaml.load(text, Loader=DEBUG_YAML_LOADER)
+        except yaml.YAMLError as e:
+            print("ERROR: the debug yaml does not load back: {}".format(e))
+            return 1
+
+        if "io_slot_log_gate" in debug:
+            print("ERROR: io_slot_log_gate was written into the debug yaml")
+            failed = True
+    finally:
+        my_predbat.io_slot_log_gate = original_gate
+
+    if not failed:
+        print("PASS: the debug yaml loads and leaves the slot log gate out")
+    return 1 if failed else 0
+
+
 class _DiscoveryComponentsStub:
     """Minimal stand-in for Components: .coordinator plus the registry surface
     Coordinator._component_status() reads on every assemble() call, as create_debug_yaml() expects."""
@@ -482,6 +520,7 @@ def run_debug_yaml_scope_tests(my_predbat):
     failed += test_per_key_dump_loads_as_one_document(my_predbat)
     failed += test_per_key_dump_bounds_the_node_tree(my_predbat)
     failed += test_create_debug_yaml_file_matches_the_string(my_predbat)
+    failed += test_debug_yaml_loads_after_an_intelligent_slot_log(my_predbat)
     failed += test_debug_yaml_includes_redacted_discovery_catalogue(my_predbat)
     failed += test_debug_yaml_with_a_populated_log_gate_loads(my_predbat)
     failed += test_old_dump_with_a_log_gate_loads(my_predbat)
