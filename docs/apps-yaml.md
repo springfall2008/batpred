@@ -2126,6 +2126,7 @@ whether you are within an Octopus Energy "smart charge" slot
 (see [car charging documentation](car-charging.md#taking-planned-slots-from-another-sensor))
 - **octopus_ready_time** - Octopus Energy integration sensor for when the car charging will be completed by
 - **octopus_charge_limit** - Octopus Energy integration sensor for car charging limit
+- **octopus_charge_limit_is_additive** - Optional list of booleans, one per car. Set to `true` when Octopus supplies a percentage to add rather than a final SOC target. Predbat then follows the dispatch energy and keeps `car_charging_limit` as the absolute SOC ceiling. Detected automatically from the `is_charger` attribute with Octopus Direct; set explicitly for other integrations without that attribute. Set to `false` to use an absolute Octopus target.
 - **octopus_slot_low_rate** - Whether Octopus Intelligent Slots reported will be at the lowest rate if at home
 - **octopus_slot_max** - Maximum number of 30-minute cheap rate slots per 24-hour period
 - **car_charging_planned** - Indicates when your EV is plugged in and planned to charge during low-rate slots.
