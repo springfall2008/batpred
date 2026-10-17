@@ -69,6 +69,8 @@ PV_INPUT_RE = re.compile(r"Replay input: PV forecast changed, 30-minute kWh from
 STATE_INPUT_RE = re.compile(r"Replay input: state (.*)$")
 # The rates from now, as change points, logged only when they change
 RATES_INPUT_RE = re.compile(r"Replay input: rates changed, from (\d\d):(\d\d) (.*)$")
+SESSIONS_INPUT_RE = re.compile(r"Replay input: rate sessions changed, from (\d\d):(\d\d) (.*)$")
+SESSIONS_SERIES_RE = re.compile(r"(import|export) (\[\]|\[\[.*?\]\]) (-?\d+)")
 RATES_SERIES_RE = re.compile(r"(\w+) (\[\]|\[\[.*?\]\]) (\d+)")
 # Rate series in the rates line and the instance attributes they replace
 RATES_ATTRIBUTES = {"import": "rate_import", "export": "rate_export", "import_base": "rate_import_base", "export_base": "rate_export_base"}
@@ -118,6 +120,8 @@ DAY_KEYED_DICTS = (
     "rate_gas_replicated",
     "rate_min_forward",
     "rate_export_max_forward",
+    "rate_import_pre_saving",
+    "rate_export_pre_saving",
     "future_energy_rates_import",
     "future_energy_rates_export",
     "manual_import_rates",
@@ -241,6 +245,7 @@ def parse_log(path):
                 (PV_EXACT_RE, "pv_exact"),
                 (STATE_INPUT_RE, "state"),
                 (RATES_INPUT_RE, "rates"),
+                (SESSIONS_INPUT_RE, "sessions"),
                 (CARS_INPUT_RE, "cars"),
                 (INVERTER_INPUT_RE, "inverter"),
                 (FILTERED_RE, "filtered"),
@@ -255,6 +260,8 @@ def parse_log(path):
                         run[store] = parse_state(found.group(1))
                     elif store == "rates":
                         run[store] = parse_rates(found.groups())
+                    elif store == "sessions":
+                        run[store] = parse_sessions(found.groups())
                     elif store in ("cars", "inverter"):
                         run[store] = ast.literal_eval(found.group(1))
                     else:
@@ -263,10 +270,10 @@ def parse_log(path):
     pending = {}
     for run in runs:
         # Rates, cars and dispatches are logged only when they change, so a change logged by a dropped run still holds for the runs after it
-        for store in ("rates", "cars", "inverter", "octopus_slots"):
+        for store in ("rates", "sessions", "cars", "inverter", "octopus_slots"):
             pending[store] = run.get(store) or pending.get(store)
         if run.get("soc"):
-            for store in ("rates", "cars", "inverter", "octopus_slots"):
+            for store in ("rates", "sessions", "cars", "inverter", "octopus_slots"):
                 if pending.get(store) and not run.get(store):
                     run[store] = pending[store]
             pending = {}
@@ -275,7 +282,7 @@ def parse_log(path):
 
 
 # The parsed "Replay input:" lines; a log with none of them comes from Predbat before they were added
-REPLAY_INPUT_STORES = ("state", "rates", "cars", "inverter", "load_exact", "load_input", "pv_exact", "pv_input", "divergence_exact")
+REPLAY_INPUT_STORES = ("state", "rates", "sessions", "cars", "inverter", "load_exact", "load_input", "pv_exact", "pv_input", "divergence_exact")
 
 
 def parse_human_car_lines(run, line):
@@ -367,6 +374,20 @@ def parse_rates(groups):
     for name, points, end in RATES_SERIES_RE.findall(text):
         series[name] = ([(int(offset), float(rate)) for offset, rate in ast.literal_eval(points)], int(end))
     return int(hours) * 60 + int(minutes), series
+
+
+def parse_sessions(groups):
+    """Parse a "Replay input: rate sessions changed" line into (start minute, {side: (change points, end)}).
+
+    Each side is a list of [minutes from start, value] at every change over the span of its session minutes - None
+    outside a session, the pre-session tariff rate inside one, True where the tariff has no rate - followed by the
+    minute from start it runs to, which is negative for a session that has already ended.
+    """
+    hours, minutes, text = groups
+    sides = {}
+    for name, points, end in SESSIONS_SERIES_RE.findall(text):
+        sides[name] = ([(int(offset), value) for offset, value in ast.literal_eval(points)], int(end))
+    return int(hours) * 60 + int(minutes), sides
 
 
 def today_values(run):
@@ -516,6 +537,10 @@ def roll_over_midnight(my_predbat, days=1):
         data = getattr(my_predbat, name, None)
         if data:
             setattr(my_predbat, name, {key - minutes: value for key, value in data.items()})
+    for name in ("rate_import_saving_minutes", "rate_export_saving_minutes"):
+        data = getattr(my_predbat, name, None)
+        if data:
+            setattr(my_predbat, name, {minute - minutes for minute in data})
     if my_predbat.load_forecast:
         my_predbat.load_forecast = shift_cumulative(my_predbat.load_forecast, minutes)
     my_predbat.load_forecast_array = [shift_cumulative(forecast, minutes) for forecast in (my_predbat.load_forecast_array or [])]
@@ -590,6 +615,8 @@ def apply_run(my_predbat, prev, run):
         my_predbat.load_minutes_now, my_predbat.import_today_now, my_predbat.export_today_now, my_predbat.pv_today_now = (float(value) for value in now_today)
     if run.get("rates"):
         apply_logged_rates(my_predbat, run["rates"])
+    if run.get("sessions"):
+        apply_logged_sessions(my_predbat, run["sessions"])
     for name, value in (run.get("cars") or {}).items():
         setattr(my_predbat, name, value)
     apply_human_car_lines(my_predbat, run)
@@ -1005,8 +1032,8 @@ def apply_logged_rates(my_predbat, rates_input):
     """Replace the rates from a logged "Replay input: rates changed" line.
 
     Each series is rebuilt per minute from its change points over the span the log gave, and ends where the live
-    rates ended. Minutes before the logged start keep their values; only the cost so far reads them, and that comes
-    from the log. A line carried over from a run before midnight is in that day's minutes, so moves back a day.
+    rates ended. Minutes before the logged start keep their values. A line carried over from a run before midnight is
+    in that day's minutes, so moves back a day.
     """
     start, series = rates_input
     if start > my_predbat.minutes_now:
@@ -1021,6 +1048,37 @@ def apply_logged_rates(my_predbat, rates_input):
             for minute in range(start + offset, start + until):
                 rates[minute] = rate
         setattr(my_predbat, attribute, rates)
+
+
+def apply_logged_sessions(my_predbat, sessions_input):
+    """Set which minutes a saving, free or Axle session priced, and their pre-session rates, from a logged line.
+
+    set_rate_thresholds() maps each session minute back to its pre-session rate, so an event reward does not read as
+    the tariff. The pre-session table starts as the rates in force, with each session minute replaced by its logged
+    rate, or removed where the tariff had none - only the session minutes are read from it, but it must not be
+    empty while there are sessions. A line carried over from a run before midnight moves back a day, as rates do.
+    """
+    start, sides = sessions_input
+    if start > my_predbat.minutes_now:
+        start -= 24 * 60
+    for name, rates_attribute in (("import", "rate_import"), ("export", "rate_export")):
+        if name not in sides:
+            continue
+        points, end = sides[name]
+        saving_minutes = set()
+        pre_saving = dict(getattr(my_predbat, rates_attribute, None) or {})
+        for index, (offset, value) in enumerate(points):
+            until = points[index + 1][0] if index + 1 < len(points) else end
+            for minute in range(start + offset, start + until):
+                if value is None:
+                    continue
+                saving_minutes.add(minute)
+                if value is True:
+                    pre_saving.pop(minute, None)
+                else:
+                    pre_saving[minute] = float(value)
+        setattr(my_predbat, "rate_{}_saving_minutes".format(name), saving_minutes)
+        setattr(my_predbat, "rate_{}_pre_saving".format(name), pre_saving)
 
 
 def apply_logged_pv_exact(my_predbat, pv_exact):
