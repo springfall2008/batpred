@@ -1579,7 +1579,7 @@ actions:
       - condition: template
         value_template: |
           {{ trigger.to_state.state.startswith('Charging')
-             or trigger.to_state.state == 'Hold charging' }}
+             or trigger.to_state.state.startswith('Hold charging') }}
     sequence:
       - action: switch.turn_on
         target:
@@ -1605,7 +1605,7 @@ actions:
   - conditions:
       - condition: template
         value_template: |
-          {{ trigger.to_state.state == 'Hold charging' }}
+          {{ trigger.to_state.state.startswith('Hold charging') }}
     sequence:
       - action: number.set_value
         target:
@@ -1625,6 +1625,8 @@ mode: single
 Occasionally, when a Manual Freeze Charge is requested, Predbat may immediately decide that **Hold Charging** is the more appropriate state based on current conditions.
 In this case, Freeze Charging automations may remain enabled even though Predbat reports Hold Charging.
 The watchdog safely exits Freeze Charging after a short grace period.
+It ignores a bare warning or error status, which Predbat can show for a moment part way through a plan update; the state written after it changes the status, so the exit automation still cleans up.
+While a component is failing, the status reads `Error: Complete run status <state> with component errors: ...` every update, so the watchdog reads the state out of that and acts on it.
 
 - Create the **Freeze Charge Watchdog** automation to handle cases where Manual Freeze Charging immediately transitions to **Hold Charging**.
 
@@ -1642,11 +1644,18 @@ conditions: []
 actions:
   - alias: 'Watchdog: Grace period'
     delay: '00:00:30'
+  - alias: 'Watchdog: Read the state out of a component error'
+    variables:
+      status: >-
+        {% set s = states('predbat.status') %}{{ s[27:] if s.startswith('Error: Complete run status ') else s }}
   - alias: 'Watchdog: Abort if no Freeze charging'
     if:
       - condition: template
         value_template: |
-          {{ not states('predbat.status').startswith('Freeze charging') }}
+          {{ status not in ['unknown','unavailable'] and
+             not status.startswith('Warn') and
+             not status.startswith('Error') and
+             not status.startswith('Freeze charging') }}
     then:
       - alias: 'Watchdog: Trace cancellation'
         action: system_log.write
@@ -1671,8 +1680,8 @@ actions:
           - conditions:
               - condition: template
                 value_template: |
-                  {{ states('predbat.status').startswith('Charging')
-                     or states('predbat.status') == 'Hold charging' }}
+                  {{ status.startswith('Charging')
+                     or status.startswith('Hold charging') }}
             sequence:
               - if:
                   - condition: state
@@ -1696,7 +1705,7 @@ actions:
           - conditions:
               - condition: template
                 value_template: |
-                  {{ states('predbat.status').startswith('Charging') }}
+                  {{ status.startswith('Charging') }}
             sequence:
               - action: number.set_value
                 target:
@@ -1706,7 +1715,7 @@ actions:
           - conditions:
               - condition: template
                 value_template: |
-                  {{ states('predbat.status') == 'Hold charging' }}
+                  {{ status.startswith('Hold charging') }}
             sequence:
               - action: number.set_value
                 target:
@@ -3893,6 +3902,8 @@ Described by @WesSec in [#2846](https://github.com/springfall2008/batpred/issues
 | Exporting | minus export limit | 0 | discharge limit |
 | Freeze exporting | e.g. 50 W | 0 | discharge limit |
 | Demand / anything else | e.g. 50 W | charge limit | discharge limit |
+
+Match each status by its start, not exactly: a run that raised a warning records its state followed by the warning, for example `Charging, Warn: ...`, and an exact match would fall through to *anything else*.
 
 Charging is not stopped at a target SoC; Predbat's next calculation changes the status instead. This route allows for more extensive integration, for instance lowering the charge and discharge limits on battery temperature and passing them to Predbat through the [manual API](manual-api.md), so the plan matches the real limits.
 

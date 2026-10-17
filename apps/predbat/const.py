@@ -182,6 +182,12 @@ PREDBAT_MODE_CONTROL_CHARGEDISCHARGE = 3
 CHARGE_STATE_PRECEDENCE = ["Charging", "Freeze charging", "Hold charging"]
 EXPORT_STATE_PRECEDENCE = ["Exporting", "Freeze exporting", "Hold exporting"]
 
+# The status a run records when it completed but a component failed. predbat.py writes it and the
+# History view (output.split_status_warning) unwraps the run's own status back out of it, so both
+# read the wording from here.
+COMPONENT_ERROR_STATUS_PREFIX = "Error: Complete run status "
+COMPONENT_ERROR_STATUS_SUFFIX = " with component errors: "
+
 # A log text that repeats (an API response, an Intelligent slot list) is logged in full again after this long, so
 # the full text is never only in a rotated-out log file; in between it is logged as one short line
 REPEAT_FULL_LOG_SECONDS = 3600
