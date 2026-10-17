@@ -300,19 +300,39 @@ The editor view allows you to edit `apps.yaml` as text directly within the web i
 
 <img alt="image of Predbat Editor view" src="https://github.com/user-attachments/assets/17383694-2300-4c81-996e-63970671b903" />
 
-### Browse View
+### Advanced Menu
+
+The **Advanced** menu groups the views most users rarely need. Click it to open the list.
+
+#### Discovery
+
+The Discovery view shows the catalogue of inverters, meters and other devices Predbat has discovered. Identifying values are redacted by default; **Show raw values** shows them in full.
+
+#### Browse View
 
 The Browse view gives a simple file system browser to enable you to view any of the configuration, output and code files in the directory that Predbat is installed in.
 
 You can navigate around subfolders and view files, but not make any changes using the Browse view.
 
-### Internals View
+#### Internals View
 
 The Internals view gives a view of Predbat's internal operations.
 
 It gives the hierarchy of threads, and their status; and the Predbat code object hierarchy.
 
 These are intended for debugging and developer activities, in normal use you can ignore this view!
+
+#### Kraken API Key
+
+The Kraken API key generator creates an API key for an E.ON Next or EDF account, for use with the [Kraken component](components.md#kraken-energy-kraken). E.ON Next customers currently need one, because E.ON Next no longer accepts email/password sign-in for the Kraken API and its website does not offer a key.
+
+1. Sign in to your E.ON Next (or EDF) online account in a desktop browser, open the developer tools (**F12**) and choose the **Network** tab.
+2. Refresh the page, filter on `graphql`, click one of the requests and copy the value of the **Authorization** request header.
+3. Paste it into the page, choose your supplier and click **Check account**.
+4. If the account has no key, click **Generate key**. If it already has one, the page shows it masked: Kraken never shows an existing key in full, so you can only get one by generating a new key, which **replaces** the old one. Anything else using the old key stops working until you give it the new one, so the page asks you to confirm first.
+5. Copy the key into `secrets.yaml` and set `kraken_auth_method: api_key` and `kraken_key: !secret kraken_key` in `apps.yaml`.
+
+The key is shown once. Predbat sends the token only to your supplier's Kraken API and does not store or log the token or the key.
 
 ### Metrics View
 

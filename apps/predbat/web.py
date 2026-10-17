@@ -68,6 +68,7 @@ from web_helper import (
     get_browse_css,
     get_entity_detailed_row_js,
     get_internals_css,
+    get_kraken_key_page_html,
     get_internals_js,
     get_dashboard_css,
     get_dashboard_collapsible_js,
@@ -577,6 +578,8 @@ class WebInterface(ComponentBase):
         app.router.add_get("/internals", self.html_internals)
         app.router.add_get("/api/internals", self.html_api_internals)
         app.router.add_get("/api/internals/download", self.html_api_internals_download)
+        app.router.add_get("/kraken_key", self.html_kraken_key)
+        app.router.add_post("/api/kraken_key", self.html_api_kraken_key)
         app.router.add_get("/api/status", self.html_api_get_status)
         app.router.add_get("/metrics", metrics_handler)
         app.router.add_get("/metrics/json", metrics_json_handler)
@@ -6041,6 +6044,61 @@ document.addEventListener('DOMContentLoaded', function() {
         text += get_metrics_dashboard_body(data_json)
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
+
+    async def html_kraken_key(self, request):
+        """
+        Return the Kraken API key generator page (Advanced -> Kraken API Key)
+
+        No auto-refresh: a refresh would wipe a token the user has just pasted.
+        """
+        self.default_page = "./kraken_key"
+        text = self.get_header("Predbat Kraken API Key", refresh=0)
+        text += "<body>\n"
+        text += get_kraken_key_page_html()
+        text += "</body></html>\n"
+        return web.Response(content_type="text/html", text=text, headers={"Cache-Control": "no-store"})
+
+    async def html_api_kraken_key(self, request):
+        """
+        Check an account's Kraken API key, or generate a new one, using a token pasted from the user's browser.
+
+        Body: {"provider": "eon"|"edf", "token": "...", "action": "check"|"generate"}. The token and the key are
+        passed straight through and never logged or kept; responses are marked no-store.
+        """
+        # Imported here so the Kraken code is only loaded when someone uses this page
+        import kraken_key
+        from kraken import KRAKEN_BASE_URLS
+
+        headers = {"Cache-Control": "no-store"}
+        try:
+            data = await request.json()
+        except (ValueError, UnicodeDecodeError):
+            return web.json_response({"status": "error", "error": "Invalid request"}, status=400, headers=headers)
+        if not isinstance(data, dict):
+            return web.json_response({"status": "error", "error": "Invalid request"}, status=400, headers=headers)
+
+        provider = data.get("provider")
+        base_url = KRAKEN_BASE_URLS.get(provider) if isinstance(provider, str) else None
+        if not base_url:
+            return web.json_response({"status": "error", "error": "Choose E.ON Next or EDF"}, status=400, headers=headers)
+        token = kraken_key.normalise_kraken_token(data.get("token"))
+        if not token:
+            return web.json_response({"status": "error", "error": "Paste the token from your browser first"}, status=400, headers=headers)
+
+        action = data.get("action")
+        if action == "check":
+            result = await kraken_key.check_kraken_key(base_url, token)
+        elif action == "generate":
+            result = await kraken_key.generate_kraken_key(base_url, token)
+        else:
+            return web.json_response({"status": "error", "error": "Unknown action"}, status=400, headers=headers)
+
+        # Outcome only - never the token or the key
+        if result.get("status") == "generated":
+            self.log("Web: Kraken API key generated for {} (sign-in check {})".format(provider, "passed" if result.get("verified") else "failed"))
+        elif result.get("status") == "error":
+            self.log("Warn: Web: Kraken API key {} for {} failed: {}".format(action, provider, result.get("error")))
+        return web.json_response(result, headers=headers)
 
     async def html_internals(self, request):
         """
