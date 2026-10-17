@@ -1283,11 +1283,20 @@ To disable, set it to 1440.
 out load_today sensors that update infrequently (e.g., sensors that increment in kWh units may only update every hour). This preprocessing happens before
 the main load data analysis and can significantly improve prediction accuracy, especially for systems with coarse-grained energy sensors. Set to 'false' to turn this feature off.
 
+- **load_history_fill_enable** (default true) fills gaps in the load_today history from the history of Predbat's own `predbat.load_energy_h0` sensor, which records
+today's measured load every cycle and keeps its name when your load sensor changes. This helps when you switch load_today to a different sensor (for example after
+changing inverter), where the new sensor has no history for the days before the switch, or when you cut over to another sensor and back again, leaving a stretch where
+load_today did not count. Any stretch of at least **load_filter_threshold** minutes where load_today did not move is filled with the load predbat.load_energy_h0 recorded
+at the time, and the days before load_today's own history started are counted as available history again. Stretches where predbat.load_energy_h0 did not move either
+are left for load_power_fill_enable and the average gap filling above. How far back this can reach depends on how long Home Assistant keeps history (10 days by default).
+Set to 'false' to turn this feature off.
+
 e.g.
 
 ```yaml
   load_filter_threshold: 60
   load_power_fill_enable: false
+  load_history_fill_enable: false
 ```
 
 See [Load filtering warning in FAQ's](faq.md#i-see-repeated-log-messages-warn-found-1-periods-of-zero-load-with-power-data-filling-using-power-integration).
@@ -2144,7 +2153,9 @@ whether you are within an Octopus Energy "smart charge" slot
 - **octopus_ready_time** - Octopus Energy integration sensor for when the car charging will be completed by
 - **octopus_charge_limit** - Octopus Energy integration sensor for car charging limit
 - **octopus_slot_low_rate** - Whether Octopus Intelligent Slots reported will be at the lowest rate if at home
-- **octopus_slot_max** - Maximum number of 30-minute cheap rate slots per 24-hour period
+- **octopus_slot_max** - Maximum cheap rate dispatch time per 24-hour period, set in 30-minute slots (12 is 6 hours). It is counted in the minutes of each dispatch, so a 10-minute dispatch uses 10 minutes of it
+- **intelligent_dispatch_billing** - `auto` (default), `octopus` or `window`: whether a planned dispatch half hour is billed cheap only when the car charges in it (`octopus`) or whenever the dispatch was in force (`window`, E.ON Next Drive Smart). `auto` picks `window` for the Kraken component on `kraken_provider: eon`
+(see [car charging documentation](car-charging.md))
 - **car_charging_planned** - Indicates when your EV is plugged in and planned to charge during low-rate slots.
 - **car_charging_planned_response** - Values for the car_charging_planned sensor that indicate that the car is plugged in and will charge in the next low rate slot.
 - **car_charging_now** - Sensor to indicate when the EV is charging, used to hold the house battery for the car. Either an on/off sensor or a charging power sensor (W or kW, 200W or more counts as charging)

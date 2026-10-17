@@ -176,6 +176,7 @@ from tests.test_holiday_mode import test_holiday_mode
 from tests.test_inday_adjustment_carry import test_inday_adjustment_carry
 from tests.test_filtered_load_minute import test_filtered_load_minute
 from tests.test_fill_load_from_power import run_all_tests as test_fill_load_from_power
+from tests.test_fill_load_from_history import run_all_tests as test_fill_load_from_history
 from tests.test_fetch_pv_forecast import run_all_tests as test_fetch_pv_forecast
 from tests.test_octopus_free import test_octopus_free
 from tests.test_prune_today import test_prune_today
@@ -207,6 +208,7 @@ from tests.test_octopus_slots_change import test_octopus_slots_change
 from tests.test_dynamic_load import test_dynamic_load_car_slot_cancellation, test_dynamic_load_high_load_baseline
 from tests.test_dynamic_load_car import test_dynamic_load_car_not_charging
 from tests.test_octopus_dispatch_hold import test_octopus_dispatch_hold
+from tests.test_dispatch_billing_window import test_dispatch_billing_window
 from tests.test_fox_api import run_fox_api_tests
 from tests.test_deye_const import run_deye_const_tests
 from tests.test_deye_config import run_deye_config_tests
@@ -500,6 +502,7 @@ def main():
         ("inday_adjustment_carry", test_inday_adjustment_carry, "In-day adjustment midnight carry-over tests", False),
         ("filtered_load_minute", test_filtered_load_minute, "Filtered load minute / window tests", False),
         ("fill_load_from_power", test_fill_load_from_power, "Fill load from power sensor tests", False),
+        ("fill_load_from_history", test_fill_load_from_history, "Fill load_today gaps from load_energy_h0 history tests", False),
         ("fetch_pv_forecast", test_fetch_pv_forecast, "Fetch PV forecast with relative_time offset tests", False),
         # Octopus Energy URL/API tests
         ("octopus_url", test_octopus_url, "Octopus URL/API comprehensive tests (downloads, day/night rates, saving sessions, intelligent dispatch, tariffs, EDF)", False),
@@ -536,6 +539,7 @@ def main():
         ("dynamic_load_high", test_dynamic_load_high_load_baseline, "Dynamic load high-load baseline tests", False),
         ("dynamic_load_car_not_charging", test_dynamic_load_car_not_charging, "Dynamic load car not charging tests", False),
         ("octopus_dispatch_hold", test_octopus_dispatch_hold, "Octopus dispatch hold tests", False),
+        ("dispatch_billing_window", test_dispatch_billing_window, "Dispatch billing window tests (E.ON)", False),
         ("car_charging_now", test_car_charging_now, "car_charging_now holds the battery and feeds the model but never adds a car slot", False),
         ("units", run_test_units, "Unit tests", False),
         ("manual_api", run_test_manual_api, "Manual API tests", False),

@@ -327,6 +327,41 @@ def test_fetch_rates_single_page():
     assert result[0]["value_inc_vat"] == 24.5
 
 
+def test_fetch_rates_keeps_direct_debit_rows_only():
+    """GH#5502: REST unit rates carry overlapping DIRECT_DEBIT / NON_DIRECT_DEBIT rows; keep Direct Debit.
+
+    Downstream minute_data() merges overlapping rows last-write-wins, so leaving both in makes the
+    rate depend on response order. Here NON_DIRECT_DEBIT comes last and would win.
+    """
+    api = make_kraken_api()
+    api.current_tariff = {"tariff_code": "E-1R-EDF_STANDARD_VARIABLE-J", "product_code": "EDF_STANDARD_VARIABLE"}
+    rows = [
+        {"value_inc_vat": 26.879, "valid_from": "2026-10-01T00:00:00Z", "valid_to": None, "payment_method": "DIRECT_DEBIT"},
+        {"value_inc_vat": 28.2, "valid_from": "2026-10-01T00:00:00Z", "valid_to": None, "payment_method": "NON_DIRECT_DEBIT"},
+    ]
+    api._fetch_rates_rest = AsyncMock(return_value=(rows, None))
+
+    result = asyncio.run(api.async_fetch_rates())
+
+    assert [rate["payment_method"] for rate in result] == ["DIRECT_DEBIT"]
+    assert result[0]["value_inc_vat"] == 26.879
+
+
+def test_fetch_rates_single_payment_method_unchanged():
+    """REST unit rates offering only one payment method (or none) are all kept."""
+    api = make_kraken_api()
+    api.current_tariff = {"tariff_code": "E-1R-VAR-01", "product_code": "VAR-01"}
+    rows = [
+        {"value_inc_vat": 28.2, "valid_from": "2026-10-01T00:00:00Z", "valid_to": "2026-10-02T00:00:00Z", "payment_method": "NON_DIRECT_DEBIT"},
+        {"value_inc_vat": 27.0, "valid_from": "2026-10-02T00:00:00Z", "valid_to": "2026-10-03T00:00:00Z", "payment_method": None},
+    ]
+    api._fetch_rates_rest = AsyncMock(return_value=(rows, None))
+
+    result = asyncio.run(api.async_fetch_rates())
+
+    assert [rate["value_inc_vat"] for rate in result] == [28.2, 27.0]
+
+
 def test_fetch_rates_no_tariff():
     api = make_kraken_api()
     assert api.current_tariff is None
@@ -549,6 +584,48 @@ def test_standing_charge_converts_pence_to_pounds():
 
     # 53.0 pence → 0.53 pounds
     assert result == 0.53
+
+
+def _fetch_standing_charge_with_rows(rows):
+    """Run async_fetch_standing_charges() against a REST response carrying the given rows."""
+    api = make_kraken_api()
+    api.current_tariff = {"tariff_code": "E-1R-EDF_STANDARD_VARIABLE-J", "product_code": "EDF_STANDARD_VARIABLE"}
+
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(return_value=_mk_get_ctx(200, {"results": rows}))
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        return asyncio.run(api.async_fetch_standing_charges())
+
+
+def test_standing_charge_prefers_direct_debit_when_listed_second():
+    """GH#5502: EDF lists the NON_DIRECT_DEBIT row first; the Direct Debit charge must still be chosen."""
+    rows = [
+        {"value_inc_vat": 61.186, "valid_from": "2026-10-01T00:00:00Z", "valid_to": None, "payment_method": "NON_DIRECT_DEBIT"},
+        {"value_inc_vat": 52.317, "valid_from": "2026-10-01T00:00:00Z", "valid_to": None, "payment_method": "DIRECT_DEBIT"},
+        {"value_inc_vat": 60.0, "valid_from": "2026-07-01T00:00:00Z", "valid_to": "2026-10-01T00:00:00Z", "payment_method": "NON_DIRECT_DEBIT"},
+        {"value_inc_vat": 51.0, "valid_from": "2026-07-01T00:00:00Z", "valid_to": "2026-10-01T00:00:00Z", "payment_method": "DIRECT_DEBIT"},
+    ]
+    assert _fetch_standing_charge_with_rows(rows) == 52.317 / 100.0
+
+
+def test_standing_charge_single_payment_method_unchanged():
+    """A response offering only NON_DIRECT_DEBIT rows is used as-is rather than discarded."""
+    rows = [
+        {"value_inc_vat": 61.186, "valid_from": "2026-10-01T00:00:00Z", "valid_to": None, "payment_method": "NON_DIRECT_DEBIT"},
+    ]
+    assert _fetch_standing_charge_with_rows(rows) == 61.186 / 100.0
+
+
+def test_standing_charge_null_payment_method_unchanged():
+    """Rows with a null payment_method keep the existing first-row behaviour."""
+    rows = [
+        {"value_inc_vat": 48.0, "valid_from": "2026-10-01T00:00:00Z", "valid_to": None, "payment_method": None},
+        {"value_inc_vat": 47.0, "valid_from": "2026-07-01T00:00:00Z", "valid_to": "2026-10-01T00:00:00Z", "payment_method": None},
+    ]
+    assert _fetch_standing_charge_with_rows(rows) == 48.0 / 100.0
 
 
 def test_fetch_standing_charges_rest_404_falls_back_to_graphql():
@@ -2081,3 +2158,163 @@ def test_kraken_api_edge_block_uses_all_bound_backoff_helpers():
     assert api.access_token == "recovered-jwt"
     assert api.token_mint_blocked_until is None
     assert api.token_mint_block_count == 0
+
+
+def test_graphql_query_expired_jwt_refreshes_and_retries():
+    """KT-CT-1124 (expired JWT) is an auth error, so it refreshes and retries in the same call (#5582)."""
+    api = make_kraken_api()
+    api.access_token = "expired-token"
+    api.check_and_refresh_oauth_token = AsyncMock(return_value=True)
+    api.handle_oauth_401 = AsyncMock(return_value=True)
+
+    expired_resp = AsyncMock()
+    expired_resp.status = 200
+    expired_resp.json = AsyncMock(return_value={"errors": [{"extensions": {"errorCode": "KT-CT-1124"}, "message": "Signature of the JWT has expired."}]})
+    success_resp = AsyncMock()
+    success_resp.status = 200
+    success_resp.json = AsyncMock(return_value={"data": {"ok": True}})
+    responses = [expired_resp, success_resp]
+
+    def post_side_effect(*args, **kwargs):
+        ctx = AsyncMock()
+        ctx.__aenter__ = AsyncMock(return_value=responses.pop(0))
+        ctx.__aexit__ = AsyncMock(return_value=None)
+        return ctx
+
+    mock_session = AsyncMock()
+    mock_session.post = MagicMock(side_effect=post_side_effect)
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = asyncio.run(api.async_graphql_query("query { test }", "test-context"))
+
+    assert result == {"ok": True}
+    api.handle_oauth_401.assert_called_once()
+
+
+def test_is_alive_false_once_login_rejected():
+    """A rejected login makes the component unhealthy even though cached tariff and rates remain (#5582)."""
+    api = make_kraken_api()
+    api.api_started = True
+    api.current_tariff = {"tariff_code": "E-1R-VAR-01", "product_code": "VAR-01"}
+    assert api.is_alive() is True
+    assert api.health_message() is None
+
+    api.oauth_failed = True
+    assert api.is_alive() is False
+
+
+def test_health_message_names_the_login_failure():
+    """health_message() explains the rejected login, steering E.ON Next email users to an API key (#5582)."""
+    eon_email = make_kraken_api(provider="eon", auth_method="email", key=None, email="me@example.com", password="pw")
+    eon_email.oauth_failed = True
+    message = eon_email.health_message()
+    assert "E.ON Next" in message and "api_key" in message, message
+
+    edf_key = make_kraken_api(provider="edf", auth_method="api_key")
+    edf_key.oauth_failed = True
+    message = edf_key.health_message()
+    assert message.startswith("EDF login failed"), message
+    assert "api_key" not in message, message
+
+
+def test_fetch_dispatches_reports_whether_any_device_fetched():
+    """async_fetch_dispatches returns False when every device's query failed, True when one succeeded (#5582)."""
+    api = make_kraken_api()
+    cached = [{"start": "2026-07-08T02:00:00Z", "end": "2026-07-08T05:00:00Z", "charge_in_kwh": 10.0}]
+    api.intelligent_devices = {"dev-1": {"device_id": "dev-1", "planned_dispatches": list(cached), "completed_dispatches": []}}
+
+    api.async_graphql_query = AsyncMock(return_value=None)
+    assert asyncio.run(api.async_fetch_dispatches()) is False
+    assert api.intelligent_devices["dev-1"]["planned_dispatches"] == cached, "a failed query must keep the cached dispatches"
+
+    api.async_graphql_query = AsyncMock(return_value={"flexPlannedDispatches": [], "completedDispatches": []})
+    assert asyncio.run(api.async_fetch_dispatches()) is True
+
+
+def test_run_failed_dispatch_fetch_is_not_a_refresh():
+    """When every dispatch query fails, run() must not stamp the cached dispatches as freshly fetched (#5582)."""
+    from datetime import datetime, timedelta
+    from kraken import KRAKEN_DISPATCH_REFRESH_MINUTES
+
+    api = make_kraken_api()
+    api.current_tariff = {"tariff_code": "E-1R-VAR-01", "product_code": "VAR-01"}
+    api.import_rates = [{"value_inc_vat": 24.5}]
+    api.tariff_fetched_at = datetime.now()
+    api.rates_fetched_at = datetime.now()
+    stale = datetime.now() - timedelta(minutes=KRAKEN_DISPATCH_REFRESH_MINUTES + 30)
+    api.dispatch_fetched_at = stale
+    api.intelligent_devices = {"dev-1": {"device_id": "dev-1", "planned_dispatches": [], "completed_dispatches": [], "dispatches_fetched_at": "2026-10-16T09:00:00+00:00"}}
+    api.async_graphql_query = AsyncMock(return_value=None)  # e.g. "Auth not available for dispatches"
+    api.save_kraken_cache = AsyncMock()
+    api.dashboard_item = MagicMock()
+    api.set_arg = MagicMock()
+    api.get_arg = MagicMock(return_value=1)
+    api.update_success_timestamp = MagicMock()
+
+    result = asyncio.run(api.run(120, False))
+
+    assert result is True
+    assert api.dispatch_fetched_at == stale, "a fetch where every query failed must keep the old timestamp"
+    api.save_kraken_cache.assert_not_called()
+    # The cached dispatches are still published, carrying their real age
+    entity = api.get_entity_name("binary_sensor", "intelligent_dispatch_1")
+    call = [c for c in api.dashboard_item.call_args_list if c.args[0] == entity][0]
+    assert call.kwargs["attributes"]["dispatches_fetched_at"] == "2026-10-16T09:00:00+00:00"
+
+
+def test_run_account_status_publishes_failure_counts():
+    """The account_status sensor carries requests_total / failures_total so failures are visible outside the log (#5582)."""
+    from datetime import datetime
+
+    api = make_kraken_api()
+    api.current_tariff = {"tariff_code": "E-1R-VAR-01", "product_code": "VAR-01"}
+    api.import_rates = [{"value_inc_vat": 24.5}]
+    api.tariff_fetched_at = datetime.now()
+    api.rates_fetched_at = datetime.now()
+    api.requests_total = 7
+    api.failures_total = 3
+    api.dashboard_item = MagicMock()
+    api.set_arg = MagicMock()
+    api.update_success_timestamp = MagicMock()
+
+    asyncio.run(api.run(120, False))
+
+    entity = api.get_entity_name("sensor", "account_status")
+    call = [c for c in api.dashboard_item.call_args_list if c.args[0] == entity][0]
+    assert call.kwargs["attributes"]["requests_total"] == 7
+    assert call.kwargs["attributes"]["failures_total"] == 3
+
+
+def test_fetch_dispatches_stamps_only_the_devices_that_refreshed():
+    """With one device's query failing, only the device that refreshed gets a new dispatches_fetched_at (#5583 review)."""
+    api = make_kraken_api()
+    old_stamp = "2026-10-16T09:00:00+00:00"
+    api.intelligent_devices = {
+        "dev-ok": {"device_id": "dev-ok", "planned_dispatches": [], "completed_dispatches": [], "dispatches_fetched_at": old_stamp},
+        "dev-bad": {"device_id": "dev-bad", "planned_dispatches": [{"start": "s", "end": "e"}], "completed_dispatches": [], "dispatches_fetched_at": old_stamp},
+    }
+
+    async def query(query_text, request_context):
+        if "dev-bad" in query_text:
+            return None
+        return {"flexPlannedDispatches": [], "completedDispatches": []}
+
+    api.async_graphql_query = AsyncMock(side_effect=query)
+
+    assert asyncio.run(api.async_fetch_dispatches()) is True
+    assert api.intelligent_devices["dev-ok"]["dispatches_fetched_at"] != old_stamp
+    assert api.intelligent_devices["dev-bad"]["dispatches_fetched_at"] == old_stamp, "a failed device must keep its own old timestamp"
+    assert api.intelligent_devices["dev-bad"]["planned_dispatches"] == [{"start": "s", "end": "e"}]
+
+
+def test_discover_smart_devices_keeps_dispatches_fetched_at():
+    """Rediscovery rebuilds each device dict but must carry its dispatches_fetched_at across (#5583 review)."""
+    api = make_kraken_api()
+    api.intelligent_devices = {"dev-1": {"device_id": "dev-1", "planned_dispatches": [], "completed_dispatches": [], "dispatches_fetched_at": "2026-10-16T09:00:00+00:00"}}
+    api.async_graphql_query = AsyncMock(return_value={"devices": [{"id": "dev-1", "deviceType": "ELECTRIC_VEHICLES", "status": {"current": "LIVE"}, "__typename": "SmartFlexVehicle"}]})
+
+    asyncio.run(api.async_discover_smart_devices())
+
+    assert api.intelligent_devices["dev-1"]["dispatches_fetched_at"] == "2026-10-16T09:00:00+00:00"
