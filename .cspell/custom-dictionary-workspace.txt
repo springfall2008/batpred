@@ -160,6 +160,7 @@ dischargefreeze
 Dischg
 Dise
 Disf
+dishcare
 diverter
 dlimit
 dlopen

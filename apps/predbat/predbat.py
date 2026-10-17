@@ -103,6 +103,7 @@ from marginal import Marginal
 from plan import Plan
 from fetch import Fetch
 from output import Output
+from additional_load import AdditionalLoad
 from userinterface import UserInterface
 from compare import Compare
 from plugin_system import PluginSystem
@@ -112,7 +113,7 @@ from control_ledger import ControlLedger
 from control_monitor import ControlMonitor
 
 
-class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, Marginal, Execute, Output, UserInterface, GitHub):
+class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, Marginal, Execute, Output, AdditionalLoad, UserInterface, GitHub):
     """Main PredBat orchestrator combining all subsystems via multiple inheritance.
 
     Inherits from Hass (HA interface), Octopus (rate loading), Energidataservice, Stromligning,
@@ -241,6 +242,18 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         state = self.unit_conversion(entity_id, state, None, required_unit, going_to=True)
         return self.ha_interface.set_state(entity_id, state, attributes=attributes)
 
+    def delete_state_wrapper(self, entity_id):
+        """
+        Wrapper function to delete state from HA.
+        """
+        if not self.ha_interface:
+            self.log("Error: delete_state_wrapper - No HA interface available")
+            return False
+        if not hasattr(self.ha_interface, "delete_state"):
+            return False
+
+        return self.ha_interface.delete_state(entity_id)
+
     def fire_event_wrapper(self, domain, service):
         """
         Wrapper function to fire a HA event
@@ -358,9 +371,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.manual_demand_times = []
         self.manual_all_times = []
         self.manual_api = []
+        self.load_forecast_delta_api = []
         self.manual_import_rates = {}
         self.manual_export_rates = {}
         self.manual_load_adjust = {}
+        self.house_load_additional_forecast_adjust = {}
+        self.house_load_additional_forecasts = {}
+        self.house_load_additional_forecast_overrides = {}
+        self.house_load_additional_history = []
+        self.house_load_additional_history_loaded = False
         self.config_index = {}
         self.dashboard_index = []
         self.dashboard_index_app = {}
