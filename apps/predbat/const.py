@@ -42,6 +42,12 @@ DYNAMIC_LOAD_CAR_CONFIRM_MINUTES = 2
 # How long a half hour an Octopus Intelligent planned dispatch ran in keeps the dispatch rate after it ends,
 # while waiting for Octopus to list it as a completed dispatch - seen to take 15 to 60 minutes (GH#5520)
 OCTOPUS_DISPATCH_HOLD_MINUTES = 90
+# The same hold under the window billing rule (E.ON Next Drive Smart, GH#5521): the supplier bills every half hour a
+# planned dispatch was in force off-peak and never lists the ones the car did not charge in, so the hold is the
+# record - kept for a day, so today's cost and the hours either side of midnight are priced from it
+OCTOPUS_DISPATCH_WINDOW_HOLD_MINUTES = 24 * 60
+# The settings of intelligent_dispatch_billing in apps.yaml
+DISPATCH_BILLING_CHOICES = ("auto", "octopus", "window")
 
 # Extra cloud divergence applied to the PV10 scenario on top of the computed cloud factor, so the
 # downside case diverges harder than the central one
@@ -65,6 +71,7 @@ PV_SCENARIO_NOMINAL = 0
 PV_SCENARIO_PV10 = 1
 PV_SCENARIO_PV90 = 2
 LOAD_FORECAST_HISTORY_MAX_DAYS = 30  # Max days of history used by the weighted-bucket load forecast (days_previous_auto)
+LOAD_FORECAST_RECORDED_MIN_MINUTES = 60  # Recorded load needed before its average fills slots no history covers (new installs, batpred#5548)
 CONFIG_ROOTS = ["/config", "/conf", "/homeassistant", "./"]
 TIME_FORMAT_HA = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_HA_TZ = "%Y-%m-%dT%H:%M:%S.%f%z"
