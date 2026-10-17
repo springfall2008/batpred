@@ -916,6 +916,10 @@ def get_now_from_cumulative(data, minutes_now, backwards):
 def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=False, prune_future_days=0, prune_past_days=0, intermediate=False, offset_minutes=0):
     """
     Remove data from before today
+
+    offset_minutes shifts each point forward (a prediction recorded at 10:00 about 11:00 is plotted at
+    11:00), and pruning judges a point by that shifted time, so a prediction made yesterday that lands
+    today is kept.
     """
     results = {}
     last_time = None
@@ -931,10 +935,10 @@ def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=
             for i in range(1, seconds_gap // int(group * 60)):
                 new_time = last_time + timedelta(seconds=i * group * 60) + timedelta(minutes=offset_minutes)
                 results[new_time.isoformat()] = prev_value
-        if not prune or (timekey > (midnight_utc - timedelta(days=prune_past_days))):
+        new_time = timekey + timedelta(minutes=offset_minutes)
+        if not prune or (new_time > (midnight_utc - timedelta(days=prune_past_days))):
             if prune_future and (timekey > (now_utc + timedelta(days=prune_future_days))):
                 continue
-            new_time = timekey + timedelta(minutes=offset_minutes)
             results[new_time.isoformat()] = data[key]
             last_time = timekey
             prev_value = data[key]

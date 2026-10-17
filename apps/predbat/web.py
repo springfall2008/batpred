@@ -3267,9 +3267,11 @@ chart.render();
         soc_kw_best = self.get_entity_results(self.prefix + ".soc_kw_best")
         # What earlier plans predicted for now, shifted forward by the horizon they were made at, so
         # each lands on the moment it was forecasting and can be read straight against Actual.
+        # Pruned to today like the chart's other series - unpruned, the 7-day history this is read from
+        # stretched the Battery chart back across the whole week.
         soc_best_history = self.get_history_with_now_attrs(self.prefix + ".soc_kw_best", 7)
-        soc_kw_best_h1 = prune_today(history_attribute(soc_best_history, attributes=True, state_key="soc_h1"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60)
-        soc_kw_best_h8 = prune_today(history_attribute(soc_best_history, attributes=True, state_key="soc_h8"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60 * 8)
+        soc_kw_best_h1 = prune_today(history_attribute(soc_best_history, attributes=True, state_key="soc_h1"), self.now_utc, self.midnight_utc, prune=True, offset_minutes=60)
+        soc_kw_best_h8 = prune_today(history_attribute(soc_best_history, attributes=True, state_key="soc_h8"), self.now_utc, self.midnight_utc, prune=True, offset_minutes=60 * 8)
         soc_kw_best10 = self.get_entity_results(self.prefix + ".soc_kw_best10")
         soc_kw_base10 = self.get_entity_results(self.prefix + ".soc_kw_base10")
         charge_limit_kw = self.get_entity_results(self.prefix + ".charge_limit_kw")
