@@ -16,6 +16,7 @@ Do the whole review yourself, in this session. Do not invoke `/code-review` or a
 
 ```bash
 gh pr view <pr-number> --json number,title,body,headRefOid,baseRefName,files,isCrossRepository
+git fetch origin main
 git fetch origin pull/<pr-number>/head
 git checkout --detach FETCH_HEAD
 git rev-parse HEAD
@@ -25,6 +26,7 @@ gh pr diff <pr-number> > <scratch>/pr.diff
 Run each command from the clone as written. A form like `git -C <path> fetch` does not match the permission rules and is denied, which on PR #5574 left the review reading `main` instead of the PR.
 
 - `git rev-parse HEAD` must equal `headRefOid`. If it does not, the PR moved between the two calls: fetch and check out again.
+- If the PR body describes changes that `<scratch>/pr.diff` does not contain, check whether they have already reached `main`, for example through another PR for the same issue. If so, the PR may now be superseded, and the review should say so.
 - Read code from the working tree from now on. It is the PR's version, so `Read` and `Grep` show what the PR actually ships. To see what `main` had, use `git show origin/main:<path>`.
 - Read `<scratch>/pr.diff` for the diff. It is the diff GitHub anchors review comments on, so later steps check anchors against it.
 - The GitNexus index describes `main`, not this checkout. Use it for callers and blast radius of symbols that already exist on `main`, and use `Grep` for anything the PR adds.
