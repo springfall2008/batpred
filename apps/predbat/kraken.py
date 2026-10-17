@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 
 from component_base import ComponentBase
 from mock_base import MockBase as KrakenMockBase
+from utils import str2time
 
 # Auth strategy selection — OAuthMixin for SaaS OAuth, KrakenAuthMixin for local auth.
 # Both may ship in the same release package.  _KrakenAuthMixin is stored at module level
@@ -1147,19 +1148,71 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         }
         await self.storage.save("kraken", self._cache_filename(), cache, format="yaml", expiry=datetime.now(timezone.utc) + timedelta(days=7))
 
+    @staticmethod
+    def _rates_in_window(rates, window_start, window_end):
+        """Return the rate periods that overlap [window_start, window_end], in their original order.
+
+        The end is inclusive because minute_data() keeps its last minute too: a period starting
+        exactly there still sets it. A period ending exactly at window_start sets nothing inside.
+
+        A period with no valid_to is open-ended and a period with no valid_from has no start, so
+        each is kept if the rest of it overlaps. A period whose timestamps cannot be parsed is kept
+        too, so that minute_data() meets it just as it did before the trim was added.
+        """
+        kept = []
+        for rate in rates:
+            try:
+                valid_from = str2time(rate["valid_from"]) if rate.get("valid_from") else None
+                valid_to = str2time(rate["valid_to"]) if rate.get("valid_to") else None
+            except (ValueError, TypeError):
+                kept.append(rate)
+                continue
+            if valid_from is not None and valid_from > window_end:
+                continue
+            if valid_to is not None and valid_to <= window_start:
+                continue
+            kept.append(rate)
+        return kept
+
+    def _published_rates(self, rates):
+        """Trim a rate list to the window Predbat reads back, for publishing as a sensor attribute.
+
+        A long fixed contract returns every period since it started - about three a day, so a few
+        months reaches 255+ periods (~38 KB), past Home Assistant's 16 KB recorder limit for a
+        state's attributes (#5534). Predbat reads the sensor back through fetch_octopus_rates(),
+        whose minute_data() keeps only (forecast_days + 1) days either side of midnight and drops
+        the rest, so publish just that and the plan sees exactly the rates it did before. The
+        back end is deliberately wider than the Octopus component's -24h: when fetches keep
+        failing, rate_replicate() copies the last real day forward from up to two days back, and
+        trimming that away would lose the rates sooner than before. The in-memory list and the
+        cache keep the full set.
+
+        The forward end has one day to spare: the sensor is republished only on the first run and
+        when a rates refresh is due (every 30 minutes), so one published just before midnight can
+        still be what Predbat reads just after it, when its own window has moved on a day. forecast_days is worked out as fetch.py does,
+        including its 24 hour minimum.
+        """
+        forecast_hours = max(self.get_arg("forecast_hours", 48), 24)
+        forecast_days = int((forecast_hours + 23) / 24)
+        midnight = self.midnight_utc
+        return self._rates_in_window(rates, midnight - timedelta(days=forecast_days + 1), midnight + timedelta(days=forecast_days + 2))
+
     def _publish_rate_sensors(self):
         """Publish the import/export rate + standing-charge sensors from the current in-memory data.
 
         Called on the first run (so cached data populates HA immediately) and whenever rates are
-        refreshed. No-ops for any datum that is not present yet.
+        refreshed. No-ops for any datum that is not present yet. The rates attributes carry only
+        the window Predbat reads back (see _published_rates()), and the state is the number of
+        periods published.
         """
         if self.import_rates:
+            import_rates = self._published_rates(self.import_rates)
             self.dashboard_item(
                 self.get_entity_name("sensor", "import_rates"),
-                state=len(self.import_rates),
+                state=len(import_rates),
                 attributes={
                     "friendly_name": "Kraken Import Rates",
-                    "rates": self.import_rates,
+                    "rates": import_rates,
                     "tariff_code": self.current_tariff["tariff_code"],
                     "product_code": self.current_tariff["product_code"],
                     "icon": "mdi:currency-gbp",
@@ -1179,12 +1232,13 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                 app="kraken",
             )
         if self.export_rates and self.export_tariff:
+            export_rates = self._published_rates(self.export_rates)
             self.dashboard_item(
                 self.get_entity_name("sensor", "export_rates"),
-                state=len(self.export_rates),
+                state=len(export_rates),
                 attributes={
                     "friendly_name": "Kraken Export Rates",
-                    "rates": self.export_rates,
+                    "rates": export_rates,
                     "tariff_code": self.export_tariff["tariff_code"],
                     "product_code": self.export_tariff["product_code"],
                     "icon": "mdi:currency-gbp",
