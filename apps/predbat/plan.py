@@ -358,7 +358,12 @@ class Plan:
         """
         now_slots = self.car_charging_now_slots
         # Always a fresh list per car, so a caller that edits the model can never edit the published plan
-        return [(now_slots[car_n] if car_n < len(now_slots) else []) + list(slots) for car_n, slots in enumerate(self.car_charging_slots)]
+        model = [(now_slots[car_n] if car_n < len(now_slots) else []) + list(slots) for car_n, slots in enumerate(self.car_charging_slots)]
+        from joint_site_arrival import model_arrival_slots
+
+        if model and not model[0]:
+            model[0] = model_arrival_slots(self)
+        return model
 
     def car_charging_threshold_kw(self):
         """
@@ -2404,6 +2409,12 @@ class Plan:
                 for line in text_lines:
                     self.log(line)
                 self.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, self.end_record)
+
+        # The personal-fork joint optimiser uses these forecasts in isolation. It
+        # never replaces the executable battery/EV plan or its Prediction object.
+        from joint_site_native import evaluate_joint_site
+
+        evaluate_joint_site(self, publish=publish)
 
         # Record planning duration for SLO metrics
         self.plan_last_duration_seconds = time.time() - plan_start_time

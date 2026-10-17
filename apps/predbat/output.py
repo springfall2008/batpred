@@ -132,6 +132,12 @@ class Output:
         """
         Publish the car charging plan
         """
+        # Fetch calls this before execution. Explicit joint apply must not leak
+        # the independently optimised legacy EV plan to the existing HA executor.
+        from joint_site_apply import publish_joint_ev
+
+        if publish_joint_ev(self):
+            return
         postfix = ""
         for car_n in range(self.num_cars):
             # A list of its own per car - shared, every car after the first also carried the windows of
@@ -1648,13 +1654,13 @@ class Output:
                 # charging in the same step, not only when no car is charging
                 car_charging_cancelled = self.car_charge_slot_kwh_cancelled(minute_start, minute_end)
                 if car_charging_kwh > 0.0:
-                    car_charging_str = str(car_charging_kwh)
+                    car_charging_str = "{:.2f}".format(car_charging_kwh)
                     if car_charging_cancelled > 0.0:
-                        car_charging_str += " +" + str(car_charging_cancelled) + "?"
+                        car_charging_str += " +{:.2f}?".format(car_charging_cancelled)
                     car_color = "FFFF00"
                     car_rate = self.car_charge_slot_rate(minute_start, minute_end)
                 elif car_charging_cancelled > 0.0:
-                    car_charging_str = str(car_charging_cancelled) + "?"
+                    car_charging_str = "{:.2f}?".format(car_charging_cancelled)
                     car_color = "#FFFFCC"
                 else:
                     car_charging_str = "&#9866;"
@@ -1901,7 +1907,7 @@ class Output:
         if plan_debug and self.load_forecast:
             html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(xload_total))
         if self.num_cars > 0:
-            html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(car_total))
+            html += "<td bgcolor=#FFFFFF><b>{:.2f}</b></td>".format(car_total)
         if self.iboost_enable:
             iboost_amount_str = "&#9866;"
             iboost_amount_end = self.predict_iboost_best.get(minute_relative_slot_end, 0)

@@ -29,6 +29,7 @@ nav:
     - compare.md
   - 'What If Annual Prediction': annual-prediction.md
   - 'Predbat development':
+    - 'Personal fork: joint site planning': joint-site-planning.md
     - todo-list.md
     - developing.md
     - random-scenarios.md
