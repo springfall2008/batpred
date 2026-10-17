@@ -412,8 +412,10 @@ They mirror input sensors fed into Predbat in `apps.yaml` and are used in the da
 
 - predbat.export_energy_h0 - Mirrors the export_today sensor configured in `apps.yaml` and gives today's total kWh of export energy
 - predbat.import_energy_h0 - Mirrors the import_today sensor configured in `apps.yaml` and gives today's total kWh of import energy
-- predbat.load_energy_h0 - Mirrors the load_today sensor configured in `apps.yaml` and gives today's total kWh of house load energy.
-Note that if you have configured [load scaling](customisation.md#scaling-and-weight-options) then load_energy_h0 will have been scaled by the scaling factor.
+- predbat.load_energy_h0 - Mirrors the load_today sensor configured in `apps.yaml` and gives today's total kWh of house load energy, as measured:
+it is not scaled by [load scaling](customisation.md#scaling-and-weight-options) and car charging and iBoost energy are not subtracted.
+The `source` attribute says where the figure came from: `load_today`, `ge_cloud`, or `load_forecast` when no load_today sensor is configured (in which case it is a forecast, not a measurement).
+Predbat uses this sensor's history to fill gaps in load_today, for example after you change to a different load sensor - see [load filtering](apps-yaml.md#load-filtering).
 - predbat.pv_energy_h0 - Mirrors the pv_today sensor configured in `apps.yaml` and gives today's total kWh of generated PV energy
 - predbat.soc_kw_h0 - Mirrors the soc_kwh sensor configured in `apps.yaml` and gives today's total kWh of battery state of charge (SoC).
 Note that if you have configured [battery scaling](apps-yaml.md#battery-size-scaling) then soc_kw_h0 will have been scaled by the configured scaling factor
