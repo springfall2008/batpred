@@ -210,8 +210,10 @@ KRAKEN_BASE_URLS = {
     "eon": "https://api.eonnext-kraken.energy",
 }
 
-# Auth error codes that trigger token refresh + retry
-KRAKEN_AUTH_ERROR_CODES = ("KT-CT-1139", "KT-CT-1111", "KT-CT-1143")
+# Auth error codes that trigger token refresh + retry. KT-CT-1124 is "Signature of the JWT has expired."
+KRAKEN_AUTH_ERROR_CODES = ("KT-CT-1139", "KT-CT-1111", "KT-CT-1143", "KT-CT-1124")
+
+KRAKEN_PROVIDER_NAMES = {"edf": "EDF", "eon": "E.ON Next"}
 
 # REST statuses meaning "the products API cannot serve this tariff's rates", as opposed to a
 # transient outage (429/500/503) — these are the ones worth falling back to GraphQL for.
@@ -331,6 +333,22 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             self.token_hash = token_hash or ""
         elif hasattr(self, "_init_kraken_auth"):
             self._init_kraken_auth(auth_method, key=key, email=email, password=password)
+
+    def is_alive(self):
+        """Report unhealthy once the login has been rejected, however much cached data is still being served."""
+        return self.api_started and not self.oauth_failed
+
+    def health_message(self):
+        """Say why Kraken is unhealthy so the run status points at the login rather than just naming the component."""
+        if not self.oauth_failed:
+            return None
+        name = KRAKEN_PROVIDER_NAMES.get(self.provider, "Kraken")
+        if self.provider == "eon" and self.auth_method == "email":
+            # E.ON Next stopped accepting email/password in obtainKrakenToken around 16 Oct 2026 (#5580)
+            return f"{name} login failed - email/password sign-in is rejected, switch kraken_auth_method to api_key"
+        if self.auth_method == "oauth":
+            return f"{name} authorisation failed - reconnect the {name} account"
+        return f"{name} login failed - check the Kraken credentials, then restart the Kraken component"
 
     async def async_graphql_query(self, query, request_context, _retry_count=0):
         """Execute a GraphQL query with auth and auto-retry on auth errors."""
@@ -1242,6 +1260,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                 "charge_point_power_in_kw": existing.get("charge_point_power_in_kw"),
                 "planned_dispatches": existing.get("planned_dispatches", []),
                 "completed_dispatches": existing.get("completed_dispatches", []),
+                "dispatches_fetched_at": existing.get("dispatches_fetched_at"),
             }
 
         added = sorted(set(live) - set(self.intelligent_devices))
@@ -1315,7 +1334,12 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         Planned dispatches replace the previous set (they are the current optimiser schedule);
         completed dispatches merge with the cached history so metered charging is retained across
         the API's rolling window and restarts.
+
+        Returns True if at least one device's dispatches were fetched. Each device records its own
+        dispatches_fetched_at (published as an attribute), so a device whose query failed keeps its
+        cached lists and its old timestamp even when another device refreshed.
         """
+        fetched = False
         for device_id, device in self.intelligent_devices.items():
             data = await self.async_graphql_query(
                 KRAKEN_DISPATCHES_QUERY.format(account_number=self.account_id, device_id=device_id),
@@ -1323,9 +1347,12 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             )
             if data is None:
                 continue
+            fetched = True
+            device["dispatches_fetched_at"] = datetime.now(timezone.utc).isoformat()
             device["planned_dispatches"] = self._normalize_dispatches(data.get("flexPlannedDispatches"), completed=False)
             new_completed = self._normalize_dispatches(data.get("completedDispatches"), completed=True)
             device["completed_dispatches"] = self._merge_completed_dispatches(device.get("completed_dispatches", []), new_completed)
+        return fetched
 
     def _publish_dispatch_sensors(self):
         """Publish an intelligent_dispatch binary_sensor per device and wire octopus_intelligent_slot.
@@ -1437,10 +1464,12 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         # Fetch SmartFlex intelligent dispatches for any known devices, then publish + wire them.
         # dispatch_due stays permanently true for accounts with no devices (dispatch_fetched_at
         # never gets set), so track whether we actually refreshed to avoid saving the cache every
-        # cycle in the common no-EV case.
-        dispatches_refreshed = bool(self.intelligent_devices) and dispatch_due
+        # cycle in the common no-EV case. A fetch where every device's query failed is not a
+        # refresh: the cached dispatches keep their old timestamp and are retried next cycle.
+        dispatches_refreshed = False
+        if self.intelligent_devices and dispatch_due:
+            dispatches_refreshed = await self.async_fetch_dispatches()
         if dispatches_refreshed:
-            await self.async_fetch_dispatches()
             self.dispatch_fetched_at = datetime.now()
             had_success = True
         if self.intelligent_devices and (first or dispatch_due):
@@ -1473,6 +1502,8 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                 "provider": self.provider,
                 "account_id": self.account_id,
                 "has_export": self.export_tariff is not None,
+                "requests_total": self.requests_total,
+                "failures_total": self.failures_total,
                 "icon": "mdi:account-check" if status == "connected" else "mdi:account-alert",
             },
             app="kraken",
