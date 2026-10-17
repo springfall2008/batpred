@@ -223,7 +223,11 @@ The default is 1.1 meaning an extra 10% load is added. This will only have an im
 
 **input_number.predbat_load_scaling90** (_expert mode_) is a percentage Scaling factor applied to historical load only for the PV90% upside scenario, exactly
 like `load_scaling10` above but discounting the load instead of adding to it. It is an absolute multiplier of the historical load - it does not compose with
-`load_scaling`. The default is 0.7, meaning the PV90% scenario uses 70% of your raw historical load regardless of what `load_scaling` itself is set to.
+`load_scaling`. The default is 0.9, meaning the PV90% scenario uses 90% of your raw historical load regardless of what `load_scaling` itself is set to.
+Overnight there is no solar, so the PV90% scenario differs from the central one only in this lower load. A deeper discount (the default used to be 0.7)
+made the plan sell the battery too early in the evening and then buy back at the peak rate before the off-peak period started (issue #5566).
+Predbat stores this setting's value whenever expert mode is on and keeps a stored value over a new default, so an install that has had expert mode on
+at any time before this change stays at 0.7 until you set it to 0.9 yourself.
 This will only have an impact if the PV 90% weighting is non-zero (see `pv_metric90_weight` and `switch.predbat_calculate_pv90_plan` below).<BR>
 Because the three load scalings are independent, some combinations would otherwise invert a scenario - a `load_scaling` set below `load_scaling90` would give
 the PV90% case _more_ load than the central case, making it a second downside case rather than the intended upside one. To prevent that, Predbat clamps the
@@ -255,8 +259,8 @@ A value of 0.15 (the default) is recommended. Do not enter a value above 1.0 (e.
 **switch.predbat_calculate_pv90_plan** (_performance tweaks_) enables the PV90% upside scenario described below - it is **On by default**.
 Turn it Off (after turning on **switch.predbat_performance_tweaks** to reveal it) and the PV90% scenario is not simulated at all, saving that
 planning time, regardless of what `pv_metric90_weight` is set to.
-The two settings that tune it (`pv_metric90_weight` and `load_scaling90`) remain expert-mode only, so everyone running the PV90% scenario is using the same
-values and their results are comparable.
+The two settings that tune it (`pv_metric90_weight` and `load_scaling90`) remain expert-mode only, so everyone running the PV90% scenario without expert
+mode (and without setting them in `apps.yaml`) is using the shipped defaults and their results are comparable.
 
 **input_number.predbat_pv_metric90_weight** (_expert mode_) is a weighting, expressed as a fraction between 0.0 and 1.0 (not a whole-number percentage), given to the Solcast 90% PV scenario in calculating solar generation.
 It is the upside mirror of `pv_metric10_weight` above: where the PV10% scenario models a cloudier, higher-load day, the PV90% scenario models a sunnier day
