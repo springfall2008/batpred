@@ -9078,8 +9078,8 @@ setTimeout(function() {
 </div>
 <a href='./dash'>Dash</a>
 <a href='./plan'>Plan</a>
-<a href='./entity'>Entities</a>
 <a href='./charts'>Charts</a>
+<a href='./entity'>Entities</a>
 <a href='./compare'>Compare</a>
 <a href='./annual'>WhatIf</a>
 """

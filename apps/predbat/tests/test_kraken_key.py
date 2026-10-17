@@ -348,11 +348,11 @@ def test_menu_groups_settings_pages():
 
 
 def test_menu_top_bar_order():
-    """Metrics follows Log, then Settings, then Advanced, then Docs."""
+    """Charts follows Plan; Metrics follows Log, then Settings, then Advanced, then Docs."""
     from web_helper import get_menu_html
 
     html = get_menu_html(False, "./dash", [], "v0.0.0", "", chat_enabled=True)
-    order = ["href='./log'", "href='./metrics_dashboard'", 'data-menu="settings-menu"', 'data-menu="advanced-menu"', "springfall2008.github.io/batpred/'"]
+    order = ["href='./plan'", "href='./charts'", "href='./entity'", "href='./log'", "href='./metrics_dashboard'", 'data-menu="settings-menu"', 'data-menu="advanced-menu"', "springfall2008.github.io/batpred/'"]
     positions = [html.index(marker) for marker in order]
     assert positions == sorted(positions), list(zip(order, positions))
     assert html.index("href='./chat'") < html.index("href='./log'")

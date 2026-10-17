@@ -86,18 +86,6 @@ Further details of the columns, what they show, the colour coding, etc can be fo
 
 You can also [create a Predbat Plan card](predbat-plan-card.md) to show Predbat's plan on your own custom dashboard.
 
-### Entities View
-
-This view enables you to look at the history of any Predbat output entity or (input) configuration setting.
-
-Select the entity required to be viewed, the attributes to be charted (defaults to entity state) and the time period of history to view the entity over (but note you may need to [increase HA's purge_keep_days](apps-yaml.md#days_previous) first).
-
-You can select multiple entities and their attributes and Predbat will then display the current entity values, a chart of the selected attribute history, and then a list of prior historical values.
-The example below shows Predbat import and export rates charted for the last 7 days:
-
-![image](images/web-interface-entities-view.png)
-![image](images/web-interface-entities-chart.png)
-
 ### Charts View
 
 The Charts view provides an easy way of viewing a number of pre-created Predbat charts:
@@ -122,6 +110,18 @@ The chart also shows where charging is planned under the Base and Best scenarios
 Example PV chart:
 
 ![image](images/web-interface-pv-chart.png)
+
+### Entities View
+
+This view enables you to look at the history of any Predbat output entity or (input) configuration setting.
+
+Select the entity required to be viewed, the attributes to be charted (defaults to entity state) and the time period of history to view the entity over (but note you may need to [increase HA's purge_keep_days](apps-yaml.md#days_previous) first).
+
+You can select multiple entities and their attributes and Predbat will then display the current entity values, a chart of the selected attribute history, and then a list of prior historical values.
+The example below shows Predbat import and export rates charted for the last 7 days:
+
+![image](images/web-interface-entities-view.png)
+![image](images/web-interface-entities-chart.png)
 
 ### Compare View
 
