@@ -141,6 +141,12 @@ class PredbatMetrics:
         self.control_conflicts_events = []
         self.control_conflicts_sustained_controls = []
 
+        # -- Control failure monitor ----------------------------------------------
+        self.control_failures_24h = _gauge("predbat_control_failures_24h", "Slots where the battery did not follow Predbat's command in the last 24h")
+        self.control_failures_total = _gauge("predbat_control_failures_total", "Lifetime count of slots where the battery did not follow Predbat's command")
+        # Plain data for the dashboard table, as for control_conflicts_events
+        self.control_failures_events = []
+
 
     def to_dict(self):
         """Return current metric values as a plain dict for the dashboard."""
@@ -243,6 +249,10 @@ class PredbatMetrics:
             "control_conflicts_sustained_total": _val(self.control_conflicts_sustained_total),
             "control_conflicts_events": self.control_conflicts_events,
             "control_conflicts_sustained_controls": self.control_conflicts_sustained_controls,
+            # Control failure monitor
+            "control_failures_24h": _val(self.control_failures_24h),
+            "control_failures_total": _val(self.control_failures_total),
+            "control_failures_events": self.control_failures_events,
         }
 
 
