@@ -34,6 +34,7 @@ from utils import (
     export_target_of,
     pack_export_limit,
 )
+from export_budget import EXPORT_BUDGET_OFF, EXPORT_BUDGET_PV_EQUIVALENT, export_budget_battery_export_allowed, export_budget_house_from_battery, export_budget_update
 from prediction_batch import PredictionBatch, prediction_cache_key
 from prediction_kernel import create_kernel_context, kernel_supported, run_prediction_kernel
 
@@ -124,6 +125,9 @@ class Prediction(PredictionBatch):
             self.car_energy_reported_load = base.car_energy_reported_load
             self.reserve = base.reserve
             self.metric_standing_charge = base.metric_standing_charge
+            self.export_budget_mode = getattr(base, "export_budget_mode", EXPORT_BUDGET_OFF)
+            self.export_budget_cap_kwh = getattr(base, "export_budget_cap_kwh", 0.0)
+            self.export_budget_seed = getattr(base, "export_budget_seed", None)
             self.set_charge_freeze = base.set_charge_freeze
             self.set_reserve_enable = base.set_reserve_enable
             self.set_export_freeze = base.set_export_freeze
@@ -728,12 +732,28 @@ class Prediction(PredictionBatch):
                 pv_remaining += pv_forecast_minute_step_flat.get(minute_step, 0.0)
                 pv_remaining_kwh[minute_step] = pv_remaining
 
+        # Export energy budget (export_budget_mode, see export_budget.py): pv_equivalent tracks a bucket of
+        # exportable energy, pv_origin splits the stored energy into a PV part and a grid part. Starts from
+        # the measured history (Fetch.update_export_budget_seed); without a seed nothing is exportable.
+        budget_mode = self.export_budget_mode
+        budget_cap = self.export_budget_cap_kwh if self.export_budget_cap_kwh > 0 else self.soc_max
+        budget_seed = self.export_budget_seed if budget_mode else None
+        budget_bucket = budget_seed[0] if budget_seed else 0.0
+        budget_pv_part = soc * budget_seed[1] if budget_seed else 0.0
+        budget_grid_part = soc - budget_pv_part
+        budget_stored_to_ac = battery_loss_discharge * inverter_loss
+        predict_export_budget = {}
+        predict_export_budget_start = {}
+        export_budget_capped_minutes = []
+        planned_battery_export = 0.0
+
         # Simulate each forward minute
         minute = 0
         while minute < self.forecast_minutes:
             # Minute yesterday can wrap if days_previous is only 1
             minute_absolute = minute + self.minutes_now
             prev_soc = soc
+            budget_forced = False
             reserve_expected = reserve
             import_rate = rate_import.get(minute_absolute, 0)
             dispatch_rate = import_rate
@@ -988,6 +1008,7 @@ class Prediction(PredictionBatch):
                 discharge_min = max(soc_max * export_limit_percent / 100.0, reserve, self.best_soc_min)
 
             if not set_export_freeze_only and export_window_active and export_mode_now == EXPORT_MODE_TARGET and (soc > discharge_min):
+                budget_forced = True
                 # Discharge enable, capped at export limit
                 if self.set_export_low_power:
                     export_rate_adjust = export_power_of(export_limit_now)
@@ -1318,6 +1339,31 @@ class Prediction(PredictionBatch):
                 pv_ac = max(pv_ac - over_limit, 0)
                 clipped_today += pv_ac_before - pv_ac
 
+            # Export energy budget - in a forced export step the battery may only export what the budget allows;
+            # whatever serves on-site load is never capped
+            budget_house_frac = 1.0
+            if budget_mode and save:
+                # Stored energy the battery may export from the start of this step (clip_export_slots' target floor)
+                predict_export_budget_start[minute] = budget_pv_part if budget_mode != EXPORT_BUDGET_PV_EQUIVALENT else (budget_bucket / budget_stored_to_ac if budget_stored_to_ac > 0 else 0.0)
+            if budget_mode and battery_draw > 0:
+                battery_ac = battery_draw * inverter_loss
+                house_from_battery_ac = export_budget_house_from_battery(budget_mode, battery_ac, load_yesterday, pv_ac)
+                battery_export_ac = battery_ac - house_from_battery_ac
+                if budget_forced and battery_export_ac > 0:
+                    allowed = export_budget_battery_export_allowed(budget_mode, budget_bucket, budget_pv_part, budget_grid_part, pv_now, max(pv_ac - load_yesterday, 0.0), house_from_battery_ac, budget_stored_to_ac)
+                    if battery_export_ac > allowed:
+                        battery_draw -= (battery_export_ac - allowed) / inverter_loss
+                        battery_ac = battery_draw * inverter_loss
+                        battery_export_ac = allowed
+                        # The iBoost solar excess below must only see the export left after the cap
+                        diff = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp)
+                        if save:
+                            export_budget_capped_minutes.append(minute_absolute)
+                budget_house_frac = house_from_battery_ac / battery_ac if battery_ac > 0 else 1.0
+                if record:
+                    planned_battery_export += battery_export_ac
+            budget_soc_before = soc
+
             # Adjust battery soc
             if battery_draw > 0:
                 soc = max(soc - battery_draw / battery_loss_discharge, reserve_expected)
@@ -1360,6 +1406,14 @@ class Prediction(PredictionBatch):
             if car_gone_kwh:
                 # The car in a dispatch that has gone away is met by the grid (or PV surplus), never the battery
                 diff += car_gone_kwh
+
+            if budget_mode:
+                budget_export = 0.0
+                if diff < 0:
+                    budget_export = max(0.0, -diff - car_load_energy_bypass) if not car_energy_reported_load else -diff
+                budget_bucket, budget_pv_part, budget_grid_part = export_budget_update(budget_mode, budget_bucket, budget_pv_part, budget_grid_part, budget_soc_before, soc, max(-battery_draw, 0.0), pv_now, budget_house_frac, budget_export, budget_cap)
+                if save:
+                    predict_export_budget[minute] = round(budget_bucket if budget_mode == EXPORT_BUDGET_PV_EQUIVALENT else budget_pv_part, 4)
 
             # Metric keep - pretend the battery is empty and you have to import instead of using the battery
             if best_soc_keep > 0 and soc <= best_soc_keep:
@@ -1507,6 +1561,10 @@ class Prediction(PredictionBatch):
             self.record_time = record_time
             self.predict_battery_cycle = predict_battery_cycle
             self.predict_soc = predict_soc
+            self.predict_export_budget = predict_export_budget
+            self.predict_export_budget_start = predict_export_budget_start
+            self.export_budget_capped_minutes = export_budget_capped_minutes
+            self.export_budget_planned_battery_export = round(planned_battery_export, 4)
             self.pv_kwh_h0 = round(pv_kwh_h0, 4)
             self.import_kwh_h0 = round(import_kwh_h0, 4)
             self.export_kwh_h0 = round(export_kwh_h0, 4)

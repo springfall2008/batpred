@@ -32,8 +32,8 @@ from const import PREDICT_STEP, PREDBAT_MAX_CARS, EXPORT_MODE_TARGET, FULL_EXPOR
 from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in_iboost_slot, export_limit_from_stored
 
 # Expected ABI/parity revisions of the shared library (see prediction_kernel.cpp)
-KERNEL_ABI_VERSION = 7
-KERNEL_PARITY_REVISION = 17
+KERNEL_ABI_VERSION = 8
+KERNEL_PARITY_REVISION = 18
 
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
 KERNEL_MAX_CARS = PREDBAT_MAX_CARS
@@ -137,6 +137,10 @@ class PkContext(ctypes.Structure):
         ("iboost_on_export", ctypes.c_int32),
         ("has_rate_gas", ctypes.c_int32),
         ("has_iboost_plan", ctypes.c_int32),
+        ("export_budget_mode", ctypes.c_int32),
+        ("export_budget_cap", ctypes.c_double),
+        ("export_budget_seed_bucket", ctypes.c_double),
+        ("export_budget_seed_pv_share", ctypes.c_double),
     ]
 
 
@@ -830,6 +834,11 @@ def create_kernel_context(pred, static_cache=None):
         ctx.iboost_on_export = 1 if pred.iboost_on_export else 0
         ctx.has_rate_gas = 1 if pred.rate_gas else 0
         ctx.has_iboost_plan = 1 if pred.iboost_plan else 0
+        ctx.export_budget_mode = int(getattr(pred, "export_budget_mode", 0) or 0)
+        budget_cap = getattr(pred, "export_budget_cap_kwh", 0.0) or 0.0
+        ctx.export_budget_cap = budget_cap if budget_cap > 0 else pred.soc_max
+        budget_seed = getattr(pred, "export_budget_seed", None) if ctx.export_budget_mode else None
+        ctx.export_budget_seed_bucket, ctx.export_budget_seed_pv_share = budget_seed if budget_seed else (0.0, 0.0)
 
         handle = lib.pk_context_create(ctypes.byref(ctx))
         if handle:
