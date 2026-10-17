@@ -563,6 +563,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.load_minutes = {}
         self.load_minutes_now = 0
         self.load_minutes_age = 0
+        self.load_minutes_source = None
         self.load_last_period = 0
         self.load_last_status = "baseline"
         self.dynamic_load_car_since = {}
@@ -579,6 +580,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.octopus_surplus = set()
         self.octopus_slots_planned = {}
         self.octopus_slots_held = {}
+        self.octopus_slots_held_saved = {}
+        self.dispatch_billing_warned = None
         self.battery_capacity_nominal = False
         self.battery_scaling_auto = False
         self.releases = {}
@@ -638,6 +641,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.pv_today = {}
         self.load_minutes = {}
         self.load_minutes_age = 0
+        self.load_minutes_source = None
         self.load_forecast = {}
         self.load_forecast_array = []
         self.pv_forecast_minute = {}
@@ -682,6 +686,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.pv_today = {}
         self.load_minutes = {}
         self.load_minutes_age = 0
+        self.load_minutes_source = None
         self.battery_temperature_charge_curve = {}
         self.battery_temperature_discharge_curve = {}
         self.battery_temperature_history = {}
@@ -2190,6 +2195,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.load_plan()
             # And the Octopus Intelligent dispatch state, so a restart part-way through a dispatch carries on from it
             self.dynamic_load_car_load()
+            # And the half hours Octopus Intelligent dispatches ran in, so they keep the dispatch rate
+            self.octopus_held_load()
 
         except Exception as e:
             self.log("Error: Exception raised {}".format(e))
