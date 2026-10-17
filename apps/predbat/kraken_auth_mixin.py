@@ -20,6 +20,45 @@ import json
 from datetime import datetime, timezone, timedelta
 from utils import is_edge_block_body, token_mint_backoff_seconds, TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS
 
+# Longest token-error summary written to the log, so one odd response cannot flood it
+TOKEN_ERROR_SUMMARY_MAX_CHARS = 300
+
+
+def redact_braced_spans(text):
+    """Replace every {...} span (nested or unterminated) with a placeholder.
+
+    Kraken echoes the submitted mutation input inside braces when it rejects it, and that input
+    holds the password or API key, so nothing between braces may reach the log.
+    """
+    out = []
+    depth = 0
+    for char in text:
+        if char == "{":
+            if depth == 0:
+                out.append("{...}")
+            depth += 1
+        elif char == "}" and depth:
+            depth -= 1
+        elif depth == 0:
+            out.append(char)
+    return "".join(out)
+
+
+def summarise_token_errors(errors):
+    """Return a log-safe 'CODE: message' summary of obtainKrakenToken GraphQL errors, with submitted input redacted."""
+    if not isinstance(errors, list):
+        return None
+    parts = []
+    for error in errors:
+        if not isinstance(error, dict):
+            continue
+        extensions = error.get("extensions")
+        code = extensions.get("errorCode") if isinstance(extensions, dict) else None
+        message = redact_braced_spans(str(error.get("message") or "")).strip()
+        parts.append(f"{code}: {message}" if code else message)
+    summary = "; ".join(part for part in parts if part)
+    return summary[:TOKEN_ERROR_SUMMARY_MAX_CHARS] or None
+
 
 class KrakenAuthMixin:
     """Local Kraken auth — API key or email/password → JWT, with local refresh."""
@@ -176,13 +215,22 @@ class KrakenAuthMixin:
                         if response.status == 403 and is_edge_block_body(body):
                             self.token_mint_edge_blocked = True
                         else:
-                            self.log(f"Warn: Kraken: Token request failed with HTTP {response.status}")
+                            # A GraphQL error body says why (e.g. a schema rejection of the email
+                            # login) but echoes the input, so log only the redacted summary.
+                            try:
+                                summary = summarise_token_errors(json.loads(body).get("errors"))
+                            except (ValueError, AttributeError):
+                                summary = None
+                            detail = f": {summary}" if summary else ""
+                            self.log(f"Warn: Kraken: Token request failed with HTTP {response.status}{detail}")
                         return None
                     data = await response.json()
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
             return None
 
         if data.get("errors"):
+            summary = summarise_token_errors(data.get("errors"))
+            self.log(f"Warn: Kraken: Token request rejected{': ' + summary if summary else ''}")
             return None
 
         token_data = data.get("data", {}).get("obtainKrakenToken")
