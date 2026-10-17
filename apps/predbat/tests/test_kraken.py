@@ -909,13 +909,108 @@ def test_fetch_rates_graphql_parses_applicable_rates():
 
     assert result is not None
     assert len(result) == 2
-    # value_inc_vat must be the raw value from the API (pence/kWh inc VAT)
+    # applicableRates publishes exc-VAT prices, so the raw value is value_exc_vat; with no
+    # VAT multiplier supplied (the default, and what export uses) inc-VAT is the same figure.
+    assert result[0]["value_exc_vat"] == 24.57
     assert result[0]["value_inc_vat"] == 24.57
-    # value_exc_vat must be value / 1.05, rounded to 4dp
-    assert result[0]["value_exc_vat"] == round(24.57 / 1.05, 4)
     # Timestamps must be passed through unchanged
     assert result[0]["valid_from"] == "2026-04-10T00:00:00Z"
     assert result[0]["valid_to"] == "2026-04-11T00:00:00Z"
+
+
+def test_fetch_rates_graphql_scales_exc_vat_to_inc_vat():
+    """applicableRates values are exc-VAT; the supplied multiplier converts them to inc-VAT."""
+    api = make_kraken_api()
+    api.async_graphql_query = AsyncMock(return_value={"applicableRates": [{"value": 20.0, "validFrom": "2026-04-10T00:00:00Z", "validTo": "2026-04-11T00:00:00Z"}]})
+
+    result = asyncio.run(api.async_fetch_rates_graphql("1900000000456", vat_multiplier=1.05))
+
+    assert result[0]["value_exc_vat"] == 20.0
+    assert result[0]["value_inc_vat"] == 21.0
+
+
+def test_vat_multiplier_from_agreement_standing_charge():
+    """The VAT multiplier is the tariff's standingCharge / preVatStandingCharge, 1.0 when unusable."""
+    api = make_kraken_api()
+    # 5% VAT
+    assert round(api._vat_multiplier({"standingCharge": 63.0, "preVatStandingCharge": 60.0}), 4) == 1.05
+    # Zero-rated (GB domestic electricity, Oct 2026 - Mar 2027): both values equal
+    assert api._vat_multiplier({"standingCharge": 60.0, "preVatStandingCharge": 60.0}) == 1.0
+    # Missing / null / zero / non-numeric values leave prices unscaled
+    assert api._vat_multiplier({}) == 1.0
+    assert api._vat_multiplier(None) == 1.0
+    assert api._vat_multiplier({"standingCharge": 63.0, "preVatStandingCharge": None}) == 1.0
+    assert api._vat_multiplier({"standingCharge": 63.0, "preVatStandingCharge": 0}) == 1.0
+    assert api._vat_multiplier({"standingCharge": "bad", "preVatStandingCharge": 60.0}) == 1.0
+    # Nonsense ratios are refused: VAT never subtracts and never adds more than a quarter
+    assert api._vat_multiplier({"standingCharge": 50.0, "preVatStandingCharge": 60.0}) == 1.0
+    assert api._vat_multiplier({"standingCharge": 120.0, "preVatStandingCharge": 60.0}) == 1.0
+
+
+def _vat_account_data(standing_charge, pre_vat_standing_charge):
+    """Account query response with one import meter point carrying the given standing charges."""
+    tariff = {"productCode": "SMART-V16", "tariffCode": "E-1R-SMART-V16-J", "displayName": "Smart Saver", "standingCharge": standing_charge, "preVatStandingCharge": pre_vat_standing_charge}
+    meter_point = {"mpan": "1900000000456", "direction": "IMPORT", "agreements": [{"validFrom": "2026-01-01T00:00:00+00:00", "validTo": None, "tariff": tariff}]}
+    return {"account": {"number": "A-TEST123", "properties": [{"address": "1 Test Street", "electricityMeterPoints": [meter_point]}]}}
+
+
+def test_find_tariffs_stores_import_vat_multiplier():
+    """async_find_tariffs() records the import VAT multiplier, and refreshes it on an unchanged tariff."""
+    api = make_kraken_api()
+    assert api.import_vat_multiplier == 1.0
+    api._discover_export_tariff = AsyncMock()
+
+    api.async_graphql_query = AsyncMock(return_value=_vat_account_data(63.0, 60.0))
+    assert asyncio.run(api.async_find_tariffs()) is not None
+    assert round(api.import_vat_multiplier, 4) == 1.05
+    # The multiplier must not leak into the tariff identity used for change detection
+    assert api.current_tariff == {"tariff_code": "E-1R-SMART-V16-J", "product_code": "SMART-V16"}
+
+    # Same tariff, VAT rate changed (e.g. the zero rate starting or ending): still picked up
+    api.async_graphql_query = AsyncMock(return_value=_vat_account_data(60.0, 60.0))
+    assert asyncio.run(api.async_find_tariffs()) is None
+    assert api.import_vat_multiplier == 1.0
+
+
+def test_fetch_rates_graphql_fallback_applies_vat_to_import_only():
+    """The applicableRates fallback scales import by the agreement's VAT multiplier but never export."""
+    api = make_kraken_api()
+    api.current_tariff = {"tariff_code": "E-1R-VAR-01-J", "product_code": "VAR-01"}
+    api.export_tariff = {"tariff_code": "E-1R-EDF_EXPORT_SEG_12M_HH-B", "product_code": "EDF_EXPORT_SEG_12M"}
+    api.import_mpan = "1900000000456"
+    api.export_mpan = "2000000000789"
+    api.import_vat_multiplier = 1.05
+    api._fetch_rates_rest = AsyncMock(return_value=([], 400))
+    api.async_fetch_rates_graphql = AsyncMock(return_value=[{"value_inc_vat": 21.0}])
+
+    asyncio.run(api.async_fetch_rates())
+    api.async_fetch_rates_graphql.assert_called_once_with("1900000000456", account_id="A-TEST123", vat_multiplier=1.05)
+
+    api.async_fetch_rates_graphql.reset_mock()
+    asyncio.run(api.async_fetch_rates(api.export_tariff))
+    api.async_fetch_rates_graphql.assert_called_once_with("2000000000789", account_id="A-TEST123", vat_multiplier=1.0)
+
+
+def test_kraken_cache_round_trips_import_vat_multiplier():
+    """The VAT multiplier survives a restart, and a cache written before it existed defaults to 1.0."""
+    api = make_kraken_api()
+    storage = attach_fake_storage(api)
+    api.current_tariff = {"tariff_code": "E-1R-IMP-01-J", "product_code": "IMP-01"}
+    api.import_vat_multiplier = 1.05
+    asyncio.run(api.save_kraken_cache())
+
+    api2 = make_kraken_api(account_id="A-TEST123")
+    api2.base.components = api.base.components
+    api2.update_success_timestamp = MagicMock()
+    asyncio.run(api2.load_kraken_cache())
+    assert api2.import_vat_multiplier == 1.05
+
+    del storage.data[("kraken", "account_A-TEST123")]["import_vat_multiplier"]
+    api3 = make_kraken_api(account_id="A-TEST123")
+    api3.base.components = api.base.components
+    api3.update_success_timestamp = MagicMock()
+    asyncio.run(api3.load_kraken_cache())
+    assert api3.import_vat_multiplier == 1.0
 
 
 def test_fetch_rates_graphql_normalizes_null_timestamps():
@@ -1072,7 +1167,7 @@ def test_fetch_rates_rest_404_falls_back_to_graphql_for_import():
         result = asyncio.run(api.async_fetch_rates())
 
     assert result is graphql_rates
-    api.async_fetch_rates_graphql.assert_called_once_with("1900000000456", account_id="A-AA8A473C")
+    api.async_fetch_rates_graphql.assert_called_once_with("1900000000456", account_id="A-AA8A473C", vat_multiplier=1.0)
 
 
 def test_fetch_rates_rest_404_no_fallback_without_import_mpan():
@@ -1133,7 +1228,7 @@ def test_fetch_rates_rest_404_falls_back_to_graphql_for_export():
 
     assert result is graphql_rates
     # Export fallback must use the export MPAN, defaulting to the import account here.
-    api.async_fetch_rates_graphql.assert_called_once_with("2000000000789", account_id="A-TEST123")
+    api.async_fetch_rates_graphql.assert_called_once_with("2000000000789", account_id="A-TEST123", vat_multiplier=1.0)
 
 
 def test_fetch_rates_export_404_uses_export_account_for_split_accounts():
@@ -1162,7 +1257,7 @@ def test_fetch_rates_export_404_uses_export_account_for_split_accounts():
     with patch("aiohttp.ClientSession", return_value=mock_session):
         asyncio.run(api.async_fetch_rates(tariff=export_tariff))
 
-    api.async_fetch_rates_graphql.assert_called_once_with("2000000000789", account_id="A-EXPORT456")
+    api.async_fetch_rates_graphql.assert_called_once_with("2000000000789", account_id="A-EXPORT456", vat_multiplier=1.0)
 
 
 def test_fetch_rates_rest_410_falls_back_to_graphql_for_import():
@@ -1190,7 +1285,91 @@ def test_fetch_rates_rest_410_falls_back_to_graphql_for_import():
         result = asyncio.run(api.async_fetch_rates())
 
     assert result is graphql_rates
-    api.async_fetch_rates_graphql.assert_called_once_with("1900000000456", account_id="A-AA8A473C")
+    api.async_fetch_rates_graphql.assert_called_once_with("1900000000456", account_id="A-AA8A473C", vat_multiplier=1.0)
+
+
+def test_fetch_rates_rest_400_day_night_tariff_falls_back_to_graphql():
+    """async_fetch_rates() falls back to GraphQL when REST returns 400 on a day/night tariff.
+
+    GH#5166: EDF day/night-structured tariffs (e.g. E-FLAT2R-EDF_STANDARD_VARIABLE-D) have no
+    /standard-unit-rates/ resource — the API answers HTTP 400 "This tariff has day and night
+    rates, not standard." That is as permanent as a 404, so it must reach the GraphQL fallback
+    instead of being logged as a failure on every cycle. Auth cannot change a 400, so unlike the
+    404 path there must be no authenticated retry of the same URL.
+    """
+    api = make_kraken_api(provider="edf", account_id="A-9C006563")
+    api.current_tariff = {"tariff_code": "E-FLAT2R-EDF_STANDARD_VARIABLE-D", "product_code": "EDF_STANDARD_VARIABLE"}
+    api.import_mpan = "1900000000456"
+    api.failures_total = 0
+
+    graphql_rates = [{"value_inc_vat": 27.5, "value_exc_vat": round(27.5 / 1.05, 4), "valid_from": "2026-09-19T00:00:00Z", "valid_to": "2026-09-21T00:00:00Z"}]
+    api.async_fetch_rates_graphql = AsyncMock(return_value=graphql_rates)
+
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(side_effect=lambda url, **kwargs: _mk_get_ctx(400))
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = asyncio.run(api.async_fetch_rates())
+
+    assert result is graphql_rates
+    api.async_fetch_rates_graphql.assert_called_once_with("1900000000456", account_id="A-9C006563", vat_multiplier=1.0)
+    assert mock_session.get.call_count == 1, f"400 must not trigger an authenticated retry, got {mock_session.get.call_count} REST requests"
+    assert api.failures_total == 0, "A recovered 400 must not count as a failure"
+
+
+def test_fetch_rates_rest_400_falls_back_to_graphql_for_export():
+    """A day/night-structured EXPORT tariff's 400 falls back on the export MPAN and account.
+
+    The 400 gate shares the fallback wiring with the 404 path, which selects export_mpan and
+    export_account_id for an export tariff — but only the 404 side of that wiring was covered,
+    so a 400 mis-routed to the import MPAN/account would have passed the suite.
+    """
+    api = make_kraken_api(provider="edf", account_id="A-9C006563", export_account_id="A-EXPORT456")
+    api.current_tariff = {"tariff_code": "E-1R-IMP-01-J", "product_code": "IMP-01"}
+    api.import_mpan = "1900000000456"
+    export_tariff = {"tariff_code": "E-FLAT2R-EDF_EXPORT_VARIABLE-D", "product_code": "EDF_EXPORT_VARIABLE"}
+    api.export_tariff = export_tariff
+    api.export_mpan = "2000000000789"
+    api.failures_total = 0
+
+    graphql_rates = [{"value_inc_vat": 15.0, "value_exc_vat": round(15.0 / 1.05, 4), "valid_from": "2026-09-19T00:00:00Z", "valid_to": "2026-09-21T00:00:00Z"}]
+    api.async_fetch_rates_graphql = AsyncMock(return_value=graphql_rates)
+
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(side_effect=lambda url, **kwargs: _mk_get_ctx(400))
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = asyncio.run(api.async_fetch_rates(tariff=export_tariff))
+
+    assert result is graphql_rates
+    api.async_fetch_rates_graphql.assert_called_once_with("2000000000789", account_id="A-EXPORT456", vat_multiplier=1.0)
+    assert mock_session.get.call_count == 1, f"400 must not trigger an authenticated retry, got {mock_session.get.call_count} REST requests"
+    assert api.failures_total == 0, "A recovered 400 must not count as a failure"
+
+
+def test_fetch_rates_rest_400_no_fallback_without_import_mpan():
+    """async_fetch_rates() returns None and counts a failure when REST 400s with no MPAN to fall back on."""
+    api = make_kraken_api(provider="edf")
+    api.current_tariff = {"tariff_code": "E-FLAT2R-EDF_STANDARD_VARIABLE-D", "product_code": "EDF_STANDARD_VARIABLE"}
+    api.import_mpan = None  # Not yet discovered
+    api.failures_total = 0
+    api.async_fetch_rates_graphql = AsyncMock()
+
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(side_effect=lambda url, **kwargs: _mk_get_ctx(400))
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = asyncio.run(api.async_fetch_rates())
+
+    assert result is None
+    api.async_fetch_rates_graphql.assert_not_called()
+    assert api.failures_total == 1
 
 
 def test_fetch_rates_transient_error_does_not_fall_back_to_graphql():
@@ -1372,7 +1551,7 @@ def test_fetch_rates_404_authenticated_retry_still_404_falls_back_to_graphql():
         result = asyncio.run(api.async_fetch_rates(tariff=export_tariff))
 
     assert result is graphql_rates
-    api.async_fetch_rates_graphql.assert_called_once_with("2000000000789", account_id="A-TEST123")
+    api.async_fetch_rates_graphql.assert_called_once_with("2000000000789", account_id="A-TEST123", vat_multiplier=1.0)
     # Recovered via GraphQL — the expected private-product 404 must NOT count as a failure.
     assert api.failures_total == 0
 
@@ -1395,6 +1574,79 @@ def test_fetch_rates_404_graphql_fallback_empty_counts_one_failure():
 
     assert result is None
     assert api.failures_total == 1
+
+
+def test_fetch_rates_404_then_network_error_on_retry_still_falls_back_to_graphql():
+    """A network error during the authenticated retry must not lose the GraphQL fallback.
+
+    _fetch_rates_rest returns (None, None) on a network error, which would otherwise erase the
+    404 the public attempt just proved and drop the cycle into the generic-failure path — losing
+    a private product's rates to a transient blip even though GraphQL would have served them.
+    """
+    import aiohttp
+
+    api = make_kraken_api()
+    export_tariff = {"tariff_code": "E-1R-EDF_EXPORT_SEG_12M_HH-B", "product_code": "EDF_EXPORT_SEG_12M"}
+    api.export_tariff = export_tariff
+    api.export_mpan = "2000000000789"
+    api.failures_total = 0
+
+    graphql_rates = [{"value_inc_vat": 15.0, "value_exc_vat": round(15.0 / 1.05, 4), "valid_from": "2026-09-19T00:00:00Z", "valid_to": "2026-09-21T00:00:00Z"}]
+    api.async_fetch_rates_graphql = AsyncMock(return_value=graphql_rates)
+
+    call_count = [0]
+
+    def get_side_effect(url, **kwargs):
+        """Public attempt 404s; the authenticated retry fails with a connection error."""
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return _mk_get_ctx(404)
+        raise aiohttp.ClientConnectionError("connection reset")
+
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(side_effect=get_side_effect)
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = asyncio.run(api.async_fetch_rates(tariff=export_tariff))
+
+    assert result is graphql_rates
+    assert call_count[0] == 2, "expected an unauthenticated attempt then an authenticated retry"
+    api.async_fetch_rates_graphql.assert_called_once_with("2000000000789", account_id="A-TEST123", vat_multiplier=1.0)
+    assert api.failures_total == 0, "rates recovered via GraphQL must not count as a failure"
+
+
+def test_fetch_rates_graphql_fallback_failure_counts_one_failure_not_two():
+    """A GraphQL fallback that fails internally is counted once, not once per counting layer.
+
+    async_graphql_query increments failures_total on every one of its own failure paths (auth
+    unavailable, no token, non-200, GraphQL errors, network), so async_fetch_rates must not add
+    a second count for the same cycle: for a day/night tariff whose GraphQL is down that would
+    score 2 every 5 minutes and mislead anything watching the metric for component health.
+    """
+    api = make_kraken_api(provider="edf", account_id="A-9C006563")
+    api.current_tariff = {"tariff_code": "E-FLAT2R-EDF_STANDARD_VARIABLE-D", "product_code": "EDF_STANDARD_VARIABLE"}
+    api.import_mpan = "1900000000456"
+    api.failures_total = 0
+
+    def graphql_failure(mpan, account_id=None, vat_multiplier=1.0):
+        """Stand in for a fallback that failed inside async_graphql_query, which counts its own."""
+        api.failures_total += 1
+        return None
+
+    api.async_fetch_rates_graphql = AsyncMock(side_effect=graphql_failure)
+
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(side_effect=lambda url, **kwargs: _mk_get_ctx(400))
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = asyncio.run(api.async_fetch_rates())
+
+    assert result is None
+    assert api.failures_total == 1, f"one failed cycle must count once, got {api.failures_total}"
 
 
 def test_connection_nodes_extracts_edges():

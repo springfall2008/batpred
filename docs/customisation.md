@@ -143,7 +143,7 @@ Higher numbers will reduce battery cycles at the expense of using higher energy 
 In theory, if you have a 9.5kWh battery and think it will last say 6000 complete cycles and it cost you £4000, then each full charge and discharge cycle is 19kWh
 and so the cost per complete cycle is £4000 / 19 / 6000 = 3.5p.
 
-Taking the 3.5p per cycle example, if you set predbat_metric_battery_cycle to 1.75 (half of 3.5) then Predbat will apply the "virtual cost" of 1.75p
+Taking this full cycle example, if you set predbat_metric_battery_cycle to 3.5 then Predbat will apply the "virtual cost" of 3.5p
 to every kWh of charge and discharge of the battery.
 This cost will be included in Predbat's cost optimisation plan when it decides whether to charge, discharge the battery or let the house run on grid import.<BR>
 _NB: For clarity and to re-emphasise, the "virtual cost" will be applied to BOTH the cost calculation for charging AND for discharging the battery._
@@ -189,7 +189,10 @@ This setting will not impact the real calculated costs and is only used for plan
 **switch.predbat_metric_dynamic_load_adjust** (default False) is a toggle that when enabled allows Predbat to take into account your energy consumption within the last 5 minutes.
 If the load is above what your battery can deliver the plan is updated to predict this load will continue during the current slot, thus preventing forced export in the plan.
 If the load remains high for two checks in a row, this prediction is extended into the following slot too, so the plan stays up to date across the slot boundary.
-If car charging is planned but the load indicates that the car is not charging then Predbat will assume the car will no longer charge during this slot thus allowing the plan to include potential export.
+
+Checking Octopus Intelligent slots against whether the car is actually charging is a separate switch, **switch.predbat_octopus_intelligent_dynamic** - see [Checking Intelligent dispatches against the car](car-charging.md#checking-intelligent-dispatches-against-the-car).<BR>
+Whether or not this switch is On, if **car_charging_now** reports your car charging but no charging slot covers the current time, Predbat predicts the car's load at **input_number.predbat_car_charging_rate** until the end of the current slot, with the battery held for the car (unless **switch.predbat_car_charging_from_battery** is On) and no export planned over it. With the switch On, that load is also taken out of the recent-load reading above, so it is not counted twice.<BR>
+This is used only for the plan; it is never added as a car charging slot, so it does not turn on **binary_sensor.predbat_car_charging_slot**.
 
 **input_number.predbat_battery_rate_max_scaling** is a percentage factor to adjust your maximum charge rate from that reported by the inverter.
 For example, a value of 0.95 would be 95% and indicate charging at 5% slower than reported.
@@ -212,7 +215,7 @@ If your battery size is reported wrongly maybe try turning this on and see if it
 
 **input_number.predbat_load_scaling** is a percentage Scaling factor applied to the historical load, increase this if you want to be more pessimistic on future consumption.
 Use 1.0 to use exactly the previous load data. A value of 1.1 for example would add 10% to the historical load. The default value is 1.05 to add 5% scaling.
-Note that the output data entity predbat.load_energy_h0 will be scaled accordingly.
+The output data entity predbat.load_energy_h0 is not scaled; it reports today's load as measured.
 
 **input_number.predbat_load_scaling10** is a percentage Scaling factor applied to historical load only for the PV10% scenario (this is in addition to load_scaling above).
 This can  be used to make the PV10% scenario take into account extra load usage and hence be more pessimistic while leaving the central scenario unchanged.
@@ -274,8 +277,8 @@ Until that sensor has a week of history, for example just after upgrading, the o
 The history is scaled by `pv_scaling` before the comparison, so both sides are on the same basis - to sanity-check the calibration factor by hand, divide your actual generation by the raw provider forecast **multiplied by** `pv_scaling`
 (equivalently, divide your actual-over-raw ratio by `pv_scaling`); comparing against the raw figure on its own leaves your answer out by a factor of `pv_scaling`.<BR>
 Do not use if you are using the [Solcast integration and have turned on the integration's auto dampening](https://github.com/BJReplay/ha-solcast-solar?tab=readme-ov-file#dampening-configuration).<BR>
-Predbat relies upon your solar generation being accurate so if your export generation can be curtailed by your solar inverter or your electricity supplier in periods when there is excess electricity in the grid,
-then you must turn PV calibration Off as otherwise Predbat will model the chopped solar generation as a PV calibration factor and will significantly reduce your forecast PV generation, leading to a very inaccurate plan.
+PV production calibration relies upon your actual solar generation reflecting the maximum your panels could produce. If your inverter can curtail or clip your solar generation, either through export limits (including zero-export setups) where generation is throttled because your battery is full and there is nowhere for the excess to go, or under instruction from your electricity supplier in periods when there is excess electricity in the grid,
+then you must turn PV calibration Off. Otherwise, Predbat will model the chopped solar generation as a PV calibration factor and will significantly reduce your forecast PV generation, leading to a very inaccurate plan.
 
 Note: If you change the PV calibration enable switch (to On or Off), you will need to restart Predbat for the change to take effect.
 
@@ -302,6 +305,8 @@ These are described in detail in [Car Charging](car-charging.md) and are listed 
 - **input_number.predbat_car_charging_loss** - percentage energy lost when charging the car
 - **switch.predbat_octopus_intelligent_charging** - controls whether Octopus Intelligent (via the Octopus Energy integration) controls the car charging or Predbat plans the car charging
 - **switch.predbat_octopus_intelligent_ignore_unplugged** (_expert mode_) - used with Octopus Intelligent to prevent Predbat from assuming the car will be charging when the car is unplugged
+- **switch.predbat_octopus_intelligent_dynamic** (_expert mode_) - On by default: cancels Octopus Intelligent slots, and their cheap rate, while the car is in a dispatch but not charging (from **car_charging_now**, or the house load when the car is inside the CT clamp), see [Checking Intelligent dispatches against the car](car-charging.md#checking-intelligent-dispatches-against-the-car)
+- **switch.predbat_octopus_intelligent_trust_slots** (_expert mode_) - when Off, Octopus Intelligent slots are assumed not to happen until the car is seen charging in one, see [Car charging](car-charging.md)
 - **binary_sensor.predbat_car_charging_slot** - set to On by Predbat when the car should be charged (Predbat-led charging)
 - **select.predbat_car_charging_plan_time** - the time you want the car to be charged by
 - **switch.predbat_car_charging_solar** - model opportunistic (sun-following) charging for this car, done by a charger that follows the PV surplus itself (`_1`, `_2`, … for further cars). Modelling only - Predbat never commands the car
@@ -309,7 +314,7 @@ These are described in detail in [Car Charging](car-charging.md) and are listed 
 - **switch.predbat_car_charging_solar_export_smart** - only divert solar to the car while the export rate is at or below the cheapest import before the car must be ready, otherwise sell the surplus and charge from the planned cheap slots
 - **binary_sensor.predbat_car_charging_solar_slot** - set to On by Predbat when solar surplus should be diverted to the car
 - **sensor.predbat_car_charging_mode** - the charging decision for an external charger: `now`, `solar` or `off`, with a `reason` attribute saying why
-- **switch.predbat_car_charging_plan_smart** - allows Predbat to allocate car charging slots to the cheapest times rather than all low-rate slots
+- **switch.predbat_car_charging_plan_smart** - allows Predbat to allocate car charging slots to the cheapest times rather than all low-rate slots in time order (default On)
 - **input_number.predbat_car_charging_plan_max_price** - maximum price per kWh to pay when charging your car
 - **switch.predbat_car_charging_from_battery** - prevent the car from draining the home battery when charging
 - **switch.predbat_car_charging_manual_soc** - ignore the **car_charging_soc** car SoC sensor set in `apps.yaml` (car 0)
@@ -355,7 +360,7 @@ By default with this option On the latest export slots of the same value will be
 
 **switch.predbat_export_more_solar** When turned On, late in the planning stage Predbat will try enabling Freeze Export on every otherwise Idle slot that has predicted solar generation. With Freeze Export the battery is not charged from the surplus solar, so that solar is exported to the grid instead.
 
-This alternative plan is only kept if it does not increase the overall plan metric by more than **input_number.predbat_export_more_solar_threshold** (_expert mode_, default 1p), otherwise the original plan is restored. This lets you favour exporting solar over storing it when doing so is roughly cost-neutral. The feature relies on **switch.predbat_set_export_freeze** being enabled (and your inverter supporting export/discharge freeze); it is an optimiser-only setting and uses the existing Freeze Export execution behaviour.
+This alternative plan is only kept if it does not increase the overall plan metric by more than **input_number.predbat_export_more_solar_threshold** (_expert mode_, default 1p), otherwise the original plan is restored. This lets you favour exporting solar over storing it when doing so is roughly cost-neutral. The feature relies on **switch.predbat_set_export_freeze** being enabled (and your inverter supporting export/discharge freeze); it is an optimiser-only setting and uses the existing Freeze Export execution behaviour. If you turn this on when it cannot have any effect - **switch.predbat_set_export_freeze** is off, your inverter does not support freeze export, or **select.predbat_mode** is not _Control charge & discharge_ - Predbat will log a warning saying so.
 
 ## Battery margins and metrics options
 
@@ -421,6 +426,22 @@ and determine the threshold above which a slot can be considered a potential exp
 If rate_high_threshold is set to a non-zero value this will set the threshold above future average export rates as the minimum export rate to consider exporting for,
 e.g. setting to 1.2 = 20% above average rate.<BR>
 If you set this too high you might not get any export slots. If it's too low you might get too many in the 24-hour period.
+
+Both thresholds, automatic or set by you, ignore an event price that is above the tariff's own rate (an Octopus saving session
+or Axle event reward): those slots count at the tariff's own rate when the thresholds are worked out, so the event does not
+stretch the range and pull ordinary-price slots in or out. A free or discounted import session still counts as a cheap slot,
+and a rate override you put on an event slot (rates_import_override, rates_export_override or a manual rate) is kept.
+The event rates themselves are still used when planning.
+
+In automatic mode (rate_low_threshold 0), when a saving session or Axle event pays more for export, or charges more for
+import, than the tariff's most expensive import rate, the plan is also offered every import slot priced no higher than that
+rate before the last such event starts. The battery can then be charged ahead of the event to export into it or to cover the
+house through it. The low rate sensors (`binary_sensor.predbat_low_rate_slot` and the `predbat.low_rate_*` sensors) and
+car charging plans still use only the tariff's own cheap slots.
+
+Predbat does not widen a rate_low_threshold you set for an event. With a manual threshold it will not charge the battery
+above that threshold ahead of an event, even when doing so would make money. Set rate_low_threshold to 0 (automatic) if
+you want those pre-event charges.
 
 **input_number.predbat_metric_future_rate_offset_import** (_expert mode_) Default 0p/kWh. Sets a pence per kWh offset to apply to future import energy rates that are
 not yet published, best used for variable rate tariffs such as Agile import where the rates are not published until 4pm.
@@ -770,7 +791,7 @@ Selected slots will be shown in the list in square brackets, and you can cancel 
 
 When you use the Manual Control features you can select the day and time from the next 48 hours, the overrides will be removed once their time slot expires (they do not repeat).
 
-The **off** option at the bottom of the list will cancel all selected force charges.
+The **off** option at the top of the list will cancel all selected force charges.
 
 ![image](images/manual_select.png)
 
@@ -824,9 +845,9 @@ the rate selected will be that configured in **input_number.predbat_manual_expor
 
 Similar to manual_import_rates, if this selector is used in an automation you can set the time and rate together by making a selection in the format HH:MM=rate e.g. 12:30=29.5
 
-The **select.predbat_manual_load_adjust** selector is used to make adjustments to the predicted load in kWh for a slot, the load adjustment amount will be that configured in **input_number.predbat_manual_load_value** (default 0.5kWh)
+The **select.predbat_manual_load_adjust** selector is used to make positive or negative adjustments to the predicted load in kWh for a slot, the load adjustment amount will be that configured in **input_number.predbat_manual_load_value** (default 0.5kWh)
 which can be adjusted prior to making a selection.
-Predbat will add the adjustment amount to the kWh predicted load for those slots.
+Predbat will add the adjustment amount (which can be positive or negative) to the kWh predicted load for those slots.
 
 If this selector is used in an automation you can set the time and kWh load adjustment amount together by making a selection in the format HH:MM=adjustment e.g. 12:30=0.5
 

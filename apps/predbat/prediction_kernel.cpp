@@ -59,9 +59,16 @@
 // Parity 14: the explicit (mode, target, power) fields replace the packed double throughout the hot
 // loop (see the ABI 7 note); the floor a target exports to now reads the target field, matching
 // prediction.py.
-// Parity 15: the car solar diversion model (parity 11 on the car-solar branch) now runs alongside
-// those explicit export fields, so neither line's revision number describes this kernel.
-#define PK_PARITY_REVISION 15
+// Parity 15: in PV10, an Intelligent dispatch minute assumed gone (io_flag, beyond 30 minutes) no longer
+// holds the battery for the car. The car still charges at the rate nominal pays, kept off the battery
+// by adding it to the grid balance after the battery has acted; the rest of the import pays rate_max.
+// Parity 16: each car charging in a step adds its own energy to the house load, not the running total
+// across cars, which counted the first car once per car (GH#5313).
+// Parity 17: a dispatch assumed gone pays the greater of rate_max (now the tariff's own highest import
+// rate, without saving session or Axle rewards) and the slot's own rate (#5163).
+// Parity 18: the car solar diversion model (parity 11, then 15, on the car-solar branch) runs alongside
+// upstream's parity 15-17, so neither line's revision number describes this kernel.
+#define PK_PARITY_REVISION 18
 #define PK_MAX_CARS 8
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
 #define PK_EXPORT_MODE_TARGET 0 // const.py EXPORT_MODE_TARGET
@@ -784,8 +791,11 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
 
         // Rates - prediction.py:577-580
         double import_rate = c->rate_import[k];
-        if (c->io_flag[k] && is_pv10 && minute > 30) {
-            import_rate = c->rate_max; // Assume in worst case that slot goes away and max rate applies
+        const double dispatch_rate = import_rate;
+        const bool dispatch_gone = c->io_flag[k] && is_pv10 && minute > 30;
+        if (dispatch_gone) {
+            // Worst case the slot goes away: the tariff's highest rate, or the slot's own if an event makes it dearer
+            import_rate = std::max(c->rate_max, import_rate);
         }
         const double export_rate = c->rate_export[k];
 
@@ -884,6 +894,8 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         double car_rate_premium = 0;
         double car_amount_premium = 0;
         double car_load_energy_bypass = 0;
+        double car_gone_kwh = 0;  // Car energy in a dispatch that has gone away, kept off the battery
+        double car_gone_cost = 0; // ...and what it costs at the rate the nominal case pays for it
         if (car_enable) {
             for (int32_t car_n = 0; car_n < c->num_cars; car_n++) {
                 car_solar_step[car_n] = 0.0;
@@ -946,13 +958,26 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
                     car_load_scale = std::max(std::min(car_load_scale, c->car_charging_limit[car_n] - car_soc[car_n]), 0.0);
                     car_soc[car_n] = car_soc[car_n] + car_load_scale;
 
+                    if (dispatch_gone) {
+                        // Worst case the dispatch has gone away: the car is still charged at the rate the
+                        // nominal case pays, but it no longer holds the battery and the battery cannot
+                        // serve it - its energy joins the grid balance after the battery has acted
+                        if (c->car_energy_reported_load) {
+                            car_gone_kwh += car_load_scale / c->car_charging_loss;
+                            car_gone_cost += car_load_scale / c->car_charging_loss * std::max(dispatch_rate, c->car_rate_flat[car_n * n_steps + k]);
+                        } else {
+                            car_load_energy_bypass += car_load_scale / c->car_charging_loss;
+                        }
+                        continue;
+                    }
+
                     // Work out the premium rate for car charging
                     car_rate_premium = std::max(car_rate_premium, std::max(0.0, c->car_rate_flat[car_n * n_steps + k] - import_rate));
 
                     if (c->car_energy_reported_load) {
-                        // Note: mirrors the Python engine exactly - the cumulative premium amount is added per car
+                        // Each car adds its own energy; car_amount_premium is the running total across cars
                         car_amount_premium += car_load_scale / c->car_charging_loss;
-                        load_yesterday += car_amount_premium;
+                        load_yesterday += car_load_scale / c->car_charging_loss;
                     } else {
                         car_load_energy_bypass += car_load_scale / c->car_charging_loss;
                     }
@@ -1385,6 +1410,10 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
 
         // Work out left over energy after battery adjustment - prediction.py:1097-1098
         diff = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp);
+        if (car_gone_kwh != 0) {
+            // The car in a dispatch that has gone away is met by the grid (or PV surplus), never the battery
+            diff += car_gone_kwh;
+        }
 
         // Metric keep - prediction.py:1100-1102
         if (best_soc_keep > 0 && soc <= best_soc_keep) {
@@ -1411,6 +1440,10 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             // Premium for car charging capped at the actual grid import - prediction.py:1119-1122
             car_amount_premium = std::min(diff, car_amount_premium);
             metric += import_rate * diff + car_rate_premium * car_amount_premium;
+            if (car_gone_kwh != 0) {
+                // The car's share of the import is paid at its own rate, not the worst-case rate
+                metric -= std::min(diff, car_gone_kwh) * (import_rate - car_gone_cost / car_gone_kwh);
+            }
         } else {
             // Export
             const double energy = -diff;

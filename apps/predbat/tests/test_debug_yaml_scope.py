@@ -16,8 +16,11 @@ import tracemalloc
 
 import yaml
 
+from coordinator import Coordinator
+from const import REPEAT_FULL_LOG_SECONDS
 from inverter import Inverter
-from userinterface import dump_debug_yaml
+from userinterface import dump_debug_yaml, DEBUG_YAML_LOADER
+from utils import RepeatLogGate
 
 
 def _plant_inverter(my_predbat):
@@ -290,6 +293,187 @@ def test_create_debug_yaml_file_matches_the_string(my_predbat=None):
     return 1 if failed else 0
 
 
+class _DiscoveryComponentsStub:
+    """Minimal stand-in for Components: .coordinator plus the registry surface
+    Coordinator._component_status() reads on every assemble() call, as create_debug_yaml() expects."""
+
+    def __init__(self, coordinator):
+        """Hold the coordinator; every reported component is treated as known, active and alive."""
+        self.coordinator = coordinator
+
+    def get_all(self):
+        """Every component name the registry knows about - just whoever has reported, here."""
+        return sorted(self.coordinator.reports)
+
+    def is_active(self, name):
+        """Whether the named component was constructed - always, in this stub."""
+        return True
+
+    def is_alive(self, name):
+        """Whether the named component is running and fresh - always, in this stub."""
+        return True
+
+    def load_error(self, name):
+        """Why the named component failed to construct - never, in this stub."""
+        return None
+
+
+def test_debug_yaml_includes_redacted_discovery_catalogue(my_predbat=None):
+    """
+    create_debug_yaml() gains a "discovery" key sourced from the coordinator's redacted catalogue,
+    and a seeded MPAN must not appear in it - the same reachability contract this module enforces
+    for every other member, now extended to the discovery catalogue coordinator.py adds.
+
+    catalogue() re-assembles on every call (final review: a frozen assemble()-once snapshot would
+    have missed anything reported after the startup barrier - see coordinator.py's catalogue()
+    docstring), so create_debug_yaml()'s own call to it exercises _component_status()'s registry
+    reads for real; _DiscoveryComponentsStub supplies them rather than a bare .coordinator
+    attribute. my_predbat.components is restored afterwards regardless of what the shared fixture
+    was carrying beforehand - another test in this suite, test_github.py's
+    _MockComponentsWithStorage, sets my_predbat.components and never restores it, so by the time
+    tests run in full-suite order this can already be some unrelated registry stub.
+    """
+    failed = False
+    print("**** Testing create_debug_yaml() includes the redacted discovery catalogue ****")
+
+    original_components = my_predbat.components
+    try:
+        coordinator = Coordinator(my_predbat)
+        coordinator.salt = "test-salt-debug-yaml-scope"
+        coordinator.report("octopus", {"meters": [{"device_id": "octopus:m", "direction": "import", "account_ids": {"mpan": "1234567890123"}}]})
+        my_predbat.components = _DiscoveryComponentsStub(coordinator)
+
+        text = my_predbat.create_debug_yaml(write_file=False)
+        debug = yaml.unsafe_load(text)
+
+        if "discovery" not in debug:
+            print("ERROR: the debug yaml is missing the 'discovery' key")
+            failed = True
+        elif "1234567890123" in str(debug["discovery"]):
+            print("ERROR: the seeded MPAN survived, unredacted, into the debug yaml's discovery catalogue")
+            failed = True
+    finally:
+        my_predbat.components = original_components
+
+    if not failed:
+        print("PASS: the debug yaml carries the redacted discovery catalogue, with the seeded MPAN pseudonymised")
+    return 1 if failed else 0
+
+
+def test_debug_yaml_with_a_populated_log_gate_loads(my_predbat=None):
+    """
+    A debug yaml written after an Intelligent slot list has been logged must still load (#5569).
+
+    io_slot_log_gate keys its history by tuples such as (("slots", car_n), hash). yaml.dump() writes
+    the gate out as a python/object whose dict keys are YAML sequences, and loading that back fails
+    with "found unhashable key" - so no dump from an Octopus Intelligent user could be replayed. The
+    gate's history is runtime bookkeeping a replay does not need, so it is kept out of the dump.
+
+    Loaded with PyYAML's own unsafe loader (C where available, for speed) rather than
+    DEBUG_YAML_LOADER: the dump must load with ordinary YAML tooling, not only with the replay
+    loader that tolerates older dumps.
+
+    Mutation check: removing "io_slot_log_gate" from DEBUG_EXCLUDE_LIST fails this.
+    """
+    failed = False
+    print("**** Testing a debug yaml with a populated io_slot_log_gate loads back ****")
+
+    original_gate = my_predbat.io_slot_log_gate
+    try:
+        my_predbat.io_slot_log_gate = RepeatLogGate(REPEAT_FULL_LOG_SECONDS)
+        my_predbat.io_slot_log_gate.log(lambda line: None, ("slots", 0), "Intelligent slot at 23:30", ["Intelligent slot at 23:30"], None)
+        if not my_predbat.io_slot_log_gate.logged:
+            print("ERROR: the gate recorded nothing, so this test is not exercising a populated gate")
+            return 1
+
+        text = my_predbat.create_debug_yaml(write_file=False)
+        try:
+            debug = yaml.load(text, Loader=getattr(yaml, "CLoader", yaml.UnsafeLoader))
+        except yaml.YAMLError as e:
+            print("ERROR: the debug yaml with a populated log gate does not load: {}".format(e))
+            return 1
+
+        if "io_slot_log_gate" in debug:
+            print("ERROR: io_slot_log_gate was written into the debug yaml")
+            failed = True
+        if "python/object:utils.RepeatLogGate" in text:
+            print("ERROR: a RepeatLogGate was written into the debug yaml")
+            failed = True
+        if "CONFIG_ITEMS" not in debug:
+            print("ERROR: the debug yaml lost CONFIG_ITEMS")
+            failed = True
+    finally:
+        my_predbat.io_slot_log_gate = original_gate
+
+    if not failed:
+        print("PASS: the debug yaml leaves out io_slot_log_gate and loads back")
+    return 1 if failed else 0
+
+
+# The io_slot_log_gate block exactly as Predbat wrote it into a debug yaml from v9.3.8 until #5569,
+# between two ordinary keys so the test also sees that its neighbours still load.
+OLD_DUMP_WITH_LOG_GATE = """io_slot_count: 1
+io_slot_log_gate: !!python/object:utils.RepeatLogGate
+  interval_seconds: 3600
+  logged:
+    ? - - slots
+        - 0
+      - 8f4d14202e49ec5efaf29fc659b4be5e605ee147
+    : - 4310095.674016051
+      - 2026-10-16 11:35:01.321928
+iog_last_action_status: success
+"""
+
+
+def test_old_dump_with_a_log_gate_loads(my_predbat=None):
+    """
+    A debug yaml that already carries an io_slot_log_gate block must still replay (#5569).
+
+    Dumps written from v9.3.8 until this fix carry the gate, and users keep attaching them to bug reports
+    after the fix ships. DEBUG_YAML_LOADER builds any dumped RepeatLogGate as a new, empty gate
+    without constructing its history, so the tuple keys that cannot be loaded are never built.
+
+    Mutation check: dropping the RepeatLogGate constructor from DebugYamlLoader fails this.
+    """
+    failed = False
+    print("**** Testing an old debug yaml carrying a log gate loads with the replay loader ****")
+
+    # First confirm the hazard is real, so a pass below means the loader did something
+    try:
+        yaml.load(OLD_DUMP_WITH_LOG_GATE, Loader=getattr(yaml, "CLoader", yaml.UnsafeLoader))
+        print("ERROR: the old log gate block loaded with PyYAML's own unsafe loader, so the hazard this guards is gone")
+        failed = True
+    except yaml.YAMLError:
+        pass
+
+    try:
+        debug = yaml.load(OLD_DUMP_WITH_LOG_GATE, Loader=DEBUG_YAML_LOADER)
+    except yaml.YAMLError as e:
+        print("ERROR: the replay loader cannot load an old dump carrying a log gate: {}".format(e))
+        return 1
+
+    gate = debug.get("io_slot_log_gate")
+    if not isinstance(gate, RepeatLogGate):
+        print("ERROR: expected the log gate to load as a RepeatLogGate, got {!r}".format(gate))
+        return 1
+    if gate.logged != {}:
+        print("ERROR: expected the loaded log gate to start with no history, got {}".format(gate.logged))
+        failed = True
+    if gate.interval_seconds != REPEAT_FULL_LOG_SECONDS:
+        print("ERROR: expected the loaded log gate to use REPEAT_FULL_LOG_SECONDS, got {}".format(gate.interval_seconds))
+        failed = True
+    if not gate.log(lambda line: None, ("slots", 0), "text", ["text"], None):
+        print("ERROR: the loaded log gate does not log a new text in full")
+        failed = True
+    if debug.get("io_slot_count") != 1 or debug.get("iog_last_action_status") != "success":
+        print("ERROR: the keys around the log gate did not load, got {}".format(debug))
+        failed = True
+
+    if not failed:
+        print("PASS: an old dump's log gate loads as an empty gate")
+    return 1 if failed else 0
+
+
 def run_debug_yaml_scope_tests(my_predbat):
     """Run every create_debug_yaml() scope test, returning a non-zero count on failure."""
     failed = 0
@@ -298,4 +482,7 @@ def run_debug_yaml_scope_tests(my_predbat):
     failed += test_per_key_dump_loads_as_one_document(my_predbat)
     failed += test_per_key_dump_bounds_the_node_tree(my_predbat)
     failed += test_create_debug_yaml_file_matches_the_string(my_predbat)
+    failed += test_debug_yaml_includes_redacted_discovery_catalogue(my_predbat)
+    failed += test_debug_yaml_with_a_populated_log_gate_loads(my_predbat)
+    failed += test_old_dump_with_a_log_gate_loads(my_predbat)
     return failed

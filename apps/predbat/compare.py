@@ -27,6 +27,119 @@ import copy
 # 3. Consider Octopus API key to access current tariff info and switch links
 
 
+# An empty 'config:' line means no overrides; any other non-mapping value can't be applied
+EMPTY_COMPARE_CONFIG = (None, "", [], {})
+
+
+def check_compare_list(compare_list):
+    """Split compare_list into the entries that can be compared and a message per skipped entry (#5472).
+
+    Each kept entry is a copy with its id and name as stripped strings, and its config either a
+    mapping of overrides or absent, so run_all() and fetch_config() can rely on that shape.
+    """
+    if not compare_list:
+        return [], []
+    if not isinstance(compare_list, list):
+        return [], ["compare_list must be a list of tariffs, each with an id and a name"]
+
+    valid = []
+    problems = []
+    seen_ids = set()
+    for index, entry in enumerate(compare_list):
+        problem = None
+        entry_id = ""
+        if not isinstance(entry, dict):
+            problem = "must be a dictionary with an id and a name"
+        else:
+            # Results, sensor names and the web page are all keyed by the id as a string, so an
+            # unquoted numeric id in apps.yaml must not reach them as an int
+            entry_id = "" if entry.get("id") is None else str(entry["id"]).strip()
+            # A numeric name would likewise break publish_data() building the friendly name
+            entry_name = "" if entry.get("name") is None else str(entry["name"]).strip()
+            if not entry_id:
+                problem = "requires a non-empty 'id'"
+            elif entry_id in seen_ids:
+                problem = "has a duplicate id '{}'".format(entry_id)
+            elif not entry_name:
+                problem = "('{}') requires a non-empty 'name'".format(entry_id)
+            elif entry.get("config") not in EMPTY_COMPARE_CONFIG and not isinstance(entry["config"], dict):
+                # run_all() and fetch_config() look overrides up by key; a list of them raised TypeError
+                # there and ended the whole comparison, and any other value was never a usable override
+                problem = "('{}') has a 'config' that isn't a set of 'setting: value' overrides".format(entry_id)
+        if problem:
+            problems.append("compare_list entry {} {}".format(index + 1, problem))
+            continue
+        seen_ids.add(entry_id)
+        checked = dict(entry, id=entry_id, name=entry_name)
+        if checked.get("config") in EMPTY_COMPARE_CONFIG:
+            checked.pop("config", None)
+        valid.append(checked)
+    return valid, problems
+
+
+def valid_compare_list(compare_list, log=None):
+    """Return the compare_list entries that can be compared, logging a warning for each one skipped (#5472)."""
+    valid, problems = check_compare_list(compare_list)
+    if log:
+        for problem in problems:
+            log("Warn: Compare, {}, skipping it".format(problem))
+    return valid
+
+
+# What Compare.run_all() saves before comparing tariffs and restores afterwards: every tariff fetches, plans and
+# predicts on the live instance. The plan state is what calculate_plan() writes that outlives the run - leaving
+# plan_preclip as the last tariff's plan once made the first re-plan after midnight score the wrong plan as the
+# plan in force. Add any new plan state calculate_plan() keeps across runs here.
+COMPARE_PLAN_STATE = (
+    "charge_window_best",
+    "charge_limit_best",
+    "export_window_best",
+    "export_limits_best",
+    "plan_preclip",
+    "end_record",
+    "plan_valid",
+    "plan_last_updated",
+    "plan_last_updated_minutes",
+    "rate_best_cost_threshold_charge",
+    "rate_best_cost_threshold_export",
+)
+# Battery and inverter values a tariff can override, reset after each tariff as well as at the end
+COMPARE_HARDWARE_STATE = ("soc_max", "battery_rate_max_charge", "battery_rate_max_charge_dc", "battery_rate_max_discharge", "battery_rate_max_export", "inverter_limit")
+COMPARE_RESTORED_STATE = (
+    COMPARE_PLAN_STATE
+    + COMPARE_HARDWARE_STATE
+    + (
+        "forecast_plan_hours",
+        "forecast_minutes",
+        "forecast_days",
+        "manual_charge_times",
+        "manual_export_times",
+        "manual_freeze_charge_times",
+        "manual_freeze_export_times",
+        "manual_demand_times",
+        "manual_all_times",
+        "cost_today_sofar",
+        "carbon_today_sofar",
+        "iboost_today",
+        "iboost_plan",
+        "import_today_now",
+        "export_today_now",
+        "octopus_intelligent_charging",
+        "soc_kw",
+    )
+)
+# Car state the comparison rebuilds per tariff, deep-copied as the lists are changed in place
+COMPARE_RESTORED_COPIES = (
+    "car_charging_plan_smart",
+    "car_charging_limit",
+    "car_charging_limit_model",
+    "car_charging_soc",
+    "car_charging_battery_size",
+    "car_charging_slots",
+    "car_charging_now_slots",
+)
+
+
 class Compare:
     """Tariff comparison engine.
 
@@ -38,6 +151,8 @@ class Compare:
     def __init__(self, my_predbat):
         self.pb = my_predbat
         self.log = self.pb.log
+        # Live cycle's saving-minute sets and pre-saving snapshots, captured by run_all() with the base rates
+        self.live_saving_state = None
         self.config_root = self.pb.config_root
         self.dashboard_item = self.pb.dashboard_item
         self.currency_symbols = self.pb.currency_symbols
@@ -59,8 +174,10 @@ class Compare:
                 self.log("Warn: Compare, config item {} not found".format(key))
         self.pb.fetch_config_options()
 
-    def fetch_rates(self, tariff, rate_import_base, rate_export_base):
+    def fetch_rates(self, tariff, rate_import_base, rate_export_base, io_adjusted_base=None):
         pb = self.pb
+        if io_adjusted_base is None:
+            io_adjusted_base = pb.io_adjusted
 
         # Reset threshold to automatic
         pb.rate_low_threshold = 0
@@ -69,17 +186,36 @@ class Compare:
         # Reset rates to base
         pb.rate_import = copy.deepcopy(rate_import_base)
         pb.rate_export = copy.deepcopy(rate_export_base)
+        # Both sides start as the live cycle's rates. Each branch below that installs this tariff's own
+        # rates for a side records it here, so the checks further down don't depend on object identity
+        # (which a copying rate_replicate() or rate source would silently break)
+        import_replaced = False
+        export_replaced = False
+
+        # Intelligent Octopus dispatch markers go with the import rates they came from (#5286)
+        pb.io_adjusted = {}
+
+        # The base rates are the live cycle's, so the live saving-minute sets and pre-saving snapshots
+        # captured by run_all() still describe them (same cycle, same minute offsets). Start from those;
+        # a side whose rates this tariff replaces has them cleared below.
+        live_saving = self.live_saving_state or {}
+        pb.rate_import_saving_minutes = set(live_saving.get("import_minutes", set()))
+        pb.rate_export_saving_minutes = set(live_saving.get("export_minutes", set()))
+        pb.rate_import_pre_saving = dict(live_saving.get("import_pre_saving", {}))
+        pb.rate_export_pre_saving = dict(live_saving.get("export_pre_saving", {}))
 
         # Fetch rates from Octopus Energy API
         if "rates_import_octopus_url" in tariff:
             # Fixed URL for rate import
             import_url = pb.resolve_arg("rates_import_octopus_url", tariff["rates_import_octopus_url"], indirect=False)
             pb.rate_import = pb.download_octopus_rates(import_url)
+            import_replaced = True
         elif "metric_octopus_import" in tariff:
             # Octopus import rates
             entity_id = pb.resolve_arg("metric_octopus_import", tariff["metric_octopus_import"], indirect=False)
             if entity_id:
                 pb.rate_import = pb.fetch_octopus_rates(entity_id, adjust_key="is_intelligent_adjusted")
+                import_replaced = True
             else:
                 self.log("Warn: Compare tariff {} bad Octopus entity id {}".format(tariff.get("id", ""), entity_id))
         elif "metric_energidataservice_import" in tariff:
@@ -87,6 +223,7 @@ class Compare:
             entity_id = pb.resolve_arg("metric_energidataservice_import", tariff["metric_energidataservice_import"], indirect=False)
             if entity_id:
                 pb.rate_import = pb.fetch_energidataservice_rates(entity_id, adjust_key="is_intelligent_adjusted")
+                import_replaced = True
             else:
                 self.log("Warn: Compare tariff {} bad Energidata entity id {}".format(tariff.get("id", ""), entity_id))
         elif "metric_stromligning_import_today" in tariff or "metric_stromligning_import_tomorrow" in tariff:
@@ -95,21 +232,27 @@ class Compare:
             entity_id_tomorrow = pb.resolve_arg("metric_stromligning_import_tomorrow", tariff.get("metric_stromligning_import_tomorrow"))
             if entity_id_today or entity_id_tomorrow:
                 pb.rate_import = pb.fetch_stromligning_rates(entity_id_today, entity_id_tomorrow, adjust_key="is_intelligent_adjusted")
+                import_replaced = True
             else:
                 self.log("Warn: Compare tariff {} bad Strømligning entity ids".format(tariff.get("id", "")))
         elif "rates_import" in tariff:
             pb.rate_import = pb.basic_rates(tariff["rates_import"], "rates_import", include_manual_api=False)
+            import_replaced = True
         else:
             self.log("Using existing rate import data")
+        if not import_replaced:
+            pb.io_adjusted = copy.deepcopy(io_adjusted_base)
 
         if "rates_export_octopus_url" in tariff:
             # Fixed URL for rate export
             pb.rate_export = pb.download_octopus_rates(pb.resolve_arg("rates_export_octopus_url", tariff["rates_export_octopus_url"], indirect=False))
+            export_replaced = True
         elif "metric_octopus_export" in tariff:
             # Octopus export rates
             entity_id = pb.resolve_arg("metric_octopus_export", tariff["metric_octopus_export"], indirect=False)
             if entity_id:
                 pb.rate_export = pb.fetch_octopus_rates(entity_id)
+                export_replaced = True
             else:
                 self.log("Warn: Compare tariff {} bad Octopus entity id {}".format(tariff.get("id", ""), entity_id))
         elif "metric_energidataservice_export" in tariff:
@@ -117,6 +260,7 @@ class Compare:
             entity_id = pb.resolve_arg("metric_energidataservice_export", tariff["metric_energidataservice_export"], indirect=False)
             if entity_id:
                 pb.rate_export = pb.fetch_energidataservice_rates(entity_id, adjust_key="is_intelligent_adjusted")
+                export_replaced = True
             else:
                 self.log("Warn: Compare tariff {} bad Energidata entity id {}".format(tariff.get("id", ""), entity_id))
         elif "metric_stromligning_export_today" in tariff or "metric_stromligning_export_tomorrow" in tariff:
@@ -125,17 +269,32 @@ class Compare:
             entity_id_tomorrow = pb.resolve_arg("metric_stromligning_export_tomorrow", tariff.get("metric_stromligning_export_tomorrow"))
             if entity_id_today or entity_id_tomorrow:
                 pb.rate_export = pb.fetch_stromligning_rates(entity_id_today, entity_id_tomorrow)
+                export_replaced = True
             else:
                 self.log("Warn: Compare tariff {} bad Strømligning entity ids".format(tariff.get("id", "")))
         elif "rates_export" in tariff:
             pb.rate_export = pb.basic_rates(tariff["rates_export"], "rates_export", include_manual_api=False)
+            export_replaced = True
         else:
             self.log("Using existing rate export data")
+
+        # A tariff that supplied its own rates for a side makes the live saving minutes for that side
+        # stale: they are offsets into the live tables, and would map unrelated minutes of the new tariff
+        # back to live "base" rates. A side left on the live rates keeps them.
+        if import_replaced:
+            pb.rate_import_saving_minutes = set()
+            pb.rate_import_pre_saving = {}
+        if export_replaced:
+            pb.rate_export_saving_minutes = set()
+            pb.rate_export_pre_saving = {}
 
         if pb.rate_import:
             pb.rate_scan(pb.rate_import, print=False)
             pb.rate_import, pb.rate_import_replicated = pb.rate_replicate(pb.rate_import, pb.io_adjusted, is_import=True)
             if "rates_import_override" in tariff:
+                # A kept pre-saving snapshot must carry the same override, as fetch_sensor_data()'s does
+                if pb.rate_import_saving_minutes and pb.rate_import_pre_saving:
+                    pb.rate_import_pre_saving = pb.override_session_rates(pb.rate_import, pb.rate_import_pre_saving, pb.rate_import_saving_minutes, tariff["rates_import_override"], "rates_import_override", {}, True, include_manual_api=False)
                 pb.rate_import = pb.basic_rates(tariff["rates_import_override"], "rates_import_override", pb.rate_import, pb.rate_import_replicated, include_manual_api=False)
             pb.rate_scan(pb.rate_import, print=True)
 
@@ -144,6 +303,8 @@ class Compare:
             pb.rate_scan_export(pb.rate_export, print=False)
             pb.rate_export, pb.rate_export_replicated = pb.rate_replicate(pb.rate_export, is_import=False)
             if "rates_export_override" in tariff:
+                if pb.rate_export_saving_minutes and pb.rate_export_pre_saving:
+                    pb.rate_export_pre_saving = pb.override_session_rates(pb.rate_export, pb.rate_export_pre_saving, pb.rate_export_saving_minutes, tariff["rates_export_override"], "rates_export_override", {}, False, include_manual_api=False)
                 pb.rate_export = pb.basic_rates(tariff["rates_export_override"], "rates_export_override", pb.rate_export, pb.rate_export_replicated, include_manual_api=False)
             pb.rate_scan_export(pb.rate_export, print=True)
 
@@ -161,10 +322,7 @@ class Compare:
         # Find charging windows
         if pb.rate_import:
             # Find charging window
-            pb.low_rates, lowest, highest = pb.rate_scan_window(pb.rate_import, 5, pb.rate_import_cost_threshold, False)
-            # Update threshold automatically
-            if pb.rate_low_threshold == 0 and highest >= pb.rate_min:
-                pb.rate_import_cost_threshold = highest
+            pb.find_low_rate_windows()
 
         # Compare to see if rates changes
         for minute in range(pb.minutes_now, pb.forecast_minutes + pb.minutes_now):
@@ -334,7 +492,7 @@ class Compare:
 
         return result_data
 
-    def run_single(self, tariff, rate_import_base, rate_export_base, end_record, debug=False, fetch_sensor=True, car_charging_slots=None, start_soc=None):
+    def run_single(self, tariff, rate_import_base, rate_export_base, end_record, debug=False, fetch_sensor=True, car_charging_slots=None, start_soc=None, io_adjusted_base=None):
         """
         Compare a single energy tariff with the current settings and report results
         """
@@ -362,7 +520,7 @@ class Compare:
 
         # Fetch rates
         try:
-            existing_tariff = self.fetch_rates(tariff, rate_import_base, rate_export_base)
+            existing_tariff = self.fetch_rates(tariff, rate_import_base, rate_export_base, io_adjusted_base)
         except ValueError as e:
             self.log("Warn fetching rates during comparison of tariff {}: {}".format(tariff, e))
             return {}
@@ -438,12 +596,14 @@ class Compare:
                 try:
                     data = yaml.safe_load(f)
                     if data:
-                        self.comparisons = data.get("comparisons", {})
+                        # str() keys: a numeric id saved before ids were normalised (#5472) would
+                        # otherwise break publish_data() and never match its compare_list entry again
+                        self.comparisons = {str(tariff_id): result for tariff_id, result in (data.get("comparisons") or {}).items()}
                 except yaml.YAMLError as exc:
                     self.log("Error loading comparisons: {}".format(exc))
 
         if self.comparisons:
-            compare_list = self.pb.get_arg("compare_list", [])
+            compare_list = valid_compare_list(self.pb.get_arg("compare_list", []))
             self.select_best(compare_list, self.comparisons)
             self.publish_data()
 
@@ -467,7 +627,8 @@ class Compare:
 
             if result:
                 cost = result.get("cost", 0)
-                name = result.get("name", "")
+                # str(): a numeric name saved before names were normalised (#5472) must not crash startup
+                name = str(result.get("name", ""))
                 attributes = {
                     "friendly_name": "Compare " + name,
                     "state_class": "measurement",
@@ -494,7 +655,7 @@ class Compare:
         """
         Update HA sensors only
         """
-        compare_list = self.pb.get_arg("compare_list", [])
+        compare_list = valid_compare_list(self.pb.get_arg("compare_list", []))
         if not compare_list:
             return
 
@@ -519,6 +680,9 @@ class Compare:
         my_predbat = self.pb
 
         my_predbat.car_charging_slots = [[] for car_n in range(my_predbat.num_cars)]
+        # The live cycle's modelled car_charging_now slots were judged against the live car plan, which is
+        # rebuilt here for the compared tariff - so drop them rather than layer them on top of it
+        my_predbat.car_charging_now_slots = [[] for car_n in range(my_predbat.num_cars)]
         # Compare re-plans car charging on the rate-based path (plan_car_charging), where the real
         # fill clamp must hold - drop any model-facing limit override left by the live IOG fetch (#4967)
         my_predbat.car_charging_limit_model = None
@@ -539,7 +703,7 @@ class Compare:
             if my_predbat.car_charging_planned[car_n] or my_predbat.car_charging_now[car_n]:
                 self.log("Re-plan car {} for charging to {}".format(car_n, my_predbat.car_charging_limit[car_n]))
                 my_predbat.car_charging_plan_smart[car_n] = True
-                my_predbat.car_charging_slots[car_n] = my_predbat.plan_car_charging(car_n, my_predbat.low_rates)
+                my_predbat.car_charging_slots[car_n] = my_predbat.plan_car_charging(car_n, my_predbat.low_rates_tariff)
 
             if my_predbat.car_charging_planned[car_n] and my_predbat.car_charging_exclusive[car_n]:
                 break
@@ -549,7 +713,7 @@ class Compare:
         Compare a comparison in prices across multiple energy tariffs and report results
         take care not to destroy the state of the system for the primary settings
         """
-        compare_list = self.pb.get_arg("compare_list", [])
+        compare_list = valid_compare_list(self.pb.get_arg("compare_list", []), log=self.log)
         if not compare_list:
             return
 
@@ -557,39 +721,9 @@ class Compare:
 
         my_predbat = self.pb
 
-        save_forecast_plan_hours = my_predbat.forecast_plan_hours
-        save_forecast_minutes = my_predbat.forecast_minutes
-        save_forecast_days = my_predbat.forecast_days
-        save_manual_charge_times = my_predbat.manual_charge_times
-        save_manual_export_times = my_predbat.manual_export_times
-        save_manual_freeze_charge_times = my_predbat.manual_freeze_charge_times
-        save_manual_freeze_export_times = my_predbat.manual_freeze_export_times
-        save_manual_demand_times = my_predbat.manual_demand_times
-        save_manual_all_times = my_predbat.manual_all_times
-        save_charge_window_best = my_predbat.charge_window_best
-        save_export_window_best = my_predbat.export_window_best
-        save_export_limits_best = my_predbat.export_limits_best
-        save_charge_limit_best = my_predbat.charge_limit_best
-        save_cost_today_sofar = my_predbat.cost_today_sofar
-        save_carbon_today_sofar = my_predbat.carbon_today_sofar
-        save_iboost_today = my_predbat.iboost_today
-        save_iboost_plan = my_predbat.iboost_plan
-        save_import_today_now = my_predbat.import_today_now
-        save_export_today_now = my_predbat.export_today_now
-        save_octopus_intelligent_charging = my_predbat.octopus_intelligent_charging
-        save_car_charging_plan_smart = copy.deepcopy(my_predbat.car_charging_plan_smart)
-        save_car_charging_limit = copy.deepcopy(my_predbat.car_charging_limit)
-        save_car_charging_limit_model = copy.deepcopy(my_predbat.car_charging_limit_model)
-        save_car_charging_soc = copy.deepcopy(my_predbat.car_charging_soc)
-        save_car_charging_battery_size = copy.deepcopy(my_predbat.car_charging_battery_size)
-        save_car_charging_slots = copy.deepcopy(my_predbat.car_charging_slots)
-        save_soc_kw = my_predbat.soc_kw
-        save_soc_max = my_predbat.soc_max
-        save_battery_rate_max_charge = my_predbat.battery_rate_max_charge
-        save_battery_rate_max_charge_dc = my_predbat.battery_rate_max_charge_dc
-        save_battery_rate_max_discharge = my_predbat.battery_rate_max_discharge
-        save_battery_rate_max_export = my_predbat.battery_rate_max_export
-        save_inverter_limit = my_predbat.inverter_limit
+        # Everything the comparison changes on the live instance, saved here and put back in the finally below
+        saved = {name: getattr(my_predbat, name) for name in COMPARE_RESTORED_STATE}
+        saved.update({name: copy.deepcopy(getattr(my_predbat, name)) for name in COMPARE_RESTORED_COPIES})
 
         # Final reports, cut end_record back to 24 hours to ignore the dump at end of day
         end_record = int((my_predbat.minutes_now + 24 * 60 + 29) / 30) * 30 - my_predbat.minutes_now
@@ -597,6 +731,13 @@ class Compare:
         # Save baseline rates
         rate_import_base = copy.deepcopy(self.pb.rate_import)
         rate_export_base = copy.deepcopy(self.pb.rate_export)
+        io_adjusted_base = copy.deepcopy(self.pb.io_adjusted)
+        self.live_saving_state = {
+            "import_minutes": set(self.pb.rate_import_saving_minutes),
+            "export_minutes": set(self.pb.rate_export_saving_minutes),
+            "import_pre_saving": dict(self.pb.rate_import_pre_saving),
+            "export_pre_saving": dict(self.pb.rate_export_pre_saving),
+        }
 
         # Midnight SOC fallback for tariffs with no prior result
         soc_midnight_fallback = my_predbat.soc_kwh_history.get(my_predbat.minutes_now, my_predbat.soc_kw)
@@ -616,7 +757,8 @@ class Compare:
 
         try:
             for tariff in compare_list:
-                prior = results.get(tariff["id"], {})
+                tariff_id = tariff["id"]
+                prior = results.get(tariff_id, {})
                 if prior:
                     prior_date = prior.get("date", "")[:10]
                     if prior_date == today_date:
@@ -628,20 +770,19 @@ class Compare:
                 else:
                     # First ever run for this tariff: start from actual midnight SoC
                     start_soc = soc_midnight_fallback
-                self.log("Compare tariff {} starting SoC: {:.2f} kWh".format(tariff.get("id", ""), start_soc))
+                self.log("Compare tariff {} starting SoC: {:.2f} kWh".format(tariff_id, start_soc))
+                # Each tariff plans from scratch: scored against the previous tariff's plan, the keep-or-switch threshold
+                # in calculate_plan() could leave one tariff's result as another tariff's plan
+                my_predbat.plan_valid = False
                 try:
-                    result_data = self.run_single(tariff, rate_import_base, rate_export_base, end_record, debug=debug, fetch_sensor=fetch_sensor, car_charging_slots=save_car_charging_slots, start_soc=start_soc)
+                    result_data = self.run_single(tariff, rate_import_base, rate_export_base, end_record, debug=debug, fetch_sensor=fetch_sensor, car_charging_slots=saved["car_charging_slots"], start_soc=start_soc, io_adjusted_base=io_adjusted_base)
                     if result_data is not None:
-                        results[tariff["id"]] = result_data
+                        results[tariff_id] = result_data
                 finally:
                     # Restore hardware settings after each tariff so overrides don't bleed into the next tariff;
                     # in a finally so a raised run_single() can't leave compare values applied to the live instance
-                    my_predbat.soc_max = save_soc_max
-                    my_predbat.battery_rate_max_charge = save_battery_rate_max_charge
-                    my_predbat.battery_rate_max_charge_dc = save_battery_rate_max_charge_dc
-                    my_predbat.battery_rate_max_discharge = save_battery_rate_max_discharge
-                    my_predbat.battery_rate_max_export = save_battery_rate_max_export
-                    my_predbat.inverter_limit = save_inverter_limit
+                    for name in COMPARE_HARDWARE_STATE:
+                        setattr(my_predbat, name, saved[name])
                     # Restore config: overrides after each tariff too, for the same reason - otherwise a
                     # tariff's config override stays applied to config_index for every subsequent tariff,
                     # even ones with no config block of their own (issue #4156)
@@ -657,45 +798,18 @@ class Compare:
                 self.save_yaml()
                 self.publish_data()
         finally:
-            # Restore config values overridden by any tariff's fetch_config() call
-            if config_snapshot:
-                for key, orig_value in config_snapshot.items():
-                    item = my_predbat.config_index.get(key)
-                    if item is not None:
-                        item["value"] = orig_value
-                my_predbat.fetch_config_options()
-
-            # Restore original settings
-            my_predbat.forecast_plan_hours = save_forecast_plan_hours
-            my_predbat.forecast_minutes = save_forecast_minutes
-            my_predbat.forecast_days = save_forecast_days
-            my_predbat.manual_charge_times = save_manual_charge_times
-            my_predbat.manual_export_times = save_manual_export_times
-            my_predbat.manual_freeze_charge_times = save_manual_freeze_charge_times
-            my_predbat.manual_freeze_export_times = save_manual_freeze_export_times
-            my_predbat.manual_demand_times = save_manual_demand_times
-            my_predbat.manual_all_times = save_manual_all_times
-            my_predbat.charge_window_best = save_charge_window_best
-            my_predbat.export_window_best = save_export_window_best
-            my_predbat.export_limits_best = save_export_limits_best
-            my_predbat.charge_limit_best = save_charge_limit_best
-            my_predbat.cost_today_sofar = save_cost_today_sofar
-            my_predbat.carbon_today_sofar = save_carbon_today_sofar
-            my_predbat.iboost_today = save_iboost_today
-            my_predbat.iboost_plan = save_iboost_plan
-            my_predbat.import_today_now = save_import_today_now
-            my_predbat.export_today_now = save_export_today_now
-            my_predbat.octopus_intelligent_charging = save_octopus_intelligent_charging
-            my_predbat.car_charging_limit = save_car_charging_limit
-            my_predbat.car_charging_limit_model = save_car_charging_limit_model
-            my_predbat.car_charging_soc = save_car_charging_soc
-            my_predbat.car_charging_battery_size = save_car_charging_battery_size
-            my_predbat.car_charging_slots = save_car_charging_slots
-            my_predbat.car_charging_plan_smart = save_car_charging_plan_smart
-            my_predbat.soc_kw = save_soc_kw
-            my_predbat.soc_max = save_soc_max
-            my_predbat.battery_rate_max_charge = save_battery_rate_max_charge
-            my_predbat.battery_rate_max_charge_dc = save_battery_rate_max_charge_dc
-            my_predbat.battery_rate_max_discharge = save_battery_rate_max_discharge
-            my_predbat.battery_rate_max_export = save_battery_rate_max_export
-            my_predbat.inverter_limit = save_inverter_limit
+            try:
+                # Restore config values overridden by any tariff's fetch_config() call
+                if config_snapshot:
+                    for key, orig_value in config_snapshot.items():
+                        item = my_predbat.config_index.get(key)
+                        if item is not None:
+                            item["value"] = orig_value
+                    my_predbat.fetch_config_options()
+            finally:
+                # Restore original settings, last so they win over fetch_config_options(), and even if it raised
+                for name in COMPARE_RESTORED_STATE + COMPARE_RESTORED_COPIES:
+                    setattr(my_predbat, name, saved[name])
+                # A re-plan requested while the comparison ran (a setting or override changed) must still happen
+                my_predbat.plan_valid = saved["plan_valid"] and not my_predbat.update_pending
+                my_predbat.io_adjusted = io_adjusted_base

@@ -13,7 +13,8 @@ Unit tests for Output.calculate_yesterday().
 
 Covered scenarios
 -----------------
-1. Early-exit when savings_last_updated is fresh (< 59 min old, same day).
+1. Early-exit when savings_last_updated is in the current plan slot; a run once a slot
+   has ended (test 1b) or the day has rolled over (tests 4 and 4b) is not skipped.
 2. Basic run with no car: function runs, key dashboard entities are published
    and all state attributes are correctly restored afterwards.
 3. Car-slot subtraction: when car_charging_slots has a slot covering some
@@ -26,6 +27,7 @@ import copy
 from datetime import datetime, timedelta
 
 import pytz
+from zoneinfo import ZoneInfo
 
 from const import PREDICT_STEP, EXPORT_MODE_FREEZE, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
 from utils import export_mode_of
@@ -219,8 +221,8 @@ def _apply_mocks(my_predbat, now_utc, cost_value=100.0, soc_value=5.0):
 
     my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
     my_predbat.get_history_wrapper = _make_history_mock(my_predbat, now_utc, cost_value, soc_value)
-    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
-    my_predbat.publish_html_plan = lambda *a, **kw: ("", "{}")
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", {})
+    my_predbat.publish_html_plan = lambda *a, **kw: ("", {})
 
     original_run_pred = my_predbat.run_prediction
     mock_run_pred = _make_mock_run_prediction(captured_load_steps)
@@ -262,12 +264,13 @@ def _restore_methods(my_predbat, original_run_pred, original_step_data=None, ori
 
 
 def _test_early_exit(my_predbat, failed):
-    """Test 1: Early-exit when savings_last_updated is < 59 min old, same day."""
-    print("calculate_yesterday: Test 1 – early-exit when timestamp is fresh")
+    """Test 1: Early-exit when savings_last_updated is in the current plan slot."""
+    print("calculate_yesterday: Test 1 – early-exit when timestamp is in the current slot")
     now_utc = _setup_base(my_predbat)
 
-    # Mark as recently updated (10 minutes ago, same day)
-    my_predbat.savings_last_updated = now_utc - timedelta(minutes=10)
+    # 06:25 now, updated at 06:10 - both count towards the 06:05-06:35 history slot (one run past the boundary)
+    my_predbat.now_utc = now_utc + timedelta(minutes=25)
+    my_predbat.savings_last_updated = now_utc + timedelta(minutes=10)
 
     # Make sure dashboard_item is NOT called by asserting that the savings
     # entity is absent before the call (it might or might not exist from a
@@ -281,8 +284,93 @@ def _test_early_exit(my_predbat, failed):
         print("ERROR: savings_last_updated was changed despite fresh timestamp")
         failed = True
 
-    # Reset for next test
+    # Reset for next test, including the clock moved above on the shared fixture
+    my_predbat.now_utc = now_utc
     my_predbat.savings_last_updated = None
+    return failed
+
+
+def _test_rebuild_after_slot_ends(my_predbat, failed):
+    """Test 1b: A run once the slot of the last update has ended is not skipped, however recent the update.
+
+    The plan history shows each slot from what actually happened, so rebuilding as soon as a slot ends keeps the
+    last finished slot on show; the hourly rebuild this replaced left up to an hour of slots in no view.
+    """
+    print("calculate_yesterday: Test 1b – rebuilt once the last update's slot has ended")
+    now_utc = _setup_base(my_predbat)
+
+    # Updated at 05:50, ten minutes ago but towards the 05:35-06:05 history slot; the 06:00 run is still in it
+    # (it waits a run so its own cost_today write is recorded), so move on to the 06:05 run
+    my_predbat.savings_last_updated = now_utc - timedelta(minutes=10)
+    # Mocked first, so a broken early exit fails here rather than running for real on the shared fixture
+    captured_load, original_run_pred = _apply_mocks(my_predbat, now_utc + timedelta(minutes=5))
+    my_predbat.calculate_yesterday()
+    if my_predbat.savings_last_updated != now_utc - timedelta(minutes=10):
+        print("ERROR: the run at the slot boundary should wait a run before rebuilding")
+        failed = True
+    now_utc = now_utc + timedelta(minutes=5)
+    my_predbat.now_utc = now_utc
+    my_predbat.minutes_now = 365
+
+    my_predbat.calculate_yesterday()
+
+    if my_predbat.savings_last_updated != now_utc:
+        print("ERROR: calculate_yesterday did not rebuild once the slot had ended: savings_last_updated {}".format(my_predbat.savings_last_updated))
+        failed = True
+
+    _restore_methods(my_predbat, original_run_pred)
+    my_predbat.now_utc = now_utc - timedelta(minutes=5)
+    my_predbat.minutes_now = 360
+    my_predbat.savings_last_updated = None
+    return failed
+
+
+def _test_history_slot(my_predbat, failed):
+    """Test 1c: history_slot() follows plan_interval_minutes, one run late, and the published refresh interval matches."""
+    print("calculate_yesterday: Test 1c – history slots follow plan_interval_minutes")
+    _setup_base(my_predbat)
+    saved = (my_predbat.plan_interval_minutes, my_predbat.calculate_plan_every)
+    try:
+        my_predbat.plan_interval_minutes = 15
+        my_predbat.calculate_plan_every = 10
+        base = datetime(2024, 10, 4, 6, 0, 0, tzinfo=UTC)
+        # 06:05-06:19 is one 15-minute history slot, 06:20 starts the next; 00:00 still counts towards yesterday
+        if my_predbat.history_slot(base + timedelta(minutes=5)) != my_predbat.history_slot(base + timedelta(minutes=19)):
+            print("ERROR: 06:05 and 06:19 should be the same 15-minute history slot")
+            failed = True
+        if my_predbat.history_slot(base + timedelta(minutes=19)) == my_predbat.history_slot(base + timedelta(minutes=20)):
+            print("ERROR: 06:20 should start a new 15-minute history slot")
+            failed = True
+        if my_predbat.history_slot(datetime(2024, 10, 5, 0, 0, 0, tzinfo=UTC)) != my_predbat.history_slot(datetime(2024, 10, 4, 23, 50, 0, tzinfo=UTC)):
+            print("ERROR: the midnight run should still count towards the last slot of the day before")
+            failed = True
+        # When the clocks go back, 01:00-01:59 happens twice: the first and second 01:35 are an hour apart and
+        # must be separate slots, or with an hourly re-plan the second is skipped and the history goes two hours
+        # without a rebuild. Both ways a local time can be built: pytz (as update_time does) and zoneinfo (fold).
+        london = pytz.timezone("Europe/London")
+        first = datetime(2024, 10, 27, 0, 35, 0, tzinfo=UTC).astimezone(london)
+        second = datetime(2024, 10, 27, 1, 35, 0, tzinfo=UTC).astimezone(london)
+        if first.strftime("%H:%M") != "01:35" or second.strftime("%H:%M") != "01:35":
+            print("ERROR: test setup - expected both instants to read 01:35 local, got {} and {}".format(first, second))
+            failed = True
+        if my_predbat.history_slot(first) == my_predbat.history_slot(second):
+            print("ERROR: the first and second 01:35 on the autumn clock change should be different history slots (pytz)")
+            failed = True
+        london_zi = ZoneInfo("Europe/London")
+        if my_predbat.history_slot(first.astimezone(london_zi)) == my_predbat.history_slot(second.astimezone(london_zi)):
+            print("ERROR: the first and second 01:35 on the autumn clock change should be different history slots (zoneinfo)")
+            failed = True
+        # The run that crosses back to 01:00 GMT waits one run as normal: 01:02 GMT counts towards the slot before it
+        # (00:30 UTC onwards, the BST 01:30 slot), not a slot of its own
+        if my_predbat.history_slot(datetime(2024, 10, 27, 1, 2, 0, tzinfo=UTC).astimezone(london)) != my_predbat.history_slot(datetime(2024, 10, 27, 0, 57, 0, tzinfo=UTC).astimezone(london)):
+            print("ERROR: 01:02 GMT should still count towards the slot that ended at the clock change")
+            failed = True
+        # A 15-minute slot, the 5-minute run it waits and a 10-minute re-plan interval
+        if my_predbat.history_refresh_minutes() != 30:
+            print("ERROR: history_refresh_minutes {} should be a slot, a run and a re-plan interval".format(my_predbat.history_refresh_minutes()))
+            failed = True
+    finally:
+        my_predbat.plan_interval_minutes, my_predbat.calculate_plan_every = saved
     return failed
 
 
@@ -350,6 +438,13 @@ def _test_basic_no_car(my_predbat, failed):
             print("ERROR: entity {} was not published".format(entity_id))
             failed = True
 
+    # --- The plan history views carry how long they may go between rebuilds, for the web page's stale check ---
+    for entity_suffix in (".cost_yesterday", ".savings_yesterday_predbat"):
+        history_json = my_predbat.get_state_wrapper(prefix + entity_suffix, attribute="json")
+        if not isinstance(history_json, dict) or history_json.get("refresh_minutes") != my_predbat.history_refresh_minutes():
+            print("ERROR: {} json should carry refresh_minutes {}, got {}".format(entity_suffix, my_predbat.history_refresh_minutes(), history_json.get("refresh_minutes") if isinstance(history_json, dict) else history_json))
+            failed = True
+
     # --- run_prediction was called (once for baseline, once for no-pvbat) ---
     if len(captured_load) < 2:
         print("ERROR: run_prediction should have been called at least twice, got {} captures".format(len(captured_load)))
@@ -384,8 +479,8 @@ def _test_forecast_minutes_widened_before_step_data(my_predbat, failed):
     forecast_minutes_snapshots = []
     my_predbat.step_data_history = _make_recording_step_data(my_predbat.pv_today, my_predbat, forecast_minutes_snapshots)
     my_predbat.get_history_wrapper = _make_history_mock(my_predbat, now_utc)
-    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
-    my_predbat.publish_html_plan = lambda *a, **kw: ("", "{}")
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", {})
+    my_predbat.publish_html_plan = lambda *a, **kw: ("", {})
     original_run_pred = my_predbat.run_prediction
     my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
 
@@ -636,12 +731,12 @@ def _test_car_slot_from_energy_sensor(my_predbat, failed):
 
 def _test_early_exit_respects_day_rollover(my_predbat, failed):
     """Test 4: Early-exit is NOT triggered if savings_last_updated was from
-    a previous day (even if it is < 59 min old by clock, the date differs)."""
+    a previous day (the same time of day yesterday is a different slot)."""
     print("calculate_yesterday: Test 4 – early-exit skipped when date rolls over")
     now_utc = _setup_base(my_predbat)
 
-    # Timestamp from yesterday – even though it is within 59 minutes of now_utc,
-    # the dates differ so the early-return condition should NOT fire.
+    # Timestamp from yesterday, five minutes into the same time-of-day slot - a different slot,
+    # so the early-return condition should NOT fire.
     my_predbat.savings_last_updated = (now_utc - timedelta(days=1)) + timedelta(minutes=5)
 
     captured_load, original_run_pred = _apply_mocks(my_predbat, now_utc)
@@ -659,6 +754,37 @@ def _test_early_exit_respects_day_rollover(my_predbat, failed):
 
     _restore_methods(my_predbat, original_run_pred)
     my_predbat.savings_last_updated = None
+    return failed
+
+
+def _test_midnight_replan_rebuilds(my_predbat, failed):
+    """Test 4b: The forced midnight re-plan rebuilds, although the one-run wait counts 00:00 towards yesterday's last slot.
+
+    Otherwise, with an hourly re-plan, the *_yesterday sensors would go on showing the day before yesterday until 01:00.
+    """
+    print("calculate_yesterday: Test 4b – the midnight re-plan rebuilds")
+    _setup_base(my_predbat)
+    saved = (my_predbat.now_utc, my_predbat.plan_interval_minutes)
+    # No cost_today history: a run that gets past the early exit records the attempt and stops, so the probe is cheap
+    my_predbat.get_history_wrapper = lambda *args, **kwargs: None
+    try:
+        my_predbat.plan_interval_minutes = 30
+        my_predbat.savings_last_updated = datetime(2024, 10, 4, 23, 40, 0, tzinfo=UTC)
+        # Same slot and same day still waits
+        my_predbat.now_utc = datetime(2024, 10, 4, 23, 55, 0, tzinfo=UTC)
+        my_predbat.calculate_yesterday()
+        if my_predbat.savings_last_updated != datetime(2024, 10, 4, 23, 40, 0, tzinfo=UTC):
+            print("ERROR: 23:55 is in the same history slot as 23:40 and should not rebuild")
+            failed = True
+        my_predbat.now_utc = datetime(2024, 10, 5, 0, 0, 0, tzinfo=UTC)
+        my_predbat.calculate_yesterday()
+        if my_predbat.savings_last_updated != my_predbat.now_utc:
+            print("ERROR: the midnight re-plan should rebuild for the day just ended: savings_last_updated {}".format(my_predbat.savings_last_updated))
+            failed = True
+    finally:
+        my_predbat.now_utc, my_predbat.plan_interval_minutes = saved
+        del my_predbat.get_history_wrapper
+        my_predbat.savings_last_updated = None
     return failed
 
 
@@ -1333,8 +1459,8 @@ def _test_soc_kw_h0_fallback(my_predbat, failed):
 
     my_predbat.get_history_wrapper = _history_no_soc
     my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
-    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
-    my_predbat.publish_html_plan = lambda *a, **kw: ("", "{}")
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", {})
+    my_predbat.publish_html_plan = lambda *a, **kw: ("", {})
     original_run_pred = my_predbat.run_prediction
 
     ran_count = [0]
@@ -1358,8 +1484,8 @@ def _test_soc_kw_h0_fallback(my_predbat, failed):
 
     my_predbat.get_history_wrapper = _history_no_soc  # still returns None for soc_kw_h0
     my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
-    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
-    my_predbat.publish_html_plan = lambda *a, **kw: ("", "{}")
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", {})
+    my_predbat.publish_html_plan = lambda *a, **kw: ("", {})
     original_run_pred = my_predbat.run_prediction
     ran_count_b = [0]
     my_predbat.run_prediction = lambda *a, **kw: _make_counting_run_pred(ran_count_b)(my_predbat, *a, **kw)
@@ -1415,11 +1541,11 @@ def _test_cross_charging_reconstructed_as_both_windows(my_predbat, failed):
         captured["charge_window_best"] = copy.deepcopy(my_predbat.charge_window_best)
         captured["export_window_best"] = copy.deepcopy(my_predbat.export_window_best)
         captured["export_limits_best"] = copy.deepcopy(my_predbat.export_limits_best)
-        return ("", "{}")
+        return ("", {})
 
     my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
     my_predbat.get_history_wrapper = _history_with_cross_charging
-    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", {})
     my_predbat.publish_html_plan = _capture_publish_html_plan
     original_run_pred = my_predbat.run_prediction
     my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
@@ -1497,11 +1623,11 @@ def _test_slot_status_read_at_the_right_minute(my_predbat, failed):
 
     def _capture_publish_html_plan(*args, **kwargs):
         captured["export_window_best"] = copy.deepcopy(my_predbat.export_window_best)
-        return ("", "{}")
+        return ("", {})
 
     my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
     my_predbat.get_history_wrapper = _history_with_one_export
-    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", {})
     my_predbat.publish_html_plan = _capture_publish_html_plan
     original_run_pred = my_predbat.run_prediction
     my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
@@ -1517,6 +1643,64 @@ def _test_slot_status_read_at_the_right_minute(my_predbat, failed):
         failed = True
     elif windows[0]["start"] != 1200:
         print("ERROR: export at plan-minutes {}-{} rebuilt as starting at {} - the status was read from the mirror-image minute within the slot".format(export_from_plan_minute, export_to_plan_minute, windows[0]["start"]))
+        failed = True
+
+    _restore_methods(my_predbat, original_run_pred)
+    my_predbat.savings_last_updated = None
+    return failed
+
+
+def _test_recorded_hold_for_car_minutes(my_predbat, failed):
+    """The actual-history table's car icon comes from the recorded "Hold for car" status (#5147 review).
+
+    That table shows measured SoC, so the car icon must follow what happened rather than the model.
+    calculate_yesterday() passes publish_html_plan() the plan minutes whose status was "Hold for car",
+    mapped from minutes-ago the same way as the charge/export reconstruction: plan-minute m is
+    (1800 - m) minutes ago here. Holds for plan-minutes 1205-1209, deliberately off-centre in its slot.
+    """
+    print("calculate_yesterday: Test - recorded Hold for car minutes are passed to the actual-history table (#5147)")
+    now_utc = _setup_base(my_predbat)
+    prefix = my_predbat.prefix
+
+    start = now_utc - timedelta(minutes=1800)
+    status_points = []
+    for step in range(0, 1800, 5):
+        stamp = start + timedelta(minutes=step)
+        status_points.append({"state": "Hold for car" if 1205 <= step < 1210 else "Demand", "last_updated": stamp.strftime("%Y-%m-%dT%H:%M:%S+00:00"), "attributes": {"p/kWh": "0.0"}})
+    status_hist = [status_points]
+
+    def _history_with_one_hold(entity_id, days=30, required=True, tracked=True):
+        """Return the recorded history calculate_yesterday() asks for, with one short Hold for car."""
+        if entity_id == prefix + ".cost_today":
+            return _make_constant_history(100.0, now_utc)
+        elif entity_id == prefix + ".soc_kw_h0":
+            return _make_constant_history(5.0, now_utc)
+        elif entity_id == prefix + ".status":
+            return status_hist
+        return None
+
+    captured = {}
+
+    def _capture_publish_html_plan(*args, **kwargs):
+        """Record the car_hold_minutes the actual-history table is rendered with."""
+        captured["car_hold_minutes"] = kwargs.get("car_hold_minutes")
+        return ("", {})
+
+    my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
+    my_predbat.get_history_wrapper = _history_with_one_hold
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", {})
+    my_predbat.publish_html_plan = _capture_publish_html_plan
+    original_run_pred = my_predbat.run_prediction
+    my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
+
+    my_predbat.calculate_yesterday()
+
+    hold = captured.get("car_hold_minutes")
+    if hold is None:
+        print("ERROR: the actual-history table was rendered without car_hold_minutes")
+        failed = True
+    elif hold != set(range(1205, 1210)):
+        print("ERROR: recorded Hold for car at plan-minutes 1205-1209 mapped to {}".format(sorted(hold)[:10]))
         failed = True
 
     _restore_methods(my_predbat, original_run_pred)
@@ -1598,11 +1782,11 @@ def _test_mixed_slot_keeps_most_active_state(my_predbat, failed):
     def _capture_publish_html_plan(*args, **kwargs):
         captured["export_window_best"] = copy.deepcopy(my_predbat.export_window_best)
         captured["export_limits_best"] = copy.deepcopy(my_predbat.export_limits_best)
-        return ("", "{}")
+        return ("", {})
 
     my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
     my_predbat.get_history_wrapper = _history_with_split_slots
-    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", {})
     my_predbat.publish_html_plan = _capture_publish_html_plan
     original_run_pred = my_predbat.run_prediction
     my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
@@ -1694,11 +1878,11 @@ def _test_short_export_inside_a_freeze_slot(my_predbat, failed):
     def _capture_publish_html_plan(*args, **kwargs):
         captured["export_window_best"] = copy.deepcopy(my_predbat.export_window_best)
         captured["export_limits_best"] = copy.deepcopy(my_predbat.export_limits_best)
-        return ("", "{}")
+        return ("", {})
 
     my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
     my_predbat.get_history_wrapper = _history_with_short_export
-    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", {})
     my_predbat.publish_html_plan = _capture_publish_html_plan
     original_run_pred = my_predbat.run_prediction
     my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
@@ -1769,11 +1953,11 @@ def _test_full_edge_state_counts_toward_the_dominant_tally(my_predbat, failed):
     def _capture_publish_html_plan(*args, **kwargs):
         captured["export_window_best"] = copy.deepcopy(my_predbat.export_window_best)
         captured["export_limits_best"] = copy.deepcopy(my_predbat.export_limits_best)
-        return ("", "{}")
+        return ("", {})
 
     my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
     my_predbat.get_history_wrapper = _history_with_edge_export
-    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", {})
     my_predbat.publish_html_plan = _capture_publish_html_plan
     original_run_pred = my_predbat.run_prediction
     my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
@@ -1835,11 +2019,11 @@ def _test_brief_edge_blip_is_not_counted(my_predbat, failed):
     def _capture_publish_html_plan(*args, **kwargs):
         captured["export_window_best"] = copy.deepcopy(my_predbat.export_window_best)
         captured["charge_window_best"] = copy.deepcopy(my_predbat.charge_window_best)
-        return ("", "{}")
+        return ("", {})
 
     my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
     my_predbat.get_history_wrapper = _history_with_edge_blip
-    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", {})
     my_predbat.publish_html_plan = _capture_publish_html_plan
     original_run_pred = my_predbat.run_prediction
     my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
@@ -1910,11 +2094,11 @@ def _test_edge_only_state_still_gets_real_window_bounds(my_predbat, failed):
     def _capture_publish_html_plan(*args, **kwargs):
         captured["charge_window_best"] = copy.deepcopy(my_predbat.charge_window_best)
         captured["export_window_best"] = copy.deepcopy(my_predbat.export_window_best)
-        return ("", "{}")
+        return ("", {})
 
     my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
     my_predbat.get_history_wrapper = _history_with_edge_only_states
-    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", {})
     my_predbat.publish_html_plan = _capture_publish_html_plan
     original_run_pred = my_predbat.run_prediction
     my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
@@ -1984,11 +2168,11 @@ def _test_cross_charging_export_window_covers_the_slot(my_predbat, failed):
     def _capture_publish_html_plan(*args, **kwargs):
         captured["charge_window_best"] = copy.deepcopy(my_predbat.charge_window_best)
         captured["export_window_best"] = copy.deepcopy(my_predbat.export_window_best)
-        return ("", "{}")
+        return ("", {})
 
     my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
     my_predbat.get_history_wrapper = _history_with_cross_charging
-    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", {})
     my_predbat.publish_html_plan = _capture_publish_html_plan
     original_run_pred = my_predbat.run_prediction
     my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
@@ -2055,6 +2239,8 @@ def _test_missing_cost_today_history(my_predbat, failed):
     my_predbat.step_data_history = _counting_step_data
     my_predbat.get_history_wrapper = _no_history
     my_predbat.savings_last_updated = None
+    # 06:05, the first run counting towards the 06:05-06:35 history slot
+    my_predbat.now_utc = now_utc + timedelta(minutes=5)
 
     my_predbat.calculate_yesterday()
 
@@ -2066,14 +2252,14 @@ def _test_missing_cost_today_history(my_predbat, failed):
         print("ERROR: calculate_yesterday did not record the attempt, so it will redo this work every cycle")
         failed = True
 
-    # A second call ten minutes later must early-exit rather than fetching and warning all over again
+    # A second call ten minutes later, in the same slot, must early-exit rather than fetching and warning all over again
     history_calls.clear()
-    my_predbat.now_utc = now_utc + timedelta(minutes=10)
+    my_predbat.now_utc = now_utc + timedelta(minutes=15)
 
     my_predbat.calculate_yesterday()
 
     if history_calls:
-        print("ERROR: calculate_yesterday retried within the hour, fetching {}".format(history_calls))
+        print("ERROR: calculate_yesterday retried within the same slot, fetching {}".format(history_calls))
         failed = True
 
     my_predbat.now_utc = now_utc
@@ -2180,11 +2366,14 @@ def test_calculate_yesterday(my_predbat):
     print("**** Running calculate_yesterday tests ****")
 
     failed = _test_early_exit(my_predbat, failed)
+    failed = _test_rebuild_after_slot_ends(my_predbat, failed)
+    failed = _test_history_slot(my_predbat, failed)
     failed = _test_basic_no_car(my_predbat, failed)
     failed = _test_forecast_minutes_widened_before_step_data(my_predbat, failed)
     failed = _test_car_slot_subtraction(my_predbat, failed)
     failed = _test_car_slot_from_energy_sensor(my_predbat, failed)
     failed = _test_early_exit_respects_day_rollover(my_predbat, failed)
+    failed = _test_midnight_replan_rebuilds(my_predbat, failed)
     failed = _test_reconstruct_car_slots(my_predbat, failed)
     failed = _test_reconstruct_car_slots_called_with_widened_end_record(my_predbat, failed)
     failed = _test_soc_not_mutated_and_override_passed(my_predbat, failed)
@@ -2194,6 +2383,7 @@ def test_calculate_yesterday(my_predbat):
     failed = _test_yesterday_slot_is_exporting(my_predbat, failed)
     failed = _test_cross_charging_reconstructed_as_both_windows(my_predbat, failed)
     failed = _test_slot_status_read_at_the_right_minute(my_predbat, failed)
+    failed = _test_recorded_hold_for_car_minutes(my_predbat, failed)
     failed = _test_mixed_slot_keeps_most_active_state(my_predbat, failed)
     failed = _test_more_active_slot_status(my_predbat, failed)
     failed = _test_short_export_inside_a_freeze_slot(my_predbat, failed)

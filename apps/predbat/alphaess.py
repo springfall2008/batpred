@@ -41,6 +41,7 @@ import time
 import aiohttp
 from datetime import datetime
 from component_base import ComponentBase
+from coordinator import inverter_record
 from alphaess_const import (
     ALPHAESS_BASE_URL,
     ALPHAESS_ENDPOINTS,
@@ -93,6 +94,20 @@ from alphaess_const import (
 
 
 _HOLD_NOT_EVALUATED = object()
+
+# The behaviour an AlphaESSCloud inverter has, stated for the discovery record's capabilities. A
+# literal, never read back from INVERTER_DEF: the record has to rebuild the row on its own, or the
+# completeness test proves nothing. support_feedin_first is False because the row leaves it out and
+# inverter.py defaults it to False; there is no feed-in-first mode in the Open API.
+ALPHAESS_CAPABILITIES = {
+    "support_charge_freeze": True,
+    "support_discharge_freeze": True,
+    "support_feedin_first": False,
+    "can_span_midnight": False,
+    "charge_discharge_with_rate": False,
+    "charge_control_immediate": False,
+    "target_soc_used_for_discharge": True,
+}
 
 
 class AlphaESSAPI(ComponentBase):
@@ -864,6 +879,143 @@ class AlphaESSAPI(ComponentBase):
         self.set_arg_auto("schedule_write_button", [self._control_name("switch", sn, "battery_schedule_charge_write") for sn in devices])
 
         await self.apply_hybrid_verdict()
+
+    def _discovery_entities(self, sn):
+        """The settings automatic_config() binds for one system, as discovery entity descriptors.
+
+        Each entity id is formed with the same _sensor_name()/_control_name() call automatic_config()
+        makes, so the two cannot drift apart. The record describes this system alone (spec D10): a
+        setting automatic_config() binds only when a figure is known - an energy counter, the
+        capacity, poinv - is described whenever this system reports it, although automatic_config()
+        binds it only once every system does. pv_power and pv_today are described even under
+        automatic_ignore_pv, which is the user's opt-out rather than a fact about the device (D11).
+        The three *_power_invert settings are always False, which is the descriptor's default, so no
+        descriptor carries invert. car_charging_* belong to the chargers and cars sections, and
+        export_limit and battery_min_soc are never bound (see automatic_config()).
+        """
+        entities = {
+            "soc_percent": {"entity_id": self._sensor_name(sn, "soc"), "access": "r", "unit": "%"},
+            "battery_power": {"entity_id": self._sensor_name(sn, "battery_power"), "access": "r", "unit": "W"},
+            "grid_power": {"entity_id": self._sensor_name(sn, "grid_power"), "access": "r", "unit": "W"},
+            "load_power": {"entity_id": self._sensor_name(sn, "load_power"), "access": "r", "unit": "W"},
+            "pv_power": {"entity_id": self._sensor_name(sn, "pv_power"), "access": "r", "unit": "W"},
+        }
+        energy = self.device_energy.get(sn, {})
+        for leaf in ("load_today", "import_today", "export_today", "pv_today"):
+            if leaf in energy:
+                entities[leaf] = {"entity_id": self._sensor_name(sn, leaf), "access": "r", "unit": "kWh"}
+        if self.battery_capacity(sn) > 0:
+            entities["soc_max"] = {"entity_id": self._sensor_name(sn, "battery_capacity"), "access": "r", "unit": "kWh"}
+        if self.inverter_limit(sn) > 0:
+            entities["inverter_limit"] = {"entity_id": self._sensor_name(sn, "inverter_limit"), "access": "r", "unit": "W"}
+        if self.battery_rate_max(sn) > 0:
+            entities["battery_rate_max"] = {"entity_id": self._sensor_name(sn, "battery_rate_max"), "access": "r", "unit": "W"}
+
+        entities["reserve"] = {"entity_id": self._control_name("number", sn, "battery_schedule_reserve"), "access": "rw", "unit": "%"}
+        for direction, prefix in (("charge", "charge"), ("export", "discharge")):
+            entities["{}_start_time".format(prefix)] = {"entity_id": self._control_name("select", sn, "battery_schedule_{}_start_time".format(direction)), "access": "rw", "domain": "select", "format": "HH:MM:SS"}
+            entities["{}_end_time".format(prefix)] = {"entity_id": self._control_name("select", sn, "battery_schedule_{}_end_time".format(direction)), "access": "rw", "domain": "select", "format": "HH:MM:SS"}
+            entities["scheduled_{}_enable".format(prefix)] = {"entity_id": self._control_name("switch", sn, "battery_schedule_{}_enable".format(direction)), "access": "rw", "domain": "switch"}
+        entities["charge_limit"] = {"entity_id": self._control_name("number", sn, "battery_schedule_charge_soc"), "access": "rw", "unit": "%"}
+        entities["charge_rate"] = {"entity_id": self._control_name("number", sn, "battery_schedule_charge_power"), "access": "rw", "unit": "W", "step": 100}
+        entities["discharge_target_soc"] = {"entity_id": self._control_name("number", sn, "battery_schedule_export_soc"), "access": "rw", "unit": "%"}
+        entities["discharge_rate"] = {"entity_id": self._control_name("number", sn, "battery_schedule_export_power"), "access": "rw", "unit": "W", "step": 100}
+        entities["schedule_write_button"] = {"entity_id": self._control_name("switch", sn, "battery_schedule_charge_write"), "access": "rw", "domain": "switch"}
+        return entities
+
+    def build_discovery(self):
+        """
+        Describe the discovered AlphaESS systems for the discovery catalogue.
+
+        Reads only what get_device_list() already holds - self.device_list and self.device_detail -
+        plus the EV-charger verdict _apply_live_payload() records and the energy counters already
+        read, so this adds no API calls and cannot change what AlphaESS does. Reporting is
+        independent of self.automatic: the catalogue records the hardware, and the report's own
+        "automatic" flag says whether Predbat wired apps.yaml to it.
+
+        self.device_list holds serial strings (sysSn), and only systems that passed has_battery()
+        at discovery: a battery-less system (the VT1000 family, cobat 0 or missing) is dropped in
+        get_device_list() and never reaches device_detail. automatic_config() applies no further
+        test - it registers every serial in device_list as "AlphaESSCloud" - so inverter_type is set
+        on every record, mirroring automatic_config() as the source of truth.
+
+        capabilities is the ALPHAESS_CAPABILITIES constant and entities is _discovery_entities(sn):
+        together they rebuild the AlphaESSCloud INVERTER_DEF row, and entities holds every setting
+        automatic_config() binds for the system.
+
+        Ratings are getEssList's own figures under their Predbat setting names: poinv (kW) as
+        inverter_limit (W) via inverter_limit(), cobat (kWh) as soc_max via battery_capacity(), and
+        popv (kW) as the descriptive pv_w. cobat is one scalar per system, so there is no list of
+        entries to mis-sum. A system reports "solar" only when popv says PV is attached.
+
+        Deliberately not reported:
+        - export_limit: AlphaESS reports no export power limit, and poinv is the inverter rating,
+          not the grid connection's cap (automatic_config() warns about this).
+        - battery_rate_max as a rating: the API reports no battery power limit; battery_rate_max()
+          is poinv or the user's override, so only its entity binding is described.
+        - emsStatus: a status that changes. refresh_discovery() compares whole reports, so a
+          changing value would re-file the report every time it moved.
+        - usCapacity and surplusCobat: they fit "current SoC" and "configured usable depth" equally
+          well, which is why publish_data() never maps them to SoC; reporting either as a rating
+          would assert a meaning nobody knows.
+        - firmware: the AlphaESS Open API exposes none.
+        - account_ids: the API has no station, plant or site identifier; every endpoint is keyed by
+          sysSn alone.
+        - an AC-coupled verdict: detect_ac_coupled() infers it from live telemetry and
+          ALPHAESS_AC_COUPLED_MODELS ships empty on purpose, so there is no held fact to report.
+
+        An EV charger is reported as a flag only when _ev_present says True. That verdict comes from
+        live telemetry alone, so a charger not yet seen reports nothing either way rather than a
+        guess. No chargers record is invented for it: AlphaESS reports a charger's power, not its
+        identity.
+
+        Returns None when no system has been discovered yet, which refresh_discovery() treats as
+        "nothing to report, ask again next cycle".
+        """
+        if not self.device_list:
+            return None
+
+        inverters = []
+        for sn in self.device_list:
+            detail = self.device_detail.get(sn, {}) or {}
+            pv_kw = self._as_float(detail.get("popv"), 0.0)
+
+            functions = ["solar", "battery"] if pv_kw > 0 else ["battery"]
+
+            info = {}
+            if detail.get("minv"):
+                info["model"] = str(detail["minv"])
+            if detail.get("mbat"):
+                info["battery_model"] = str(detail["mbat"])
+
+            ratings = {}
+            inverter_w = self.inverter_limit(sn)
+            if inverter_w > 0:
+                ratings["inverter_limit"] = inverter_w
+            if pv_kw > 0:
+                ratings["pv_w"] = pv_kw * 1000.0
+            battery_kwh = self.battery_capacity(sn)
+            if battery_kwh > 0:
+                ratings["soc_max"] = battery_kwh
+
+            flags = ["ev_charger"] if self._ev_present.get(sn) is True else []
+
+            inverters.append(
+                inverter_record(
+                    "alphaess:{}".format(sn),
+                    inverter_type="AlphaESSCloud",
+                    composition="direct",
+                    functions=functions,
+                    capabilities=dict(ALPHAESS_CAPABILITIES),
+                    flags=flags,
+                    hardware_ids={"serial": sn},
+                    info=info,
+                    ratings=ratings,
+                    entities=self._discovery_entities(sn),
+                )
+            )
+
+        return {"automatic": self.automatic, "inverters": inverters}
 
     @staticmethod
     def _empty_schedule():
@@ -1999,6 +2151,14 @@ class AlphaESSAPI(ComponentBase):
             await self.publish_schedule_settings_ha(sn)
 
         await self.publish_data()
+
+        # Filed right after this cycle's publish and BEFORE `if first and not live_ok:` below:
+        # that branch returns False to defer startup when the first telemetry poll fails, and
+        # automatic_config() follows it, so a report filed any later would never be filed on
+        # exactly the installs whose dump most needs to say what hardware was found. (AlphaESS's
+        # automatic_config() does not raise - the early return is the reason.) refresh_discovery()
+        # owns the compare/retry/guard loop and never raises.
+        self.refresh_discovery()
 
         if first and not live_ok:
             # Startup has not really succeeded without telemetry: automatic_config() runs

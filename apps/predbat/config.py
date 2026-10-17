@@ -973,10 +973,29 @@ CONFIG_ITEMS = [
         "default": True,
     },
     {
+        "name": "octopus_intelligent_charger_follows_car",
+        "friendly_name": "Drive the charger to the Intelligent dispatches when Octopus drives the car",
+        "type": "switch",
+        "default": False,
+        "enable": "expert_mode",
+    },
+    {
         "name": "octopus_saving_auto_join",
         "friendly_name": "Octopus Saving Session Auto Join",
         "type": "switch",
         "default": True,
+    },
+    {
+        "name": "octopus_saving_auto_join_lead_hours",
+        "friendly_name": "Octopus Saving Session Auto Join Lead Time",
+        "type": "input_number",
+        "min": 0,
+        "max": 12,
+        "step": 1,
+        "unit": "hours",
+        "icon": "mdi:clock-end",
+        "enable": "octopus_saving_auto_join",
+        "default": 0,
     },
     {
         "name": "octopus_intelligent_ignore_unplugged",
@@ -993,10 +1012,24 @@ CONFIG_ITEMS = [
         "enable": "expert_mode",
     },
     {
+        "name": "octopus_intelligent_dynamic",
+        "friendly_name": "Confirm Intelligent slots against the car charging",
+        "type": "switch",
+        "default": True,
+        "enable": "expert_mode",
+    },
+    {
+        "name": "octopus_intelligent_trust_slots",
+        "friendly_name": "Trust Intelligent slots before the car is seen charging",
+        "type": "switch",
+        "default": True,
+        "enable": "expert_mode",
+    },
+    {
         "name": "car_charging_plan_smart",
         "friendly_name": "Car Charging Plan Smart",
         "type": "switch",
-        "default": False,
+        "default": True,
         "enable": "num_cars",
         "enable_condition": "num_cars > 0",
     },
@@ -2008,6 +2041,7 @@ INVERTER_DEF = {
         "can_span_midnight": True,
         "charge_discharge_with_rate": False,
         "target_soc_used_for_discharge": False,
+        "rate_step_percent_of_capacity": 1,
     },
     "GEC": {
         "name": "GivEnergy Cloud",
@@ -2022,7 +2056,7 @@ INVERTER_DEF = {
         "has_timed_pause": True,
         "charge_time_format": "HH:MM:SS",
         "charge_time_entity_is_option": True,
-        "soc_units": "kWh",
+        "soc_units": "%",
         "num_load_entities": 1,
         "has_ge_inverter_mode": False,
         "has_ge_eco_toggle": True,
@@ -2050,7 +2084,7 @@ INVERTER_DEF = {
         "has_timed_pause": False,
         "charge_time_format": "HH:MM:SS",
         "charge_time_entity_is_option": True,
-        "soc_units": "kWh",
+        "soc_units": "%",
         "num_load_entities": 1,
         "has_ge_inverter_mode": False,
         "has_ge_eco_toggle": False,
@@ -2067,6 +2101,7 @@ INVERTER_DEF = {
     },
     "GS": {
         "name": "Ginlong Solis",
+        "has_solis_energy_control": True,
         "has_rest_api": False,
         "has_mqtt_api": False,
         "output_charge_control": "current",
@@ -2095,6 +2130,7 @@ INVERTER_DEF = {
     },
     "GS_fb00": {
         "name": "Ginlong Solis (FB00)",
+        "has_solis_energy_control": True,
         "has_rest_api": False,
         "has_mqtt_api": False,
         "output_charge_control": "current",
@@ -2114,8 +2150,13 @@ INVERTER_DEF = {
         "clock_time_format": "%Y-%m-%d %H:%M:%S",
         "write_and_poll_sleep": 4,
         "has_time_window": True,
-        "support_charge_freeze": False,
-        "support_discharge_freeze": False,
+        # Freeze charge and holds turn grid charging off on the Energy Storage Control Switch (Backup/Reserve - No Grid
+        # Charging): the charge slot or the Reserved SOC holds the battery (inverter.py adjust_charge_immediate)
+        "support_charge_freeze": True,
+        # Freeze Export selects Feed-in priority on the Energy Storage Control Switch (inverter.py adjust_export_immediate),
+        # which exports PV ahead of charging the battery - so PV past the export limit still reaches the battery
+        "support_feedin_first": True,
+        "support_discharge_freeze": True,
         "has_idle_time": False,
         "can_span_midnight": False,
         "charge_discharge_with_rate": False,
@@ -2609,7 +2650,8 @@ INVERTER_DEF = {
         "has_charge_enable_time": True,
         "has_discharge_enable_time": True,
         "has_target_soc": True,
-        "has_reserve_soc": False,
+        # The Battery Reserve SOC (CID 157), a floor while the component keeps the Battery Reserve bit on
+        "has_reserve_soc": True,
         "has_timed_pause": False,
         "charge_time_format": "HH:MM:SS",
         "charge_time_entity_is_option": True,
@@ -2676,9 +2718,19 @@ INVERTER_DEF = {
         "soc_units": "%",
         "num_load_entities": 1,
         "has_ge_inverter_mode": False,
-        "time_button_press": False,
+        # Slot times stage in the gateway; pressing schedule_write_button sends the complete
+        # window (and its enable) to the Hub, as on Fox. See gateway.py _commit_side().
+        "time_button_press": True,
         "clock_time_format": "%H:%M:%S",
-        "write_and_poll_sleep": 2,
+        # The hub applies register writes one at a time and a single write can take 10-20s (longer
+        # under an EMS), so re-sending every couple of seconds only queues more work ahead of the
+        # read-back. Allow each attempt 10s to verify, give up after 3, and when a control keeps
+        # failing from one cycle to the next send it once, at most every few minutes (see
+        # INVERTER_WRITE_BACKOFF_FAILURES and INVERTER_WRITE_DEGRADED_INTERVAL). Only this row sets
+        # write_max_retry/write_backoff.
+        "write_and_poll_sleep": 10,
+        "write_max_retry": 3,
+        "write_backoff": True,
         "has_time_window": True,
         "support_charge_freeze": True,
         "support_discharge_freeze": True,
@@ -2720,6 +2772,18 @@ SOLAX_SOLIS_MODES_NEW = {
     "Feed-in priority - No Grid Charging": 64,
     "Feed-in priority - No Timed Charge/Discharge": 96,
     "Feed-in priority": 98,
+}
+# FB00 firmware (Solax Modbus "Solis FB00" plugin) has no Timed Charge/Discharge bit in the switch -
+# slot enables replaced it - so its option names differ: "Self-Use" is 33 here, not 35
+SOLAX_SOLIS_MODES_FB00 = {
+    "Self-Use - No Grid Charging": 1,
+    "Backup/Reserve - No Grid Charging": 17,
+    "Self-Use": 33,
+    "Off-Grid Mode": 37,
+    "Battery Awaken": 41,
+    "Backup/Reserve": 49,
+    "Feed-in priority - No Grid Charging": 64,
+    "Feed-in priority": 96,
 }
 
 # Apps.yaml validation schema
@@ -2924,6 +2988,11 @@ APPS_SCHEMA = {
     "myenergi_enable_controls": {"type": "boolean"},
     "myenergi_poll_seconds": {"type": "integer", "zero": False},
     "myenergi_zappi_control": {"type": "boolean"},
+    "wallbox_username": {"type": "string", "empty": False},
+    "wallbox_password": {"type": "string", "empty": False},
+    "wallbox_automatic": {"type": "boolean"},
+    "wallbox_control": {"type": "boolean"},
+    "wallbox_poll_seconds": {"type": "integer", "zero": False},
     "fox_key": {"type": "string", "empty": False},
     "fox_automatic": {"type": "boolean"},
     "fox_automatic_ignore_pv": {"type": "boolean"},
@@ -2971,6 +3040,7 @@ APPS_SCHEMA = {
     "teslemetry_base_url": {"type": "string", "empty": False},
     "teslemetry_automatic": {"type": "boolean"},
     "teslemetry_tbc_control": {"type": "boolean"},
+    "teslemetry_hybrid": {"type": "boolean"},
     "teslemetry_auth_method": {"type": "string", "empty": False},
     "teslemetry_token_expires_at": {"type": "string", "empty": False},
     "teslemetry_token_hash": {"type": "string", "empty": False},
@@ -2980,10 +3050,12 @@ APPS_SCHEMA = {
     "enphase_automatic": {"type": "boolean"},
     "enphase_automatic_ignore_pv": {"type": "boolean"},
     "octopus_intelligent_slot": {"type": "sensor|sensor_list", "sensor_type": "boolean|action", "entries": "num_cars", "optional_entries": True},
+    "octopus_intelligent_planned_slot": {"type": "sensor|sensor_list", "sensor_type": "boolean", "entries": "num_cars", "optional_entries": True},
     "octopus_ready_time": {"type": "sensor|sensor_list", "sensor_type": "string", "entries": "num_cars", "optional_entries": True},
     "octopus_charge_limit": {"type": "sensor|sensor_list", "sensor_type": "float", "entries": "num_cars", "optional_entries": True},
     "octopus_slot_low_rate": {"type": "boolean"},
     "octopus_slot_max": {"type": "integer"},
+    "intelligent_dispatch_billing": {"type": "string", "empty": False},
     "octopus_saving_session_octopoints_per_penny": {"type": "integer"},
     "octopus_saving_session_min_octopoints_per_kwh": {"type": "float"},
     "octopus_saving_session_rate": {"type": "float"},
@@ -3037,11 +3109,15 @@ APPS_SCHEMA = {
     "open_meteo_forecast_max_age": {"type": "float"},
     "enable_coarse_fine_levels": {"type": "boolean"},
     "load_power_fill_enable": {"type": "boolean"},
+    "load_history_fill_enable": {"type": "boolean"},
     "load_ml_enable": {"type": "boolean"},
+    "load_ml_retrain_interval_hours": {"type": "integer", "min": 1, "max": 48},
     "gateway_device_id": {"type": "string", "empty": False},
     "gateway_mqtt_host": {"type": "string", "empty": False},
     "gateway_mqtt_port": {"type": "integer", "zero": False},
     "gateway_mqtt_token": {"type": "string", "empty": False},
+    "gateway_shared_ct": {"type": "boolean"},
+    "gateway_integrate_power": {"type": "boolean"},
     # User-maintained log/debug redaction denylist (GH#4770): literal strings to mask wherever a
     # value appears in predbat.log or a debug dump, for anything Predbat cannot recognise as a
     # credential from its own config - an MPAN or account number surfaced by a third-party HA

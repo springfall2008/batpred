@@ -24,7 +24,8 @@ import asyncio
 import os
 import subprocess
 
-from utils import collect_log_secret_values, compile_log_secret_pattern, redact_log_line
+from log_secrets import LogRedaction
+from utils import redact_log_line
 
 
 def write_git_version_marker():
@@ -183,82 +184,17 @@ if __name__ == "__main__":
     sys.exit(0)
 
 
-class Hass:
+class Hass(LogRedaction):
     """Standalone mode wrapper emulating the AppDaemon interface.
 
     Enables PredBat to run outside Home Assistant/AppDaemon with YAML
     config loading, secret management, log rotation, scheduled callbacks,
     and file change detection for development hot-reload.
+
+    log()'s credential-redaction cache lives in LogRedaction (log_secrets.py) rather
+    than here, so it carries its own state and needs nothing from this __init__
+    (GH#5169).
     """
-
-    # Sentinel distinct from None: compile_log_secret_pattern() legitimately returns None when
-    # there are no secrets configured to redact, so None alone in the cache slot can't tell
-    # "not built yet" from "built, and there is nothing to redact" - the latter would otherwise
-    # rebuild (recompute the value set, recompile) on every single log() call instead of caching.
-    _LOG_SECRET_PATTERN_UNSET = object()
-
-    def _invalidate_log_secret_pattern(self):
-        """
-        Mark the cached redaction pattern stale so the next log() call rebuilds it from the
-        current args/secrets (GH#4770). Every call site that mutates self.args or self.secrets
-        after startup must call this - see _log_secret_pattern()'s docstring for why a missed
-        site is a real leak, not just a staleness bug.
-        """
-        with self._log_secret_pattern_lock:
-            self._log_secret_pattern_cache = self._LOG_SECRET_PATTERN_UNSET
-
-    def _log_secret_fingerprint(self):
-        """
-        A cheap value that changes whenever the set of credentials in args/secrets could have.
-
-        Deliberately not a hash of every value: this runs under the lock on the way to each
-        rebuild decision, so it stays O(number of top-level keys). Identity of the args and
-        secrets mappings plus their sizes catches the shapes a config mutation takes - a key
-        added or removed (size), and the whole mapping being replaced or rebound (identity), as
-        web.py's batch editor does via clear()/update() and web_chat.py does by assigning a new
-        block.
-
-        An in-place edit of an existing key that keeps the size the same is NOT caught here, so
-        the explicit _invalidate_log_secret_pattern() call sites remain load-bearing. This is a
-        safety net under them, not a replacement: with it, a missed or mis-ordered call site
-        degrades to "redacted from the next line" instead of "leaks until the next restart",
-        which is the failure mode successive reviews of this PR kept finding one call site at a
-        time. GH#5063 tracks removing the contract itself by routing every args mutation through
-        one setter (#5053 review).
-        """
-        args = getattr(self, "args", None)
-        secrets = getattr(self, "secrets", None)
-        return (id(args), len(args) if isinstance(args, dict) else -1, id(secrets), len(secrets) if isinstance(secrets, dict) else -1)
-
-    def _log_secret_pattern(self):
-        """
-        Return the cached compiled redaction pattern log() must apply, rebuilding it the first
-        time it is needed and whenever load_secrets()/apps.yaml load invalidate it (GH#4770).
-
-        Cached rather than recomputed on every log() call: log() runs on every log line, while
-        args/secrets only change on startup and on a config reload, so rebuilding the value set
-        and recompiling the pattern that rarely - rather than on every call - keeps the
-        redaction check to a single compiled-regex scan per line on the hot path.
-
-        Guarded by a lock, not just the sentinel check: log() runs from component threads as well
-        as the main thread (create_task()), so two threads can both observe the sentinel and race
-        to rebuild. Without the lock, a thread that started building from stale args right before
-        another thread invalidates the cache (a credential just added via set_arg()) can finish
-        second and overwrite the fresh invalidation with its stale, already-out-of-date pattern -
-        silently keeping the just-added credential unredacted until something invalidates the
-        cache again. The lock makes "read sentinel, build, store" one atomic step so a build that
-        started before an invalidation can never win a race against it.
-        """
-        with self._log_secret_pattern_lock:
-            fingerprint = self._log_secret_fingerprint()
-            if self._log_secret_pattern_cache is self._LOG_SECRET_PATTERN_UNSET or fingerprint != self._log_secret_pattern_fingerprint:
-                args = getattr(self, "args", None)
-                redact_strings = args.get("redact_strings") if args else None
-                redact_strings_labelled = args.get("redact_strings_labelled") if args else None
-                values = collect_log_secret_values(args, getattr(self, "secrets", None), redact_strings, redact_strings_labelled)
-                self._log_secret_pattern_cache = compile_log_secret_pattern(values)
-                self._log_secret_pattern_fingerprint = fingerprint
-            return self._log_secret_pattern_cache
 
     def log(self, msg, quiet=True):
         """
@@ -338,9 +274,6 @@ class Hass:
         self.threads = []
         self.fatal_error = False
         self.hass_api_version = 2
-        self._log_secret_pattern_lock = threading.Lock()
-        self._log_secret_pattern_cache = self._LOG_SECRET_PATTERN_UNSET
-        self._log_secret_pattern_fingerprint = None
 
         self.logfile = open("predbat.log", "a")
 
