@@ -263,17 +263,26 @@ recorder:
     domains:
       - predbat
       - predheat
+    entity_globs:
+      # Exclude Octopus Integration and Predbat Kraken sensors, Predbat only needs the current record
+      - sensor.octopus_energy_*_octoplus_points
+      - sensor.octopus_energy_electricity_*_rate
+      - sensor.predbat_octopus_*
+      - sensor.predbat_kraken_*
+      - binary_sensor.predbat_kraken_*
     entities:
       - sensor.predbat_load_ml_forecast
-      - sensor.predbat_pv_tomorrow
-      - sensor.predbat_pv_forecast_raw
       - sensor.predbat_pv_d2
       - sensor.predbat_pv_d3
+      - sensor.predbat_pv_forecast_raw
+      - sensor.predbat_pv_tomorrow
       - sensor.predbat_temperature
   include:
-    entity_globs: #The history of these entities is used by Predbat's Compare tab
+    entity_globs: 
+      #The history of these entities are used by Predbat's Compare tab
       - predbat.compare_tariff_*
-    entities: #The history of these entities is used by Predbat
+    entities: 
+      #The history of these entities are used by Predbat
       - predbat.car_charging_power
       - predbat.carbon_today
       - predbat.cost_today
