@@ -255,7 +255,6 @@ geserial
 geseriale
 getaffinity
 getall
-getattr
 getrusage
 Ginlong
 githubusercontent
