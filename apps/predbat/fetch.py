@@ -1209,6 +1209,32 @@ class Fetch:
 
         self.log_replay_changed("replay_rates_signature", lambda: hash(tuple(tuple(sorted((rates or {}).items())) for _, rates in series)), build, "rates")
 
+    def log_replay_dispatch_minutes(self):
+        """Log the minutes marked as Octopus Intelligent dispatches (io_adjusted) whenever they change.
+
+        The PV10 scenario assumes a planned dispatch more than half an hour away may be taken away, and finds those
+        minutes in io_adjusted, which the rates line does not carry. Without it a replay kept the yaml's dispatches and
+        its PV10 scenario drifted from live's once a new dispatch was planned. Logged as [minutes from now, length] for
+        each run of marked minutes. Never raises - this runs every cycle on the main loop.
+        """
+
+        def runs():
+            """The marked minutes as [start, length] runs, in order."""
+            out = []
+            for minute in sorted(minute for minute, marked in (self.io_adjusted or {}).items() if marked):
+                if out and minute == out[-1][0] + out[-1][1]:
+                    out[-1][1] += 1
+                else:
+                    out.append([minute, 1])
+            return out
+
+        def build():
+            """The dispatch line: each run of marked minutes as [minutes from now, length]."""
+            start = self.minutes_now
+            return "Replay input: dispatch minutes changed, from {} {}".format(self.replay_clock(start), [[minute - start, length] for minute, length in runs()])
+
+        self.log_replay_changed("replay_dispatch_signature", lambda: hash(tuple(tuple(run) for run in runs())), build, "dispatch minutes")
+
     def log_replay_rate_sessions(self):
         """Log which minutes a saving, free or Axle session priced, and each one's tariff rate beneath, whenever they change.
 
@@ -1747,6 +1773,7 @@ class Fetch:
         if save:
             self.log_replay_rates()
             self.log_replay_rate_sessions()
+            self.log_replay_dispatch_minutes()
 
         # Set rate thresholds
         if self.rate_import or self.rate_export:

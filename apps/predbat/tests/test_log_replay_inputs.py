@@ -9,6 +9,7 @@ from datetime import timedelta
 SAVED = (
     "midnight_utc",
     "rate_import_saving_minutes",
+    "io_adjusted",
     "rate_export_saving_minutes",
     "rate_import_pre_saving",
     "rate_export_pre_saving",
@@ -283,6 +284,29 @@ def test_rate_sessions_logged_on_change(my_predbat):
     return 0
 
 
+def test_dispatch_minutes_logged_on_change(my_predbat):
+    """The minutes marked as Intelligent dispatches are logged as runs from now when they change, so a replay's PV10
+    scenario can treat a planned dispatch as one that may be taken away, as live does."""
+    my_predbat.minutes_now = 19 * 60 + 35
+    my_predbat.replay_dispatch_signature = None
+    my_predbat.io_adjusted = {minute: True for minute in list(range(22 * 60, 23 * 60)) + list(range(25 * 60, 25 * 60 + 30))}
+    my_predbat.io_adjusted[60] = False
+    lines = capture(my_predbat, my_predbat.log_replay_dispatch_minutes)
+    expected = "Replay input: dispatch minutes changed, from 19:35 [[145, 60], [325, 30]]"
+    if lines != [expected]:
+        print("ERROR: dispatch minutes line wrong:\n  got      {}\n  expected {}".format(lines, expected))
+        return 1
+    if capture(my_predbat, my_predbat.log_replay_dispatch_minutes):
+        print("ERROR: unchanged dispatch minutes should not be logged again")
+        return 1
+    my_predbat.io_adjusted = {}
+    lines = capture(my_predbat, my_predbat.log_replay_dispatch_minutes)
+    if lines != ["Replay input: dispatch minutes changed, from 19:35 []"]:
+        print("ERROR: dispatches going away should be logged as empty: {}".format(lines))
+        return 1
+    return 0
+
+
 def test_unchanged_inputs_logged_each_new_day(my_predbat):
     """Inputs keyed from midnight are logged again on a new day even when they match yesterday's, as a fixed tariff does.
 
@@ -422,11 +446,13 @@ def test_logging_never_raises(my_predbat):
     my_predbat.charge_window = [{"start": object()}]
     my_predbat.replay_rate_sessions_signature = None
     my_predbat.rate_import_saving_minutes = {"bad", 1}
+    my_predbat.replay_dispatch_signature = None
+    my_predbat.io_adjusted = {"bad": True, 1: True}
     lines = capture(my_predbat, my_predbat.log_replay_pv_forecast) + capture(my_predbat, my_predbat.log_replay_load_forecast)
     lines += capture(my_predbat, my_predbat.log_replay_rates) + capture(my_predbat, my_predbat.log_replay_state) + capture(my_predbat, my_predbat.log_replay_cars)
-    lines += capture(my_predbat, my_predbat.log_replay_inverter) + capture(my_predbat, my_predbat.log_replay_rate_sessions)
-    if len(lines) != 7 or not all(line.startswith("Warn:") for line in lines):
-        print("ERROR: expected seven warnings, got {}".format(lines))
+    lines += capture(my_predbat, my_predbat.log_replay_inverter) + capture(my_predbat, my_predbat.log_replay_rate_sessions) + capture(my_predbat, my_predbat.log_replay_dispatch_minutes)
+    if len(lines) != 8 or not all(line.startswith("Warn:") for line in lines):
+        print("ERROR: expected eight warnings, got {}".format(lines))
         return 1
     return 0
 
@@ -498,7 +524,7 @@ def test_comparison_runs_not_logged(my_predbat):
 def run_log_replay_inputs_tests(my_predbat):
     """Run the replay-input logging tests, restoring the shared fixture afterwards."""
     missing = object()
-    saved = {key: getattr(my_predbat, key, missing) for key in SAVED + ("replay_pv_signature", "replay_ml_signature", "replay_rates_signature", "replay_rate_sessions_signature", "replay_cars_text", "replay_inverter_text", "replay_load_empty", "replay_baseline_text")}
+    saved = {key: getattr(my_predbat, key, missing) for key in SAVED + ("replay_pv_signature", "replay_ml_signature", "replay_rates_signature", "replay_rate_sessions_signature", "replay_dispatch_signature", "replay_cars_text", "replay_inverter_text", "replay_load_empty", "replay_baseline_text")}
     failed = 0
     try:
         failed += test_pv_forecast_logged_on_change(my_predbat)
@@ -508,6 +534,7 @@ def run_log_replay_inputs_tests(my_predbat):
         failed += test_load_forecast_compact(my_predbat)
         failed += test_rates_logged_on_change(my_predbat)
         failed += test_rate_sessions_logged_on_change(my_predbat)
+        failed += test_dispatch_minutes_logged_on_change(my_predbat)
         failed += test_unchanged_inputs_logged_each_new_day(my_predbat)
         failed += test_state_logged(my_predbat)
         failed += test_cars_logged_on_change(my_predbat)
