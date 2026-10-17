@@ -465,6 +465,24 @@ def test_redact_braced_spans():
     assert redact_braced_spans("a {b {c} d} e") == "a {...} e"
     assert redact_braced_spans("value {'password': 'hunter2'") == "value {...}"
     assert redact_braced_spans("no braces") == "no braces"
+    # A brace, quote or backslash inside a quoted credential must not end the span early (#5583 review)
+    assert redact_braced_spans("value {'password': 'prefix}example-secret'} tail") == "value {...} tail"
+    assert redact_braced_spans('value {"password": "a\\"}b"} tail') == "value {...} tail"
+    assert redact_braced_spans("value {'password': \"it's}\"} tail") == "value {...} tail"
+    assert redact_braced_spans("value {'password': 'ab\\\\'} tail") == "value {...} tail"
+    assert redact_braced_spans("value {'password': 'never closed} tail") == "value {...}"
+
+
+def test_summarise_token_errors_scrubs_submitted_secrets():
+    """A submitted credential is removed verbatim even when Kraken echoes it in a shape the brace matching misreads."""
+    from kraken_auth_mixin import summarise_token_errors
+
+    errors = [{"message": "got invalid value {password: ab}cd} for input", "extensions": {"errorCode": "KT-CT-0000"}}]
+    # Unquoted, the brace matching alone closes at the first "}" and would leak the rest of the credential
+    assert "cd" in summarise_token_errors(errors)
+    summary = summarise_token_errors(errors, ["ab}cd"])
+    assert summary == "KT-CT-0000: got invalid value {...} for input", summary
+    assert "cd" not in summary
 
 
 def test_token_request_http_400_logs_redacted_reason():
@@ -487,12 +505,13 @@ def test_token_request_http_400_logs_redacted_reason():
 
 def test_token_request_graphql_rejection_logs_redacted_reason():
     """A 200 response carrying GraphQL errors (a rejected credential) is logged rather than dropped silently (#5582)."""
-    error_body = {"errors": [{"message": "Invalid data {'password': 'hunter2'}.", "extensions": {"errorCode": "KT-CT-1138"}}]}
+    # Echoed unquoted, with a brace inside the password: only the submitted-secret scrub stops "ter2" leaking
+    error_body = {"errors": [{"message": "Invalid data {password: hun}ter2}.", "extensions": {"errorCode": "KT-CT-1138"}}]}
     mixin, mock_session = make_http_mixin(200, "", json_data=error_body)
     with patch("aiohttp.ClientSession", return_value=mock_session):
-        result = asyncio.run(mixin._kraken_token_request({"email": "me@example.com", "password": "hunter2"}))
+        result = asyncio.run(mixin._kraken_token_request({"email": "me@example.com", "password": "hun}ter2"}))
 
     assert result is None
     logged = " ".join(str(c.args[0]) for c in mixin.log.call_args_list)
     assert "KT-CT-1138: Invalid data {...}." in logged, logged
-    assert "hunter2" not in logged, logged
+    assert "ter2" not in logged and "hun" not in logged, logged

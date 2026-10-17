@@ -1260,6 +1260,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                 "charge_point_power_in_kw": existing.get("charge_point_power_in_kw"),
                 "planned_dispatches": existing.get("planned_dispatches", []),
                 "completed_dispatches": existing.get("completed_dispatches", []),
+                "dispatches_fetched_at": existing.get("dispatches_fetched_at"),
             }
 
         added = sorted(set(live) - set(self.intelligent_devices))
@@ -1334,8 +1335,9 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         completed dispatches merge with the cached history so metered charging is retained across
         the API's rolling window and restarts.
 
-        Returns True if at least one device's dispatches were fetched; a device whose query failed
-        keeps its cached lists.
+        Returns True if at least one device's dispatches were fetched. Each device records its own
+        dispatches_fetched_at (published as an attribute), so a device whose query failed keeps its
+        cached lists and its old timestamp even when another device refreshed.
         """
         fetched = False
         for device_id, device in self.intelligent_devices.items():
@@ -1346,6 +1348,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             if data is None:
                 continue
             fetched = True
+            device["dispatches_fetched_at"] = datetime.now(timezone.utc).isoformat()
             device["planned_dispatches"] = self._normalize_dispatches(data.get("flexPlannedDispatches"), completed=False)
             new_completed = self._normalize_dispatches(data.get("completedDispatches"), completed=True)
             device["completed_dispatches"] = self._merge_completed_dispatches(device.get("completed_dispatches", []), new_completed)
@@ -1362,7 +1365,6 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         if not self.intelligent_devices:
             return
         now = datetime.now(timezone.utc)
-        fetched_at = self.dispatch_fetched_at
         slot_list = []
         for device_id, device in self.intelligent_devices.items():
             index_suffix = self._device_index_suffix(device_id)
@@ -1379,8 +1381,6 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                     break
 
             attributes = {"friendly_name": "Kraken Intelligent Dispatches", "icon": "mdi:flash", **device}
-            # The sensor is republished from cache when a fetch fails, so say how old the dispatches are
-            attributes["dispatches_fetched_at"] = fetched_at.isoformat() if isinstance(fetched_at, datetime) else fetched_at
             self.dashboard_item(entity, "on" if active else "off", attributes=attributes, app="kraken")
 
         # Wire the dispatch sensors so predbat treats them as car-charging slots (like Octopus IOG),

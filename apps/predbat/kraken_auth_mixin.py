@@ -28,24 +28,43 @@ def redact_braced_spans(text):
     """Replace every {...} span (nested or unterminated) with a placeholder.
 
     Kraken echoes the submitted mutation input inside braces when it rejects it, and that input
-    holds the password or API key, so nothing between braces may reach the log.
+    holds the password or API key, so nothing between braces may reach the log. Quoted strings
+    inside a span are skipped whole, escapes included, so a brace or quote inside a credential
+    cannot end the span early; anything left unterminated is hidden to the end of the text.
     """
     out = []
     depth = 0
+    quote = None
+    escaped = False
     for char in text:
-        if char == "{":
-            if depth == 0:
+        if depth == 0:
+            if char == "{":
                 out.append("{...}")
+                depth = 1
+            else:
+                out.append(char)
+        elif quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+        elif char in ("'", '"'):
+            quote = char
+        elif char == "{":
             depth += 1
-        elif char == "}" and depth:
+        elif char == "}":
             depth -= 1
-        elif depth == 0:
-            out.append(char)
     return "".join(out)
 
 
-def summarise_token_errors(errors):
-    """Return a log-safe 'CODE: message' summary of obtainKrakenToken GraphQL errors, with submitted input redacted."""
+def summarise_token_errors(errors, secrets=()):
+    """Return a log-safe 'CODE: message' summary of obtainKrakenToken GraphQL errors, with submitted input redacted.
+
+    Each value in secrets (the submitted credentials) is removed verbatim before the brace redaction,
+    so a credential still cannot leak if Kraken echoes it in a shape the brace matching misreads.
+    """
     if not isinstance(errors, list):
         return None
     parts = []
@@ -54,7 +73,11 @@ def summarise_token_errors(errors):
             continue
         extensions = error.get("extensions")
         code = extensions.get("errorCode") if isinstance(extensions, dict) else None
-        message = redact_braced_spans(str(error.get("message") or "")).strip()
+        message = str(error.get("message") or "")
+        for secret in secrets:
+            if secret:
+                message = message.replace(secret, "***")
+        message = redact_braced_spans(message).strip()
         parts.append(f"{code}: {message}" if code else message)
     summary = "; ".join(part for part in parts if part)
     return summary[:TOKEN_ERROR_SUMMARY_MAX_CHARS] or None
@@ -199,6 +222,7 @@ class KrakenAuthMixin:
             }
         }"""
         url = f"{self.base_url}/v1/graphql/"
+        secrets = [str(value) for value in input_vars.values() if value]
         try:
             timeout = aiohttp.ClientTimeout(total=30)
             async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -218,7 +242,7 @@ class KrakenAuthMixin:
                             # A GraphQL error body says why (e.g. a schema rejection of the email
                             # login) but echoes the input, so log only the redacted summary.
                             try:
-                                summary = summarise_token_errors(json.loads(body).get("errors"))
+                                summary = summarise_token_errors(json.loads(body).get("errors"), secrets)
                             except (ValueError, AttributeError):
                                 summary = None
                             detail = f": {summary}" if summary else ""
@@ -229,7 +253,7 @@ class KrakenAuthMixin:
             return None
 
         if data.get("errors"):
-            summary = summarise_token_errors(data.get("errors"))
+            summary = summarise_token_errors(data.get("errors"), secrets)
             self.log(f"Warn: Kraken: Token request rejected{': ' + summary if summary else ''}")
             return None
 

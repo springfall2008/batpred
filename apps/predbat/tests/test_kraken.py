@@ -2168,7 +2168,7 @@ def test_run_failed_dispatch_fetch_is_not_a_refresh():
     api.rates_fetched_at = datetime.now()
     stale = datetime.now() - timedelta(minutes=KRAKEN_DISPATCH_REFRESH_MINUTES + 30)
     api.dispatch_fetched_at = stale
-    api.intelligent_devices = {"dev-1": {"device_id": "dev-1", "planned_dispatches": [], "completed_dispatches": []}}
+    api.intelligent_devices = {"dev-1": {"device_id": "dev-1", "planned_dispatches": [], "completed_dispatches": [], "dispatches_fetched_at": "2026-10-16T09:00:00+00:00"}}
     api.async_graphql_query = AsyncMock(return_value=None)  # e.g. "Auth not available for dispatches"
     api.save_kraken_cache = AsyncMock()
     api.dashboard_item = MagicMock()
@@ -2184,7 +2184,7 @@ def test_run_failed_dispatch_fetch_is_not_a_refresh():
     # The cached dispatches are still published, carrying their real age
     entity = api.get_entity_name("binary_sensor", "intelligent_dispatch_1")
     call = [c for c in api.dashboard_item.call_args_list if c.args[0] == entity][0]
-    assert call.kwargs["attributes"]["dispatches_fetched_at"] == stale.isoformat()
+    assert call.kwargs["attributes"]["dispatches_fetched_at"] == "2026-10-16T09:00:00+00:00"
 
 
 def test_run_account_status_publishes_failure_counts():
@@ -2208,3 +2208,36 @@ def test_run_account_status_publishes_failure_counts():
     call = [c for c in api.dashboard_item.call_args_list if c.args[0] == entity][0]
     assert call.kwargs["attributes"]["requests_total"] == 7
     assert call.kwargs["attributes"]["failures_total"] == 3
+
+
+def test_fetch_dispatches_stamps_only_the_devices_that_refreshed():
+    """With one device's query failing, only the device that refreshed gets a new dispatches_fetched_at (#5583 review)."""
+    api = make_kraken_api()
+    old_stamp = "2026-10-16T09:00:00+00:00"
+    api.intelligent_devices = {
+        "dev-ok": {"device_id": "dev-ok", "planned_dispatches": [], "completed_dispatches": [], "dispatches_fetched_at": old_stamp},
+        "dev-bad": {"device_id": "dev-bad", "planned_dispatches": [{"start": "s", "end": "e"}], "completed_dispatches": [], "dispatches_fetched_at": old_stamp},
+    }
+
+    async def query(query_text, request_context):
+        if "dev-bad" in query_text:
+            return None
+        return {"flexPlannedDispatches": [], "completedDispatches": []}
+
+    api.async_graphql_query = AsyncMock(side_effect=query)
+
+    assert asyncio.run(api.async_fetch_dispatches()) is True
+    assert api.intelligent_devices["dev-ok"]["dispatches_fetched_at"] != old_stamp
+    assert api.intelligent_devices["dev-bad"]["dispatches_fetched_at"] == old_stamp, "a failed device must keep its own old timestamp"
+    assert api.intelligent_devices["dev-bad"]["planned_dispatches"] == [{"start": "s", "end": "e"}]
+
+
+def test_discover_smart_devices_keeps_dispatches_fetched_at():
+    """Rediscovery rebuilds each device dict but must carry its dispatches_fetched_at across (#5583 review)."""
+    api = make_kraken_api()
+    api.intelligent_devices = {"dev-1": {"device_id": "dev-1", "planned_dispatches": [], "completed_dispatches": [], "dispatches_fetched_at": "2026-10-16T09:00:00+00:00"}}
+    api.async_graphql_query = AsyncMock(return_value={"devices": [{"id": "dev-1", "deviceType": "ELECTRIC_VEHICLES", "status": {"current": "LIVE"}, "__typename": "SmartFlexVehicle"}]})
+
+    asyncio.run(api.async_discover_smart_devices())
+
+    assert api.intelligent_devices["dev-1"]["dispatches_fetched_at"] == "2026-10-16T09:00:00+00:00"
