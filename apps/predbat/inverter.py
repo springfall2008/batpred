@@ -325,7 +325,11 @@ class Inverter:
         Create a missing inverter argument which will be assigned to a dummy entity
         """
         if (arg not in self.base.args) or (not isinstance(self.base.args[arg], list)):
-            self.base.args[arg] = [default, default, default, default]
+            # Padded with None rather than the default, for the same reason as the short-list branch
+            # below: the caller overwrites [self.id] with its dummy entity straight afterwards, so a
+            # bare default left in another inverter's slot reads back as "configured" there too - and
+            # rate_controls() then takes a sibling's default number for a bound entity (#5359)
+            self.base.args[arg] = [default if i == self.id else None for i in range(4)]
         elif len(self.base.args[arg]) <= self.id:
             # A list that stops short of this inverter is just as missing for it as no list at all,
             # and every caller assigns into [self.id] straight afterwards - so a short one raised
