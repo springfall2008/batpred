@@ -13,6 +13,7 @@ GivTCP, and an InverterRestState to hold the snapshot - the same stand-in GivTCP
 """
 
 import copy
+import json
 
 from givtcp_rest import GivTCPRest, InverterRestState
 from const import INVERTER_MAX_RETRY_REST
@@ -641,6 +642,193 @@ def test_transport_success_paths(my_predbat=None):
     return 1 if failed else 0
 
 
+def _captured(name):
+    """A captured /readData response from coverage/cases. Callers mutate their own copy."""
+    with open("cases/{}.json".format(name), "r") as handle:
+        return json.load(handle)
+
+
+def test_inverter_details_prefers_named_blocks(my_predbat=None):
+    """
+    Invertor_Details and the raw-serial key still win when another details-shaped block is present.
+
+    The fallback scans every top-level dict. It must not run once either of the existing lookups
+    has already named a block, or a second Invertor_Serial_Number anywhere in the snapshot would
+    make a previously valid v2 or v3 capture look ambiguous and return {}.
+    """
+    failed = False
+    print("**** Testing named inverter details keep precedence over other candidate blocks ****")
+
+    def check(what, got, expected):
+        """Compare one details result against the block the named lookup should have returned."""
+        nonlocal failed
+        if got is not expected:
+            print("ERROR: {} resolved {!r}, expected the named block".format(what, got if not isinstance(got, dict) else got.get("Invertor_Serial_Number")))
+            failed = True
+
+    v2 = _captured("rest_v2")
+    v2["Unrelated"] = {"Invertor_Serial_Number": "ZZ9999", "Invertor_Time": "2000-01-01T00:00:00+00:00", "Battery_Capacity_kWh": 1.0}
+    _base, state, _transport, client = _client([v2], rest_data=v2)
+    check("v2 Invertor_Details", client.inverter_details(), state.rest_data["Invertor_Details"])
+    if client.inverter_time() != "2024-12-30T15:32:38+00:00" or client.battery_capacity_kwh() == 1.0:
+        print("ERROR: v2 readers did not stay on Invertor_Details, time {} capacity {}".format(client.inverter_time(), client.battery_capacity_kwh()))
+        failed = True
+
+    v3 = _captured("rest_v3")
+    v3["Unrelated"] = {"Invertor_Serial_Number": "ZZ9999", "Invertor_Time": "2000-01-01T00:00:00+00:00", "Battery_Capacity_kWh": 1.0}
+    _base, state, _transport, client = _client([v3], rest_data=v3)
+    check("v3 raw serial", client.inverter_details(), state.rest_data["EA2303G082"])
+    if client.inverter_time() != "2024-12-30T13:07:22+00:00" or client.battery_capacity_kwh() == 1.0:
+        print("ERROR: v3 readers did not stay on the raw-serial block, time {} capacity {}".format(client.inverter_time(), client.battery_capacity_kwh()))
+        failed = True
+
+    if not failed:
+        print("PASS: named inverter details keep precedence over other candidate blocks")
+    return 1 if failed else 0
+
+
+def test_inverter_details_recovers_a_unique_block_when_the_raw_serial_fails(my_predbat=None):
+    """
+    A null, missing or unmatched raw serial still resolves the one block that names its serial.
+
+    That is the #5334 gateway shape: the top-level details dict is intact, but
+    raw.invertor.serial_number cannot be used as its key. Clock and capacity have to come
+    back off that block, because those readers have no other source.
+    """
+    failed = False
+    print("**** Testing a unique details block is recovered when the raw serial cannot name it ****")
+
+    cases = ("null", "missing", "unmatched")
+    for label in cases:
+        data = _captured("rest_v3")
+        invertor = data["raw"]["invertor"]
+        if label == "null":
+            invertor["serial_number"] = None
+        elif label == "missing":
+            del invertor["serial_number"]
+        else:
+            # Present, but not the key of the details block, so the raw-serial lookup misses.
+            invertor["serial_number"] = "ZZ9999"
+        _base, state, _transport, client = _client([data], rest_data=data)
+        try:
+            details = client.inverter_details()
+        except Exception as exc:
+            print("ERROR: {} raw serial raised {}".format(label, exc))
+            failed = True
+            continue
+        if details is not state.rest_data["EA2303G082"]:
+            print("ERROR: {} raw serial resolved {!r}, expected the EA2303G082 block".format(label, details if not isinstance(details, dict) else details.get("Invertor_Serial_Number")))
+            failed = True
+            continue
+        if client.inverter_time() != "2024-12-30T13:07:22+00:00":
+            print("ERROR: {} raw serial clock was {!r}".format(label, client.inverter_time()))
+            failed = True
+        if client.battery_capacity_kwh() != 9.52:
+            print("ERROR: {} raw serial capacity was {!r}".format(label, client.battery_capacity_kwh()))
+            failed = True
+        if client.max_battery_rate() != 3600:
+            print("ERROR: {} raw serial max battery rate was {!r}".format(label, client.max_battery_rate()))
+            failed = True
+        if client.inverter_type() != "Gen2 Hybrid":
+            print("ERROR: {} raw serial model was {!r}".format(label, client.inverter_type()))
+            failed = True
+
+    if not failed:
+        print("PASS: a unique details block is recovered when the raw serial cannot name it")
+    return 1 if failed else 0
+
+
+def test_inverter_details_rejects_ambiguous_candidates(my_predbat=None):
+    """
+    The fallback accepts one clear block and refuses to guess.
+
+    Scalars and lists are not candidates, even when a list holds a dict that looks like details.
+    No candidate, two serials, and two time blocks all return {}. Two serials must not then
+    fall through to a lone time block.
+    """
+    failed = False
+    print("**** Testing ambiguous inverter details are refused and a single time block is kept ****")
+
+    def resolve(blob):
+        """Read inverter_details() for one synthetic snapshot, recording a raise as a failure.
+
+        The client deep-copies the snapshot, so identity is checked against that copy.
+        """
+        nonlocal failed
+        _base, state, _transport, client = _client([blob], rest_data=blob)
+        try:
+            return client.inverter_details(), state.rest_data
+        except Exception as exc:
+            print("ERROR: inverter_details() raised {}: {}".format(type(exc).__name__, exc))
+            failed = True
+            return None, None
+
+    only_time = {
+        "count": 4,
+        "label": "ignored",
+        "flags": [{"Invertor_Serial_Number": "NESTED", "Invertor_Time": "1999-01-01T00:00:00+00:00", "Battery_Capacity_kWh": 1.0}],
+        "Control": {"Mode": "Eco"},
+        "raw": {"invertor": {"serial_number": None}},
+        "OnlyClock": {"Invertor_Time": "2024-12-30T13:07:22+00:00", "Battery_Capacity_kWh": 8.25},
+    }
+    got, data = resolve(only_time)
+    if data is None or got is not data["OnlyClock"]:
+        print("ERROR: the only Invertor_Time dict was not used, got {!r}".format(None if not isinstance(got, dict) else got.get("Battery_Capacity_kWh")))
+        failed = True
+
+    # An empty serial is not a serial, so the remaining time dict is still the one candidate.
+    blank_serial = {
+        "Blank": {"Invertor_Serial_Number": "", "Battery_Capacity_kWh": 1.0},
+        "OnlyClock": {"Invertor_Serial_Number": None, "Invertor_Time": "2024-12-30T13:07:22+00:00", "Battery_Capacity_kWh": 8.25},
+        "raw": {"invertor": {}},
+    }
+    got, data = resolve(blank_serial)
+    if data is None or got is not data["OnlyClock"]:
+        print("ERROR: an empty serial was treated as identifying a block, got {!r}".format(got))
+        failed = True
+
+    # One real serial wins even when another dict only has a clock.
+    one_serial = {
+        "Named": {"Invertor_Serial_Number": "EA2303G082", "Invertor_Time": "2024-12-30T13:07:22+00:00", "Battery_Capacity_kWh": 9.52},
+        "ClockOnly": {"Invertor_Time": "1999-01-01T00:00:00+00:00", "Battery_Capacity_kWh": 1.0},
+    }
+    got, data = resolve(one_serial)
+    if data is None or got is not data["Named"]:
+        print("ERROR: the unique serial block lost to a time-only block, got {!r}".format(got))
+        failed = True
+
+    none = {"count": 1, "flags": [{"Invertor_Time": "2024-12-30T13:07:22+00:00", "Invertor_Serial_Number": "HIDDEN"}], "Control": {"Mode": "Eco"}}
+    got, _data = resolve(none)
+    if got != {}:
+        print("ERROR: a snapshot with no top-level details dict did not return {{}}")
+        failed = True
+
+    ambiguous_serial = {
+        "A": {"Invertor_Serial_Number": "AAA", "Invertor_Time": "2024-01-01T00:00:00+00:00", "Battery_Capacity_kWh": 1.0},
+        "B": {"Invertor_Serial_Number": "BBB", "Invertor_Time": "2024-06-01T00:00:00+00:00", "Battery_Capacity_kWh": 2.0},
+        "C": {"Invertor_Time": "2024-12-30T13:07:22+00:00", "Battery_Capacity_kWh": 9.52},
+    }
+    got, _data = resolve(ambiguous_serial)
+    if got != {}:
+        print("ERROR: two serial blocks fell through or picked one")
+        failed = True
+
+    ambiguous_time = {
+        "A": {"Invertor_Time": "2024-01-01T00:00:00+00:00", "Battery_Capacity_kWh": 1.0},
+        "B": {"Invertor_Time": "2024-06-01T00:00:00+00:00", "Battery_Capacity_kWh": 2.0},
+        "count": 2,
+        "flags": [1],
+    }
+    got, _data = resolve(ambiguous_time)
+    if got != {}:
+        print("ERROR: two Invertor_Time blocks were not refused")
+        failed = True
+
+    if not failed:
+        print("PASS: ambiguous inverter details are refused and a single time block is kept")
+    return 1 if failed else 0
+
+
 def run_givtcp_rest_tests(my_predbat):
     """Run every GivTCPRest test, returning a non-zero count on failure."""
     failed = 0
@@ -655,4 +843,7 @@ def run_givtcp_rest_tests(my_predbat):
     failed += test_readers_return_nothing_without_a_snapshot(my_predbat)
     failed += test_reader_edge_cases(my_predbat)
     failed += test_transport_success_paths(my_predbat)
+    failed += test_inverter_details_prefers_named_blocks(my_predbat)
+    failed += test_inverter_details_recovers_a_unique_block_when_the_raw_serial_fails(my_predbat)
+    failed += test_inverter_details_rejects_ambiguous_candidates(my_predbat)
     return failed
