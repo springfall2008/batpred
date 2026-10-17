@@ -1545,6 +1545,54 @@ def undo_control_monitor_exporting(my_predbat, saved):
         inverter.discharge_end_time_minutes = end
 
 
+def test_control_monitor_expectation_after_start_service(my_predbat):
+    """
+    With a {power} start service the immediate calls are queued until after the rates are set
+    (#5252); each inverter's Charging expectation is only recorded once its start call has been
+    made, so the slot's grace period starts from the command rather than before it.
+    """
+    saved_monitor = my_predbat.control_monitor
+    my_predbat.control_monitor = ControlMonitor()
+    events = []
+    real_set_expectation = my_predbat.control_monitor.set_expectation
+
+    def record_set_expectation(inverter_id, *args, **kwargs):
+        """Note the expectation, then record it as normal."""
+        events.append(("expectation", inverter_id))
+        return real_set_expectation(inverter_id, *args, **kwargs)
+
+    def wrap_charge_immediate(inverter):
+        """Note this inverter's charge start call, then make it as normal."""
+        real_call = inverter.adjust_charge_immediate
+
+        def record_charge_immediate(target_soc, freeze=False):
+            """Note the call, then make it."""
+            events.append(("charge_immediate", inverter.id))
+            return real_call(target_soc, freeze=freeze)
+
+        return record_charge_immediate
+
+    my_predbat.control_monitor.set_expectation = record_set_expectation
+    for inverter in my_predbat.inverters:
+        inverter.adjust_charge_immediate = wrap_charge_immediate(inverter)
+    failed = False
+    try:
+        if control_monitor_charging_scenario(my_predbat, "control_monitor_after_start_service"):
+            return True
+        for inverter in my_predbat.inverters:
+            call = ("charge_immediate", inverter.id)
+            expectation = ("expectation", inverter.id)
+            if call not in events or expectation not in events or events.index(call) > events.index(expectation):
+                print("ERROR: inverter {} expectation recorded before its start call: {}".format(inverter.id, events))
+                failed = True
+    finally:
+        my_predbat.control_monitor = saved_monitor
+        for inverter in my_predbat.inverters:
+            # Drop the instance wrapper so the class method is used again
+            del inverter.adjust_charge_immediate
+    return failed
+
+
 def test_control_monitor_exporting_expectation(my_predbat):
     """Exporting sets an Exporting expectation, with the discharge rate written recorded on the inverter."""
     saved_monitor = my_predbat.control_monitor
@@ -5054,6 +5102,7 @@ def run_execute_tests(my_predbat):
 
     for control_monitor_test in (
         test_control_monitor_charging_counts_once,
+        test_control_monitor_expectation_after_start_service,
         test_control_monitor_exporting_expectation,
         test_control_monitor_read_only_records_nothing,
         test_control_monitor_read_only_between_plan_runs,
