@@ -969,6 +969,10 @@ def apply_logged_inverter(my_predbat, inverter):
     """Set the inverter's programmed state from a run's "Replay input: inverter changed" line, when it has one."""
     for name, value in (inverter or {}).items():
         setattr(my_predbat, name, value)
+    # Every window carries the inverter's current charge limit, which a fresh plan starts its charge limits from
+    if inverter and inverter.get("charge_limit"):
+        my_predbat.current_charge_limit_kwh = inverter["charge_limit"][0]
+        my_predbat.current_charge_limit = calc_percent_limit(my_predbat.current_charge_limit_kwh, my_predbat.soc_max)
 
 
 def apply_logged_state(my_predbat, state):

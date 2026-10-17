@@ -744,6 +744,10 @@ def test_inverter_input():
     if bat.charge_window != [{"start": 1410, "end": 1440, "average": 0}] or bat.isCharging is not True or bat.reserve != 0.723:
         print("ERROR: inverter state not applied: {}".format(vars(bat)))
         return 1
+    # A fresh plan seeds its charge limits from the inverter's current limit, which each logged window carries
+    if getattr(bat, "current_charge_limit_kwh", None) != 18.08 or getattr(bat, "current_charge_limit", None) != 100:
+        print("ERROR: the current charge limit should come from the logged windows: {} kWh {}%".format(getattr(bat, "current_charge_limit_kwh", None), getattr(bat, "current_charge_limit", None)))
+        return 1
     if bat.charge_rate_now != 0.0625 or bat.discharge_rate_now != 0.09166666666666666 or bat.battery_temperature != 23 or not isinstance(bat.battery_temperature, int):
         print("ERROR: the logged rates in force should be applied: {}".format(vars(bat)))
         return 1
