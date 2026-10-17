@@ -531,6 +531,29 @@ class TestInjectEntities:
         _, attrs = gw._dashboard_calls[f"sensor.predbat_gateway_{suffix}_battery_temperature"]
         assert attrs == GATEWAY_ATTRIBUTE_TABLE.get("battery_temperature", {})
 
+    def test_ems_midnight_capability_stays_with_its_schedule_entities(self):
+        """An EMS carries the same-day restriction without changing other Hub inverters or shared attributes."""
+        from gateway import GATEWAY_ATTRIBUTE_TABLE
+
+        gw = self._make_gateway()
+        status = self._make_status()
+        status.inverters[0].type = pb.INVERTER_TYPE_GIVENERGY_EMS
+        gw._inject_entities(status)
+        names = ["charge_slot1_start", "charge_slot1_end", "discharge_slot1_start", "discharge_slot1_end"]
+        for name in names:
+            _, attrs = gw._dashboard_calls[f"select.predbat_gateway_456789_{name}"]
+            assert attrs["can_span_midnight"] is False
+            assert "can_span_midnight" not in GATEWAY_ATTRIBUTE_TABLE.get(name, {})
+
+        # Reclassification must remove a previous EMS restriction, including when
+        # an entity id is reused after discovery refresh.
+        for inv_type in [pb.INVERTER_TYPE_GIVENERGY, pb.INVERTER_TYPE_GIVENERGY_GATEWAY, pb.INVERTER_TYPE_SOLIS_HYBRID]:
+            status.inverters[0].type = inv_type
+            gw._inject_entities(status)
+            for name in names:
+                _, attrs = gw._dashboard_calls[f"select.predbat_gateway_456789_{name}"]
+                assert "can_span_midnight" not in attrs
+
     def test_schedule_select_entities(self):
         """Schedule select entities are published with correct HH:MM:SS state and table attributes."""
         from gateway import GATEWAY_ATTRIBUTE_TABLE
@@ -1121,6 +1144,60 @@ class TestPlanHookConversion:
         gw._last_plan_data = None
         gw._last_plan_publish_time = 0
         return gw
+
+    def test_same_day_hub_plan_splits_charge_and_export_at_midnight(self):
+        """The native backup plan preserves rate, target and absolute days across midnight."""
+        from types import SimpleNamespace
+
+        gw = self._make_gateway()
+        gw.base.inverters = [SimpleNamespace(inverter_type="GWMQTT", inv_can_span_midnight=False)]
+        gw._on_plan_executed(
+            charge_windows=[{"start": 1410, "end": 1770}],
+            charge_limits=[8],
+            export_windows=[{"start": 2820, "end": 2910}],
+            export_limits=[(0, 20, 0.5)],
+            charge_rate_w=3000,
+            discharge_rate_w=2000,
+            soc_max=10,
+        )
+        entries, _ = gw._pending_plan
+        assert [(e["start_hour"], e["start_minute"], e["end_hour"], e["end_minute"]) for e in entries] == [(23, 30, 23, 59), (24, 0, 29, 30), (47, 0, 47, 59), (48, 0, 48, 30)]
+        assert [(e["mode"], e["power_w"], e["target_soc"]) for e in entries] == [(1, 3000, 80), (1, 3000, 80), (2, 1000, 20), (2, 1000, 20)]
+        # Exercise the real protobuf serialiser, including absolute hours >= 24.
+        encoded = gw.build_execution_plan(entries, plan_version=1, timezone="Europe/London")
+        plan = pb.ExecutionPlan.FromString(encoded)
+        assert len(plan.entries) == 4
+        assert plan.entries[1].start_hour == 24 and plan.entries[3].end_hour == 48
+
+    def test_same_day_plan_drops_expired_starts_and_caps_after_sorting(self):
+        """Retained negative starts cannot enter an unsigned protobuf field or consume future capacity."""
+        from types import SimpleNamespace
+
+        gw = self._make_gateway()
+        gw.base.inverters = [SimpleNamespace(inverter_type="GWMQTT", inv_can_span_midnight=False)]
+        gw._on_plan_executed(
+            charge_windows=[{"start": 1410, "end": 1770}, {"start": -30, "end": 330}, {"start": 2820, "end": 2910}, {"start": -90, "end": -30}],
+            charge_limits=[8, 8, 8, 8],
+            export_windows=[{"start": 600, "end": 660}, {"start": 700, "end": 760}],
+            export_limits=[(0, 20, 1.0), (0, 20, 1.0)],
+        )
+        entries, _ = gw._pending_plan
+        starts = [e["start_hour"] * 60 + e["start_minute"] for e in entries]
+        assert starts == [0, 600, 700, 1410, 1440, 2820]
+        assert len(entries) == 6
+        assert all(e["start_hour"] <= e["end_hour"] for e in entries)
+        gw.build_execution_plan(entries, plan_version=1, timezone="Europe/London")
+
+    def test_midnight_capable_hub_plan_keeps_overnight_window(self):
+        """Hub hardware which supports overnight windows retains the unsplit plan."""
+        from types import SimpleNamespace
+
+        gw = self._make_gateway()
+        gw.base.inverters = [SimpleNamespace(inverter_type="GWMQTT", inv_can_span_midnight=True)]
+        gw._on_plan_executed(charge_windows=[{"start": 1410, "end": 1770}], charge_limits=[8])
+        entries, _ = gw._pending_plan
+        assert len(entries) == 1
+        assert (entries[0]["start_hour"], entries[0]["end_hour"]) == (23, 29)
 
     def test_charge_window_conversion(self):
         """Charge windows are converted to mode=1 plan entries."""
@@ -1750,6 +1827,14 @@ class TestAutomaticConfig:
         assert gw._args["num_inverters"] == 1
         assert gw._args["inverter_type"] == ["GWMQTT"]
 
+    def test_gwmqtt_automatic_config_sets_schedule_write_button(self):
+        """Each control target's schedule write switch is bound as its schedule_write_button."""
+        gw = self._make_gateway()
+        gw._last_status = self._basic_status(serial="CE123456789", primary=False)
+        gw.automatic_config()
+
+        assert gw._args["schedule_write_button"] == ["switch.predbat_gateway_456789_schedule_write"]
+
     def test_single_inverter_energy_and_health_args(self):
         """Energy counter, battery health, and inverter_time args use first inverter's suffix."""
         gw = self._make_gateway()
@@ -2018,12 +2103,6 @@ class TestAutomaticConfig:
         assert gw._args["ems_total_pv"] == f"sensor.{pfx}_ems_total_pv"
         assert gw._args["ems_total_load"] == f"sensor.{pfx}_ems_total_load"
 
-        # idle_*_time should have one entry per inverter (1 in this case)
-        assert len(gw._args["idle_start_time"]) == 1
-        assert len(gw._args["idle_end_time"]) == 1
-        assert "discharge_slot1_start" in gw._args["idle_start_time"][0]
-        assert "discharge_slot1_end" in gw._args["idle_end_time"][0]
-
     def test_non_ems_does_not_set_aggregate_args(self):
         """Standard GivEnergy inverter does NOT register ems_* args."""
         gw = self._make_gateway()
@@ -2031,7 +2110,30 @@ class TestAutomaticConfig:
         gw.automatic_config()
 
         assert "ems_total_soc" not in gw._args
-        assert "idle_start_time" not in gw._args
+
+    def test_hub_does_not_bind_idle_time(self):
+        """The Hub manages idle time itself, so no Hub inverter type binds idle_*_time.
+
+        On an EMS the old binding pointed idle_*_time at the export slot selects, so every
+        idle write from adjust_idle_time() overwrote the export window.
+        """
+        ems = self._make_gateway()
+        status = pb.GatewayStatus()
+        status.device_id = "pbgw_ems"
+        status.firmware = "1.0.0"
+        status.schema_version = 1
+        inv = self._make_inverter(status, serial="EM123456", primary=True, inv_type=pb.INVERTER_TYPE_GIVENERGY_EMS)
+        inv.ems.num_inverters = 2
+        ems._last_status = status
+        ems.automatic_config()
+
+        direct = self._make_gateway()
+        direct._last_status = self._basic_status()
+        direct.automatic_config()
+
+        for gw in (ems, direct):
+            assert gw._args["idle_start_time"] is None
+            assert gw._args["idle_end_time"] is None
 
     def test_export_limit_nonzero_maps_to_sensor_entity(self):
         """export_limit_w is always mapped to the sensor entity regardless of value."""
@@ -2315,7 +2417,7 @@ class TestAutomaticConfig:
 
 
 class TestSelectEvent:
-    """Tests for GatewayMQTT.select_event() — mode and schedule-time routing."""
+    """Tests for GatewayMQTT.select_event() — slot times are staged until the schedule write switch is pressed."""
 
     def _make_gateway(self):
         from gateway import GatewayMQTT
@@ -2329,11 +2431,17 @@ class TestSelectEvent:
         gw._mqtt_client = MagicMock()
         gw.topic_command = "predbat/devices/pbgw_test/command"
         gw._published = []  # capture (command, kwargs) tuples
+        gw.cache = {}  # entity_id -> state
 
         async def fake_publish_command(command, **kwargs):
             gw._published.append((command, kwargs))
 
+        def fake_dashboard_item(entity_id, state=None, attributes=None, app=None):
+            gw.cache[entity_id] = state
+
         gw.publish_command = fake_publish_command
+        gw.dashboard_item = fake_dashboard_item
+        gw.get_state_wrapper = lambda entity_id=None, **kwargs: gw.cache.get(entity_id)
         return gw
 
     def _run(self, coro):
@@ -2342,55 +2450,57 @@ class TestSelectEvent:
 
         return asyncio.run(coro)
 
+    def _staged(self, gw, side):
+        """The staged (start, end) for one side of inverter 456789."""
+        entry = gw._staged[("456789", side)]
+        return entry["start"], entry["end"]
+
     # ------------------------------------------------------------------
     # Charge slot time routing
     # ------------------------------------------------------------------
 
     def test_charge_slot_start(self):
-        """charge_slot1_start publishes set_charge_slot with start HHMM."""
-        import json
-
+        """charge_slot1_start stages the start HHMM, paired with the end the select shows, and sends nothing."""
         gw = self._make_gateway()
+        gw.cache["select.predbat_gateway_456789_charge_slot1_end"] = "04:30:00"
         self._run(gw.select_event("select.predbat_gateway_456789_charge_slot1_start", "01:30:00"))
-        assert len(gw._published) == 1
-        cmd, kwargs = gw._published[0]
-        assert cmd == "set_charge_slot"
-        parsed = json.loads(kwargs["schedule_json"])
-        assert parsed == {"start": 130}
+        assert gw._published == []
+        assert self._staged(gw, "charge") == (130, 430)
+        assert gw.cache["select.predbat_gateway_456789_charge_slot1_start"] == "01:30:00"
 
     def test_charge_slot_end(self):
-        """charge_slot1_end publishes set_charge_slot with end HHMM."""
-        import json
-
+        """charge_slot1_end stages the end HHMM."""
         gw = self._make_gateway()
+        gw.cache["select.predbat_gateway_456789_charge_slot1_start"] = "01:30:00"
         self._run(gw.select_event("select.predbat_gateway_456789_charge_slot1_end", "04:30:00"))
-        cmd, kwargs = gw._published[0]
-        assert cmd == "set_charge_slot"
-        assert json.loads(kwargs["schedule_json"]) == {"end": 430}
+        assert gw._published == []
+        assert self._staged(gw, "charge") == (130, 430)
 
     # ------------------------------------------------------------------
     # Discharge slot time routing
     # ------------------------------------------------------------------
 
     def test_discharge_slot_start(self):
-        """discharge_slot1_start publishes set_discharge_slot with start HHMM."""
-        import json
-
+        """discharge_slot1_start stages on the discharge side, not the charge side."""
         gw = self._make_gateway()
         self._run(gw.select_event("select.predbat_gateway_456789_discharge_slot1_start", "16:00:00"))
-        cmd, kwargs = gw._published[0]
-        assert cmd == "set_discharge_slot"
-        assert json.loads(kwargs["schedule_json"]) == {"start": 1600}
+        assert gw._published == []
+        assert self._staged(gw, "discharge") == (1600, None)
+        assert ("456789", "charge") not in gw._staged
 
     def test_discharge_slot_end(self):
-        """discharge_slot1_end publishes set_discharge_slot with end HHMM."""
-        import json
-
+        """discharge_slot1_end stages the discharge end HHMM."""
         gw = self._make_gateway()
         self._run(gw.select_event("select.predbat_gateway_456789_discharge_slot1_end", "19:00:00"))
-        cmd, kwargs = gw._published[0]
-        assert cmd == "set_discharge_slot"
-        assert json.loads(kwargs["schedule_json"]) == {"end": 1900}
+        assert self._staged(gw, "discharge") == (None, 1900)
+
+    def test_both_endpoints_complete_the_staged_window(self):
+        """Writing the start and then the end of one side stages the complete window."""
+        gw = self._make_gateway()
+        self._run(gw.select_event("select.predbat_gateway_456789_charge_slot1_start", "02:30:00"))
+        self._run(gw.select_event("select.predbat_gateway_456789_charge_slot1_end", "03:05:00"))
+        assert gw._published == []
+        assert self._staged(gw, "charge") == (230, 305)
 
     # ------------------------------------------------------------------
     # Edge cases
@@ -2398,43 +2508,35 @@ class TestSelectEvent:
 
     def test_midnight_time_converts_correctly(self):
         """00:00:00 → HHMM 0 (midnight)."""
-        import json
-
         gw = self._make_gateway()
         self._run(gw.select_event("select.predbat_gateway_456789_charge_slot1_start", "00:00:00"))
-        parsed = json.loads(gw._published[0][1]["schedule_json"])
-        assert parsed == {"start": 0}
+        assert self._staged(gw, "charge")[0] == 0
 
     def test_invalid_time_string_no_command(self):
-        """Malformed time values (non-numeric) do not publish any command."""
+        """Malformed time values (non-numeric) neither publish nor stage."""
         gw = self._make_gateway()
         self._run(gw.select_event("select.predbat_gateway_456789_charge_slot1_start", "bad_value"))
         assert gw._published == []
+        assert getattr(gw, "_staged", {}) == {}
 
     def test_unrecognised_entity_no_command(self):
         """Entities that don't match any known pattern are silently ignored."""
         gw = self._make_gateway()
         self._run(gw.select_event("select.predbat_some_other_select", "01:00:00"))
         assert gw._published == []
+        assert getattr(gw, "_staged", {}) == {}
 
     # ------------------------------------------------------------------
     # Serial routing
     # ------------------------------------------------------------------
 
-    def test_charge_slot_includes_serial_when_known(self):
-        """charge_slot1_start passes full inverter serial when suffix is in the map."""
-        gw = self._make_gateway()
-        gw._suffix_to_serial["456789"] = "CE123456789"
-        self._run(gw.select_event("select.predbat_gateway_456789_charge_slot1_start", "01:30:00"))
-        _, kwargs = gw._published[0]
-        assert kwargs.get("serial") == "CE123456789"
-
     def test_no_command_when_suffix_not_in_map(self):
-        """No command is sent when the entity suffix cannot be resolved to a serial."""
+        """Nothing is staged when the entity suffix cannot be resolved to a serial."""
         gw = self._make_gateway()
         gw._suffix_to_serial = {}  # clear — suffix "456789" unknown
         self._run(gw.select_event("select.predbat_gateway_456789_charge_slot1_start", "01:30:00"))
         assert gw._published == []
+        assert getattr(gw, "_staged", {}) == {}
         gw.log.assert_called()
 
 
@@ -5417,12 +5519,12 @@ class TestSetChargeSlotPayload:
         return asyncio.run(coro)
 
     def test_set_charge_slot_start_raw_payload(self):
-        """Print the raw JSON sent for a charge slot start update so the format can be verified."""
+        """Print the raw JSON sent for a charge slot start command so the format can be verified."""
         import json
 
         gw = self._make_gateway()
         # 02:00:00 → HHMM 200, matching the expected {"start":200} in the hub spec
-        self._run(gw.select_event("select.predbat_gateway_30g499_charge_slot1_start", "02:00:00"))
+        self._run(gw.publish_command("set_charge_slot", command_id=1, schedule_json=json.dumps({"start": 200}), serial="CH2330G499"))
 
         assert gw._raw_published, "No payload was published — serial lookup may have failed"
         actual = json.loads(gw._raw_published[0].decode("utf-8"))
@@ -6279,6 +6381,17 @@ class TestCommandAck:
 
         return asyncio.run(coro)
 
+    def _send_slot(self, gw, entity_id, value):
+        """Send one slot endpoint through _send_control, as the select handler did before slots staged.
+
+        These tests exercise the ack and re-send machinery, which the schedule write still uses.
+        """
+        import json
+
+        field = "start" if entity_id.endswith("_start") else "end"
+        hours, minutes = value.split(":")[:2]
+        return gw._send_control(entity_id, "set_charge_slot", schedule_json=json.dumps({field: int(hours) * 100 + int(minutes)}), serial="CE123456789")
+
     def _clock(self):
         """A controllable clock for the ack window."""
         from unittest.mock import patch
@@ -6314,7 +6427,7 @@ class TestCommandAck:
                 if gw.cache.get(self.SLOT_START) == "00:30:00":
                     matched = True
                     break
-                self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+                self._run(self._send_slot(gw, self.SLOT_START, "00:30:00"))
         assert matched
         assert len(gw._published) == 1
         assert gw._published[0][1] == 1
@@ -6325,19 +6438,19 @@ class TestCommandAck:
         gw = self._make_gateway()
         clock, patcher = self._clock()
         with patcher:
-            self._run(gw.select_event(self.SLOT_END, "00:00:00"))
+            self._run(self._send_slot(gw, self.SLOT_END, "00:00:00"))
             clock["now"] = 1001.0
             self._ack(gw, "PBAT1", "set_charge_slot", ok=False, error="would_disable_charge_zero_length_slot")
             for step in range(1, 15):
                 clock["now"] = 1001.0 + step * 2
-                self._run(gw.select_event(self.SLOT_END, "00:00:00"))
+                self._run(self._send_slot(gw, self.SLOT_END, "00:00:00"))
             assert len(gw._published) == 1
             assert self._logged(gw, "Warn: GatewayMQTT: set_charge_slot for CE123456789 refused by hub: would_disable_charge_zero_length_slot")
             # The refusal does not update the cached value
             assert self.SLOT_END not in gw.cache
             # After the window a new attempt goes out
             clock["now"] = 1031.0
-            self._run(gw.select_event(self.SLOT_END, "00:00:00"))
+            self._run(self._send_slot(gw, self.SLOT_END, "00:00:00"))
         assert len(gw._published) == 2
 
     def test_no_ack_resends_once_after_window_then_falls_back(self):
@@ -6370,9 +6483,9 @@ class TestCommandAck:
         gw = self._make_gateway()
         clock, patcher = self._clock()
         with patcher:
-            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            self._run(self._send_slot(gw, self.SLOT_START, "00:30:00"))
             clock["now"] = 1001.0
-            self._run(gw.select_event(self.SLOT_START, "01:00:00"))
+            self._run(self._send_slot(gw, self.SLOT_START, "01:00:00"))
             assert [p[1] for p in gw._published] == [1, 2]
             # The superseded command's ack must not overwrite the cache
             self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 0})
@@ -6398,9 +6511,9 @@ class TestCommandAck:
         gw = self._make_gateway()
         clock, patcher = self._clock()
         with patcher:
-            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            self._run(self._send_slot(gw, self.SLOT_START, "00:30:00"))
             self._ack(gw, "PBAT1", "set_charge_slot", applied={"staged": True, "start": 30, "slot": 0})
-            self._run(gw.select_event(self.SLOT_END, "05:00:00"))
+            self._run(self._send_slot(gw, self.SLOT_END, "05:00:00"))
             self._ack(gw, "PBAT2", "set_charge_slot", applied={"start": 30, "end": 500, "slot": 0, "recorded": True})
         assert gw.cache == {}
 
@@ -6483,7 +6596,7 @@ class TestCommandAck:
         gw._inject_entities = fake_inject_entities
         clock, patcher = self._clock()
         with patcher:
-            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            self._run(self._send_slot(gw, self.SLOT_START, "00:30:00"))
             self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 0})
             assert gw.cache[self.SLOT_START] == "00:30:00"
             self._ack(gw, "PBAT1", "set_charge_slot", ok=False, error="modbus_write_failed")
@@ -6500,7 +6613,7 @@ class TestCommandAck:
         gw = self._make_gateway()
         clock, patcher = self._clock()
         with patcher:
-            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            self._run(self._send_slot(gw, self.SLOT_START, "00:30:00"))
             self._ack(gw, "PBAT1", "set_charge_slot", applied={"staged": True, "start": 30, "slot": 0})
             assert gw.cache == {}
             self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 1})
@@ -6531,9 +6644,9 @@ class TestCommandAck:
         gw = self._make_gateway(acks_seen=False)
         clock, patcher = self._clock()
         with patcher:
-            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            self._run(self._send_slot(gw, self.SLOT_START, "00:30:00"))
             clock["now"] = 1002.0
-            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            self._run(self._send_slot(gw, self.SLOT_START, "00:30:00"))
             self._ack(gw, "PBAT1", "set_charge_slot", ok=False, error="modbus_write_failed")
             assert gw._pending_commands[self.SLOT_START]["state"] == "refused"
             self._ack(gw, "PBAT2", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 0})
@@ -6541,8 +6654,8 @@ class TestCommandAck:
             assert gw.cache[self.SLOT_START] == "00:30:00"
             # A delayed refusal of an earlier send does not undo the later success
             clock["now"] = 1004.0
-            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
-            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            self._run(self._send_slot(gw, self.SLOT_START, "00:30:00"))
+            self._run(self._send_slot(gw, self.SLOT_START, "00:30:00"))
         assert gw._pending_commands[self.SLOT_START]["state"] == "applied"
         assert len(gw._published) == 2
 
@@ -6577,7 +6690,7 @@ class TestCommandAck:
         entity = "select.house_charge_slot1_x_gateway_456789_charge_slot1_start"
         clock, patcher = self._clock()
         with patcher:
-            self._run(gw.select_event(entity, "00:30:00"))
+            self._run(self._send_slot(gw, entity, "00:30:00"))
             self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 0})
         assert gw.cache == {entity: "00:30:00", "select.house_charge_slot1_x_gateway_456789_charge_slot1_end": "18:00:00"}
 
@@ -6630,11 +6743,11 @@ class TestCommandAck:
         gw._inject_entities = fake_inject_entities
         clock, patcher = self._clock()
         with patcher:
-            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            self._run(self._send_slot(gw, self.SLOT_START, "00:30:00"))
             self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 0})
             assert gw.cache[self.SLOT_START] == "00:30:00"
             clock["now"] = 1031.0
-            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            self._run(self._send_slot(gw, self.SLOT_START, "00:30:00"))
             assert [p[1] for p in gw._published] == [1, 2]
             self._ack(gw, "PBAT1", "set_charge_slot", ok=False, error="modbus_write_failed")
         assert restored == [gw._last_status]
@@ -6668,10 +6781,10 @@ class TestCommandAck:
         gw = self._make_gateway()
         clock, patcher = self._clock()
         with patcher:
-            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            self._run(self._send_slot(gw, self.SLOT_START, "00:30:00"))
             self._ack(gw, "PBAT1", "set_charge_slot", ok=False, error="modbus_write_failed")
             clock["now"] = 1031.0
-            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            self._run(self._send_slot(gw, self.SLOT_START, "00:30:00"))
             assert [p[1] for p in gw._published] == [1, 2]
             self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 1})
             assert gw._pending_commands[self.SLOT_START]["state"] == "sent"
@@ -6704,10 +6817,10 @@ class TestCommandAck:
         gw._inject_entities = lambda status: restored.append(status)
         clock, patcher = self._clock()
         with patcher:
-            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            self._run(self._send_slot(gw, self.SLOT_START, "00:30:00"))
             self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 0})
             clock["now"] = 1031.0
-            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            self._run(self._send_slot(gw, self.SLOT_START, "00:30:00"))
             clock["now"] = 1032.0
             self._ack(gw, "PBAT1", "set_charge_slot", ok=False, error="replay")
             entry = gw._pending_commands[self.SLOT_START]
@@ -6716,7 +6829,7 @@ class TestCommandAck:
             assert restored == [gw._last_status]
             assert self._logged(gw, "refused by hub: replay")
             clock["now"] = 1034.0
-            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            self._run(self._send_slot(gw, self.SLOT_START, "00:30:00"))
         assert len(gw._published) == 2
 
     def test_replay_for_the_newest_id_after_an_earlier_send_applied(self):
@@ -6874,7 +6987,7 @@ class TestCommandAck:
         gw = self._make_gateway()
         clock, patcher = self._clock()
         with patcher:
-            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            self._run(self._send_slot(gw, self.SLOT_START, "00:30:00"))
             self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 0})
             self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 30, "end": 900, "slot": 1})
         assert gw.cache[self.SLOT_END] == "18:00:00"
@@ -7444,13 +7557,14 @@ class TestIntegratePower:
 def run_gateway_tests(my_predbat=None):
     """Run all GatewayMQTT tests. Returns True on failure, False on success."""
     from tests.test_gateway_token_refresh import TestIsAuthFailure, TestApplyRefreshResponse, TestMaybeRefreshOnAuthError
-    from tests.test_gateway_charge_window import TestGatewayChargeWindow
-    from tests.test_gateway_discharge_window import TestGatewayDischargeWindow
+    from tests.test_gateway_window_commit import TestHubWindowCommit
     from tests.test_gateway_display import TestGatewayDisplayOnly
+    from tests.test_gateway_commit import TestGatewayStaging, TestGatewayCommit
 
     test_classes = [
-        TestGatewayChargeWindow,
-        TestGatewayDischargeWindow,
+        TestGatewayStaging,
+        TestGatewayCommit,
+        TestHubWindowCommit,
         TestGatewayDisplayOnly,
         TestProtobufDecode,
         TestPlanSerialization,
