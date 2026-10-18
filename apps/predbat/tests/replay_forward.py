@@ -1269,7 +1269,6 @@ def replay_records(rows, live_lines, replay_lines, cluster_gap=30):
             "charge": compared(window_records(row.get("logged_charge")), window_records(row.get("replayed_charge"))),
         }
         record = {
-            "type": "run",
             "label": label,
             "time": row["timestamp"],
             # Minutes from the yaml day's midnight, so they carry on past midnight
@@ -1312,7 +1311,6 @@ def replay_records(rows, live_lines, replay_lines, cluster_gap=30):
 
     sims = [(record["soc_percent"], record["soc_sim_percent"]) for record in records if record.get("soc_sim_percent") is not None and record["soc_percent"] is not None]
     summary = {
-        "type": "summary",
         "runs": len(records),
         "adopted": counts("adopted"),
         "candidate": counts("candidate"),
@@ -1326,11 +1324,15 @@ def replay_records(rows, live_lines, replay_lines, cluster_gap=30):
 
 
 def write_replay_json(filename, rows, live_lines, replay_lines, meta):
-    """Write a replay as JSON lines: a meta record (what was replayed, how), one record per run, then the summary."""
+    """Write a replay as one JSON document, one element per line: what was replayed and how, the summary, then the runs.
+
+    The summary comes before the runs so a reader can stop after it when nothing differs.
+    """
+    records = replay_records(rows, live_lines, replay_lines)
+    document = {"meta": meta, "summary": records[-1], "runs": records[:-1]}
     with open(filename, "w") as handle:
-        handle.write(json.dumps(dict(meta, type="meta")) + "\n")
-        for record in replay_records(rows, live_lines, replay_lines):
-            handle.write(json.dumps(record) + "\n")
+        json.dump(document, handle, indent=1)
+        handle.write("\n")
 
 
 def trace_differences(live, replayed):

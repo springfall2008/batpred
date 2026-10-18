@@ -844,7 +844,7 @@ def main():
     parser.add_argument("--replay_simulate", action="store_true", help="With --replay_log: simulate the battery under the replayed plan from actual PV and load, instead of taking SoC from the log")
     parser.add_argument("--override", action="append", help="With --debug_file: override a setting after restoring the yaml, as name=value (repeatable), for what-if replays")
     parser.add_argument("--replay_chart", action="store", help="With --replay_log: also write a PNG chart of SoC and the live vs replayed export plan to this file")
-    parser.add_argument("--replay_json", action="store", help="With --replay_log: also write the comparison as JSON lines to this file - one record per run with both plans, the prediction metrics and the first differing plan line, then a summary")
+    parser.add_argument("--replay_json", action="store", help="With --replay_log: also write the comparison as JSON to this file - a summary, then one record per run with the plans and prediction metrics that differ and the first differing plan line")
     parser.add_argument("--full_debug", action="store_true", help="Enable full debug output")
     parser.add_argument("--redo", action="store_true", help="Redo rates, load model and octopus slots for debug test")
     parser.add_argument("--compare", action="store_true", help="Run compare")

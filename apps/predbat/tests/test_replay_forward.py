@@ -2,6 +2,7 @@
 # pylint: disable=line-too-long
 """Unit tests for the forward replay of a Predbat log from a debug yaml (tests/replay_forward.py)."""
 
+import json
 import os
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -9,7 +10,7 @@ from types import SimpleNamespace
 
 from utils import MinuteArray
 from tests.test_single_debug import apply_overrides
-from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, plan_state_now, model_car_charging_now, rebuild_io_rates, run_soc, chart_replay, simulate_soc, install_logged_load_divergence, remove_logged_load_divergence, soc_rms_error, version_change, apply_logged_load_forecast, apply_logged_pv_forecast, parse_log, parse_override, rescan_rate_stats, counter_gain, crosses_midnight, shift_cumulative, shift_windows, roll_over_midnight, apply_run, today_values, apply_logged_rates, apply_logged_load_exact, apply_logged_pv_exact, apply_logged_sessions, apply_logged_dispatch, replay_records, plan_metrics
+from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, plan_state_now, model_car_charging_now, rebuild_io_rates, run_soc, chart_replay, simulate_soc, install_logged_load_divergence, remove_logged_load_divergence, soc_rms_error, version_change, apply_logged_load_forecast, apply_logged_pv_forecast, parse_log, parse_override, rescan_rate_stats, counter_gain, crosses_midnight, shift_cumulative, shift_windows, roll_over_midnight, apply_run, today_values, apply_logged_rates, apply_logged_load_exact, apply_logged_pv_exact, apply_logged_sessions, apply_logged_dispatch, replay_records, plan_metrics, write_replay_json
 
 SAMPLE_LOG = """2026-10-01 08:30:00.575570: --------------- PredBat - update at 2026-10-01 08:30:00+01:00 with clock skew 0 minutes, minutes now 510
 2026-10-01 08:30:00.577646: Predbat /config/github.py repository springfall2008/batpred version v9.3.3 currently running, latest version is v9.3.3, latest beta is v9.3.3
@@ -860,6 +861,19 @@ def test_replay_records():
         return 1
     if summary["adopted"] != {"compared": 2, "identical": 1} or summary["metrics_differ"] != 0 or [cluster["start"] for cluster in summary["clusters"]] != ["2026-10-18 00:05:00+01:00"]:
         print("ERROR: summary wrong: {}".format(summary))
+        return 1
+    # The file is one document, one element per line, with the summary before the runs
+    with tempfile.TemporaryDirectory() as folder:
+        path = os.path.join(folder, "replay.json")
+        write_replay_json(path, rows, live, replay, {"mode": "exact"})
+        with open(path) as handle:
+            text = handle.read()
+    document = json.loads(text)
+    if list(document) != ["meta", "summary", "runs"] or len(document["runs"]) != 3 or document["summary"] != summary:
+        print("ERROR: the JSON document should be meta, summary, runs: {}".format(list(document)))
+        return 1
+    if '"runs": 3,' not in text or text.count("\n") < 40:
+        print("ERROR: the JSON should be written one element per line")
         return 1
     return 0
 
