@@ -16,7 +16,27 @@ reserve level adjustments, and multi-inverter balancing.
 # pylint: disable=attribute-defined-outside-init
 
 from datetime import timedelta, datetime
-from const import MINUTE_WATT, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
+from const import (
+    MINUTE_WATT,
+    EXPORT_LIMIT_IDLE,
+    EXPORT_MODE_TARGET,
+    EXPORT_MODE_FREEZE,
+    EXPORT_MODE_IDLE,
+    CHARGE_STATE_PRECEDENCE,
+    EXPORT_STATE_PRECEDENCE,
+    RUN_STATE_DEMAND,
+    RUN_STATE_CHARGING,
+    RUN_STATE_FREEZE_CHARGING,
+    RUN_STATE_HOLD_CHARGING,
+    RUN_STATE_EXPORTING,
+    RUN_STATE_FREEZE_EXPORTING,
+    RUN_STATE_HOLD_EXPORTING,
+    RUN_STATE_CROSS_CHARGING,
+    RUN_STATE_HOLD_FOR_CAR,
+    RUN_STATE_HOLD_FOR_IBOOST,
+    RUN_STATE_READ_ONLY,
+    RUN_STATE_CALIBRATION,
+)
 from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate, balance_inverters, allocate_export_rates, export_mode_of, export_power_of, export_target_of, get_charge_rate_curve, get_discharge_rate_curve
 from predbat_metrics import metrics
 from inverter import Inverter, calibration_reported
@@ -55,13 +75,13 @@ def resolve_multi_inverter_status(status_per_inverter, current_status):
     before the one that entered calibration mode, since calibration force-overrides every inverter's
     controls and that must not be hidden behind a leftover Charging/Exporting label.
     """
-    if current_status == "Calibration":
+    if current_status == RUN_STATE_CALIBRATION:
         return current_status
     states_present = set(status_per_inverter.values())
     charge_states_present = states_present & CHARGE_SIDE_STATES
     export_states_present = states_present & EXPORT_SIDE_STATES
     if charge_states_present and export_states_present:
-        return "Cross-charging"
+        return RUN_STATE_CROSS_CHARGING
     if charge_states_present:
         return next(candidate for candidate in CHARGE_STATE_PRECEDENCE if candidate in charge_states_present)
     if export_states_present:
@@ -433,9 +453,9 @@ class Execute:
                     self.charge_limit_best[window_n] = self.reserve
 
         if self.holiday_days_left > 0:
-            status = "Demand (Holiday)"
+            status = RUN_STATE_DEMAND + " (Holiday)"
         else:
-            status = "Demand"
+            status = RUN_STATE_DEMAND
 
         if self.inverter_needs_reset:
             self.reset_inverter()
@@ -461,13 +481,13 @@ class Execute:
             # Read-only mode
             if self.set_read_only:
                 if self.set_read_only_axle:
-                    status = "Read-Only (Axle)"
+                    status = RUN_STATE_READ_ONLY + " (Axle)"
                 else:
-                    status = "Read-Only"
+                    status = RUN_STATE_READ_ONLY
                 continue
             # Inverter is in calibration mode
             if inverter.in_calibration:
-                status = "Calibration"
+                status = RUN_STATE_CALIBRATION
                 self.log("Inverter {} is in calibration mode, not executing plan and enabling charge/discharge at full rate.".format(inverter.id))
                 for inverter in self.inverters:
                     inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
@@ -643,7 +663,7 @@ class Execute:
                             else:
                                 discharge_rate = 0
 
-                            status = "Freeze charging"
+                            status = RUN_STATE_FREEZE_CHARGING
                             status_per_inverter[inverter.id] = status
                             monitor_slots[inverter.id] = (MODE_FREEZE_CHARGING, charge_slot[0], charge_slot[1], None)
                             status_extra_parts.append((inverter.id, "target", status, "{}%".format(inverter.soc_percent)))  # Append multi-inverter target SoC's together
@@ -652,7 +672,7 @@ class Execute:
                             # We can only hold charge if a) we have a way to hold the charge level on the reserve or with a pause feature
                             # and the current charge level is above the target for all inverters
                             if self.set_soc_enable and inverter.soc_percent >= inv_target_soc_percent:
-                                status = "Hold charging"
+                                status = RUN_STATE_HOLD_CHARGING
                                 status_per_inverter[inverter.id] = status
                                 self.log(
                                     "Inverter {} Hold charging as SoC {}% is above target SoC {}% (global soc target {}%) set_discharge_during_charge {}".format(
@@ -687,7 +707,7 @@ class Execute:
                                     # Still charging or we have no way to hold on either reserve or pause the discharge
                                     inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
                             else:
-                                status = "Charging"
+                                status = RUN_STATE_CHARGING
                                 status_per_inverter[inverter.id] = status
                                 monitor_slots[inverter.id] = (MODE_CHARGING, charge_slot[0], charge_slot[1], inv_target_soc_percent)
                                 inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
@@ -835,7 +855,7 @@ class Execute:
                             target = export_target_percent_or_zero(self.export_limits_best[0])
                         self.isExporting_Target = int(target)
 
-                        status = "Exporting"
+                        status = RUN_STATE_EXPORTING
                         status_per_inverter[inverter.id] = status
                         # adjust_reserve() clamps to each inverter's own minimum, so an inverter with
                         # a higher reserve rightly stops above the fleet target - judge it at its own
@@ -858,7 +878,7 @@ class Execute:
                                 charge_rate = 0
 
                             self.log("Export Freeze as exporting is now at/below target - current SoC {}kWh and target {}kWh".format(self.soc_kw, discharge_soc))
-                            status = "Freeze exporting"
+                            status = RUN_STATE_FREEZE_EXPORTING
                             status_per_inverter[inverter.id] = status
                             monitor_slots[inverter.id] = (MODE_FREEZE_EXPORTING, window["start"], window["end"], None)
                             # Discharge limit (99) is meaningless when Freeze Exporting so don't display it
@@ -869,7 +889,7 @@ class Execute:
                                 target = export_target_percent_or_zero(self.export_limits_best[0])
                             self.isExporting_Target = int(target)
                         else:
-                            status = "Hold exporting"
+                            status = RUN_STATE_HOLD_EXPORTING
                             status_per_inverter[inverter.id] = status
                             target = self.export_window_best[0].get("target")
                             if target is None:
@@ -904,7 +924,7 @@ class Execute:
                 else:
                     charge_rate = 0
 
-                status_freeze_export = " [Freeze exporting]"
+                status_freeze_export = " [" + RUN_STATE_FREEZE_EXPORTING + "]"
 
             # Car charging from battery disable? Applies regardless of car_energy_reported_load - that
             # switch only controls whether EV energy is included in the CT-clamp house-load model, not
@@ -939,7 +959,7 @@ class Execute:
                             # something. A timed pause is one latched write that blocks only discharge, so it stays on
                             # through the charge, covering the moments the inverter reaches its target before Predbat
                             # sees it. The sibling iBoost hold below already sits out a charge for the same reason.
-                            hold_deferred = (not inverter.inv_has_timed_pause) and status_per_inverter.get(inverter.id) == "Charging"
+                            hold_deferred = (not inverter.inv_has_timed_pause) and status_per_inverter.get(inverter.id) == RUN_STATE_CHARGING
                             if hold_deferred:
                                 self.log("Inverter {} is charging, so the hold for car {} leaves the discharge rate and reserve alone until charging stops".format(inverter.id, car_n))
                             else:
@@ -956,11 +976,11 @@ class Execute:
                                         resetReserve = False
                                 self.log("Disabling battery discharge whilst car {} is charging".format(car_n))
                             carHolding = True
-                            if ("Hold for car" not in status) and (status_hold_car == ""):
-                                if status == "Demand":
-                                    status = "Hold for car"
+                            if (RUN_STATE_HOLD_FOR_CAR not in status) and (status_hold_car == ""):
+                                if status == RUN_STATE_DEMAND:
+                                    status = RUN_STATE_HOLD_FOR_CAR
                                 else:
-                                    status_hold_car = ", Hold for car"
+                                    status_hold_car = ", " + RUN_STATE_HOLD_FOR_CAR
                         break
 
             # iBoost running?
@@ -969,7 +989,7 @@ class Execute:
                 # Only pause discharge on this inverter, and only annotate the status as held for
                 # iBoost, if the fleet isn't already Charging/Exporting - pausing would conflict with
                 # that, and the annotation must stay coupled to whether a hold actually happened here.
-                if status not in ["Exporting", "Charging"]:
+                if status not in [RUN_STATE_EXPORTING, RUN_STATE_CHARGING]:
                     if inverter.inv_has_timed_pause:
                         if resetPause:
                             inverter.adjust_pause_mode(pause_discharge=True)
@@ -983,11 +1003,11 @@ class Execute:
                             resetReserve = False
                     boostHolding = True
                     self.log("Disabling battery discharge whilst iBoost is running")
-                    if ("Hold for iBoost" not in status) and (status_hold_iboost == ""):
-                        if status == "Demand":
-                            status = "Hold for iBoost"
+                    if (RUN_STATE_HOLD_FOR_IBOOST not in status) and (status_hold_iboost == ""):
+                        if status == RUN_STATE_DEMAND:
+                            status = RUN_STATE_HOLD_FOR_IBOOST
                         else:
-                            status_hold_iboost = ", Hold for iBoost"
+                            status_hold_iboost = ", " + RUN_STATE_HOLD_FOR_IBOOST
 
             # Reset pause mode; rates are resolved once by the apply pass after the loop
             if resetPause:

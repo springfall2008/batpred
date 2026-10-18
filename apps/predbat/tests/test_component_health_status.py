@@ -345,11 +345,15 @@ def test_record_status_after_comparison(my_predbat):
     saved_item = my_predbat.ha_interface.dummy_items.get(status_entity)
     saved_value = my_predbat.dashboard_values.get(status_entity)
     saved = (my_predbat.current_status, my_predbat.status_state, my_predbat.status_detail, my_predbat.had_errors, my_predbat.status_warning, my_predbat.status_warning_debug, my_predbat.components, my_predbat.comparison)
+    # The clean case goes through record_status(notify=True), which sends a notification and moves previous_status
+    saved_previous_status = my_predbat.previous_status
+    original_call_notify = my_predbat.call_notify
     run_warning = "Warn: Return bad float value unavailable from car_charging_soc"
     compare_warning = "Warn: Bad rate x provided in energy rates"
 
     try:
         my_predbat.components = None
+        my_predbat.call_notify = lambda message: None
         for run_warnings, compare_warnings, expected in [
             ([], [compare_warning], compare_warning + " [Exporting]"),
             ([run_warning], [compare_warning, run_warning], run_warning + " [Exporting]"),
@@ -370,6 +374,8 @@ def test_record_status_after_comparison(my_predbat):
             print("OK: comparison warnings keep the run's state and detail after them")
     finally:
         my_predbat.current_status, my_predbat.status_state, my_predbat.status_detail, my_predbat.had_errors, my_predbat.status_warning, my_predbat.status_warning_debug, my_predbat.components, my_predbat.comparison = saved
+        my_predbat.previous_status = saved_previous_status
+        my_predbat.call_notify = original_call_notify
         if saved_item is None:
             my_predbat.ha_interface.dummy_items.pop(status_entity, None)
         else:

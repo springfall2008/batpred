@@ -29,6 +29,7 @@ from datetime import datetime, timedelta
 import pytz
 from zoneinfo import ZoneInfo
 
+import const
 from const import PREDICT_STEP, EXPORT_MODE_FREEZE, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
 from utils import export_mode_of
 from output import yesterday_slot_is_exporting, split_status_warning, more_active_slot_status
@@ -2406,6 +2407,25 @@ def _test_split_status_warning(my_predbat, failed):
         result = split_status_warning(status)[1]
         if result != expected:
             print("ERROR: split_status_warning({!r}) warning should be {!r}, got {!r}".format(status, expected, result))
+            failed = True
+
+    # Every run state execute.py can write must come back out from behind a warning, or History shows
+    # those slots as no state while the warning lasts. A RUN_STATE_* name missing from RUN_STATE_NAMES
+    # is the drift this catches; the qualified forms are the ones execute.py builds from the names.
+    run_states = [value for key, value in vars(const).items() if key.startswith("RUN_STATE_") and key != "RUN_STATE_NAMES"]
+    qualified = [
+        const.RUN_STATE_DEMAND + " (Holiday)",
+        const.RUN_STATE_READ_ONLY + " (Axle)",
+        const.RUN_STATE_DEMAND + " [" + const.RUN_STATE_FREEZE_EXPORTING + "]",
+        const.RUN_STATE_FREEZE_EXPORTING + ", " + const.RUN_STATE_HOLD_FOR_CAR,
+        const.RUN_STATE_CHARGING + ", " + const.RUN_STATE_HOLD_FOR_IBOOST,
+        const.RUN_STATE_CHARGING + " [Alert]",
+    ]
+    for run_state in run_states + qualified:
+        status = "Warn: Return bad float value unavailable from car_charging_soc [" + run_state + "]"
+        result = split_status_warning(status)[0]
+        if result != run_state:
+            print("ERROR: run state {!r} behind a warning should read back as itself, got {!r} - is it in RUN_STATE_NAMES?".format(run_state, result))
             failed = True
 
     return failed
