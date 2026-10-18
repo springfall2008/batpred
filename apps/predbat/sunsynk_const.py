@@ -283,7 +283,8 @@ SUNSYNK_SLAVE_STARTUP_RETRIES = 3
 
 # Per-unit battery current cap, amps. CONFIRMED live on the parallel pair above: 65 on each
 # unit against the BMS's whole-bank chargeCurrentLimit of 200, with each unit charging at
-# ~62 A and the bank at 105-137 A - so in a group this, summed, is what binds.
+# ~62 A and the bank at 105-137 A - so this, summed across a group, is what binds, and on a
+# single inverter it caps the BMS limit the same way.
 SUNSYNK_UNIT_CHARGE_CURRENT_FIELD = "batteryMaxCurrentCharge"  # settings, amps
 
 # Charge-current limit candidates, in priority order: the FIRST field with a positive value

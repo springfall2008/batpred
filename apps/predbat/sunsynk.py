@@ -827,13 +827,13 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         # maxChargeCurrentLimit 0.0 alongside chargeCurrentLimit 216.0, which derived a rate
         # of 0 and made automatic_config skip battery_rate_max entirely.
         amps = next((amp for amp in (self._as_float(values.get(field)) for field in SUNSYNK_CHARGE_CURRENT_FIELDS) if amp > 0), 0.0)
-        # In a parallel group the BMS limit covers the whole bank, but each unit has its own cap
-        # (batteryMaxCurrentCharge) and that, summed, is what binds - see the constant.
+        # The BMS limit is what the bank will accept, but each inverter has its own battery current
+        # cap (batteryMaxCurrentCharge) and that - summed across a parallel group - is what it
+        # actually charges at; see the constant. Unknown on any member leaves the BMS limit alone.
         members = self._group_members(sn)
-        if len(members) > 1:
-            unit_caps = [self._as_float(self.device_settings.get(member, {}).get(SUNSYNK_UNIT_CHARGE_CURRENT_FIELD)) for member in members]
-            if all(cap > 0 for cap in unit_caps):
-                amps = min(amps, sum(unit_caps)) if amps > 0 else sum(unit_caps)
+        unit_caps = [self._as_float(self.device_settings.get(member, {}).get(SUNSYNK_UNIT_CHARGE_CURRENT_FIELD)) for member in members]
+        if all(cap > 0 for cap in unit_caps):
+            amps = min(amps, sum(unit_caps)) if amps > 0 else sum(unit_caps)
         volts = self.nominal_pack_voltage(values.get(SUNSYNK_CHARGE_VOLT_FIELD))
         if amps <= 0 or volts <= 0:
             return 0.0

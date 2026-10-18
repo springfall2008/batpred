@@ -1125,6 +1125,35 @@ def test_cli_reports_telemetry_failure_naming_the_serials():
     assert not failed, "test_cli_reports_telemetry_failure_naming_the_serials"
 
 
+def test_battery_rate_max_is_capped_by_the_inverters_own_current_limit():
+    """A single inverter's charge rate is the lower of the BMS limit and its own batteryMaxCurrentCharge.
+
+    The BMS reports what the bank will accept (chargeCurrentLimit 200 A on a live system), but the
+    inverter's own battery current setting (65 A there) is what it actually charges at - ~62 A was
+    measured. Planning on the BMS figure alone promised 10.24 kW where the inverter delivers ~3.3 kW.
+    """
+    failed = False
+    s = MockSunsynk()
+    cases = {
+        # BMS 200 A, inverter 65 A: the inverter binds. 65 A x 51.2 V.
+        "INV1": ({"chargeCurrentLimit": 200.0, "chargeVolt": 58.0}, {"batteryMaxCurrentCharge": "65"}, 65.0 * 51.2),
+        # The inverter set above the BMS limit: the BMS binds.
+        "INV2": ({"chargeCurrentLimit": 200.0, "chargeVolt": 58.0}, {"batteryMaxCurrentCharge": "250"}, 200.0 * 51.2),
+        # No inverter setting read: unchanged, the BMS limit.
+        "INV3": ({"chargeCurrentLimit": 200.0, "chargeVolt": 58.0}, {}, 200.0 * 51.2),
+        # No BMS limit but the inverter's own is known: that is still a real limit.
+        "INV4": ({"chargeCurrentLimit": 0.0, "maxChargeCurrentLimit": 0.0, "chargeVolt": 58.0}, {"batteryMaxCurrentCharge": "65"}, 65.0 * 51.2),
+    }
+    for sn, (values, settings, expected) in cases.items():
+        s.device_values[sn] = values
+        s.device_settings[sn] = settings
+        rate = s.battery_rate_max(sn)
+        if abs(rate - expected) > 1:
+            print(f"ERROR: {sn} battery_rate_max {rate}W, expected {expected}W")
+            failed = True
+    assert not failed, "test_battery_rate_max_is_capped_by_the_inverters_own_current_limit"
+
+
 def test_battery_rate_max_prefers_a_populated_current_field():
     """A zero maxChargeCurrentLimit must not mask a populated chargeCurrentLimit.
 
@@ -1245,6 +1274,7 @@ def run_sunsynk_api_tests(my_predbat):
         ("capacity_ah_to_kwh", test_battery_capacity_amp_hours_to_kwh),
         ("battery_rate_max", test_battery_rate_max_from_charge_current),
         ("rate_max_field_priority", test_battery_rate_max_prefers_a_populated_current_field),
+        ("rate_max_unit_cap", test_battery_rate_max_is_capped_by_the_inverters_own_current_limit),
         ("pack_voltage_window", test_nominal_pack_voltage_across_the_lifepo4_charge_window),
         ("inverter_limit_vs_export", test_inverter_limit_is_the_rating_and_export_limit_is_the_cap),
         ("battery_reserve_min", test_battery_reserve_min_from_settings),
