@@ -998,7 +998,7 @@ Keep your Sunsynk login in `secrets.yaml` rather than in `apps.yaml` - see [Stor
 - `sunsynk_password` - Your Sunsynk Connect account password
 - `sunsynk_region` - The API region your account is registered in: `'sunsynk'` (default, `api.sunsynk.net`) or `'inteless'` (`pv.inteless.com`)
 - `sunsynk_auth_method` - The login flow: `'password'` (default, RSA-encrypted login), `'password_legacy'` (the pre-2025 plaintext login, opt-in for regions that still serve it) or `'oauth'` (Predbat.com injects and refreshes the token)
-- `sunsynk_inverter_sn` - Optional, restrict Predbat to specific inverter serial number(s) - a single string or a list. Default is all inverters found on the account
+- `sunsynk_inverter_sn` - Optional, restrict Predbat to specific inverter serial number(s) - a single string or a list. Default is all inverters found on the account. For parallel inverters sharing one battery, list the master only - its slaves are included automatically and the group is controlled as one inverter
 - `sunsynk_automatic` - Set to `true` to automatically configure Predbat entities (recommended, default: `false`)
 - `sunsynk_automatic_ignore_pv` - Optional, defaults to `false`. When `automatic` is enabled, set to `true` to prevent Sunsynk Cloud from overwriting the `pv_power` config
 - `sunsynk_control_enable` - Allow Predbat to write charge/export schedules to the inverter (default: `true`, set to `false` for monitoring only)
@@ -1283,11 +1283,20 @@ To disable, set it to 1440.
 out load_today sensors that update infrequently (e.g., sensors that increment in kWh units may only update every hour). This preprocessing happens before
 the main load data analysis and can significantly improve prediction accuracy, especially for systems with coarse-grained energy sensors. Set to 'false' to turn this feature off.
 
+- **load_history_fill_enable** (default true) fills gaps in the load_today history from the history of Predbat's own `predbat.load_energy_h0` sensor, which records
+today's measured load every cycle and keeps its name when your load sensor changes. This helps when you switch load_today to a different sensor (for example after
+changing inverter), where the new sensor has no history for the days before the switch, or when you cut over to another sensor and back again, leaving a stretch where
+load_today did not count. Any stretch of at least **load_filter_threshold** minutes where load_today did not move is filled with the load predbat.load_energy_h0 recorded
+at the time, and the days before load_today's own history started are counted as available history again. Stretches where predbat.load_energy_h0 did not move either
+are left for load_power_fill_enable and the average gap filling above. How far back this can reach depends on how long Home Assistant keeps history (10 days by default).
+Set to 'false' to turn this feature off.
+
 e.g.
 
 ```yaml
   load_filter_threshold: 60
   load_power_fill_enable: false
+  load_history_fill_enable: false
 ```
 
 See [Load filtering warning in FAQ's](faq.md#i-see-repeated-log-messages-warn-found-1-periods-of-zero-load-with-power-data-filling-using-power-integration).
@@ -1673,6 +1682,12 @@ charge_update_button:
 discharge_update_button:
   - button.solis_discharge
 ```
+
+The Predbat Gateway (Hub) sets this up itself: automatic configuration binds **schedule_write_button** to `switch.predbat_gateway_<serial>_schedule_write`.
+A change to a charge or export slot start or end time, and an enable switched alongside it, is held by the Gateway and shown straight away on its select or switch, but not sent to the inverter until the schedule write switch is turned on.
+The Gateway then sends the complete window in one command, followed by the enable, and the switch returns to off.
+If the inverter refuses the window, the selects go back to showing the inverter's own schedule and Predbat writes the window again on its next update.
+If you change a slot time by hand, turn the schedule write switch on afterwards; a change that is never written goes back to the inverter's schedule after 10 minutes.
 
 *TIP:* Some older GivEnergy inverters such as the Gen 1 hybrid and AC3 inverter that have had firmware upgrades to introduce battery pause functionality do not have sufficient memory on the inverter to provide control of battery pause start and end times.
 GivTCP does not recognise this and so still provides the select.givtcp_xxxx_battery_pause_start_time_slot and end_time_slot controls, but they do not work.<BR>
@@ -2138,7 +2153,9 @@ whether you are within an Octopus Energy "smart charge" slot
 - **octopus_ready_time** - Octopus Energy integration sensor for when the car charging will be completed by
 - **octopus_charge_limit** - Octopus Energy integration sensor for car charging limit
 - **octopus_slot_low_rate** - Whether Octopus Intelligent Slots reported will be at the lowest rate if at home
-- **octopus_slot_max** - Maximum number of 30-minute cheap rate slots per 24-hour period
+- **octopus_slot_max** - Maximum cheap rate dispatch time per 24-hour period, set in 30-minute slots (12 is 6 hours). It is counted in the minutes of each dispatch, so a 10-minute dispatch uses 10 minutes of it
+- **intelligent_dispatch_billing** - `auto` (default), `octopus` or `window`: whether a planned dispatch half hour is billed cheap only when the car charges in it (`octopus`) or whenever the dispatch was in force (`window`, E.ON Next Drive Smart). `auto` picks `window` for the Kraken component on `kraken_provider: eon`
+(see [car charging documentation](car-charging.md))
 - **car_charging_planned** - Indicates when your EV is plugged in and planned to charge during low-rate slots.
 - **car_charging_planned_response** - Values for the car_charging_planned sensor that indicate that the car is plugged in and will charge in the next low rate slot.
 - **car_charging_now** - Sensor to indicate when the EV is charging, used to hold the house battery for the car. Either an on/off sensor or a charging power sensor (W or kW, 200W or more counts as charging)
@@ -2183,7 +2200,7 @@ no hub, use the serial of the device acting as one, which is the Zappi or Eddi t
 - **myenergi_token_hash** - OAuth refresh token hash, used to refresh `myenergi_key` automatically - at least one of `myenergi_key` or `myenergi_token_hash` is required when `myenergi_auth_method` is `oauth`
 - **myenergi_token_expires_at** - OAuth access token expiry, used to trigger a refresh
 - **myenergi_automatic** - Set to `false` to stop Predbat wiring the device sensors into **car_charging_energy**, **car_charging_planned** and **iboost_energy_today** automatically (default: `true`)
-- **myenergi_automatic_zappi** - Set to `false` to wire only the Eddi half of the automatic configuration, leaving your Zappis out of **car_charging_energy**, **car_charging_planned** and **car_charging_power** (default: `true`). This is what to use if you have an Eddi but charge your car with a different make of charger - turning **myenergi_automatic** off instead would drop the **iboost_energy_today** wiring too
+- **myenergi_automatic_zappi** - Set to `false` to wire only the Eddi half of the automatic configuration, leaving your Zappis out of **car_charging_energy**, **car_charging_planned**, **car_charging_power** and **car_charging_now** (default: `true`). This is what to use if you have an Eddi but charge your car with a different make of charger - turning **myenergi_automatic** off instead would drop the **iboost_energy_today** wiring too
 - **myenergi_automatic_eddi** - Set to `false` to wire only the Zappi half of the automatic configuration, leaving your Eddi out of **iboost_energy_today** (default: `true`). This is what to use if your hot water diversion is handled elsewhere but you still want your Zappis wired as cars
 - **myenergi_enable_controls** - Set to `false` for monitor-only operation (default: `true`)
 - **myenergi_poll_seconds** - Poll interval in seconds, rounded to the nearest whole multiple of 60, minimum 60 and maximum 1800 (default: `60`)
@@ -2597,7 +2614,7 @@ Note that the charge/discharge curves *only* affect the accuracy of the charging
 Predbat will still instruct the inverter to charge/discharge at full rate regardless of the charging curve so not having these curves only has an impact on plan accuracy.
 
 If you know the battery charge or discharge curves (e.g. manufacturer info or your own testing) then you can manually configure this in `apps.yaml`,
-or Predbat can calculate the curves based on historical inverter charging/discharging data in Home Assistant.
+or Predbat can calculate the curves based on historical inverter charging/discharging data in Home Assistant. Note the battery curves cannot be calculated if Predbat is in Read Only mode.
 
 If the battery has not recently been fully charged or fully discharged *at a charge/discharge rate that is at least 95% of your maximum charge/discharge rate* then Predbat will not be able to calculate the curves and you'll get a warning in the logfile.
 For some inverters you may not be able to practically charge/discharge at full rates so you'll keep getting the curve warning every time Predbat starts. Simply create dummy curves to stop this warning, e.g:

@@ -619,6 +619,115 @@ class Fetch:
 
         return new_load_minutes
 
+    def fill_load_from_history(self, load_minutes, load_minutes_age):
+        """
+        Fill stretches where load_today stopped counting from the history of Predbat's own load_energy_h0 sensor.
+
+        load_energy_h0 republishes today's measured load (unscaled, unfiltered, summed across inverters) every
+        cycle under an entity id that never changes, so its history outlives a change of load_today sensor - a
+        new inverter, or a cut over to another sensor and back. Where load_today is flat for at least
+        load_filter_threshold minutes, including the days before its own history starts, the increments
+        load_energy_h0 recorded over that stretch are put in its place. Where load_energy_h0 is flat too
+        (Predbat saw the same dead sensor) the stretch is left for fill_load_from_power and the average gap
+        filler. Records tagged as published from load_forecast alone are skipped, as they are not measured.
+
+        Returns (load_minutes, load_minutes_age), with the age extended over any older days filled in.
+        """
+        if not self.get_arg("load_history_fill_enable", True):
+            return load_minutes, load_minutes_age
+
+        size = self.max_days_previous * 24 * 60 + 2
+        data = load_minutes.copy() if load_minutes else MinuteArray({}, size)
+        max_minute = (len(data) - 1) if isinstance(data, MinuteArray) else max(data.keys())
+        gap_size = max(self.get_arg("load_filter_threshold", self.plan_interval_minutes), 5)
+
+        # Find the stretches where load_today did not increment, as (newest, oldest) minute pairs
+        gaps = []
+        gap_start = None
+        for minute in range(max_minute):
+            if data.get(minute, 0) == data.get(minute + 1, 0):
+                if gap_start is None:
+                    gap_start = minute
+            else:
+                if gap_start is not None and minute - gap_start >= gap_size:
+                    gaps.append((gap_start, minute))
+                gap_start = None
+        if gap_start is not None and max_minute - gap_start >= gap_size:
+            gaps.append((gap_start, max_minute))
+        if not gaps:
+            return load_minutes, load_minutes_age
+
+        entity_id = self.prefix + ".load_energy_h0"
+        history = self.get_history_wrapper(entity_id, days=self.max_days_previous, required=False)
+        if not (isinstance(history, list) and history and history[0]):
+            return load_minutes, load_minutes_age
+        # Keep the measured records, and note where consecutive ones are too far apart to join up: the smoothing
+        # below would otherwise spread the difference between them across a stretch nobody measured, whether
+        # Predbat was not running or was publishing a forecast. Those stretches are left to the later fillers.
+        records = []
+        unknown = []
+        previous_minute = None
+        bridged_forecast = False
+        try:
+            for record in sorted(history[0], key=lambda record: str2time(record["last_updated"])):
+                record_minute = int((self.now_utc - str2time(record["last_updated"])).total_seconds() / 60)
+                if (record.get("attributes") or {}).get("source") == "load_forecast":
+                    bridged_forecast = True
+                    continue
+                if previous_minute is not None and (bridged_forecast or previous_minute - record_minute > gap_size):
+                    unknown.append((max(record_minute, 0), previous_minute))
+                records.append(record)
+                previous_minute = record_minute
+                bridged_forecast = False
+        except (ValueError, TypeError, KeyError):
+            return load_minutes, load_minutes_age
+        if not records:
+            return load_minutes, load_minutes_age
+
+        history_age = (self.now_utc - str2time(records[0]["last_updated"])).days
+        # No extrapolation past the newest record: load_energy_h0 is republished every cycle, so extrapolating
+        # it would add the last rate seen on top of what was published from the last fill, cycle after cycle
+        history_minutes, _ = minute_data(records, self.max_days_previous, self.now_utc, "state", "last_updated", backwards=True, smoothing=True, clean_increment=True, required_unit="kWh", interpolate=False)
+
+        # Mark the gap minutes load_energy_h0 measured, then walk from oldest to newest carrying the energy added
+        # so far forward, so the data keeps incrementing all the way to minute 0
+        in_gap = bytearray(max_minute + 1)
+        for newest, oldest_minute in gaps:
+            for minute in range(newest, oldest_minute):
+                in_gap[minute] = 1
+        for newest, oldest_minute in unknown:
+            for minute in range(newest, min(oldest_minute, max_minute + 1)):
+                in_gap[minute] = 0
+        added = 0.0
+        for minute in range(max_minute, -1, -1):
+            if in_gap[minute]:
+                added += max(history_minutes.get(minute, 0) - history_minutes.get(minute + 1, 0), 0)
+            if added:
+                data[minute] = dp4(data.get(minute, 0) + added)
+
+        if added <= 0:
+            return load_minutes, load_minutes_age
+
+        # Days older than load_today's own history are now real data, so extend the age to cover them
+        newest, oldest_minute = gaps[-1]
+        if oldest_minute == max_minute and history_minutes.get(newest, 0) > history_minutes.get(oldest_minute, 0):
+            load_minutes_age = min(max(load_minutes_age, history_age), self.max_days_previous)
+
+        self.log("Filled {} gaps in load_today totalling {}kWh from {} history, data now goes back {} days".format(len(gaps), dp2(added), entity_id, load_minutes_age))
+        return data, load_minutes_age
+
+    def fetch_load_today(self):
+        """
+        Read the load_today history, backfill the stretches it did not count from load_energy_h0, then work out
+        today's load so far and the last period's load from the filled data.
+        """
+        load_minutes, load_minutes_age = self.minute_data_load(self.now_utc, "load_today", self.max_days_previous, required_unit="kWh", load_scaling=1.0, interpolate=True)
+        self.log("Found {} load_today datapoints going back {} days".format(len(load_minutes), load_minutes_age))
+        self.load_minutes, self.load_minutes_age = self.fill_load_from_history(load_minutes, load_minutes_age)
+        self.load_minutes_source = "load_today"
+        self.load_minutes_now = get_now_from_cumulative(self.load_minutes, self.minutes_now, backwards=True)
+        self.load_last_period = (self.load_minutes.get(0, 0) - self.load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
+
     def previous_days_modal_filter(self, data):
         """
         Look at the data from previous days and discard the best case one
@@ -1178,8 +1287,8 @@ class Fetch:
         """
         Fetch the PV forecast, compute the dawn light/dark split from it, and publish the dawn
         binary_sensor - as one call so the ordering that #4699 regressed on (the split must be
-        computed from a freshly-fetched forecast, not the empty dict fetch_sensor_data() resets it
-        to at the top of each cycle) can't drift apart again. Published unconditionally regardless
+        computed from a freshly-fetched forecast, not the one left over from the previous cycle)
+        can't drift apart again. Published unconditionally regardless
         of whether import rates currently exist, so the sensor never goes stale.
 
         Returns:
@@ -1270,9 +1379,9 @@ class Fetch:
         self.load_minutes_age = 0
         self.load_forecast = {}
         self.load_forecast_array = []
-        self.pv_forecast_minute = {}
-        self.pv_forecast_minute10 = {}
-        self.pv_forecast_minute90 = {}
+        # The PV forecasts are not reset here: fetch_pv_forecast_and_dawn() below replaces all three
+        # at once, and until then a debug dump taken mid-fetch keeps last cycle's forecast rather
+        # than capturing it empty (#4317)
         self.pv_light_dark = {}
         # See Plan.refresh_pv_forecast_minute90(): both series are re-fetched together below, so no
         # earlier pair of signatures may be held against them
@@ -1319,10 +1428,7 @@ class Fetch:
         else:
             # Load data
             if "load_today" in self.args:
-                self.load_minutes, self.load_minutes_age = self.minute_data_load(self.now_utc, "load_today", self.max_days_previous, required_unit="kWh", load_scaling=1.0, interpolate=True)
-                self.log("Found {} load_today datapoints going back {} days".format(len(self.load_minutes), self.load_minutes_age))
-                self.load_minutes_now = get_now_from_cumulative(self.load_minutes, self.minutes_now, backwards=True)
-                self.load_last_period = (self.load_minutes.get(0, 0) - self.load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
+                self.fetch_load_today()
 
                 if ("load_power" in self.args) and self.get_arg("load_power_fill_enable", True):
                     # Use power data to make load data more accurate.
@@ -1336,6 +1442,7 @@ class Fetch:
                 if self.load_forecast:
                     self.log("Using load forecast from load_forecast sensor")
                     self.load_minutes_now = self.load_forecast.get(0, 0)
+                    self.load_minutes_source = "load_forecast"
                     self.load_minutes_age = 0
                     self.load_last_period = 0
                 else:
@@ -1599,8 +1706,9 @@ class Fetch:
 
         # Needed here, ahead of "Find charging windows" below, because calc_pv_light_dark() reads
         # self.pv_forecast_minute to locate dawn - it was previously fetched further down in this
-        # function, after the dawn calculation had already run against the freshly-reset empty dict
-        # from the top of fetch_sensor_data(), so the dawn split could never actually trigger (#4699).
+        # function, after the dawn calculation had already run against an empty dict, so the dawn
+        # split could never actually trigger (#4699). Anything that reads it must still come after
+        # this line: before it, the attribute holds last cycle's forecast (#4317).
         pv_light_dark = self.fetch_pv_forecast_and_dawn(save=save)
 
         # Find discharging windows
@@ -2140,6 +2248,7 @@ class Fetch:
         self.pv_today, _ = minute_data(ge_cloud_data.filter_data(mdata, "pv"), self.max_days_previous, now_utc, "pv", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
 
         self.load_minutes_now = get_now_from_cumulative(self.load_minutes, self.minutes_now, backwards=True)
+        self.load_minutes_source = "ge_cloud"
         self.load_last_period = (self.load_minutes.get(0, 0) - self.load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
         self.import_today_now = get_now_from_cumulative(self.import_today, self.minutes_now, backwards=True)
         self.export_today_now = get_now_from_cumulative(self.export_today, self.minutes_now, backwards=True)

@@ -361,6 +361,7 @@ libyaml
 LIFEPO
 linebreak
 linestyle
+Liskov
 loadml
 loadmlpower
 loadspower
@@ -691,6 +692,7 @@ Trefor
 treforsiphone
 treforsouthwell
 triggerable
+trydan
 tunables
 twinx
 typecode
@@ -707,6 +709,7 @@ undriven
 unencodable
 unfetchable
 unflushed
+unhashable
 unindexed
 unnormalised
 unparseable
