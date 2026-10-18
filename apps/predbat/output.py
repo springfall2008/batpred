@@ -2881,6 +2881,7 @@ class Output:
                     "version": THIS_VERSION_DISPLAY,
                     "error": (had_errors or self.had_errors),
                     "error_count": error_count,
+                    "run_state": self.status_run_state or "",
                 },
             )
 
@@ -2955,6 +2956,7 @@ class Output:
                     "version": THIS_VERSION_DISPLAY,
                     "error": True,
                     "error_count": error_count,
+                    "run_state": self.status_run_state or "",
                 },
             )
 

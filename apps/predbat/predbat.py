@@ -373,6 +373,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         # The status sensor's state (unclamped) and detail as last written, so a repeated warning can keep both
         self.status_state = None
         self.status_detail = ""
+        # The state the last completed run carried out, with no warning text - the sensor's run_state attribute
+        self.status_run_state = None
         self.previous_status = None
         self.had_errors = False
         self.status_warning = None
@@ -1122,6 +1124,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                     "error_count": error_count,
                 },
             )
+
+        # Published as the sensor's run_state attribute by whichever status write follows, and kept until the
+        # next run completes: a run that stops early, or a warning part way through one, leaves the inverter
+        # on this state.
+        self.status_run_state = status
 
         if self.had_errors:
             self.log("Error: Completed run status {} with Errors reported (check log)".format(status))

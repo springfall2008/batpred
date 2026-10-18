@@ -69,6 +69,7 @@ def test_record_status_state_clamped(my_predbat):
     print("*** Running test: record_status clamps the status sensor state at 255 characters")
     failed = 0
 
+    saved_run_state = my_predbat.status_run_state
     try:
         long_message = "Warn: Inverter 0 unable to read charge window time - " + "x" * 300
         my_predbat.current_status = ""
@@ -119,6 +120,7 @@ def test_record_status_state_clamped(my_predbat):
         my_predbat.status_detail = ""
         my_predbat.had_errors = False
         my_predbat.status_warning = None
+        my_predbat.status_run_state = saved_run_state
 
     return failed
 
@@ -139,7 +141,7 @@ def test_record_status_under_warning(my_predbat):
     status_entity = my_predbat.prefix + ".status"
     saved_item = my_predbat.ha_interface.dummy_items.get(status_entity)
     saved_value = my_predbat.dashboard_values.get(status_entity)
-    saved = (my_predbat.current_status, my_predbat.status_state, my_predbat.status_detail, my_predbat.had_errors, my_predbat.status_warning, my_predbat.status_warning_debug, my_predbat.components)
+    saved = (my_predbat.current_status, my_predbat.status_state, my_predbat.status_detail, my_predbat.status_run_state, my_predbat.had_errors, my_predbat.status_warning, my_predbat.status_warning_debug, my_predbat.components)
     warning = "Warn: Return bad float value unavailable from car_charging_soc"
 
     try:
@@ -209,7 +211,7 @@ def test_record_status_under_warning(my_predbat):
         else:
             print("OK: no warning recorded, sensor left alone")
     finally:
-        my_predbat.current_status, my_predbat.status_state, my_predbat.status_detail, my_predbat.had_errors, my_predbat.status_warning, my_predbat.status_warning_debug, my_predbat.components = saved
+        my_predbat.current_status, my_predbat.status_state, my_predbat.status_detail, my_predbat.status_run_state, my_predbat.had_errors, my_predbat.status_warning, my_predbat.status_warning_debug, my_predbat.components = saved
         if saved_item is None:
             my_predbat.ha_interface.dummy_items.pop(status_entity, None)
         else:
@@ -236,7 +238,7 @@ def test_record_status_concurrent(my_predbat):
     status_entity = my_predbat.prefix + ".status"
     saved_item = my_predbat.ha_interface.dummy_items.get(status_entity)
     saved_value = my_predbat.dashboard_values.get(status_entity)
-    saved = (my_predbat.current_status, my_predbat.status_state, my_predbat.status_detail, my_predbat.had_errors, my_predbat.status_warning, my_predbat.status_warning_debug)
+    saved = (my_predbat.current_status, my_predbat.status_state, my_predbat.status_detail, my_predbat.status_run_state, my_predbat.had_errors, my_predbat.status_warning, my_predbat.status_warning_debug)
     original_get_state_wrapper = my_predbat.get_state_wrapper
     original_call_notify = my_predbat.call_notify
     saved_notify_flag = my_predbat.set_status_notify
@@ -304,7 +306,7 @@ def test_record_status_concurrent(my_predbat):
         my_predbat.call_notify = original_call_notify
         my_predbat.set_status_notify = saved_notify_flag
         my_predbat.previous_status = saved_previous_status
-        my_predbat.current_status, my_predbat.status_state, my_predbat.status_detail, my_predbat.had_errors, my_predbat.status_warning, my_predbat.status_warning_debug = saved
+        my_predbat.current_status, my_predbat.status_state, my_predbat.status_detail, my_predbat.status_run_state, my_predbat.had_errors, my_predbat.status_warning, my_predbat.status_warning_debug = saved
         if saved_item is None:
             my_predbat.ha_interface.dummy_items.pop(status_entity, None)
         else:
@@ -344,7 +346,7 @@ def test_record_status_after_comparison(my_predbat):
     status_entity = my_predbat.prefix + ".status"
     saved_item = my_predbat.ha_interface.dummy_items.get(status_entity)
     saved_value = my_predbat.dashboard_values.get(status_entity)
-    saved = (my_predbat.current_status, my_predbat.status_state, my_predbat.status_detail, my_predbat.had_errors, my_predbat.status_warning, my_predbat.status_warning_debug, my_predbat.components, my_predbat.comparison)
+    saved = (my_predbat.current_status, my_predbat.status_state, my_predbat.status_detail, my_predbat.status_run_state, my_predbat.had_errors, my_predbat.status_warning, my_predbat.status_warning_debug, my_predbat.components, my_predbat.comparison)
     # The clean case goes through record_status(notify=True), which sends a notification and moves previous_status
     saved_previous_status = my_predbat.previous_status
     original_call_notify = my_predbat.call_notify
@@ -373,7 +375,7 @@ def test_record_status_after_comparison(my_predbat):
         if not failed:
             print("OK: comparison warnings keep the run's state and detail after them")
     finally:
-        my_predbat.current_status, my_predbat.status_state, my_predbat.status_detail, my_predbat.had_errors, my_predbat.status_warning, my_predbat.status_warning_debug, my_predbat.components, my_predbat.comparison = saved
+        my_predbat.current_status, my_predbat.status_state, my_predbat.status_detail, my_predbat.status_run_state, my_predbat.had_errors, my_predbat.status_warning, my_predbat.status_warning_debug, my_predbat.components, my_predbat.comparison = saved
         my_predbat.previous_status = saved_previous_status
         my_predbat.call_notify = original_call_notify
         if saved_item is None:
@@ -436,6 +438,112 @@ def test_record_status_reset_locked(my_predbat):
     return failed
 
 
+def test_record_status_run_state(my_predbat):
+    """
+    Verify the status sensor carries the state the last run carried out as its run_state attribute,
+    with no warning text, so automations and the gateway can read it without parsing the state.
+
+    The History view still decodes the state from the sensor's text ("Warn: ... [Exporting]"), as
+    some recorder databases don't keep attribute history; this attribute is for live readers.
+    """
+    print("*** Running test: the status sensor's run_state attribute holds the run's plain state")
+    failed = 0
+    status_entity = my_predbat.prefix + ".status"
+    health_entity = "binary_sensor." + my_predbat.prefix + "_components_healthy"
+    saved_items = {entity: my_predbat.ha_interface.dummy_items.get(entity) for entity in (status_entity, health_entity)}
+    saved_values = {entity: my_predbat.dashboard_values.get(entity) for entity in (status_entity, health_entity)}
+    saved = (
+        my_predbat.current_status,
+        my_predbat.status_state,
+        my_predbat.status_detail,
+        my_predbat.status_run_state,
+        my_predbat.had_errors,
+        my_predbat.status_warning,
+        my_predbat.status_warning_debug,
+        my_predbat.components,
+        my_predbat.previous_status,
+    )
+    original_call_notify = my_predbat.call_notify
+    warning = "Warn: Return bad float value unavailable from car_charging_soc"
+
+    def published():
+        item = my_predbat.dashboard_values[status_entity]
+        return item["state"], item["attributes"].get("run_state")
+
+    def check(label, expected_state, expected_run_state):
+        state, run_state = published()
+        if state != expected_state or run_state != expected_run_state:
+            print("ERROR: {}: expected state {!r} with run_state {!r}, got {!r} with run_state {!r}".format(label, expected_state, expected_run_state, state, run_state))
+            return 1
+        return 0
+
+    try:
+        my_predbat.call_notify = lambda message: None
+        my_predbat.components = None
+
+        # Straight after a restart, before any run has finished, there is no state to report
+        my_predbat.status_run_state = None
+        my_predbat.status_state = None
+        my_predbat.reset_run_status()
+        my_predbat.record_status(warning, had_errors=True)
+        failed |= check("before the first run", warning, "")
+
+        # A run that raised a warning: its state follows the warning in the text and is the attribute
+        my_predbat.record_final_run_status("Exporting", " target 20%")
+        failed |= check("a run that raised a warning", warning + " [Exporting]", "Exporting")
+
+        # The same warning part way through the next run keeps the state, as the text does
+        my_predbat.reset_run_status()
+        my_predbat.record_status(warning, had_errors=True)
+        failed |= check("a repeated warning mid-run", warning + " [Exporting]", "Exporting")
+
+        # A run that stops before carrying anything out leaves the inverter on the previous run's state
+        bail_out = "Error: Failed to fetch inverter data, not able to execute the plan"
+        my_predbat.record_status(bail_out, had_errors=True)
+        failed |= check("a run that stopped early", bail_out, "Exporting")
+
+        # A clean run
+        my_predbat.reset_run_status()
+        my_predbat.record_final_run_status("Demand", "")
+        failed |= check("a clean run", "Demand", "Demand")
+
+        # A run that completed with a component failing reports the run's state, not the summary
+        my_predbat.reset_run_status()
+        my_predbat.components = FakeComponents({"octopus": False})
+        my_predbat.record_final_run_status("Hold charging", "")
+        state, run_state = published()
+        if not state.startswith("Error: Complete run status Hold charging") or run_state != "Hold charging":
+            print("ERROR: a component error should keep the run's state as run_state, got {!r} with run_state {!r}".format(state, run_state))
+            failed = 1
+
+        if not failed:
+            print("OK: run_state follows the state each run carried out")
+    finally:
+        (
+            my_predbat.current_status,
+            my_predbat.status_state,
+            my_predbat.status_detail,
+            my_predbat.status_run_state,
+            my_predbat.had_errors,
+            my_predbat.status_warning,
+            my_predbat.status_warning_debug,
+            my_predbat.components,
+            my_predbat.previous_status,
+        ) = saved
+        my_predbat.call_notify = original_call_notify
+        for entity in (status_entity, health_entity):
+            if saved_items[entity] is None:
+                my_predbat.ha_interface.dummy_items.pop(entity, None)
+            else:
+                my_predbat.ha_interface.dummy_items[entity] = saved_items[entity]
+            if saved_values[entity] is None:
+                my_predbat.dashboard_values.pop(entity, None)
+            else:
+                my_predbat.dashboard_values[entity] = saved_values[entity]
+
+    return failed
+
+
 def test_component_health_status(my_predbat):
     """
     Verify record_final_run_status() marks the run as an error, naming the failed component(s),
@@ -446,6 +554,7 @@ def test_component_health_status(my_predbat):
 
     recorded_statuses = []
     original_record_status = my_predbat.record_status
+    saved_run_state = my_predbat.status_run_state
     my_predbat.record_status = lambda message, debug="", had_errors=False, notify=False, extra="": recorded_statuses.append((message, had_errors))
 
     try:
@@ -545,5 +654,6 @@ def test_component_health_status(my_predbat):
         my_predbat.status_warning = None
         my_predbat.components = None
         my_predbat.record_status = original_record_status
+        my_predbat.status_run_state = saved_run_state
 
     return failed

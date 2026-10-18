@@ -280,6 +280,10 @@ predbat.status additionally has the following attributes that are automatically 
 - **Debug** - A set of arrays containing Predbat's planned charging and discharging time windows and battery limits (in kWh)
 - **Version** - version of Predbat that's running
 - **Error** - binary value true or false depending upon whether Predbat is in an error status or nor
+- **Run state** (`run_state`) - the status the last plan update carried out, such as `Exporting` or `Demand, Hold for car`, without any warning or error text.
+It stays the same while a warning is shown, and when an update stops before carrying anything out, as the inverter is still following the last one.
+It is empty after a restart until the first update completes.
+Use it in an automation that follows Predbat's status, e.g. `state_attr('predbat.status', 'run_state')`, rather than parsing the status text.
 
 ## Sensor data
 
