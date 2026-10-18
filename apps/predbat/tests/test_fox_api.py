@@ -5999,13 +5999,47 @@ def test_apply_battery_schedule_charge_only(my_predbat):
             charge_found = True
             assert group["startHour"] == 2, f"Expected startHour=2, got {group['startHour']}"
             assert group["startMinute"] == 30, f"Expected startMinute=30, got {group['startMinute']}"
-            assert group["fdSoc"] == 100, f"Expected fdSoc=100, got {group['fdSoc']}"
+            # Fox Cloud charges towards fdSoc, so it must be the target rather than 100 (#3398)
+            assert group["fdSoc"] == 90, f"Expected fdSoc=90, got {group['fdSoc']}"
             assert group["fdPwr"] == 8000, f"Expected fdPwr=8000, got {group['fdPwr']}"
             assert group["maxSoc"] == 90, f"Expected maxSoc=90, got {group['maxSoc']}"
             assert group["endHour"] == 5, f"Expected endHour=5, got {group['endHour']}"
             assert group["endMinute"] == 29, f"Expected endMinute=29, got {group['endMinute']}"
             assert group["minSocOnGrid"] == 90, f"Expected minSocOnGrid=90, got {group['minSocOnGrid']}"
     assert charge_found, "ForceCharge group not found in schedule"
+
+    return False
+
+
+def test_apply_battery_schedule_charge_target_below_reserve(my_predbat):
+    """
+    Test apply_battery_schedule raises a charge target below the reserve to the reserve in fdSoc as well as maxSoc
+    """
+    print("  - test_apply_battery_schedule_charge_target_below_reserve")
+
+    fox = MockFoxAPIWithSchedulerTracking()
+    deviceSN = "TEST123456"
+
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.local_schedule[deviceSN] = {
+        "reserve": 20,
+        "charge": {"enable": 1, "start_time": "02:30:00", "end_time": "05:30:00", "soc": 12, "power": 6000},
+        "discharge": {"enable": 0, "start_time": "00:00:00", "end_time": "00:00:00", "soc": 10, "power": 5000},
+    }
+
+    run_async(fox.apply_battery_schedule(deviceSN))
+
+    assert len(fox.set_scheduler_calls) == 1
+    charge_groups = [group for group in fox.set_scheduler_calls[0]["groups"] if group.get("workMode") == "ForceCharge"]
+    assert len(charge_groups) == 1, f"Expected one ForceCharge group, got {charge_groups}"
+    group = charge_groups[0]
+    assert group["fdSoc"] == 20, f"Expected fdSoc=20, got {group['fdSoc']}"
+    assert group["maxSoc"] == 20, f"Expected maxSoc=20, got {group['maxSoc']}"
+    assert group["minSocOnGrid"] == 20, f"Expected minSocOnGrid=20, got {group['minSocOnGrid']}"
+    assert group["fdPwr"] == 6000, f"Expected fdPwr=6000, got {group['fdPwr']}"
 
     return False
 
@@ -8199,6 +8233,7 @@ def run_fox_api_tests(my_predbat):
 
         # apply_battery_schedule tests
         failed |= test_apply_battery_schedule_charge_only(my_predbat)
+        failed |= test_apply_battery_schedule_charge_target_below_reserve(my_predbat)
         failed |= test_apply_battery_schedule_discharge_only(my_predbat)
         failed |= test_apply_battery_schedule_both_enabled(my_predbat)
         failed |= test_apply_battery_schedule_neither_enabled(my_predbat)

@@ -2288,6 +2288,8 @@ class FoxAPI(ComponentBase, OAuthMixin):
                 end_hour, end_minute = self.time_string_to_hour_minute(end_time, 0, 0)
 
                 if direction == "charge":
+                    # Fox Cloud treats fdSoc as the force charge target even on the Scheduler v1 call,
+                    # charging on past maxSoc towards it, so it must carry the target too (#3398)
                     new_schedule.append(
                         {
                             "enable": 1,
@@ -2296,7 +2298,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
                             "endHour": end_hour,
                             "endMinute": end_minute,
                             "workMode": "ForceCharge",
-                            "fdSoc": 100,
+                            "fdSoc": max(soc, reserve),
                             "maxSoc": max(soc, reserve),
                             "fdPwr": power,
                             "minSocOnGrid": max(soc, reserve),
@@ -2304,7 +2306,18 @@ class FoxAPI(ComponentBase, OAuthMixin):
                     )
                 elif direction == "discharge":
                     new_schedule.append(
-                        {"enable": 1, "startHour": start_hour, "startMinute": start_minute, "endHour": end_hour, "endMinute": end_minute, "workMode": "ForceDischarge", "fdSoc": max(soc, reserve), "maxSoc": reserve, "fdPwr": power, "minSocOnGrid": reserve}
+                        {
+                            "enable": 1,
+                            "startHour": start_hour,
+                            "startMinute": start_minute,
+                            "endHour": end_hour,
+                            "endMinute": end_minute,
+                            "workMode": "ForceDischarge",
+                            "fdSoc": max(soc, reserve),
+                            "maxSoc": reserve,
+                            "fdPwr": power,
+                            "minSocOnGrid": reserve,
+                        }
                     )
         new_schedule = validate_schedule(new_schedule, reserve, fdPwr_max, self.device_scheduler_count.get(serial, 0), baseline_work_mode=baseline_work_mode)
         self.log("Fox: New schedule for {} (baseline {}): {}".format(serial, baseline_work_mode, new_schedule))
