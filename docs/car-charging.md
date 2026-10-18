@@ -105,7 +105,7 @@ Like car_charging_energy it can be a list of sensors, one per line per car charg
 If you have multiple cars sharing one charger, then only include a single entry for the charger.
 
 If your car charger has no live power sensor, leave **car_charging_power** commented out in `apps.yaml`; the power flow diagram then shows the same four items it always has, and no **predbat.car_charging_power** sensor is published.<BR>
-If you use one of the supported charger integrations (Ohme, myenergi Zappi, Wallbox, GivEnergy EV charger, AlphaESS EV charger or the Predbat gateway) then this is configured automatically and you do not need an `apps.yaml` entry of your own.
+If you use one of the supported charger integrations (Ohme, myenergi Zappi, Wallbox, GivEnergy EV charger, AlphaESS EV charger or the Predbat gateway with `gateway_evc_automatic`) then this is configured automatically and you do not need an `apps.yaml` entry of your own.
 
 If you do not have a suitable car charging energy kWh sensor in Home Assistant then comment the **car_charging_energy** line out of `apps.yaml` and configure **input_number.predbat_car_charging_threshold**
 
@@ -219,7 +219,7 @@ So it does not turn on **binary_sensor.predbat_car_charging_slot**, and an autom
 With Octopus Intelligent charging a charge outside a dispatch does not get the cheap rate either.<BR>
 A car charging outside any charging slot is also modelled in the plan at **input_number.predbat_car_charging_rate** until the end of the current plan slot (**plan_interval_minutes**, 30 minutes by default), so no export is planned over it. With **switch.predbat_metric_dynamic_load_adjust** On its load is also taken out of the recent-load estimate, so it is not counted twice - see [Dynamic Load Adjust](customisation.md#scaling-and-weight-options).<BR>
 Leave it commented out if you have no sensor that reports the car actually drawing power.
-The Ohme (`ohme_automatic`), myenergi Zappi (`myenergi_automatic`), Wallbox (`wallbox_automatic`) and Predbat gateway integrations set it for you, unless you have set it yourself in `apps.yaml`.
+The Ohme (`ohme_automatic`), myenergi Zappi (`myenergi_automatic`) and Wallbox (`wallbox_automatic`) integrations set it for you, unless you have set it yourself in `apps.yaml`. The [GivEnergy Gateway](#givenergy-gateway-ocpp-ev-charger) integration (`gateway_evc_automatic`) sets it too, replacing any value of your own.
 
 - **car_charging_now_response** - Set to the range of positive responses for car_charging_now to indicate that the car is charging. Useful if you have a sensor for your car charger that isn't binary.
 The sensor's state must match one of these exactly (ignoring case). If unset it defaults to `yes`, `on`, `enable`, `true` and `charging`, which covers on/off sensors and chargers whose status reads `Charging`, such as a myenergi Zappi's plug status.
@@ -289,10 +289,62 @@ For multiple cars, set it to a list with one sensor per car.
 
 Multiple cars can be planned with Predbat, in which case you should set **num_cars** in `apps.yaml` to the number of cars you want to plan.
 
-- **car_charging_limit**, **car_charging_planned**, **car_charging_battery_size** and **car_charging_soc** must then be a list of values (i.e. 2 entries for 2 cars)
+- **car_charging_limit**, **car_charging_planned**, **car_charging_battery_size** and **car_charging_soc** must then be a list of values (i.e. 2 entries for 2 cars), and so should **car_charging_now** if you set it
 
 - Each car will have its own Home Assistant slot sensor created e.g. **binary_sensor.predbat_car_charging_slot_1**,
 SoC planning sensor e.g **predbat.car_soc_1** and **predbat.car_soc_best_1** for car 1
+
+#### One charger shared by more than one car
+
+A single charger sensor listed for both cars shows both cars as plugged in (in **car_charging_planned**) or charging (in **car_charging_now**) whenever either one is.
+With **car_charging_exclusive** set to `true` Predbat then plans only one of them, but it goes through the cars in order, so it plans car 0 whenever car 0 has charging to plan, whichever car is actually on the charger.
+
+This applies to a charger whose car settings you set yourself in `apps.yaml` - not one set up by Predbat's own charger integrations (Ohme, myenergi, Wallbox, GivEnergy Gateway or GivEnergy Cloud EV charger), whose automatic setup and charger control assume one car per charger.
+To use it with a Zappi on Predbat's own myenergi integration, set **myenergi_automatic_zappi** to `false` so the integration leaves your Zappi's car settings to you. That includes **car_charging_energy** (and **car_charging_power**), which you then set yourself to the Zappi's `sensor.predbat_myenergi_zappi_<serial>_session_energy` (still published) so its energy is still taken out of your house load. Zappi charger control then stays off, as it needs that setting on.
+
+To fix it, tell Predbat which car is on the charger, and give each car its own sensors that follow the charger only while that car is the one on it (keep **car_charging_exclusive** set to `true` as well).
+For example, with an `input_select` helper of your own, with options `Car 0`, `Car 1` and `None`, which you or an automation set to the car on the charger:
+
+```yaml
+template:
+  - sensor:
+      # Use the same unit as your charger's power sensor: "kW" if it is in kW, which Predbat converts
+      - name: "Car 0 charging power"
+        unit_of_measurement: "W"
+        device_class: power
+        availability: "{{ has_value('input_select.car_on_charger') and (not is_state('input_select.car_on_charger', 'Car 0') or has_value('sensor.your_charger_power')) }}"
+        state: "{{ states('sensor.your_charger_power') if is_state('input_select.car_on_charger', 'Car 0') else 0 }}"
+      - name: "Car 1 charging power"
+        unit_of_measurement: "W"
+        device_class: power
+        availability: "{{ has_value('input_select.car_on_charger') and (not is_state('input_select.car_on_charger', 'Car 1') or has_value('sensor.your_charger_power')) }}"
+        state: "{{ states('sensor.your_charger_power') if is_state('input_select.car_on_charger', 'Car 1') else 0 }}"
+  - binary_sensor:
+      # Use your charger's plugged-in sensor; with a status sensor instead, test for its exact "no car" state,
+      # e.g. for a Zappi's plug status: has_value('sensor.your_charger_status') and not is_state('sensor.your_charger_status', 'EV Disconnected')
+      - name: "Car 0 plugged in"
+        state: "{{ is_state('input_select.car_on_charger', 'Car 0') and is_state('binary_sensor.your_charger_plugged_in', 'on') }}"
+      - name: "Car 1 plugged in"
+        state: "{{ is_state('input_select.car_on_charger', 'Car 1') and is_state('binary_sensor.your_charger_plugged_in', 'on') }}"
+```
+
+```yaml
+  car_charging_now:
+    - sensor.car_0_charging_power
+    - sensor.car_1_charging_power
+  car_charging_planned:
+    - binary_sensor.car_0_plugged_in
+    - binary_sensor.car_1_plugged_in
+  car_charging_exclusive:
+    - true
+    - true
+```
+
+The `availability` lines matter with Octopus Intelligent: the [dispatch check](#checking-intelligent-dispatches-against-the-car) treats an unavailable sensor as no evidence, but a definite 0W as the car not charging.
+
+With Octopus Intelligent, this works when each car is enrolled separately with its own **octopus_intelligent_slot** entry, and **octopus_intelligent_planned_slot** entry if you use one (see [below](#multiple-cars-with-octopus-intelligent-go-iog)).
+With **octopus_automatic**, suspending or removing a car can move the other car to a different index (see [how Predbat picks which car goes in which slot](#how-predbat-picks-which-car-goes-in-which-slot-octopus_automatic)), so check that your `input_select` options still name the right car afterwards.
+When only the charger is enrolled, its dispatches belong to the car whose **octopus_intelligent_slot** entry it is, normally car 0. While the other car is selected, the enrolled car reads 0W, so Predbat can cancel the dispatch - and with **switch.predbat_octopus_intelligent_ignore_unplugged** On it also reads as unplugged, so the dispatch is ignored. This recipe does not suit that setup.
 
 ### Multiple cars with Octopus Intelligent Go (IOG)
 
@@ -671,7 +723,7 @@ A half hour Octopus has still not confirmed after 90 minutes goes back to your n
 **Setting it up**
 
 Point **car_charging_now** in `apps.yaml` at a sensor that shows the car charging.
-If you use `ohme_automatic`, `myenergi_automatic`, `wallbox_automatic` or the Predbat gateway this is already done for you.
+If you use `ohme_automatic`, `myenergi_automatic`, `wallbox_automatic` or the Predbat gateway with `gateway_evc_automatic`, this is already done for you.
 It can be an on/off sensor (matched against **car_charging_now_response**), or a charging power sensor in W or kW, where 200W or more counts as charging - useful for chargers such as Wallbox that have no "charging" sensor:
 
 ```yaml
