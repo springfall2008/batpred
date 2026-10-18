@@ -585,9 +585,10 @@ def test_find_charge_curve_zero_soc_glitch(my_predbat):
     print("*** Running test: find_charge_curve_zero_soc_glitch ***")
     inv = create_curve_test_inverter(my_predbat)
     create_stepped_history_data(my_predbat, glitch=True)
-    failed = check_glitch_free_curve(inv.find_charge_curve(discharge=False))
-    remove_test_history_data(my_predbat)
-    return failed
+    try:
+        return check_glitch_free_curve(inv.find_charge_curve(discharge=False))
+    finally:
+        remove_test_history_data(my_predbat)
 
 
 def test_find_charge_curve_missing_soc_minute(my_predbat):
@@ -611,11 +612,10 @@ def test_find_charge_curve_missing_soc_minute(my_predbat):
 
     inverter_module.minute_data = minute_data_with_gap
     try:
-        failed = check_glitch_free_curve(inv.find_charge_curve(discharge=False))
+        return check_glitch_free_curve(inv.find_charge_curve(discharge=False))
     finally:
         inverter_module.minute_data = original_minute_data
-    remove_test_history_data(my_predbat)
-    return failed
+        remove_test_history_data(my_predbat)
 
 
 def test_find_charge_curve_coarse_soc_steps(my_predbat):
@@ -626,8 +626,10 @@ def test_find_charge_curve_coarse_soc_steps(my_predbat):
     print("*** Running test: find_charge_curve_coarse_soc_steps ***")
     inv = create_curve_test_inverter(my_predbat)
     create_stepped_history_data(my_predbat, start_soc=78, step_percent=5)
-    charge_curve = inv.find_charge_curve(discharge=False)
-    remove_test_history_data(my_predbat)
+    try:
+        charge_curve = inv.find_charge_curve(discharge=False)
+    finally:
+        remove_test_history_data(my_predbat)
     if not charge_curve:
         print("ERROR: No charge curve found from 5% SoC steps")
         return True
