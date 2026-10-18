@@ -24,6 +24,7 @@ import array
 import copy
 import ctypes
 import gc
+import itertools
 import os
 import random
 import signal
@@ -142,6 +143,9 @@ SCENARIO_STATE_ATTRS = [
     "rate_gas",
     "iboost_plan",
     "end_record",
+    "export_budget_mode",
+    "export_budget_cap_kwh",
+    "export_budget_seed",
 ]
 
 
@@ -777,6 +781,77 @@ def run_edge_case_tests(my_predbat):
                 load90_step=load90_step,
             )
         my_predbat.io_adjusted = {}
+
+    failed |= run_export_budget_parity_tests(my_predbat)
+    return failed
+
+
+def run_export_budget_parity_tests(my_predbat):
+    """Every export budget case and mode through both engines and all PV scenarios, returns True on failure"""
+    from tests.test_export_budget import BUDGET_CASES, setup_budget_case
+
+    print("**** Running export budget parity tests ****")
+    failed = False
+    state = snapshot_scenario_state(my_predbat)
+    try:
+        # Lossless (as hand-computed), lossy, a lossy hybrid inverter with an export limit below the battery rate, and lossy with iBoost
+        variants = {
+            "lossless": {},
+            "lossy": {"inverter_loss": 0.96, "battery_loss": 0.95, "battery_loss_discharge": 0.95},
+            "lossy_hybrid": {"inverter_loss": 0.96, "battery_loss": 0.95, "battery_loss_discharge": 0.95, "inverter_hybrid": True, "export_limit": 4 / 60.0},
+            # iBoost solar excess reads the grid balance the cap has just changed
+            "lossy_iboost": {
+                "inverter_loss": 0.96,
+                "battery_loss": 0.95,
+                "battery_loss_discharge": 0.95,
+                "iboost_enable": True,
+                "iboost_solar": True,
+                "iboost_solar_excess": True,
+                "iboost_on_export": True,
+                "iboost_max_power": 3 / 60.0,
+                "iboost_max_energy": 100.0,
+                "iboost_min_power": 0.0,
+                "iboost_min_soc": 0.0,
+                "iboost_rate_threshold": 9999.0,
+                "iboost_rate_threshold_export": 9999.0,
+                "iboost_today": 0.0,
+            },
+        }
+        for case, mode, variant in itertools.product(BUDGET_CASES, (0, 1, 2), variants):
+            args = setup_budget_case(my_predbat, case)
+            for attr, value in variants[variant].items():
+                setattr(my_predbat, attr, value)
+            my_predbat.export_budget_mode = mode
+            my_predbat.export_budget_seed = case["seed"] if mode else None
+            pv, load = args["pv_step"], args["load_step"]
+            pv10 = {m: v * 0.5 for m, v in pv.items()}
+            pv90 = {m: v * 1.5 for m, v in pv.items()}
+            for scenario in (PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90):
+                failed |= dual_run(
+                    "budget_{}_{}_m{}_s{}".format(case["name"], variant, mode, scenario),
+                    my_predbat,
+                    pv,
+                    pv10,
+                    load,
+                    load,
+                    args["charge_limit"],
+                    args["charge_window"],
+                    args["export_window"],
+                    [0.0 for _ in args["export_window"]],
+                    scenario,
+                    args["end_record"],
+                    pv90_step=pv90,
+                    load90_step=load,
+                )
+        # Seed present but mode off must be ignored by both engines
+        args = setup_budget_case(my_predbat, BUDGET_CASES[1])
+        my_predbat.export_budget_mode = 0
+        my_predbat.export_budget_seed = (5.0, 1.0)
+        failed |= dual_run("budget_seed_mode_off", my_predbat, args["pv_step"], args["pv_step"], args["load_step"], args["load_step"], [], [], args["export_window"], [0.0], PV_SCENARIO_NOMINAL, args["end_record"])
+    finally:
+        restore_scenario_state(my_predbat, state)
+    if not failed:
+        print("PASS")
     return failed
 
 
@@ -789,6 +864,7 @@ def run_random_sweep_tests(my_predbat, count=150):
     the sweep is fast enough to absorb the 3x.
     """
     failed = False
+    budget_count = 0
     scenario_counts = {PV_SCENARIO_NOMINAL: 0, PV_SCENARIO_PV10: 0, PV_SCENARIO_PV90: 0}
     for seed in range(count):
         rng = random.Random(seed)
@@ -823,6 +899,43 @@ def run_random_sweep_tests(my_predbat, count=150):
                 break
         if failed:
             break
+
+        # The same configuration with an export budget. Own generator, so every scenario above is unchanged.
+        rng_budget = random.Random(seed + 3000000)
+        my_predbat.export_budget_mode = rng_budget.choice([1, 2])
+        my_predbat.export_budget_cap_kwh = rng_budget.choice([0.0, round(rng_budget.uniform(0.5, my_predbat.soc_max), 2)])
+        my_predbat.export_budget_seed = rng_budget.choice([None, (round(rng_budget.uniform(0, my_predbat.soc_max), 3), round(rng_budget.uniform(0, 1), 3))])
+        budget_scenario = rng_budget.choice([PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90])
+        # Lighter load so forced exports reach the grid; at the full random load the house absorbs most of
+        # the battery output and the cap would rarely bind
+        load_scale = rng_budget.uniform(0.0, 0.5)
+        budget_load = {minute: value * load_scale for minute, value in load_step.items()}
+        budget_load10 = {minute: value * load_scale for minute, value in load10_step.items()}
+        budget_load90 = {minute: value * load_scale for minute, value in load90_step.items()}
+        failed |= dual_run(
+            "random_{}_budget{}_s{}".format(seed, my_predbat.export_budget_mode, budget_scenario),
+            my_predbat,
+            pv_step,
+            pv10_step,
+            budget_load,
+            budget_load10,
+            charge_limit,
+            charge_window,
+            export_window,
+            export_limits,
+            budget_scenario,
+            end_record,
+            pv90_step=pv90_step,
+            load90_step=budget_load90,
+        )
+        my_predbat.export_budget_mode = 0
+        my_predbat.export_budget_cap_kwh = 0.0
+        my_predbat.export_budget_seed = None
+        budget_count += 1
+        if failed:
+            print("Random sweep failed at seed {} with export budget".format(seed))
+            break
+    print("Random sweep ran {} export budget configurations".format(budget_count))
     print("Random sweep ran {} configurations: nominal {}, pv10 {}, pv90 {}".format(sum(scenario_counts.values()), scenario_counts[PV_SCENARIO_NOMINAL], scenario_counts[PV_SCENARIO_PV10], scenario_counts[PV_SCENARIO_PV90]))
     return failed
 

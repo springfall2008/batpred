@@ -41,6 +41,7 @@ from const import (
 from predbat_metrics import metrics
 from futurerate import FutureRate
 from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
+from export_budget import EXPORT_BUDGET_OFF, EXPORT_BUDGET_PV_ORIGIN, EXPORT_BUDGET_MODE_NAMES, EXPORT_BUDGET_REPLAY_DAYS, parse_export_budget_mode, export_budget_replay
 
 import ast
 import copy
@@ -1369,6 +1370,9 @@ class Fetch:
         self.high_export_rates = []
         self.octopus_slots = [[] for _ in range(self.num_cars)]
         self.cost_today_sofar = 0
+        self.export_budget_seed = None
+        self.export_budget_noncompliant_kwh = 0.0
+        self.export_budget_replay_steps = 0
         self.carbon_today_sofar = 0
         self.import_today = {}
         self.export_today = {}
@@ -1812,6 +1816,69 @@ class Fetch:
             self.log("Axle sessions changed from {} to {}".format(prev_axle_sessions, self.axle_sessions))
             force_replan = True
         return force_replan
+
+    def update_export_budget_seed(self):
+        """Replay the measured history to find where the export energy budget stands now.
+
+        Runs after fetch_inverter_data() because the budget cap and the pv_origin parts need soc_max.
+        """
+        self.export_budget_seed = None
+        self.export_budget_noncompliant_kwh = 0.0
+        self.export_budget_replay_steps = 0
+        if not self.export_budget_mode:
+            return
+        cap = self.export_budget_cap_kwh if self.export_budget_cap_kwh > 0 else self.soc_max
+        soc_history = {}
+        if self.export_budget_mode == EXPORT_BUDGET_PV_ORIGIN:
+            soc_history = self.fetch_export_budget_soc_history()
+            if not soc_history:
+                self.log("Warn: Export energy budget has no battery SoC history - estimating the battery flow from pv/import/export/load, which counts conversion losses as PV charge")
+        seed, noncompliant, steps = export_budget_replay(self.export_budget_mode, self.pv_today, self.export_today, self.import_today, self.load_minutes, self.soc_max, cap, soc_history=soc_history)
+        if seed is None:
+            self.log("Warn: Export energy budget has no usable pv/export/import/load history - treating nothing as exportable")
+        self.export_budget_seed = seed
+        self.export_budget_noncompliant_kwh = noncompliant
+        self.export_budget_replay_steps = steps
+
+    def fetch_export_budget_soc_history(self):
+        """Stored kWh keyed by minutes ago over the export budget replay window, summed across inverters.
+
+        Read from each inverter's soc_percent (or soc_kw) sensor history. Returns {} when any inverter has none, so the
+        replay falls back to estimating the battery flow.
+        """
+        days = EXPORT_BUDGET_REPLAY_DAYS + 1
+        total = {}
+        counts = {}
+        for inverter in self.inverters:
+            soc_max = getattr(inverter, "soc_max", 0) or 0
+            percent_sensor = self.get_arg("soc_percent", indirect=False, index=inverter.id)
+            kw_sensor = self.get_arg("soc_kw", indirect=False, index=inverter.id)
+            sensor = percent_sensor or kw_sensor
+            if not isinstance(sensor, str) or not sensor or (percent_sensor and soc_max <= 0):
+                return {}
+            history = self.get_history_wrapper(entity_id=sensor, days=days, required=False)
+            if not history or not history[0]:
+                return {}
+            data, _ = minute_data(
+                history[0],
+                days,
+                self.now_utc,
+                "state",
+                "last_updated",
+                backwards=True,
+                clean_increment=False,
+                smoothing=False,
+                divide_by=1.0,
+                # soc_kw is scaled by battery_scaling, as the live SoC is (Inverter.update_status)
+                scale=soc_max / 100.0 if percent_sensor else (getattr(inverter, "battery_scaling", 1.0) or 1.0),
+                required_unit="%" if percent_sensor else "kWh",
+            )
+            if not data:
+                return {}
+            for minute, value in data.items():
+                total[minute] = total.get(minute, 0.0) + value
+                counts[minute] = counts.get(minute, 0) + 1
+        return {minute: value for minute, value in total.items() if counts[minute] == len(self.inverters)}
 
     def fetch_sensor_data_car_planning(self):
         # Work out car plan?
@@ -4057,6 +4124,24 @@ class Fetch:
         self.calculate_export_on_pv = self.get_arg("calculate_export_on_pv")
         self.calculate_second_pass = self.get_arg("calculate_second_pass")
         self.prediction_kernel_enable = self.get_arg("prediction_kernel_enable", True)
+        budget_arg = self.get_arg("export_budget_mode", "off")
+        budget_mode = parse_export_budget_mode(budget_arg)
+        if budget_mode is None:
+            self.log("Warn: export_budget_mode {} must be one of {} - export energy budget disabled".format(budget_arg, ", ".join(EXPORT_BUDGET_MODE_NAMES)))
+            budget_mode = EXPORT_BUDGET_OFF
+        self.export_budget_mode = budget_mode
+        cap_arg = self.get_arg("export_budget_cap_kwh", 0.0) or 0.0
+        try:
+            budget_cap = float(cap_arg)
+        except (TypeError, ValueError):
+            budget_cap = -1.0
+        if budget_cap < 0:
+            self.log("Warn: export_budget_cap_kwh {} must be a positive number of kWh - using the battery size".format(cap_arg))
+            budget_cap = 0.0
+        self.export_budget_cap_kwh = budget_cap
+        if budget_mode:
+            mode_name = [name for name, value in EXPORT_BUDGET_MODE_NAMES.items() if value == budget_mode][0]
+            self.log("Export energy budget enabled in {} mode".format(mode_name))
         self.calculate_inday_adjustment = self.get_arg("calculate_inday_adjustment")
         self.calculate_regions = True
         self.calculate_import_low_export = self.get_arg("calculate_import_low_export")

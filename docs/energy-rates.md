@@ -711,3 +711,52 @@ Once the integration is active, update `apps.yaml` to link Predbat to the Carbon
   # Carbon Intensity data from National grid
   carbon_intensity: 're:(sensor.carbon_intensity_uk_sensor)'
 ```
+
+## Export energy budget
+
+Some prosumer schemes only let a household sell energy its own PV produced - for example Poland,
+where energy bought from the grid to be stored may not be resold without a licence. Predbat can plan
+battery exports within such a rule. Set in `apps.yaml`:
+
+```yaml
+  export_budget_mode: pv_origin   # off (default) | pv_origin | pv_equivalent
+  # export_budget_cap_kwh: 7.1    # pv_equivalent only, defaults to the battery size
+```
+
+- **pv_origin**: Predbat tracks how much of the stored energy came from PV and how much from the
+  grid. Charging counts as PV up to the PV produced at the time, the rest as grid. Energy the house
+  (and car, iBoost) uses comes from the grid part first, even while PV is exported; only the PV part
+  may be force exported. Every kWh that reaches the grid is PV, sent directly or stored first, and
+  grid energy is only ever used on site. Use this where the rule is "only PV energy may be sold" and
+  storing grid energy for your own use is allowed.
+
+  For example (ignoring losses), the battery charges 5 kWh from the grid while PV makes 5 kWh and the
+  house uses 5 kWh. The 5 kWh stored counts as PV and the house is deemed to have used the grid energy,
+  so the battery may export those 5 kWh later. Over the whole period 5 kWh was imported and used on
+  site, and the 5 kWh exported equals the PV produced. Had the battery charged 5 kWh from the grid at
+  night with no PV, that energy would be grid part: it can run the house but is never force exported.
+- **pv_equivalent**: a credit bucket that all PV production fills (including PV the house uses) and
+  every kWh exported drains. The battery may force export while the bucket has credit. Direct PV
+  surplus export is never limited and doesn't reduce the credit, because the PV it sends out is added
+  and removed in the same step; only battery export draws the credit down. `export_budget_cap_kwh` (default the
+  battery size) caps how much credit is carried over. This can sell grid-charged energy when the
+  bucket has credit, so it is the less strict reading.
+
+Only battery-to-grid export is limited; PV surplus export and grid charging for your own use are not.
+When the budget runs out during an export window the battery keeps covering the house and only the
+export stops. Manual forced exports are limited too; set the mode to `off` to export without it.
+Because the inverter exports at full power down to a window's target SoC, every cycle Predbat raises
+the target of the export running now to at least the measured SoC minus the energy the budget still
+allows (rounded up to a whole percent).
+
+Each cycle Predbat replays up to the last 7 days of `pv_today`, `export_today`, `import_today` and
+`load_today` history to find where the budget stands. It uses the history already loaded for load
+prediction, so the replay is shorter when [days_previous](apps-yaml.md#days_previous) covers fewer
+days (`history_steps` on the sensor shows how many 5 minute steps were replayed). For `pv_origin` it also reads 7 days of the
+battery's `soc_percent` (or `soc_kw`) history, so conversion losses are not mistaken for PV charge;
+without that history it estimates the battery flow and logs a warning. It publishes `predbat.export_budget`
+(exportable kWh now, with `planned_battery_export_kwh` and `noncompliant_export_kwh` - export in the
+replayed history the rule would not have allowed). Its `results` attribute holds the budget over the
+best plan in the same format as `predbat.soc_kw_best`, so it can be charted next to the planned SoC.
+
+This is a planning aid, not legal advice. Check the rules that apply to you.

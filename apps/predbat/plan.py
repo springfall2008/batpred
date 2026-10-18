@@ -39,7 +39,9 @@ from const import (
     EXPORT_MODE_TARGET,
     EXPORT_MODE_FREEZE,
     EXPORT_MODE_IDLE,
+    RUN_EVERY,
 )
+from export_budget import EXPORT_BUDGET_PV_EQUIVALENT, export_budget_floor_percent
 
 from utils import (
     calc_percent_limit,
@@ -2212,13 +2214,18 @@ class Plan:
                         self.export_limits_best,
                         False,
                         end_record=self.end_record,
+                        save="clip" if self.export_budget_mode else None,
                     )
 
                     # Work out record windows
                     record_export_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.export_window_best), 1)
 
-                    # Export slot clipping
-                    self.export_window_best, self.export_limits_best = self.clip_export_slots(self.minutes_now, self.predict_soc, self.export_window_best, self.export_limits_best, record_export_windows, PREDICT_STEP)
+                    # Export slot clipping. With the export energy budget on, the run above was a saving (Python) run
+                    # so clipping can see what the budget allows at the start of each window
+                    budget_clip = {}
+                    if self.export_budget_mode:
+                        budget_clip = {"budget_exportable": self.prediction.predict_export_budget_start}
+                    self.export_window_best, self.export_limits_best = self.clip_export_slots(self.minutes_now, self.predict_soc, self.export_window_best, self.export_limits_best, record_export_windows, PREDICT_STEP, **budget_clip)
 
                     # Filter out the windows we disabled during clipping
                     self.export_limits_best, self.export_window_best = self.discard_unused_export_slots(self.export_limits_best, self.export_window_best)
@@ -2313,6 +2320,10 @@ class Plan:
             self.plan_last_updated = self.now_utc
             self.plan_last_updated_minutes = self.minutes_now
 
+        # Export energy budget: re-check the export running now against the measured state every cycle, so a kept
+        # plan or a plan clipped from an earlier forecast can never command more export than the budget allows
+        self.apply_export_budget_floor()
+
         # Final simulation of base
         metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
             self.charge_limit, self.charge_window, self.export_window, self.export_limits, False, save="base" if publish else None, end_record=self.end_record
@@ -2397,6 +2408,7 @@ class Plan:
             if publish:
                 self.publish_charge_limit(self.charge_limit_best, self.charge_window_best, best=True, soc=self.predict_soc_best)
                 self.publish_export_limit(self.export_window_best, self.export_limits_best, best=True)
+                self.publish_export_budget()
 
                 # Compute marginal energy cost matrix (what-if extra load scenarios)
                 self.calculate_marginal_costs()
@@ -3666,9 +3678,35 @@ class Plan:
                 window["target"] = 0
         return charge_window_best, charge_limit_best
 
-    def clip_export_slots(self, minutes_now, predict_soc, export_window_best, export_limits_best, record_export_windows, step):
+    def apply_export_budget_floor(self):
+        """Hold export windows running now, or starting before the next cycle, at or above the measured SoC minus the
+        energy the export budget allows now (seeded from history every cycle). The inverter force exports at full power
+        down to the target while the battery also covers the house, so a lower target could sell more than the budget.
+        """
+        if not self.export_budget_mode:
+            return
+        seed = self.export_budget_seed
+        if self.export_budget_mode == EXPORT_BUDGET_PV_EQUIVALENT:
+            stored_to_ac = self.battery_loss_discharge * self.inverter_loss
+            exportable = seed[0] / stored_to_ac if seed and stored_to_ac > 0 else 0.0
+        else:
+            exportable = self.soc_kw * seed[1] if seed else 0.0
+        floor_percent = export_budget_floor_percent(self.soc_kw, exportable, self.soc_max)
+        for window_n, window in enumerate(self.export_window_best):
+            limit = self.export_limits_best[window_n]
+            if window["start"] >= self.minutes_now + RUN_EVERY or window["end"] <= self.minutes_now or export_mode_of(limit) != EXPORT_MODE_TARGET:
+                continue
+            if (export_target_of(limit) or 0) < floor_percent:
+                self.export_limits_best[window_n] = pack_export_limit(EXPORT_MODE_TARGET, floor_percent, export_power_of(limit))
+                window["target"] = max(window.get("target", 0), float(floor_percent))
+                self.log("Export energy budget: export {} - {} target raised to {}% (SoC {} kWh, exportable {} kWh)".format(self.time_abs_str(window["start"]), self.time_abs_str(window["end"]), floor_percent, dp2(self.soc_kw), dp2(exportable)))
+
+    def clip_export_slots(self, minutes_now, predict_soc, export_window_best, export_limits_best, record_export_windows, step, budget_exportable=None):
         """
         Clip export slots to the right length
+
+        budget_exportable ({relative minute: stored kWh the export energy budget allows from the start of that step})
+        comes from a saving prediction run when the budget is on, see the budget floor below.
         """
         for window_n in range(min(record_export_windows, len(export_window_best))):
             window = export_window_best[window_n]
@@ -3723,6 +3761,17 @@ class Plan:
                         export_limits_best[window_n] = pack_export_limit(EXPORT_MODE_TARGET, calc_percent_limit(limit_soc, self.soc_max), export_power_of(limit))
                         if limit != export_limits_best[window_n] and self.debug_enable:
                             self.log("Clip up export window {} from {} - {} from limit {} to new limit {} target set to {}".format(window_n, window_start, window_end, limit, export_limits_best[window_n], window["target"]))
+
+                    # Export energy budget: the inverter force exports at full power down to the target, and the battery
+                    # also covers the house meanwhile, so a target below the start SoC minus the exportable budget could
+                    # sell more than the budget allows. Never command below that floor; rounded up so it never allows more.
+                    if self.export_budget_mode and budget_exportable is not None and export_mode_of(limit) == EXPORT_MODE_TARGET and predict_minute_start in budget_exportable:
+                        floor_percent = export_budget_floor_percent(predict_soc[predict_minute_start], budget_exportable[predict_minute_start], self.soc_max)
+                        current = export_limits_best[window_n]
+                        if floor_percent > (export_target_of(current) or 0):
+                            export_limits_best[window_n] = pack_export_limit(EXPORT_MODE_TARGET, floor_percent, export_power_of(current))
+                            window["target"] = max(window["target"], float(floor_percent))
+                            self.log("Export energy budget: export window {} - {} target raised to {}% so the inverter only exports what the budget allows".format(self.time_abs_str(window["start"]), self.time_abs_str(window["end"]), floor_percent))
             else:
                 self.log("Warn: Clip export window {} as it's already passed".format(window_n))
                 export_limits_best[window_n] = pack_export_limit(EXPORT_MODE_IDLE)
@@ -5181,6 +5230,9 @@ class Plan:
                 self.predict_carbon_best = pred.predict_carbon_best
                 self.predict_clipped_best = pred.predict_clipped_best
                 self.predict_car_hold_best = pred.predict_car_hold_best
+                self.predict_export_budget = pred.predict_export_budget
+                self.export_budget_capped_minutes = pred.export_budget_capped_minutes
+                self.export_budget_planned_battery_export = pred.export_budget_planned_battery_export
 
             if save:
                 self.log(
