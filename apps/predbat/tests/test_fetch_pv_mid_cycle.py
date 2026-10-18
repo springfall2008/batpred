@@ -17,6 +17,13 @@ after the rate fetches, so a dump taken in between captured no PV at all while t
 a full forecast.
 """
 
+import inspect
+import re
+
+from fetch import Fetch
+
+PV_NAMES = ("pv_forecast_minute", "pv_forecast_minute10", "pv_forecast_minute90")
+
 
 class _StopFetch(Exception):
     """Raised by the test's hook to stop fetch_sensor_data() at the moment it is inspected."""
@@ -25,8 +32,11 @@ class _StopFetch(Exception):
 def test_fetch_pv_mid_cycle(my_predbat):
     """
     Run the real fetch_sensor_data() from a populated previous cycle, stop it inside the window
-    before the PV forecast is refetched, and check the three PV forecasts still hold the previous cycle's values
-    rather than {} - which is what a mid-fetch create_debug_yaml() would have written out.
+    before the PV forecast is refetched, and check the three PV forecasts still hold the previous
+    cycle's values rather than {} - which is what a mid-fetch create_debug_yaml() would have
+    written out. The live run can only reach the start of that window on the shared fixture, so
+    the rest of it is covered by checking fetch_sensor_data() itself never assigns them, leaving
+    fetch_pv_forecast_and_dawn() as the one place they are replaced.
     """
     failed = 0
     print("Test fetch_pv_mid_cycle: PV forecasts are not empty part way through fetch_sensor_data() (#4317)")
@@ -34,22 +44,21 @@ def test_fetch_pv_mid_cycle(my_predbat):
     # fetch_sensor_data() is stopped part way, so put back everything it touched before returning
     saved_state = dict(my_predbat.__dict__)
 
-    previous_pv = {minute: 0.5 for minute in range(0, 24 * 60, 5)}
-    previous_pv10 = {minute: 0.25 for minute in range(0, 24 * 60, 5)}
-    previous_pv90 = {minute: 0.75 for minute in range(0, 24 * 60, 5)}
+    previous = {
+        "pv_forecast_minute": {minute: 0.5 for minute in range(0, 24 * 60, 5)},
+        "pv_forecast_minute10": {minute: 0.25 for minute in range(0, 24 * 60, 5)},
+        "pv_forecast_minute90": {minute: 0.75 for minute in range(0, 24 * 60, 5)},
+    }
     seen = {}
 
     def hook(*args, **kwargs):
         """Record the PV forecasts as a dump would read them now, then stop the fetch."""
-        seen["pv"] = my_predbat.pv_forecast_minute
-        seen["pv10"] = my_predbat.pv_forecast_minute10
-        seen["pv90"] = my_predbat.pv_forecast_minute90
+        seen.update({name: getattr(my_predbat, name) for name in PV_NAMES})
         raise _StopFetch()
 
     try:
-        my_predbat.pv_forecast_minute = dict(previous_pv)
-        my_predbat.pv_forecast_minute10 = dict(previous_pv10)
-        my_predbat.pv_forecast_minute90 = dict(previous_pv90)
+        for name in PV_NAMES:
+            setattr(my_predbat, name, dict(previous[name]))
         # The first call after the per-cycle resets, unconditional, and well before the PV refill.
         # Running further would need every sensor read stubbed, which the shared fixture can't feed.
         my_predbat.combine_active_keep = hook
@@ -58,16 +67,19 @@ def test_fetch_pv_mid_cycle(my_predbat):
             print("ERROR: fetch_sensor_data() returned without reaching combine_active_keep()")
             failed = 1
         except _StopFetch:
-            pass
-
-        if seen:
-            for name, expected in (("pv_forecast_minute", previous_pv), ("pv_forecast_minute10", previous_pv10), ("pv_forecast_minute90", previous_pv90)):
-                key = name.replace("pv_forecast_minute", "pv")
-                if seen[key] != expected:
-                    print("ERROR: {} was {} entries mid-fetch, expected the previous cycle's {} - a debug dump taken now would capture it empty".format(name, len(seen[key]), len(expected)))
+            for name in PV_NAMES:
+                if seen[name] != previous[name]:
+                    print("ERROR: {} was {} entries mid-fetch, expected the previous cycle's {} - a debug dump taken now would capture it empty".format(name, len(seen[name]), len(previous[name])))
                     failed = 1
     finally:
-        my_predbat.__dict__.clear()
+        for name in [name for name in my_predbat.__dict__ if name not in saved_state]:
+            delattr(my_predbat, name)
         my_predbat.__dict__.update(saved_state)
+
+    source = inspect.getsource(Fetch.fetch_sensor_data)
+    for name in PV_NAMES:
+        if re.search(r"self\.{}\s*=(?!=)".format(name), source):
+            print("ERROR: fetch_sensor_data() assigns self.{} directly - only fetch_pv_forecast_and_dawn() should replace it, or a mid-fetch dump can see it half-built".format(name))
+            failed = 1
 
     return failed

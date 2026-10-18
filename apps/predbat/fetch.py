@@ -1706,8 +1706,9 @@ class Fetch:
 
         # Needed here, ahead of "Find charging windows" below, because calc_pv_light_dark() reads
         # self.pv_forecast_minute to locate dawn - it was previously fetched further down in this
-        # function, after the dawn calculation had already run against the freshly-reset empty dict
-        # from the top of fetch_sensor_data(), so the dawn split could never actually trigger (#4699).
+        # function, after the dawn calculation had already run against an empty dict, so the dawn
+        # split could never actually trigger (#4699). Anything that reads it must still come after
+        # this line: before it, the attribute holds last cycle's forecast (#4317).
         pv_light_dark = self.fetch_pv_forecast_and_dawn(save=save)
 
         # Find discharging windows
