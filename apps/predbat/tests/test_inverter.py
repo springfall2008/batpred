@@ -1136,6 +1136,56 @@ def test_create_missing_arg_does_not_fill_sibling_entries(test_name, my_predbat)
     return 1 if failed else 0
 
 
+def test_create_missing_arg_keeps_inverter_0_single_value(test_name, my_predbat):
+    """
+    A single (non-list) apps.yaml value is inverter 0's, and must survive another inverter creating its dummy.
+
+    On a mixed fleet where inverter 0 has the control and inverter 1 does not, inverter 1's
+    create_missing_arg() turned the single value into a fresh list and threw it away, so inverter 0
+    lost its own entity: it read the literal default (100%) instead of its real target SoC, and every
+    write to it failed with "not an entity id" (or, padded with None, "No entity_id").
+    """
+    failed = False
+    print(f"**** Running Test: {test_name} ****")
+
+    saved_args = copy.deepcopy(my_predbat.args)
+    saved_apps_yaml = getattr(my_predbat, "args_from_apps_yaml", None)
+    dummy_items = my_predbat.ha_interface.dummy_items
+    saved_entity = dummy_items.get("number.inv0_charge_limit")
+    try:
+        my_predbat.args["num_inverters"] = 2
+        # GE has a target SoC control, GS does not, so only inverter 1 builds a charge_limit dummy
+        my_predbat.args["inverter_type"] = ["GE", "GS"]
+        my_predbat.args["charge_limit"] = "number.inv0_charge_limit"
+        my_predbat.args_from_apps_yaml = copy.deepcopy(my_predbat.args)
+        dummy_items["number.inv0_charge_limit"] = 55
+
+        inv0 = Inverter(my_predbat, 0, quiet=True)
+        Inverter(my_predbat, 1, quiet=True)
+
+        expected = ["number.inv0_charge_limit", "sensor.{}_GS_1_charge_limit".format(my_predbat.prefix), None, None]
+        if my_predbat.args["charge_limit"] != expected:
+            print("ERROR: {} expected charge_limit {} got {}".format(test_name, expected, my_predbat.args["charge_limit"]))
+            failed = True
+        current = my_predbat.get_arg("charge_limit", index=0, default=100.0)
+        if current != 55:
+            print("ERROR: {} expected inverter 0 to read its own charge limit 55 got {}".format(test_name, current))
+            failed = True
+        if inv0.user_configured_entity("charge_limit") != "number.inv0_charge_limit":
+            print("ERROR: {} expected inverter 0's apps.yaml entity to still count as configured, got {}".format(test_name, inv0.user_configured_entity("charge_limit")))
+            failed = True
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        my_predbat.args_from_apps_yaml = saved_apps_yaml
+        if saved_entity is None:
+            dummy_items.pop("number.inv0_charge_limit", None)
+        else:
+            dummy_items["number.inv0_charge_limit"] = saved_entity
+
+    return 1 if failed else 0
+
+
 def test_custom_inverter_def_drops_rate_step(test_name, my_predbat, ha):
     """
     A custom inverter type is built from a copy of the GE row, but must not inherit GivEnergy's rate step (#5324).
@@ -6328,6 +6378,7 @@ charge_start_service:
     failed |= test_window_warning_names_components_when_type_unset("window_warning_names_components_when_type_unset", my_predbat, dummy_items)
     failed |= test_short_per_inverter_list_gets_its_dummy_entity("short_per_inverter_list_gets_its_dummy_entity", my_predbat)
     failed |= test_create_missing_arg_does_not_fill_sibling_entries("create_missing_arg_does_not_fill_sibling_entries", my_predbat)
+    failed |= test_create_missing_arg_keeps_inverter_0_single_value("create_missing_arg_keeps_inverter_0_single_value", my_predbat)
     if failed:
         return failed
 

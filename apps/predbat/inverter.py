@@ -329,7 +329,13 @@ class Inverter:
             # below: the caller overwrites [self.id] with its dummy entity straight afterwards, so a
             # bare default left in another inverter's slot reads back as "configured" there too - and
             # rate_controls() then takes a sibling's default number for a bound entity (#5359)
+            single_value = self.base.args.get(arg)
             self.base.args[arg] = [default if i == self.id else None for i in range(4)]
+            if self.id > 0 and single_value is not None:
+                # A single apps.yaml value is inverter 0's (see user_configured_entity()), so another
+                # inverter making its dummy must not throw it away - inverter 0 would lose its own
+                # entity and read and write the default in its place
+                self.base.args[arg][0] = single_value
         elif len(self.base.args[arg]) <= self.id:
             # A list that stops short of this inverter is just as missing for it as no list at all,
             # and every caller assigns into [self.id] straight afterwards - so a short one raised
@@ -361,7 +367,7 @@ class Inverter:
             # slot may by now hold the dummy an earlier refresh wrote there
             raw = raw[self.id] if self.id < len(raw) else None
         elif self.id > 0:
-            # A single value is inverter 0's, as create_missing_arg() has always treated it
+            # A single value is inverter 0's, which create_missing_arg() keeps in slot 0
             raw = None
         # Judged on what apps.yaml itself says, not just that it said something: a placeholder such as
         # Sofar's '00:00:00' is set, but the live slot holds Predbat's own dummy from the first cycle on
