@@ -34,7 +34,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v9.4.1"
+THIS_VERSION = "v9.4.2"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
 from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, DEFAULT_PREDBAT_REPOSITORY
@@ -419,7 +419,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         # DC array size in kWp, capping the p90 cloud model's extrapolation. Auto-detected from the
         # forecast provider (see resolve_pv_array_kwp); 0 leaves the cap inert.
         self.pv_array_kwp = 0.0
-        self.load_scaling90 = 0.7
+        self.load_scaling90 = 0.9
         self.metric_future_rate_offset_import = 0.0
         self.metric_future_rate_offset_export = 0.0
         self.metric_inday_adjust_damping = 1.0
@@ -566,6 +566,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.load_minutes = {}
         self.load_minutes_now = 0
         self.load_minutes_age = 0
+        self.load_minutes_source = None
         self.load_last_period = 0
         self.load_last_status = "baseline"
         self.dynamic_load_car_since = {}
@@ -582,6 +583,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.octopus_surplus = set()
         self.octopus_slots_planned = {}
         self.octopus_slots_held = {}
+        self.octopus_slots_held_saved = {}
+        self.dispatch_billing_warned = None
         self.battery_capacity_nominal = False
         self.battery_scaling_auto = False
         self.releases = {}
@@ -641,6 +644,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.pv_today = {}
         self.load_minutes = {}
         self.load_minutes_age = 0
+        self.load_minutes_source = None
         self.load_forecast = {}
         self.load_forecast_array = []
         self.pv_forecast_minute = {}
@@ -685,6 +689,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.pv_today = {}
         self.load_minutes = {}
         self.load_minutes_age = 0
+        self.load_minutes_source = None
         self.battery_temperature_charge_curve = {}
         self.battery_temperature_discharge_curve = {}
         self.battery_temperature_history = {}
@@ -2190,6 +2195,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.load_plan()
             # And the Octopus Intelligent dispatch state, so a restart part-way through a dispatch carries on from it
             self.dynamic_load_car_load()
+            # And the half hours Octopus Intelligent dispatches ran in, so they keep the dispatch rate
+            self.octopus_held_load()
 
         except Exception as e:
             self.log("Error: Exception raised {}".format(e))
