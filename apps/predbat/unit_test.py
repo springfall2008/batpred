@@ -227,6 +227,7 @@ from tests.test_control_monitor import run_control_monitor_tests
 from tests.test_sunsynk_publish import run_sunsynk_publish_tests
 from tests.test_sunsynk_storage import run_sunsynk_storage_tests
 from tests.test_sunsynk_config import run_sunsynk_config_tests
+from tests.test_sunsynk_parallel import run_sunsynk_parallel_tests
 from tests.test_alphaess_const import run_alphaess_const_tests
 from tests.test_alphaess_api import run_alphaess_api_tests
 from tests.test_alphaess_config import run_alphaess_config_tests
@@ -644,6 +645,7 @@ def main():
         ("sunsynk_publish", run_sunsynk_publish_tests, "Sunsynk publish tests", False),
         ("sunsynk_storage", run_sunsynk_storage_tests, "Sunsynk storage tests", False),
         ("sunsynk_config", run_sunsynk_config_tests, "Sunsynk config/INVERTER_DEF tests", False),
+        ("sunsynk_parallel", run_sunsynk_parallel_tests, "Sunsynk parallel master/slave group tests", False),
         ("alphaess_const", run_alphaess_const_tests, "AlphaESS constants tests", False),
         ("alphaess_api", run_alphaess_api_tests, "AlphaESS API tests", False),
         ("alphaess_config", run_alphaess_config_tests, "AlphaESS config/INVERTER_DEF tests", False),
