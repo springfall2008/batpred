@@ -578,6 +578,61 @@ async def _noop(*args, **kwargs):
     return None
 
 
+def test_parallel_cli_never_writes_to_a_slave():
+    """The standalone CLI's --tou-test round trip reaches the master only, and names the slave as one."""
+    import argparse
+    import io
+    from contextlib import redirect_stdout
+    from tests.test_sunsynk_api import CLIMockSunsynk
+    from sunsynk import test_sunsynk_api as run_cli_once
+
+    failed = False
+    client = _parallel_pair(CLIMockSunsynk())
+    client.access_token = "tok"
+    tested = []
+
+    async def fake_round_trip(cli_client, sn):
+        """Record which serial the TOU round trip was run against."""
+        tested.append(sn)
+        return False
+
+    args = argparse.Namespace(username=None, password=None, region="sunsynk", auth_method="password", serial=None, dump_settings=False, write_test=False, tou_test=True, automatic=False)
+    buffer = io.StringIO()
+    with patch("sunsynk._build_sunsynk", return_value=client), patch.object(client, "run", side_effect=_async_true), patch("sunsynk._tou_round_trip", side_effect=fake_round_trip), patch.object(
+        client, "_integration_now", return_value=LONDON.localize(datetime(2026, 10, 18, 9, 5))
+    ), redirect_stdout(buffer):
+        run_async_local(run_cli_once(args))
+    output = buffer.getvalue()
+    if tested != [MASTER]:
+        print(f"ERROR: the TOU round trip must run against the master only, ran against {tested}")
+        failed = True
+    if f"Parallel group: master {MASTER}" not in output or f"{SLAVE} is a parallel slave of {MASTER}" not in output:
+        print(f"ERROR: the CLI should describe the group:\n{output}")
+        failed = True
+    return failed
+
+
+def test_parallel_cli_automatic_flag():
+    """--automatic builds the CLI's component with automatic config on; without it, off."""
+    import argparse
+    from mock_base import MockBase
+    from sunsynk import _build_sunsynk
+
+    failed = False
+    for flag in (True, False):
+        args = argparse.Namespace(username="someone@example.com", password="secret", region="sunsynk", auth_method="password", serial=None, credentials=None, automatic=flag)
+        client = _build_sunsynk(MockBase(), args)
+        if client.automatic is not flag:
+            print(f"ERROR: --automatic {flag} built a component with automatic={client.automatic}")
+            failed = True
+    return failed
+
+
+async def _async_true(*args, **kwargs):
+    """Stand in for a successful run()."""
+    return True
+
+
 def run_sunsynk_parallel_tests(my_predbat):
     """Run all Sunsynk parallel-group tests."""
     failed = False
@@ -602,6 +657,8 @@ def run_sunsynk_parallel_tests(my_predbat):
         ("run_drives_master_only", test_parallel_run_drives_the_master_only),
         ("restart", test_parallel_roles_and_battery_energy_survive_a_restart),
         ("slave_settings_not_external", test_parallel_slave_settings_are_not_reported_as_external_changes),
+        ("cli_never_writes_slave", test_parallel_cli_never_writes_to_a_slave),
+        ("cli_automatic_flag", test_parallel_cli_automatic_flag),
     ]:
         try:
             if fn():

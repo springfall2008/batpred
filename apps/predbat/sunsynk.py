@@ -2305,7 +2305,9 @@ def _build_sunsynk(mock_base, args):  # pragma: no cover
         # apply_settings/apply_schedule for a serial already in control_active, which
         # starts empty on every fresh CLI process - so the default path stays read-only.
         control_enable=True,
-        automatic=False,
+        # --automatic runs automatic_config() on the first cycle, as a live install does;
+        # MockBase.set_arg prints every setting it binds with the referenced entity's state.
+        automatic=bool(getattr(args, "automatic", False)),
     )
 
 
@@ -2486,8 +2488,13 @@ async def test_sunsynk_api(args):  # pragma: no cover
         return
 
     serials = client.device_list
+    driven = client.inverter_list
+    groups = client.parallel_groups()
     failures = []
-    print(f"Inverters: {serials}")
+    print(f"Polled: {serials}")
+    print(f"Inverters: {driven}")
+    for master, slaves in groups.items():
+        print(f"Parallel group: master {master}, slave(s) {slaves}")
     for sn in serials:
         print(f"\n--- {sn} detail ---")
         print(json.dumps(client.device_detail.get(sn, {}), indent=2, default=str))
@@ -2496,7 +2503,17 @@ async def test_sunsynk_api(args):  # pragma: no cover
         if args.dump_settings:
             print(f"\n--- {sn} settings ---")
             print(json.dumps(client.device_settings.get(sn, {}), indent=2, default=str))
-        print(f"\nDerived: capacity={client.battery_capacity(sn):.2f} kWh, rate_max={client.battery_rate_max(sn):.0f} W, floor={client.battery_reserve_min(sn)}%")
+        if sn not in driven:
+            # Never written to: a slave takes its settings from its master (GH#5594).
+            master = next((master for master, slaves in groups.items() if sn in slaves), None)
+            print(f"\n{sn} is a parallel slave of {master}: its flows are counted in the master's, and it is never written to")
+            continue
+        if sn in groups:
+            print(f"\n--- {sn} group telemetry (published) ---")
+            print(json.dumps({**client.group_values(sn), **client.group_energy(sn)}, indent=2, default=str))
+        print(
+            f"\nDerived: capacity={client.battery_capacity(sn):.2f} kWh, rate_max={client.battery_rate_max(sn):.0f} W, inverter_limit={client.inverter_limit(sn):.0f} W, export_limit={client.export_limit(sn):.0f} W, floor={client.battery_reserve_min(sn)}%"
+        )
         if args.write_test:
             # A deliberately harmless schedule: a self-use day at the inverter's own floor.
             schedule = {
@@ -2543,6 +2560,7 @@ def main():  # pragma: no cover
     parser.add_argument("--region", default="sunsynk", choices=sorted(SUNSYNK_REGIONS), help="API region")
     parser.add_argument("--auth-method", default="password", choices=["password", "password_legacy"], help="Login flow: RSA-encrypted (default) or the pre-2025 plaintext one")
     parser.add_argument("--serial", default=None, help="Restrict to one inverter serial")
+    parser.add_argument("--automatic", action="store_true", help="Run automatic_config() on the first cycle and print the Predbat settings it binds (writes nothing to the inverter)")
     parser.add_argument("--dump-settings", action="store_true", help="Print the full settings object")
     parser.add_argument("--write-test", action="store_true", help="Build a harmless self-use payload and offer to send it")
     parser.add_argument("--tou-test", action="store_true", help="Write a padded TOU programme to the inverter, verify the read-back, then restore the original (asks first)")
