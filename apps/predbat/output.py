@@ -35,6 +35,8 @@ from const import (
     EXPORT_STATE_PRECEDENCE,
     COMPONENT_ERROR_STATUS_PREFIX,
     COMPONENT_ERROR_STATUS_SUFFIX,
+    RUN_STATE_NAMES,
+    STATUS_STATE_MAX_LENGTH,
 )
 from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state, find_charge_rate, export_mode_of, export_target_of, export_power_of, export_limit_sort_key, pack_export_limit, export_limit_from_stored
 from prediction import Prediction
@@ -89,29 +91,70 @@ def split_status_warning(status):
 
     Returns ``(state, warning)``, either of which may be empty.
 
-    A run that raises a warning records its state in front of it - ``"Exporting, Warn: ..."``. A
-    bare warning or error, with no state in front, is from a run that executed nothing, or from
-    history recorded before the state was kept, and says nothing about the charge/export state: it
-    maps to an empty state that matches neither side. The reconstruction classifies states by
-    substring, so reading one as a state rebuilt a day of force exports as charge holds, from a
-    warning about "car_charging_soc". The component-error summary is the one bare error that
-    carries the run's state inside it, and is unwrapped to that.
+    A run that raises a warning records its state after it in square brackets -
+    ``"Warn: ... [Exporting]"`` - so the status still starts with the warning for anything that
+    checks for one. A bare warning or error, with no state after it, is from a run that executed
+    nothing, or from history recorded before the state was kept, and says nothing about the
+    charge/export state: it maps to an empty state that matches neither side. The reconstruction
+    classifies states by substring, so reading one as a state rebuilt a day of force exports as
+    charge holds, from a warning about "car_charging_soc". The component-error summary is the one
+    bare error that carries the run's state inside it, and is unwrapped to that.
     """
     lowered = status.lower()
     component_prefix = COMPONENT_ERROR_STATUS_PREFIX.lower()
     component_suffix = COMPONENT_ERROR_STATUS_SUFFIX.lower()
     if lowered.startswith(component_prefix) and component_suffix in lowered:
         return status[len(component_prefix) : lowered.index(component_suffix)].strip(), status
-    # Predheat words its warnings "Warn - ..." rather than "Warn: ...", so both forms are
-    # recognised, bare and behind a state alike.
+    # Predheat words its warnings "Warn - ..." rather than "Warn: ...", so both forms are recognised
     if lowered.startswith("warn:") or lowered.startswith("warn -") or lowered.startswith("error:"):
-        return "", status
-    # Split at the earliest marker, whichever kind: the warning text may itself mention another one.
-    indices = [index for index in (lowered.find(marker) for marker in (", warn:", ", warn -", ", error:")) if index >= 0]
-    if indices:
-        index = min(indices)
-        return status[:index].strip(), status[index + 2 :].strip()
+        open_index = run_state_suffix_index(status)
+        if open_index is None:
+            return "", status
+        return status[open_index + 1 : -1], status[:open_index].rstrip()
     return status, ""
+
+
+def run_state_suffix_index(status):
+    """Find the run's state recorded after a warning - the ``[Exporting]`` of ``"Warn: ... [Exporting]"``.
+
+    Returns the index of the suffix's opening bracket, or None when the status does not end in one.
+
+    The bracket is matched by balance from the end, as a state carries brackets of its own
+    (``"Demand [Freeze exporting]"``, ``"Charging [Alert]"``), and is only taken as a state when its
+    contents start with one of RUN_STATE_NAMES followed by nothing or a qualifier: a warning that
+    interpolates a list or an entity can end in brackets that are not a state at all.
+    """
+    if not status.endswith("]"):
+        return None
+    depth = 0
+    open_index = None
+    for index in range(len(status) - 1, -1, -1):
+        if status[index] == "]":
+            depth += 1
+        elif status[index] == "[":
+            depth -= 1
+            if depth == 0:
+                open_index = index
+                break
+    if not open_index or status[open_index - 1] != " ":
+        return None
+    run_state = status[open_index + 1 : -1]
+    for name in RUN_STATE_NAMES:
+        if run_state == name or run_state.startswith((name + ",", name + " [", name + " (")):
+            return open_index
+    return None
+
+
+def status_with_run_state(warning, run_state):
+    """The status sensor state for a run that raised ``warning``: the warning, then the run's state in
+    square brackets, within the length Home Assistant accepts.
+
+    The state is at the end, so clamping the whole string would cut it off first - on exactly the long
+    warnings, such as the window warnings that list every inverter component (#4990). The warning is
+    shortened instead, so the History view can always read the state back.
+    """
+    suffix = " [{}]".format(run_state)
+    return warning[: max(0, STATUS_STATE_MAX_LENGTH - len(suffix))] + suffix
 
 
 def more_active_slot_status(current, candidate, precedence):
@@ -2785,16 +2828,20 @@ class Output:
             if not extra:
                 extra = ""
 
-            # A warning that repeats the one already shown behind the previous run's state keeps that
-            # state in front of it, rather than flipping the sensor back to the bare warning for the few
-            # seconds until this run's own state is put back - two state changes every cycle for as long
+            # A warning that repeats the one already shown with the previous run's state keeps that
+            # state after it, rather than flipping the sensor back to the bare warning for the few
+            # seconds until this run's own state is added - two state changes every cycle for as long
             # as the warning recurs. Any different warning or error, including the ones a run records
             # when it bails out without executing, is shown bare. The state's detail is kept with it.
             state_message = message
+            sensor_state = message[:STATUS_STATE_MAX_LENGTH]
             detail = extra
-            if had_errors and self.status_state and self.status_state != message and self.status_state.endswith(", " + message):
-                state_message = self.status_state
-                detail = self.status_detail
+            if had_errors and self.status_state and self.status_state != message:
+                shown_run_state, shown_warning = split_status_warning(self.status_state)
+                if shown_run_state and shown_warning == message:
+                    state_message = self.status_state
+                    sensor_state = status_with_run_state(message, shown_run_state)
+                    detail = self.status_detail
 
             self.status_state = state_message
             self.status_detail = detail
@@ -2824,7 +2871,7 @@ class Output:
             # exactly the cycles the warning matters.
             self.dashboard_item(
                 self.prefix + ".status",
-                state=state_message[:255],
+                state=sensor_state,
                 attributes={
                     "friendly_name": "Status",
                     "detail": detail,
@@ -2844,7 +2891,7 @@ class Output:
 
             if had_errors:
                 self.had_errors = True
-                # Kept so the end of the run can put the state it executed back in front of it
+                # Kept so the end of the run can add the state it executed after it
                 self.status_warning = message
                 self.status_warning_debug = debug
 
@@ -2857,7 +2904,7 @@ class Output:
 
         Taken under the status lock, as record_status() is: a component thread recording a warning
         between these resets would otherwise leave had_errors set with its warning text cleared, so
-        the end of the run could not put its state back in front of that warning.
+        the end of the run could not add its state after that warning.
         """
         with self.status_lock:
             self.had_errors = False
@@ -2866,16 +2913,17 @@ class Output:
 
     def record_status_under_warning(self, run_status, extra=""):
         """
-        Put the state a run executed back on the status sensor, in front of the warning it raised.
+        Put the state a run executed back on the status sensor, after the warning it raised.
 
         A warning or error recorded during a run takes over the status sensor, and the run's own
         state used to be only logged, so a warning that recurs every cycle erased the executed state
         from the sensor for as long as it lasted - the History view rebuilds past slots from this
-        sensor's history and had nothing to show. The state leads and the warning follows after a
-        comma, the same form as ", Hold for car", so the History view's first-comma split still
-        finds the state. The warning's own debug is kept, error_count is not counted again and no
-        notification is sent - this is the same warning, not a new one. extra is the run's detail
-        (e.g. its target SoC), written as the sensor's detail as a clean run would.
+        sensor's history and had nothing to show. The warning leads and the state follows in square
+        brackets ("Warn: ... [Exporting]"), so the status still starts with the warning for the web
+        dashboard, the gateway and user templates that check for one, and the History view reads the
+        state back with split_status_warning(). The warning's own debug is kept, error_count is not
+        counted again and no notification is sent - this is the same warning, not a new one. extra
+        is the run's detail (e.g. its target SoC), written as the sensor's detail as a clean run would.
 
         Does nothing when no warning was recorded this run (e.g. a component thread set had_errors
         on its own), leaving the sensor as it was.
@@ -2891,13 +2939,13 @@ class Output:
                 error_count = 0
             if not extra:
                 extra = ""
-            message = "{}, {}".format(run_status, self.status_warning)
+            message = "{} [{}]".format(self.status_warning, run_status)
             self.status_state = message
             self.status_detail = extra
             self.current_status = message + extra
             self.dashboard_item(
                 self.prefix + ".status",
-                state=message[:255],
+                state=status_with_run_state(self.status_warning, run_status),
                 attributes={
                     "friendly_name": "Status",
                     "detail": extra,

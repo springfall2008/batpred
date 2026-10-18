@@ -269,7 +269,7 @@ If you toggle this switch in Home Assistant it will force Predbat to perform an 
 
 - **predbat.status** - Gives the current status & errors and logs any changes that Predbat makes to your inverter.
 The different Predbat status values and their meanings are detailed in [what does Predbat do](what-does-predbat-do.md#predbat-status).
-When a warning is reported during a plan update, the update ends by putting the state it carried out in front of the warning, e.g. `Exporting, Warn: ...`.
+When a warning is reported during a plan update, the update ends by adding the state it carried out after the warning in square brackets, e.g. `Warn: ... [Exporting]`, so the status still starts with `Warn:` or `Error:`.
 An update that stopped before carrying anything out shows the warning or error on its own.
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/e24914b8-93d9-4217-812a-ac25a569a52c)

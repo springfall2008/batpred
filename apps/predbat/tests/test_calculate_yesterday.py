@@ -2370,11 +2370,20 @@ def _test_split_status_warning(my_predbat, failed):
         ("Error: Inverter 0 unable to read Export window - no source is configured", ""),
         ("Error: Complete run status Exporting with component errors: gecloud", "Exporting"),
         ("Error: Complete run status Hold charging with component errors: fox", "Hold charging"),
-        ("Exporting, Warn: Return bad float value unavailable from car_charging_soc", "Exporting"),
-        ("Freeze exporting, Hold for car, Error: Inverter 0 unable to read Export window", "Freeze exporting, Hold for car"),
+        ("Warn: Return bad float value unavailable from car_charging_soc [Exporting]", "Exporting"),
+        ("Error: Inverter 0 unable to read Export window [Freeze exporting, Hold for car]", "Freeze exporting, Hold for car"),
         ("Warn - Unable to fetch data from sensor.outdoor_temperature", ""),
-        ("Exporting, Warn - Unable to fetch data from sensor.outdoor_temperature", "Exporting"),
-        ("Charging, Error: Exception raised in fetch, Warn: retrying", "Charging"),
+        ("Warn - Unable to fetch data from sensor.outdoor_temperature [Exporting]", "Exporting"),
+        # The run's state can carry brackets of its own, so the suffix is matched by balance
+        ("Warn: Return bad float value unavailable from car_charging_soc [Demand [Freeze exporting]]", "Demand [Freeze exporting]"),
+        ("Warn: Return bad float value unavailable from car_charging_soc [Charging [Alert]]", "Charging [Alert]"),
+        # A warning that ends in brackets of its own, with no state after it, has no state
+        ("Warn: Bad windows [1, 2]", ""),
+        ("Warn: Unknown entities ['sensor.a', 'sensor.b']", ""),
+        ("Error: Some components failed to start (phase 1)", ""),
+        ("Warn: Bad windows [1, 2] [Hold charging]", "Hold charging"),
+        # An unbalanced tail is not a state either
+        ("Warn: truncated text ]", ""),
     ]
     for status, expected in cases:
         result = split_status_warning(status)[0]
@@ -2386,12 +2395,12 @@ def _test_split_status_warning(my_predbat, failed):
     warning_cases = [
         ("Exporting", ""),
         ("Warn - Unable to fetch data from sensor.outdoor_temperature", "Warn - Unable to fetch data from sensor.outdoor_temperature"),
-        ("Exporting, Warn - Unable to fetch data from sensor.outdoor_temperature", "Warn - Unable to fetch data from sensor.outdoor_temperature"),
-        ("Exporting, Warn: Return bad float value unavailable from car_charging_soc", "Warn: Return bad float value unavailable from car_charging_soc"),
-        # The split is at the first marker, whichever kind it is, so a warning that mentions another
-        # marker later on is kept whole rather than cut at that later marker
-        ("Charging, Error: Exception raised in fetch, Warn: retrying", "Error: Exception raised in fetch, Warn: retrying"),
-        ("Charging, Warn - Unable to fetch data, Error: timeout", "Warn - Unable to fetch data, Error: timeout"),
+        ("Warn - Unable to fetch data from sensor.outdoor_temperature [Exporting]", "Warn - Unable to fetch data from sensor.outdoor_temperature"),
+        ("Warn: Return bad float value unavailable from car_charging_soc [Exporting]", "Warn: Return bad float value unavailable from car_charging_soc"),
+        ("Warn: Return bad float value unavailable from car_charging_soc [Demand [Freeze exporting]]", "Warn: Return bad float value unavailable from car_charging_soc"),
+        # Brackets that are not a state stay part of the warning
+        ("Warn: Bad windows [1, 2]", "Warn: Bad windows [1, 2]"),
+        ("Warn: Bad windows [1, 2] [Hold charging]", "Warn: Bad windows [1, 2]"),
     ]
     for status, expected in warning_cases:
         result = split_status_warning(status)[1]
@@ -2482,34 +2491,34 @@ def _test_warning_status_is_not_a_charge_state(my_predbat, failed):
         print("ERROR: a transient warning before each Exporting cycle should still rebuild export windows, got none")
         failed = True
 
-    # A run records its state in front of the warning - the state is rebuilt, the warning flagged
-    captured = _reconstruct_windows_from_status(my_predbat, lambda stamp: [(0, "Exporting, " + warning)])
+    # A run records its state after the warning - the state is rebuilt, the warning flagged
+    captured = _reconstruct_windows_from_status(my_predbat, lambda stamp: [(0, warning + " [Exporting]")])
     if captured.get("charge_window_best"):
-        print("ERROR: 'Exporting, Warn: ...' rebuilt {} charge windows, expected none".format(len(captured["charge_window_best"])))
+        print("ERROR: 'Warn: ... [Exporting]' rebuilt {} charge windows, expected none".format(len(captured["charge_window_best"])))
         failed = True
     if not captured.get("export_window_best"):
-        print("ERROR: 'Exporting, Warn: ...' should rebuild export windows, got none")
+        print("ERROR: 'Warn: ... [Exporting]' should rebuild export windows, got none")
         failed = True
     elif any(export_mode_of(limit) == EXPORT_MODE_FREEZE for limit in captured["export_limits_best"]):
-        print("ERROR: 'Exporting, Warn: ...' should rebuild force exports, not freezes")
+        print("ERROR: 'Warn: ... [Exporting]' should rebuild force exports, not freezes")
         failed = True
     if not captured.get("status_warnings") or set(captured["status_warnings"].values()) != {warning}:
         print("ERROR: the warning should be passed on to flag the slots, got {}".format(captured.get("status_warnings") and set(captured["status_warnings"].values())))
         failed = True
 
-    # The real sequence in a cycle: the bare warning mid-run, then the state put in front of it
-    captured = _reconstruct_windows_from_status(my_predbat, lambda stamp: [(0, warning), (8, "Exporting, " + warning)])
+    # The real sequence in a cycle: the bare warning mid-run, then the state added after it
+    captured = _reconstruct_windows_from_status(my_predbat, lambda stamp: [(0, warning), (8, warning + " [Exporting]")])
     if captured.get("charge_window_best") or not captured.get("export_window_best"):
-        print("ERROR: a bare warning followed by 'Exporting, Warn: ...' should rebuild exports only, got {} charge and {} export windows".format(len(captured.get("charge_window_best") or []), len(captured.get("export_window_best") or [])))
+        print("ERROR: a bare warning followed by 'Warn: ... [Exporting]' should rebuild exports only, got {} charge and {} export windows".format(len(captured.get("charge_window_best") or []), len(captured.get("export_window_best") or [])))
         failed = True
 
     # A freeze export under a warning stays a freeze - the exact state survives, not just its side
-    captured = _reconstruct_windows_from_status(my_predbat, lambda stamp: [(0, "Freeze exporting, " + warning)])
+    captured = _reconstruct_windows_from_status(my_predbat, lambda stamp: [(0, warning + " [Freeze exporting]")])
     if not captured.get("export_limits_best") or any(export_mode_of(limit) != EXPORT_MODE_FREEZE for limit in captured["export_limits_best"]):
-        print("ERROR: 'Freeze exporting, Warn: ...' should rebuild freeze exports only")
+        print("ERROR: 'Warn: ... [Freeze exporting]' should rebuild freeze exports only")
         failed = True
 
-    # A bare warning (no state in front - nothing executed) is still flagged
+    # A bare warning (no state after it - nothing executed) is still flagged
     captured = _reconstruct_windows_from_status(my_predbat, lambda stamp: [(0, warning)])
     if not captured.get("status_warnings"):
         print("ERROR: a bare warning should still flag its slots")
@@ -2523,7 +2532,7 @@ def _test_warning_status_is_not_a_charge_state(my_predbat, failed):
     def _warning_for_one_hour(stamp):
         plan_minute = int((stamp - plan_start).total_seconds() // 60)
         if warning_start <= plan_minute < warning_end:
-            return [(0, "Exporting, " + warning)]
+            return [(0, warning + " [Exporting]")]
         return [(0, "Exporting")]
 
     captured = _reconstruct_windows_from_status(my_predbat, _warning_for_one_hour)
@@ -2532,16 +2541,16 @@ def _test_warning_status_is_not_a_charge_state(my_predbat, failed):
         print("ERROR: the warning should flag plan minutes {}-{} exactly, got {} minutes from {} to {}".format(warning_start, warning_end - 1, len(flagged), min(flagged) if flagged else None, max(flagged) if flagged else None))
         failed = True
 
-    # A warning that lags two minutes into the next slot, behind the previous slot's state, is that
+    # A warning that lags two minutes into the next slot, under the previous slot's state, is that
     # slot's leftover: the next slot's state is rebuilt without those minutes, so its flag is too.
     lag_slot = 16 * 60
 
     def _warning_lags_into_next_slot(stamp):
         plan_minute = int((stamp - plan_start).total_seconds() // 60)
         if lag_slot - 30 <= plan_minute < lag_slot:
-            return [(0, "Charging, " + warning)]
+            return [(0, warning + " [Charging]")]
         if plan_minute == lag_slot:
-            return [(0, "Charging, " + warning), (120, "Exporting")]
+            return [(0, warning + " [Charging]"), (120, "Exporting")]
         return [(0, "Exporting")]
 
     captured = _reconstruct_windows_from_status(my_predbat, _warning_lags_into_next_slot)

@@ -188,6 +188,15 @@ EXPORT_STATE_PRECEDENCE = ["Exporting", "Freeze exporting", "Hold exporting"]
 COMPONENT_ERROR_STATUS_PREFIX = "Error: Complete run status "
 COMPONENT_ERROR_STATUS_SUFFIX = " with component errors: "
 
+# The states a run can end in (execute.py), each optionally followed by its qualifiers - ", Hold for car",
+# " (Holiday)", " [Freeze exporting]", " [Alert]". A run that raised a warning records its state after it
+# in square brackets ("Warn: ... [Exporting]"), and the History view only reads a trailing bracket as the
+# run's state when it starts with one of these, as warning text can end in brackets of its own.
+RUN_STATE_NAMES = ["Demand", "Charging", "Freeze charging", "Hold charging", "Exporting", "Freeze exporting", "Hold exporting", "Cross-charging", "Hold for car", "Hold for iBoost", "Read-Only", "Calibration"]
+
+# Home Assistant rejects entity states over 255 characters
+STATUS_STATE_MAX_LENGTH = 255
+
 # A log text that repeats (an API response, an Intelligent slot list) is logged in full again after this long, so
 # the full text is never only in a rotated-out log file; in between it is logged as one short line
 REPEAT_FULL_LOG_SECONDS = 3600

@@ -1167,7 +1167,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
         status and status_extra are the run's final status, already recorded. The comparison runs after
         that and re-reads sensors and rates, so it can record a warning that takes over the status
-        sensor; when it does, the run's state is put back in front of it, as for a warning raised
+        sensor; when it does, the run's state is added after it, as for a warning raised
         during the run itself.
         """
         status_before = self.current_status

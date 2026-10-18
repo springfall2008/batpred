@@ -91,6 +91,28 @@ def test_record_status_state_clamped(my_predbat):
             failed = 1
         else:
             print("OK: state clamped to 255 characters ({}), full text kept in current_status ({})".format(len(state), len(my_predbat.current_status)))
+
+        # The run's state follows the warning, so clamping from the end would cut it off first and the
+        # History view would lose the state on exactly the long warnings - the warning is shortened instead
+        saved_components = my_predbat.components
+        my_predbat.components = None
+        try:
+            my_predbat.record_final_run_status("Freeze exporting", "")
+            state = my_predbat.dashboard_values[my_predbat.prefix + ".status"]["state"]
+            if len(state) > 255 or not state.endswith(" [Freeze exporting]") or not state.startswith("Warn: Inverter 0 unable to read charge window time"):
+                print("ERROR: a long warning should be shortened to keep its state within 255 characters, got {} characters ending {!r}".format(len(state), state[-30:]))
+                failed = 1
+
+            # The same long warning recurring mid-run keeps the clamped form, state and all
+            my_predbat.had_errors = False
+            my_predbat.status_warning = None
+            my_predbat.record_status(long_message, had_errors=True)
+            state = my_predbat.dashboard_values[my_predbat.prefix + ".status"]["state"]
+            if len(state) > 255 or not state.endswith(" [Freeze exporting]"):
+                print("ERROR: a repeated long warning should keep its state within 255 characters, got {} characters ending {!r}".format(len(state), state[-30:]))
+                failed = 1
+        finally:
+            my_predbat.components = saved_components
     finally:
         my_predbat.current_status = ""
         my_predbat.status_state = None
@@ -103,8 +125,8 @@ def test_record_status_state_clamped(my_predbat):
 
 def test_record_status_under_warning(my_predbat):
     """
-    Verify a run that raised a warning ends with its executed state in front of the warning on the
-    status sensor ("Exporting, Warn: ..."), keeping the warning's debug, without counting the
+    Verify a run that raised a warning ends with its executed state after the warning on the
+    status sensor ("Warn: ... [Exporting]"), keeping the warning's debug, without counting the
     warning again - and that a run whose had_errors came from somewhere that recorded no warning
     (a component thread) leaves the sensor alone rather than failing.
 
@@ -112,7 +134,7 @@ def test_record_status_under_warning(my_predbat):
     only logged, so a warning that recurred every cycle erased the executed state from the sensor's
     history and the History view rebuilt a day of force exports as charge holds.
     """
-    print("*** Running test: a run's state is recorded in front of the warning it raised")
+    print("*** Running test: a run's state is recorded after the warning it raised")
     failed = 0
     status_entity = my_predbat.prefix + ".status"
     saved_item = my_predbat.ha_interface.dummy_items.get(status_entity)
@@ -131,8 +153,8 @@ def test_record_status_under_warning(my_predbat):
         my_predbat.record_final_run_status("Exporting", " target 20%")
         published = my_predbat.dashboard_values[status_entity]
         attributes = published["attributes"]
-        if published["state"] != "Exporting, " + warning:
-            print("ERROR: expected the state in front of the warning, got {!r}".format(published["state"]))
+        if published["state"] != warning + " [Exporting]":
+            print("ERROR: expected the state after the warning, got {!r}".format(published["state"]))
             failed = 1
         elif attributes["detail"] != " target 20%":
             print("ERROR: the run's detail should be shown with its state, got {!r}".format(attributes["detail"]))
@@ -146,19 +168,19 @@ def test_record_status_under_warning(my_predbat):
         elif not attributes["error"]:
             print("ERROR: the sensor should still show the run as in error")
             failed = 1
-        elif my_predbat.current_status != "Exporting, " + warning + " target 20%":
+        elif my_predbat.current_status != warning + " [Exporting] target 20%":
             print("ERROR: current_status should follow the sensor's state and detail, got {!r}".format(my_predbat.current_status))
             failed = 1
         else:
-            print("OK: state and detail recorded in front of the warning, debug and error_count kept")
+            print("OK: state and detail recorded after the warning, debug and error_count kept")
 
-        # The next run raises the same warning mid-run: the state stays in front of it, so the sensor
+        # The next run raises the same warning mid-run: the state stays after it, so the sensor
         # doesn't flip to the bare warning and back every cycle
         my_predbat.had_errors = False
         my_predbat.status_warning = None
         my_predbat.record_status(warning, had_errors=True)
-        if my_predbat.dashboard_values[status_entity]["state"] != "Exporting, " + warning:
-            print("ERROR: a repeated warning should keep the state in front of it, got {!r}".format(my_predbat.dashboard_values[status_entity]["state"]))
+        if my_predbat.dashboard_values[status_entity]["state"] != warning + " [Exporting]":
+            print("ERROR: a repeated warning should keep the state after it, got {!r}".format(my_predbat.dashboard_values[status_entity]["state"]))
             failed = 1
         elif my_predbat.dashboard_values[status_entity]["attributes"]["detail"] != " target 20%":
             print("ERROR: a repeated warning should keep the state's detail too, got {!r}".format(my_predbat.dashboard_values[status_entity]["attributes"]["detail"]))
@@ -311,13 +333,13 @@ class FakeComparison:
 def test_record_status_after_comparison(my_predbat):
     """
     Verify a warning the midnight tariff comparison records, after the run's final status, ends up
-    behind the run's state rather than replacing it until the next run.
+    with the run's state after it rather than replacing it until the next run.
 
     The comparison runs after record_final_run_status() and re-reads sensors and rates, so a
     comparison-only warning (or a different one than the run raised) took over the status sensor
-    with no state in front of it, which status-following automations read as no state at all.
+    with no state after it, so the History view read the rest of the run as no state at all.
     """
-    print("*** Running test: a warning from the tariff comparison stays behind the run's state")
+    print("*** Running test: a warning from the tariff comparison keeps the run's state after it")
     failed = 0
     status_entity = my_predbat.prefix + ".status"
     saved_item = my_predbat.ha_interface.dummy_items.get(status_entity)
@@ -329,9 +351,9 @@ def test_record_status_after_comparison(my_predbat):
     try:
         my_predbat.components = None
         for run_warnings, compare_warnings, expected in [
-            ([], [compare_warning], "Exporting, " + compare_warning),
-            ([run_warning], [compare_warning, run_warning], "Exporting, " + run_warning),
-            ([run_warning], [run_warning], "Exporting, " + run_warning),
+            ([], [compare_warning], compare_warning + " [Exporting]"),
+            ([run_warning], [compare_warning, run_warning], run_warning + " [Exporting]"),
+            ([run_warning], [run_warning], run_warning + " [Exporting]"),
             ([], [], "Exporting"),
         ]:
             my_predbat.reset_run_status()
@@ -345,7 +367,7 @@ def test_record_status_after_comparison(my_predbat):
                 print("ERROR: run warnings {} then comparison warnings {}: expected {!r} with its detail, got {!r} detail {!r}".format(run_warnings, compare_warnings, expected, published["state"], published["attributes"]["detail"]))
                 failed = 1
         if not failed:
-            print("OK: comparison warnings stay behind the run's state and detail")
+            print("OK: comparison warnings keep the run's state and detail after them")
     finally:
         my_predbat.current_status, my_predbat.status_state, my_predbat.status_detail, my_predbat.had_errors, my_predbat.status_warning, my_predbat.status_warning_debug, my_predbat.components, my_predbat.comparison = saved
         if saved_item is None:
@@ -366,7 +388,7 @@ def test_record_status_reset_locked(my_predbat):
 
     A component thread records its warning under the lock. If the reset ran outside it, the thread's
     warning could land between clearing had_errors and clearing the warning text, leaving had_errors
-    set with no warning to put the run's state in front of.
+    set with no warning to add the run's state after.
     """
     print("*** Running test: the start-of-run status reset takes the status lock")
     failed = 0
