@@ -69,7 +69,7 @@ pred_bat:
   # subtract PV twice (once implicitly, once via the forecast).
   # Helper 4: import - export + pv + battery_discharge - battery_charge
   load_today:
-  - <sensor.house_load_today
+  - sensor.house_load_today
 
   # ---------------------------------------------------------------
   # INDEVOLT - custom inverter definition

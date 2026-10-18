@@ -944,7 +944,7 @@ A more complete working example, including Home Assistant package sensors, EV ch
 
 ## Indevolt Battery
 
-Thanks to the work of @woutervg1994, Predbat can control the Indevolt plug-in battery using the HA Indevolt integration.  This has been tested with an Indevolt CMS-SF2000 and a Powerflex 2000 ECO.
+Thanks to the work of @woutervg1994, Predbat can control the Indevolt plug-in battery using the HA Indevolt integration.  This has been tested with an Indevolt Powerflex 2000 ECO (CMS-SF2000).
 
 The integration does not provide start/stop times or target SoC, only two service calls:
 
@@ -970,7 +970,7 @@ template:
       # Inverted grid power - Predbat wants negative on import, INDEVOLT is opposite
       - name: "Indevolt Grid Power (inverted)"
         unique_id: indevolt_grid_power_inverted
-        unit_of_measurement: "kW"
+        unit_of_measurement: "W"
         state_class: measurement
         device_class: power
         state: >
@@ -979,7 +979,7 @@ template:
       # House load power (optional, for the flow diagram)
       - name: "House Load Power"
         unique_id: house_load_power
-        unit_of_measurement: "kW"
+        unit_of_measurement: "W"
         state_class: measurement
         device_class: power
         state: >
@@ -990,7 +990,7 @@ template:
       - name: "House Load Today"
         unique_id: house_load_today
         unit_of_measurement: "kWh"
-        state_class: measurement
+        state_class: total_increasing
         device_class: energy
         state: >
           {{ [ IMPORT_TODAY - EXPORT_TODAY + PV_TODAY
