@@ -292,3 +292,9 @@ When an investigation turns up something that passes the test above, add a row. 
 If you are running under the triage bot you cannot edit this file directly — the clone is `reset --hard` before every flow, so the edit would not survive. Write the finding as a single markdown file in the queue directory named in your system prompt instead; the `/journal-update` flow folds the queue in once a day, re-checking each candidate against current `main` first, and opens a PR for a maintainer to merge.
 
 Whichever route you take, the bar is the same and it is not "interesting": record what you **verified**, say how you verified it, and keep anything you merely suspect explicitly marked as suspected. A wrong entry here is worse than a missing one — every later run trusts this file, so a confident mistake ends up in a comment posted to a real reporter. Correcting or deleting a stale entry counts as much as adding one.
+
+## Hub offline while the plan still looks valid (October 2026)
+
+A live Hub outage left `predbat_plan_valid=1`: the engine could still calculate from cached inverter entities. The growing inverter-clock-skew warning was a frozen Hub status timestamp, not evidence of a misconfigured inverter clock. Broker connectivity, component housekeeping success and receipt of a retained MQTT message do not prove fresh battery data.
+
+`GatewayMQTT.inverter_data_error()` checks receipt and source age plus selected battery availability. The engine checks it before planning, inverter reads and execution, invalidates both the plan and its metric, and blocks new Hub inverter commands and cached schedule refreshes. Display-only Hubs and separate PV-only units do not gate the working battery provider. Regression coverage is in `tests/test_gateway_freshness.py` (registered under `gateway`). The current protocol exposes a Hub status timestamp and connection flags, not a separate successful-read timestamp for every battery field.

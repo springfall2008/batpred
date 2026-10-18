@@ -1591,6 +1591,7 @@ class TestPlanRepublish:
         from unittest.mock import MagicMock
 
         gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.inverter_data_error = lambda: None if gw._mqtt_connected else "Broker offline"
         gw.log = MagicMock()
         gw._debug = False
         gw._mqtt_connected = True
@@ -4788,20 +4789,19 @@ class TestCheckInverterResets:
     def _make_gateway(self, read_only=False, alive=True, auto_configured=True):
         """Build a minimal GatewayMQTT stub for _check_inverter_resets() tests.
 
-        Sets _mqtt_connected and _gateway_online so is_alive() returns *alive*
-        without needing to mock the method itself.  When alive=True the gateway
-        is connected to the broker but its LWT reports offline — is_alive()
-        returns True in that state without requiring fresh telemetry.
+        The transport/telemetry guard is stubbed here; real freshness and offline
+        behaviour are covered in TestGatewayFreshness.
         """
         from gateway import GatewayMQTT
         from unittest.mock import MagicMock
 
         gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.inverter_data_error = lambda: None if gw._mqtt_connected else "Broker offline"
         gw.log = MagicMock()
         gw._suffix_to_serial = {}
         gw._inverter_reset_done = set()
         gw._mqtt_connected = alive
-        gw._gateway_online = False  # broker-connected but LWT-offline → is_alive() True when _mqtt_connected
+        gw._gateway_online = True
         gw._last_telemetry_time = 0
         gw._auto_configured = auto_configured
         gw._published = []
@@ -4959,6 +4959,7 @@ class TestCheckRateCaps:
         from unittest.mock import MagicMock
 
         gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.inverter_data_error = lambda: None if gw._mqtt_connected else "Broker offline"
         gw.log = MagicMock()
         gw.base = MagicMock()
         gw.base.inverters = []
@@ -5163,6 +5164,7 @@ class TestCheckReadOnlyState:
         from unittest.mock import MagicMock
 
         gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.inverter_data_error = lambda: None
         gw.log = MagicMock()
         gw._mqtt_connected = connected
         gw._last_read_only = None
@@ -5498,6 +5500,7 @@ class TestSetChargeSlotPayload:
         from unittest.mock import MagicMock
 
         gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.inverter_data_error = lambda: None
         gw.log = MagicMock()
         gw.prefix = "predbat"
         gw._suffix_to_serial = {"30g499": "CH2330G499"}
@@ -7069,6 +7072,7 @@ class TestCommandAck:
         from unittest.mock import MagicMock
 
         gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.inverter_data_error = lambda: None
         gw.log = MagicMock()
         gw._mqtt_connected = True
         gw._command_id = 7
@@ -7556,12 +7560,14 @@ class TestIntegratePower:
 
 def run_gateway_tests(my_predbat=None):
     """Run all GatewayMQTT tests. Returns True on failure, False on success."""
+    from tests.test_gateway_freshness import TestGatewayFreshness
     from tests.test_gateway_token_refresh import TestIsAuthFailure, TestApplyRefreshResponse, TestMaybeRefreshOnAuthError
     from tests.test_gateway_window_commit import TestHubWindowCommit
     from tests.test_gateway_display import TestGatewayDisplayOnly
     from tests.test_gateway_commit import TestGatewayStaging, TestGatewayCommit
 
     test_classes = [
+        TestGatewayFreshness,
         TestGatewayStaging,
         TestGatewayCommit,
         TestHubWindowCommit,

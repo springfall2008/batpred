@@ -2466,6 +2466,10 @@ class GatewayMQTT(ComponentBase):
             self._last_read_only = None
             return
         read_only = bool(self.get_arg("set_read_only", False))
+        if not read_only and self.inverter_data_error():
+            # Keep the housekeeping loop running so it can discard stale schedules,
+            # reconnect and refresh auth, without releasing inverter control.
+            return
         now = time.time()
         changed = read_only != self._last_read_only
         stale = now - self._last_read_only_sent_time >= 30 * 60
@@ -2601,6 +2605,11 @@ class GatewayMQTT(ComponentBase):
             self.log("Warn: GatewayMQTT: Not connected — plan queued for next publish")
             return
 
+        error = self.inverter_data_error()
+        if error:
+            self._pending_plan = None
+            self.log(f"Warn: GatewayMQTT: Not publishing execution plan: {error}")
+            return
         self._plan_version += 1
         data = self.build_execution_plan(plan_entries, plan_version=self._plan_version, timezone=timezone_str)
         self._last_plan_data = data
@@ -2623,6 +2632,13 @@ class GatewayMQTT(ComponentBase):
         stale. The version is left unchanged because the plan content has not changed.
         Gated on an active MQTT connection and a previously built plan.
         """
+        if self.inverter_data_error():
+            # Once the source goes stale, only a newly executed plan may re-arm
+            # publication. Reconnecting must not revive a cached old schedule.
+            self._last_plan_entries = None
+            self._last_published_plan = None
+            self._pending_plan = None
+            return
         if self._last_plan_entries is None or self._last_plan_timezone is None or not self._mqtt_connected:
             return
         if time.time() - self._last_plan_publish_time <= _PLAN_REPUBLISH_INTERVAL:
@@ -2648,6 +2664,10 @@ class GatewayMQTT(ComponentBase):
             command_id: Pre-allocated id number (from _next_command_id); allocated here when None.
             **kwargs: Command-specific fields (power_w, target_soc, etc.).
         """
+        if not self.gateway_display_only and not (command == "set_read_only" and kwargs.get("enable") is True):
+            error = self.inverter_data_error()
+            if error:
+                raise RuntimeError(f"Hub inverter command blocked: {error}")
         if command_id is None:
             command_id = self._next_command_id()
         cmd_json = self.build_command(command, command_id=command_id, **kwargs)
@@ -2706,33 +2726,55 @@ class GatewayMQTT(ComponentBase):
         # thread and timestamp; a stopped component thread remains unhealthy.
         self.update_success_timestamp()
 
-    def is_alive(self):
-        """Check if the gateway component is alive and receiving data.
+    def inverter_data_error(self):
+        """Return why the selected battery data cannot safely support a plan.
 
-        Returns True when MQTT is connected AND either the gateway is
-        offline (LWT says so — we're still connected, just no data) OR
-        we've received telemetry within the last 2 minutes.
-
-        In display mode only the component must be started: optional transport
-        availability is reported separately by _update_display_health().
-
-        Returns:
-            bool: True if healthy, False otherwise.
+        Broker connectivity and message receipt do not establish source freshness.
+        Watch bound control targets and discovered battery members, including leaves
+        behind an EMS, but not a separate PV inverter or an optional display.
         """
         if self.gateway_display_only:
-            return self.api_started
+            return None
         if not self._mqtt_connected:
-            return False
-
+            return "Hub broker connection is offline"
         if not self._gateway_online:
-            # Gateway is offline but we're connected to broker — that's OK
-            return True
+            return "Hub is offline"
+        status = self._last_status
+        now = time.time()
+        if status is None or self._last_telemetry_time <= 0 or now - self._last_telemetry_time >= _TELEMETRY_STALE_THRESHOLD:
+            return "Hub battery telemetry is stale or missing"
+        age = now - status.timestamp
+        if status.timestamp <= 0 or age >= _TELEMETRY_STALE_THRESHOLD or age < -_TELEMETRY_STALE_THRESHOLD:
+            return "Hub battery telemetry source timestamp is stale or invalid"
+        by_serial = {inv.serial.upper(): inv for inv in status.inverters}
+        watched = set()
+        for serial in self._inverter_slot_serials:
+            record = self._discovery.get(serial.upper())
+            if record is None or record.get("battery") or record.get("type") in GATEWAY_COORDINATOR_TYPES:
+                watched.add(serial.upper())
+        coordinated = any(by_serial[key].type in GATEWAY_COORDINATOR_TYPES for key in watched if key in by_serial)
+        if self.gateway_inverter_serial or coordinated:
+            watched.update(key for key, record in self._discovery.items() if record.get("battery") and record.get("type") not in GATEWAY_COORDINATOR_TYPES)
+        if not watched:
+            return "Hub has no configured battery inverter data"
+        for serial in sorted(watched):
+            inv = by_serial.get(serial)
+            if inv is None:
+                return f"Hub battery inverter {serial} is missing"
+            if not inv.connected:
+                return f"Hub battery inverter {serial} is disconnected"
+            if inv.type in GATEWAY_COORDINATOR_TYPES:
+                if inv.battery.ByteSize() == 0 and inv.ems.ByteSize() == 0:
+                    return f"Hub battery coordinator {serial} has no readings"
+            elif inv.battery.ByteSize() == 0:
+                return f"Hub battery inverter {serial} is disconnected or has no battery readings"
+        return None
 
-        # Gateway is online — check telemetry freshness
-        if self._last_telemetry_time == 0:
-            return False
-
-        return (time.time() - self._last_telemetry_time) < _TELEMETRY_STALE_THRESHOLD
+    def is_alive(self):
+        """Require fresh selected battery data, or a started optional display."""
+        if self.gateway_display_only:
+            return self.api_started
+        return self.inverter_data_error() is None
 
     def get_error_count(self):
         """Return the cumulative error count (decode failures, MQTT disconnects, publish failures)."""
