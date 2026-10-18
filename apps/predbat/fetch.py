@@ -1287,8 +1287,8 @@ class Fetch:
         """
         Fetch the PV forecast, compute the dawn light/dark split from it, and publish the dawn
         binary_sensor - as one call so the ordering that #4699 regressed on (the split must be
-        computed from a freshly-fetched forecast, not the empty dict fetch_sensor_data() resets it
-        to at the top of each cycle) can't drift apart again. Published unconditionally regardless
+        computed from a freshly-fetched forecast, not the one left over from the previous cycle)
+        can't drift apart again. Published unconditionally regardless
         of whether import rates currently exist, so the sensor never goes stale.
 
         Returns:
@@ -1379,9 +1379,9 @@ class Fetch:
         self.load_minutes_age = 0
         self.load_forecast = {}
         self.load_forecast_array = []
-        self.pv_forecast_minute = {}
-        self.pv_forecast_minute10 = {}
-        self.pv_forecast_minute90 = {}
+        # The PV forecasts are not reset here: fetch_pv_forecast_and_dawn() below replaces all three
+        # at once, and until then a debug dump taken mid-fetch keeps last cycle's forecast rather
+        # than capturing it empty (#4317)
         self.pv_light_dark = {}
         # See Plan.refresh_pv_forecast_minute90(): both series are re-fetched together below, so no
         # earlier pair of signatures may be held against them
