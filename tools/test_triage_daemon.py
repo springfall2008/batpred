@@ -2390,24 +2390,35 @@ class MarkPrReviewFailedTests(unittest.TestCase):
 
 
 class ReviewPrTests(DaemonPathsTestCase):
-    """Tests for review_pr(), new - runs /code-review under the comment-only permission set."""
+    """Tests for review_pr(), new - runs /pr-review under the comment-only permission set."""
 
     @patch("triage_daemon.subprocess.run")
     def test_invokes_claude_with_the_review_permission_set(self, mock_run):
-        """Runs /code-review at the high effort level with --comment, under the
-        review-only allow/deny lists - no write/push/commit access."""
+        """Runs the /pr-review skill with the scratch dir, under the review-only
+        allow/deny lists - no write/push/commit access."""
         mock_run.return_value = MagicMock(returncode=0)
         triage_daemon.review_pr(4742)
         cmd = mock_run.call_args[0][0]
-        self.assertIn("/code-review 4742 high --comment", cmd[2])
+        self.assertEqual(cmd[2], f"/pr-review 4742 scratch={triage_daemon.SCRATCH_DIR}")
         self.assertIn(triage_daemon.ALLOWED_TOOLS_REVIEW, cmd)
         self.assertIn(triage_daemon.DISALLOWED_TOOLS_REVIEW, cmd)
 
     @patch("triage_daemon.subprocess.run")
+    def test_does_not_let_the_forked_review_post(self, mock_run):
+        """/code-review runs its review in a forked subagent, and a fork sees neither our skill
+        nor the appended system prompt. Given --comment it posts on its own with whatever gh api
+        spelling it picks - PR #5304's run passed `-f body="$(cat ...)"` and every call was denied.
+        The daemon must invoke /pr-review, never /code-review."""
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.review_pr(4742)
+        cmd = mock_run.call_args[0][0]
+        self.assertNotIn("/code-review", cmd[2])
+        self.assertNotIn("--comment", cmd[2])
+
+    @patch("triage_daemon.subprocess.run")
     def test_appends_the_gh_api_form_system_prompt(self, mock_run):
-        """/code-review is built in, so the only place to pin its gh api command form is an
-        appended system prompt - without it the posting step picks `--method POST` first and
-        is denied, which is exactly how PR #4758's review came back empty."""
+        """/pr-review reviews and posts from the main session, which does see an appended system
+        prompt, so the gh api command-form rules and the journal request both reach it."""
         mock_run.return_value = MagicMock(returncode=0)
         triage_daemon.review_pr(4742)
         cmd = mock_run.call_args[0][0]
@@ -2451,6 +2462,81 @@ class ReviewPrTests(DaemonPathsTestCase):
         self.assertEqual(cmd[cmd.index("--model") + 1], "glm-5.3-flash:cloud")
         env = mock_run.call_args.kwargs["env"]
         self.assertEqual(env["ANTHROPIC_BASE_URL"], triage_daemon.OLLAMA_BASE_URL)
+
+
+class PrReviewSkillTests(unittest.TestCase):
+    """Tests for .claude/skills/pr-review/SKILL.md - the skill review_pr() invokes. It does the
+    whole review in the main session and posts it itself, because a forked review cannot see
+    any instruction about how to post."""
+
+    SKILL = Path(__file__).resolve().parent.parent / ".claude" / "skills" / "pr-review" / "SKILL.md"
+
+    def skill_commands(self):
+        """Return every command line from the skill's ```bash blocks, with placeholders filled in."""
+        commands, in_block = [], False
+        for line in self.SKILL.read_text().splitlines():
+            if line.startswith("```"):
+                in_block = line == "```bash"
+                continue
+            if in_block and line.strip():
+                commands.append(line.replace("<pr-number>", "4742").replace("<scratch>", str(triage_daemon.SCRATCH_DIR)))
+        return commands
+
+    def test_reviews_in_this_session(self):
+        """The built-in /code-review reviews in a forked subagent that sees neither this skill nor
+        the appended system prompt - PR #5304's and #5574's reviews both posted nothing that way.
+        The skill must do the review itself: no /code-review, no subagents, no --comment."""
+        text = self.SKILL.read_text()
+        self.assertIn("Do not invoke `/code-review`", text)
+        self.assertIn("do not start subagents", text)
+        self.assertNotIn("Invoke the Skill tool", text)
+        self.assertNotIn("--comment", text)
+
+    def test_reviews_the_prs_own_code(self):
+        """The clone sits on main. PR #5574's review read main for context because its fetch was
+        spelled `git -C <path> fetch` and denied; the skill checks out the PR's head instead."""
+        commands = self.skill_commands()
+        self.assertIn("git fetch origin pull/4742/head", commands)
+        self.assertIn("git checkout --detach FETCH_HEAD", commands)
+
+    def test_every_prescribed_command_is_allowed_and_not_denied(self):
+        """Every command the skill prescribes must match a rule in ALLOWED_TOOLS_REVIEW and none in
+        DISALLOWED_TOOLS_REVIEW exactly as written, or every run is denied the way #5304's was."""
+        allowed = triage_daemon.ALLOWED_TOOLS_REVIEW.split(",")
+        denied = triage_daemon.DISALLOWED_TOOLS_REVIEW.split(",")
+        commands = self.skill_commands()
+        self.assertTrue(commands)
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertTrue(any(bash_rule_matches(rule, command) for rule in allowed))
+                self.assertFalse(any(bash_rule_matches(rule, command) for rule in denied))
+
+    def test_posts_one_review_with_the_body_in_a_file(self):
+        """The one POST reads its body from a file - an inline body holding backticks is command
+        substitution to the shell, which is how #5574's comment was denied."""
+        command = next(line for line in self.skill_commands() if line.startswith("gh api ") and "/reviews" in line)
+        self.assertIn("--input", command)
+        self.assertNotIn("body=", command)
+
+    def test_review_is_comment_only_and_disclosed(self):
+        """A bot must never approve or request changes, and every body it posts discloses that it is automated."""
+        text = self.SKILL.read_text()
+        self.assertIn('"event": "COMMENT"', text)
+        self.assertIn("_Automated comment from the triage bot._", text)
+
+    def test_carries_the_maintainer_rules(self):
+        """The maintainer's standing review rules: tests for every change, docs for user-facing
+        changes, no unjustified getattr(), components through ComponentBase rather than self.base,
+        no extra complexity, SOLID design."""
+        text = self.SKILL.read_text()
+        for rule in ("**Tests cover the change.**", "**User-facing changes are documented.**", "**No `getattr()` without a very good reason.**", "**Components go through `ComponentBase`.**", "**No extra complexity.**", "**SOLID design.**"):
+            with self.subTest(rule=rule):
+                self.assertIn(rule, text)
+
+    def test_never_runs_the_prs_code(self):
+        """A BOT_REVIEW label can land on a fork's PR, and this session holds a credential that can
+        post to the repo, so the review must stay a reading exercise."""
+        self.assertIn("Never run the PR's code", self.SKILL.read_text())
 
 
 class ProcessBotReviewPrTests(unittest.TestCase):

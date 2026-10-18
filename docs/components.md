@@ -250,7 +250,7 @@ total size budget - `truncated_reason` says which of the two ended it. A cut lin
 its number, and passing that back as `line_number` returns it in full:
 
 ```text
-2026-08-30 09:58:11: OctopusAPI: Fetched saving sessions... [+19069 chars, get_log line_number=26793]
+2026-08-30 09:58:11: OctopusAPI: GraphQL response for get-saving-sessions (status 200): {'data': {'savingSessions': {'events': ... [+19069 chars, get_log line_number=26793]
 ```
 
 Line numbers count from the start of the previous (rotated) log through the current one, so they
@@ -592,14 +592,14 @@ connected and logged once, so please report the value from the log so it can be 
 
 #### Charger control (gecloud)
 
-With `ge_cloud_evc_control` set to `true`, Predbat drives each charger from its own car's
-plan: `start-charge` inside a planned charging window, `stop-charge` outside one. Charger N
+With `ge_cloud_evc_control` set to `true`, Predbat drives each charger from its own car's plan: `start-charge` inside a planned charging window, `stop-charge` outside one. Charger N
 follows car N, in the same serial order the automatic configuration uses, so the two cannot
 disagree about which charger is which car.
 
 `ge_cloud_automatic_evc` must also be on, since it is that configuration which establishes
-the charger to car mapping. Predbat says so in the log and leaves control off rather than
-guessing if you enable control without it.
+the charger to car mapping. If you set `ge_cloud_evc_control: true` without it, Predbat says so
+in the log and leaves control off rather than guessing. On Octopus Intelligent, see
+[Octopus Intelligent and charger control](car-charging.md#octopus-intelligent-and-charger-control).
 
 - A command is only sent when the wanted state actually changes, so a charger already
   charging inside a window is left alone rather than commanded every minute
@@ -899,7 +899,7 @@ Integrates with Ohme EV chargers to monitor charging sessions and coordinate cha
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `email` | String | Yes | - | `ohme_login` | Your Ohme account email address |
 | `password` | String | Yes | - | `ohme_password` | Your Ohme account password |
-| `ohme_automatic` | Boolean | No | `False` | `ohme_automatic` | Set to `true` to register the Ohme charger with Predbat as a car. Unless `ohme_control` is on, the car charging plan is taken from Ohme's own schedule |
+| `ohme_automatic` | Boolean | No | `False` | `ohme_automatic` | Set to `true` to register the Ohme charger with Predbat as a car. Unless Predbat controls the charger (`ohme_control`), the car charging plan is taken from Ohme's own schedule |
 | `ohme_control` | Boolean | No | `False` | `ohme_control` | Set to `true` to let Predbat start and stop the charger from its own plan. Requires `ohme_automatic`; released by read only mode |
 | `ohme_automatic_octopus_intelligent` | Boolean | No | unset (auto-detect) | `ohme_automatic_octopus_intelligent` | Take the Intelligent car slots from Ohme. Omit the setting entirely to auto-detect it when `ohme_automatic` is on (it is used when the Octopus Intelligent device is the Ohme charger, not when it is the car), or give it `true`/`false` to override. Do not write `auto` - any value other than `true`/`false` is read as true |
 
@@ -1001,7 +1001,7 @@ Not implemented in this release: priority, minimum green level, phase setting, a
 
 #### Zappi charge control (myenergi)
 
-With `myenergi_zappi_control: true` Predbat drives your Zappi from the car charging plan it has already worked out, instead of you scheduling the charge on the Zappi itself.
+With Zappi control on, Predbat drives your Zappi from the car charging plan it has already worked out, instead of you scheduling the charge on the Zappi itself. It is off unless you set `myenergi_zappi_control: true`.
 
 Inside a planned charging window Predbat puts the Zappi in **Fast**, and outside one it puts it in **Stopped**. Fast is used because the window was chosen for its electricity rate rather than for sunshine — Eco or Eco+ would only charge from surplus, and the car would not get what the plan assumed.
 
@@ -1011,11 +1011,11 @@ Predbat re-checks the Zappi every minute. If the mode is changed in the myenergi
 
 ##### The control switch
 
-A `switch.predbat_myenergi_zappi_control` entity appears once `myenergi_zappi_control` is set. It starts **on**, and turning it off hands your Zappi back without editing `apps.yaml`. The setting is remembered across restarts, so a restart will not quietly take control back.
+A `switch.predbat_myenergi_zappi_control` entity appears once Zappi control is on. It starts **on**, and turning it off hands your Zappi back without editing `apps.yaml`. The setting is remembered across restarts, so a restart will not quietly take control back.
 
 ##### When Predbat hands the Zappi back
 
-Predbat releases the Zappi when the control switch is turned off, or when Predbat itself is put in read only mode. Releasing restores the mode the Zappi was in before Predbat first changed it, falling back to **Eco+** when there is nothing saved — after a restart, for instance. It deliberately does not simply stop sending commands, because Predbat may have left the Zappi Stopped and walking away would leave the car unable to charge.
+Predbat releases the Zappi when the control switch is turned off, or when Predbat itself is put in read only mode. Releasing restores the mode the Zappi was in before Predbat first changed it, which is remembered across restarts, falling back to **Eco+** when there is nothing saved. It deliberately does not simply stop sending commands, because Predbat may have left the Zappi Stopped and walking away would leave the car unable to charge.
 
 ##### Two things to expect
 
@@ -1484,6 +1484,7 @@ Integrates with Sunsynk (DEYE-family) hybrid inverters via the Sunsynk Connect c
 - There is a single whole-object settings endpoint, so every write is a read-modify-write of the entire settings object rather than a partial update. Predbat re-reads the settings immediately before every write to keep the race window as small as possible, and logs when a field it does not own has changed since the last read
 - Using the Sunsynk phone app while Predbat is running can overwrite Predbat's settings, and vice versa - there is one whole-object write endpoint, so the last writer wins
 - A write reaching the cloud does not mean the inverter has applied it: the dongle collects new settings on its next poll, typically one to five minutes later. Predbat tolerates a few cycles of divergence before warning
+- **Parallel inverters (master + slaves on one shared battery)** are detected from the Sunsynk inverter list and modelled as **one** Predbat inverter, driven through the master. Predbat writes only to the master (it passes its settings on to the slaves), takes the battery SoC, capacity and limits from the master once, reads battery power for the whole bank from the master's battery-management link, and adds up the grid, PV and load power and daily energy of every unit in the group. Configuring just the master's serial in `sunsynk_inverter_sn` is enough - its slaves are polled automatically. Each slave's own readings are still published as `sensor.predbat_sunsynk_<serial>_*` for diagnosis, but nothing is bound to them. A slave that reports its own battery-management link is treated as a separate inverter with its own battery
 
 #### Configuration Options (sunsynk)
 
@@ -1697,6 +1698,8 @@ On first run the component queries your account for active meter point agreement
 - The component automatically sets `metric_octopus_import` and `metric_standing_charge` in Predbat, and will also set `metric_octopus_export` **when an export tariff is discovered** — no manual `apps.yaml` edits are needed for those settings once the relevant tariffs have been detected and the component is running
 - E.ON Next customers who have solar export may have their import and export on **separate account numbers** — in this case the component will attempt to discover the export account automatically via an address-matching strategy, or you can provide `export_account_id` explicitly
 - For OSS (self-hosted) installations you need to supply credentials — either an API key (`api_key` auth method) or email/password (`email` auth method). SaaS/cloud-managed installations use OAuth and have credentials managed automatically. If you can't find a way to generate a separate API key for your provider, use the `email` auth method with the same email/password you use to sign into your normal EDF or E.ON Next online account — no separate key is required for that method
+- **E.ON Next customers currently need an API key.** E.ON Next stopped accepting email/password sign-in for the Kraken API in October 2026 (see [#5580](https://github.com/springfall2008/batpred/issues/5580)) and its website does not offer an API key. Generate one with the [Kraken API key generator](web-interface.md#kraken-api-key) in the Predbat web interface (**Advanced → Kraken API Key**), then set `kraken_auth_method: api_key` and `kraken_key`
+- If the login is rejected, `sensor.predbat_kraken_<account>_account_status` turns to `error`, `binary_sensor.predbat_components_healthy` turns off and `predbat.status` reports the Kraken component error with the reason. Cached rates and dispatches carry on being published meanwhile; the `dispatches_fetched_at` attribute on the `intelligent_dispatch` sensor shows how old the dispatches are. Fix the credentials, then restart Predbat or the Kraken component
 - For accounts with a SmartFlex-managed EV device, an `intelligent_dispatch` binary sensor is published per device (see [Published entities](#published-entities-kraken)) and automatically wired into `octopus_intelligent_slot`, exactly like Octopus Intelligent Go — no manual `apps.yaml` configuration is needed for this. Make sure **switch.predbat_octopus_intelligent_charging** (see [car charging docs](car-charging.md)) is turned On so Predbat actually uses the dispatch slots for planning
 
 #### Configuration Options (kraken)
@@ -1733,7 +1736,16 @@ kraken_password: YOUR_REAL_PASSWORD
   kraken_key: !secret kraken_key
 ```
 
-**E.ON Next — email/password authentication:**
+**E.ON Next — API key authentication (recommended):**
+
+```yaml
+  kraken_provider: eon
+  kraken_account_id: A-12345678
+  kraken_auth_method: api_key
+  kraken_key: !secret kraken_key
+```
+
+**E.ON Next — email/password authentication (being phased out by E.ON Next):**
 
 ```yaml
   kraken_provider: eon
@@ -1749,9 +1761,8 @@ kraken_password: YOUR_REAL_PASSWORD
   kraken_provider: eon
   kraken_account_id: A-12345678        # import account
   kraken_export_account_id: A-87654321 # export account (different number)
-  kraken_auth_method: email
-  kraken_email: myemail@example.com
-  kraken_password: !secret kraken_password
+  kraken_auth_method: api_key
+  kraken_key: !secret kraken_key
 ```
 
 #### How to find your account number (kraken)
@@ -1764,14 +1775,17 @@ All entities use the pattern `sensor.predbat_kraken_{account_id}_{suffix}` (acco
 
 | Entity | Description |
 | ------ | ----------- |
-| `sensor.predbat_kraken_a_12345678_account_status` | Connection status: `discovering`, `connected`, or `error` |
+| `sensor.predbat_kraken_a_12345678_account_status` | Connection status: `discovering`, `connected`, or `error` (login rejected); `requests_total` / `failures_total` attributes count API calls since start |
 | `sensor.predbat_kraken_a_12345678_tariff_code` | Active import tariff code (e.g. `E-1R-FLEX-22-11-25-A`) |
 | `sensor.predbat_kraken_a_12345678_import_rates` | Import rate periods — consumed by Predbat automatically |
 | `sensor.predbat_kraken_a_12345678_import_standing` | Daily standing charge in £/day |
 | `sensor.predbat_kraken_a_12345678_export_rates` | Export rate periods — only present when an export tariff is found |
-| `binary_sensor.predbat_kraken_a_12345678_intelligent_dispatch[_N]` | On when a SmartFlex dispatch slot is active for device `N` — only present for accounts with a SmartFlex-managed EV device |
+| `binary_sensor.predbat_kraken_a_12345678_intelligent_dispatch[_N]` | On when a SmartFlex dispatch slot is active for device `N` — only present for accounts with a SmartFlex-managed EV device. The `dispatches_fetched_at` attribute is when the dispatches were last fetched successfully |
 
 Predbat is automatically configured to use these energy rates once Kraken is enabled.
+
+The `rates` attribute of the import and export rates sensors holds only the rate periods Predbat can use: those within N + 1 days either side of today's midnight, plus one spare day ahead, where N is `forecast_hours` (at least 24) rounded up to whole days - so at most 3 days back and 4 days ahead with the default 48 hours (fewer when the provider has not returned that many).
+Older periods are left out, so a long fixed contract does not grow the attribute past Home Assistant's 16 KB recorder limit. The sensor's state is the number of periods in that attribute.
 
 ---
 
@@ -1797,7 +1811,7 @@ This provides more accurate load predictions than simple averaging, especially f
 - Optionally incorporates PV generation and temperature forecast data
 - Trains a multi-layer neural network on your historical patterns
 - Makes autoregressive predictions for 48 hours ahead in 5-minute intervals
-- Fine-tunes periodically (every 2 hours) to adapt to changing patterns
+- Fine-tunes periodically (every 2 hours by default) to adapt to changing patterns
 - Validates predictions and falls back gracefully if accuracy is poor
 - Publishes predictions to `sensor.predbat_load_ml_forecast`
 
@@ -1813,6 +1827,7 @@ For a detailed explanation of how the neural network works and comprehensive con
 | `load_ml_source` | Boolean | No | false | `load_ml_source` | Set to `true` to use ML predictions in Predbat battery planning |
 | `load_ml_max_days_history` | Integer | No | 28 | `load_ml_max_days_history` | Maximum days of load history to fetch from HA on each poll (bounded by HA recorder retention) |
 | `load_ml_database_days` | Integer | No | 90 | `load_ml_database_days` | Days of history to accumulate in the on-disk database (`predbat_ml_history.npz`); set to 0 to disable the database |
+| `load_ml_retrain_interval_hours` | Integer | No | 2 | `load_ml_retrain_interval_hours` | Hours between training cycles (1–48); use 24 for daily retraining. Predictions still update every 30 minutes |
 
 Note: **load_today**, **pv_today** and **car_charging_energy** `apps.yaml` configuration items are also used, but these should already be set in Predbat.
 
@@ -1830,6 +1845,9 @@ predbat:
 
   # Optional: days of history to accumulate on disk for training (default 90)
   # load_ml_database_days: 90
+
+  # Optional: hours between training cycles (default 2, range 1-48)
+  # load_ml_retrain_interval_hours: 24
 
   # Optional but recommended: enable temperature forecasts
   temperature_enable: true

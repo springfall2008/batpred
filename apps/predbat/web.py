@@ -68,6 +68,7 @@ from web_helper import (
     get_browse_css,
     get_entity_detailed_row_js,
     get_internals_css,
+    get_kraken_key_page_html,
     get_internals_js,
     get_dashboard_css,
     get_dashboard_collapsible_js,
@@ -96,6 +97,7 @@ from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA, MANUAL_RATE_MA
 from predbat import THIS_VERSION_DISPLAY
 from component_base import ComponentBase
 from config import APPS_SCHEMA
+from compare import check_compare_list
 import debug_history
 from web_annual import AnnualPage
 from web_chat import WebChat
@@ -576,6 +578,8 @@ class WebInterface(ComponentBase):
         app.router.add_get("/internals", self.html_internals)
         app.router.add_get("/api/internals", self.html_api_internals)
         app.router.add_get("/api/internals/download", self.html_api_internals_download)
+        app.router.add_get("/kraken_key", self.html_kraken_key)
+        app.router.add_post("/api/kraken_key", self.html_api_kraken_key)
         app.router.add_get("/api/status", self.html_api_get_status)
         app.router.add_get("/metrics", metrics_handler)
         app.router.add_get("/metrics/json", metrics_json_handler)
@@ -2657,7 +2661,7 @@ chart.render();
         text += get_plan_css()
 
         # Add warning/error divs
-        text += '<div id="staleWarning" style="display:none; padding:10px; background:#fff3cd; color:#856404; border:1px solid #ffc107; margin-bottom:10px;">&#9888;&#65039; Plan data is stale (last updated >15 minutes ago)</div>'
+        text += '<div id="staleWarning" style="display:none; padding:10px; background:#fff3cd; color:#856404; border:1px solid #ffc107; margin-bottom:10px;">&#9888;&#65039; Plan data is stale</div>'
         text += '<div id="planError" style="display:none; padding:10px; background:#fee; color:#c00; border:1px solid #c00; margin-bottom:10px;"></div>'
 
         # Add view switcher buttons
@@ -3266,9 +3270,11 @@ chart.render();
         soc_kw_best = self.get_entity_results(self.prefix + ".soc_kw_best")
         # What earlier plans predicted for now, shifted forward by the horizon they were made at, so
         # each lands on the moment it was forecasting and can be read straight against Actual.
+        # Pruned to today like the chart's other series - unpruned, the 7-day history this is read from
+        # stretched the Battery chart back across the whole week.
         soc_best_history = self.get_history_with_now_attrs(self.prefix + ".soc_kw_best", 7)
-        soc_kw_best_h1 = prune_today(history_attribute(soc_best_history, attributes=True, state_key="soc_h1"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60)
-        soc_kw_best_h8 = prune_today(history_attribute(soc_best_history, attributes=True, state_key="soc_h8"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60 * 8)
+        soc_kw_best_h1 = prune_today(history_attribute(soc_best_history, attributes=True, state_key="soc_h1"), self.now_utc, self.midnight_utc, prune=True, offset_minutes=60)
+        soc_kw_best_h8 = prune_today(history_attribute(soc_best_history, attributes=True, state_key="soc_h8"), self.now_utc, self.midnight_utc, prune=True, offset_minutes=60 * 8)
         soc_kw_best10 = self.get_entity_results(self.prefix + ".soc_kw_best10")
         soc_kw_base10 = self.get_entity_results(self.prefix + ".soc_kw_base10")
         charge_limit_kw = self.get_entity_results(self.prefix + ".charge_limit_kw")
@@ -4081,23 +4087,13 @@ chart.render();
     def _validate_compare_list(self, compare_list):
         """
         Check every compare_list profile still has the unique id and non-empty name that
-        compare.py indexes results by, raising ValueError if a batch has left one without
+        compare.py indexes results by, raising ValueError if a batch has left one without.
+        Uses compare.py's own rules, so the editor refuses exactly what a comparison would skip,
+        and names every problem at once so they can all be fixed in one go.
         """
-        if not compare_list:
-            return
-
-        seen_ids = set()
-        for entry in compare_list:
-            if not isinstance(entry, dict):
-                raise ValueError("Each compare_list entry must be a dictionary with an id and a name")
-            entry_id = entry.get("id")
-            if not entry_id:
-                raise ValueError("Each compare_list entry requires a non-empty 'id'")
-            if entry_id in seen_ids:
-                raise ValueError(f"Duplicate compare_list id '{entry_id}'")
-            seen_ids.add(entry_id)
-            if not entry.get("name"):
-                raise ValueError(f"compare_list entry '{entry_id}' requires a non-empty 'name'")
+        _, problems = check_compare_list(compare_list)
+        if problems:
+            raise ValueError("; ".join(problems))
 
     async def html_apps_post(self, request):
         """
@@ -4452,7 +4448,9 @@ chart.render();
         else:
             cost_yesterday_no_car = cost_yesterday_hist
 
-        compare_list = self.get_arg("compare_list", [])
+        # Same entries, with the same string ids, as the comparison itself ran on (#5472)
+        configured_compare_list = self.get_arg("compare_list", [])
+        compare_list, compare_problems = check_compare_list(configured_compare_list)
         compare_hist = {}
         for item in compare_list:
             id = item.get("id", None)
@@ -4464,8 +4462,6 @@ chart.render();
                     compare_hist[id]["cost"] = history_attribute(entity_hist, daily=True, pounds=True)
                     compare_hist[id]["metric"] = history_attribute(entity_hist, state_key="metric", attributes=True, daily=True, pounds=True)
                     compare_hist[id]["cost_1am"] = self.history_daily_at_hour(entity_hist)
-
-        compare_list = self.get_arg("compare_list", [])
 
         for compare in compare_list:
             name = compare.get("name", "")
@@ -4526,6 +4522,10 @@ chart.render();
 
         text += "</table>\n"
 
+        # The comparison only logs skipped entries when it runs, so say why a configured tariff is missing here
+        for problem in compare_problems:
+            text += "<p><b>Skipped:</b> {} - fix it in apps.yaml</p>\n".format(html_module.escape(problem))
+
         # Charts
         text += '<div id="chart"></div>'
         series_data = []
@@ -4541,9 +4541,9 @@ chart.render();
 
         if compare_hist:
             text += self.render_chart(series_data, self.currency_symbols[0], "Tariff Comparison - True cost", now_str, daily_chart=False)
-        elif not compare_list:
+        elif not configured_compare_list:
             text += '<br><h2>No tariffs configured yet - see <a href="https://springfall2008.github.io/batpred/compare/" target="_blank" rel="noopener noreferrer">Comparing Energy Tariffs</a> for how to add some to apps.yaml</h2><br>'
-        else:
+        elif compare_list:
             text += "<br><h2>Loading chart (please wait)...</h2><br>"
 
         # 7-day rolling average chart
@@ -4560,7 +4560,7 @@ chart.render();
         if series_7d:
             text += self.render_chart(series_7d, self.currency_symbols[0], "Tariff Comparison - 7 day rolling average", now_str, tagname="chart7d", daily_chart=False)
         elif not compare_list:
-            pass  # Already explained by the "No tariffs configured" message above
+            pass  # Already explained above, by "No tariffs configured" or the skipped entries
         else:
             text += "<br><h2>7 day rolling average chart loading (please wait)...</h2><br>"
 
@@ -6046,6 +6046,61 @@ document.addEventListener('DOMContentLoaded', function() {
         text += get_metrics_dashboard_body(data_json)
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
+
+    async def html_kraken_key(self, request):
+        """
+        Return the Kraken API key generator page (Advanced -> Kraken API Key)
+
+        No auto-refresh: a refresh would wipe a token the user has just pasted.
+        """
+        self.default_page = "./kraken_key"
+        text = self.get_header("Predbat Kraken API Key", refresh=0)
+        text += "<body>\n"
+        text += get_kraken_key_page_html()
+        text += "</body></html>\n"
+        return web.Response(content_type="text/html", text=text, headers={"Cache-Control": "no-store"})
+
+    async def html_api_kraken_key(self, request):
+        """
+        Check an account's Kraken API key, or generate a new one, using a token pasted from the user's browser.
+
+        Body: {"provider": "eon"|"edf", "token": "...", "action": "check"|"generate"}. The token and the key are
+        passed straight through and never logged or kept; responses are marked no-store.
+        """
+        # Imported here so the Kraken code is only loaded when someone uses this page
+        import kraken_key
+        from kraken import KRAKEN_BASE_URLS
+
+        headers = {"Cache-Control": "no-store"}
+        try:
+            data = await request.json()
+        except (ValueError, UnicodeDecodeError):
+            return web.json_response({"status": "error", "error": "Invalid request"}, status=400, headers=headers)
+        if not isinstance(data, dict):
+            return web.json_response({"status": "error", "error": "Invalid request"}, status=400, headers=headers)
+
+        provider = data.get("provider")
+        base_url = KRAKEN_BASE_URLS.get(provider) if isinstance(provider, str) else None
+        if not base_url:
+            return web.json_response({"status": "error", "error": "Choose E.ON Next or EDF"}, status=400, headers=headers)
+        token = kraken_key.normalise_kraken_token(data.get("token"))
+        if not token:
+            return web.json_response({"status": "error", "error": "Paste the token from your browser first"}, status=400, headers=headers)
+
+        action = data.get("action")
+        if action == "check":
+            result = await kraken_key.check_kraken_key(base_url, token)
+        elif action == "generate":
+            result = await kraken_key.generate_kraken_key(base_url, token)
+        else:
+            return web.json_response({"status": "error", "error": "Unknown action"}, status=400, headers=headers)
+
+        # Outcome only - never the token or the key
+        if result.get("status") == "generated":
+            self.log("Web: Kraken API key generated for {} (sign-in check {})".format(provider, "passed" if result.get("verified") else "failed"))
+        elif result.get("status") == "error":
+            self.log("Warn: Web: Kraken API key {} for {} failed: {}".format(action, provider, result.get("error")))
+        return web.json_response(result, headers=headers)
 
     async def html_internals(self, request):
         """

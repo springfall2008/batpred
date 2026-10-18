@@ -550,8 +550,11 @@ class Plan:
         """
         Whether slot confirmation applies to car_n: an Octopus Intelligent car, with octopus_intelligent_dynamic
         on (the default). It is independent of metric_dynamic_load_adjust, which is only the load estimate.
+
+        Never under the window billing rule (dispatch_billing_window()): the supplier bills the whole planned
+        dispatch off-peak whether the car charges in it or not, so there is nothing to cancel (GH#5521).
         """
-        return self.octopus_intelligent_dynamic and self.dynamic_load_car_is_octopus(car_n)
+        return self.octopus_intelligent_dynamic and self.dynamic_load_car_is_octopus(car_n) and not self.dispatch_billing_window()
 
     def dynamic_load_car_strip_from(self, car_n):
         """
@@ -2024,6 +2027,11 @@ class Plan:
         # Created optimised step data
         self.metric_cloud_coverage = self.get_cloud_factor(self.minutes_now, self.pv_forecast_minute, self.pv_forecast_minute10)
         self.metric_load_divergence = self.get_load_divergence(self.minutes_now, self.load_minutes)
+        if publish:
+            # Exactly as the plan uses it (None when divergence is off): the human-readable line rounds the percentage,
+            # which can round the other way. Not for a tariff comparison run (publish=False).
+            self.log("Replay input: load divergence {!r}".format(self.metric_load_divergence))
+            self.log_replay_baseline()
 
         # Clamp the three load scalings so load_scaling90 <= load_scaling <= load_scaling10 always
         # holds: the PV90 case can never end up with more load than the central case, and the PV10
@@ -5307,7 +5315,7 @@ class Plan:
                 self.dashboard_item(
                     self.prefix + ".load_energy_h0",
                     state=dp3(load_kwh_h0),
-                    attributes={"friendly_name": "Current load", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:home-lightning-bolt"},
+                    attributes={"friendly_name": "Current load", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:home-lightning-bolt", "source": self.load_minutes_source},
                 )
                 self.dashboard_item(
                     self.prefix + ".pv_energy",

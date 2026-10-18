@@ -202,6 +202,7 @@ enph
 enphase
 enphaseenergy
 Enpower
+entityfilter
 entrez
 epod
 epvtoday
@@ -360,6 +361,7 @@ libyaml
 LIFEPO
 linebreak
 linestyle
+Liskov
 loadml
 loadmlpower
 loadspower
@@ -477,6 +479,7 @@ overfitting
 oversizing
 overvoltage
 ownerapi
+pac
 parseable
 pbat
 pbgw
@@ -633,6 +636,7 @@ startswith
 startt
 stdlib
 stepline
+stevekirtley
 Storion
 Stromligning
 strptime
@@ -688,6 +692,7 @@ Trefor
 treforsiphone
 treforsouthwell
 triggerable
+trydan
 tunables
 twinx
 typecode
@@ -704,6 +709,7 @@ undriven
 unencodable
 unfetchable
 unflushed
+unhashable
 unindexed
 unnormalised
 unparseable

@@ -711,6 +711,7 @@ COMPONENT_LIST = {
             "load_ml_source": {"required": False, "config": "load_ml_source", "default": False},
             "load_ml_max_days_history": {"required": False, "config": "load_ml_max_days_history", "default": 28},
             "load_ml_database_days": {"required": False, "config": "load_ml_database_days", "default": 90},
+            "load_ml_retrain_interval_hours": {"required": False, "config": "load_ml_retrain_interval_hours", "default": 2},
         },
         "phase": 2,  # Load ML in phase 2 so that any Predbat cloud components (such as GEcloud) have been started and initialised pv_today, etc
         "can_restart": True,
@@ -726,6 +727,7 @@ COMPONENT_LIST = {
             "mqtt_port": {"required": False, "config": "gateway_mqtt_port", "default": 8883},
             "mqtt_token": {"required": True, "secret": True, "config": "gateway_mqtt_token"},
             "gateway_inverter_serial": {"required": False, "config": "gateway_inverter_serial", "default": None},
+            "gateway_display_only": {"required": False, "config": "gateway_display_only", "default": False},
             "gateway_evc_automatic": {"required": False, "config": "gateway_evc_automatic", "default": False},
             "gateway_evc_control": {"required": False, "config": "gateway_evc_control", "default": False},
             "gateway_shared_ct": {"required": False, "config": "gateway_shared_ct", "default": True},
@@ -1038,11 +1040,11 @@ class Components:
         question rather than a per-inverter one: a component serves whichever inverters it
         discovered, and Inverter only needs to know whether to keep waiting.
         """
-        return any(COMPONENT_LIST.get(name, {}).get("inverter", False) and component for name, component in self.components.items())
+        return any(COMPONENT_LIST.get(name, {}).get("inverter", False) and component and getattr(component, "gateway_display_only", False) is not True for name, component in self.components.items())
 
     def inverter_source_names(self):
         """The display names of every active inverter component, for user-facing messages."""
-        return [COMPONENT_LIST[name]["name"] for name, component in self.components.items() if component and COMPONENT_LIST.get(name, {}).get("inverter", False)]
+        return [COMPONENT_LIST[name]["name"] for name, component in self.components.items() if component and COMPONENT_LIST.get(name, {}).get("inverter", False) and getattr(component, "gateway_display_only", False) is not True]
 
     def inverter_source_status(self):
         """
@@ -1075,6 +1077,8 @@ class Components:
                 continue
             load_error = self.load_error(name)
             component = self.components.get(name, None)
+            if component and getattr(component, "gateway_display_only", False) is True:
+                continue
             if load_error is not None:
                 state = "failed to start: {}".format(load_error)
             elif not component:
