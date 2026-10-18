@@ -287,6 +287,13 @@ SUNSYNK_SLAVE_STARTUP_RETRIES = 3
 # single inverter it caps the BMS limit the same way.
 SUNSYNK_UNIT_CHARGE_CURRENT_FIELD = "batteryMaxCurrentCharge"  # settings, amps
 
+# The BMS charge limit is LIVE, not a rating: it tapers as the bank fills. CONFIRMED live over a
+# day on one bank - 200 A at mid SoC, 175 A at 83%, 108 A at 93%, 0 when full - while the bank
+# still charged at 120 A. maxChargeCurrentLimit reads 0 and the settings read's chargeCurrent
+# mirrors the live value, so nothing reports the fixed maximum. The highest value seen is kept
+# instead, and forgotten if not seen again for this many days (a smaller battery fitted, say).
+SUNSYNK_BMS_LIMIT_MAX_AGE_DAYS = 7
+
 # Charge-current limit candidates, in priority order: the FIRST field with a positive value
 # wins. CONFIRMED live that a real system reports maxChargeCurrentLimit 0.0 while
 # chargeCurrentLimit 216.0 carries the actual limit - reading only the max field derived

@@ -93,6 +93,7 @@ from sunsynk_const import (
     SUNSYNK_BATTERY_INTEGRATE_MAX_GAP,
     SUNSYNK_SLAVE_STARTUP_RETRIES,
     SUNSYNK_UNIT_CHARGE_CURRENT_FIELD,
+    SUNSYNK_BMS_LIMIT_MAX_AGE_DAYS,
     SUNSYNK_RESTORE_MAX_CONTROL,
     SUNSYNK_RESTORE_MAX_CONTROL_ACTIVE,
     encode_setting,
@@ -167,6 +168,8 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         self.device_settings = {}
         self.device_energy = {}
         self.device_rated_power = {}
+        # {sn: {"amps", "seen"}} - the highest BMS charge limit seen; the live one tapers as the bank fills
+        self.bms_charge_limit_max = {}
         self.local_schedule = {}
         self.applied_payload = {}
         self.settle_count = {}
@@ -827,6 +830,8 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         # maxChargeCurrentLimit 0.0 alongside chargeCurrentLimit 216.0, which derived a rate
         # of 0 and made automatic_config skip battery_rate_max entirely.
         amps = next((amp for amp in (self._as_float(values.get(field)) for field in SUNSYNK_CHARGE_CURRENT_FIELDS) if amp > 0), 0.0)
+        # The live limit tapers as the bank fills (to 0 when full), so the highest seen is the rating.
+        amps = max(amps, self._as_float(self.bms_charge_limit_max.get(sn, {}).get("amps")))
         # The BMS limit is what the bank will accept, but each inverter has its own battery current
         # cap (batteryMaxCurrentCharge) and that - summed across a parallel group - is what it
         # actually charges at; see the constant. Unknown on any member leaves the BMS limit alone.
@@ -838,6 +843,30 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         if amps <= 0 or volts <= 0:
             return 0.0
         return amps * volts
+
+    def _note_bms_charge_limit(self, sn, now):
+        """Keep the highest BMS charge limit sn has reported, returning True when the saved record changed.
+
+        A maximum not seen again for SUNSYNK_BMS_LIMIT_MAX_AGE_DAYS resets to the live value, so a
+        battery swapped for a smaller one is relearned. Seeing the maximum again refreshes it, and
+        counts as a change once a day so the saved copy's age stays roughly true.
+        """
+        values = self.device_values.get(sn, {})
+        live = next((amp for amp in (self._as_float(values.get(field)) for field in SUNSYNK_CHARGE_CURRENT_FIELDS) if amp > 0), 0.0)
+        if live <= 0:
+            return False
+        entry = self.bms_charge_limit_max.get(sn) or {}
+        try:
+            seen = datetime.fromisoformat(entry["seen"])
+        except (KeyError, TypeError, ValueError):
+            seen = None
+        stale = seen is None or (now - seen).total_seconds() > SUNSYNK_BMS_LIMIT_MAX_AGE_DAYS * 86400
+        stored = self._as_float(entry.get("amps"))
+        if not stale and live < stored:
+            return False
+        changed = stale or live != stored or (now - seen).total_seconds() > 86400
+        self.bms_charge_limit_max[sn] = {"amps": live, "seen": now.isoformat()}
+        return changed
 
     def inverter_limit(self, sn):
         """Return the inverter's AC power rating in watts, or 0 when unknown.
@@ -1639,7 +1668,7 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
 
     async def save_ratings(self):
         """Persist derived ratings so automatic_config can map args at startup."""
-        await self.save_cache(SUNSYNK_CACHE_RATINGS, {"device_rated_power": self.device_rated_power})
+        await self.save_cache(SUNSYNK_CACHE_RATINGS, {"device_rated_power": self.device_rated_power, "bms_charge_limit_max": self.bms_charge_limit_max})
 
     async def save_battery_energy(self):
         """Persist parallel groups' battery energy today, so a restart does not zero the day."""
@@ -1702,6 +1731,7 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         ratings = await self.load_cache(SUNSYNK_CACHE_RATINGS)
         if ratings:
             self.device_rated_power = ratings.get("device_rated_power", {}) or {}
+            self.bms_charge_limit_max = ratings.get("bms_charge_limit_max", {}) or {}
 
         # Kept whatever its age: each total carries its own date, and a stale day reads as 0.
         energy = await self.load_cache(SUNSYNK_CACHE_BATTERY_ENERGY)
@@ -2118,6 +2148,9 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
                 integrated = True
         if integrated:
             await self.save_battery_energy()
+        # Track each unit's highest BMS charge limit; it is saved with the ratings it feeds.
+        if any([self._note_bms_charge_limit(sn, now) for sn in polled]):
+            await self.save_ratings()
         if got_any:
             self.mark_refreshed("live")
         return got_any
