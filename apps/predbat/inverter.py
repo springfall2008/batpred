@@ -50,6 +50,11 @@ from utils import calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3
 
 TIME_FORMAT_HMS = "%H:%M:%S"
 
+# Largest SoC jump (percentage points) between consecutive readings that the charge curve learner
+# accepts as genuine. Wide enough for inverters that report SoC in 5% steps; a larger jump is a
+# glitch (e.g. a stray 0% reading) and would otherwise stamp one sample across a huge SoC range.
+CHARGE_CURVE_MAX_SOC_STEP = 10
+
 # Sentinel for "this side has committed nothing yet", distinct from any real commit key a caller
 # might use - including None, which adjust_charge_window() can legitimately produce for an unset
 # window time.
@@ -1493,6 +1498,9 @@ class Inverter:
                                 if (discharge and (this_soc > data_point)) or (not discharge and (this_soc < data_point)):
                                     if total_power == 0:
                                         # No power data, so skip this data point
+                                        break
+                                    if target_minute not in soc_kwh or abs(previous_point - data_point) > CHARGE_CURVE_MAX_SOC_STEP or abs(data_point - this_soc) > CHARGE_CURVE_MAX_SOC_STEP:
+                                        # Missing or implausible SoC reading at either end of the step, skip this sample (#5259)
                                         break
                                     if discharge:
                                         this_soc -= 1
