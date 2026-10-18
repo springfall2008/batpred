@@ -26,7 +26,7 @@ import pytz
 
 from dummy_inverter import DummyInverter
 from predbat import PredBat
-from tests.replay_forward import plan_trace, replay_forward, trace_differences, rescan_rate_stats
+from tests.replay_forward import capture_log, plan_trace, replay_forward, trace_differences, rescan_rate_stats
 from tests.test_single_debug import rescan_rate_windows, rebuild_load_pv_models
 from tests.test_infra import FIXTURE_MINUTES_NOW, TestHAInterface
 
@@ -142,18 +142,6 @@ def publish_pv_forecast(my_predbat, start, pv_profile):
         forecast90[str(minute)] = round(per_minute * 1.2, 6)
     attributes = {"forecast": forecast, "forecast10": forecast10, "forecast90": forecast90, "relative_time": midnight.strftime("%Y-%m-%dT%H:%M:%S%z")}
     my_predbat.ha_interface.set_state("sensor.{}_pv_forecast_raw".format(my_predbat.prefix), "on", attributes=attributes)
-
-
-def capture_log(my_predbat, lines):
-    """Make my_predbat.log keep each line, with a timestamp in the live log's format, as well as logging it."""
-    original = type(my_predbat).log
-
-    def log(message, *args, **kwargs):
-        """Keep the line, then log as normal."""
-        lines.append("{}: {}".format(datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"), message))
-        return original(my_predbat, message, *args, **kwargs)
-
-    my_predbat.log = log
 
 
 def roundtrip(start, cycles, load_profile, pv_profile, battery, folder):

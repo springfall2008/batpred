@@ -56,6 +56,8 @@ There are two modes:
 
 `--override name=value` (repeatable) changes a setting after the yaml is restored, for what-if replays - for example `--override pv_metric90_weight=0.25`. It works for a plain `--debug_file` replay as well.
 
+`--replay_json <file.jsonl>` writes the comparison as JSON lines, for a script or an AI to read: a `meta` record, one `run` record per live run, and a `summary`. A run that matches is one short record (time, whether it re-planned, SoC). A run that differs also gives the live and replayed plans that differ (`adopted`, `candidate`, `charge`), the plan's prediction summaries that differ (`base`, `best` and their PV10/PV90 scenarios), and `first_difference`, the first optimiser line where the two logs part. The summary counts the matches and groups the differing runs into `clusters`, each with its first difference, so the place to start looking is the first line of the summary.
+
 `--replay_chart <file.png>` draws the actual SoC (and the simulated SoC, when simulating) against the export targets of the live and replayed plans, and a timeline of what each plan says at every run in the web plan's terms (Chrg, HoldChrg, FrzChrg, Exp, HoldExp, FrzExp, car), with a lane for the car's planned charging.
 
 In simulated mode the replay also prints the RMS difference between its simulated SoC and the logged SoC, a single number for how faithfully it is tracking the real battery.

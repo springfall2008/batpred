@@ -122,18 +122,24 @@ def rebuild_load_pv_models(my_predbat, load_override=1.0):
     )
 
 
-def rescan_rate_windows(my_predbat):
-    """Re-derive the rate thresholds and the candidate charge/export windows for the instance's current time."""
+def rescan_rate_windows(my_predbat, verbose=True):
+    """Re-derive the rate thresholds and the candidate charge/export windows for the instance's current time.
+
+    verbose prints each step, as a single debug replay does; a log replay runs this every re-plan, so turns it off.
+    """
     # Set rate thresholds
     if my_predbat.rate_import or my_predbat.rate_export:
-        print("Set rate thresholds")
+        if verbose:
+            print("Set rate thresholds")
         my_predbat.set_rate_thresholds()
-        print("Result export {} import {}".format(my_predbat.rate_export_cost_threshold, my_predbat.rate_import_cost_threshold))
+        if verbose:
+            print("Result export {} import {}".format(my_predbat.rate_export_cost_threshold, my_predbat.rate_import_cost_threshold))
 
     # Find discharging windows
     if my_predbat.rate_export:
         my_predbat.high_export_rates, export_lowest, export_highest = my_predbat.rate_scan_window(my_predbat.rate_export, 5, my_predbat.rate_export_cost_threshold, True, alt_rates=my_predbat.rate_import)
-        print("High export rate found rates in range {} to {} based on threshold {}".format(export_lowest, export_highest, my_predbat.rate_export_cost_threshold))
+        if verbose:
+            print("High export rate found rates in range {} to {} based on threshold {}".format(export_lowest, export_highest, my_predbat.rate_export_cost_threshold))
         # Update threshold automatically
         if my_predbat.rate_high_threshold == 0 and export_lowest <= my_predbat.rate_export_max:
             my_predbat.rate_export_cost_threshold = export_lowest
@@ -144,7 +150,8 @@ def rescan_rate_windows(my_predbat):
         # light/dark split (#4699: this reimplementation used to omit pv_light_dark entirely,
         # so a debug.yaml replay could never catch a regression in the split)
         pv_light_dark = my_predbat.calc_pv_light_dark()
-        print("rate scan window import threshold rate {}".format(my_predbat.rate_import_cost_threshold))
+        if verbose:
+            print("rate scan window import threshold rate {}".format(my_predbat.rate_import_cost_threshold))
         my_predbat.find_low_rate_windows(alt_rates=my_predbat.rate_export, pv_light_dark=pv_light_dark)
 
 

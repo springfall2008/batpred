@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 from utils import MinuteArray
 from tests.test_single_debug import apply_overrides
-from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, plan_state_now, model_car_charging_now, rebuild_io_rates, run_soc, chart_replay, simulate_soc, install_logged_load_divergence, remove_logged_load_divergence, soc_rms_error, version_change, apply_logged_load_forecast, apply_logged_pv_forecast, parse_log, parse_override, rescan_rate_stats, counter_gain, crosses_midnight, shift_cumulative, shift_windows, roll_over_midnight, apply_run, today_values, apply_logged_rates, apply_logged_load_exact, apply_logged_pv_exact, apply_logged_sessions, apply_logged_dispatch
+from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, plan_state_now, model_car_charging_now, rebuild_io_rates, run_soc, chart_replay, simulate_soc, install_logged_load_divergence, remove_logged_load_divergence, soc_rms_error, version_change, apply_logged_load_forecast, apply_logged_pv_forecast, parse_log, parse_override, rescan_rate_stats, counter_gain, crosses_midnight, shift_cumulative, shift_windows, roll_over_midnight, apply_run, today_values, apply_logged_rates, apply_logged_load_exact, apply_logged_pv_exact, apply_logged_sessions, apply_logged_dispatch, replay_records, plan_metrics
 
 SAMPLE_LOG = """2026-10-01 08:30:00.575570: --------------- PredBat - update at 2026-10-01 08:30:00+01:00 with clock skew 0 minutes, minutes now 510
 2026-10-01 08:30:00.577646: Predbat /config/github.py repository springfall2008/batpred version v9.3.3 currently running, latest version is v9.3.3, latest beta is v9.3.3
@@ -798,6 +798,72 @@ def test_dispatch_input():
     return 0
 
 
+def test_replay_records():
+    """The JSON records: a matching run is one short record; a differing run gives the plans and metrics that differ and
+    the first differing plan line; a run that did not re-plan compares nothing; the summary counts and clusters them."""
+
+    def predict(name, soc, metric):
+        """A prediction summary line as the plan logs it."""
+        return "predict {} end_record 10-19 00:00:00, final soc {}kWh, metric {}p, metric_keep 0kWh, min_soc 4.0kWh @ 10-18 01:00:00, load 8.0kWh, PV 9.0kWh".format(name, soc, metric)
+
+    def stamped(lines):
+        """Give each line a log timestamp."""
+        return ["2026-10-18 00:00:01.000000: {}".format(line) for line in lines]
+
+    live = stamped(
+        [
+            "--------------- PredBat - update at 2026-10-18 00:00:00+01:00 with clock skew 0 minutes, minutes now 0",
+            predict("best", 3.0, -50.0),  # the plan in force, printed before the re-plan
+            predict("base", 5.0, 10.0),
+            ">> Region optimisation pass width 960 gives best_metric -60p",
+            predict("best", 4.0, -60.0),
+            predict("yesterday", 9.0, 99.0),
+            "--------------- PredBat - update at 2026-10-18 00:05:00+01:00 with clock skew 0 minutes, minutes now 5",
+            predict("base", 5.0, 10.0),
+            ">> Region optimisation pass width 960 gives best_metric -61p",
+            "--------------- PredBat - update at 2026-10-18 00:10:00+01:00 with clock skew 0 minutes, minutes now 10",
+            predict("base", 5.0, 10.0),
+        ]
+    )
+    replay = stamped(
+        [
+            "--------------- Replay of run at 2026-10-18 00:00:00+01:00 minutes now 0",
+            predict("base", 5.0, 10.0),
+            ">> Region optimisation pass width 960 gives best_metric -60p",
+            predict("best", 4.0, -60.0),
+            "--------------- Replay of run at 2026-10-18 00:05:00+01:00 minutes now 5",
+            predict("base", 5.0, 10.0),
+            ">> Region optimisation pass width 960 gives best_metric -62p",
+            "--------------- Replay of run at 2026-10-18 00:10:00+01:00 minutes now 10",
+        ]
+    )
+    window = [(1440 + 8 * 60, 1440 + 9 * 60, 15.0, 99.0)]
+    other = [(1440 + 8 * 60, 1440 + 9 * 60 + 30, 15.0, 99.0)]
+    rows = [
+        {"timestamp": "2026-10-18 00:00:00+01:00", "minutes_now": 1440, "replanned": True, "soc_percent": 30, "logged": window, "replayed": window},
+        {"timestamp": "2026-10-18 00:05:00+01:00", "minutes_now": 1445, "replanned": True, "soc_percent": 31, "logged": window, "replayed": other},
+        {"timestamp": "2026-10-18 00:10:00+01:00", "minutes_now": 1450, "replanned": False, "soc_percent": 32, "logged": None, "replayed": None},
+    ]
+    if set(plan_metrics(live)["2026-10-18 00:00"]) != {"base", "best"} or plan_metrics(live)["2026-10-18 00:00"]["best"]["metric"] != -60.0:
+        print("ERROR: the plan's last summary of each prediction should be kept, and the savings report's left out: {}".format(plan_metrics(live)))
+        return 1
+    records = replay_records(rows, live, replay)
+    first, second, third, summary = records
+    if first["differs"] or "adopted" in first or third["differs"]:
+        print("ERROR: matching and non-replanned runs should be short records that do not differ: {} {}".format(first, third))
+        return 1
+    if not second["differs"] or second["adopted"]["live"][0]["end"] != "09:00+1d" or second["adopted"]["replay"][0]["end"] != "09:30+1d" or "metrics" in second:
+        print("ERROR: the differing run should give both adopted plans and no matching metrics: {}".format(second))
+        return 1
+    if second["first_difference"] != {"line": 0, "live": ">> Region optimisation pass width 960 gives best_metric -61p", "replay": ">> Region optimisation pass width 960 gives best_metric -62p"}:
+        print("ERROR: the first differing plan line is wrong: {}".format(second.get("first_difference")))
+        return 1
+    if summary["adopted"] != {"compared": 2, "identical": 1} or summary["metrics_differ"] != 0 or [cluster["start"] for cluster in summary["clusters"]] != ["2026-10-18 00:05:00+01:00"]:
+        print("ERROR: summary wrong: {}".format(summary))
+        return 1
+    return 0
+
+
 def test_inverter_input():
     """A logged inverter state carries past a dropped run and replaces the reconstructed export window; the exact
     divergence and the rates in force are applied too."""
@@ -1002,6 +1068,7 @@ def run_replay_forward_tests(my_predbat):
     failed += test_inverter_input()
     failed += test_rate_sessions_input()
     failed += test_dispatch_input()
+    failed += test_replay_records()
     failed += test_model_car_charging_now(my_predbat)
     failed += test_old_log_formats()
     failed += test_rebuild_io_rates(my_predbat)

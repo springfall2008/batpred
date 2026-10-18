@@ -31,9 +31,10 @@ The replay carries on across midnight (roll_over_midnight), so a late-evening ya
 """
 import array
 import ast
+import json
 import math
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from const import PREDICT_STEP, EXPORT_MODE_TARGET
 from utils import MinuteArray, pack_export_limit, calc_percent_limit
@@ -821,6 +822,7 @@ def replay_runs(my_predbat, runs, until_minutes, plan_day, yaml_today, simulate,
                 inverter.soc_percent = my_predbat.soc_percent
         row = {
             "time": run["time"][11:16],
+            "timestamp": run["time"],
             # From the yaml day's midnight, like the windows below, so rows after midnight carry on from it
             "minutes_now": run["minute"],
             "soc_percent": run_soc(run, my_predbat.soc_max)[1],
@@ -842,7 +844,7 @@ def replay_runs(my_predbat, runs, until_minutes, plan_day, yaml_today, simulate,
         if row["replanned"]:
             # Candidate windows start at the current slot, so they move with the clock as fetch moves them
             rescan_rate_stats(my_predbat)
-            rescan_rate_windows(my_predbat)
+            rescan_rate_windows(my_predbat, verbose=False)
             rebuild_load_pv_models(my_predbat)
             pv_step = my_predbat.pv_forecast_minute_step
             load_step = my_predbat.load_minutes_step
@@ -1159,15 +1161,20 @@ REPLAY_RUN_LABEL_RE = re.compile(r"Replay of run at (\S+ \d\d:\d\d)")
 LOG_STAMP_RE = re.compile(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d+: ")
 
 
-def plan_trace(lines, replay=False):
-    """Cut log lines into runs and keep each run's plan lines, without timestamps, as {run label: [lines]}.
+# A prediction summary line for the plan (base/best and their PV10/PV90 scenarios, not the savings report's "yesterday"):
+# which prediction, then its final SoC, metric, keep, minimum SoC and the load and PV totals
+PREDICT_RE = re.compile(r"predict ((?:base|best)\w*) end_record .*?, final soc ([-0-9.]+)kWh, metric ([-0-9.]+)p, metric_keep ([-0-9.]+)kWh, min_soc ([-0-9.]+)kWh .*?, load ([-0-9.]+)kWh, PV ([-0-9.]+)kWh")
+
+
+def labelled_runs(lines, replay=False):
+    """Yield (run label, line) for each line inside a run, or (label, None) as each run starts.
 
     A live log's runs start at "PredBat - update", a replay's own log's at "Replay of run at". Repeated run times
     are numbered (#2, #3) so the two line up, and the midnight run stops at the tariff comparison, as none of
     that is the live plan.
     """
     marker = REPLAY_RUN_LABEL_RE if replay else LIVE_RUN_LABEL_RE
-    trace, seen = {}, {}
+    seen = {}
     current = None
     for line in lines:
         found = marker.search(line)
@@ -1175,12 +1182,155 @@ def plan_trace(lines, replay=False):
             label = found.group(1)
             seen[label] = seen.get(label, 0) + 1
             current = label if seen[label] == 1 else "{} #{}".format(label, seen[label])
-            trace[current] = []
+            yield current, None
         elif current is not None and COMPARE_RE.search(line):
             current = None
-        elif current is not None and TRACE_RE.search(line):
-            trace[current].append(LOG_STAMP_RE.sub("", line.rstrip("\n")))
+        elif current is not None:
+            yield current, line
+
+
+def plan_trace(lines, replay=False):
+    """Cut log lines into runs and keep each run's plan lines, without timestamps, as {run label: [lines]}."""
+    trace = {}
+    for label, line in labelled_runs(lines, replay):
+        if line is None:
+            trace[label] = []
+        elif TRACE_RE.search(line):
+            trace[label].append(LOG_STAMP_RE.sub("", line.rstrip("\n")))
     return trace
+
+
+def plan_metrics(lines, replay=False):
+    """Return each run's prediction summaries as {run label: {prediction: {soc, metric, keep, min_soc, load, pv}}}.
+
+    The last summary of each prediction in a run is kept: a live re-plan prints the plan in force first and then
+    the new plan, and the replay prints only the new plan.
+    """
+    metrics = {}
+    for label, line in labelled_runs(lines, replay):
+        if line is None:
+            metrics[label] = {}
+            continue
+        found = PREDICT_RE.search(line)
+        if found:
+            metrics[label][found.group(1)] = dict(zip(("soc", "metric", "keep", "min_soc", "load", "pv"), (float(value) for value in found.groups()[1:])))
+    return metrics
+
+
+def capture_log(my_predbat, lines):
+    """Make my_predbat.log keep each line, with a timestamp in the live log's format, as well as logging it."""
+    original = type(my_predbat).log
+
+    def log(message, *args, **kwargs):
+        """Keep the line, then log as normal."""
+        lines.append("{}: {}".format(datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"), message))
+        return original(my_predbat, message, *args, **kwargs)
+
+    my_predbat.log = log
+
+
+def window_records(windows):
+    """Windows as dicts with clock times (HH:MM, +Nd for later days), for the JSON output; None stays None."""
+    if windows is None:
+        return None
+    return [{"start": minute_label(start), "end": minute_label(end), "rate": rate, "percent": percent} for start, end, rate, percent in windows]
+
+
+def compared(logged, replayed):
+    """A live/replayed pair for the JSON output, with whether they match - None when either side has nothing to compare."""
+    return {"live": logged, "replay": replayed, "same": None if logged is None or replayed is None else logged == replayed}
+
+
+def replay_records(rows, live_lines, replay_lines, cluster_gap=30):
+    """Turn a replay into JSON-ready records: one per run, then a summary.
+
+    A run that matches is one short record (time, whether it re-planned, SoC); a run that differs also gives the
+    logged and replayed plans (adopted, candidate, charge) that differ, the prediction summaries that differ, live
+    against replay, and the first plan-trace line that differs - so the output stays small enough to read whole.
+    Runs are matched to the live log by their "update at" label, numbered when repeated, as the round trip does.
+    The summary counts the matches and groups the differing runs into clusters, splitting where cluster_gap
+    minutes pass without one.
+    """
+    live_trace, live_metrics = plan_trace(live_lines), plan_metrics(live_lines)
+    replay_trace, replay_metrics = plan_trace(replay_lines, replay=True), plan_metrics(replay_lines, replay=True)
+    labels = [label for label, line in labelled_runs(replay_lines, replay=True) if line is None]
+    records = []
+    for row, label in zip(rows, labels):
+        live_run, replay_run = live_metrics.get(label, {}), replay_metrics.get(label, {})
+        metrics = {name: compared(live_run.get(name), replay_run.get(name)) for name in sorted(set(live_run) | set(replay_run))}
+        first = None
+        if row["replanned"] and replay_trace.get(label) and live_trace.get(label) != replay_trace.get(label):
+            live_plan, replay_plan = live_trace.get(label) or [], replay_trace[label]
+            index = next((n for n, (a, b) in enumerate(zip(live_plan, replay_plan)) if a != b), min(len(live_plan), len(replay_plan)))
+            first = {"line": index, "live": live_plan[index] if index < len(live_plan) else None, "replay": replay_plan[index] if index < len(replay_plan) else None}
+        plans = {
+            "adopted": compared(window_records(row.get("logged")), window_records(row.get("replayed"))),
+            "candidate": compared(window_records(row.get("logged_candidate")), window_records(row.get("replayed_candidate"))),
+            "charge": compared(window_records(row.get("logged_charge")), window_records(row.get("replayed_charge"))),
+        }
+        record = {
+            "type": "run",
+            "label": label,
+            "time": row["timestamp"],
+            # Minutes from the yaml day's midnight, so they carry on past midnight
+            "minute": row["minutes_now"],
+            "replanned": row["replanned"],
+            "soc_percent": row.get("soc_percent"),
+        }
+        if row.get("soc_sim_percent") is not None:
+            record["soc_sim_percent"] = row["soc_sim_percent"]
+        if row.get("after_version_change"):
+            record["after_version_change"] = True
+        differing_plans = {name: pair for name, pair in plans.items() if pair["same"] is False}
+        differing_metrics = {name: pair for name, pair in metrics.items() if pair["same"] is False}
+        record["differs"] = bool(first or differing_plans or differing_metrics)
+        if record["differs"]:
+            record.update(differing_plans)
+            if differing_metrics:
+                record["metrics"] = differing_metrics
+            if first:
+                record["first_difference"] = first
+        record["_plans"] = plans
+        records.append(record)
+
+    clusters = []
+    last = None
+    for record in records:
+        if not record["differs"]:
+            continue
+        when = datetime.fromisoformat(record["time"])
+        if clusters and (when - last).total_seconds() <= cluster_gap * 60:
+            clusters[-1].update(end=record["time"], runs=clusters[-1]["runs"] + 1)
+        else:
+            clusters.append({"start": record["time"], "end": record["time"], "runs": 1, "first_difference": record.get("first_difference")})
+        last = when
+
+    def counts(name):
+        """How many re-plans compared that plan, and how many matched."""
+        pairs = [record["_plans"][name]["same"] for record in records if record["replanned"] and record["_plans"][name]["same"] is not None and not record.get("after_version_change")]
+        return {"compared": len(pairs), "identical": sum(pairs)}
+
+    sims = [(record["soc_percent"], record["soc_sim_percent"]) for record in records if record.get("soc_sim_percent") is not None and record["soc_percent"] is not None]
+    summary = {
+        "type": "summary",
+        "runs": len(records),
+        "adopted": counts("adopted"),
+        "candidate": counts("candidate"),
+        "metrics_differ": sum(1 for record in records if "metrics" in record),
+        "clusters": clusters,
+        "soc_rms_percent": round(math.sqrt(sum((a - b) ** 2 for a, b in sims) / len(sims)), 2) if sims else None,
+    }
+    for record in records:
+        del record["_plans"]
+    return records + [summary]
+
+
+def write_replay_json(filename, rows, live_lines, replay_lines, meta):
+    """Write a replay as JSON lines: a meta record (what was replayed, how), one record per run, then the summary."""
+    with open(filename, "w") as handle:
+        handle.write(json.dumps(dict(meta, type="meta")) + "\n")
+        for record in replay_records(rows, live_lines, replay_lines):
+            handle.write(json.dumps(record) + "\n")
 
 
 def trace_differences(live, replayed):
