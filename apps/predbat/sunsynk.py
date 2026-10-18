@@ -2206,6 +2206,10 @@ APPS_YAML_CREDENTIAL_KEYS = {
     "sunsynk_inverter_sn": "inverter_sn",
 }
 
+# What OAuthMixin needs to refresh an expired oauth token: the Supabase edge function's URL and
+# key, read from the environment, and the instance id, read from base.args["user_id"].
+APPS_YAML_OAUTH_REFRESH_KEYS = ("supabase_url", "supabase_key", "user_id")
+
 
 def load_apps_yaml_credentials(path):
     """Read Sunsynk credentials out of a real apps.yaml for the standalone CLI.
@@ -2216,8 +2220,9 @@ def load_apps_yaml_credentials(path):
     raises ValueError with the reason when the file cannot supply a usable account - the
     caller is a CLI, and a precise refusal beats a half-built client failing at login.
 
-    Only the keys in APPS_YAML_CREDENTIAL_KEYS are read, and none of their values are ever
-    printed: the CLI reports the serial and the region, never the token.
+    Only the keys in APPS_YAML_CREDENTIAL_KEYS are read, plus the oauth refresh settings in
+    APPS_YAML_OAUTH_REFRESH_KEYS (returned under "oauth_refresh"), and none of their values are
+    ever printed: the CLI reports the serial and the region, never the token.
     """
     try:
         with open(path, "r") as handle:
@@ -2238,12 +2243,30 @@ def load_apps_yaml_credentials(path):
     if credentials.get("token_expires_at") is not None:
         # yaml parses an ISO timestamp into a datetime; _parse_expiry wants the string back.
         credentials["token_expires_at"] = str(credentials["token_expires_at"])
+    refresh = {key: str(config[key]) for key in APPS_YAML_OAUTH_REFRESH_KEYS if config.get(key) not in (None, "")}
+    if refresh:
+        credentials["oauth_refresh"] = refresh
     if credentials.get("auth_method") == "oauth":
         if not credentials.get("key"):
             raise ValueError(f"{path} selects the oauth flow but carries no sunsynk_key token")
     elif not (credentials.get("username") and credentials.get("password")):
         raise ValueError(f"{path} has neither an oauth token nor a sunsynk_username/sunsynk_password pair")
     return credentials
+
+
+def apply_oauth_refresh_settings(mock_base, refresh):
+    """Put apps.yaml's oauth refresh settings where OAuthMixin reads them: the environment and base.args.
+
+    Without them the standalone CLI cannot refresh an expired token - the refresh is skipped with
+    "SUPABASE_URL or SUPABASE_KEY not set" and every API call then fails with HTTP 401.
+    """
+    refresh = refresh or {}
+    if refresh.get("supabase_url"):
+        os.environ["SUPABASE_URL"] = refresh["supabase_url"]
+    if refresh.get("supabase_key"):
+        os.environ["SUPABASE_KEY"] = refresh["supabase_key"]
+    if refresh.get("user_id"):
+        mock_base.args["user_id"] = refresh["user_id"]
 
 
 def _build_sunsynk(mock_base, args):  # pragma: no cover
@@ -2264,6 +2287,9 @@ def _build_sunsynk(mock_base, args):  # pragma: no cover
     # singled out without editing apps.yaml.
     if args.serial:
         credentials["inverter_sn"] = args.serial
+    apply_oauth_refresh_settings(mock_base, credentials.pop("oauth_refresh", None))
+    if credentials.get("auth_method") == "oauth" and not (os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_KEY") and mock_base.args.get("user_id")):
+        print("Warning: the oauth token cannot be refreshed without supabase_url, supabase_key and user_id in apps.yaml - expect HTTP 401 once it expires")
     return SunsynkAPI(
         mock_base,
         username=credentials.pop("username", args.username),
