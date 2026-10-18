@@ -205,3 +205,34 @@ class TestGatewayFreshness:
         inv = gw._last_status.inverters.add(serial="SECONDARY", type=pb.INVERTER_TYPE_GIVENERGY_GATEWAY, connected=False)
         inv.battery.rate_max_w = 38
         assert gw.inverter_data_error() is None
+
+    def test_source_timestamp_errors_distinguish_clock_and_connectivity(self):
+        """Explain clock skew without assuming an old timestamp is only a clock fault."""
+        for offset, expected in ((-300, "old; check Hub connectivity and clock synchronisation"), (300, "ahead; check Hub and PredBat clock synchronisation")):
+            gw = fresh_gateway()
+            gw._last_status.timestamp = int(time.time()) + offset
+            assert expected in gw.inverter_data_error()
+            assert not gw.is_alive()
+        gw = fresh_gateway()
+        gw._last_status.timestamp = 0
+        assert "no valid source timestamp; check Hub time synchronisation" in gw.inverter_data_error()
+        assert not gw.is_alive()
+
+    def test_parallel_gateway_rejects_cached_disconnected_member(self):
+        """A fresh coordinator envelope cannot validate a member's cached readings."""
+        gw = fresh_gateway()
+        gw.gateway_inverter_serial = ["COORDINATOR", "BATTERY", "BATTERY2"]
+        gw._inverter_slot_serials = ["COORDINATOR"]
+        coordinator = gw._last_status.inverters.add(serial="COORDINATOR", type=pb.INVERTER_TYPE_GIVENERGY_GATEWAY, connected=True)
+        coordinator.battery.soc_percent = 50
+        member = gw._last_status.inverters.add(serial="BATTERY2", type=pb.INVERTER_TYPE_GIVENERGY, connected=True)
+        member.battery.soc_percent = 60
+        member.battery.capacity_wh = 10000
+        gw._discovery["BATTERY2"] = {"serial": "BATTERY2", "battery": True, "type": pb.INVERTER_TYPE_GIVENERGY}
+        assert gw.inverter_data_error() is None
+        member.connected = False
+        assert member.battery.ByteSize() > 0
+        assert gw._last_status.timestamp > time.time() - 2
+        assert "BATTERY2 is disconnected" in gw.inverter_data_error()
+        member.connected = True
+        assert gw.inverter_data_error() is None

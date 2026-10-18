@@ -2458,8 +2458,9 @@ class GatewayMQTT(ComponentBase):
         inverter. To guard against the gateway losing sync (the command is not retained,
         so a single missed message would leave it stale), the state is also re-sent at
         least every 30 minutes even when unchanged. The command is gateway-wide, so it
-        carries no inverter serial. Gated only on an active MQTT connection — it does not
-        depend on auto-config, so the state is established as early as possible.
+        carries no inverter serial. Entering read-only requires only a broker connection.
+        Releasing read-only also requires fresh selected battery data and completed
+        inverter configuration, so an outage cannot release control prematurely.
         """
         if not self._mqtt_connected:
             # Force a re-send after reconnect (command is not retained).
@@ -2744,8 +2745,12 @@ class GatewayMQTT(ComponentBase):
         if status is None or self._last_telemetry_time <= 0 or now - self._last_telemetry_time >= _TELEMETRY_STALE_THRESHOLD:
             return "Hub battery telemetry is stale or missing"
         age = now - status.timestamp
-        if status.timestamp <= 0 or age >= _TELEMETRY_STALE_THRESHOLD or age < -_TELEMETRY_STALE_THRESHOLD:
-            return "Hub battery telemetry source timestamp is stale or invalid"
+        if status.timestamp <= 0:
+            return "Hub battery telemetry has no valid source timestamp; check Hub time synchronisation"
+        if age < -_TELEMETRY_STALE_THRESHOLD:
+            return f"Hub battery telemetry source timestamp is {abs(age):.0f}s ahead; check Hub and PredBat clock synchronisation"
+        if age >= _TELEMETRY_STALE_THRESHOLD:
+            return f"Hub battery telemetry source timestamp is {age:.0f}s old; check Hub connectivity and clock synchronisation"
         by_serial = {inv.serial.upper(): inv for inv in status.inverters}
         watched = set()
         for serial in self._inverter_slot_serials:
@@ -2761,6 +2766,10 @@ class GatewayMQTT(ComponentBase):
             inv = by_serial.get(serial)
             if inv is None:
                 return f"Hub battery inverter {serial} is missing"
+            # Unlike the warning-only _check_configured_inverters(), planning must
+            # reject disconnected battery members even when they have no control slot.
+            # The Hub serialises cached readings with a fresh envelope after failed
+            # polls, so a populated battery block does not establish a live read.
             if not inv.connected:
                 return f"Hub battery inverter {serial} is disconnected"
             if inv.type in GATEWAY_COORDINATOR_TYPES:
