@@ -38,6 +38,7 @@ class MockSunsynk(SunsynkAPI):
         self.control_enable = control_enable
         self.inverter_sn_filter = inverter_sn or []
         self.device_list = []
+        self.device_roles = {}
         self.device_detail = {}
         self.device_values = {}
         self.device_settings = {}
@@ -47,6 +48,8 @@ class MockSunsynk(SunsynkAPI):
         self.local_schedule = {}
         self.applied_payload = {}
         self.settle_count = {}
+        self.battery_energy = {}
+        self._parallel_warned = set()
         self.control_active = set()
         self._tier_refreshed = {}
         self._cache_restored = False

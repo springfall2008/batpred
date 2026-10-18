@@ -998,7 +998,7 @@ Keep your Sunsynk login in `secrets.yaml` rather than in `apps.yaml` - see [Stor
 - `sunsynk_password` - Your Sunsynk Connect account password
 - `sunsynk_region` - The API region your account is registered in: `'sunsynk'` (default, `api.sunsynk.net`) or `'inteless'` (`pv.inteless.com`)
 - `sunsynk_auth_method` - The login flow: `'password'` (default, RSA-encrypted login), `'password_legacy'` (the pre-2025 plaintext login, opt-in for regions that still serve it) or `'oauth'` (Predbat.com injects and refreshes the token)
-- `sunsynk_inverter_sn` - Optional, restrict Predbat to specific inverter serial number(s) - a single string or a list. Default is all inverters found on the account
+- `sunsynk_inverter_sn` - Optional, restrict Predbat to specific inverter serial number(s) - a single string or a list. Default is all inverters found on the account. For parallel inverters sharing one battery, list the master only - its slaves are included automatically and the group is controlled as one inverter
 - `sunsynk_automatic` - Set to `true` to automatically configure Predbat entities (recommended, default: `false`)
 - `sunsynk_automatic_ignore_pv` - Optional, defaults to `false`. When `automatic` is enabled, set to `true` to prevent Sunsynk Cloud from overwriting the `pv_power` config
 - `sunsynk_control_enable` - Allow Predbat to write charge/export schedules to the inverter (default: `true`, set to `false` for monitoring only)
