@@ -309,6 +309,7 @@ from tests.test_band_rate_text import test_band_rate_text
 from tests.test_rate_text_scan import test_rate_text_scan
 from tests.test_kraken import run_kraken_tests
 from tests.test_kraken_auth_mixin import run_kraken_auth_mixin_tests
+from tests.test_kraken_key import run_kraken_key_tests
 from tests.test_clip_export_slots import run_clip_export_slots_tests
 from tests.test_manual_overrides import run_manual_overrides_tests
 from tests.test_charge_freeze_only import run_charge_freeze_only_tests
@@ -758,6 +759,7 @@ def main():
         # Kraken Energy (EDF/E.ON) tests
         ("kraken", run_kraken_tests, "Kraken API tests (init, GraphQL, tariff discovery, rate fetching, run lifecycle)", False),
         ("kraken_auth", run_kraken_auth_mixin_tests, "Kraken auth mixin tests (API key, email, refresh, 401 handling)", False),
+        ("kraken_key", run_kraken_key_tests, "Kraken API key generator page tests (token check, key generation, Advanced menu)", False),
         ("clip_export_slots", run_clip_export_slots_tests, "Clip export slots tests", False),
         ("manual_overrides", run_manual_overrides_tests, "Manual window override tests", False),
         ("charge_freeze_only", run_charge_freeze_only_tests, "set_charge_freeze_only (no grid charging) tests", False),
