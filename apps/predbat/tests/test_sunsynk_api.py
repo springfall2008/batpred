@@ -50,6 +50,7 @@ class MockSunsynk(SunsynkAPI):
         self.settle_count = {}
         self.battery_energy = {}
         self._parallel_warned = set()
+        self._slave_startup_waits = 0
         self.control_active = set()
         self._tier_refreshed = {}
         self._cache_restored = False

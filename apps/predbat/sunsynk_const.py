@@ -276,6 +276,10 @@ SUNSYNK_PARALLEL_BATTERY_ENERGY = {"battery_charge_today": "charge", "battery_di
 # A polling gap longer than this is not integrated: filling an outage with one stale reading
 # would invent energy. Three live-tier intervals tolerates one or two missed polls.
 SUNSYNK_BATTERY_INTEGRATE_MAX_GAP = 15
+# First-cycle attempts startup waits for a parallel slave's battery reading, which decides
+# whether it is grouped (no BMS link) or its own inverter. After these the master starts
+# alone rather than staying uncontrolled because one slave is offline.
+SUNSYNK_SLAVE_STARTUP_RETRIES = 3
 
 # Per-unit battery current cap, amps. CONFIRMED live on the parallel pair above: 65 on each
 # unit against the BMS's whole-bank chargeCurrentLimit of 200, with each unit charging at

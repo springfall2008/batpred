@@ -14,8 +14,9 @@ with serials and the plant id anonymised.
 
 import predbat  # noqa: F401  (import first - avoids circular import: config.py does `from predbat import THIS_VERSION`)
 from datetime import datetime, timedelta
-from unittest.mock import patch
+from unittest.mock import PropertyMock, patch
 import pytz
+import sunsynk
 from tests.discovery_contract import assert_record_agrees, assert_record_binds_nothing_extra, capture_automatic_config, validated_inverters
 from tests.test_sunsynk_config import RunSunsynk, _fake_token, _live_plan_entities
 from tests.test_sunsynk_publish import PublishingSunsynk
@@ -26,6 +27,11 @@ SLAVE = "2200000002"
 PLANT = 400001
 
 LONDON = pytz.timezone("Europe/London")
+
+
+def _clock(s, when):
+    """Freeze the component's local clock (ComponentBase.now_utc_exact) at when."""
+    return patch.object(type(s), "now_utc_exact", new_callable=PropertyMock, return_value=when)
 
 
 def _infos(*units):
@@ -208,6 +214,54 @@ def test_parallel_slave_with_its_own_battery_is_independent():
     return failed
 
 
+def test_parallel_filter_leaves_out_a_slave_with_its_own_battery():
+    """A slave the master's filter pulled in is polled, but one with its own battery is not driven unless it is named."""
+    failed = False
+    s = PublishingSunsynk(inverter_sn=[MASTER])
+    with patch.object(s, "_get", side_effect=_list_get(_infos((MASTER, "M1", PLANT), (SLAVE, "S2", PLANT)))):
+        run_async_local(s.get_device_list())
+    pair = _parallel_pair()
+    s.device_values = pair.device_values
+    s.device_values[SLAVE].update({"bmsSoc": 64.0, "bmsVolt": 52.1, "bmsCurrent": -10.0})
+    if s.inverter_list != [MASTER]:
+        print(f"ERROR: an unnamed slave with its own battery must not be driven, got {s.inverter_list}")
+        failed = True
+
+    # Naming it as well makes it a second inverter, as before the filter grew the group.
+    s = PublishingSunsynk(inverter_sn=[MASTER, SLAVE])
+    with patch.object(s, "_get", side_effect=_list_get(_infos((MASTER, "M1", PLANT), (SLAVE, "S2", PLANT)))):
+        run_async_local(s.get_device_list())
+    s.device_values = pair.device_values
+    if s.inverter_list != [MASTER, SLAVE]:
+        print(f"ERROR: a named slave with its own battery is its own inverter, got {s.inverter_list}")
+        failed = True
+    return failed
+
+
+def test_parallel_filter_warns_when_the_list_has_no_roles():
+    """With a filter set and no equipMode in the list, a same-plant unit left out may be a slave, so it is warned about."""
+    failed = False
+    no_roles = [{"sn": MASTER, "plant": {"id": PLANT}}, {"sn": SLAVE, "plant": {"id": PLANT}}]
+    s = PublishingSunsynk(inverter_sn=[MASTER])
+    with patch.object(s, "_get", side_effect=_list_get(no_roles)):
+        devices = run_async_local(s.get_device_list())
+    if devices != [MASTER]:
+        print(f"ERROR: without roles only the named serial is polled, got {devices}")
+        failed = True
+    if not any("no parallel roles" in message and SLAVE in message for message in s.log_messages):
+        print(f"ERROR: the left-out same-plant unit must be warned about, got {s.log_messages}")
+        failed = True
+
+    # A unit in another plant cannot be this master's slave: no warning.
+    s = PublishingSunsynk(inverter_sn=[MASTER])
+    with patch.object(s, "_get", side_effect=_list_get([{"sn": MASTER, "plant": {"id": PLANT}}, {"sn": SLAVE, "plant": {"id": 400002}}])):
+        run_async_local(s.get_device_list())
+    if any("no parallel roles" in message for message in s.log_messages):
+        print(f"ERROR: a unit in another plant must not be warned about, got {s.log_messages}")
+        failed = True
+    return failed
+
+
 def test_parallel_group_values():
     """Grid, PV and load are summed; SoC and temperature come from the master; battery power from the BMS."""
     failed = False
@@ -283,7 +337,7 @@ def test_parallel_group_energy_and_balance():
     s = _parallel_pair()
     now = LONDON.localize(datetime(2026, 10, 18, 9, 46))
     s.battery_energy[MASTER] = {"date": "2026-10-18", "charge": 19.2, "discharge": 6.2, "time": now.isoformat(), "power": -1244.0}
-    with patch.object(s, "_integration_now", return_value=now):
+    with _clock(s, now):
         energy = s.group_energy(MASTER)
     expected = {"pv_today": 1.5, "import_today": 42.3, "export_today": 4.7, "load_today": 20.3, "battery_charge_today": 19.2, "battery_discharge_today": 6.2}
     for leaf, want in expected.items():
@@ -335,7 +389,7 @@ def test_parallel_battery_integrator():
         failed = True
 
     # Yesterday's totals are not published as today's.
-    with patch.object(s, "_integration_now", return_value=LONDON.localize(datetime(2026, 10, 20, 0, 1))):
+    with _clock(s, LONDON.localize(datetime(2026, 10, 20, 0, 1))):
         energy = s.group_energy(MASTER)
     if energy.get("battery_discharge_today") != 0.0:
         print(f"ERROR: a stale day must publish 0, got {energy.get('battery_discharge_today')}")
@@ -373,7 +427,7 @@ def test_parallel_automatic_config_registers_one_inverter():
     failed = False
     s = _parallel_pair()
     s.battery_energy[MASTER] = {"date": "2026-10-18", "charge": 1.0, "discharge": 1.0, "time": LONDON.localize(datetime(2026, 10, 18, 9, 0)).isoformat(), "power": 0.0}
-    with patch.object(s, "_integration_now", return_value=LONDON.localize(datetime(2026, 10, 18, 9, 5))):
+    with _clock(s, LONDON.localize(datetime(2026, 10, 18, 9, 5))):
         captured = capture_automatic_config(s)
     if captured.get("num_inverters") != 1 or captured.get("inverter_type") != ["SunsynkCloud"]:
         print(f"ERROR: expected one SunsynkCloud inverter, got {captured.get('num_inverters')} {captured.get('inverter_type')}")
@@ -393,7 +447,7 @@ def test_parallel_discovery_record():
     """build_discovery() files one record per group, listing every member serial and agreeing with automatic_config()."""
     failed = False
     s = _parallel_pair()
-    with patch.object(s, "_integration_now", return_value=LONDON.localize(datetime(2026, 10, 18, 9, 5))):
+    with _clock(s, LONDON.localize(datetime(2026, 10, 18, 9, 5))):
         records = validated_inverters(s.build_discovery())
         captured = capture_automatic_config(s)
     if [record["device_id"] for record in records] != [f"sunsynk:{MASTER}"]:
@@ -414,7 +468,7 @@ def test_parallel_publish():
     """The master's sensors carry the group; the slave's raw readings are published for diagnosis, marked as such."""
     failed = False
     s = _parallel_pair()
-    with patch.object(s, "_integration_now", return_value=LONDON.localize(datetime(2026, 10, 18, 9, 5))):
+    with _clock(s, LONDON.localize(datetime(2026, 10, 18, 9, 5))):
         run_async_local(s.publish_data())
     if s.published.get(s._sensor_name(MASTER, "grid_power"), {}).get("state") != 4.0:
         print(f"ERROR: the master's grid_power should be the group sum, got {s.published.get(s._sensor_name(MASTER, 'grid_power'))}")
@@ -440,6 +494,85 @@ def test_parallel_run_drives_the_master_only():
     s.automatic = True
     _live_plan_entities(s, MASTER)
     posts = []
+    fake_get, fake_post = _pair_transport(posts)
+
+    with patch.object(s, "_get", side_effect=fake_get), patch.object(s, "_post", side_effect=fake_post), patch.object(s, "fetch_token", side_effect=_fake_token):
+        run_async_local(s.run(0, True))
+        run_async_local(s.switch_event(s._control_name("switch", MASTER, "battery_schedule_charge_write"), "turn_on"))
+        run_async_local(s.run(0, False))
+    if s.args_set.get("num_inverters") != 1:
+        print(f"ERROR: expected one inverter, got {s.args_set.get('num_inverters')}")
+        failed = True
+    if any(SLAVE.lower() in entity and "battery_schedule" in entity for entity in s.published):
+        print("ERROR: the slave must not get control entities")
+        failed = True
+    if not posts or any(sn != MASTER for _, sn, _ in posts):
+        print(f"ERROR: writes must reach the master only, got {[(key, sn) for key, sn, _ in posts]}")
+        failed = True
+    if s._sn_from_entity(f"switch.predbat_sunsynk_{SLAVE}_battery_schedule_charge_write") is not None:
+        print("ERROR: a slave entity must not route to an inverter")
+        failed = True
+    if s.published.get(s._sensor_name(MASTER, "pv_power"), {}).get("state") != 2066.0:
+        print(f"ERROR: the master's pv_power should be the group sum, got {s.published.get(s._sensor_name(MASTER, 'pv_power'))}")
+        failed = True
+    return failed
+
+
+def test_parallel_first_cycle_waits_for_the_slaves_battery_reading():
+    """Startup waits for a slave's battery reading, which decides whether it is grouped; a slave that never answers is given up on."""
+    failed = False
+    slave_up = [False]
+    s = RunSunsynk()
+    s.automatic = True
+    fake_get, fake_post = _pair_transport([], slave_battery=lambda: slave_up[0])
+    with patch.object(s, "_get", side_effect=fake_get), patch.object(s, "_post", side_effect=fake_post), patch.object(s, "fetch_token", side_effect=_fake_token):
+        if run_async_local(s.run(0, True)) is not False:
+            print("ERROR: startup must wait while the slave's battery reading is missing")
+            failed = True
+        if "num_inverters" in s.args_set:
+            print(f"ERROR: automatic_config() must not run before the slave is read, got {s.args_set.get('num_inverters')}")
+            failed = True
+        if not any("waiting for parallel slave" in message for message in s.log_messages):
+            print(f"ERROR: the wait must be logged, got {s.log_messages}")
+            failed = True
+        slave_up[0] = True
+        if run_async_local(s.run(0, True)) is not True:
+            print("ERROR: startup must complete once the slave answers")
+            failed = True
+    if s.args_set.get("num_inverters") != 1:
+        print(f"ERROR: expected one inverter once the slave is read, got {s.args_set.get('num_inverters')}")
+        failed = True
+
+    # A slave that never answers must not keep the master uncontrolled for ever.
+    s = RunSunsynk()
+    s.automatic = True
+    fake_get, fake_post = _pair_transport([], slave_battery=lambda: False)
+    results = []
+    with patch.object(s, "_get", side_effect=fake_get), patch.object(s, "_post", side_effect=fake_post), patch.object(s, "fetch_token", side_effect=_fake_token):
+        for _ in range(sunsynk.SUNSYNK_SLAVE_STARTUP_RETRIES + 1):
+            results.append(run_async_local(s.run(0, True)))
+    if results != [False] * sunsynk.SUNSYNK_SLAVE_STARTUP_RETRIES + [True]:
+        print(f"ERROR: expected {sunsynk.SUNSYNK_SLAVE_STARTUP_RETRIES} waits and then a start, got {results}")
+        failed = True
+    if s.args_set.get("num_inverters") != 1:
+        print(f"ERROR: the master must be configured after giving up on the slave, got {s.args_set.get('num_inverters')}")
+        failed = True
+    if not any("treated as sharing" in message for message in s.log_messages):
+        print(f"ERROR: giving up on the slave must be logged, got {s.log_messages}")
+        failed = True
+
+    # Without automatic config nothing is bound once, so inverter_list corrects itself and startup does not wait.
+    s = RunSunsynk()
+    fake_get, fake_post = _pair_transport([], slave_battery=lambda: False)
+    with patch.object(s, "_get", side_effect=fake_get), patch.object(s, "_post", side_effect=fake_post), patch.object(s, "fetch_token", side_effect=_fake_token):
+        if run_async_local(s.run(0, True)) is not True:
+            print("ERROR: startup must not wait for a slave when automatic config is off")
+            failed = True
+    return failed
+
+
+def _pair_transport(posts, slave_battery=None):
+    """Return (fake_get, fake_post) serving the live pair; slave_battery() False makes the slave's battery read fail."""
     master_settings = {
         "sn": MASTER,
         "sysWorkMode": "2",
@@ -462,6 +595,8 @@ def test_parallel_run_drives_the_master_only():
         if endpoint_key == "inverter_detail":
             return {"ratePower": 3600}
         if endpoint_key == "battery":
+            if sn == SLAVE and slave_battery is not None and not slave_battery():
+                return {}
             if sn == MASTER:
                 return {"soc": 80, "power": -1220, "voltage": 54.1, "capacity": 400, "chargeVolt": 58.0, "chargeCurrentLimit": 200, "bmsCurrent": 23.0, "bmsVolt": 53.5, "bmsSoc": 80.0, "etodayChg": 12.7, "etodayDischg": 6.2}
             return {"soc": 80, "power": 6007, "voltage": 54.0, "capacity": 400, "chargeVolt": 0.0, "chargeCurrentLimit": 0, "bmsCurrent": 0.0, "bmsVolt": 0.0, "bmsSoc": 0.0, "etodayChg": 0.0, "etodayDischg": 57.8}
@@ -483,26 +618,7 @@ def test_parallel_run_drives_the_master_only():
         posts.append((endpoint_key, sn, body))
         return {}
 
-    with patch.object(s, "_get", side_effect=fake_get), patch.object(s, "_post", side_effect=fake_post), patch.object(s, "fetch_token", side_effect=_fake_token):
-        run_async_local(s.run(0, True))
-        run_async_local(s.switch_event(s._control_name("switch", MASTER, "battery_schedule_charge_write"), "turn_on"))
-        run_async_local(s.run(0, False))
-    if s.args_set.get("num_inverters") != 1:
-        print(f"ERROR: expected one inverter, got {s.args_set.get('num_inverters')}")
-        failed = True
-    if any(SLAVE.lower() in entity and "battery_schedule" in entity for entity in s.published):
-        print("ERROR: the slave must not get control entities")
-        failed = True
-    if not posts or any(sn != MASTER for _, sn, _ in posts):
-        print(f"ERROR: writes must reach the master only, got {[(key, sn) for key, sn, _ in posts]}")
-        failed = True
-    if s._sn_from_entity(f"switch.predbat_sunsynk_{SLAVE}_battery_schedule_charge_write") is not None:
-        print("ERROR: a slave entity must not route to an inverter")
-        failed = True
-    if s.published.get(s._sensor_name(MASTER, "pv_power"), {}).get("state") != 2066.0:
-        print(f"ERROR: the master's pv_power should be the group sum, got {s.published.get(s._sensor_name(MASTER, 'pv_power'))}")
-        failed = True
-    return failed
+    return fake_get, fake_post
 
 
 def test_parallel_roles_and_battery_energy_survive_a_restart():
@@ -598,8 +714,8 @@ def test_parallel_cli_never_writes_to_a_slave():
 
     args = argparse.Namespace(username=None, password=None, region="sunsynk", auth_method="password", serial=None, dump_settings=False, write_test=False, tou_test=True, automatic=False)
     buffer = io.StringIO()
-    with patch("sunsynk._build_sunsynk", return_value=client), patch.object(client, "run", side_effect=_async_true), patch("sunsynk._tou_round_trip", side_effect=fake_round_trip), patch.object(
-        client, "_integration_now", return_value=LONDON.localize(datetime(2026, 10, 18, 9, 5))
+    with patch("sunsynk._build_sunsynk", return_value=client), patch.object(client, "run", side_effect=_async_true), patch("sunsynk._tou_round_trip", side_effect=fake_round_trip), _clock(
+        client, LONDON.localize(datetime(2026, 10, 18, 9, 5))
     ), redirect_stdout(buffer):
         run_async_local(run_cli_once(args))
     output = buffer.getvalue()
@@ -644,6 +760,8 @@ def run_sunsynk_parallel_tests(my_predbat):
         ("two_masters_one_plant", test_parallel_two_masters_in_one_plant),
         ("settings_fallback", test_parallel_roles_fall_back_to_the_settings_read),
         ("slave_own_battery", test_parallel_slave_with_its_own_battery_is_independent),
+        ("filter_own_battery_slave", test_parallel_filter_leaves_out_a_slave_with_its_own_battery),
+        ("filter_no_roles_warns", test_parallel_filter_warns_when_the_list_has_no_roles),
         ("group_values", test_parallel_group_values),
         ("battery_sign", test_parallel_battery_power_follows_the_bms_sign),
         ("battery_fallback", test_parallel_battery_power_without_a_bms_link_falls_back_to_the_master),
@@ -655,6 +773,7 @@ def run_sunsynk_parallel_tests(my_predbat):
         ("discovery_record", test_parallel_discovery_record),
         ("publish", test_parallel_publish),
         ("run_drives_master_only", test_parallel_run_drives_the_master_only),
+        ("first_cycle_waits_for_slave", test_parallel_first_cycle_waits_for_the_slaves_battery_reading),
         ("restart", test_parallel_roles_and_battery_energy_survive_a_restart),
         ("slave_settings_not_external", test_parallel_slave_settings_are_not_reported_as_external_changes),
         ("cli_never_writes_slave", test_parallel_cli_never_writes_to_a_slave),

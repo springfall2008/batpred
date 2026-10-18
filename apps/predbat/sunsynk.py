@@ -91,6 +91,7 @@ from sunsynk_const import (
     SUNSYNK_PARALLEL_SUMMED_ENERGY,
     SUNSYNK_PARALLEL_BATTERY_ENERGY,
     SUNSYNK_BATTERY_INTEGRATE_MAX_GAP,
+    SUNSYNK_SLAVE_STARTUP_RETRIES,
     SUNSYNK_UNIT_CHARGE_CURRENT_FIELD,
     SUNSYNK_RESTORE_MAX_CONTROL,
     SUNSYNK_RESTORE_MAX_CONTROL_ACTIVE,
@@ -173,6 +174,8 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         self.battery_energy = {}
         # Parallel-group conditions already warned about, so each is logged once
         self._parallel_warned = set()
+        # First-cycle attempts so far that waited for a parallel slave's battery reading
+        self._slave_startup_waits = 0
         # Serials Predbat has actually been asked to drive, i.e. ones whose write button
         # has been pressed at least once. run() only re-applies a schedule for these, so a
         # startup cycle can never clobber an inverter before there is a plan to apply.
@@ -536,6 +539,15 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
             # A configured master brings its plant's slaves with it: they carry half the site's
             # grid and PV flows, and the user configured the inverter they see, not the group.
             wanted_plants = {roles[sn]["plant"] for sn in serials if sn.lower() in wanted and self._role_letter(roles[sn]["equip_mode"]) == "M"}
+            if not any(self._role_letter(role["equip_mode"]) for role in roles.values()):
+                # Roles only reach discovery through the list; without them a slave cannot be told apart here.
+                named_plants = {roles[sn]["plant"] for sn in serials if sn.lower() in wanted and roles[sn]["plant"]}
+                left_out = [sn for sn in serials if sn.lower() not in wanted and roles[sn]["plant"] in named_plants]
+                if left_out:
+                    self._warn_parallel_once(
+                        ("no_roles", tuple(left_out)),
+                        f"Warn: Sunsynk inverter list carries no parallel roles, so {', '.join(left_out)} in the same plant as sunsynk_inverter_sn is not polled; if it is a parallel slave, add its serial to sunsynk_inverter_sn too",
+                    )
             serials = [sn for sn in serials if sn.lower() in wanted or (self._role_letter(roles[sn]["equip_mode"]) == "S" and roles[sn]["plant"] in wanted_plants)]
         self.device_list = serials
         return serials
@@ -656,15 +668,21 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         """The serials Predbat drives as inverters: standalone units and group masters, never a slave.
 
         A slave that cannot be paired is left out too, with a warning: its battery readings are
-        not its own, and writing to it would fight the master that sets it.
+        not its own, and writing to it would fight the master that sets it. With a serial filter,
+        a unit the filter does not name is never driven: it is only polled because a named
+        master pulled in its plant's slaves, and one with its own battery is not in the group.
         """
         paired = {sn for members in self.parallel_groups().values() for sn in members}
+        wanted = {str(sn).lower() for sn in self.inverter_sn_filter}
         driven = []
         for sn in self.device_list:
             if sn in paired:
                 continue
             if self._unit_role(sn) == "S" and not self._has_bms_link(sn):
                 self._warn_parallel_once(("unpaired", sn), f"Warn: Sunsynk parallel slave {sn} could not be paired with its master, so its grid and PV flows are not counted; configure the master's serial too")
+                continue
+            if wanted and sn.lower() not in wanted:
+                self._warn_parallel_once(("unnamed", sn), f"Sunsynk: parallel slave {sn} has its own battery and is not in sunsynk_inverter_sn, so it is monitored but not controlled")
                 continue
             driven.append(sn)
         return driven
@@ -721,14 +739,10 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
             if total is not None:
                 group[leaf] = total
         state = self.battery_energy.get(sn, {})
-        today = state.get("date") == self._integration_now().date().isoformat()
+        today = state.get("date") == self.now_utc_exact.date().isoformat()
         for leaf, key in SUNSYNK_PARALLEL_BATTERY_ENERGY.items():
             group[leaf] = round(state.get(key, 0.0), 3) if today else 0.0
         return group
-
-    def _integration_now(self):
-        """Return the current local time for battery-energy integration."""
-        return datetime.now(self.local_tz)
 
     def _integrate_group_battery(self, sn, power, now):
         """Add the battery energy since the last reading to group sn's totals for today.
@@ -2095,7 +2109,7 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
             except Exception as error:
                 self.log(f"Warn: Sunsynk telemetry poll failed for {sn}: {error}")
         # A parallel group's battery energy is integrated from its BMS power, from fresh readings only.
-        now = self._integration_now()
+        now = self.now_utc_exact
         integrated = False
         for master in self.parallel_groups():
             power = self.group_values(master).get("battery_power")
@@ -2179,6 +2193,19 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
             # entire startup path is retried on its backoff until a poll comes back.
             self.log("Warn: Sunsynk first telemetry poll returned nothing, deferring startup; it will be retried after a backoff")
             return False
+
+        if first and self.automatic:
+            # A slave's battery reading decides whether it is grouped or its own inverter, and
+            # automatic_config() runs once, so it waits for every slave - a bounded number of times.
+            unread = [sn for sn in self.device_list if self._unit_role(sn) == "S" and not any(field in self.device_values.get(sn, {}) for field in SUNSYNK_BMS_LINK_FIELDS)]
+            if unread and self._slave_startup_waits < SUNSYNK_SLAVE_STARTUP_RETRIES:
+                self._slave_startup_waits += 1
+                # Clear the live clock, or the retry would find the tier fresh and not poll the slave again.
+                self._tier_refreshed.pop("live", None)
+                self.log(f"Warn: Sunsynk is waiting for parallel slave {', '.join(unread)} to report its battery before configuring (attempt {self._slave_startup_waits} of {SUNSYNK_SLAVE_STARTUP_RETRIES})")
+                return False
+            if unread:
+                self.log(f"Warn: Sunsynk parallel slave {', '.join(unread)} has not reported its battery, so it is treated as sharing its master's; restart Predbat if it has a battery of its own")
 
         if first and self.automatic:
             await self.automatic_config()
@@ -2307,7 +2334,7 @@ def _build_sunsynk(mock_base, args):  # pragma: no cover
         control_enable=True,
         # --automatic runs automatic_config() on the first cycle, as a live install does;
         # MockBase.set_arg prints every setting it binds with the referenced entity's state.
-        automatic=bool(getattr(args, "automatic", False)),
+        automatic=bool(args.automatic),
     )
 
 
