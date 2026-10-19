@@ -585,6 +585,99 @@ def test_hanchu_default_power_limit_is_warned_once():
     assert not failed, "test_hanchu_default_power_limit_is_warned_once"
 
 
+def test_hanchu_menu_answered_by_code_alone_is_used():
+    """The menu answers code 200 with no success flag; its ranges must still be applied (batpred#5305, hardware).
+
+    The real envelope is {"code": 200, "msg": ..., "data": {"energy": {...}}} - no success key - and
+    the parser receives the inner data, not the whole envelope. Either half wrong and every device
+    silently runs on the 5 kW defaults.
+    """
+    failed = False
+    client = MockHanchu()
+    client._token = "tok"
+    client._token_time = time.time()
+    client.device_list = ["HC240100001"]
+    menu = {"code": 200, "msg": "success", "data": MENU_SAMPLE["data"]}
+    with patched_session([(200, menu), (200, envelope(data={"WORK_MODE_CMB": "3"}))]):
+        run_async_local(client.refresh_config())
+    ranges = client.device_ranges.get("HC240100001", {})
+    if ranges.get(HANCHU_KEY_CHARGE_POWER) != (0, 7000) or ranges.get(HANCHU_KEY_CHARGE_SOC) != (40, 100):
+        print(f"ERROR: the menu's ranges were not applied: {ranges}")
+        failed = True
+    if logged(client, "/gateway/app/ha/menu was unsuccessful"):
+        print("ERROR: a code-200 menu was logged as a failure")
+        failed = True
+    if client.battery_rate_max("HC240100001") != 7000.0:
+        print(f"ERROR: battery_rate_max {client.battery_rate_max('HC240100001')} should follow the menu")
+        failed = True
+    assert not failed, "test_hanchu_menu_answered_by_code_alone_is_used"
+
+
+def test_hanchu_code_alone_is_success_only_for_the_menu():
+    """Every other endpoint still needs success: true - a bare code 200 there is not taken as success."""
+    failed = False
+    client = MockHanchu()
+    client._token = "tok"
+    client._token_time = time.time()
+    with patched_session([(200, {"code": 200, "msg": "?", "data": DEVICE_LIST_SAMPLE})]):
+        serials = run_async_local(client.get_device_list())
+    if serials or client.discovery_ok is not False:
+        print(f"ERROR: a device list without success was accepted: {serials} discovery_ok={client.discovery_ok}")
+        failed = True
+    assert not failed, "test_hanchu_code_alone_is_success_only_for_the_menu"
+
+
+def test_hanchu_failed_menu_warns_the_default_power_is_in_use():
+    """A menu call that fails leaves the 5 kW default in force too, so it is warned about, once."""
+    failed = False
+    client = MockHanchu()
+    client._token = "tok"
+    client._token_time = time.time()
+    client.device_list = ["HC240100001"]
+    for _ in range(2):
+        with patched_session([(200, envelope(code=500, msg="busy")), (200, envelope(data={}))]):
+            run_async_local(client.refresh_config())
+    warnings = [message for message in client.log_messages if "did not report its power limits" in message]
+    if len(warnings) != 1:
+        print(f"ERROR: expected one default-power warning after a failed menu, got {warnings}")
+        failed = True
+    assert not failed, "test_hanchu_failed_menu_warns_the_default_power_is_in_use"
+
+
+def test_hanchu_ac_coupled_pv_is_counted_in_pv_power():
+    """On an AC-coupled system the solar is only in bypMeterTotalPower, so pv_power must include it (batpred#5305, hardware).
+
+    bypMeterSwitch is 1 on AC-coupled systems and 0 on DC-coupled ones. The readings are upton68's
+    from a real AC-coupled unit and a contributor's DC-coupled one.
+    """
+    failed = False
+    client = MockHanchu()
+    ac_coupled = {"batSoc": 0.5, "batP": 408.0, "batPUnit": "W", "meterPPwr": 0, "meterPPwrUnit": "W", "pvTtPwr": 0.0, "pvTtPwrUnit": "W", "bypMeterTotalPower": 686.8, "bypMeterTotalPowerUnit": "W", "bypMeterSwitch": 1, "loadPwr": 278.8}
+    client._apply_status_payload("HC1", ac_coupled)
+    values = client.device_values["HC1"]
+    if values.get("pv_power") != 686.8 or values.get("ac_pv_power") != 686.8:
+        print(f"ERROR: AC-coupled pv_power {values.get('pv_power')} ac_pv_power {values.get('ac_pv_power')}, expected both 686.8")
+        failed = True
+    dc_coupled = dict(ac_coupled, pvTtPwr=15.0, bypMeterTotalPower=0, bypMeterSwitch=0)
+    client._apply_status_payload("HC2", dc_coupled)
+    if client.device_values["HC2"].get("pv_power") != 15.0:
+        print(f"ERROR: DC-coupled pv_power {client.device_values['HC2'].get('pv_power')}, expected 15.0")
+        failed = True
+    # A bypass reading on a unit that says it has no bypass meter is not added: the switch decides.
+    stray = dict(dc_coupled, bypMeterTotalPower=500.0)
+    client._apply_status_payload("HC3", stray)
+    if client.device_values["HC3"].get("pv_power") != 15.0:
+        print(f"ERROR: pv_power {client.device_values['HC3'].get('pv_power')} took a bypass reading with bypMeterSwitch 0")
+        failed = True
+    # With no switch reported at all, behaviour is unchanged.
+    unknown = {key: value for key, value in ac_coupled.items() if key != "bypMeterSwitch"}
+    client._apply_status_payload("HC4", unknown)
+    if client.device_values["HC4"].get("pv_power") != 0.0:
+        print(f"ERROR: pv_power {client.device_values['HC4'].get('pv_power')} changed without a bypMeterSwitch")
+        failed = True
+    assert not failed, "test_hanchu_ac_coupled_pv_is_counted_in_pv_power"
+
+
 def test_hanchu_config_read_is_one_call_per_device():
     """Nineteen keys are read in ONE iotGet - the same batching rationale as the write path."""
     failed = False
@@ -692,6 +785,10 @@ def run_hanchu_api_tests(my_predbat):
         ("inverter_limit_override", test_hanchu_inverter_limit_override_wins),
         ("default_power_warning", test_hanchu_default_power_limit_is_warned_once),
         ("config_batched_read", test_hanchu_config_read_is_one_call_per_device),
+        ("menu_code_alone", test_hanchu_menu_answered_by_code_alone_is_used),
+        ("code_alone_menu_only", test_hanchu_code_alone_is_success_only_for_the_menu),
+        ("failed_menu_warning", test_hanchu_failed_menu_warns_the_default_power_is_in_use),
+        ("ac_coupled_pv", test_hanchu_ac_coupled_pv_is_counted_in_pv_power),
         ("transport_failure", test_hanchu_transport_failure_is_retried_then_reported),
         ("no_credentials", test_hanchu_run_refuses_to_start_without_credentials),
         ("retry_delay_default", test_hanchu_retry_delay_default),

@@ -122,6 +122,12 @@ HANCHU_CODE_OK = 200
 HANCHU_CODE_UNAUTHORISED = 401
 HANCHU_CODE_FAILED = 100
 
+# HARDWARE (batpred#5305): the menu answers code 200 with NO success flag, so it is judged on the
+# code alone - which is also how the official integration reads it (GUOXIA api.py async_get_menu
+# accepts code == 200). Kept to the endpoints actually observed doing this: everywhere else a bare
+# code 200 without success: true is still treated as a failure.
+HANCHU_SUCCESS_BY_CODE_ENDPOINTS = ("menu",)
+
 # OBSERVED: UPTON api.py ReauthRequired is raised when the refresh endpoint answers code 100, and
 # the component then asks Home Assistant to re-authenticate. Note the INTERNAL INCONSISTENCY in the
 # source: that exception's own docstring says the trigger is code 90076, while the code that raises
@@ -179,10 +185,18 @@ HANCHU_TELEMETRY = {
     # CORROBORATED (UPTON sensor.py "load_power", GUOXIA sensor.py). House load.
     "load_power": "loadPwr",
     # OBSERVED (UPTON sensor.py "ac_coupled_pv_power"). AC-coupled PV measured through the bypass
-    # meter. Published for visibility; deliberately NOT added into pv_power, since whether it is
-    # already included in pvTtPwr is unknown.
+    # meter. HARDWARE (batpred#5305): on an AC-coupled system pvTtPwr reads 0 and the solar is only
+    # here, so it is added into pv_power when HANCHU_AC_COUPLED_FIELD says the system is AC-coupled.
+    # Also published on its own for visibility.
     "ac_pv_power": "bypMeterTotalPower",
 }
+
+# HARDWARE (batpred#5305): 1 on an AC-coupled system, 0 on a DC-coupled one. On AC-coupled the live
+# solar is only in bypMeterTotalPower (pvTtPwr reads 0) while getDeviceStatistics' daily pv counts
+# it, so without adding it pv_power reads zero while pv_today climbs. On DC-coupled bypMeterTotalPower
+# is 0. NOT yet seen: a system with both DC strings and AC-coupled PV, where pvTtPwr might already
+# include the AC part.
+HANCHU_AC_COUPLED_FIELD = "bypMeterSwitch"
 
 # Fields whose sign is opposite to Predbat's convention (battery NEGATIVE on charge, grid NEGATIVE
 # on import - see inverter.py's battery_power_invert handling and sunsynk_const.py's own note).

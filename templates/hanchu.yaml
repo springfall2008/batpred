@@ -99,9 +99,10 @@ pred_bat:
   #inverter_battery_rate_min:
   #  - 200
 
-  # Workaround to limit the maximum reserve setting, some inverters won't allow 100% to be set
-  # Comment out if your inverter allows 100%
-  #inverter_reserve_max : 98
+  # The highest reserve Predbat may hold the battery on. Hanchu's discharge floor only accepts up
+  # to 45%, and hanchu_automatic sets this to that ceiling for you - only set it by hand without
+  # hanchu_automatic, and never above 45, or a hold above 45% drains the battery instead
+  #inverter_reserve_max : 45
 
   # Some batteries tail off their charge rate at high soc%
   # enter the charging curve here as a % of the max charge rate for each soc percentage.

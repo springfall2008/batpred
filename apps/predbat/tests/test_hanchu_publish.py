@@ -12,7 +12,7 @@ import predbat  # noqa: F401  (import first - avoids circular import: config.py 
 from config import INVERTER_DEF
 from coordinator import CAPABILITY_KEYS
 from hanchu import HANCHU_CAPABILITIES
-from hanchu_const import HANCHU_KEY_CHARGE_END, HANCHU_KEY_CHARGE_POWER, HANCHU_KEY_CHARGE_START
+from hanchu_const import HANCHU_KEY_CHARGE_END, HANCHU_KEY_CHARGE_POWER, HANCHU_KEY_CHARGE_START, HANCHU_KEY_DISCHARGE_SOC
 from tests.discovery_contract import assert_definition_complete, assert_record_agrees, assert_record_binds_nothing_extra, capture_automatic_config, validated_inverters
 from tests.test_hanchu_api import MockHanchu, STATISTICS_SAMPLE, STATUS_SAMPLE
 from tests.test_infra import run_async as run_async_local
@@ -205,6 +205,32 @@ def test_hanchu_automatic_config_binds_the_expected_args():
     assert not failed, "test_hanchu_automatic_config_binds_the_expected_args"
 
 
+def test_hanchu_automatic_config_caps_the_reserve_at_the_device_floor():
+    """inverter_reserve_max is the discharge floor's ceiling, so Predbat never plans a reserve hold it cannot write.
+
+    DSCHG_BAT_SOC_LMT accepts only 5-45%. Without the cap Predbat assumes 100, decides a Hold
+    Charging at 80% can be held on the reserve, writes 81 - clamped to 45 - and the battery drains
+    to 45% before re-charging from the grid. It is a single value because inverter.py reads it
+    without an index; with several devices the lowest ceiling governs.
+    """
+    failed = False
+    client = populated()
+    run_async_local(client.automatic_config())
+    if client.base.args.get("inverter_reserve_max") != 45:
+        print(f"ERROR: inverter_reserve_max {client.base.args.get('inverter_reserve_max')}, expected the default ceiling 45")
+        failed = True
+    client = populated()
+    client.device_list = [SN, "HC240100002"]
+    client._apply_status_payload("HC240100002", STATUS_SAMPLE)
+    client.device_energy["HC240100002"] = dict(client.device_energy[SN])
+    client.device_ranges["HC240100002"] = {HANCHU_KEY_DISCHARGE_SOC: (5, 40)}
+    run_async_local(client.automatic_config())
+    if client.base.args.get("inverter_reserve_max") != 40:
+        print(f"ERROR: inverter_reserve_max {client.base.args.get('inverter_reserve_max')}, expected the lower device ceiling 40")
+        failed = True
+    assert not failed, "test_hanchu_automatic_config_caps_the_reserve_at_the_device_floor"
+
+
 def test_hanchu_automatic_ignore_pv_skips_the_pv_args():
     """The opt-out is the user's choice, not a fact about the device."""
     failed = False
@@ -328,6 +354,7 @@ def run_hanchu_publish_tests(my_predbat):
         ("device_slots", test_hanchu_device_slots_are_published_as_readable_times),
         ("control_ranges", test_hanchu_schedule_controls_advertise_the_narrow_soc_ranges),
         ("automatic_config", test_hanchu_automatic_config_binds_the_expected_args),
+        ("reserve_max", test_hanchu_automatic_config_caps_the_reserve_at_the_device_floor),
         ("ignore_pv", test_hanchu_automatic_ignore_pv_skips_the_pv_args),
         ("energy_all_or_nothing", test_hanchu_energy_args_need_every_device_to_report),
         ("capabilities", test_hanchu_capabilities_match_the_inverter_def_row),

@@ -236,12 +236,15 @@ def test_hanchu_cli_judges_freezes_only_when_they_can_show_something():
     verdict, _ = judge_live_window("freeze-charge", [sample(70, 750, load=800), sample(100, 760, load=800)])
     failed = expect(failed, verdict == "FAIL", f"freeze-charge drain verdict {verdict}")
     # Solar covering the load means a held battery and a free one look the same.
-    verdict, _ = judge_live_window("freeze-charge", [sample(70, 0, load=300, pv=900), sample(100, 0, load=300, ac_pv=900)])
+    verdict, _ = judge_live_window("freeze-charge", [sample(70, 0, load=300, pv=900), sample(100, 0, load=300, pv=900)])
     failed = expect(failed, verdict == "INCONCLUSIVE", f"freeze-charge no-demand verdict {verdict}")
 
     # Freeze export: surplus exists and the battery does not charge -> PASS; it soaks up the surplus -> FAIL.
-    verdict, _ = judge_live_window("freeze-export", [sample(70, 0, load=300, pv=1500), sample(100, 0, load=300, ac_pv=1500)])
+    verdict, _ = judge_live_window("freeze-export", [sample(70, 0, load=300, pv=1500), sample(100, 0, load=300, pv=1500)])
     failed = expect(failed, verdict == "PASS", f"freeze-export verdict {verdict}")
+    # pv_power already carries AC-coupled solar, so the bypass reading is not counted a second time.
+    verdict, _ = judge_live_window("freeze-export", [sample(70, 0, load=1000, pv=600, ac_pv=600), sample(100, 0, load=1000, pv=600, ac_pv=600)])
+    failed = expect(failed, verdict == "INCONCLUSIVE", f"AC solar counted twice: {verdict}")
     verdict, _ = judge_live_window("freeze-export", [sample(70, -1100, load=300, pv=1500), sample(100, -1200, load=300, pv=1500)])
     failed = expect(failed, verdict == "FAIL", f"freeze-export charging verdict {verdict}")
     verdict, _ = judge_live_window("freeze-export", [sample(70, 300, load=300), sample(100, 300, load=300)])

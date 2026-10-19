@@ -53,12 +53,14 @@ from coordinator import inverter_record
 from hanchu_const import (
     HANCHU_ACK_MAP,
     HANCHU_ACK_OK,
+    HANCHU_AC_COUPLED_FIELD,
     HANCHU_BASE_URL,
     HANCHU_CACHE_CONFIG,
     HANCHU_CACHE_CONTROL,
     HANCHU_CACHE_STATIC,
     HANCHU_CAPACITY_FIELD,
     HANCHU_CODE_FAILED,
+    HANCHU_CODE_OK,
     HANCHU_CODE_REFRESH_REJECTED,
     HANCHU_CODE_UNAUTHORISED,
     HANCHU_CONTROL_KEYS,
@@ -96,6 +98,7 @@ from hanchu_const import (
     HANCHU_SOC_SCALE,
     HANCHU_STATION_FIELD,
     HANCHU_STORAGE_MODULE,
+    HANCHU_SUCCESS_BY_CODE_ENDPOINTS,
     HANCHU_TELEMETRY,
     HANCHU_TELEMETRY_NEGATE,
     HANCHU_TELEMETRY_UNIT_FIELD,
@@ -350,7 +353,7 @@ class HanchuAPI(ComponentBase):
                     continue
                 return False, None
 
-            if payload.get("success"):
+            if payload.get("success") or (code == HANCHU_CODE_OK and endpoint_key in HANCHU_SUCCESS_BY_CODE_ENDPOINTS):
                 return True, payload.get("data")
             message = payload.get("msg")
             self.last_api_error = str(message) if message is not None else ""
@@ -543,6 +546,11 @@ class HanchuAPI(ComponentBase):
             if watts is None:
                 continue
             values[leaf] = -watts if leaf in HANCHU_TELEMETRY_NEGATE else watts
+        # AC-coupled solar is only in the bypass meter (pvTtPwr reads 0), so it is added in where the
+        # unit says it is AC-coupled. The switch decides, not the reading: a bypass figure on a unit
+        # that reports no bypass meter is not trusted. See HANCHU_AC_COUPLED_FIELD.
+        if self._as_float(payload.get(HANCHU_AC_COUPLED_FIELD), 0) == 1 and "ac_pv_power" in values:
+            values["pv_power"] = round(values.get("pv_power", 0.0) + values["ac_pv_power"], 1)
         self.device_values[sn] = values
 
         detail = self.device_detail.setdefault(sn, {})
@@ -599,8 +607,12 @@ class HanchuAPI(ComponentBase):
         rather than defaulting, because a wrong range silently clamps a good plan.
         """
         ranges = {}
-        section = (payload or {}).get(HANCHU_MENU_DATA, {}) if isinstance(payload, dict) else {}
-        energy = section.get(HANCHU_MENU_SECTION) if isinstance(section, dict) else None
+        section = payload if isinstance(payload, dict) else {}
+        # _post hands over the envelope's inner data, which holds the section directly. A whole
+        # envelope, still wrapped in its own data, is accepted too.
+        if HANCHU_MENU_SECTION not in section and isinstance(section.get(HANCHU_MENU_DATA), dict):
+            section = section[HANCHU_MENU_DATA]
+        energy = section.get(HANCHU_MENU_SECTION)
         if not isinstance(energy, dict):
             return ranges
         for group in energy.get(HANCHU_MENU_ITEMS) or []:
@@ -631,10 +643,11 @@ class HanchuAPI(ComponentBase):
         return merged
 
     def _warn_if_default_power(self, sn, ranges):
-        """Warn once when a menu that DID answer gave no power bounds, so the 5 kW default applies.
+        """Warn once when no power bounds are held for a device, so the 5 kW default applies.
 
-        Hanchu units come in 3.68, 5, 6 and 10 kW, so the default is wrong for most of them. Only
-        called after a successful menu read, so a slow first poll does not raise a false warning.
+        Hanchu units come in 3.68, 5, 6 and 10 kW, so the default is wrong for most of them. Called
+        after every menu attempt, failed ones included - a failed menu leaves the default in force
+        just as surely as one that answered without bounds. Said once per device per session.
         """
         missing = [key for key in (HANCHU_KEY_CHARGE_POWER, HANCHU_KEY_DISCHARGE_POWER) if key not in ranges]
         if not missing or sn in self.warned_default_power:
@@ -661,7 +674,9 @@ class HanchuAPI(ComponentBase):
                 ranges = self._parse_menu_ranges(menu)
                 if ranges:
                     self.device_ranges[sn] = ranges
-                self._warn_if_default_power(sn, self.device_ranges.get(sn) or {})
+            # Warned on a failed menu too: with no ranges held, the 5 kW default is just as much
+            # in force. A device whose ranges were read on an earlier cycle is not warned about.
+            self._warn_if_default_power(sn, self.device_ranges.get(sn) or {})
             if self.api_delay:
                 await asyncio.sleep(self.api_delay)
             ok, data = await self._post("iot_get", body={"sn": sn, "devType": HANCHU_DEV_TYPE_DTU, "keys": list(HANCHU_CONTROL_KEYS)})
@@ -703,6 +718,10 @@ class HanchuAPI(ComponentBase):
         if self.inverter_limit_override > 0:
             return self.inverter_limit_override
         return float(self.ranges_for(sn).get(HANCHU_KEY_DISCHARGE_POWER, (0, 0))[1])
+
+    def reserve_max(self, devices=None):
+        """Return the highest reserve every device can hold, in percent - the discharge floor key's ceiling."""
+        return min(int(self.ranges_for(sn).get(HANCHU_KEY_DISCHARGE_SOC, HANCHU_RANGES[HANCHU_KEY_DISCHARGE_SOC])[1]) for sn in (devices or self.device_list))
 
     # ------------------------------------------------------------------
     # Publishing
@@ -850,6 +869,13 @@ class HanchuAPI(ComponentBase):
         # battery_min_soc is deliberately NOT mapped: the discharge floor key is a field Predbat
         # writes, so reading it back as the floor would be circular.
 
+        # The reserve lands on the discharge floor key, which only goes up to 45% on this hardware.
+        # Predbat decides whether it can hold the battery on the reserve against inverter_reserve_max
+        # (execute.py, Hold Charging), so left at its default of 100 it would hold at 80% by writing
+        # 81 - clamped to 45 - and drain the battery to 45% before re-charging from the grid. One
+        # value, because inverter.py reads it without an index; the lowest device ceiling governs.
+        self.set_arg_auto("inverter_reserve_max", self.reserve_max(devices))
+
         self.set_arg_auto("reserve", [self._control_name("number", sn, "battery_schedule_reserve") for sn in devices])
         self.set_arg_auto("charge_start_time", [self._control_name("select", sn, "battery_schedule_charge_start_time") for sn in devices])
         self.set_arg_auto("charge_end_time", [self._control_name("select", sn, "battery_schedule_charge_end_time") for sn in devices])
@@ -926,8 +952,9 @@ class HanchuAPI(ComponentBase):
           inventing names for them would be a guess.
         - the work mode: it changes, and refresh_discovery() compares whole reports, so a changing
           value would re-file the report every time it moved.
-        - an AC-coupled verdict: there is no signal for it. bypMeterTotalPower is AC-coupled PV,
-          but its presence says a bypass meter exists, not that the inverter is AC-coupled.
+        - an AC-coupled verdict. bypMeterSwitch does distinguish the two (HANCHU_AC_COUPLED_FIELD),
+          but it is only used to fold AC-coupled solar into pv_power and is not kept, and the
+          record's composition vocabulary has been confirmed against no Hanchu system.
 
         "solar" is claimed only once PV has actually been observed, which is why it keys off a
         reported pv_power rather than off a nameplate the API never gives.
@@ -953,6 +980,8 @@ class HanchuAPI(ComponentBase):
             capacity = self.battery_capacity(sn)
             if capacity > 0:
                 ratings["soc_max"] = capacity
+            # Site-wide in apps.yaml, so every record carries the value automatic_config() binds.
+            ratings["inverter_reserve_max"] = self.reserve_max()
 
             account_ids = {"station": detail["station_id"]} if detail.get("station_id") else {}
 
@@ -1858,8 +1887,8 @@ def judge_live_window(scenario, samples, threshold=HANCHU_CLI_THRESHOLD_W, settl
         return "INCONCLUSIVE", "no readings after the first {}s, while the inverter is still settling - run for longer".format(settle_seconds)
 
     def solar(item):
-        """Return the total solar reading, DC strings plus the AC-coupled bypass meter."""
-        return reading(item, "pv_power") + reading(item, "ac_pv_power")
+        """Return the solar reading - pv_power, which already carries AC-coupled solar where there is any."""
+        return reading(item, "pv_power")
 
     battery = [reading(item, "battery_power") for item in settled]
     median = statistics.median(battery)
@@ -1980,8 +2009,9 @@ def _cli_print_device(client, sn):  # pragma: no cover
 async def _cli_print_coupling(client, sn):  # pragma: no cover
     """Print the raw fields that tell an AC-coupled system from a DC-coupled one.
 
-    On an AC-coupled system the solar is only in bypMeterTotalPower and pvTtPwr reads zero, so
-    Predbat's pv_power (from pvTtPwr) misses it. bypMeterSwitch is 1 on AC-coupled systems.
+    On an AC-coupled system the solar is only in bypMeterTotalPower and pvTtPwr reads zero, and
+    bypMeterSwitch is 1; the component adds the bypass meter into pv_power on those systems. The raw
+    fields are printed so a tester can check that, and report a system with both kinds of PV.
     """
     ok, data = await client._post("device_status", body={"sn": sn})
     if not ok or not isinstance(data, dict):
