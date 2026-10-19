@@ -43,7 +43,10 @@ look identical to a window that never ran.
 
 import asyncio
 import json
+import os
+import statistics
 import time
+from datetime import datetime
 import aiohttp
 from component_base import ComponentBase
 from coordinator import inverter_record
@@ -76,6 +79,7 @@ from hanchu_const import (
     HANCHU_KEY_DISCHARGE_POWER,
     HANCHU_KEY_DISCHARGE_SOC,
     HANCHU_KEY_DISCHARGE_START,
+    HANCHU_KEY_GRID_CHARGE_SOC,
     HANCHU_KEY_WORK_MODE,
     HANCHU_MENU_DATA,
     HANCHU_MENU_ITEMS,
@@ -1596,3 +1600,713 @@ class HanchuAPI(ComponentBase):
         await self.save_static()
         await self.save_config()
         await self.save_control()
+
+
+# ----------------------------------------------------------------------
+# Command-line harness for live hardware
+#
+#   python3 hanchu.py --account you@example.com            read-only report (the default)
+#   python3 hanchu.py ... --write-test                     write a future window, read it back, restore
+#   python3 hanchu.py ... --live-window charge             run a real window now, watch it, restore
+#   python3 hanchu.py ... --restore hanchu_snapshot_*.json put back a snapshot a test saved
+#
+# Nobody on the project has Hanchu hardware, so this is how a tester proves or disproves what
+# hanchu_const.py marks INFERRED. The pure helpers below decide what gets written, what gets
+# restored and how a run is judged, and are unit-tested (tests/test_hanchu_cli.py); the async
+# drivers that talk to the real cloud are not.
+# ----------------------------------------------------------------------
+
+# The live tests, each named after the Predbat state it reproduces.
+HANCHU_CLI_SCENARIOS = ("charge", "export", "freeze-charge", "freeze-export")
+
+# What each scenario should make the battery do, printed before anything is written so the tester
+# knows what they are watching for.
+HANCHU_CLI_EXPECTATION = {
+    "charge": "the battery CHARGES (battery power negative) at about the requested power",
+    "export": "the battery DISCHARGES (battery power positive) and the surplus is exported",
+    "freeze-charge": "the battery neither charges nor discharges while the house draws from the grid",
+    "freeze-export": "the battery does not charge, so surplus solar is exported instead",
+}
+
+# Every key a restore may write back: everything build_write_payload() can touch. The grid-charge
+# limit is read but never written by Predbat, so a restore leaves it alone too.
+HANCHU_CLI_RESTORE_KEYS = [key for key in HANCHU_CONTROL_KEYS if key != HANCHU_KEY_GRID_CHARGE_SOC]
+
+# apps.yaml keys --config reads, mapped to the command-line fields they stand in for.
+HANCHU_CLI_CREDENTIAL_KEYS = {"account": "hanchu_account", "password": "hanchu_password", "serial": "hanchu_inverter_sn"}
+
+# Readings inside this many seconds of a write are ignored when judging: the cloud relays the write
+# to the inverter and the inverter ramps, so the first minute shows the old behaviour.
+HANCHU_CLI_SETTLE_SECONDS = 60
+
+# Battery or surplus power below this many watts is treated as noise when judging a run.
+HANCHU_CLI_THRESHOLD_W = 100
+
+
+def merge_hanchu_credentials(cli, config):
+    """Fill any credential not given on the command line from an apps.yaml pred_bat section.
+
+    An explicit command-line value always wins. hanchu_inverter_sn may be a list in apps.yaml, but
+    the harness drives one device, so a list gives its first entry.
+
+    Returns (merged, used): used names the apps.yaml keys actually taken, so the caller can say so.
+    """
+    merged = dict(cli)
+    used = []
+    for cli_name, config_key in HANCHU_CLI_CREDENTIAL_KEYS.items():
+        if merged.get(cli_name):
+            continue
+        value = config.get(config_key)
+        if isinstance(value, list):
+            value = value[0] if value else None
+        if value:
+            merged[cli_name] = str(value)
+            used.append(config_key)
+    return merged, used
+
+
+def _cli_number(value):
+    """Return a settings value as an int where it reads as a number, else unchanged.
+
+    iotGet returns values as strings or floats ("3", 70.0), while build_write_payload() produces
+    ints, so both sides are normalised before they are compared or written back.
+    """
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return value
+
+
+def _cli_hhmm(minutes):
+    """Format minutes since midnight as Predbat's HH:MM:SS control-entity form."""
+    return "{:02d}:{:02d}:00".format(minutes // 60, minutes % 60)
+
+
+def build_cli_schedule(scenario, start_minutes, soc, settings, ranges, window_minutes, power, require_effect=True):
+    """Build the schedule a live test writes, in the shape get_schedule_settings_ha() produces.
+
+    It goes through the component's own build_write_payload() afterwards, so the test exercises the
+    shipped payload path rather than a hand-built one. Each scenario mirrors what execute.py leaves
+    on the control entities for that state:
+
+    - charge: a charge window from start_minutes, target 10 points above the current SoC.
+    - export: an export window from start_minutes, floor 10 points below the current SoC.
+    - freeze-charge: no window, discharge rate 0 (how Predbat holds the battery with no pause mode).
+    - freeze-export: no window, charge rate 0 (how Predbat stops the battery soaking up solar).
+
+    The rate Predbat is not using is left at the device maximum, as Predbat does outside a window,
+    and a disabled charge window carries a 100% target - Predbat's demand-mode value, and the one
+    that cannot cap solar charging if the target turns out to be device-wide.
+
+    Raises ValueError when the scenario is unknown, the window would have under two minutes before
+    midnight, or (with require_effect) the battery is already where the test would move it, so the
+    run could only ever come back inconclusive.
+
+    Returns (schedule, notes), notes explaining anything adjusted to fit the device.
+    """
+    if scenario not in HANCHU_CLI_SCENARIOS:
+        raise ValueError("unknown scenario {!r}; choose one of {}".format(scenario, ", ".join(HANCHU_CLI_SCENARIOS)))
+    notes = []
+    charge_low, charge_high = ranges.get(HANCHU_KEY_CHARGE_SOC, HANCHU_RANGES[HANCHU_KEY_CHARGE_SOC])
+    floor_low, floor_high = ranges.get(HANCHU_KEY_DISCHARGE_SOC, HANCHU_RANGES[HANCHU_KEY_DISCHARGE_SOC])
+    charge_max = int(ranges.get(HANCHU_KEY_CHARGE_POWER, HANCHU_RANGES[HANCHU_KEY_CHARGE_POWER])[1])
+    discharge_max = int(ranges.get(HANCHU_KEY_DISCHARGE_POWER, HANCHU_RANGES[HANCHU_KEY_DISCHARGE_POWER])[1])
+    soc = float(soc)
+
+    reserve = _cli_number(settings.get(HANCHU_KEY_DISCHARGE_SOC))
+    if not isinstance(reserve, int):
+        reserve = int(floor_low)
+    reserve = max(int(floor_low), min(int(floor_high), reserve))
+
+    def capped(requested, high):
+        """Cap a requested power at the device's range, noting it when the cap bites."""
+        if requested is None:
+            return high
+        requested = max(0, int(requested))
+        if requested > high:
+            notes.append("power capped at {} W, the most this device accepts".format(high))
+            return high
+        return requested
+
+    schedule = {
+        "reserve": reserve,
+        "charge": {"enable": False, "soc": int(charge_high), "power": charge_max, "start": "00:00:00", "end": "00:00:00"},
+        "export": {"enable": False, "soc": reserve, "power": discharge_max, "start": "00:00:00", "end": "00:00:00"},
+    }
+
+    if scenario in ("charge", "export"):
+        end_minutes = start_minutes + int(window_minutes)
+        if end_minutes > 23 * 60 + 59:
+            end_minutes = 23 * 60 + 59
+            notes.append("window cut at 23:59 so it does not cross midnight")
+        if end_minutes - start_minutes < 2:
+            raise ValueError("under two minutes left before midnight - run the test after 00:00")
+        window = {"enable": True, "start": _cli_hhmm(start_minutes), "end": _cli_hhmm(end_minutes)}
+
+    if scenario == "charge":
+        if require_effect and soc >= charge_high - 1:
+            raise ValueError("the battery is at {:.0f}%, so a charge would show nothing - try export or freeze-charge".format(soc))
+        target = min(int(charge_high), int(soc) + 10)
+        if target < charge_low:
+            notes.append("charge target raised to {}%, the lowest this device accepts".format(charge_low))
+            target = int(charge_low)
+        schedule["charge"] = dict(window, soc=target, power=capped(power, charge_max))
+    elif scenario == "export":
+        floor = max(int(floor_low), min(int(floor_high), int(soc) - 10))
+        if floor == int(floor_high) and int(soc) - 10 > floor_high:
+            notes.append("export floor set to {}%, the highest this device accepts, so the battery may export further than 10 points".format(floor_high))
+        if require_effect and soc <= floor + 2:
+            raise ValueError("the battery is at {:.0f}%, too close to the {}% floor for an export to show anything - try charge or freeze-export".format(soc, floor))
+        schedule["export"] = dict(window, soc=floor, power=capped(power, discharge_max))
+    elif scenario == "freeze-charge":
+        schedule["export"]["power"] = 0
+    else:
+        schedule["charge"]["power"] = 0
+    return schedule, notes
+
+
+def cli_future_start(minutes_now, window_minutes):
+    """Pick a start time for the write test's window: three hours from now, never crossing midnight.
+
+    The write test proves a write lands and reads back without moving any energy, so its window must
+    not cover the present, and must fit inside one day since the harness never writes a wrap-around.
+    """
+    start = (minutes_now + 180) % (24 * 60)
+    if start + window_minutes > 23 * 60 + 59:
+        start = 60
+    return start
+
+
+def settings_mismatches(expected, actual):
+    """Return (key, expected, actual) for every expected setting the read-back does not match.
+
+    Compared as numbers, since iotGet returns "3" or 70.0 where the write sent 3 or 70. A key the
+    read-back does not carry at all is a mismatch with actual None.
+    """
+    mismatches = []
+    for key, value in expected.items():
+        got = actual.get(key)
+        if got is None or _cli_number(got) != _cli_number(value):
+            mismatches.append((key, value, got))
+    return mismatches
+
+
+def restore_payload(snapshot, keys):
+    """Build the write that puts keys back to their snapshot values.
+
+    Returns (payload, missing). missing names keys the snapshot never held, which cannot be restored
+    and must be reported rather than silently left at the test's value.
+    """
+    payload = {}
+    missing = []
+    for key in keys:
+        if snapshot.get(key) is None:
+            missing.append(key)
+        else:
+            payload[key] = _cli_number(snapshot[key])
+    return payload, missing
+
+
+def save_cli_snapshot(folder, sn, settings):
+    """Save the settings read before a test write, so the test can be undone even if the run dies.
+
+    Returns the file's path, which the harness prints before it writes anything.
+    """
+    path = os.path.join(folder or ".", "hanchu_snapshot_{}_{}.json".format(sn, datetime.now().strftime("%Y%m%d_%H%M%S")))
+    with open(path, "w") as handle:
+        json.dump({"serial": sn, "taken": datetime.now().replace(microsecond=0).isoformat(), "settings": settings}, handle, indent=2, default=str)
+    return path
+
+
+def load_cli_snapshot(path):
+    """Load a snapshot saved by save_cli_snapshot(), returning (serial, settings).
+
+    Raises ValueError when the file is unreadable or does not look like a snapshot.
+    """
+    try:
+        with open(path, "r") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError) as error:
+        raise ValueError("could not read snapshot {}: {}".format(path, error))
+    if not isinstance(data, dict) or not data.get("serial") or not isinstance(data.get("settings"), dict):
+        raise ValueError("{} is not a Hanchu settings snapshot".format(path))
+    return str(data["serial"]), data["settings"]
+
+
+def judge_live_window(scenario, samples, threshold=HANCHU_CLI_THRESHOLD_W, settle_seconds=HANCHU_CLI_SETTLE_SECONDS):
+    """Decide whether a live test did what the scenario expects, from its telemetry samples.
+
+    samples are dicts of Predbat-convention readings (battery negative on charge) plus "elapsed",
+    seconds since the write was accepted. Readings inside settle_seconds are ignored.
+
+    A freeze is only judged on readings where it could show something: freeze-charge needs the house
+    to be drawing more than solar supplies, freeze-export needs a solar surplus. Without that, a held
+    battery and a free one look identical, and the answer is INCONCLUSIVE rather than a false PASS.
+
+    Returns (verdict, reason), verdict one of PASS, FAIL or INCONCLUSIVE.
+    """
+
+    def reading(item, key):
+        """Return one reading as a float, treating a missing or junk value as zero."""
+        try:
+            return float(item.get(key) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    settled = [item for item in samples if item.get("elapsed", 0) >= settle_seconds and item.get("battery_power") is not None]
+    if not settled:
+        return "INCONCLUSIVE", "no readings after the first {}s, while the inverter is still settling - run for longer".format(settle_seconds)
+
+    def solar(item):
+        """Return the total solar reading, DC strings plus the AC-coupled bypass meter."""
+        return reading(item, "pv_power") + reading(item, "ac_pv_power")
+
+    battery = [reading(item, "battery_power") for item in settled]
+    median = statistics.median(battery)
+    if scenario == "charge":
+        if sum(1 for value in battery if value <= -threshold) * 2 > len(battery):
+            return "PASS", "the battery charged at a median {:.0f} W".format(-median)
+        return "FAIL", "the battery did not charge - median battery power {:.0f} W (negative is charging)".format(median)
+    if scenario == "export":
+        if sum(1 for value in battery if value >= threshold) * 2 > len(battery):
+            return "PASS", "the battery discharged at a median {:.0f} W".format(median)
+        return "FAIL", "the battery did not discharge - median battery power {:.0f} W (positive is discharging)".format(median)
+    if scenario == "freeze-charge":
+        demand = [item for item in settled if reading(item, "load_power") - solar(item) > threshold]
+        if not demand:
+            return "INCONCLUSIVE", "solar covered the house load throughout, so a held battery and a free one look the same - retry when the house is drawing power"
+        draining = [reading(item, "battery_power") for item in demand]
+        if sum(1 for value in draining if value >= threshold) * 2 > len(draining):
+            return "FAIL", "the battery fed the house at a median {:.0f} W when it should have been held".format(statistics.median(draining))
+        return "PASS", "the battery held (median {:.0f} W) while the house drew more than solar supplied".format(statistics.median(draining))
+    surplus = [item for item in settled if solar(item) - reading(item, "load_power") > threshold]
+    if not surplus:
+        return "INCONCLUSIVE", "there was no solar surplus, so there was nothing for the battery to refuse - retry in sunshine"
+    charging = [reading(item, "battery_power") for item in surplus]
+    if sum(1 for value in charging if value <= -threshold) * 2 > len(charging):
+        return "FAIL", "the battery charged from the surplus at a median {:.0f} W when charging should have been stopped".format(-statistics.median(charging))
+    return "PASS", "the battery stayed out of the surplus (median {:.0f} W)".format(statistics.median(charging))
+
+
+def _cli_confirm(prompt, assume_yes=False):  # pragma: no cover
+    """Ask before writing to a real inverter, treating a closed stdin or Ctrl-C as no."""
+    if assume_yes:
+        return True
+    try:
+        answer = input(prompt)
+    except (EOFError, KeyboardInterrupt):
+        print("\nNo input available, nothing sent.")
+        return False
+    return answer.strip().lower() == "y"
+
+
+def _cli_refresh_clock(client):  # pragma: no cover
+    """Move the mock base's clock to now, so build_write_payload() judges active windows correctly.
+
+    MockBase fixes its clock when it is built, and the discharge floor in the payload depends on
+    whether an export window is running at this minute.
+    """
+    base = client.base
+    base.now_utc = datetime.now(base.local_tz)
+    base.now_utc_exact = base.now_utc
+    base.midnight_utc = base.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+    base.minutes_now = base.now_utc.hour * 60 + base.now_utc.minute
+
+
+def _build_hanchu_cli(args, automatic=False):  # pragma: no cover
+    """Construct a HanchuAPI around a MockBase for a standalone run.
+
+    control_enable is always off: the harness writes through _write_payload() directly, after asking,
+    and must never have run() or the reconcile loop write on its behalf. Pacing is off because each
+    harness write is deliberate and the restore must not be held back.
+    """
+    from mock_base import MockBase
+
+    client = HanchuAPI(
+        MockBase(),
+        account=args.account,
+        password=args.password,
+        inverter_sn=args.serial,
+        automatic=automatic,
+        control_enable=False,
+        api_delay=args.api_delay,
+        min_write_interval=0,
+    )
+    client.api_debug = not args.no_trace
+    return client
+
+
+def _cli_slot_table(settings):  # pragma: no cover
+    """Format the device's charge and discharge slots as one readable line each."""
+    lines = []
+    for label, start_key, end_key in (("charge", HANCHU_KEY_CHARGE_START, HANCHU_KEY_CHARGE_END), ("discharge", HANCHU_KEY_DISCHARGE_START, HANCHU_KEY_DISCHARGE_END)):
+        slots = []
+        for index in range(1, HANCHU_SLOT_COUNT + 1):
+            start, end = settings.get(start_key.format(index)), settings.get(end_key.format(index))
+            if start is None and end is None:
+                slots.append("{}: not read".format(index))
+            elif _cli_number(start) == HANCHU_SLOT_DISABLED and _cli_number(end) == HANCHU_SLOT_DISABLED:
+                slots.append("{}: off".format(index))
+            else:
+                slots.append("{}: {}-{}".format(index, seconds_to_hhmmss(start)[:5], seconds_to_hhmmss(end)[:5]))
+        lines.append("  {:9} slots  {}".format(label, "   ".join(slots)))
+    return lines
+
+
+def _cli_print_device(client, sn):  # pragma: no cover
+    """Print everything a tester needs to check one device against the Hanchu app."""
+    settings = client.device_settings.get(sn, {})
+    print("\n=== {} ===".format(sn))
+    mode = settings.get(HANCHU_KEY_WORK_MODE)
+    print("  work mode       {} (raw {!r}){}".format(HANCHU_WORK_MODES.get(_cli_number(mode), "unknown"), mode, "" if _cli_number(mode) == HANCHU_WORK_MODE_FOR_SCHEDULE else " - Predbat switches this to User-defined when it writes a window"))
+    for line in _cli_slot_table(settings):
+        print(line)
+    for key in (HANCHU_KEY_CHARGE_POWER, HANCHU_KEY_DISCHARGE_POWER, HANCHU_KEY_CHARGE_SOC, HANCHU_KEY_DISCHARGE_SOC, HANCHU_KEY_GRID_CHARGE_SOC):
+        print("  {:20} {!r}".format(key, settings.get(key)))
+
+    menu = client.device_ranges.get(sn) or {}
+    print("  ranges (compare with the Hanchu app):")
+    for key in HANCHU_RANGES:
+        low, high = client.ranges_for(sn)[key]
+        print("    {:20} {}-{}  from {}".format(key, low, high, "the menu" if key in menu else "the BUILT-IN DEFAULT"))
+    if not menu:
+        print("  WARNING: the menu gave no ranges, so every limit above is a default. On a 3.68, 6 or 10 kW unit the power limits will be wrong.")
+
+    print("  telemetry       {}".format(json.dumps(client.device_values.get(sn, {}))))
+    print("  energy today    {}".format(json.dumps(client.device_energy.get(sn, {}))))
+    print("  derived         soc_max {:.2f} kWh, battery_rate_max {:.0f} W, inverter_limit {:.0f} W".format(client.battery_capacity(sn), client.battery_rate_max(sn), client.inverter_limit(sn)))
+
+
+async def _cli_print_coupling(client, sn):  # pragma: no cover
+    """Print the raw fields that tell an AC-coupled system from a DC-coupled one.
+
+    On an AC-coupled system the solar is only in bypMeterTotalPower and pvTtPwr reads zero, so
+    Predbat's pv_power (from pvTtPwr) misses it. bypMeterSwitch is 1 on AC-coupled systems.
+    """
+    ok, data = await client._post("device_status", body={"sn": sn})
+    if not ok or not isinstance(data, dict):
+        print("  coupling        could not read getDeviceStatus")
+        return
+    switch = data.get("bypMeterSwitch")
+    print("  coupling        bypMeterSwitch={!r} bypMeterTotalPower={!r} pvTtPwr={!r} -> {}".format(switch, data.get("bypMeterTotalPower"), data.get("pvTtPwr"), {1: "AC-coupled", 0: "DC-coupled"}.get(_cli_number(switch), "unknown")))
+
+
+async def _cli_prepare(client):  # pragma: no cover
+    """Log in, pick the device and read its settings, ranges and SoC before a test write.
+
+    Returns (sn, settings, soc), or (None, None, None) when anything needed for a safe write is
+    missing. Without the current settings there is nothing to restore, so the harness refuses.
+    """
+    if not await client.ensure_token():
+        print("LOGIN FAILED{}".format(": {}".format(client.last_api_error) if client.last_api_error else ""))
+        return None, None, None
+    await client.refresh_static()
+    if not client.device_list:
+        print("NO DEVICES - discovery {}".format("failed" if client.discovery_ok is False else "found no DTU on this account"))
+        return None, None, None
+    sn = client.device_list[0]
+    if len(client.device_list) > 1:
+        print("Several devices found ({}); using {} - pass --serial to choose".format(", ".join(client.device_list), sn))
+    await client.refresh_config()
+    await client.refresh_power()
+    settings = client.device_settings.get(sn)
+    if not settings:
+        print("Could not read {}'s current settings (iotGet) - refusing to write without a snapshot to restore".format(sn))
+        return None, None, None
+    soc = client.device_values.get(sn, {}).get("soc")
+    if soc is None:
+        print("Could not read {}'s SoC (getDeviceStatus) - refusing to write".format(sn))
+        return None, None, None
+    _cli_print_device(client, sn)
+    return sn, settings, soc
+
+
+async def _cli_await_settings(client, sn, expected, timeout=120, interval=10):  # pragma: no cover
+    """Read the settings back until they match expected, or the timeout runs out.
+
+    Cloud round trips take 7-45s (batpred#5305), so one immediate read could report a write that
+    has in fact landed as missing. Returns (actual, mismatches, seconds_waited).
+    """
+    started = time.time()
+    while True:
+        ok, data = await client._post("iot_get", body={"sn": sn, "devType": HANCHU_DEV_TYPE_DTU, "keys": list(expected)})
+        actual = dict(data) if ok and isinstance(data, dict) else {}
+        mismatches = settings_mismatches(expected, actual)
+        waited = int(time.time() - started)
+        if not mismatches or waited >= timeout:
+            return actual, mismatches, waited
+        print("  ...read-back does not match yet after {}s ({} key(s) differ), retrying in {}s".format(waited, len(mismatches), interval))
+        await asyncio.sleep(interval)
+
+
+def _cli_print_mismatches(mismatches):  # pragma: no cover
+    """Print each setting that did not read back as written."""
+    for key, wanted, got in mismatches:
+        print("    {:20} wrote {!r}, reads {!r}".format(key, wanted, got))
+
+
+async def _cli_write(client, sn, payload, label):  # pragma: no cover
+    """Send one payload, then read it back. Returns True only when the device holds every value."""
+    print("\nWriting {} ({} setting(s))...".format(label, len(payload)))
+    if not await client._write_payload(sn, payload, force=True):
+        print("  write NOT accepted: {}".format(client.last_api_error or "see the Warn: lines above"))
+        return False
+    _actual, mismatches, waited = await _cli_await_settings(client, sn, payload)
+    if mismatches:
+        print("  accepted, but {} setting(s) still differ after {}s:".format(len(mismatches), waited))
+        _cli_print_mismatches(mismatches)
+        return False
+    print("  accepted and read back intact after {}s".format(waited))
+    return True
+
+
+async def _cli_restore(client, sn, snapshot, keys, snapshot_path, args):  # pragma: no cover
+    """Put keys back to their snapshot values, and say exactly what to run if that fails."""
+    payload, missing = restore_payload(snapshot, keys)
+    if missing:
+        print("WARNING: the snapshot holds no value for {}, so they stay as the test left them".format(", ".join(missing)))
+    if not payload:
+        print("Nothing to restore")
+        return
+    if not await _cli_write(client, sn, payload, "the original settings back"):
+        print("WARNING: {} was NOT fully restored. Check it in the Hanchu app, or retry with:".format(sn))
+        print("  python3 hanchu.py --account {} --restore {}".format(args.account, snapshot_path))
+
+
+def _cli_snapshot(client, sn, settings, args):  # pragma: no cover
+    """Save the pre-write settings to disk and tell the tester how to restore them by hand."""
+    path = save_cli_snapshot(args.snapshot_dir, sn, settings)
+    print("\nSaved the current settings to {}".format(path))
+    print("If this run is interrupted, put them back with:  python3 hanchu.py --account {} --restore {}".format(args.account, path))
+    return path
+
+
+async def test_hanchu_api(args):  # pragma: no cover
+    """Read-only report: log in, discover, run one full cycle with control off, and print the results."""
+    client = _build_hanchu_cli(args, automatic=True)
+    print("Calling run() once (read-only: control is off, nothing is written to the inverter)...")
+    ok = await client.run(seconds=0, first=True)
+    if not ok:
+        if not client._token:
+            print("\nLOGIN FAILED - check the e-mail and password you use in the Hanchu app{}".format(": {}".format(client.last_api_error) if client.last_api_error else ""))
+        elif client.discovery_ok is False:
+            print("\nLOGGED IN, but the device list call failed{}".format(": {}".format(client.last_api_error) if client.last_api_error else ""))
+        elif not client.device_list:
+            print("\nLOGGED IN, but no DTU was found on this account{}".format(" matching --serial {}".format(args.serial) if args.serial else ""))
+        else:
+            print("\nDISCOVERY OK ({}), but the first telemetry poll came back empty - see the Warn: lines above".format(", ".join(client.device_list)))
+        await client.final()
+        return
+    for sn in client.device_list:
+        _cli_print_device(client, sn)
+        await _cli_print_coupling(client, sn)
+    print("\nThe 'Set arg' lines above are what hanchu_automatic: true would put in apps.yaml.")
+    await client.final()
+    print("Done")
+
+
+async def test_hanchu_write_readback(args):  # pragma: no cover
+    """Write a charge window three hours away, read it back, then restore the original settings.
+
+    Proves iotSet lands and the slot encoding reads back as written, without moving any energy.
+    """
+    client = _build_hanchu_cli(args)
+    sn, settings, soc = await _cli_prepare(client)
+    if not sn:
+        return
+    _cli_refresh_clock(client)
+    start = cli_future_start(client.minutes_now, args.minutes)
+    schedule, notes = build_cli_schedule("charge", start, soc, settings, client.ranges_for(sn), args.minutes, args.power, require_effect=False)
+    payload = client.build_write_payload(sn, schedule)
+    print("\nWrite test: a charge window {}-{}, away from now so the battery does not move".format(schedule["charge"]["start"][:5], schedule["charge"]["end"][:5]))
+    for note in notes:
+        print("  note: {}".format(note))
+    print("Payload:\n{}".format(json.dumps(payload, indent=2)))
+    if not _cli_confirm("Write this to {} and then restore it? [y/N] ".format(sn), args.yes):
+        return
+    path = _cli_snapshot(client, sn, settings, args)
+    try:
+        if await _cli_write(client, sn, payload, "the test window"):
+            print("PASS: the write landed and read back intact")
+        else:
+            print("FAIL: the write did not land as sent")
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        print("\nInterrupted - restoring")
+    finally:
+        await _cli_restore(client, sn, settings, list(payload), path, args)
+    print("Done")
+
+
+async def test_hanchu_live_window(args):  # pragma: no cover
+    """Run one Predbat state on the real inverter for a few minutes, watch the battery, then restore.
+
+    The schedule goes through the component's own build_write_payload(), so this tests the payload
+    Predbat would actually send. A charge or export window ends on the inverter by itself at the
+    window end even if this process dies; a freeze has no end time, so the snapshot is the way back.
+    """
+    client = _build_hanchu_cli(args)
+    sn, settings, soc = await _cli_prepare(client)
+    if not sn:
+        return
+    scenario = args.live_window
+    _cli_refresh_clock(client)
+    # Predbat's clock, and so every window it writes, sits on the 5-minute planning grid: at 19:29 a
+    # window starts at 19:25. The test starts on the same grid, so build_write_payload() sees the
+    # window as running exactly as it would in Predbat, and is lengthened by the minutes already
+    # past the grid line so it still runs for --minutes from now.
+    now = datetime.now()
+    real_minutes = now.hour * 60 + now.minute
+    try:
+        schedule, notes = build_cli_schedule(scenario, client.minutes_now, soc, settings, client.ranges_for(sn), args.minutes + real_minutes - client.minutes_now, args.power)
+    except ValueError as error:
+        print("\nNot running {}: {}".format(scenario, error))
+        return
+    payload = client.build_write_payload(sn, schedule)
+    if scenario.startswith("freeze"):
+        if args.user_defined:
+            payload[HANCHU_KEY_WORK_MODE] = HANCHU_WORK_MODE_FOR_SCHEDULE
+        elif _cli_number(settings.get(HANCHU_KEY_WORK_MODE)) != HANCHU_WORK_MODE_FOR_SCHEDULE:
+            print("\nNOTE: the work mode is not User-defined, and a freeze writes no window, so Predbat would not change it.")
+            print("  In practice an earlier Predbat window has usually set User-defined already; add --user-defined to test that case.")
+
+    window = schedule["charge"] if schedule["charge"]["enable"] else schedule["export"]
+    if window["enable"]:
+        print("\nLive test: {} window {}-{}. Expect {}.".format(scenario, window["start"][:5], window["end"][:5], HANCHU_CLI_EXPECTATION[scenario]))
+        print("The window uses this computer's clock - check it matches the inverter's.")
+        # Watch until the window ends on the inverter, not for a fixed time from the write.
+        hold_seconds = hhmmss_to_seconds(window["end"]) - (real_minutes * 60 + now.second)
+    else:
+        print("\nLive test: {} for {} minute(s), with no window - it lasts until the restore. Expect {}.".format(scenario, args.minutes, HANCHU_CLI_EXPECTATION[scenario]))
+        hold_seconds = args.minutes * 60
+    for note in notes:
+        print("  note: {}".format(note))
+    print("Payload:\n{}".format(json.dumps(payload, indent=2)))
+    if not _cli_confirm("Write this to {} now, run it, and then restore? [y/N] ".format(sn), args.yes):
+        return
+    if window["enable"]:
+        # The tester may have taken a while to answer the prompt; the window's end has not moved.
+        now = datetime.now()
+        hold_seconds = hhmmss_to_seconds(window["end"]) - (now.hour * 3600 + now.minute * 60 + now.second)
+        if hold_seconds <= 0:
+            print("The window has already ended while waiting for an answer - nothing written")
+            return
+    path = _cli_snapshot(client, sn, settings, args)
+    written_from = time.time()
+
+    samples = []
+    try:
+        if await _cli_write(client, sn, payload, "the {} test".format(scenario)):
+            # The write and read-back took real time, which the window has already used up.
+            hold_seconds = max(0, hold_seconds - int(time.time() - written_from))
+            started = time.time()
+            print("\nWatching for {}s (Ctrl-C restores early). Battery: negative = charging. Grid: positive = exporting.".format(hold_seconds))
+            while time.time() - started < hold_seconds:
+                await client.refresh_power()
+                values = client.device_values.get(sn, {})
+                # Measured from the write, not from the read-back: the settle time is the inverter's.
+                elapsed = int(time.time() - written_from)
+                samples.append(dict(values, elapsed=elapsed))
+                print(
+                    "  {}  +{:4}s  SoC {}%  battery {} W  grid {} W  pv {} W  ac-pv {} W  load {} W".format(
+                        datetime.now().strftime("%H:%M:%S"), elapsed, values.get("soc"), values.get("battery_power"), values.get("grid_power"), values.get("pv_power"), values.get("ac_pv_power"), values.get("load_power")
+                    )
+                )
+                await asyncio.sleep(max(1, min(args.interval, hold_seconds - (time.time() - started))))
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        print("\nInterrupted - restoring")
+    finally:
+        verdict, reason = judge_live_window(scenario, samples)
+        print("\n{}: {} - {}".format(verdict, scenario, reason))
+        await _cli_restore(client, sn, settings, list(payload), path, args)
+    print("Done")
+
+
+async def restore_hanchu_snapshot(args):  # pragma: no cover
+    """Write a saved snapshot back, to undo a test that did not get to restore itself."""
+    try:
+        serial, snapshot = load_cli_snapshot(args.restore)
+    except ValueError as error:
+        print(error)
+        return
+    args.serial = args.serial or serial
+    if args.serial.lower() != serial.lower():
+        print("The snapshot is for {}, not {} - refusing".format(serial, args.serial))
+        return
+    client = _build_hanchu_cli(args)
+    if not await client.ensure_token():
+        print("LOGIN FAILED{}".format(": {}".format(client.last_api_error) if client.last_api_error else ""))
+        return
+    await client.refresh_static()
+    if serial not in client.device_list:
+        print("{} is not on this account (found: {})".format(serial, ", ".join(client.device_list) or "nothing"))
+        return
+    payload, missing = restore_payload(snapshot, HANCHU_CLI_RESTORE_KEYS)
+    print("Restoring {} from {}:\n{}".format(serial, args.restore, json.dumps(payload, indent=2)))
+    if not _cli_confirm("Write these settings back to {}? [y/N] ".format(serial), args.yes):
+        return
+    await _cli_restore(client, serial, snapshot, HANCHU_CLI_RESTORE_KEYS, args.restore, args)
+    print("Done")
+
+
+def main():  # pragma: no cover
+    """Command-line entry point: Hanchu diagnostics and live-hardware tests."""
+    import argparse
+    import getpass
+
+    parser = argparse.ArgumentParser(
+        description="Hanchu ESS cloud diagnostics and live-hardware tests. With no mode option it is read-only.",
+        epilog="Run from apps/predbat. The password can also come from HANCHU_PASSWORD or --config; otherwise you are prompted for it.",
+    )
+    parser.add_argument("--account", help="The e-mail address you sign into the Hanchu app with")
+    parser.add_argument("--password", help="The Hanchu app password (prefer HANCHU_PASSWORD or the prompt, which keep it out of shell history)")
+    parser.add_argument("--serial", default=None, help="Drive this DTU serial when the account has several")
+    parser.add_argument("--config", help="Read hanchu_account, hanchu_password and hanchu_inverter_sn from an apps.yaml, resolving !secret as Predbat does")
+    parser.add_argument("--api-delay", type=float, default=1, help="Seconds to wait between API calls (default 1)")
+    parser.add_argument("--no-trace", action="store_true", help="Stop printing every API request and response")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--write-test", action="store_true", help="Write a charge window three hours from now, read it back, then restore - moves no energy")
+    mode.add_argument("--live-window", choices=HANCHU_CLI_SCENARIOS, help="Run this Predbat state on the inverter now, watch the battery, then restore")
+    mode.add_argument("--restore", metavar="SNAPSHOT", help="Write back a snapshot file a test saved")
+    parser.add_argument("--minutes", type=int, default=10, help="Length of the test window in minutes (default 10)")
+    parser.add_argument("--power", type=int, default=1000, help="Charge or export power for the test in watts (default 1000)")
+    parser.add_argument("--interval", type=int, default=30, help="Seconds between readings during --live-window (default 30)")
+    parser.add_argument("--user-defined", action="store_true", help="With a freeze test, also set the User-defined work mode, as an earlier Predbat window would have")
+    parser.add_argument("--snapshot-dir", default=".", help="Where to save the pre-write snapshot (default: the current directory)")
+    parser.add_argument("--yes", action="store_true", help="Do not ask before writing")
+    args = parser.parse_args()
+
+    if args.config:
+        import yaml
+        from utils import load_apps_yaml
+
+        try:
+            config, _ = load_apps_yaml(args.config)
+        except (yaml.YAMLError, KeyError, OSError, ValueError) as error:
+            parser.error("could not read Hanchu credentials from {}: {}".format(args.config, error))
+        merged, used = merge_hanchu_credentials({"account": args.account, "password": args.password, "serial": args.serial}, config or {})
+        args.account, args.password, args.serial = merged["account"], merged["password"], merged["serial"]
+        print("Read from {}: {}".format(args.config, ", ".join(used) if used else "nothing - no hanchu_ keys found"))
+    if not args.account:
+        parser.error("no account: pass --account, or --config pointing at an apps.yaml holding hanchu_account")
+    if not args.password:
+        args.password = os.environ.get("HANCHU_PASSWORD")
+    if not args.password:
+        try:
+            args.password = getpass.getpass("Hanchu password for {}: ".format(args.account))
+        except (EOFError, KeyboardInterrupt):
+            parser.error("no password: pass --password, set HANCHU_PASSWORD, or use --config")
+    if args.minutes < 2:
+        parser.error("--minutes must be at least 2")
+
+    if args.write_test:
+        asyncio.run(test_hanchu_write_readback(args))
+    elif args.live_window:
+        asyncio.run(test_hanchu_live_window(args))
+    elif args.restore:
+        asyncio.run(restore_hanchu_snapshot(args))
+    else:
+        asyncio.run(test_hanchu_api(args))
+
+
+if __name__ == "__main__":  # pragma: no cover
+    main()
