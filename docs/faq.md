@@ -265,9 +265,10 @@ recorder:
       - predbat
       - predheat
     entity_globs:
-      # Exclude Octopus Integration and Predbat Kraken sensors, Predbat only needs the current record
+      # Exclude Octopus Integration Octoplus, Octopus Cost and Predbat Kraken sensors, Predbat only needs the current record
       - sensor.octopus_energy_*_octoplus_points
-      - sensor.octopus_energy_electricity_*_rate
+      - sensor.octopus_energy_*_next_rate
+      - sensor.octopus_energy_*_previous_rate
       - sensor.predbat_octopus_*
       - sensor.predbat_kraken_*
       - binary_sensor.predbat_kraken_*
