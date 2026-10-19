@@ -253,6 +253,7 @@ from tests.test_annual_tariff import test_annual_tariff
 from tests.test_rate_add_io_slots import run_rate_add_io_slots_tests
 from tests.test_iog_car_need_gate import run_iog_car_need_gate_tests
 from tests.test_iog_charge_skew import run_iog_charge_skew_tests
+from tests.test_iog_bird_in_hand import run_iog_bird_in_hand_tests
 from tests.test_iog_early_slot_flat_battery import run_iog_early_slot_flat_battery_tests
 from tests.test_multi_car_load import run_multi_car_load_tests
 from tests.test_dispatch_timeline import run_dispatch_timeline_tests
@@ -609,6 +610,7 @@ def main():
         ("rate_add_io_slots", run_rate_add_io_slots_tests, "Rate add IO slots tests", False),
         ("iog_car_need_gate", run_iog_car_need_gate_tests, "IOG car-need gate: no cheap rate for dispatch minutes no car needs", False),
         ("iog_charge_skew", run_iog_charge_skew_tests, "IOG earlier-charge skew characterisation tests", False),
+        ("iog_bird_in_hand", run_iog_bird_in_hand_tests, "IOG bird-in-hand credit for a confirmed dispatch run", False),
         ("iog_early_slot_flat_battery", run_iog_early_slot_flat_battery_tests, "IOG bonus dispatch before the night window with a flat battery", False),
         ("multi_car_load", run_multi_car_load_tests, "Cars charging at once each add their own energy to the load", False),
         ("dispatch_timeline", run_dispatch_timeline_tests, "Dispatch timeline diagnostic tests (#4516 Stage 1)", False),

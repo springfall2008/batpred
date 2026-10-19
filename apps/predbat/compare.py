@@ -102,6 +102,7 @@ COMPARE_PLAN_STATE = (
     "plan_last_updated_minutes",
     "rate_best_cost_threshold_charge",
     "rate_best_cost_threshold_export",
+    "io_confirmed_tiebreak",
 )
 # Battery and inverter values a tariff can override, reset after each tariff as well as at the end
 COMPARE_HARDWARE_STATE = ("soc_max", "battery_rate_max_charge", "battery_rate_max_charge_dc", "battery_rate_max_discharge", "battery_rate_max_export", "inverter_limit")
@@ -126,6 +127,8 @@ COMPARE_RESTORED_STATE = (
         "export_today_now",
         "octopus_intelligent_charging",
         "soc_kw",
+        # Rebuilt by each tariff's fetch, which the live plan's Prediction must not inherit
+        "io_confirmed_credit",
     )
 )
 # Car state the comparison rebuilds per tariff, deep-copied as the lists are changed in place
