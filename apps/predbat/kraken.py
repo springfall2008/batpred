@@ -1026,9 +1026,13 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             self.log("Warn: Kraken: applicableStandingCharges GraphQL returned no results")
             return None
 
-        # Take the first (most applicable) standing charge entry; value is pence/day inc VAT.
+        # Take the entry whose validity covers now; value is pence/day inc VAT. The window is wide, so
+        # a price change inside it returns more than one row, in no guaranteed order.
         # Divide by 100 to match the units expected by the caller (pounds/day).
-        charge = applicable_charges[0]
+        charge = self._standing_charge_covering(applicable_charges, "validFrom", "validTo", now)
+        if charge is None:
+            self.log("Warn: Kraken: no applicableStandingCharges entry covers the current time")
+            return None
         value = charge.get("value")
         if value is None:
             return None
@@ -1082,10 +1086,39 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         # EDF lists the NON_DIRECT_DEBIT one first, so keep the Direct Debit row (GH#5502).
         results = filter_payment_method(data.get("results", []))
         if results:
+            charge = self._standing_charge_covering(results, "valid_from", "valid_to", datetime.now(timezone.utc))
+            if charge is None:
+                self.log("Warn: Kraken: no standing charge row covers the current time")
+                return None
             # API returns pence/day; fetch.py multiplies by 100 expecting pounds/day
-            value = results[0].get("value_inc_vat")
+            value = charge.get("value_inc_vat")
             return value / 100.0 if value is not None else None
         return None
+
+    @staticmethod
+    def _standing_charge_covering(rows, from_key, to_key, now):
+        """Return the standing charge row whose validity covers now, or None.
+
+        A row with no start has always applied and a row with no end still applies. A row whose
+        timestamps cannot be parsed is ignored. Rows arrive in no guaranteed order, so a future-dated
+        row is skipped and the latest start wins among the rows that do cover now.
+        """
+        best = None
+        best_from = None
+        for row in rows:
+            try:
+                valid_from = str2time(row[from_key]) if row.get(from_key) else None
+                valid_to = str2time(row[to_key]) if row.get(to_key) else None
+            except (ValueError, TypeError):
+                continue
+            if valid_from is not None and valid_from > now:
+                continue
+            if valid_to is not None and valid_to <= now:
+                continue
+            if best is None or (valid_from is not None and (best_from is None or valid_from > best_from)):
+                best = row
+                best_from = valid_from
+        return best
 
     def _cache_filename(self):
         """Logical storage filename for this account's cache blob."""

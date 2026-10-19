@@ -633,6 +633,50 @@ def test_standing_charge_null_payment_method_unchanged():
     assert _fetch_standing_charge_with_rows(rows) == 48.0 / 100.0
 
 
+def test_standing_charge_skips_future_dated_row_listed_first():
+    """A row published ahead of a price change is not used before its valid_from."""
+    future = (datetime.now(timezone.utc) + timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    rows = [
+        {"value_inc_vat": 70.0, "valid_from": future, "valid_to": None, "payment_method": "DIRECT_DEBIT"},
+        {"value_inc_vat": 52.0, "valid_from": "2026-01-01T00:00:00Z", "valid_to": future, "payment_method": "DIRECT_DEBIT"},
+    ]
+    assert _fetch_standing_charge_with_rows(rows) == 52.0 / 100.0
+    assert _fetch_standing_charge_with_rows(list(reversed(rows))) == 52.0 / 100.0
+
+
+def test_standing_charge_skips_expired_row_listed_first():
+    """An expired row is not used when it sorts ahead of the row that covers now."""
+    rows = [
+        {"value_inc_vat": 40.0, "valid_from": "2025-01-01T00:00:00Z", "valid_to": "2025-06-01T00:00:00Z", "payment_method": "DIRECT_DEBIT"},
+        {"value_inc_vat": 52.0, "valid_from": "2025-06-01T00:00:00Z", "valid_to": None, "payment_method": "DIRECT_DEBIT"},
+    ]
+    assert _fetch_standing_charge_with_rows(rows) == 52.0 / 100.0
+
+
+def test_standing_charge_none_when_no_row_covers_now():
+    """With only future-dated rows there is nothing valid to report."""
+    future = (datetime.now(timezone.utc) + timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    rows = [{"value_inc_vat": 70.0, "valid_from": future, "valid_to": None, "payment_method": "DIRECT_DEBIT"}]
+    assert _fetch_standing_charge_with_rows(rows) is None
+
+
+def test_fetch_standing_charges_graphql_picks_row_covering_now():
+    """The wide GraphQL window can hold a future price change; only the row covering now is used."""
+    soon = (datetime.now(timezone.utc) + timedelta(hours=20)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    for nodes in (
+        [{"value": 70.0, "validFrom": soon, "validTo": None}, {"value": 61.95, "validFrom": "2026-04-10T00:00:00Z", "validTo": soon}],
+        [{"value": 61.95, "validFrom": "2026-04-10T00:00:00Z", "validTo": soon}, {"value": 70.0, "validFrom": soon, "validTo": None}],
+    ):
+        api = make_kraken_api()
+        api.account_id = "A-AA8A473C"
+        api.async_graphql_query = AsyncMock(return_value={"applicableStandingCharges": nodes})
+
+        result = asyncio.run(api.async_fetch_standing_charges_graphql("1900000000456"))
+
+        assert result is not None
+        assert abs(result - 0.6195) < 1e-6
+
+
 def test_fetch_standing_charges_rest_404_falls_back_to_graphql():
     """async_fetch_standing_charges() falls back to GraphQL when REST returns 404.
 
