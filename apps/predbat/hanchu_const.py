@@ -189,6 +189,10 @@ HANCHU_TELEMETRY = {
     # here, so it is added into pv_power when HANCHU_AC_COUPLED_FIELD says the system is AC-coupled.
     # Also published on its own for visibility.
     "ac_pv_power": "bypMeterTotalPower",
+    # OBSERVED (UPTON sensor.py "dg_power", shown only when hasDg is true). A diesel/backup generator's
+    # AC output. Read and published for diagnosis only - its sign and whether it is already inside
+    # loadPwr or meterPPwr are unknown, so it feeds nothing Predbat plans with until a live test says.
+    "generator_power": "dgPAcTotal",
 }
 
 # HARDWARE (batpred#5305): 1 on an AC-coupled system, 0 on a DC-coupled one. On AC-coupled the live
@@ -197,6 +201,17 @@ HANCHU_TELEMETRY = {
 # is 0. NOT yet seen: a system with both DC strings and AC-coupled PV, where pvTtPwr might already
 # include the AC part.
 HANCHU_AC_COUPLED_FIELD = "bypMeterSwitch"
+
+# OBSERVED (UPTON sensor.py condition_key "hasDg"): whether a generator is fitted. True in the
+# status payload, 1 in the statistics one - read as a truthy value either way.
+HANCHU_GENERATOR_FIELD = "hasDg"
+
+# OBSERVED (UPTON sensor.py DeviceStatusSensor STATUS_MAP): the datalogger's connection state.
+# 0 offline, 1 online, 99 pending. While offline the cloud keeps serving the last readings, so the
+# telemetry is stale and a write cannot reach the inverter.
+HANCHU_DEVICE_STATUS_FIELD = "devStatus"
+HANCHU_DEVICE_STATUS_OFFLINE = 0
+HANCHU_DEVICE_STATUSES = {0: "offline", 1: "online", 99: "pending"}
 
 # Fields whose sign is opposite to Predbat's convention (battery NEGATIVE on charge, grid NEGATIVE
 # on import - see inverter.py's battery_power_invert handling and sunsynk_const.py's own note).
@@ -216,6 +231,7 @@ HANCHU_TELEMETRY_UNIT_FIELD = {
     "grid_power": "meterPPwrUnit",
     "pv_power": "pvTtPwrUnit",
     "ac_pv_power": "bypMeterTotalPowerUnit",
+    "generator_power": "dgPAcTotalUnit",
 }
 
 # OBSERVED: UPTON sensor.py _scale_auto_watt - with no usable unit string, a magnitude below 10 is
@@ -246,6 +262,8 @@ HANCHU_ENERGY = {
     "pv_today": "pv",
     "battery_charge_today": "batCharge",
     "battery_discharge_today": "batDisCharge",
+    # OBSERVED (UPTON sensor.py "daily_dg_energy"). Diagnostic only, like generator_power.
+    "generator_today": "dgEp",
 }
 
 # --- Control keys (iotGet / iotSet) -----------------------------------------------------------
@@ -259,6 +277,12 @@ HANCHU_ENERGY = {
 HANCHU_KEY_WORK_MODE = "WORK_MODE_CMB"
 HANCHU_KEY_CHARGE_POWER = "CHG_PWR_LMT"
 HANCHU_KEY_DISCHARGE_POWER = "DSCHG_PWR_LMT"
+# OBSERVED (UPTON number.py): CHG_BAT_SOC_LMT is "Maximum Charge SOC" and DTU_AC_CHG_SOC_LMT is
+# "Grid to Battery Charge Maximum". INFERRED from those names: the first is the battery's overall
+# ceiling, solar included, and the second limits grid charging alone - so the grid one carries
+# Predbat's charge target and the overall one is never written. Writing a 70% charge target into the
+# overall ceiling would stop solar charging at 70% for the rest of the day. A live charge test with
+# --target is the way to confirm the grid limit stops a charge window.
 HANCHU_KEY_CHARGE_SOC = "CHG_BAT_SOC_LMT"
 HANCHU_KEY_DISCHARGE_SOC = "DSCHG_BAT_SOC_LMT"
 HANCHU_KEY_GRID_CHARGE_SOC = "DTU_AC_CHG_SOC_LMT"
@@ -312,12 +336,13 @@ HANCHU_WORK_MODE_FOR_SCHEDULE = HANCHU_WORK_MODE_USER_DEFINED
 HANCHU_RANGES = {
     HANCHU_KEY_CHARGE_POWER: (0, 5000),
     HANCHU_KEY_DISCHARGE_POWER: (0, 5000),
-    # 50 is a real floor, and a real limitation for Predbat: a charge TARGET below 50% cannot be
-    # expressed at all. See hanchu.py's clamp logging.
+    # The overall charge ceiling. Read, never written - see HANCHU_KEY_CHARGE_SOC.
     HANCHU_KEY_CHARGE_SOC: (50, 100),
     # 45 is a real ceiling, and the mirror-image limitation: an export/discharge target above 45%
     # cannot be expressed.
     HANCHU_KEY_DISCHARGE_SOC: (5, 45),
+    # The grid-charge limit, which carries Predbat's charge target: a target below 20% cannot be
+    # expressed. See hanchu.py's clamp logging.
     HANCHU_KEY_GRID_CHARGE_SOC: (20, 100),
 }
 
@@ -335,6 +360,20 @@ HANCHU_MENU_ITEMS = "items"
 HANCHU_MENU_SIGNAL = "itemCodeSignal"
 HANCHU_MENU_MIN = "minVal"
 HANCHU_MENU_MAX = "maxVal"
+# OBSERVED (UPTON sensor.py _parse_energy_menu, www/hanchuess-energy-card.js): an item's signal falls
+# back to its itemCode, a time item carries its start and end signals comma-separated, and an item's
+# "listener" {"code": "WORK_MODE_CMB", "show": "3,..."} names the work modes it is shown in.
+HANCHU_MENU_CODE = "itemCode"
+HANCHU_MENU_TYPE = "itemType"
+HANCHU_MENU_LISTENER = "listener"
+HANCHU_MENU_LISTENER_SHOW = "show"
+
+# OBSERVED (UPTON www/hanchuess-energy-card.js _submit): a SECOND time-slot format exists. Period
+# items of type 82/83 hold an array value [charge mode, power limit, "HHMM" start, "HHMM" end], and a
+# FLAG_ENABLE_CYCLE list switches each period on. A device whose menu offers those and no TCT_/TDT_
+# keys would accept TCT_ writes and ignore them, so the component does not drive it.
+HANCHU_MENU_ARRAY_SLOT_TYPES = ("82", "83")
+HANCHU_MENU_ENABLE_CYCLE = "FLAG_ENABLE_CYCLE"
 
 # --- iotSet acknowledgement -------------------------------------------------------------------
 # OBSERVED: BLUSTERY api.py set_device_setting reads data["responseSemMap"], a per-key map in which

@@ -87,10 +87,11 @@ pred_bat:
   #export_limit:
   #  - 3680
 
-  # NOTE ON SOC LIMITS. This hardware only accepts a charge target of 50-100% and a
+  # NOTE ON SOC LIMITS. This hardware only accepts a grid-charge target of 20-100% and a
   # discharge floor of 5-45%. Predbat clamps anything outside those and says so in the
   # log; there is no way around it from here. It means a plan that wants to charge to
-  # only 30%, or to export down to no lower than 60%, cannot be carried out exactly.
+  # only 10%, or to export down to no lower than 60%, cannot be carried out exactly.
+  # The app's "Maximum Charge SOC" is left as you set it - it limits solar charging too.
 
   #
 

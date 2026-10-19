@@ -2364,8 +2364,9 @@ INVERTER_DEF = {
         "charge_control_immediate": False,
         "has_charge_enable_time": True,
         "has_discharge_enable_time": True,
-        # CHG_BAT_SOC_LMT. NOTE it only accepts 50-100 on this hardware, so a charge target below
-        # 50% cannot be expressed at all and is clamped, with a warning, by the component.
+        # DTU_AC_CHG_SOC_LMT, the grid-charge limit. NOTE it only accepts 20-100 on this hardware, so
+        # a charge target below 20% cannot be expressed at all and is clamped, with a warning, by
+        # the component. CHG_BAT_SOC_LMT also caps solar charging, so it is never written.
         "has_target_soc": True,
         # DSCHG_BAT_SOC_LMT, which accepts only 5-45 - the mirror-image limitation.
         "has_reserve_soc": True,

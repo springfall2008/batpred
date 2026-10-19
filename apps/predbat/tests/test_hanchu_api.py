@@ -12,11 +12,12 @@ import predbat  # noqa: F401  (import first - avoids circular import: config.py 
 import pytz
 import time
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from hanchu import HanchuAPI
 from hanchu_const import (
     HANCHU_KEY_CHARGE_POWER,
     HANCHU_KEY_CHARGE_SOC,
+    HANCHU_KEY_WORK_MODE,
     HANCHU_TOKEN_REFRESH_SECONDS,
     HANCHU_WRITE_RETRY_DELAY,
 )
@@ -678,6 +679,187 @@ def test_hanchu_ac_coupled_pv_is_counted_in_pv_power():
     assert not failed, "test_hanchu_ac_coupled_pv_is_counted_in_pv_power"
 
 
+# The phone app's menu as a device using the TCT_/TDT_ slot keys describes it: a time item carries both
+# of its signals comma-separated (the vendor card splits them), and its listener names the work modes
+# the slots are shown - and so run - in.
+MENU_SLOTS = {
+    "energy": {
+        "items": [
+            [
+                {"itemCodeSignal": "WORK_MODE_CMB", "itemType": "3"},
+                {"itemCode": "chg_time_1", "itemCodeSignal": "TCT_START_1,TCT_END_1", "itemType": "6", "listener": {"code": "WORK_MODE_CMB", "show": "3"}},
+                {"itemCode": "dschg_time_1", "itemCodeSignal": "TDT_START_1,TDT_END_1", "itemType": "6", "listener": {"code": "WORK_MODE_CMB", "show": "3"}},
+            ]
+        ]
+    }
+}
+
+# The other slot format the vendor card handles: array-valued period items (types 82/83) and a
+# FLAG_ENABLE_CYCLE enable list, with no TCT_/TDT_ keys at all.
+MENU_ARRAY_SLOTS = {
+    "energy": {
+        "items": [
+            [
+                {"itemCode": "TCT_CHG1", "itemCodeSignal": "CHG_PERIOD_1", "itemType": "82", "structure": [{"itemCode": "charge_mode"}, {"itemCode": "chg_pwr_lmt"}, {"itemCode": "start_time"}, {"itemCode": "end_time"}]},
+                {"itemCodeSignal": "FLAG_ENABLE_CYCLE", "itemType": "4"},
+            ]
+        ]
+    }
+}
+
+
+def ready_client(**kwargs):
+    """Return a MockHanchu past login with one device, ready to poll."""
+    client = MockHanchu(**kwargs)
+    client._token = "tok"
+    client._token_time = time.time()
+    client.device_list = ["HC240100001"]
+    return client
+
+
+def test_hanchu_menu_slot_model_is_recognised():
+    """The menu says which slot format a device uses, and which work modes run the TCT_/TDT_ slots."""
+    failed = False
+    client = ready_client()
+    with patched_session([(200, {"code": 200, "data": MENU_SLOTS}), (200, envelope(data={}))]):
+        run_async_local(client.refresh_config())
+    if client.slot_model.get("HC240100001") != "slots" or client.slot_work_modes.get("HC240100001") != [3]:
+        print(f"ERROR: slot model {client.slot_model} modes {client.slot_work_modes}, expected slots / [3]")
+        failed = True
+    if client.slot_work_mode("HC240100001") != 3:
+        print(f"ERROR: slot work mode {client.slot_work_mode('HC240100001')}, expected 3")
+        failed = True
+
+    array = ready_client()
+    with patched_session([(200, {"code": 200, "data": MENU_ARRAY_SLOTS}), (200, envelope(data={}))]):
+        run_async_local(array.refresh_config())
+    if array.slot_model.get("HC240100001") != "array":
+        print(f"ERROR: an array-slot menu read as {array.slot_model}")
+        failed = True
+
+    # A menu showing neither format is unknown, not unsupported: control stays allowed.
+    unknown = ready_client()
+    with patched_session([(200, {"code": 200, "data": MENU_SAMPLE["data"]}), (200, envelope(data={}))]):
+        run_async_local(unknown.refresh_config())
+    if unknown.slot_model.get("HC240100001") not in (None, "unknown"):
+        print(f"ERROR: a menu with no slot items read as {unknown.slot_model}")
+        failed = True
+    assert not failed, "test_hanchu_menu_slot_model_is_recognised"
+
+
+def test_hanchu_slot_work_mode_follows_the_menu():
+    """User-defined (3) is written where the menu allows it or says nothing; otherwise the menu's own mode is, and that is logged."""
+    failed = False
+    client = ready_client()
+    if client.slot_work_mode("HC240100001") != 3:
+        print(f"ERROR: with no menu the slot work mode is {client.slot_work_mode('HC240100001')}, expected 3")
+        failed = True
+    client.slot_work_modes["HC240100001"] = [3, 4]
+    if client.slot_work_mode("HC240100001") != 3:
+        print("ERROR: 3 is listed, so it should be kept")
+        failed = True
+    client.slot_work_modes["HC240100001"] = [4]
+    if client.slot_work_mode("HC240100001") != 4 or not logged(client, "work mode 4"):
+        print(f"ERROR: the menu only runs the slots in mode 4, got {client.slot_work_mode('HC240100001')}; logs {client.log_messages[-2:]}")
+        failed = True
+    payload = client.build_write_payload("HC240100001", {"reserve": 10, "charge": {"enable": True, "soc": 80, "power": 2000, "start": "01:00:00", "end": "02:00:00"}, "export": {"enable": False}})
+    if payload.get(HANCHU_KEY_WORK_MODE) != 4:
+        print(f"ERROR: payload work mode {payload.get(HANCHU_KEY_WORK_MODE)}, expected the menu's 4")
+        failed = True
+    assert not failed, "test_hanchu_slot_work_mode_follows_the_menu"
+
+
+def test_hanchu_array_slot_device_is_not_controlled():
+    """A device on the array slot format would accept TCT_ writes and ignore them, so nothing is written - and the user is told once."""
+    failed = False
+    client = ready_client()
+    client.slot_model["HC240100001"] = "array"
+    client.local_schedule["HC240100001"] = {"reserve": 10, "charge": {"enable": True, "soc": 80, "power": 2000, "start": "01:00:00", "end": "02:00:00"}, "export": {"enable": False}}
+    with patched_session([(200, envelope(data={}))]) as session_cls:
+        first = run_async_local(client.apply_schedule("HC240100001"))
+        second = run_async_local(client.apply_schedule("HC240100001"))
+    if first or second or session_cls.return_value.post.call_count:
+        print(f"ERROR: an array-slot device was written to: {first} {second} calls={session_cls.return_value.post.call_count}")
+        failed = True
+    warnings = [message for message in client.log_messages if "different time-slot format" in message]
+    if len(warnings) != 1:
+        print(f"ERROR: expected one warning, got {warnings}")
+        failed = True
+    if "time-slot format" not in (client.health_message() or ""):
+        print(f"ERROR: health message {client.health_message()!r} should name the unsupported slot format")
+        failed = True
+    assert not failed, "test_hanchu_array_slot_device_is_not_controlled"
+
+
+def test_hanchu_offline_device_is_reported():
+    """devStatus 0 means the datalogger is offline and the readings are stale - say so, once per outage."""
+    failed = False
+    client = ready_client()
+    client._apply_status_payload("HC240100001", dict(STATUS_SAMPLE, devStatus=1))
+    if client.device_online.get("HC240100001") is not True or client.health_message():
+        print(f"ERROR: online device: {client.device_online} health {client.health_message()!r}")
+        failed = True
+    for _ in range(2):
+        client._apply_status_payload("HC240100001", dict(STATUS_SAMPLE, devStatus=0))
+    if client.device_online.get("HC240100001") is not False or "offline" not in (client.health_message() or ""):
+        print(f"ERROR: offline device: {client.device_online} health {client.health_message()!r}")
+        failed = True
+    if len([message for message in client.log_messages if "is offline" in message]) != 1:
+        print(f"ERROR: the outage should be logged once: {client.log_messages}")
+        failed = True
+    client._apply_status_payload("HC240100001", dict(STATUS_SAMPLE, devStatus=1))
+    if client.health_message() or not logged(client, "is back online"):
+        print(f"ERROR: recovery not reported: health {client.health_message()!r}")
+        failed = True
+    # 99 is pending, and no devStatus at all is unknown: neither is called offline.
+    client._apply_status_payload("HC240100001", dict(STATUS_SAMPLE, devStatus=99))
+    if client.health_message():
+        print(f"ERROR: pending read as offline: {client.health_message()!r}")
+        failed = True
+    assert not failed, "test_hanchu_offline_device_is_reported"
+
+
+def test_hanchu_http_session_is_reused_and_closed():
+    """One open session serves every call (upton68 2.0.2: far fewer timeouts than a session per call), and final() closes it."""
+    failed = False
+    client = ready_client()
+    session = create_aiohttp_mock_session([mock_json_response(json_data=envelope(data=STATUS_SAMPLE)), mock_json_response(json_data=envelope(data=STATISTICS_SAMPLE))])
+    session.closed = False
+    session.close = AsyncMock()
+    with patch("aiohttp.ClientSession", return_value=session) as session_cls:
+        run_async_local(client.refresh_power())
+        run_async_local(client.refresh_energy())
+        if session_cls.call_count != 1 or session.post.call_count != 2:
+            print(f"ERROR: {session_cls.call_count} sessions for {session.post.call_count} calls, expected 1 for 2")
+            failed = True
+        run_async_local(client.final())
+    if not session.close.await_count:
+        print("ERROR: final() did not close the session")
+        failed = True
+    assert not failed, "test_hanchu_http_session_is_reused_and_closed"
+
+
+def test_hanchu_generator_fields_are_read():
+    """The generator's live power and daily energy are read and published, so a live test can show what they mean."""
+    failed = False
+    client = ready_client()
+    client._apply_status_payload("HC240100001", dict(STATUS_SAMPLE, hasDg=True, dgPAcTotal=1.2, dgPAcTotalUnit="kW"))
+    if client.device_values["HC240100001"].get("generator_power") != 1200.0 or client.device_detail["HC240100001"].get("has_generator") is not True:
+        print(f"ERROR: generator status {client.device_values['HC240100001']} {client.device_detail['HC240100001']}")
+        failed = True
+    with patched_session([(200, envelope(data=dict(STATISTICS_SAMPLE, dgEp=3.4)))]):
+        run_async_local(client.refresh_energy())
+    if client.device_energy["HC240100001"].get("generator_today") != 3.4:
+        print(f"ERROR: generator energy {client.device_energy['HC240100001']}")
+        failed = True
+    run_async_local(client.publish_data())
+    for leaf in ("generator_power", "generator_today"):
+        if client._sensor_name("HC240100001", leaf) not in client.published:
+            print(f"ERROR: {leaf} was not published")
+            failed = True
+    assert not failed, "test_hanchu_generator_fields_are_read"
+
+
 def test_hanchu_config_read_is_one_call_per_device():
     """Nineteen keys are read in ONE iotGet - the same batching rationale as the write path."""
     failed = False
@@ -789,6 +971,12 @@ def run_hanchu_api_tests(my_predbat):
         ("code_alone_menu_only", test_hanchu_code_alone_is_success_only_for_the_menu),
         ("failed_menu_warning", test_hanchu_failed_menu_warns_the_default_power_is_in_use),
         ("ac_coupled_pv", test_hanchu_ac_coupled_pv_is_counted_in_pv_power),
+        ("slot_model", test_hanchu_menu_slot_model_is_recognised),
+        ("slot_work_mode", test_hanchu_slot_work_mode_follows_the_menu),
+        ("array_slots_blocked", test_hanchu_array_slot_device_is_not_controlled),
+        ("offline", test_hanchu_offline_device_is_reported),
+        ("session_reuse", test_hanchu_http_session_is_reused_and_closed),
+        ("generator", test_hanchu_generator_fields_are_read),
         ("transport_failure", test_hanchu_transport_failure_is_retried_then_reported),
         ("no_credentials", test_hanchu_run_refuses_to_start_without_credentials),
         ("retry_delay_default", test_hanchu_retry_delay_default),

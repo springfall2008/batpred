@@ -20,6 +20,7 @@ from hanchu_const import (
     HANCHU_KEY_DISCHARGE_POWER,
     HANCHU_KEY_DISCHARGE_SOC,
     HANCHU_KEY_DISCHARGE_START,
+    HANCHU_KEY_GRID_CHARGE_SOC,
     HANCHU_KEY_WORK_MODE,
     HANCHU_SECONDS_PER_DAY,
     HANCHU_SLOT_DISABLED,
@@ -62,7 +63,7 @@ def test_hanchu_charge_window_fills_slot_one():
     expected = {
         HANCHU_KEY_CHARGE_START.format(1): 5400,
         HANCHU_KEY_CHARGE_END.format(1): 16200,
-        HANCHU_KEY_CHARGE_SOC: 90,
+        HANCHU_KEY_GRID_CHARGE_SOC: 90,
         HANCHU_KEY_CHARGE_POWER: 3000,
         HANCHU_KEY_WORK_MODE: HANCHU_WORK_MODE_FOR_SCHEDULE,
     }
@@ -70,6 +71,11 @@ def test_hanchu_charge_window_fills_slot_one():
         if payload.get(key) != value:
             print(f"ERROR: payload[{key}] = {payload.get(key)} != {value}")
             failed = True
+    # The charge target is the grid-to-battery limit. CHG_BAT_SOC_LMT is the device's overall maximum
+    # charge SoC, which would cap solar charging as well, so it is never written.
+    if HANCHU_KEY_CHARGE_SOC in payload:
+        print(f"ERROR: {HANCHU_KEY_CHARGE_SOC} = {payload[HANCHU_KEY_CHARGE_SOC]} was written; it is the user's overall cap")
+        failed = True
     # The discharge floor carries the reserve, because no export window is running.
     if payload.get(HANCHU_KEY_DISCHARGE_SOC) != 10:
         print(f"ERROR: discharge floor {payload.get(HANCHU_KEY_DISCHARGE_SOC)} should be the reserve, 10")
@@ -102,18 +108,18 @@ def test_hanchu_soc_limits_are_clamped_and_explained_once():
     """The narrow SoC ranges are a real limitation, so the clamp is logged - but only once."""
     failed = False
     client = ready()
-    # 30% charge target is below this hardware's floor of 50, and a 70% export target is above its
-    # ceiling of 45. Both are perfectly ordinary Predbat plans that this inverter cannot express.
+    # A 10% charge target is below the grid-charge limit's floor of 20, and a 70% export target is
+    # above the discharge floor's ceiling of 45. Neither can be expressed on this hardware.
     client.set_mock_clock(13 * 60)
-    plan = schedule(charge={"enable": True, "soc": 30, "power": 2000, "start": "01:00:00", "end": "04:00:00"}, export={"enable": True, "soc": 70, "power": 3000, "start": "12:00:00", "end": "16:00:00"})
+    plan = schedule(charge={"enable": True, "soc": 10, "power": 2000, "start": "01:00:00", "end": "04:00:00"}, export={"enable": True, "soc": 70, "power": 3000, "start": "12:00:00", "end": "16:00:00"})
     payload = client.build_write_payload(SN, plan)
-    if payload.get(HANCHU_KEY_CHARGE_SOC) != 50:
-        print(f"ERROR: charge target {payload.get(HANCHU_KEY_CHARGE_SOC)} should be clamped up to 50")
+    if payload.get(HANCHU_KEY_GRID_CHARGE_SOC) != 20:
+        print(f"ERROR: charge target {payload.get(HANCHU_KEY_GRID_CHARGE_SOC)} should be clamped up to 20")
         failed = True
     if payload.get(HANCHU_KEY_DISCHARGE_SOC) != 45:
         print(f"ERROR: export target {payload.get(HANCHU_KEY_DISCHARGE_SOC)} should be clamped down to 45")
         failed = True
-    if not logged(client, "only accepts 50-100"):
+    if not logged(client, "only accepts 20-100"):
         print("ERROR: the charge target clamp was not explained")
         failed = True
     if not logged(client, "only accepts 5-45"):
@@ -127,7 +133,7 @@ def test_hanchu_soc_limits_are_clamped_and_explained_once():
     if new_clamp_lines:
         print(f"ERROR: the clamp was re-explained on a later cycle: {new_clamp_lines}")
         failed = True
-    if payload.get(HANCHU_KEY_CHARGE_SOC) != 50:
+    if payload.get(HANCHU_KEY_GRID_CHARGE_SOC) != 20:
         print("ERROR: the clamp itself must keep applying even once it has been explained")
         failed = True
     assert not failed, "test_hanchu_soc_limits_are_clamped_and_explained_once"
@@ -281,7 +287,7 @@ def test_hanchu_write_is_one_call_carrying_every_setting():
         print(f"ERROR: iotSet body {body}")
         failed = True
     value = body.get("value") or {}
-    for key in (HANCHU_KEY_CHARGE_POWER, HANCHU_KEY_DISCHARGE_POWER, HANCHU_KEY_CHARGE_SOC, HANCHU_KEY_DISCHARGE_SOC, HANCHU_KEY_CHARGE_START.format(1), HANCHU_KEY_WORK_MODE):
+    for key in (HANCHU_KEY_CHARGE_POWER, HANCHU_KEY_DISCHARGE_POWER, HANCHU_KEY_GRID_CHARGE_SOC, HANCHU_KEY_DISCHARGE_SOC, HANCHU_KEY_CHARGE_START.format(1), HANCHU_KEY_WORK_MODE):
         if key not in value:
             print(f"ERROR: the batched value dict is missing {key}")
             failed = True
@@ -738,6 +744,48 @@ def test_hanchu_failed_write_is_retried_before_the_pacing_interval():
     assert not failed, "test_hanchu_failed_write_is_retried_before_the_pacing_interval"
 
 
+def test_hanchu_overlapping_windows_keep_only_one():
+    """The vendor card refuses overlapping charge and discharge slots, so the payload never carries them.
+
+    The window running now is kept; if neither is running, the one that starts first. Windows that only
+    touch at an edge do not overlap.
+    """
+    failed = False
+
+    def slots(payload, start_key, end_key):
+        """Return the enabled (start, end) pairs of one direction's slots."""
+        pairs = [(payload.get(start_key.format(i)), payload.get(end_key.format(i))) for i in (1, 2, 3)]
+        return [pair for pair in pairs if pair != (HANCHU_SLOT_DISABLED, HANCHU_SLOT_DISABLED)]
+
+    client = ready()
+    client.set_mock_clock(13 * 60 + 30)
+    running = schedule(charge={"enable": True, "soc": 90, "power": 2000, "start": "13:00:00", "end": "15:00:00"}, export={"enable": True, "soc": 20, "power": 3000, "start": "14:00:00", "end": "16:00:00"})
+    payload = client.build_write_payload(SN, running)
+    if slots(payload, HANCHU_KEY_CHARGE_START, HANCHU_KEY_CHARGE_END) != [(46800, 54000)] or slots(payload, HANCHU_KEY_DISCHARGE_START, HANCHU_KEY_DISCHARGE_END):
+        print(f"ERROR: the running charge window should be kept and the export dropped: {payload}")
+        failed = True
+    if not logged(client, "overlap"):
+        print("ERROR: dropping a window should be logged")
+        failed = True
+
+    client = ready()
+    client.set_mock_clock(10 * 60)
+    future = schedule(charge={"enable": True, "soc": 90, "power": 2000, "start": "12:00:00", "end": "14:00:00"}, export={"enable": True, "soc": 20, "power": 3000, "start": "13:00:00", "end": "15:00:00"})
+    payload = client.build_write_payload(SN, future)
+    if not slots(payload, HANCHU_KEY_CHARGE_START, HANCHU_KEY_CHARGE_END) or slots(payload, HANCHU_KEY_DISCHARGE_START, HANCHU_KEY_DISCHARGE_END):
+        print(f"ERROR: neither running, so the earlier charge window should be kept: {payload}")
+        failed = True
+
+    client = ready()
+    client.set_mock_clock(10 * 60)
+    adjacent = schedule(charge={"enable": True, "soc": 90, "power": 2000, "start": "12:00:00", "end": "13:00:00"}, export={"enable": True, "soc": 20, "power": 3000, "start": "13:00:00", "end": "14:00:00"})
+    payload = client.build_write_payload(SN, adjacent)
+    if not slots(payload, HANCHU_KEY_CHARGE_START, HANCHU_KEY_CHARGE_END) or not slots(payload, HANCHU_KEY_DISCHARGE_START, HANCHU_KEY_DISCHARGE_END):
+        print(f"ERROR: windows that only touch should both be kept: {payload}")
+        failed = True
+    assert not failed, "test_hanchu_overlapping_windows_keep_only_one"
+
+
 def run_hanchu_control_tests(my_predbat):
     """Run all Hanchu control-logic tests."""
     failed = False
@@ -769,6 +817,7 @@ def run_hanchu_control_tests(my_predbat):
         ("collapsed_window", test_hanchu_collapsed_window_is_disabled_not_wrapped),
         ("restore_state", test_hanchu_restore_state_rebuilds_the_range_tuples),
         ("empty_payload", test_hanchu_empty_payload_sends_nothing),
+        ("overlap", test_hanchu_overlapping_windows_keep_only_one),
     ]:
         try:
             if fn():

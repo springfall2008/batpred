@@ -34,11 +34,12 @@ logging in again if the API ever answers 401. Predbat holds the credentials, so 
 rejected token is always recoverable without user action - unlike the reference integration,
 which has to ask Home Assistant to re-authenticate.
 
-TWO SOC LIMITS ARE NARROWER THAN PREDBAT'S. The charge target key accepts 50-100 and the
-discharge floor key accepts 5-45. A plan asking to charge to 40% or to export down to 60%
-cannot be expressed on this hardware at all. Those values are CLAMPED and the clamp is logged,
-because sending an out-of-range value would either be rejected or silently ignored, and both
-look identical to a window that never ran.
+TWO SOC LIMITS ARE NARROWER THAN PREDBAT'S. The charge target goes in the grid-charge limit,
+which accepts 20-100, and the discharge floor key accepts 5-45. A plan asking to charge to 10% or
+to export down to 60% cannot be expressed on this hardware at all. Those values are CLAMPED and
+the clamp is logged, because sending an out-of-range value would either be rejected or silently
+ignored, and both look identical to a window that never ran. The overall charge ceiling,
+CHG_BAT_SOC_LMT, also caps solar charging, so it is never written.
 """
 
 import asyncio
@@ -66,6 +67,9 @@ from hanchu_const import (
     HANCHU_CONTROL_KEYS,
     HANCHU_DEBUG_REDACT_KEYS,
     HANCHU_DEV_TYPE_DTU,
+    HANCHU_DEVICE_STATUS_FIELD,
+    HANCHU_DEVICE_STATUS_OFFLINE,
+    HANCHU_DEVICE_STATUSES,
     HANCHU_DEVICE_SN_FIELD,
     HANCHU_DEVICE_TYPE_FIELD,
     HANCHU_ENDPOINTS,
@@ -83,12 +87,18 @@ from hanchu_const import (
     HANCHU_KEY_DISCHARGE_START,
     HANCHU_KEY_GRID_CHARGE_SOC,
     HANCHU_KEY_WORK_MODE,
+    HANCHU_MENU_ARRAY_SLOT_TYPES,
+    HANCHU_MENU_CODE,
     HANCHU_MENU_DATA,
+    HANCHU_MENU_ENABLE_CYCLE,
     HANCHU_MENU_ITEMS,
+    HANCHU_MENU_LISTENER,
+    HANCHU_MENU_LISTENER_SHOW,
     HANCHU_MENU_MAX,
     HANCHU_MENU_MIN,
     HANCHU_MENU_SECTION,
     HANCHU_MENU_SIGNAL,
+    HANCHU_MENU_TYPE,
     HANCHU_POWER_STEP,
     HANCHU_RANGES,
     HANCHU_REFRESH_MIN_INTERVAL,
@@ -111,6 +121,7 @@ from hanchu_const import (
     HANCHU_WORK_MODE_FOR_SCHEDULE,
     HANCHU_WORK_MODES,
     HANCHU_FAILED_WRITE_INTERVAL,
+    HANCHU_GENERATOR_FIELD,
     HANCHU_WRITE_FAILURE_NOTIFY,
     HANCHU_WRITE_RETRY_DELAY,
     clamp_range,
@@ -232,6 +243,16 @@ class HanchuAPI(ComponentBase):
         # told apart from a failed call.
         self.last_api_error = ""
         self.discovery_ok = None
+        # Per serial: whether the datalogger is online (devStatus), None while unknown or pending.
+        self.device_online = {}
+        # Per serial: which time-slot format the menu describes ("slots", "array" or "unknown"), and the
+        # work modes its TCT_/TDT_ slots are shown in. Absent until a menu has been read.
+        self.slot_model = {}
+        self.slot_work_modes = {}
+        self._slot_notes_logged = set()
+        # One HTTP session for every call, opened on first use and closed by final(). Hanchu's cloud
+        # takes 7-45s to answer; a session per request made timeouts and retries far more common.
+        self._session = None
         if not self.control_enable:
             self.log("Info: Hanchu control is disabled (hanchu_control_enable is false); monitoring only")
         if not self.work_mode_control:
@@ -317,10 +338,10 @@ class HanchuAPI(ComponentBase):
         while attempt < HANCHU_RETRIES:
             self.debug_api("request", path, body if body is not None else {})
             try:
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.post(url, headers=self._headers(), json=body if body is not None else {}) as response:
-                        status = response.status
-                        payload = await response.json(content_type=None) if status in (200, HANCHU_CODE_UNAUTHORISED) else None
+                session = self._http_session(timeout)
+                async with session.post(url, headers=self._headers(), json=body if body is not None else {}) as response:
+                    status = response.status
+                    payload = await response.json(content_type=None) if status in (200, HANCHU_CODE_UNAUTHORISED) else None
             # Deliberately broad: the docstring promises this never raises, so every caller can fail
             # closed. A narrower tuple let a bare OSError from the socket layer escape run().
             except Exception as error:
@@ -364,6 +385,25 @@ class HanchuAPI(ComponentBase):
             return False, payload.get("data")
 
         return False, None
+
+    def _http_session(self, timeout):
+        """Return the open HTTP session, opening one if there is none.
+
+        Reused only when it positively reports itself open (closed is False): a session that has been
+        closed, or anything that is not a real session, is replaced rather than trusted.
+        """
+        if self._session is None or getattr(self._session, "closed", True) is not False:
+            self._session = aiohttp.ClientSession(timeout=timeout)
+        return self._session
+
+    async def close_session(self):
+        """Close the HTTP session if one is open. Safe to call more than once."""
+        session, self._session = self._session, None
+        if session is not None and getattr(session, "closed", True) is False:
+            try:
+                await session.close()
+            except Exception as error:
+                self.log("Warn: Hanchu could not close its HTTP session: {}".format(error))
 
     # ------------------------------------------------------------------
     # Auth
@@ -560,7 +600,29 @@ class HanchuAPI(ComponentBase):
         station = payload.get(HANCHU_STATION_FIELD)
         if station:
             detail["station_id"] = str(station)
+        generator = payload.get(HANCHU_GENERATOR_FIELD)
+        if generator is not None:
+            detail["has_generator"] = str(generator).strip().lower() in ("true", "1")
+        self._apply_device_status(sn, payload.get(HANCHU_DEVICE_STATUS_FIELD))
         return True
+
+    def _apply_device_status(self, sn, status):
+        """Record the datalogger's devStatus, saying so once when it goes offline and once when it returns.
+
+        Offline means the cloud is serving the last readings it had and a write cannot reach the
+        inverter. Pending (99) and a missing field are unknown, not offline.
+        """
+        if status is None:
+            return
+        code = int(self._as_float(status, -1))
+        self.device_detail.setdefault(sn, {})["status"] = HANCHU_DEVICE_STATUSES.get(code, str(status))
+        online = False if code == HANCHU_DEVICE_STATUS_OFFLINE else (True if code == 1 else None)
+        previous = self.device_online.get(sn)
+        if online is False and previous is not False:
+            self.log("Warn: Hanchu {} is offline (devStatus {}) - its readings are stale and Predbat's settings cannot reach it until it reconnects".format(sn, code))
+        elif online is not False and previous is False:
+            self.log("Info: Hanchu {} is back online".format(sn))
+        self.device_online[sn] = online
 
     async def refresh_power(self):
         """Poll live telemetry for every device. True when at least one reported a SoC."""
@@ -607,29 +669,83 @@ class HanchuAPI(ComponentBase):
         rather than defaulting, because a wrong range silently clamps a good plan.
         """
         ranges = {}
+        for item in self._menu_items(payload):
+            key = item.get(HANCHU_MENU_SIGNAL)
+            if key not in HANCHU_RANGES:
+                continue
+            try:
+                low = int(float(item[HANCHU_MENU_MIN]))
+                high = int(float(item[HANCHU_MENU_MAX]))
+            except (KeyError, TypeError, ValueError):
+                continue
+            if high > low:
+                ranges[key] = (low, high)
+        return ranges
+
+    @staticmethod
+    def _menu_items(payload):
+        """Yield every item dict in a menu response's energy section, flattening its groups.
+
+        _post hands over the envelope's inner data, which holds the section directly. A whole
+        envelope, still wrapped in its own data, is accepted too.
+        """
         section = payload if isinstance(payload, dict) else {}
-        # _post hands over the envelope's inner data, which holds the section directly. A whole
-        # envelope, still wrapped in its own data, is accepted too.
         if HANCHU_MENU_SECTION not in section and isinstance(section.get(HANCHU_MENU_DATA), dict):
             section = section[HANCHU_MENU_DATA]
         energy = section.get(HANCHU_MENU_SECTION)
         if not isinstance(energy, dict):
-            return ranges
+            return
         for group in energy.get(HANCHU_MENU_ITEMS) or []:
             for item in group if isinstance(group, list) else []:
-                if not isinstance(item, dict):
-                    continue
-                key = item.get(HANCHU_MENU_SIGNAL)
-                if key not in HANCHU_RANGES:
-                    continue
-                try:
-                    low = int(float(item[HANCHU_MENU_MIN]))
-                    high = int(float(item[HANCHU_MENU_MAX]))
-                except (KeyError, TypeError, ValueError):
-                    continue
-                if high > low:
-                    ranges[key] = (low, high)
-        return ranges
+                if isinstance(item, dict):
+                    yield item
+
+    def _parse_menu_slot_model(self, payload):
+        """Work out which time-slot format a device's menu describes, returning (model, work_modes).
+
+        "slots" when an item edits TCT_START_1 - the format this component writes - with the work modes
+        its listener shows it in (empty when it names none). "array" when the menu has the other
+        format's period items or FLAG_ENABLE_CYCLE and no TCT_ item. "unknown" otherwise: a menu that
+        shows neither is not proof the device cannot run the slots, so it does not block control.
+        """
+        has_array = False
+        for item in self._menu_items(payload):
+            signal = str(item.get(HANCHU_MENU_SIGNAL) or item.get(HANCHU_MENU_CODE) or "")
+            signals = [part.strip() for part in signal.split(",")]
+            if HANCHU_KEY_CHARGE_START.format(1) in signals:
+                listener = item.get(HANCHU_MENU_LISTENER) or {}
+                show = str(listener.get(HANCHU_MENU_LISTENER_SHOW) or "") if isinstance(listener, dict) else ""
+                modes = [int(part) for part in (piece.strip() for piece in show.split(",")) if part.isdigit()]
+                return "slots", modes
+            if str(item.get(HANCHU_MENU_TYPE)) in HANCHU_MENU_ARRAY_SLOT_TYPES or HANCHU_MENU_ENABLE_CYCLE in signals:
+                has_array = True
+        return ("array" if has_array else "unknown"), []
+
+    def _apply_slot_model(self, sn, model, modes):
+        """Record a device's slot format and slot work modes, saying once what was found when it matters."""
+        self.slot_model[sn] = model
+        self.slot_work_modes[sn] = list(modes)
+        if model == "array" and (sn, "array") not in self._slot_notes_logged:
+            self._slot_notes_logged.add((sn, "array"))
+            self.log("Warn: Hanchu {} uses a different time-slot format (array-valued periods with FLAG_ENABLE_CYCLE), which Predbat cannot drive yet - it will be monitored but not controlled".format(sn))
+        elif model == "unknown" and (sn, "unknown") not in self._slot_notes_logged:
+            self._slot_notes_logged.add((sn, "unknown"))
+            self.log("Info: Hanchu {}'s settings menu shows no time slots at all; Predbat will still write the TCT_/TDT_ slots - check them in the Hanchu app".format(sn))
+
+    def slot_work_mode(self, sn):
+        """Return the work mode to write with a window: User-defined, unless the menu runs the slots only in other modes.
+
+        The menu's listener on the slot items names the work modes they are shown in. Where it names
+        modes and User-defined is not among them, the first one it names is used instead, and that is
+        logged once - it would be the first device seen to do so.
+        """
+        modes = self.slot_work_modes.get(sn) or []
+        if not modes or HANCHU_WORK_MODE_FOR_SCHEDULE in modes:
+            return HANCHU_WORK_MODE_FOR_SCHEDULE
+        if (sn, "mode") not in self._slot_notes_logged:
+            self._slot_notes_logged.add((sn, "mode"))
+            self.log("Warn: Hanchu {}'s menu runs its time slots in work mode {} rather than User-defined ({}), so work mode {} is written with a window".format(sn, modes[0], HANCHU_WORK_MODE_FOR_SCHEDULE, modes[0]))
+        return modes[0]
 
     def ranges_for(self, sn):
         """Return the parameter ranges to clamp against for one device.
@@ -674,6 +790,7 @@ class HanchuAPI(ComponentBase):
                 ranges = self._parse_menu_ranges(menu)
                 if ranges:
                     self.device_ranges[sn] = ranges
+                self._apply_slot_model(sn, *self._parse_menu_slot_model(menu))
             # Warned on a failed menu too: with no ranges held, the 5 kW default is just as much
             # in force. A device whose ranges were read on an earlier cycle is not warned about.
             self._warn_if_default_power(sn, self.device_ranges.get(sn) or {})
@@ -760,7 +877,7 @@ class HanchuAPI(ComponentBase):
 
     async def publish_data(self):
         """Publish monitoring sensors for each device."""
-        units = {"soc": "%", "battery_power": "W", "grid_power": "W", "pv_power": "W", "load_power": "W", "ac_pv_power": "W"}
+        units = {"soc": "%", "battery_power": "W", "grid_power": "W", "pv_power": "W", "load_power": "W", "ac_pv_power": "W", "generator_power": "W"}
         for sn in self.device_list:
             values = self.device_values.get(sn, {})
             for leaf, unit in units.items():
@@ -797,6 +914,9 @@ class HanchuAPI(ComponentBase):
             station = self.device_detail.get(sn, {}).get("station_id")
             if station:
                 self.dashboard_item(self._sensor_name(sn, "station_id"), state=station, attributes={"friendly_name": "Hanchu {} Station".format(sn)}, app="hanchu")
+            status = self.device_detail.get(sn, {}).get("status")
+            if status:
+                self.dashboard_item(self._sensor_name(sn, "status"), state=status, attributes={"friendly_name": "Hanchu {} Status".format(sn), "icon": "mdi:check-network-outline"}, app="hanchu")
 
             # The slot table as the DEVICE reports it, alongside what Predbat asked for. This is
             # the single most useful diagnostic on an undocumented API: it is what distinguishes
@@ -923,7 +1043,7 @@ class HanchuAPI(ComponentBase):
             entities["inverter_limit"] = {"entity_id": self._sensor_name(sn, "inverter_limit"), "access": "r", "unit": "W"}
 
         ranges = self.ranges_for(sn)
-        charge_low, charge_high = ranges.get(HANCHU_KEY_CHARGE_SOC, (0, 100))
+        charge_low, charge_high = ranges.get(HANCHU_KEY_GRID_CHARGE_SOC, (0, 100))
         floor_low, floor_high = ranges.get(HANCHU_KEY_DISCHARGE_SOC, (0, 100))
         entities["reserve"] = {"entity_id": self._control_name("number", sn, "battery_schedule_reserve"), "access": "rw", "unit": "%", "min": floor_low, "max": floor_high}
         for prefix, direction in (("charge", "charge"), ("discharge", "export")):
@@ -1022,7 +1142,7 @@ class HanchuAPI(ComponentBase):
         """Publish the charge/export schedule control entities for one device."""
         local = self.local_schedule.get(sn, {})
         ranges = self.ranges_for(sn)
-        charge_low, charge_high = ranges.get(HANCHU_KEY_CHARGE_SOC, (0, 100))
+        charge_low, charge_high = ranges.get(HANCHU_KEY_GRID_CHARGE_SOC, (0, 100))
         floor_low, floor_high = ranges.get(HANCHU_KEY_DISCHARGE_SOC, (0, 100))
         power_high = int(ranges.get(HANCHU_KEY_CHARGE_POWER, (0, 20000))[1]) or 20000
 
@@ -1254,16 +1374,20 @@ class HanchuAPI(ComponentBase):
         against an API with no documented budget.
 
         A COMPLETE control state, not a patch, for the keys Predbat owns: the two power limits, the
-        charge target, the device-wide discharge floor, the work mode (unless the user has turned
-        that off) and both slot tables. Every value is clamped to the range this device reports.
+        charge target (the grid-charge limit), the device-wide discharge floor, the work mode
+        (unless the user has turned that off) and both slot tables. Every value is clamped to the
+        range this device reports. The overall charge ceiling, CHG_BAT_SOC_LMT, is never written:
+        it caps solar charging too, so it stays as the user set it.
+
+        A charge window and an export window that overlap are never both written - the vendor's own
+        settings card refuses to submit that. See _resolve_overlap().
 
         Every one of the three charge and three discharge slots is written, and any the plan does
         not use is set to 00:00-00:00 - see HANCHU_SLOT_DISABLED. User-defined mode runs all six,
         so a slot left over from the Hanchu app would otherwise fight the plan.
         """
         ranges = self.ranges_for(sn)
-        charge = schedule.get("charge", {})
-        export = schedule.get("export", {})
+        charge, export = self._resolve_overlap(sn, schedule.get("charge", {}), schedule.get("export", {}))
         payload = {}
 
         # Power. Rate 0 is how Predbat expresses freeze, and 0 is inside the accepted range, so it
@@ -1271,9 +1395,9 @@ class HanchuAPI(ComponentBase):
         payload[HANCHU_KEY_CHARGE_POWER] = self._clamp(sn, HANCHU_KEY_CHARGE_POWER, charge.get("power", 0), ranges)
         payload[HANCHU_KEY_DISCHARGE_POWER] = self._clamp(sn, HANCHU_KEY_DISCHARGE_POWER, export.get("power", 0), ranges)
 
-        # The charge target. Clamped to 50-100 on this hardware, so a plan asking for less cannot
-        # be expressed - _clamp says so once per device.
-        payload[HANCHU_KEY_CHARGE_SOC] = self._clamp(sn, HANCHU_KEY_CHARGE_SOC, charge.get("soc", 0), ranges)
+        # The charge target goes in the grid-charge limit, clamped to 20-100 on this hardware, so a
+        # plan asking for less cannot be expressed - _clamp says so once per device.
+        payload[HANCHU_KEY_GRID_CHARGE_SOC] = self._clamp(sn, HANCHU_KEY_GRID_CHARGE_SOC, charge.get("soc", 0), ranges)
 
         # The discharge floor is device-wide, so it carries the export target while an export
         # window is actually running and the reserve at every other moment - the same shape every
@@ -1294,8 +1418,45 @@ class HanchuAPI(ComponentBase):
         # HANCHU_WORK_MODE_FOR_SCHEDULE), so it is never written speculatively - with no window
         # enabled the mode is the user's business.
         if self.work_mode_control and (charge.get("enable") or export.get("enable")):
-            payload[HANCHU_KEY_WORK_MODE] = HANCHU_WORK_MODE_FOR_SCHEDULE
+            payload[HANCHU_KEY_WORK_MODE] = self.slot_work_mode(sn)
         return payload
+
+    def _resolve_overlap(self, sn, charge, export):
+        """Return (charge, export) with one of them disabled if their slots would overlap.
+
+        The window running now is kept. If neither is running (or, which Predbat never asks for,
+        both are), the one starting sooner is kept. Windows that only touch at an edge do not overlap.
+        The drop is logged once per pair of windows, because a dropped window never runs.
+        """
+        if not (charge.get("enable") and export.get("enable")):
+            return charge, export
+        disabled = (HANCHU_SLOT_DISABLED, HANCHU_SLOT_DISABLED)
+        charge_pairs = [pair for pair in self._slot_pairs(sn, "charge", charge) if pair != disabled]
+        export_pairs = [pair for pair in self._slot_pairs(sn, "export", export) if pair != disabled]
+        if not any(c_start < e_end and e_start < c_end for c_start, c_end in charge_pairs for e_start, e_end in export_pairs):
+            return charge, export
+        charge_active, export_active = self._window_active_now(charge), self._window_active_now(export)
+        if charge_active != export_active:
+            keep_charge = charge_active
+        else:
+
+            def minutes_until(window):
+                """Return minutes from now until a window starts, wrapping past midnight."""
+                return (hhmmss_to_seconds(window.get("start", "00:00:00")) // 60 - self.minutes_now) % (24 * 60)
+
+            keep_charge = minutes_until(charge) <= minutes_until(export)
+        dropped, kept = ("export", "charge") if keep_charge else ("charge", "export")
+        note = (sn, "overlap", charge.get("start"), charge.get("end"), export.get("start"), export.get("end"))
+        if note not in self._clamp_logged:
+            self._clamp_logged.add(note)
+            self.log(
+                "Warn: Hanchu {} charge window {}-{} and export window {}-{} overlap, which the device does not accept, so only the {} window is written and the {} window is dropped".format(
+                    sn, charge.get("start"), charge.get("end"), export.get("start"), export.get("end"), kept, dropped
+                )
+            )
+        if keep_charge:
+            return charge, dict(export, enable=False)
+        return dict(charge, enable=False), export
 
     @staticmethod
     def payloads_equal(first, second):
@@ -1429,8 +1590,17 @@ class HanchuAPI(ComponentBase):
         self.write_failures.pop(sn, None)
 
     async def apply_schedule(self, sn, force=False):
-        """Build and send the locally held schedule for one device."""
+        """Build and send the locally held schedule for one device.
+
+        Refused for a device on the array time-slot format: it would accept the TCT_/TDT_ write and
+        ignore it, which looks exactly like a window that ran.
+        """
         if not self.control_enable:
+            return False
+        if self.slot_model.get(sn) == "array":
+            if (sn, "array") not in self._slot_notes_logged:
+                self._slot_notes_logged.add((sn, "array"))
+                self.log("Warn: Hanchu {} uses a different time-slot format (array-valued periods with FLAG_ENABLE_CYCLE), which Predbat cannot drive yet - nothing is written to it".format(sn))
             return False
         schedule = self.local_schedule.get(sn)
         if not schedule:
@@ -1496,7 +1666,15 @@ class HanchuAPI(ComponentBase):
 
     async def save_config(self):
         """Persist the per-device parameter ranges and the control values last read back."""
-        await self.save_cache(HANCHU_CACHE_CONFIG, {"device_ranges": {sn: list(ranges.items()) for sn, ranges in self.device_ranges.items()}, "device_settings": self.device_settings})
+        await self.save_cache(
+            HANCHU_CACHE_CONFIG,
+            {
+                "device_ranges": {sn: list(ranges.items()) for sn, ranges in self.device_ranges.items()},
+                "device_settings": self.device_settings,
+                "slot_model": self.slot_model,
+                "slot_work_modes": self.slot_work_modes,
+            },
+        )
 
     async def save_control(self):
         """Persist the control state that must survive a restart.
@@ -1532,6 +1710,8 @@ class HanchuAPI(ComponentBase):
         # so clamp_range sees exactly what the live path gives it.
         self.device_ranges = {sn: {key: tuple(bounds) for key, bounds in (pairs or [])} for sn, pairs in (config.get("device_ranges") or {}).items()}
         self.device_settings = dict(config.get("device_settings") or {})
+        self.slot_model = dict(config.get("slot_model") or {})
+        self.slot_work_modes = {sn: list(modes or []) for sn, modes in (config.get("slot_work_modes") or {}).items()}
         control = await self.load_cache(HANCHU_CACHE_CONTROL)
         self.local_schedule = dict(control.get("local_schedule") or {})
         self.applied_payload = dict(control.get("applied_payload") or {})
@@ -1551,6 +1731,12 @@ class HanchuAPI(ComponentBase):
             return "Hanchu is not logged in{}".format(": {}".format(self.last_api_error) if self.last_api_error else "")
         if not self.device_list:
             return "Hanchu found no devices on this account"
+        offline = [sn for sn in self.device_list if self.device_online.get(sn) is False]
+        if offline:
+            return "Hanchu {} offline - readings are stale".format(", ".join(offline))
+        unsupported = [sn for sn in self.device_list if self.slot_model.get(sn) == "array"]
+        if unsupported:
+            return "Hanchu {} uses a time-slot format Predbat cannot drive".format(", ".join(unsupported))
         return None
 
     async def run(self, seconds, first):
@@ -1621,14 +1807,18 @@ class HanchuAPI(ComponentBase):
 
         if first and self.automatic:
             await self.automatic_config()
-        self.update_success_timestamp()
+        # An offline datalogger means stale readings and writes that cannot land, so the component is
+        # not reported healthy while any device is offline; health_message() then says why.
+        if not any(self.device_online.get(sn) is False for sn in self.device_list):
+            self.update_success_timestamp()
         return True
 
     async def final(self):
-        """Persist state on shutdown so a restart resumes without re-polling."""
+        """Persist state on shutdown so a restart resumes without re-polling, then close the HTTP session."""
         await self.save_static()
         await self.save_config()
         await self.save_control()
+        await self.close_session()
 
 
 # ----------------------------------------------------------------------
@@ -1657,9 +1847,9 @@ HANCHU_CLI_EXPECTATION = {
     "freeze-export": "the battery does not charge, so surplus solar is exported instead",
 }
 
-# Every key a restore may write back: everything build_write_payload() can touch. The grid-charge
-# limit is read but never written by Predbat, so a restore leaves it alone too.
-HANCHU_CLI_RESTORE_KEYS = [key for key in HANCHU_CONTROL_KEYS if key != HANCHU_KEY_GRID_CHARGE_SOC]
+# Every key a restore may write back: everything build_write_payload() can touch. The overall charge
+# ceiling is read but never written by Predbat, so a restore leaves it alone too.
+HANCHU_CLI_RESTORE_KEYS = [key for key in HANCHU_CONTROL_KEYS if key != HANCHU_KEY_CHARGE_SOC]
 
 # apps.yaml keys --config reads, mapped to the command-line fields they stand in for.
 HANCHU_CLI_CREDENTIAL_KEYS = {"account": "hanchu_account", "password": "hanchu_password", "serial": "hanchu_inverter_sn"}
@@ -1711,7 +1901,7 @@ def _cli_hhmm(minutes):
     return "{:02d}:{:02d}:00".format(minutes // 60, minutes % 60)
 
 
-def build_cli_schedule(scenario, start_minutes, soc, settings, ranges, window_minutes, power, require_effect=True):
+def build_cli_schedule(scenario, start_minutes, soc, settings, ranges, window_minutes, power, require_effect=True, target=None):
     """Build the schedule a live test writes, in the shape get_schedule_settings_ha() produces.
 
     It goes through the component's own build_write_payload() afterwards, so the test exercises the
@@ -1727,6 +1917,9 @@ def build_cli_schedule(scenario, start_minutes, soc, settings, ranges, window_mi
     and a disabled charge window carries a 100% target - Predbat's demand-mode value, and the one
     that cannot cap solar charging if the target turns out to be device-wide.
 
+    target, when given, replaces the charge target or export floor - set it just past the current SoC
+    to watch the inverter stop a window at the target by itself.
+
     Raises ValueError when the scenario is unknown, the window would have under two minutes before
     midnight, or (with require_effect) the battery is already where the test would move it, so the
     run could only ever come back inconclusive.
@@ -1736,7 +1929,7 @@ def build_cli_schedule(scenario, start_minutes, soc, settings, ranges, window_mi
     if scenario not in HANCHU_CLI_SCENARIOS:
         raise ValueError("unknown scenario {!r}; choose one of {}".format(scenario, ", ".join(HANCHU_CLI_SCENARIOS)))
     notes = []
-    charge_low, charge_high = ranges.get(HANCHU_KEY_CHARGE_SOC, HANCHU_RANGES[HANCHU_KEY_CHARGE_SOC])
+    charge_low, charge_high = ranges.get(HANCHU_KEY_GRID_CHARGE_SOC, HANCHU_RANGES[HANCHU_KEY_GRID_CHARGE_SOC])
     floor_low, floor_high = ranges.get(HANCHU_KEY_DISCHARGE_SOC, HANCHU_RANGES[HANCHU_KEY_DISCHARGE_SOC])
     charge_max = int(ranges.get(HANCHU_KEY_CHARGE_POWER, HANCHU_RANGES[HANCHU_KEY_CHARGE_POWER])[1])
     discharge_max = int(ranges.get(HANCHU_KEY_DISCHARGE_POWER, HANCHU_RANGES[HANCHU_KEY_DISCHARGE_POWER])[1])
@@ -1775,16 +1968,21 @@ def build_cli_schedule(scenario, start_minutes, soc, settings, ranges, window_mi
     if scenario == "charge":
         if require_effect and soc >= charge_high - 1:
             raise ValueError("the battery is at {:.0f}%, so a charge would show nothing - try export or freeze-charge".format(soc))
-        target = min(int(charge_high), int(soc) + 10)
+        if require_effect and target is not None and soc >= int(target):
+            raise ValueError("the battery is already at {:.0f}%, at or above the {}% target - set --target above it".format(soc, target))
+        target = min(int(charge_high), int(soc) + 10) if target is None else int(target)
         if target < charge_low:
             notes.append("charge target raised to {}%, the lowest this device accepts".format(charge_low))
             target = int(charge_low)
         schedule["charge"] = dict(window, soc=target, power=capped(power, charge_max))
     elif scenario == "export":
-        floor = max(int(floor_low), min(int(floor_high), int(soc) - 10))
-        if floor == int(floor_high) and int(soc) - 10 > floor_high:
-            notes.append("export floor set to {}%, the highest this device accepts, so the battery may export further than 10 points".format(floor_high))
-        if require_effect and soc <= floor + 2:
+        wanted = int(soc) - 10 if target is None else int(target)
+        floor = max(int(floor_low), min(int(floor_high), wanted))
+        if floor == int(floor_high) and wanted > floor_high:
+            notes.append("export floor set to {}%, the highest this device accepts, so the battery may export further than asked".format(floor_high))
+        # An explicit target is the tester's choice, so only a battery already at or below it is
+        # refused; the default floor also needs a little room to show anything.
+        if require_effect and soc <= floor + (0 if target is not None else 2):
             raise ValueError("the battery is at {:.0f}%, too close to the {}% floor for an export to show anything - try charge or freeze-export".format(soc, floor))
         schedule["export"] = dict(window, soc=floor, power=capped(power, discharge_max))
     elif scenario == "freeze-charge":
@@ -1962,7 +2160,19 @@ def _build_hanchu_cli(args, automatic=False):  # pragma: no cover
         min_write_interval=0,
     )
     client.api_debug = not args.no_trace
+    # Recorded on args so _cli_main() can close its HTTP session however the driver returns.
+    args.client = client
     return client
+
+
+async def _cli_main(driver, args):  # pragma: no cover
+    """Run one harness driver, then close the HTTP session it opened, whichever way it returned."""
+    try:
+        await driver(args)
+    finally:
+        client = getattr(args, "client", None)
+        if client is not None:
+            await client.close_session()
 
 
 def _cli_slot_table(settings):  # pragma: no cover
@@ -2004,14 +2214,25 @@ def _cli_print_device(client, sn):  # pragma: no cover
     print("  telemetry       {}".format(json.dumps(client.device_values.get(sn, {}))))
     print("  energy today    {}".format(json.dumps(client.device_energy.get(sn, {}))))
     print("  derived         soc_max {:.2f} kWh, battery_rate_max {:.0f} W, inverter_limit {:.0f} W".format(client.battery_capacity(sn), client.battery_rate_max(sn), client.inverter_limit(sn)))
+    model = client.slot_model.get(sn)
+    print(
+        "  time slots      {}{}".format(
+            {"slots": "TCT_/TDT_ slots - the format Predbat writes", "array": "ARRAY periods with FLAG_ENABLE_CYCLE - Predbat will NOT control this device", "unknown": "the menu shows no slot items"}.get(model, "menu not read"),
+            ", shown in work mode(s) {}".format(client.slot_work_modes.get(sn)) if client.slot_work_modes.get(sn) else "",
+        )
+    )
+    detail = client.device_detail.get(sn, {})
+    print("  device status   {}".format(detail.get("status", "not reported")))
 
 
 async def _cli_print_coupling(client, sn):  # pragma: no cover
-    """Print the raw fields that tell an AC-coupled system from a DC-coupled one.
+    """Print the raw fields that tell an AC-coupled system from a DC-coupled one, and the generator's.
 
     On an AC-coupled system the solar is only in bypMeterTotalPower and pvTtPwr reads zero, and
     bypMeterSwitch is 1; the component adds the bypass meter into pv_power on those systems. The raw
-    fields are printed so a tester can check that, and report a system with both kinds of PV.
+    fields are printed so a tester can check that, and report a system with both kinds of PV. The
+    generator fields are printed for the same reason: nobody yet knows their sign, or whether the
+    generator's output is already counted in the load or grid readings.
     """
     ok, data = await client._post("device_status", body={"sn": sn})
     if not ok or not isinstance(data, dict):
@@ -2019,6 +2240,7 @@ async def _cli_print_coupling(client, sn):  # pragma: no cover
         return
     switch = data.get("bypMeterSwitch")
     print("  coupling        bypMeterSwitch={!r} bypMeterTotalPower={!r} pvTtPwr={!r} -> {}".format(switch, data.get("bypMeterTotalPower"), data.get("pvTtPwr"), {1: "AC-coupled", 0: "DC-coupled"}.get(_cli_number(switch), "unknown")))
+    print("  generator       hasDg={!r} dgPAcTotal={!r} {} (load {!r}, grid {!r}, battery {!r})".format(data.get("hasDg"), data.get("dgPAcTotal"), data.get("dgPAcTotalUnit") or "", data.get("loadPwr"), data.get("meterPPwr"), data.get("batP")))
 
 
 async def _cli_prepare(client):  # pragma: no cover
@@ -2048,6 +2270,12 @@ async def _cli_prepare(client):  # pragma: no cover
         print("Could not read {}'s SoC (getDeviceStatus) - refusing to write".format(sn))
         return None, None, None
     _cli_print_device(client, sn)
+    if client.slot_model.get(sn) == "array":
+        print("{} uses the array time-slot format, which Predbat does not write - refusing. Please report this menu on batpred#5305".format(sn))
+        return None, None, None
+    if client.device_online.get(sn) is False:
+        print("{} is offline, so a write cannot reach it - refusing".format(sn))
+        return None, None, None
     return sn, settings, soc
 
 
@@ -2187,7 +2415,7 @@ async def test_hanchu_live_window(args):  # pragma: no cover
     now = datetime.now()
     real_minutes = now.hour * 60 + now.minute
     try:
-        schedule, notes = build_cli_schedule(scenario, client.minutes_now, soc, settings, client.ranges_for(sn), args.minutes + real_minutes - client.minutes_now, args.power)
+        schedule, notes = build_cli_schedule(scenario, client.minutes_now, soc, settings, client.ranges_for(sn), args.minutes + real_minutes - client.minutes_now, args.power, target=args.target)
     except ValueError as error:
         print("\nNot running {}: {}".format(scenario, error))
         return
@@ -2237,8 +2465,16 @@ async def test_hanchu_live_window(args):  # pragma: no cover
                 elapsed = int(time.time() - written_from)
                 samples.append(dict(values, elapsed=elapsed))
                 print(
-                    "  {}  +{:4}s  SoC {}%  battery {} W  grid {} W  pv {} W  ac-pv {} W  load {} W".format(
-                        datetime.now().strftime("%H:%M:%S"), elapsed, values.get("soc"), values.get("battery_power"), values.get("grid_power"), values.get("pv_power"), values.get("ac_pv_power"), values.get("load_power")
+                    "  {}  +{:4}s  SoC {}%  battery {} W  grid {} W  pv {} W  ac-pv {} W  load {} W{}".format(
+                        datetime.now().strftime("%H:%M:%S"),
+                        elapsed,
+                        values.get("soc"),
+                        values.get("battery_power"),
+                        values.get("grid_power"),
+                        values.get("pv_power"),
+                        values.get("ac_pv_power"),
+                        values.get("load_power"),
+                        "  generator {} W".format(values.get("generator_power")) if "generator_power" in values else "",
                     )
                 )
                 await asyncio.sleep(max(1, min(args.interval, hold_seconds - (time.time() - started))))
@@ -2299,6 +2535,7 @@ def main():  # pragma: no cover
     mode.add_argument("--restore", metavar="SNAPSHOT", help="Write back a snapshot file a test saved")
     parser.add_argument("--minutes", type=int, default=10, help="Length of the test window in minutes (default 10)")
     parser.add_argument("--power", type=int, default=1000, help="Charge or export power for the test in watts (default 1000)")
+    parser.add_argument("--target", type=int, default=None, help="Charge target or export floor in percent for --live-window charge/export (default: 10 points from the current SoC). Set it just past the current SoC to watch the inverter stop at it")
     parser.add_argument("--interval", type=int, default=30, help="Seconds between readings during --live-window (default 30)")
     parser.add_argument("--user-defined", action="store_true", help="With a freeze test, also set the User-defined work mode, as an earlier Predbat window would have")
     parser.add_argument("--snapshot-dir", default=".", help="Where to save the pre-write snapshot (default: the current directory)")
@@ -2329,13 +2566,13 @@ def main():  # pragma: no cover
         parser.error("--minutes must be at least 2")
 
     if args.write_test:
-        asyncio.run(test_hanchu_write_readback(args))
+        asyncio.run(_cli_main(test_hanchu_write_readback, args))
     elif args.live_window:
-        asyncio.run(test_hanchu_live_window(args))
+        asyncio.run(_cli_main(test_hanchu_live_window, args))
     elif args.restore:
-        asyncio.run(restore_hanchu_snapshot(args))
+        asyncio.run(_cli_main(restore_hanchu_snapshot, args))
     else:
-        asyncio.run(test_hanchu_api(args))
+        asyncio.run(_cli_main(test_hanchu_api, args))
 
 
 if __name__ == "__main__":  # pragma: no cover

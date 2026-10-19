@@ -80,11 +80,16 @@ def test_hanchu_cli_charge_schedule_is_what_predbat_would_send():
 
 
 def test_hanchu_cli_charge_target_respects_the_device_floor():
-    """A charge target below the device's 50% floor is raised to it, and the note says so."""
+    """A charge target below the grid-charge limit's 20% floor is raised to it, and the note says so."""
     failed = False
-    schedule, notes = build_cli_schedule("charge", 600, 20, SETTINGS, HANCHU_RANGES, window_minutes=10, power=1500)
-    failed = expect(failed, schedule["charge"]["soc"] == 50, f"target {schedule['charge']['soc']}")
-    failed = expect(failed, any("50" in note for note in notes), f"the raise should be explained: {notes}")
+    schedule, notes = build_cli_schedule("charge", 600, 5, SETTINGS, HANCHU_RANGES, window_minutes=10, power=1500)
+    failed = expect(failed, schedule["charge"]["soc"] == 20, f"target {schedule['charge']['soc']}")
+    failed = expect(failed, any("20" in note for note in notes), f"the raise should be explained: {notes}")
+    # --target sets the charge target directly, so a tester can watch the battery stop at it.
+    schedule, _ = build_cli_schedule("charge", 600, 60, SETTINGS, HANCHU_RANGES, window_minutes=10, power=1500, target=62)
+    failed = expect(failed, schedule["charge"]["soc"] == 62, f"--target charge {schedule['charge']['soc']}")
+    schedule, _ = build_cli_schedule("export", 600, 40, SETTINGS, HANCHU_RANGES, window_minutes=10, power=1500, target=38)
+    failed = expect(failed, schedule["export"]["soc"] == 38, f"--target export floor {schedule['export']['soc']}")
     return failed
 
 
@@ -189,8 +194,10 @@ def test_hanchu_cli_restore_payload_uses_the_snapshot():
     payload, missing = restore_payload(snapshot, [HANCHU_KEY_WORK_MODE, HANCHU_KEY_CHARGE_SOC, HANCHU_KEY_CHARGE_POWER])
     failed = expect(failed, payload == {HANCHU_KEY_WORK_MODE: 1, HANCHU_KEY_CHARGE_SOC: 100}, f"payload {payload}")
     failed = expect(failed, missing == [HANCHU_KEY_CHARGE_POWER], f"missing {missing}")
-    # The grid-charge limit is never written by Predbat, so a full restore leaves it alone too.
-    failed = expect(failed, HANCHU_KEY_GRID_CHARGE_SOC not in HANCHU_CLI_RESTORE_KEYS, "the restore set should not include the grid-charge limit")
+    # The overall charge cap is never written by Predbat, so a full restore leaves it alone too; the
+    # grid-charge limit carries the charge target, so it is restored.
+    failed = expect(failed, HANCHU_KEY_CHARGE_SOC not in HANCHU_CLI_RESTORE_KEYS, "the restore set should not include the overall charge cap")
+    failed = expect(failed, HANCHU_KEY_GRID_CHARGE_SOC in HANCHU_CLI_RESTORE_KEYS, "the restore set should include the grid-charge limit")
     return failed
 
 

@@ -127,7 +127,7 @@ def test_hanchu_schedule_controls_advertise_the_narrow_soc_ranges():
     client = populated()
     run_async_local(client.publish_schedule_settings_ha(SN))
     charge_soc = client.published.get(client._control_name("number", SN, "battery_schedule_charge_soc"))
-    if not charge_soc or (charge_soc["attributes"].get("min"), charge_soc["attributes"].get("max")) != (50, 100):
+    if not charge_soc or (charge_soc["attributes"].get("min"), charge_soc["attributes"].get("max")) != (20, 100):
         print(f"ERROR: the charge SoC control advertises {charge_soc['attributes'] if charge_soc else None}")
         failed = True
     for leaf in ("battery_schedule_export_soc", "battery_schedule_reserve"):
