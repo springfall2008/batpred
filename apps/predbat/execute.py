@@ -947,9 +947,10 @@ class Execute:
                             self.log("Car charging from battery is off, next slot for car {} is {} - {}".format(car_n, self.time_abs_str(window["start"]), self.time_abs_str(window["end"])))
                             car_hold = True
                     if car_hold:
-                        # Don't disable discharge during force charge/discharge slots but otherwise turn it off to prevent
-                        # from draining the battery
-                        if not isExporting:
+                        # Don't disable discharge while this inverter is force exporting, but otherwise turn it off to prevent
+                        # draining the battery. Not isExporting: a freeze export sets that too, yet leaves the inverter in
+                        # demand with discharge live, so the hold is all that keeps the battery out of the car (#5612).
+                        if status_per_inverter.get(inverter.id) != RUN_STATE_EXPORTING:
                             # Not while this inverter is actually charging, unless it can pause: the battery is being
                             # filled from the grid, so it cannot be feeding the car. A discharge rate of 0 adds nothing
                             # then, and some GivEnergy inverters will not grid-charge at all with it at 0 and the SoC on
