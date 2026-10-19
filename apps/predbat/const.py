@@ -39,6 +39,15 @@ DYNAMIC_LOAD_CAR_LOW_FACTOR = 0.85
 # A car_charging_now reading only confirms the half hour it is in (keeping that half hour cheap once the car
 # stops, GH#5316) from this many minutes into it: the sensor can lag a car that stopped just before the boundary
 DYNAMIC_LOAD_CAR_CONFIRM_MINUTES = 2
+# How long a half hour an Octopus Intelligent planned dispatch ran in keeps the dispatch rate after it ends,
+# while waiting for Octopus to list it as a completed dispatch - seen to take 15 to 60 minutes (GH#5520)
+OCTOPUS_DISPATCH_HOLD_MINUTES = 90
+# The same hold under the window billing rule (E.ON Next Drive Smart, GH#5521): the supplier bills every half hour a
+# planned dispatch was in force off-peak and never lists the ones the car did not charge in, so the hold is the
+# record - kept for a day, so today's cost and the hours either side of midnight are priced from it
+OCTOPUS_DISPATCH_WINDOW_HOLD_MINUTES = 24 * 60
+# The settings of intelligent_dispatch_billing in apps.yaml
+DISPATCH_BILLING_CHOICES = ("auto", "octopus", "window")
 
 # Extra cloud divergence applied to the PV10 scenario on top of the computed cloud factor, so the
 # downside case diverges harder than the central one
@@ -62,6 +71,7 @@ PV_SCENARIO_NOMINAL = 0
 PV_SCENARIO_PV10 = 1
 PV_SCENARIO_PV90 = 2
 LOAD_FORECAST_HISTORY_MAX_DAYS = 30  # Max days of history used by the weighted-bucket load forecast (days_previous_auto)
+LOAD_FORECAST_RECORDED_MIN_MINUTES = 60  # Recorded load needed before its average fills slots no history covers (new installs, batpred#5548)
 CONFIG_ROOTS = ["/config", "/conf", "/homeassistant", "./"]
 TIME_FORMAT_HA = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_HA_TZ = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -165,12 +175,42 @@ PREDBAT_MODE_CONTROL_SOC = 1
 PREDBAT_MODE_CONTROL_CHARGE = 2
 PREDBAT_MODE_CONTROL_CHARGEDISCHARGE = 3
 
+# The states a run can end in, as execute.py writes them to predbat.status. Each can be followed by its
+# qualifiers - ", Hold for car", " (Holiday)", " [Freeze exporting]", " [Alert]". A run that raised a
+# warning records its state after it in square brackets ("Warn: ... [Exporting]"), and the History view
+# only reads a trailing bracket as the run's state when it starts with one of RUN_STATE_NAMES, as warning
+# text can end in brackets of its own. execute.py uses these names rather than literals so the two can't
+# drift apart: a state missing from RUN_STATE_NAMES would read as no state in History during a warning.
+RUN_STATE_DEMAND = "Demand"
+RUN_STATE_CHARGING = "Charging"
+RUN_STATE_FREEZE_CHARGING = "Freeze charging"
+RUN_STATE_HOLD_CHARGING = "Hold charging"
+RUN_STATE_EXPORTING = "Exporting"
+RUN_STATE_FREEZE_EXPORTING = "Freeze exporting"
+RUN_STATE_HOLD_EXPORTING = "Hold exporting"
+RUN_STATE_CROSS_CHARGING = "Cross-charging"
+RUN_STATE_HOLD_FOR_CAR = "Hold for car"
+RUN_STATE_HOLD_FOR_IBOOST = "Hold for iBoost"
+RUN_STATE_READ_ONLY = "Read-Only"
+RUN_STATE_CALIBRATION = "Calibration"
+
 # Predbat's core charge/export status strings, ordered most-active-first. Used two ways: execute.py
 # resolves one headline status across a multi-inverter fleet (#4446), and output.py breaks a tie when
 # a history slot's dominant state is ambiguous - e.g. an even split between two states (#4843). Both
 # need the same answer to "which of these two states is the more significant one to show".
-CHARGE_STATE_PRECEDENCE = ["Charging", "Freeze charging", "Hold charging"]
-EXPORT_STATE_PRECEDENCE = ["Exporting", "Freeze exporting", "Hold exporting"]
+CHARGE_STATE_PRECEDENCE = [RUN_STATE_CHARGING, RUN_STATE_FREEZE_CHARGING, RUN_STATE_HOLD_CHARGING]
+EXPORT_STATE_PRECEDENCE = [RUN_STATE_EXPORTING, RUN_STATE_FREEZE_EXPORTING, RUN_STATE_HOLD_EXPORTING]
+
+RUN_STATE_NAMES = [RUN_STATE_DEMAND] + CHARGE_STATE_PRECEDENCE + EXPORT_STATE_PRECEDENCE + [RUN_STATE_CROSS_CHARGING, RUN_STATE_HOLD_FOR_CAR, RUN_STATE_HOLD_FOR_IBOOST, RUN_STATE_READ_ONLY, RUN_STATE_CALIBRATION]
+
+# The status a run records when it completed but a component failed. predbat.py writes it and the
+# History view (output.split_status_warning) unwraps the run's own status back out of it, so both
+# read the wording from here.
+COMPONENT_ERROR_STATUS_PREFIX = "Error: Complete run status "
+COMPONENT_ERROR_STATUS_SUFFIX = " with component errors: "
+
+# Home Assistant rejects entity states over 255 characters
+STATUS_STATE_MAX_LENGTH = 255
 
 # A log text that repeats (an API response, an Intelligent slot list) is logged in full again after this long, so
 # the full text is never only in a rotated-out log file; in between it is logged as one short line
