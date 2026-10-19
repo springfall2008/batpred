@@ -747,9 +747,11 @@ class Compare:
         rate_export_base = copy.deepcopy(self.pb.rate_export)
         io_adjusted_base = copy.deepcopy(self.pb.io_adjusted)
         # The same rates before any saving session, free electricity, Axle or dispatch stamp, to recognise
-        # the existing tariff by (#5180) - taken now, as fetch_sensor_data() in run_single() rebuilds them
+        # the existing tariff by (#5180) - taken now, as fetch_sensor_data() in run_single() rebuilds them.
+        # rate_export_base is not reset in a cycle with no export rates, so it is only trusted when this cycle has some;
+        # an empty match falls back to the live table in fetch_rates(), as the import side already does
         rate_import_match = copy.deepcopy(self.pb.rate_import_no_io)
-        rate_export_match = copy.deepcopy(self.pb.rate_export_base)
+        rate_export_match = copy.deepcopy(self.pb.rate_export_base) if self.pb.rate_export else {}
         self.live_saving_state = {
             "import_minutes": set(self.pb.rate_import_saving_minutes),
             "export_minutes": set(self.pb.rate_export_saving_minutes),

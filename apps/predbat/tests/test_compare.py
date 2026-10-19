@@ -1170,10 +1170,17 @@ def test_compare(my_predbat):
             return [{"id": "mine", "name": "Mine"}]
         return real_get_arg(key, default, *args, **kwargs)
 
-    with patch.object(my_predbat, "get_arg", side_effect=t32_get_arg), patch.object(my_predbat, "rate_import_no_io", dict(import_clean)), patch.object(my_predbat, "rate_export_base", dict(export_clean)):
+    with patch.object(my_predbat, "get_arg", side_effect=t32_get_arg), patch.object(my_predbat, "rate_import_no_io", dict(import_clean)), patch.object(my_predbat, "rate_export_base", dict(export_clean)), patch.object(my_predbat, "rate_export", dict(export_live)):
         cmp.run_all(fetch_sensor=False)
     if match_kwargs != [(import_clean, export_clean)]:
         t32_errors.append("run_all() should pass run_single() the live rates without events, got {}".format(match_kwargs))
+
+    # A cycle with no export rates leaves rate_export_base on the previous cycle's table - it must not be used as the match
+    match_kwargs.clear()
+    with patch.object(my_predbat, "get_arg", side_effect=t32_get_arg), patch.object(my_predbat, "rate_import_no_io", dict(import_clean)), patch.object(my_predbat, "rate_export_base", dict(export_clean)), patch.object(my_predbat, "rate_export", {}):
+        cmp.run_all(fetch_sensor=False)
+    if match_kwargs != [(import_clean, {})]:
+        t32_errors.append("run_all() should not match against a stale rate_export_base when this cycle has no export rates, got {}".format(match_kwargs))
 
     if t32_errors:
         for error in t32_errors:
