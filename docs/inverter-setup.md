@@ -2844,6 +2844,7 @@ Useful flags:
 - `--region sunsynk|inteless` - select the API region (default `sunsynk`)
 - `--serial <sn>` - restrict to one inverter instead of every inverter on the account
 - `--dump-settings` - print the full settings object, useful for confirming the current work mode and slot layout against the app
+- `--automatic` - run `automatic_config()` on the first cycle and print every Predbat setting it binds, to check the bindings against your own account (writes nothing to the inverter)
 - `--write-test` - build a harmless self-use-at-floor schedule, show it, and offer to send it after confirmation - use this to verify a write actually reaches the inverter, and how long the dongle takes to apply it
 
 Check the dumped `soc`, `battery_power`, `grid_power`, `load_power` and `pv_power` readings against the Sunsynk app, and in particular note whether `battery_power` is positive while charging or while discharging - this sign convention has not been confirmed on real hardware and getting it wrong would invert Predbat's whole model of the battery. Please report your findings via a GitHub issue so the assumption can be confirmed or corrected.

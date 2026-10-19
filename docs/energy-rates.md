@@ -302,6 +302,9 @@ The following entries are required for the Kraken component in `apps.yaml`:
 
 Full details of what to configure are given in the [component documentation](components.md#kraken-energy-kraken)
 
+If you have an EV on a smart-charging tariff with Eon.Next (such as Next Drive Smart), Eon bills every half hour of a planned charging dispatch at the cheap rate whether or not the car charged in it, unlike Octopus Intelligent.
+With `kraken_provider: eon` Predbat prices dispatches that way automatically; see **intelligent_dispatch_billing** in the [car charging documentation](car-charging.md) to change it.
+
 ## Energidataservice Integration
 
 <https://github.com/MTrab/energidataservice>

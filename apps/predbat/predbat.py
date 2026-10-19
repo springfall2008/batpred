@@ -25,6 +25,7 @@ import traceback
 import gc
 import random
 import time
+import threading
 
 # from memory_profiler import profile
 
@@ -34,7 +35,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v9.4.1"
+THIS_VERSION = "v9.4.2"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
 from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, DEFAULT_PREDBAT_REPOSITORY
@@ -65,6 +66,8 @@ else:
     print("Running in compiled mode; skipping local file checks and auto-update.")
 
 from const import (
+    COMPONENT_ERROR_STATUS_PREFIX,
+    COMPONENT_ERROR_STATUS_SUFFIX,
     REPEAT_FULL_LOG_SECONDS,
     TIME_FORMAT,
     PREDICT_STEP,
@@ -367,8 +370,16 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.dashboard_values = {}
         self.prefix = self.args.get("prefix", "predbat")
         self.current_status = None
+        # The status sensor's state (unclamped) and detail as last written, so a repeated warning can keep both
+        self.status_state = None
+        self.status_detail = ""
+        # The state the last completed run carried out, with no warning text - the sensor's run_state attribute
+        self.status_run_state = None
         self.previous_status = None
         self.had_errors = False
+        self.status_warning = None
+        self.status_warning_debug = ""
+        self.status_lock = threading.RLock()
         self.plan_valid = False
         self.plan_preclip = None
         self.plan_last_updated = None
@@ -412,7 +423,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         # DC array size in kWp, capping the p90 cloud model's extrapolation. Auto-detected from the
         # forecast provider (see resolve_pv_array_kwp); 0 leaves the cap inert.
         self.pv_array_kwp = 0.0
-        self.load_scaling90 = 0.7
+        self.load_scaling90 = 0.9
         self.metric_future_rate_offset_import = 0.0
         self.metric_future_rate_offset_export = 0.0
         self.metric_inday_adjust_damping = 1.0
@@ -499,6 +510,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.car_charging_power = 0
         self.car_charging_power_configured = False
         self.io_adjusted = {}
+        # Bird-in-hand credit for a confirmed dispatch run and whether one is in force (io_confirmed_credit_update)
+        self.io_confirmed_credit = {}
+        self.io_confirmed_active = False
+        # One replan may take a same-cost plan once a run becomes boosted (should_replace_plan)
+        self.io_confirmed_tiebreak = False
         # Repeated Intelligent slot lists are logged briefly between full logs (rate_add_io_slots)
         self.io_slot_log_gate = RepeatLogGate(REPEAT_FULL_LOG_SECONDS)
         self.current_charge_limit = 0.0
@@ -559,6 +575,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.load_minutes = {}
         self.load_minutes_now = 0
         self.load_minutes_age = 0
+        self.load_minutes_source = None
         self.load_last_period = 0
         self.load_last_status = "baseline"
         self.dynamic_load_car_since = {}
@@ -575,6 +592,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.octopus_surplus = set()
         self.octopus_slots_planned = {}
         self.octopus_slots_held = {}
+        self.octopus_slots_held_saved = {}
+        self.dispatch_billing_warned = None
         self.battery_capacity_nominal = False
         self.battery_scaling_auto = False
         self.releases = {}
@@ -634,6 +653,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.pv_today = {}
         self.load_minutes = {}
         self.load_minutes_age = 0
+        self.load_minutes_source = None
         self.load_forecast = {}
         self.load_forecast_array = []
         self.pv_forecast_minute = {}
@@ -678,6 +698,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.pv_today = {}
         self.load_minutes = {}
         self.load_minutes_age = 0
+        self.load_minutes_source = None
         self.battery_temperature_charge_curve = {}
         self.battery_temperature_discharge_curve = {}
         self.battery_temperature_history = {}
@@ -1109,10 +1130,16 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 },
             )
 
+        # Published as the sensor's run_state attribute by whichever status write follows, and kept until the
+        # next run completes: a run that stops early, or a warning part way through one, leaves the inverter
+        # on this state.
+        self.status_run_state = status
+
         if self.had_errors:
             self.log("Error: Completed run status {} with Errors reported (check log)".format(status))
+            self.record_status_under_warning(status, status_extra)
         elif failed_components:
-            error_status = "Error: Complete run status {} with component errors: {}".format(status, ", ".join(failed_components))
+            error_status = COMPONENT_ERROR_STATUS_PREFIX + status + COMPONENT_ERROR_STATUS_SUFFIX + ", ".join(failed_components)
             self.log(error_status)
             self.record_status(
                 error_status,
@@ -1146,14 +1173,24 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                         soc_next = min(soc_next, self.car_charging_limit[car_n])
                     self.expose_config("car_charging_manual_soc_kwh" + car_postfix, dp3(soc_next))
 
-    def run_comparison(self):
-        """Run the tariff comparison, clearing compare_active afterwards even if it raises (#5472)."""
+    def run_comparison(self, status=None, status_extra=""):
+        """
+        Run the tariff comparison, clearing compare_active afterwards even if it raises (#5472).
+
+        status and status_extra are the run's final status, already recorded. The comparison runs after
+        that and re-reads sensors and rates, so it can record a warning that takes over the status
+        sensor; when it does, the run's state is added after it, as for a warning raised
+        during the run itself.
+        """
+        status_before = self.current_status
         # Without the finally, a crashed comparison leaves compare_active on and re-triggers itself every cycle
         self.expose_config("compare_active", True)
         try:
             self.comparison.run_all()
         finally:
             self.expose_config("compare_active", False)
+        if status is not None and self.current_status != status_before:
+            self.record_status_under_warning(status, status_extra)
 
     def update_pred(self, scheduled=True):
         """
@@ -1161,7 +1198,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         """
         recompute = False
         status_extra = ""
-        self.had_errors = False
+        self.reset_run_status()
 
         self.update_time()
         self.save_current_config()
@@ -1520,7 +1557,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         if self.comparison:
             if (scheduled and self.minutes_now < RUN_EVERY) or self.get_arg("compare_active", False):
                 # Compare tariffs either when triggered or daily at midnight
-                self.run_comparison()
+                self.run_comparison(status, status_extra)
             else:
                 # Otherwise just update HA sensors to prevent then expiring
                 self.comparison.publish_only()
@@ -2183,6 +2220,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.load_plan()
             # And the Octopus Intelligent dispatch state, so a restart part-way through a dispatch carries on from it
             self.dynamic_load_car_load()
+            # And the half hours Octopus Intelligent dispatches ran in, so they keep the dispatch rate
+            self.octopus_held_load()
 
         except Exception as e:
             self.log("Error: Exception raised {}".format(e))
