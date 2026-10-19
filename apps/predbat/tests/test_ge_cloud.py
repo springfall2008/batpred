@@ -11,7 +11,7 @@
 
 from gecloud import GECloudDirect, GECloudData, regname_to_ha
 from gecloud import GE_API_ACCOUNT, GE_API_DEVICES, GE_API_EVC_SEND_COMMAND, GE_API_INVERTER_WRITE_SETTING, GE_API_SITE
-from gecloud import GECloudTerminalError, SITE_MAX_AGE_MINUTES, parse_site_export_limit
+from gecloud import EVCCommandFailed, GECloudTerminalError, SITE_MAX_AGE_MINUTES, parse_site_export_limit
 from gecloud import DEVICE_REFRESH_SECONDS, SETTINGS_SLOW_REFRESH_SECONDS, find_ems_slot_overrides, normalise_register_time
 from utils import dp4
 import asyncio
@@ -57,12 +57,9 @@ class MockGECloudDirect(GECloudDirect):
         self.evc_sessions = {}
         self.evc_status_unknown = set()
         self.automatic_evc = False
+        # Off, the components.py default when apps.yaml does not mention it
         self.evc_control = False
-        self.evc_control_active = False
-        self.evc_control_enabled = True
-        self.evc_control_released = False
-        self.evc_control_state = {}
-        self.evc_control_windows = {}
+        self.charger_control_setup("GECloud", "EV charger", "gecloud", "evc_control_state", "evc_control_enabled", switch_prefix="gecloud")
         self.entity_states = {}
         self.entity_attributes = {}
         self.pending_writes = {}
@@ -131,7 +128,9 @@ class MockGECloudDirect(GECloudDirect):
         self.dashboard_items[entity_id] = {"state": state, "attributes": attributes}
 
     def get_arg(self, name, default=None, **kwargs):
-        """Mock get_arg"""
+        """Mock get_arg - set_read_only answers from the same flag as the read only switch, as it does in Predbat"""
+        if name == "set_read_only":
+            return self._read_only
         return self.config_args.get(name, default)
 
     def set_arg(self, name, value):
@@ -324,7 +323,9 @@ def test_ge_cloud(my_predbat=None):
         ("publish_registers_bracketed_options", _test_publish_registers_bracketed_options, "Publish registers with bracketed or unparseable option validation"),
         ("publish_evc_data", _test_publish_evc_data, "Publish EVC data"),
         ("automatic_config", _test_async_automatic_config, "Automatic config"),
+        ("grid_charge_only", _test_grid_charge_only, "Charge rate marked grid_charge_only on the 3-phase register set"),
         ("discovery_direct", _test_build_discovery_battery_only_direct, "build_discovery: single battery, direct composition"),
+        ("discovery_grid_charge_only", _test_build_discovery_grid_charge_only, "build_discovery: no Freeze Export on the 3-phase register set"),
         ("discovery_gateway", _test_build_discovery_gateway_composition, "build_discovery: gateway fronting multiple batteries"),
         ("discovery_ems", _test_build_discovery_ems_composition, "build_discovery: EMS composition"),
         ("discovery_pv_only", _test_build_discovery_pv_only_devices, "build_discovery: sensor-only PV devices"),
@@ -3456,7 +3457,7 @@ def _test_run_rediscovers_evc_devices(my_predbat):
             print("ERROR: EVC automatic config should re-run once, got {}".format(calls["automatic_evc"]))
             return 1
 
-        ge_cloud.evc_control_state["evc-1"] = "start"
+        ge_cloud.charger_control_state["evc-1"] = True
         api["evc"] = [{"uuid": "evc-2", "alias": "Second"}]
         _reset_rediscovery_calls(calls)
         await ge_cloud.run(seconds=DEVICE_REFRESH_SECONDS * 2, first=False)
@@ -3466,7 +3467,7 @@ def _test_run_rediscovers_evc_devices(my_predbat):
         if "evc-1" in calls["evc_polled"]:
             print("ERROR: the removed charger should not be polled, got {}".format(calls["evc_polled"]))
             return 1
-        for name in ("evc_device", "evc_data", "evc_sessions", "evc_control_state"):
+        for name in ("evc_device", "evc_data", "evc_sessions", "charger_control_state"):
             if "evc-1" in getattr(ge_cloud, name):
                 print("ERROR: {} should no longer hold the removed charger".format(name))
                 return 1
@@ -5543,6 +5544,93 @@ def _discovery_component(devices, settings=None, info=None, automatic=True):
     return ge
 
 
+# What a 3-phase GIV-3HY lists (#5082): percentage rates, no battery charge power and no Battery Pause
+GRID_CHARGE_ONLY_REGISTERS = {
+    1: {"name": "Charge Power Rate", "validation_rules": ["between:1,100"], "validation": "", "value": 100},
+    2: {"name": "Discharge Power Rate", "validation_rules": ["between:1,100"], "validation": "", "value": 100},
+    3: {"name": "Enable Force Discharge", "validation_rules": ["boolean"], "validation": "", "value": False},
+}
+
+
+def _test_grid_charge_only(my_predbat):
+    """The percentage charge rate entity is marked grid_charge_only only when the device has neither Battery Pause nor a battery charge power register (#5082)."""
+    from gecloud import charge_rate_grid_only
+
+    for names, expect in (
+        (["charge_power_rate", "discharge_power_rate"], True),
+        (["inverter_charge_power_percentage"], True),
+        # "discharge_power_rate" contains "charge_power_rate" and is not a charge rate
+        (["discharge_power_rate"], False),
+        (["charge_power_rate", "battery_charge_power"], False),
+        (["charge_power_rate", "pause_battery"], False),
+        (["battery_charge_power", "pause_battery"], False),
+        ([], False),
+    ):
+        if charge_rate_grid_only(names) is not expect:
+            print("ERROR: charge_rate_grid_only({}) expected {}".format(names, expect))
+            return 1
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        registers = copy.deepcopy(GRID_CHARGE_ONLY_REGISTERS)
+        ge_cloud.settings["test123"] = registers
+        await ge_cloud.publish_registers("test123", registers)
+        charge = ge_cloud.dashboard_items["number.predbat_gecloud_test123_charge_power_rate"]["attributes"]
+        discharge = ge_cloud.dashboard_items["number.predbat_gecloud_test123_discharge_power_rate"]["attributes"]
+        if charge.get("grid_charge_only") is not True or charge.get("unit_of_measurement") != "%":
+            print("ERROR: expected the percentage charge rate to be marked grid_charge_only, got {}".format(charge))
+            return 1
+        if "grid_charge_only" in discharge:
+            print("ERROR: the discharge rate must not be marked grid_charge_only, got {}".format(discharge))
+            return 1
+
+        # A single register refresh still sees the whole device, so the mark survives it
+        ge_cloud.dashboard_items.clear()
+        await ge_cloud.publish_registers("test123", registers, select_key=1)
+        charge = ge_cloud.dashboard_items["number.predbat_gecloud_test123_charge_power_rate"]["attributes"]
+        if charge.get("grid_charge_only") is not True:
+            print("ERROR: expected the mark to survive a single register refresh, got {}".format(charge))
+            return 1
+
+        # With Battery Pause the freeze is carried by the pause, so the rate is not marked
+        ge_cloud = MockGECloudDirect()
+        registers = copy.deepcopy(GRID_CHARGE_ONLY_REGISTERS)
+        registers[4] = {"name": "Pause Battery", "validation_rules": ["in:0,1,2,3"], "validation": "", "value": 0}
+        ge_cloud.settings["test123"] = registers
+        await ge_cloud.publish_registers("test123", registers)
+        charge = ge_cloud.dashboard_items["number.predbat_gecloud_test123_charge_power_rate"]["attributes"]
+        if "grid_charge_only" in charge:
+            print("ERROR: a device with Battery Pause must not be marked grid_charge_only, got {}".format(charge))
+            return 1
+        return 0
+
+    return run_async(test())
+
+
+def _test_build_discovery_grid_charge_only(my_predbat):
+    """The discovery record drops support_discharge_freeze for a device whose registers cannot hold a Freeze Export, and keeps it once Battery Pause is there (#5082)."""
+    devices = {"ems": None, "gateway": None, "battery": ["battery001"], "pv": [], "battery_meters": {}}
+    info = {"battery001": {"info": {"model": "GIV-3HY-11", "max_charge_rate": 11000, "battery": {"nominal_capacity": 100, "nominal_voltage": 51.2}}, "firmware_version": {"ARM": 616, "DSP": 616}}}
+    for extra, expect in (({}, False), ({4: {"name": "Pause Battery"}}, True)):
+        settings = {"battery001": copy.deepcopy(GRID_CHARGE_ONLY_REGISTERS)}
+        settings["battery001"].update(extra)
+        ge = _discovery_component(devices, settings=settings, info=info)
+        reports = []
+        ge.report_discovery = lambda report: reports.append(report)
+
+        result = run_async(ge.run(seconds=0, first=True))
+
+        assert result is True, "run() should succeed"
+        capabilities = reports[0]["inverters"][0]["capabilities"]
+        assert len(capabilities) == 7 and capabilities["support_discharge_freeze"] is expect, (extra, capabilities)
+        assert capabilities["support_charge_freeze"] is True, capabilities
+    # The override is on a copy of the type's row
+    from gecloud import GE_CLOUD_CAPABILITIES
+
+    assert GE_CLOUD_CAPABILITIES["GEC"]["support_discharge_freeze"] is True
+    return 0
+
+
 def _test_build_discovery_battery_only_direct(my_predbat):
     """A single battery with no gateway or EMS yields one direct-composition inverter record."""
     devices = {"ems": None, "gateway": None, "battery": ["battery001"], "pv": [], "battery_meters": {}}
@@ -6007,8 +6095,9 @@ def _test_discovery_record_two_devices(my_predbat):
     """
     Two inverters give two records whose entity ids differ by device, each describing its own device
     (spec D10). automatic_config()'s "any device has it" gate binds the pause and discharge-target
-    entities on the second device although it has no such registers, and withholds its percentage
-    rate controls because the first device has a power register; the record does neither.
+    entities on the second device although it has no such registers; the record does not. The
+    percentage rate controls are bound per device by both: the second device has no power register,
+    so it gets its percentage rate while the first keeps its power register (#5359).
     """
     devices = {"ems": None, "gateway": None, "battery": ["battery001", "battery002"], "pv": [], "battery_meters": {"battery001": [1001], "battery002": [1002]}}
     settings = {
@@ -6027,9 +6116,11 @@ def _test_discovery_record_two_devices(my_predbat):
     assert not (_entity_ids(records[0]) & _entity_ids(records[1])), "the two records must not share an entity"
     captured = capture_automatic_config(ge)
     _agree_at(records[0], captured, 0)
-    _agree_at(records[1], captured, 1, missing=("pause_mode", "pause_start_time", "pause_end_time", "discharge_target_soc"), allowed_extra=("charge_rate_percent", "discharge_rate_percent"))
+    _agree_at(records[1], captured, 1, missing=("pause_mode", "pause_start_time", "pause_end_time", "discharge_target_soc"))
     assert captured["pause_mode"][1] == "select.predbat_gecloud_battery002_pause_battery", "automatic_config's fleet gate binds pause on the second device"
-    assert captured["charge_rate_percent"] is None, "automatic_config's fleet gate withholds the percentage rates"
+    assert captured["charge_rate_percent"] == [None, "number.predbat_gecloud_battery002_inverter_charge_power_percentage"], "the percentage charge rate is bound for the device with no power register only"
+    assert captured["discharge_rate_percent"] == [None, "number.predbat_gecloud_battery002_inverter_discharge_power_percentage"], "the percentage discharge rate likewise"
+    assert captured["charge_rate"][1] is None and captured["charge_rate"][0] is not None, "the power register is bound for the device that has it only"
     second = records[1]["entities"]
     assert second["reserve"]["entity_id"] == "number.predbat_gecloud_battery002_battery_reserve_percent", "the per-device candidate choice"
     assert second["scheduled_charge_enable"]["entity_id"] == "switch.predbat_gecloud_battery002_enable_ac_charge"
@@ -6324,17 +6415,23 @@ def _test_evc_control(my_predbat):
         outside = tz.localize(datetime(2026, 8, 23, 6, 0))
         plan = {EVC_PLAN_SENSOR: {"planned": [{"start": "08-22 23:00:00", "end": "08-23 05:00:00"}]}}
 
-        # Test 1: control stays off unless it is asked for
+        # Test 1: control is off by default, and ge_cloud_automatic_evc alone does not turn it on
         ge = MockGECloudDirect()
         ge.automatic_evc = True
         ge.evc_control_enable()
-        assert ge.evc_control_active is False, "Control should be off without ge_cloud_evc_control"
+        assert ge.charger_control_active is False, "ge_cloud_automatic_evc alone must not turn charger control on"
+        assert not any("Warn" in message for message in ge.log_messages), "Control that was never asked for is not warned about"
+        ge = MockGECloudDirect()
+        ge.automatic_evc = True
+        ge.evc_control = True
+        ge.evc_control_enable()
+        assert ge.charger_control_active is True, "ge_cloud_evc_control: true with ge_cloud_automatic_evc turns control on"
 
-        # Test 2: and refuses to run without the auto-config that maps chargers to cars
+        # Test 2: an explicit request refuses to run without the auto-config that maps chargers to cars
         ge = MockGECloudDirect()
         ge.evc_control = True
         ge.evc_control_enable()
-        assert ge.evc_control_active is False, "Control needs ge_cloud_automatic_evc to know which charger is which car"
+        assert ge.charger_control_active is False, "Control needs ge_cloud_automatic_evc to know which charger is which car"
         assert any("ge_cloud_automatic_evc" in message for message in ge.log_messages), "The reason control is off should be logged"
 
         # Test 3: a planned window starts the charger, and is not re-sent every poll
@@ -6344,27 +6441,27 @@ def _test_evc_control(my_predbat):
         ge.evc_device = {"evc-001": {"serial_number": "EVC100", "status": "charging"}}
         ge.entity_attributes = plan
 
-        await ge.evc_control_charge(inside)
+        await ge.charger_control_apply(inside)
         assert commands == [("evc-001", "start-charge")], "A planned window should start the charge, got {}".format(commands)
 
         commands.clear()
-        await ge.evc_control_charge(inside)
+        await ge.charger_control_apply(inside)
         assert commands == [], "The same state should not be re-sent, got {}".format(commands)
 
         # Test 4: outside the window the charger is stopped
         commands.clear()
-        await ge.evc_control_charge(outside)
+        await ge.charger_control_apply(outside)
         assert commands == [("evc-001", "stop-charge")], "Outside a window the charge should stop, got {}".format(commands)
 
         # Test 5: read only mode hands the charger back, once
         commands.clear()
         ge._read_only = True
-        await ge.evc_control_tick(outside)
+        await ge.charger_control_tick(outside)
         assert commands == [("evc-001", "start-charge")], "Releasing should hand a stopped charger back, got {}".format(commands)
-        assert ge.evc_control_released is True, "The release should be remembered"
+        assert ge.charger_control_released is not None, "The release should be remembered"
 
         commands.clear()
-        await ge.evc_control_tick(outside)
+        await ge.charger_control_tick(outside)
         assert commands == [], "A release should happen once, not every cycle"
 
         # Test 6: turning the control switch off releases in the same way
@@ -6373,12 +6470,40 @@ def _test_evc_control(my_predbat):
         ge.evc_device_list = ["evc-001"]
         ge.evc_device = {"evc-001": {"serial_number": "EVC100", "status": "charging"}}
         ge.entity_attributes = plan
-        await ge.evc_control_charge(outside)
+        await ge.charger_control_apply(outside)
         commands.clear()
         await ge.switch_event("switch.predbat_gecloud_evc_control", "turn_off")
-        assert ge.evc_control_enabled is False, "The switch should turn control off"
-        await ge.evc_control_tick(outside)
+        assert ge.charger_control_enabled is False, "The switch should turn control off"
+        await ge.charger_control_tick(outside)
         assert commands == [("evc-001", "start-charge")], "Switching control off should release the charger, got {}".format(commands)
+
+        # Test 6b: the guest charging switch releases in the same way, and ends when the guest unplugs -
+        # but not when the owner's car, on the charger when it went on, is unplugged to make way
+        commands = []
+        ge = _evc_control_component(commands)
+        ge.evc_device_list = ["evc-001"]
+        ge.evc_device = {"evc-001": {"serial_number": "EVC100", "status": "charging"}}
+        ge.entity_attributes = plan
+        await ge.charger_control_apply(outside)
+        commands.clear()
+        await ge.switch_event("switch.predbat_gecloud_guest_charging", "turn_on")
+        assert ge.charger_control_guest is True, "The guest switch should turn guest charging on"
+        await ge.charger_control_tick(outside)
+        assert commands == [("evc-001", "start-charge")], "Guest charging should release the charger, got {}".format(commands)
+        ge.evc_device["evc-001"]["status"] = "idle"
+        await ge.charger_control_tick(outside)
+        assert ge.charger_control_guest is True, "The owner's car being unplugged should not end guest charging"
+        ge.evc_device["evc-001"]["status"] = "charging"
+        await ge.charger_control_tick(outside)
+        # A comms blip is not an unplug
+        ge.evc_device["evc-001"]["status"] = "Unavailable"
+        await ge.charger_control_tick(outside)
+        assert ge.charger_control_guest is True, "An unavailable status should not end guest charging"
+        ge.evc_device["evc-001"]["status"] = "charging"
+        await ge.charger_control_tick(outside)
+        ge.evc_device["evc-001"]["status"] = "idle"
+        await ge.charger_control_tick(outside)
+        assert ge.charger_control_guest is False, "Unplugging the guest's car should end guest charging"
 
         # Test 7: nothing is commanded while no car is plugged in
         commands = []
@@ -6386,7 +6511,7 @@ def _test_evc_control(my_predbat):
         ge.evc_device_list = ["evc-001"]
         ge.evc_device = {"evc-001": {"serial_number": "EVC100", "status": "idle"}}
         ge.entity_attributes = plan
-        await ge.evc_control_charge(inside)
+        await ge.charger_control_apply(inside)
         assert commands == [], "An empty charger should not be commanded, got {}".format(commands)
 
         # Test 8: nothing is commanded before Predbat has published a plan, so a restart
@@ -6395,7 +6520,7 @@ def _test_evc_control(my_predbat):
         ge = _evc_control_component(commands)
         ge.evc_device_list = ["evc-001"]
         ge.evc_device = {"evc-001": {"serial_number": "EVC100", "status": "charging"}}
-        await ge.evc_control_charge(inside)
+        await ge.charger_control_apply(inside)
         assert commands == [], "With no plan published nothing should be commanded, got {}".format(commands)
 
         # Test 9: charger N is car N by serial order, matching the automatic configuration
@@ -6408,7 +6533,7 @@ def _test_evc_control(my_predbat):
         }
         ge.entity_attributes = {EVC_PLAN_SENSOR: plan[EVC_PLAN_SENSOR], EVC_PLAN_SENSOR_CAR_1: {"planned": []}}
 
-        await ge.evc_control_charge(inside)
+        await ge.charger_control_apply(inside)
         assert sorted(commands) == sorted([("evc-second", "start-charge"), ("evc-first", "stop-charge")]), "The lower serial should be car 0, got {}".format(commands)
 
         # Test 10: a charger with no car index yet is left alone rather than stopped.
@@ -6423,8 +6548,51 @@ def _test_evc_control(my_predbat):
         }
         ge.entity_attributes = {EVC_PLAN_SENSOR: plan[EVC_PLAN_SENSOR]}
 
-        await ge.evc_control_charge(inside)
+        await ge.charger_control_apply(inside)
         assert commands == [("evc-first", "start-charge")], "Only the charger with a car should be commanded, got {}".format(commands)
+
+        # Test 11: a command GE Cloud refuses is not recorded as sent, so it is tried again
+        commands = []
+        ge = _evc_control_component(commands)
+        ge.evc_device_list = ["evc-001"]
+        ge.evc_device = {"evc-001": {"serial_number": "EVC100", "status": "charging"}}
+        ge.entity_attributes = plan
+        refused = []
+
+        async def refuse(uuid, command, params):
+            """Refuse the command, as async_send_evc_command reports it: None."""
+            refused.append((uuid, command))
+            return None
+
+        real_send = ge.async_send_evc_command
+        ge.async_send_evc_command = refuse
+        try:
+            await ge.charger_control_apply(outside)
+            assert False, "A refused command should raise"
+        except EVCCommandFailed:
+            pass
+        assert ge.charger_control_state == {}, "A refused stop must not be recorded, got {}".format(ge.charger_control_state)
+
+        ge.async_send_evc_command = real_send
+        await ge.charger_control_apply(outside)
+        assert commands == [("evc-001", "stop-charge")], "The stop should be retried, got {}".format(commands)
+
+        # Test 12: a refused release is not latched as done, so the stopped charger is not stranded
+        commands.clear()
+        ge._read_only = True
+        ge.async_send_evc_command = refuse
+        try:
+            await ge.charger_control_tick(outside)
+            assert False, "A refused release should raise"
+        except EVCCommandFailed:
+            pass
+        assert ge.charger_control_released is None, "A refused release must not be recorded as done"
+        assert ge.charger_control_state == {"evc-001": False}, "Predbat still holds the stopped charger"
+
+        ge.async_send_evc_command = real_send
+        await ge.charger_control_tick(outside)
+        assert commands == [("evc-001", "start-charge")], "The release should be retried, got {}".format(commands)
+        assert ge.charger_control_released is not None
 
         return 0
 

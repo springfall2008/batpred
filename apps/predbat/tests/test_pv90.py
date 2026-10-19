@@ -9,6 +9,7 @@
 
 """Tests for the pv90 upside forecast scenario."""
 
+from config import CONFIG_ITEMS
 from const import PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90
 from tests.test_infra import reset_inverter, reset_rates
 
@@ -33,7 +34,7 @@ def test_pv90_config_items(my_predbat):
     failed = False
     expected = {
         "pv_metric90_weight": {"default": 0.15, "min": 0, "max": 1.0, "step": 0.01},
-        "load_scaling90": {"default": 0.7, "min": 0, "max": 2.0, "step": 0.01},
+        "load_scaling90": {"default": 0.9, "min": 0, "max": 2.0, "step": 0.01},
     }
     by_name = {item["name"]: item for item in my_predbat.CONFIG_ITEMS}
     for name, want in expected.items():
@@ -62,7 +63,7 @@ def test_pv90_calculate_pv90_plan_config_item(my_predbat):
     performance_tweaks alongside the other fast-path options: a user on slow hardware turns that toggle on
     to reveal it and can then switch PV90 off. While the toggle is off the item is disabled, get_arg falls
     through to this default, and the feature stays on. The two tuning knobs (pv_metric90_weight,
-    load_scaling90) remain expert-gated, so everyone running PV90 runs the same 0.15/0.7 values.
+    load_scaling90) remain expert-gated, so an install without expert mode runs the shipped 0.15/0.9 values.
     """
     failed = False
     by_name = {item["name"]: item for item in my_predbat.CONFIG_ITEMS}
@@ -112,7 +113,7 @@ def test_pv90_config_read(my_predbat):
         my_predbat.config_index["expert_mode"]["value"] = True
         my_predbat.config_index["calculate_pv90_plan"]["value"] = True
         my_predbat.fetch_config_options()
-        for name, default in (("pv_metric90_weight", 0.15), ("load_scaling90", 0.7)):
+        for name, default in (("pv_metric90_weight", 0.15), ("load_scaling90", 0.9)):
             value = getattr(my_predbat, name, None)
             if value != default:
                 print("ERROR: {} is {} after fetch_config_options, expected the default {} (sentinel {} was not overwritten - the get_arg read is missing)".format(name, value, default, sentinel))
@@ -434,8 +435,9 @@ def test_pv90_load_scaling_clamp_invariant(my_predbat):
     an attribute-level assertion would pass for them while the scenarios were silently inverted.
 
     Two violating configurations are exercised, one per side. load_scaling90 (0.7) above load_scaling (0.5)
-    is the pv90-side inversion, and exactly the numbers coverage/cases/predbat_debug_agile1.yaml hits - it
-    made pv90 carry 40% MORE load than nominal, a harsher case than pv10. load_scaling (2.0) above
+    is the pv90-side inversion, and exactly the numbers coverage/cases/predbat_debug_agile1.yaml hit under the
+    0.7 default that applied before #5566 - it made pv90 carry 40% MORE load than nominal, a harsher case than
+    pv10. load_scaling (2.0) above
     load_scaling10 (1.1) is the symmetric pv10-side inversion, which predates the PV90 work.
     """
     failed = False
@@ -470,13 +472,31 @@ def test_pv90_load_scaling_clamp_invariant(my_predbat):
     return failed
 
 
+def _shipped_load_scalings():
+    """Return the shipped defaults of (load_scaling, load_scaling10, load_scaling90).
+
+    Read from config.CONFIG_ITEMS rather than written out as literals, so the tests that use them follow a
+    change of default (0.7 to 0.9 for load_scaling90 in #5566) instead of silently testing the old one. The
+    module-level list is used, not the instance copy, because load_user_config() replaces an instance item's
+    default with any apps.yaml value, so the instance copy is not guaranteed to hold the shipped default.
+    """
+    by_name = {item["name"]: item for item in CONFIG_ITEMS}
+    return by_name["load_scaling"]["default"], by_name["load_scaling10"]["default"], by_name["load_scaling90"]["default"]
+
+
 def test_pv90_load_scaling_clamp_is_a_noop_at_defaults(my_predbat):
-    """At the shipped defaults (1.05 / 1.1 / 0.7) the ordering already holds, so the clamp must change nothing.
+    """At the shipped defaults (read from CONFIG_ITEMS) the ordering already holds, so the clamp must change nothing.
 
     A clamp that quietly altered values nobody needed clamped would be its own regression, and it would show
-    up as the pv90 and pv10 load totals collapsing onto nominal rather than sitting either side of it.
+    up as the pv90 and pv10 load totals collapsing onto nominal rather than sitting either side of it. The
+    defaults are also required to keep load_scaling90 strictly below load_scaling: equal values would pass the
+    clamp untouched but leave the PV90 scenario modelling no lighter-load day at all.
     """
     failed = False
+    default_ls, default_ls10, default_ls90 = _shipped_load_scalings()
+    if not (default_ls90 < default_ls <= default_ls10):
+        print("ERROR: shipped defaults load_scaling90 {} / load_scaling {} / load_scaling10 {} are not ordered load_scaling90 < load_scaling <= load_scaling10".format(default_ls90, default_ls, default_ls10))
+        failed = True
     saved = {name: getattr(my_predbat, name, None) for name in ("load_scaling", "load_scaling10", "load_scaling90", "load_minutes", "load_forecast_only", "metric_load_divergence_enable")}
     try:
         my_predbat.load_forecast_only = False
@@ -488,9 +508,9 @@ def test_pv90_load_scaling_clamp_is_a_noop_at_defaults(my_predbat):
         # This test is about the clamp, not about divergence.
         my_predbat.metric_load_divergence_enable = False
         my_predbat.load_minutes = {minute: (1440 - minute) * 0.02 for minute in range(0, 1441)}
-        my_predbat.load_scaling = 1.05
-        my_predbat.load_scaling10 = 1.1
-        my_predbat.load_scaling90 = 0.7
+        my_predbat.load_scaling = default_ls
+        my_predbat.load_scaling10 = default_ls10
+        my_predbat.load_scaling90 = default_ls90
         my_predbat.plan_valid = False
         my_predbat.calculate_plan(recompute=True)
         total = sum(my_predbat.load_minutes_step.values())
@@ -499,7 +519,7 @@ def test_pv90_load_scaling_clamp_is_a_noop_at_defaults(my_predbat):
         if total <= 0:
             print("ERROR: nominal load total is {} - the check would be vacuous".format(total))
             return True
-        for name, got, want in (("pv10", total10, total * 1.1 / 1.05), ("pv90", total90, total * 0.7 / 1.05)):
+        for name, got, want in (("pv10", total10, total * default_ls10 / default_ls), ("pv90", total90, total * default_ls90 / default_ls)):
             if abs(got - want) > max(want * 0.001, 1e-6):
                 print("ERROR: {} load total is {} at the defaults, expected {} - the clamp altered a value that was already in range".format(name, got, want))
                 failed = True
@@ -525,9 +545,10 @@ def test_pv90_load_scaling_ordering_holds_with_divergence(my_predbat):
     try:
         my_predbat.load_forecast_only = False
         my_predbat.load_minutes = {minute: (1440 - minute) * 0.02 for minute in range(0, 1441)}
-        my_predbat.load_scaling = 1.05
-        my_predbat.load_scaling10 = 1.1
-        my_predbat.load_scaling90 = 0.7
+        default_ls, default_ls10, default_ls90 = _shipped_load_scalings()
+        my_predbat.load_scaling = default_ls
+        my_predbat.load_scaling10 = default_ls10
+        my_predbat.load_scaling90 = default_ls90
         my_predbat.plan_valid = False
         my_predbat.calculate_plan(recompute=True)
         total = sum(my_predbat.load_minutes_step.values())
@@ -541,7 +562,7 @@ def test_pv90_load_scaling_ordering_holds_with_divergence(my_predbat):
             failed = True
         # Each scenario should still sit near its scaling ratio - modulation redistributes, it does
         # not rescale, so a drift of more than a few percent means something else moved
-        for name, got, want in (("pv10", total10, total * 1.1 / 1.05), ("pv90", total90, total * 0.7 / 1.05)):
+        for name, got, want in (("pv10", total10, total * default_ls10 / default_ls), ("pv90", total90, total * default_ls90 / default_ls)):
             if abs(got - want) > want * 0.05:
                 print("ERROR: {} load total is {} with divergence active, expected near {} - modulation should redistribute, not rescale".format(name, got, want))
                 failed = True

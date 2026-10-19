@@ -547,8 +547,8 @@ def test_calc_pv_light_dark(my_predbat):
 def test_fetch_pv_forecast_and_dawn(my_predbat):
     """
     Regression test for #4699: calc_pv_light_dark() must see the freshly-fetched PV forecast, not
-    the empty dict fetch_sensor_data() resets pv_forecast_minute to at the top of each cycle. The
-    original bug was an ordering mistake between two separate lines in fetch_sensor_data() - the
+    whatever pv_forecast_minute held before it (an empty dict when #4699 was fixed; last cycle's
+    forecast since #4317 stopped fetch_sensor_data() resetting it). The original bug was an ordering mistake between two separate lines in fetch_sensor_data() - the
     forecast was fetched further down, after the dawn split had already run against the stale
     reset. fetch_pv_forecast_and_dawn() now does both as one call, so this test exercises that real
     method (mocking only fetch_pv_forecast, its one external dependency) rather than reimplementing
@@ -566,8 +566,8 @@ def test_fetch_pv_forecast_and_dawn(my_predbat):
     my_predbat.plan_interval_minutes = 30
     my_predbat.combine_charge_slots = True
     my_predbat.minutes_now = 30
-    # Simulate the state fetch_sensor_data() resets to at the top of each cycle, before this call
-    my_predbat.pv_forecast_minute = {}
+    # Last cycle's forecast, all dark, so a split computed from it instead of the fetch shows up
+    my_predbat.pv_forecast_minute = {m: 0.0 for m in range(0, 60, 5)}
 
     fetched_forecast = {}
     for m in range(0, 30, 5):

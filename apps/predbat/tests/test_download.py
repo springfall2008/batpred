@@ -8,6 +8,7 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+import asyncio
 import os
 import io
 import sys
@@ -115,6 +116,7 @@ def test_download(my_predbat):
         ("predbat_main_repo_override", _test_predbat_download_main_uses_configured_repository, "Predbat main update uses configured repository override"),
         ("predbat_tag_repo_upstream", _test_predbat_download_tag_uses_default_repository, "Predbat tagged update always uses upstream repository"),
         ("predbat_startup_pins_upstream", _test_predbat_startup_self_check_uses_default_repository, "Predbat startup self-check pins repository to upstream"),
+        ("update_event_install", _test_update_event_install_entity_forms, "update.install installs the latest version for a string or list entity_id"),
     ]
 
     print("\n" + "=" * 70)
@@ -1810,4 +1812,33 @@ def _test_predbat_startup_self_check_uses_default_repository(my_predbat):
 
     assert mock_update_download.called
     assert mock_update_download.call_args.kwargs.get("repository") == DEFAULT_PREDBAT_REPOSITORY
+    return 0
+
+
+def _test_update_event_install_entity_forms(my_predbat):
+    """Test update_event installs the latest release whether entity_id is a string or a list (as the HA update card sends it)."""
+    from userinterface import UserInterface
+
+    class DummyPredBat:
+        def __init__(self):
+            self.releases = {"latest": "v9.9.9"}
+            self.installed = []
+
+        def log(self, *_args, **_kwargs):
+            return None
+
+        async def async_download_predbat_version(self, version):
+            self.installed.append(version)
+            return True
+
+    cases = [
+        ("update.predbat_version", ["v9.9.9"]),
+        (["update.predbat_version"], ["v9.9.9"]),
+        (["update.other_update"], []),
+    ]
+    for entity_id, expected in cases:
+        dummy = DummyPredBat()
+        data = {"domain": "update", "service": "install", "service_data": {"entity_id": entity_id}}
+        asyncio.run(UserInterface.update_event(dummy, "install", data, None))
+        assert dummy.installed == expected, "entity_id {} installed {} expected {}".format(entity_id, dummy.installed, expected)
     return 0
