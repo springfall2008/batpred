@@ -156,6 +156,11 @@ IO_ADJUST_MAX_DISCOUNT = 3.0  # Maximum pence discount applied to the earliest I
 IO_ADJUST_MAX_PENALTY = 10.0  # Maximum pence penalty applied to the latest IOG slots
 IO_ADJUST_DISCOUNT_HORIZON_HOURS = 3.0  # Only discount IOG slots that start within this many hours of now
 
+# Octopus Intelligent "bird in hand" credit (see io_confirmed_credit_update()): score only, pence per kWh
+# stored in the current half hour of the dispatch run a car is charging in, divided by 1 + n for the nth half hour after
+# it. Kept well below any real price step so it only settles ties.
+IO_CONFIRMED_CREDIT = 0.1
+
 
 def slots_around(target_slots, slot_lengths):
     """
@@ -555,6 +560,61 @@ class Plan:
         dispatch off-peak whether the car charges in it or not, so there is nothing to cancel (GH#5521).
         """
         return self.octopus_intelligent_dynamic and self.dynamic_load_car_is_octopus(car_n) and not self.dispatch_billing_window()
+
+    def io_confirmed_credit_update(self, save=True):
+        """
+        Build io_confirmed_credit, the "bird in hand" credit the prediction gives the battery for charging in
+        the dispatch run a car is charging in now: {minute: pence per kWh stored}, empty when there is none.
+
+        A dispatch only makes the house cheap if the car really charges in it, and the car can be unplugged at
+        any time, so the half hour it is charging in now is the one certain part of the run. Charging there
+        scored the same as waiting for the fixed off-peak window when the battery looked able to wait, so the
+        planner waited and a house could run out first.
+
+        The run is boosted while a car is in one of its dispatches and the dispatch check has not cancelled it
+        (dynamic_load_car_effective) - the same decision that shows a cancelled slot with a "?". With
+        octopus_intelligent_trust_slots Off that means the car has been seen charging in it; where the check
+        does not apply (octopus_intelligent_dynamic Off, or the window billing rule) it means the dispatch has
+        started.
+
+        The run is the minutes from now that a dispatch made cheap (io_adjusted): a dispatch inside the fixed
+        off-peak window risks nothing. The credit is IO_CONFIRMED_CREDIT for the current half hour, divided by
+        1 + n for the nth after it, so the charge lands where it is least likely to vanish. It is score only
+        (metric_keep): cost is never touched, so a genuinely cheaper slot still wins.
+
+        Returns True when a run has just become boosted, so the fetch asks for a replan: with
+        octopus_intelligent_trust_slots On nothing else does, as a trusted dispatch starting changes no rates.
+        The incumbent plan was optimised without the credit, which is far smaller than
+        metric_min_improvement_plan, so io_confirmed_tiebreak lets should_replace_plan() take a plan that costs
+        no more on that one replan. Later replans compare two plans both scored with the credit, so the usual
+        hysteresis applies and the plan is not replaced every cycle of the run. With save False (compare.py)
+        the credit is built but the state is not advanced.
+        """
+        minute = self.dynamic_load_car_minute(self.now_utc_real)
+        boosted = any(self.dynamic_load_car_is_octopus(car_n) and not self.dynamic_load_car_effective.get(car_n, False) and self.dynamic_load_car_dispatch(car_n, minute) is not None for car_n in range(self.num_cars))
+
+        credit = {}
+        if boosted:
+            period_start = (self.minutes_now // 30) * 30
+            run_minute = self.minutes_now
+            while self.io_adjusted.get(run_minute, False) and run_minute < self.minutes_now + self.forecast_minutes:
+                credit[run_minute] = IO_CONFIRMED_CREDIT / (1 + (run_minute - period_start) // 30)
+                run_minute += 1
+        self.io_confirmed_credit = credit
+
+        active = bool(credit)
+        if not save:
+            return False
+        newly = active and not self.io_confirmed_active
+        if active != self.io_confirmed_active:
+            if active:
+                self.log("Octopus Intelligent: car charging in its dispatch, preferring battery charge in the run to {}".format(self.time_abs_str(max(credit) + 1)))
+            else:
+                self.log("Octopus Intelligent: dispatch run over or cancelled, no longer preferring battery charge in it")
+            self.io_confirmed_active = active
+        if newly:
+            self.io_confirmed_tiebreak = True
+        return newly
 
     def dynamic_load_car_strip_from(self, car_n):
         """
@@ -1795,18 +1855,26 @@ class Plan:
             prev_mode = mode
         return segments
 
-    def should_replace_plan(self, metric_prev, metric_new, fragmentation_prev, fragmentation_new):
+    def should_replace_plan(self, metric_prev, metric_new, fragmentation_prev, fragmentation_new, cost_prev=None, cost_new=None):
         """Decide whether to adopt the freshly optimised plan over the incumbent.
 
         The new plan is adopted when it is better by at least metric_min_improvement_plan (the existing
         anti-jitter behaviour). On a near-tie within that band it is also adopted when it is no worse on cost
         and strictly less fragmented, so a cleaner single export block can replace a locked-in split schedule
         without churning the plan for tiny cost changes. Lower metric is better, so improvement is prev - new.
+
+        On the first replan after a dispatch run becomes boosted (io_confirmed_tiebreak, see
+        io_confirmed_credit_update()) a near-tie is also won by a plan that scores better and costs no more
+        (cost_prev/cost_new, to a hundredth of a penny): the incumbent was optimised before the score-only
+        credit existed, and the credit is far smaller than the band, so it would otherwise never take effect.
+        Only that once - later in the run both plans carry the credit, and the band keeps the plan steady.
         """
         improvement = metric_prev - metric_new
         if improvement >= self.metric_min_improvement_plan:
             return True
         if improvement >= 0 and fragmentation_new < fragmentation_prev:
+            return True
+        if self.io_confirmed_tiebreak and improvement > 0 and cost_prev is not None and cost_new is not None and dp2(cost_new) <= dp2(cost_prev):
             return True
         return False
 
@@ -2284,7 +2352,7 @@ class Plan:
                 self.log("Previous plan best metric is {} (cost {}) and new plan best metric is {} (cost {})".format(dp2(metric_prev), dp2(cost_prev), dp2(metric), dp2(cost)))
                 fragmentation_prev = self.plan_fragmentation(score_prev[1], score_prev[0], score_prev[2], score_prev[3])
                 fragmentation_new = self.plan_fragmentation(score_new[1], score_new[0], score_new[2], score_new[3])
-                if not self.should_replace_plan(metric_prev, metric, fragmentation_prev, fragmentation_new):
+                if not self.should_replace_plan(metric_prev, metric, fragmentation_prev, fragmentation_new, cost_prev=cost_prev, cost_new=cost):
                     self.log("New plan metric is not significantly better (metric_min_improvement_plan {}) than previous plan, using previous plan".format(self.metric_min_improvement_plan))
                     self.charge_window_best = clone_windows(charge_window_best_prev)
                     self.charge_limit_best = charge_limit_best_prev.copy()
@@ -2295,11 +2363,15 @@ class Plan:
                     preclip_new = preclip_prev
                 elif (metric_prev - metric) >= self.metric_min_improvement_plan:
                     self.log("New plan metric is significantly better from previous plan, using new plan")
+                elif fragmentation_new >= fragmentation_prev:
+                    self.log("New plan costs no more and prefers the Intelligent dispatch run now in hand, using new plan")
                 else:
                     self.log("New plan is a cost-neutral improvement but less fragmented ({} vs {} segments), using new plan".format(fragmentation_new, fragmentation_prev))
 
             # Carry the pre-clip snapshot of whichever plan we kept into the next cycle
             self.plan_preclip = preclip_new
+            # The plan now in force has been weighed with the bird-in-hand credit, so its one-off tie-break is spent
+            self.io_confirmed_tiebreak = False
 
             # Plan is now valid
             self.log("Plan valid is now true after recompute was {}".format(self.plan_valid))
