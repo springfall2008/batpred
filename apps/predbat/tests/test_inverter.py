@@ -1186,6 +1186,49 @@ def test_create_missing_arg_keeps_inverter_0_single_value(test_name, my_predbat)
     return 1 if failed else 0
 
 
+def test_reserve_max_per_inverter_list(test_name, my_predbat):
+    """
+    inverter_reserve_max as a per-inverter list (what validate_config() requires on 2+ inverters) gives each inverter its own entry.
+
+    Read without an index the whole list reached the int coercion in get_arg(), which logged
+    "Return bad int value [98, 95]", flagged the run as "with Errors" every cycle and fell back to
+    100, so the cap was silently lost (#5369). A single value must still apply as before.
+    """
+    failed = False
+    print(f"**** Running Test: {test_name} ****")
+
+    saved_args = copy.deepcopy(my_predbat.args)
+    saved_arg_errors = copy.deepcopy(getattr(my_predbat, "arg_errors", {}))
+    try:
+        my_predbat.args["num_inverters"] = 2
+        my_predbat.args["inverter_type"] = ["GE", "GE"]
+        my_predbat.args["inverter_reserve_max"] = [98, 95]
+
+        inv0 = Inverter(my_predbat, 0, quiet=True)
+        inv1 = Inverter(my_predbat, 1, quiet=True)
+        if (inv0.reserve_max, inv1.reserve_max) != (98, 95):
+            print("ERROR: {} expected per-inverter reserve_max (98, 95) got ({}, {})".format(test_name, inv0.reserve_max, inv1.reserve_max))
+            failed = True
+        my_predbat.validate_config()
+        if "inverter_reserve_max" in my_predbat.arg_errors:
+            print("ERROR: {} expected the list form to validate clean, got {}".format(test_name, my_predbat.arg_errors))
+            failed = True
+
+        my_predbat.args["num_inverters"] = 1
+        my_predbat.args["inverter_type"] = "GE"
+        my_predbat.args["inverter_reserve_max"] = 98
+        inv0 = Inverter(my_predbat, 0, quiet=True)
+        if inv0.reserve_max != 98:
+            print("ERROR: {} expected a single value to give reserve_max 98 got {}".format(test_name, inv0.reserve_max))
+            failed = True
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        my_predbat.arg_errors = saved_arg_errors
+
+    return 1 if failed else 0
+
+
 def test_custom_inverter_def_drops_rate_step(test_name, my_predbat, ha):
     """
     A custom inverter type is built from a copy of the GE row, but must not inherit GivEnergy's rate step (#5324).
@@ -6379,6 +6422,7 @@ charge_start_service:
     failed |= test_short_per_inverter_list_gets_its_dummy_entity("short_per_inverter_list_gets_its_dummy_entity", my_predbat)
     failed |= test_create_missing_arg_does_not_fill_sibling_entries("create_missing_arg_does_not_fill_sibling_entries", my_predbat)
     failed |= test_create_missing_arg_keeps_inverter_0_single_value("create_missing_arg_keeps_inverter_0_single_value", my_predbat)
+    failed |= test_reserve_max_per_inverter_list("reserve_max_per_inverter_list", my_predbat)
     if failed:
         return failed
 

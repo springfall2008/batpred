@@ -1635,7 +1635,7 @@ or
 
 #### Inverter Info  
 
-- **inverter_reserve_max** - When set defines the maximum reserve setting in % (default is 100)
+- **inverter_reserve_max** - When set defines the maximum reserve setting in % (default is 100). With more than one inverter give one entry per inverter as a list, e.g. `inverter_reserve_max: [98, 98]`
 - **inverter_mode** - Givenergy inverter mode control
 - **inverter_time** - Inverter timestamp, used to track the last update of the inverter data
 - **inverter_battery_rate_min** - Defines the minimum discharge/charge rate of the battery in watts (default is 0)

@@ -190,6 +190,14 @@ Some inverters e.g. GE AIO inverter won't allow the reserve to be set to 100, in
   inverter_reserve_max : 98
 ```
 
+If you have more than one inverter (num_inverters 2 or more) give one value per inverter as a list:
+
+```yaml
+  inverter_reserve_max:
+    - 98
+    - 98
+```
+
 And this should prevent the issue
 
 ## The plan doesn't charge or discharge when I expect it to
