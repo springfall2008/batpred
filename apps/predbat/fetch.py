@@ -19,7 +19,7 @@ dictionaries for use by the prediction engine.
 """
 
 from datetime import datetime, timedelta
-from utils import minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative, MinuteArray
+from utils import minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative, MinuteArray, strptime_aware
 from const import (
     MINUTE_WATT,
     PREDICT_STEP,
@@ -2128,7 +2128,7 @@ class Fetch:
         pv_forecast90_packed_ld = self.get_state_wrapper(entity_id=entity_id, attribute="forecast90")
         relative_time = self.get_state_wrapper(entity_id=entity_id, attribute="relative_time")
         try:
-            relative_time = datetime.strptime(relative_time, TIME_FORMAT)
+            relative_time = strptime_aware(relative_time, TIME_FORMAT)
         except (ValueError, TypeError):
             self.log(f"Warn: Unable to parse relative_time from PV forecast sensor: {relative_time}, using midnight UTC as fallback")
             relative_time = self.midnight_utc

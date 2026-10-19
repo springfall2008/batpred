@@ -81,6 +81,7 @@ from const import (
 from config import APPS_SCHEMA, CONFIG_ITEMS
 import debug_history
 from utils import (
+    strptime_aware,
     RepeatLogGate,
     minutes_since_yesterday,
     minutes_since_midnight,
@@ -2342,7 +2343,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         config_refresh_stamp = None
         if config_refresh:
             try:
-                config_refresh_stamp = datetime.strptime(config_refresh, TIME_FORMAT)
+                config_refresh_stamp = strptime_aware(config_refresh, TIME_FORMAT)
             except (ValueError, TypeError):
                 config_refresh_stamp = None
 

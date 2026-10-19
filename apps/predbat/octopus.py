@@ -20,7 +20,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from predbat_metrics import record_api_call
 from const import TIME_FORMAT, TIME_FORMAT_OCTOPUS, DISPATCH_SOURCE_CHARGER_SCHEDULE, REPEAT_FULL_LOG_SECONDS, OCTOPUS_DISPATCH_HOLD_MINUTES, OCTOPUS_DISPATCH_WINDOW_HOLD_MINUTES, DISPATCH_BILLING_CHOICES
-from utils import RepeatLogGate, str2time, minutes_to_time, dp1, dp2, dp4, minute_data, round_out_to_period, filter_payment_method, is_edge_block_body, token_mint_backoff_seconds, TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS
+from utils import RepeatLogGate, str2time, minutes_to_time, dp1, dp2, dp4, minute_data, round_out_to_period, filter_payment_method, is_edge_block_body, token_mint_backoff_seconds, TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS, strptime_aware
 from component_base import ComponentBase
 from mock_base import MockBase as SharedMockBase
 import aiohttp
@@ -158,7 +158,7 @@ def parse_date(dt_str):
 def parse_date_time(dt_str):
     """Convert a date string to a date object."""
     try:
-        return datetime.strptime(dt_str, DATE_TIME_STR_FORMAT)
+        return strptime_aware(dt_str, DATE_TIME_STR_FORMAT)
     except (ValueError, TypeError):
         return None
 
@@ -1867,11 +1867,11 @@ class OctopusAPI(ComponentBase):
             valid_from_str = rate.get("valid_from") or ""
             valid_to_str = rate.get("valid_to") or ""
             try:
-                valid_from_stamp = datetime.strptime(valid_from_str, DATE_TIME_STR_FORMAT) if valid_from_str else _EPOCH
+                valid_from_stamp = strptime_aware(valid_from_str, DATE_TIME_STR_FORMAT) if valid_from_str else _EPOCH
             except ValueError:
                 valid_from_stamp = _EPOCH
             try:
-                valid_to_stamp = datetime.strptime(valid_to_str, DATE_TIME_STR_FORMAT) if valid_to_str else _FAR_FUTURE
+                valid_to_stamp = strptime_aware(valid_to_str, DATE_TIME_STR_FORMAT) if valid_to_str else _FAR_FUTURE
             except ValueError:
                 valid_to_stamp = _FAR_FUTURE
             if now is not None and valid_from_stamp > now:
@@ -2949,8 +2949,8 @@ class Octopus:
                 daynumber = "0" + daynumber
 
             try:
-                timestamp_start = datetime.strptime("{} {} {} {} {} Z".format(year, month, daynumber, str(time_from), "00"), "%Y %B %d %H %M %z")
-                timestamp_end = datetime.strptime("{} {} {} {} {} Z".format(year, month, daynumber, str(time_to), "00"), "%Y %B %d %H %M %z")
+                timestamp_start = strptime_aware("{} {} {} {} {} Z".format(year, month, daynumber, str(time_from), "00"), "%Y %B %d %H %M %z")
+                timestamp_end = strptime_aware("{} {} {} {} {} Z".format(year, month, daynumber, str(time_to), "00"), "%Y %B %d %H %M %z")
                 # Change to local timezone, but these times were in local zone so push the hour back to the correct one
                 timestamp_start = timestamp_start.astimezone(self.local_tz)
                 timestamp_end = timestamp_end.astimezone(self.local_tz)
@@ -3370,11 +3370,11 @@ class Octopus:
         build_dispatch_timeline() review). Only start/end are meaningful there.
         """
         if "start" in slot:
-            start = datetime.strptime(slot["start"], TIME_FORMAT)
-            end = datetime.strptime(slot["end"], TIME_FORMAT)
+            start = strptime_aware(slot["start"], TIME_FORMAT)
+            end = strptime_aware(slot["end"], TIME_FORMAT)
         else:
-            start = datetime.strptime(slot["startDtUtc"], TIME_FORMAT_OCTOPUS)
-            end = datetime.strptime(slot["endDtUtc"], TIME_FORMAT_OCTOPUS)
+            start = strptime_aware(slot["startDtUtc"], TIME_FORMAT_OCTOPUS)
+            end = strptime_aware(slot["endDtUtc"], TIME_FORMAT_OCTOPUS)
 
         source = slot.get("source", "")
         location = slot.get("location", "")
@@ -4841,7 +4841,7 @@ async def test_fetch_tariffs(product_code, tariff_code):  # pragma: no cover
     window_entries = []
     for entry in rates_stamp:
         try:
-            start_dt = datetime.strptime(entry["start"], TIME_FORMAT)
+            start_dt = strptime_aware(entry["start"], TIME_FORMAT)
         except (ValueError, KeyError):
             continue
         if start_dt.tzinfo is None:

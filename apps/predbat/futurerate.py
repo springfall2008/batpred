@@ -12,7 +12,7 @@ import copy
 
 from const import TIME_FORMAT
 from ha import run_async
-from utils import dp1, dp2, minute_data
+from utils import dp1, dp2, minute_data, strptime_aware
 
 TIME_FORMAT_NORD = "%d-%m-%YT%H:%M:%S%z"
 
@@ -242,8 +242,8 @@ class FutureRate:
             for area in entryPerArea:
                 areaPrice = entryPerArea[area]
 
-            time_date_start = datetime.strptime(deliveryStart, TIME_FORMAT)
-            time_date_end = datetime.strptime(deliveryEnd, TIME_FORMAT)
+            time_date_start = strptime_aware(deliveryStart, TIME_FORMAT)
+            time_date_end = strptime_aware(deliveryEnd, TIME_FORMAT)
             if time_date_end < time_date_start:
                 time_date_end += timedelta(days=1)
             delta_start = time_date_start - self.midnight_utc
