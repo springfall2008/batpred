@@ -7659,13 +7659,14 @@ def _fox_battery_facts(record):
 def test_fox_build_discovery_battery_ratings_tell_the_aio_bug_from_a_healthy_stack(my_predbat):
     """The battery ratings distinguish the GH#4919 AIO from a healthy system, and never report the known-wrong sum.
 
-    publish_data() sums the capacity of every batteryList entry that carries one. GH#4919's AIO
-    reports one 10.24 kWh pack as four bmu entries, each claiming 10240 Wh and all carrying the
-    inverter's own serial, so that sum is 4x the truth. Counting entries is no better evidence: the
-    real list is a bcu plus the four bmu entries, five in all - exactly what a genuine four-module
-    stack reports, whose bmu entries each carry their own serial. Only the serials tell the two
-    apart, so the report carries both how many entries publish_data() sums and how many distinct
-    serials those entries hold: four against one is the GH#4919 signature.
+    Summing the capacity of every batteryList entry that carries one is wrong for GH#4919's AIO,
+    which reports one 10.24 kWh pack as four bmu entries, each claiming 10240 Wh and all carrying
+    the inverter's own serial, so that sum is 4x the truth (battery_capacity_wh() corrects for this
+    when publish_data() publishes soc_max). Counting entries is no better evidence: the real list is
+    a bcu plus the four bmu entries, five in all - exactly what a genuine four-module stack reports,
+    whose bmu entries each carry their own serial. Only the serials tell the two apart, so the report
+    carries both how many entries carry a capacity and how many distinct serials those entries hold:
+    four against one is the GH#4919 signature.
 
     The healthy four-module stack is the AIO's own entries with a serial per module - the repo holds
     no captured multi-pack sample, so it changes only the one field the ratings claim to read.
