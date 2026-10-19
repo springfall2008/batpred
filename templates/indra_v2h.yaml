@@ -1,0 +1,280 @@
+# Predbat config for the Indra V2H / V2G bi-directional EV charger, via the
+# ha-indrav2h custom integration (https://github.com/creatingwake/ha-indrav2h)
+#
+# The car's battery is treated as the home battery. Predbat controls the Indra
+# purely by changing select.indra_v2h_operating_mode - no helpers, scripts or
+# automations are needed.
+#
+# Copy this over your apps.yaml and:
+#   1. Install the ha-indrav2h integration and log in with your Indra account.
+#      Check that select.indra_v2h_operating_mode and the indra_v2h sensors appear.
+#      If you renamed the Indra device in Home Assistant, update the entity IDs below.
+#   2. Set the load_today / import_today / export_today / pv_today and pv_power
+#      sensors to your own energy meter and solar inverter entities - the Indra
+#      does not provide daily energy totals or solar data.
+#   3. Set soc_max to the usable size of your car's battery in kWh.
+#   4. Set inverter_limit and battery_rate_max to your Indra's rating (6kW or 7kW).
+#   5. Set battery_min_soc to the lowest car SoC % you want Predbat to discharge to.
+#   6. Delete the template: True line below once you have configured this file.
+---
+pred_bat:
+  module: predbat
+  class: PredBat
+  prefix: predbat
+  timezone: Europe/London
+  currency_symbols:
+    - '£'
+    - 'p'
+  threads: auto
+  # XXX: This is a configuration template, delete this line once you edit your configuration
+  template: True
+  load_filter_threshold: 30
+  # ─── Daily energy sensors (from your own meter / solar inverter) ──────────
+  # The Indra has no daily energy totals, so point these at the kWh-today sensors
+  # from your smart meter, energy monitor or solar inverter integration.
+  load_today:
+    - sensor.YOUR_HOUSE_LOAD_TODAY
+  import_today:
+    - sensor.YOUR_GRID_IMPORT_TODAY
+  export_today:
+    - sensor.YOUR_GRID_EXPORT_TODAY
+  pv_today:
+    - sensor.YOUR_SOLAR_TODAY
+  # ─── Indra V2H inverter definition ────────────────────────────────────────
+  # The Indra has no target SoC, reserve or rate controls, so Predbat starts and
+  # stops charging/discharging itself and holds the car battery with charge freeze.
+  num_inverters: 1
+  inverter_type: "INDRA"
+  inverter:
+    name: "Indra V2H"
+    has_rest_api: False
+    has_mqtt_api: False
+    has_service_api: True
+    output_charge_control: "none"
+    charge_control_immediate: True
+    current_dp: 0
+    charge_discharge_with_rate: False
+    has_charge_enable_time: False
+    has_discharge_enable_time: False
+    has_target_soc: False
+    target_soc_used_for_discharge: False
+    has_reserve_soc: False
+    has_timed_pause: False
+    time_button_press: False
+    support_charge_freeze: True
+    support_discharge_freeze: False
+    has_ge_inverter_mode: False
+    has_idle_time: False
+    has_time_window: False
+    charge_time_format: "S"
+    charge_time_entity_is_option: False
+    can_span_midnight: True
+    clock_time_format: "%Y-%m-%d %H:%M:%S"
+    num_load_entities: 1
+    soc_units: "%"
+    write_and_poll_sleep: 2
+  # ─── Indra V2H control (write) ────────────────────────────────────────────
+  # Each Predbat action maps to one Indra operating mode:
+  #   charge        -> CHARGE        (charge the car from the grid at full rate)
+  #   freeze/hold   -> EXPORT_MATCH  (no discharge; surplus solar still goes into the car)
+  #   normal/demand -> LOAD_MATCH    (car discharges to cover the house load)
+  #   force export  -> DISCHARGE     (car discharges at full rate, exporting to the grid)
+  charge_start_service:
+    service: select.select_option
+    entity_id: select.indra_v2h_operating_mode
+    option: "CHARGE"
+  charge_freeze_service:
+    service: select.select_option
+    entity_id: select.indra_v2h_operating_mode
+    option: "EXPORT_MATCH"
+  charge_stop_service:
+    service: select.select_option
+    entity_id: select.indra_v2h_operating_mode
+    option: "LOAD_MATCH"
+  discharge_start_service:
+    service: select.select_option
+    entity_id: select.indra_v2h_operating_mode
+    option: "DISCHARGE"
+  discharge_stop_service:
+    service: select.select_option
+    entity_id: select.indra_v2h_operating_mode
+    option: "LOAD_MATCH"
+  # ─── Indra V2H sensors (read) ─────────────────────────────────────────────
+  soc_percent:
+    - sensor.indra_v2h_vehicle_state_of_charge
+  battery_power:
+    - sensor.indra_v2h_power_to_ev
+  battery_power_invert:
+    - True  # Indra reports power into the car as positive; Predbat expects charging as negative
+  # house_load is the Indra's grid CT reading: positive is import, negative is export
+  grid_power:
+    - sensor.indra_v2h_house_load
+  grid_power_invert:
+    - True
+  pv_power:
+    - sensor.YOUR_SOLAR_POWER
+  # ─── Car battery and charger limits ───────────────────────────────────────
+  soc_max:
+    - 20  # usable kWh of the car battery - e.g. ~20 for a 24kWh Leaf with some degradation
+  battery_min_soc:
+    - 20  # lowest car SoC % Predbat will discharge to - keep some range for driving.
+          # You can raise it further with input_number.predbat_set_reserve_min.
+  inverter_limit:
+    - 6000
+  inverter_limit_charge:
+    - 6000
+  inverter_limit_discharge:
+    - 6000
+  battery_rate_max:
+    - 6000
+  inverter_battery_rate_min:
+    - 0
+  inverter_clock_skew_start: 0
+  inverter_clock_skew_end: 0
+  inverter_clock_skew_discharge_start: 0
+  inverter_clock_skew_discharge_end: 0
+  inverter_can_charge_during_export: false
+  clock_skew: 0
+  # ─── Solcast solar forecast ───────────────────────────────────────────────
+  # Solcast cloud interface, set this or the local interface below
+  #solcast_host: 'https://api.solcast.com.au/'
+  #solcast_api_key: 'xxxx'
+  #solcast_poll_hours: 8
+  pv_forecast_today: re:(sensor.(solcast_|)(pv_forecast_|)forecast_today)
+  pv_forecast_tomorrow: re:(sensor.(solcast_|)(pv_forecast_|)forecast_tomorrow)
+  pv_forecast_d3: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_3|d3))
+  pv_forecast_d4: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_4|d4))
+  # ─── Car charging ─────────────────────────────────────────────────────────
+  # This section is for a *second* EV on a separate charger. The car plugged into the
+  # Indra is already modelled as the home battery above, so do not add it here.
+  car_charging_energy: 're:(sensor.myenergi_zappi_[0-9a-z]+_charge_added_session|sensor.wallbox_portal_added_energy)'
+
+  # car_charging_power is the live charging power of your car charger, in Watts
+  # It is display only - it drives the car shown on the web interface power flow diagram
+  # and the predbat.car_charging_power sensor. The plan itself is unaffected by it.
+  # Automatically set to detect Wallbox and Zappi, if it doesn't match manually enter your sensor name
+  car_charging_power: 're:(sensor.myenergi_zappi_[0-9a-z]+_internal_load_ct1|sensor.wallbox_portal_charging_power)'
+  num_cars: 1
+  car_charging_planned:
+    - 're:(sensor.wallbox_portal_status_description|sensor.myenergi_zappi_[0-9a-z]+_plug_status)'
+  car_charging_planned_response:
+    - 'yes'
+    - 'on'
+    - 'true'
+    - 'connected'
+    - 'ev connected'
+    - 'ev ready to charge'
+    - 'charging'
+    - 'paused'
+    - 'waiting for car demand'
+    - 'waiting for ev'
+    - 'scheduled'
+    - 'enabled'
+    - 'latched'
+    - 'locked'
+    - 'plugged in'
+    - 'waiting'
+  # car_charging_now can be set to a sensor that shows the car is charging right now, so that
+  # Predbat holds the house battery for the car while it charges. It never adds a charging slot.
+  # Use an on/off sensor (matched against car_charging_now_response), or a charging power sensor
+  # in W or kW where 200W or more counts as charging - e.g. for a Wallbox charger:
+  #car_charging_now:
+  #  - sensor.wallbox_portal_charging_power
+  car_charging_now_response:
+    - 'yes'
+    - 'on'
+    - 'true'
+    - 'charging'
+  #car_charging_battery_size:
+  #  - 75
+  #car_charging_limit:
+  #  - 're:number.tsunami_charge_limit'
+  #car_charging_soc:
+  #  - 're:sensor.tsunami_battery'
+  #car_charging_exclusive:
+  #  - True
+  # ─── Octopus Energy ───────────────────────────────────────────────────────
+  octopus_intelligent_slot: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_intelligent_dispatching)'
+  octopus_ready_time: 're:((select|time).octopus_energy_([0-9a-z_]+|)_intelligent_target_time)'
+  octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_target)'
+  #octopus_intelligent_slot: 'binary_sensor.ohme_slot_active'
+  #octopus_ready_time: 'time.ohme_target_time'
+  #octopus_charge_limit: 'number.ohme_target_percent'
+  #octopus_slot_low_rate: False
+  octopus_saving_session: 're:(event.octopus_energy([0-9a-z_]+|)_saving_session_event(s|))'
+  octopus_saving_session_octopoints_per_penny: 8
+  octopus_free_session: 're:(event.octopus_energy_([0-9a-z_]+|)_octoplus_free_electricity_session_events)'
+  # octopus_free_url: 'http://octopus.energy/free-electricity'
+  # axle_api_key: "xxxxxxx"
+  # ─── Energy rates ─────────────────────────────────────────────────────────
+  metric_octopus_import: 're:(event.octopus_energy_electricity_[0-9a-z_]+(?<!export)_current_day_rates)'
+  #metric_octopus_export: 're:(event.octopus_energy_electricity_[0-9a-z_]+_export_current_day_rates)'
+  metric_standing_charge: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_standing_charge)'
+  #metric_energidataservice_import: 'sensor.energi_data_service_import'
+  #metric_energidataservice_export: 'sensor.energi_data_service_export'
+  #rates_import:
+  #  -  start: "00:30:00"
+  #     end: "04:30:00"
+  #     rate: 7.5
+  #  -  start: "04:30:00"
+  #     end: "00:30:00"
+  #     rate: 40.0
+  #rates_export:
+  #  -  rate: 4.2
+  # rates_import_octopus_url : "https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-{octopus_region}/standard-unit-rates"
+  # rates_export_octopus_url: "https://api.octopus.energy/v1/products/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-A/standard-unit-rates/"
+  #rates_import_override:
+  # -  date: '2023-09-10'
+  #    start: '14:00:00'
+  #    end: '14:30:00'
+  #    rate: 112
+  #    load_scaling: 0.8
+  # ─── Forecast and history ─────────────────────────────────────────────────
+  days_previous:
+    - 7
+  forecast_hours: 48
+  load_ml_enable: true
+  # load_ml_source: true
+  temperature_enable: true
+  # ─── Notifications ────────────────────────────────────────────────────────
+  #notify_devices:
+  #  - mobile_app_treforsiphone12_2
+  # ─── Scaling ──────────────────────────────────────────────────────────────
+  battery_scaling:
+    - 1.0
+  import_export_scaling: 1.0
+  # ─── Export triggers ──────────────────────────────────────────────────────
+  export_triggers:
+    - name: 'large'
+      minutes: 60
+      energy: 1.0
+    - name: 'small'
+      minutes: 15
+      energy: 0.25
+  #iboost_energy_today: 'sensor.xxxxx'
+  #iboost_energy_scaling: 1.0
+  #metric_octopus_gas: 're:(sensor.(octopus_energy_|)gas_[0-9a-z]+_[0-9a-z]+_current_rate)'
+  #futurerate_url: 'https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices?date=DATE&market=N2EX_DayAhead&deliveryArea=UK&currency=GBP'
+  #futurerate_adjust_import: True
+  #futurerate_adjust_export: False
+  #futurerate_peak_start: "16:00:00"
+  #futurerate_peak_end: "19:00:00"
+  #futurerate_peak_premium_import: 14
+  #futurerate_peak_premium_export: 6.5
+  #octopus_region: "A"
+  #compare_list:
+  #  - id: 'current'
+  #    name: 'Current Tariff'
+  #alerts:
+  #  url: "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-united-kingdom"
+  #  event: "(Amber|Yellow|Orange|Red).*(Wind|Snow|Fog|Rain|Thunderstorm|Avalanche|Frost|Heat|Coastal event|Flood|Forestfire|Ice|Low temperature|Storm|Tornado|Tsunami|Volcano|Wildfire)"
+  #  severity: "Moderate|Severe|Extreme"
+  #  certainty: "Possible|Likely|Expected"
+  #  keep: 40
+  #watch_list:
+  #  - '{octopus_intelligent_slot}'
+  #  - '{octopus_ready_time}'
+  #  - '{octopus_charge_limit}'
+  #  - '{octopus_saving_session}'
+  #  - '+[car_charging_planned]'
+  #  - '+[car_charging_soc]'
