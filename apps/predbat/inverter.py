@@ -689,6 +689,17 @@ class Inverter:
         # Battery rate max charge, discharge (all converted to kW/min)
         inverter_limit_charge = self.base.get_arg("inverter_limit_charge", self.battery_rate_max_raw, index=self.id, required_unit="W")
         inverter_limit_discharge = self.base.get_arg("inverter_limit_discharge", self.battery_rate_max_raw, index=self.id, required_unit="W")
+        # A live limit sensor can read 0W because Predbat itself wrote 0W to the rate it mirrors -
+        # the Sunsynk template's max-charge-rate sensor tracks the charge current Predbat zeroes for a
+        # freeze export. A 0W limit then zeroes battery_rate_max_charge, the curve search and the
+        # multi-inverter split divide by it, and the crash stops the plan that would restore the rate
+        # (GH#5219). Treat a non-positive reading as no reading, as the apps.yaml schema already does.
+        if inverter_limit_charge <= 0:
+            self.log("Warn: Inverter {} inverter_limit_charge reads {}W, ignoring it and using battery rate max {}W".format(self.id, inverter_limit_charge, self.battery_rate_max_raw))
+            inverter_limit_charge = self.battery_rate_max_raw
+        if inverter_limit_discharge <= 0:
+            self.log("Warn: Inverter {} inverter_limit_discharge reads {}W, ignoring it and using battery rate max {}W".format(self.id, inverter_limit_discharge, self.battery_rate_max_raw))
+            inverter_limit_discharge = self.battery_rate_max_raw
         inverter_limit_override = self.base.get_arg("inverter_limit_override", 0, index=self.id, required_unit="W")
         if inverter_limit_override > 0:
             self.log("Info: Inverter {} applying inverter_limit_override of {} W to charge and discharge limits".format(self.id, inverter_limit_override))
@@ -1367,6 +1378,11 @@ class Inverter:
             max_power = int(self.battery_rate_max_discharge * MINUTE_WATT)
         else:
             max_power = int(self.battery_rate_max_charge * MINUTE_WATT)
+
+        # Every curve point is a fraction of this rate, so with no rate there is no curve to learn (GH#5219)
+        if max_power <= 0:
+            self.log("Warn: Inverter {} skipping {} curve calculation as the maximum {} rate is {}W".format(self.id, curve_type, curve_type, max_power))
+            return {}
 
         max_power_scaled = max_power * 0.95
 
