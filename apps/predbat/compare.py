@@ -177,7 +177,13 @@ class Compare:
                 self.log("Warn: Compare, config item {} not found".format(key))
         self.pb.fetch_config_options()
 
-    def fetch_rates(self, tariff, rate_import_base, rate_export_base, io_adjusted_base=None):
+    def fetch_rates(self, tariff, rate_import_base, rate_export_base, io_adjusted_base=None, rate_import_match=None, rate_export_match=None):
+        """
+        Install the tariff's rates on the instance and return True if they match the user's existing tariff.
+
+        rate_import_match/rate_export_match are the live tariff without saving session, free electricity,
+        Axle or Intelligent dispatch stamps - what a refetched rate card is checked against (#5180)
+        """
         pb = self.pb
         if io_adjusted_base is None:
             io_adjusted_base = pb.io_adjusted
@@ -327,13 +333,18 @@ class Compare:
             # Find charging window
             pb.find_low_rate_windows()
 
-        # Compare to see if rates changes
+        # Compare to see if rates changes. A side this tariff fetched its own rates for never carries the live
+        # cycle's events, so it is checked against the live tariff without them - otherwise an active saving
+        # session or dispatch makes the user's own tariff look different (#5180). A side left on the live
+        # rates is checked against them as they are, so only this tariff's override can make it differ.
+        import_match = rate_import_match if (import_replaced and rate_import_match) else rate_import_base
+        export_match = rate_export_match if (export_replaced and rate_export_match) else rate_export_base
         for minute in range(pb.minutes_now, pb.forecast_minutes + pb.minutes_now):
-            if dp2(pb.rate_import.get(minute, 0)) != dp2(rate_import_base.get(minute, 0)):
-                self.log("Compare rate import is different, minute {} changed from {} to {}".format(minute, rate_import_base.get(minute, 0), pb.rate_import.get(minute, 0)))
+            if dp2(pb.rate_import.get(minute, 0)) != dp2(import_match.get(minute, 0)):
+                self.log("Compare rate import is different, minute {} changed from {} to {}".format(minute, import_match.get(minute, 0), pb.rate_import.get(minute, 0)))
                 return False
-            if dp2(pb.rate_export.get(minute, 0)) != dp2(rate_export_base.get(minute, 0)):
-                self.log("Compare rate export is different, minute {} changed from {} to {}".format(minute, rate_export_base.get(minute, 0), pb.rate_export.get(minute, 0)))
+            if dp2(pb.rate_export.get(minute, 0)) != dp2(export_match.get(minute, 0)):
+                self.log("Compare rate export is different, minute {} changed from {} to {}".format(minute, export_match.get(minute, 0), pb.rate_export.get(minute, 0)))
                 return False
         return True
 
@@ -495,7 +506,7 @@ class Compare:
 
         return result_data
 
-    def run_single(self, tariff, rate_import_base, rate_export_base, end_record, debug=False, fetch_sensor=True, car_charging_slots=None, start_soc=None, io_adjusted_base=None):
+    def run_single(self, tariff, rate_import_base, rate_export_base, end_record, debug=False, fetch_sensor=True, car_charging_slots=None, start_soc=None, io_adjusted_base=None, rate_import_match=None, rate_export_match=None):
         """
         Compare a single energy tariff with the current settings and report results
         """
@@ -523,7 +534,7 @@ class Compare:
 
         # Fetch rates
         try:
-            existing_tariff = self.fetch_rates(tariff, rate_import_base, rate_export_base, io_adjusted_base)
+            existing_tariff = self.fetch_rates(tariff, rate_import_base, rate_export_base, io_adjusted_base, rate_import_match, rate_export_match)
         except ValueError as e:
             self.log("Warn fetching rates during comparison of tariff {}: {}".format(tariff, e))
             return {}
@@ -735,6 +746,10 @@ class Compare:
         rate_import_base = copy.deepcopy(self.pb.rate_import)
         rate_export_base = copy.deepcopy(self.pb.rate_export)
         io_adjusted_base = copy.deepcopy(self.pb.io_adjusted)
+        # The same rates before any saving session, free electricity, Axle or dispatch stamp, to recognise
+        # the existing tariff by (#5180) - taken now, as fetch_sensor_data() in run_single() rebuilds them
+        rate_import_match = copy.deepcopy(self.pb.rate_import_no_io)
+        rate_export_match = copy.deepcopy(self.pb.rate_export_base)
         self.live_saving_state = {
             "import_minutes": set(self.pb.rate_import_saving_minutes),
             "export_minutes": set(self.pb.rate_export_saving_minutes),
@@ -778,7 +793,19 @@ class Compare:
                 # in calculate_plan() could leave one tariff's result as another tariff's plan
                 my_predbat.plan_valid = False
                 try:
-                    result_data = self.run_single(tariff, rate_import_base, rate_export_base, end_record, debug=debug, fetch_sensor=fetch_sensor, car_charging_slots=saved["car_charging_slots"], start_soc=start_soc, io_adjusted_base=io_adjusted_base)
+                    result_data = self.run_single(
+                        tariff,
+                        rate_import_base,
+                        rate_export_base,
+                        end_record,
+                        debug=debug,
+                        fetch_sensor=fetch_sensor,
+                        car_charging_slots=saved["car_charging_slots"],
+                        start_soc=start_soc,
+                        io_adjusted_base=io_adjusted_base,
+                        rate_import_match=rate_import_match,
+                        rate_export_match=rate_export_match,
+                    )
                     if result_data is not None:
                         results[tariff_id] = result_data
                 finally:
