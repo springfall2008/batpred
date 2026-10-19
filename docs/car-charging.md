@@ -800,6 +800,16 @@ The log shows `car 0 is in a dispatch but not charging, cancelling its slots` al
 - The log's `Cars ... charging_now [False]` line shows what Predbat made of the sensor each cycle.
 - A charging power sensor (200W or more counts as charging) avoids matching status text altogether.
 
+**Charging the battery while the car is charging**
+
+A dispatch is only cheap while the car really charges in it, and the car could be unplugged at any time, so the half hour it is charging in now is the one certain part of the dispatch.
+
+While your car is in a dispatch that has not been cancelled (the same check that marks cancelled slots with a **?**), and topping up the battery in the dispatch would cost the same as waiting for your fixed off-peak window, Predbat now prefers the dispatch, earliest half hours first. With **switch.predbat_octopus_intelligent_trust_slots** Off this only starts once the car has been seen charging. For example, with a dispatch from 19:00 and off-peak from 23:30, the battery charges at 19:00 rather than waiting, so the house is covered if the car is unplugged at 20:00.
+
+- This only breaks ties: it never changes the predicted cost, and a cheaper slot later on still wins.
+- It does not apply to a dispatch inside your fixed off-peak window, which carries no such risk.
+- The log shows `Octopus Intelligent: car charging in its dispatch, preferring battery charge in the run to ...`, and Predbat replans straight away when this starts.
+
 #### Reading the dispatch timeline in the logs
 
 When Octopus Intelligent charging is active Predbat writes a diagnostic line to the log each cycle

@@ -1669,6 +1669,8 @@ class Fetch:
         self.rate_import = import_rates
         # A charger's own schedule is costed at the tariff, which the car slots were built too early to know
         self.reprice_charger_schedule_slots()
+        # Needs this cycle's dispatch decision and the final io_adjusted
+        io_confirmed_changed = self.io_confirmed_credit_update(save=save)
 
         # Replicate and scan export rates
         if export_rates:
@@ -1795,7 +1797,7 @@ class Fetch:
         else:
             self.load_inday_adjustment = 1.0
 
-        force_replan = dynamic_load_car_changed or octopus_surplus_changed
+        force_replan = dynamic_load_car_changed or octopus_surplus_changed or io_confirmed_changed
         # Compare on the change-detection signature, not the raw slots, so the per-cycle re-clocking
         # of an in-progress dispatch (start advanced to now, energy scaled to remaining time) does not
         # force a replan every cycle while a slot is active - only genuine slot changes do
