@@ -1035,9 +1035,23 @@ class OctopusAPI(ComponentBase):
                     tariffCode = tariff.get("tariffCode", None)
                     productCode = tariff.get("productCode", None)
                     break
-            if isActiveMeter and isActiveAgreement:
+            isExportTariffCode = bool(tariffCode) and ("OUTGOING" in tariffCode or "EXPORT" in tariffCode)
+            # An export agreement goes live as soon as the customer signs up, but Octopus can take a while to
+            # attach the physical meter to the new export MPAN, so the meterPoint arrives with meters: [] (GH#5595).
+            # Rates come from the public products API, so the tariff is usable without a device ID. Import and gas
+            # meterPoints with no meters are still skipped - there an empty list more likely means a closed supply.
+            isUnmeteredExport = not meters and isActiveAgreement and isExportTariffCode
+            if isUnmeteredExport:
+                isExport = True
+                export_mpan = meterpoint.get("mpan") or ""
+                self.log(
+                    "Warn: OctopusAPI: Export agreement {} on MPAN {} has no meter attached yet - using the tariff rates, but Octopus may not be metering/paying export until the meter is linked".format(
+                        tariffCode, export_mpan[:4] + "..." + export_mpan[-4:] if len(export_mpan) > 8 else export_mpan
+                    )
+                )
+            if (isActiveMeter or isUnmeteredExport) and isActiveAgreement:
                 if not isImport and not isExport and not isGas:
-                    if tariffCode and ("OUTGOING" in tariffCode or "EXPORT" in tariffCode):
+                    if isExportTariffCode:
                         isExport = True
                         deviceID_export = None
                         self.log("OctopusAPI: No export meter found but tariff code indicates export, treating as export tariff with device ID None")

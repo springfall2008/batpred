@@ -11,6 +11,7 @@
 import re
 from datetime import datetime, timedelta, timezone
 
+from const import TIME_FORMAT
 from web import WebInterface
 
 
@@ -137,6 +138,22 @@ def run_web_charts_tests(my_predbat):
         if "name: 'Best'" not in legacy_html or "y: 6.5" not in legacy_html:
             print("  ERROR: legacy chart no longer renders the shared optimised series")
             failed += 1
+
+        print("Test: battery forecast history is pruned after shifting onto its predicted time")
+        old_stamp = (my_predbat.midnight_utc - timedelta(days=2)).isoformat()
+        recent_stamp = (my_predbat.midnight_utc - timedelta(minutes=30)).isoformat()
+        web.get_history_with_now_attrs = lambda *args, **kwargs: [
+            [
+                {"last_updated": old_stamp, "attributes": {"soc_h1": 1.0, "soc_h8": 2.0}},
+                {"last_updated": recent_stamp, "attributes": {"soc_h1": 3.0, "soc_h8": 4.0}},
+            ]
+        ]
+        battery_data = web.get_battery_chart_data()
+        for series, minutes, value in [("predicted_h1", 60, 3.0), ("predicted_h8", 480, 4.0)]:
+            expected_stamp = (my_predbat.midnight_utc + timedelta(minutes=minutes - 30)).isoformat()
+            if battery_data["series"][series] != {expected_stamp: value}:
+                print(f"  ERROR: {series} should retain only forecasts landing today: {battery_data['series'][series]}")
+                failed += 1
     finally:
         my_predbat.dashboard_values = original_dashboard_values
         my_predbat.soc_kwh_history = original_history

@@ -367,6 +367,7 @@ linebreak
 linecap
 linejoin
 linestyle
+Liskov
 loadml
 loadmlpower
 loadspower
@@ -702,6 +703,7 @@ treforsiphone
 treforsouthwell
 TRGT
 triggerable
+trydan
 tunables
 twinx
 typecode

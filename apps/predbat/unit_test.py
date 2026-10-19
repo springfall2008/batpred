@@ -227,6 +227,7 @@ from tests.test_control_monitor import run_control_monitor_tests
 from tests.test_sunsynk_publish import run_sunsynk_publish_tests
 from tests.test_sunsynk_storage import run_sunsynk_storage_tests
 from tests.test_sunsynk_config import run_sunsynk_config_tests
+from tests.test_sunsynk_parallel import run_sunsynk_parallel_tests
 from tests.test_alphaess_const import run_alphaess_const_tests
 from tests.test_alphaess_api import run_alphaess_api_tests
 from tests.test_alphaess_config import run_alphaess_config_tests
@@ -274,6 +275,7 @@ from tests.test_plan_why_reason import run_test_plan_why_reason
 from tests.test_plan_scenario_summary import run_test_plan_scenario_summary
 from tests.test_rate_replicate_missing_slots import test_rate_replicate
 from tests.test_find_charge_window import test_find_charge_window
+from tests.test_fetch_pv_mid_cycle import test_fetch_pv_mid_cycle
 from tests.test_set_rate_thresholds import run_set_rate_thresholds_tests
 from tests.test_random_scenarios import generate_scenarios, save_scenarios, run_scenarios_from_file, compare_results, profile_scenario, run_random_scenario_tests
 from tests.test_carbon import test_carbon
@@ -309,6 +311,7 @@ from tests.test_band_rate_text import test_band_rate_text
 from tests.test_rate_text_scan import test_rate_text_scan
 from tests.test_kraken import run_kraken_tests
 from tests.test_kraken_auth_mixin import run_kraken_auth_mixin_tests
+from tests.test_kraken_key import run_kraken_key_tests
 from tests.test_clip_export_slots import run_clip_export_slots_tests
 from tests.test_manual_overrides import run_manual_overrides_tests
 from tests.test_charge_freeze_only import run_charge_freeze_only_tests
@@ -599,6 +602,7 @@ def main():
         ("log_rotation", run_log_rotation_tests, "Configurable log rotation and two-digit naming (#5076)", False),
         ("rate_replicate", test_rate_replicate, "Rate replicate comprehensive tests (missing slots, IO, offsets, gas)", False),
         ("find_charge_window", test_find_charge_window, "Find charge window gap handling tests", False),
+        ("fetch_pv_mid_cycle", test_fetch_pv_mid_cycle, "PV forecasts not empty part way through fetch_sensor_data (#4317)", False),
         ("set_rate_thresholds", run_set_rate_thresholds_tests, "Rate threshold saving-session exclusion tests (GH#5050)", False),
         ("find_charge_rate", test_find_charge_rate, "Find charge rate tests", False),
         ("find_charge_rate_pv", test_find_charge_rate_pv_overlap, "Find charge rate with PV overlap", False),
@@ -641,6 +645,7 @@ def main():
         ("sunsynk_publish", run_sunsynk_publish_tests, "Sunsynk publish tests", False),
         ("sunsynk_storage", run_sunsynk_storage_tests, "Sunsynk storage tests", False),
         ("sunsynk_config", run_sunsynk_config_tests, "Sunsynk config/INVERTER_DEF tests", False),
+        ("sunsynk_parallel", run_sunsynk_parallel_tests, "Sunsynk parallel master/slave group tests", False),
         ("alphaess_const", run_alphaess_const_tests, "AlphaESS constants tests", False),
         ("alphaess_api", run_alphaess_api_tests, "AlphaESS API tests", False),
         ("alphaess_config", run_alphaess_config_tests, "AlphaESS config/INVERTER_DEF tests", False),
@@ -758,6 +763,7 @@ def main():
         # Kraken Energy (EDF/E.ON) tests
         ("kraken", run_kraken_tests, "Kraken API tests (init, GraphQL, tariff discovery, rate fetching, run lifecycle)", False),
         ("kraken_auth", run_kraken_auth_mixin_tests, "Kraken auth mixin tests (API key, email, refresh, 401 handling)", False),
+        ("kraken_key", run_kraken_key_tests, "Kraken API key generator page tests (token check, key generation, Advanced menu)", False),
         ("clip_export_slots", run_clip_export_slots_tests, "Clip export slots tests", False),
         ("manual_overrides", run_manual_overrides_tests, "Manual window override tests", False),
         ("charge_freeze_only", run_charge_freeze_only_tests, "set_charge_freeze_only (no grid charging) tests", False),
