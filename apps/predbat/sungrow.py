@@ -1,0 +1,2689 @@
+# -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+# Sungrow iSolarCloud OpenAPI Library
+# -----------------------------------------------------------------------------
+
+"""Sungrow iSolarCloud OpenAPI integration for Predbat.
+
+Registers each discovered energy-storage (hybrid) inverter as a ``SungrowCloud`` Predbat
+inverter, publishing monitoring sensors and the usual schedule control entities, and
+translating Predbat's plan into Sungrow's INSTANTANEOUS external-dispatch commands.
+
+THE HEARTBEAT IS THE CENTRAL FACT OF THIS COMPONENT.
+
+Sungrow offer TWO control paths, and this component drives the instantaneous one.
+
+The path taken here is external energy dispatch: 10003 mode, 10004 charge/discharge/stop,
+10005 power. It carries no time at all - there is no "charge between 02:00 and 05:00" in it,
+only "charge at 3000 W, now" - and control is held open by parameter 10017, the External EMS
+Heartbeat. Predbat declares an interval of 1-1000 seconds and must keep writing that
+parameter inside it. If the beats stop, the inverter drops external dispatch and returns to
+self-consumption by itself.
+
+The path NOT taken is the forced-charging schedule, 10065-10076, which does carry times
+(start and end hour/minute for two windows, each with a target SoC). It was rejected as the
+primary path for four reasons, in order of weight:
+
+  1. It is CHARGE ONLY. Nothing in the published control table is a forced-DISCHARGE window,
+     so Predbat's export windows could not be expressed through it at all. External dispatch
+     would still be needed for export, and running two control mechanisms against one battery
+     is worse than running one.
+  2. It carries no power setpoint - only a target SoC - so Predbat's charge rate, and the
+     rate-zero it uses to signal freeze, have nowhere to go.
+  3. It is two windows, recurring daily (10066 is weekdays/everyday). Predbat routinely plans
+     more than two charge slots across 48 hours, and plans them for a specific date; a window
+     written today fires again tomorrow.
+  4. It persists in the inverter. That is a real advantage when Predbat is unreachable, and a
+     real hazard when Predbat is unreachable AND its last plan has gone stale.
+
+Reason 4 cuts both ways, which is why build_forced_charge_params() exists and is offered
+behind sungrow_forced_charge_schedule (default off) - see that method. Reasons 1 to 3 are
+what make the schedule insufficient as the primary path regardless of the safety argument.
+
+The cost of the choice made here is stated plainly: with instantaneous control, Predbat must
+stay alive and reachable every few minutes for the battery to follow the plan. A network
+partition loses the rest of a charge window. The schedule path would not have, and that is
+exactly the trade the opt-in flag offers.
+
+That revert is a SAFETY PROPERTY, not a limitation, and nothing here should try to defeat
+it. If Predbat is killed mid-charge, crashes, loses its network or is simply stopped, the
+battery goes back to ordinary self-consumption within one heartbeat interval. It does not
+sit stopped with the house on the grid, and it does not hold a stale forced setpoint. The
+heartbeat therefore runs as its own asyncio task with its own cadence (see
+``_heartbeat_loop``), not as something run() does when it happens to tick.
+
+So Predbat's window entities are read every cycle and evaluated AGAINST THE CLOCK here:
+"is a charge window active this minute" becomes "command charge at this power now", and
+leaving the window becomes "release control". The windows are never written to the
+inverter.
+
+WRITES ARE ASYNCHRONOUS. There is no synchronous PUT. A write is three calls:
+paramSettingCheck (does this device accept parameter configuration at all), paramSetting
+(queue a task, receive a task_id) and getParamSettingTask (poll until the task leaves the
+running state). ``_write_params`` owns that flow; every caller sees one awaitable that
+returns True only when the inverter is known to have taken the values.
+
+SCALING IS UNVERIFIED. Appendix 10 does not publish the coefficients - its own words are
+"refer to the external communication protocols for inverters to determine the
+coefficients", and those protocols are per-model. Everything assumed lives in one table in
+sungrow_const.py under a banner. A wrong coefficient is silently 10x or 100x out.
+
+Auth is OAuth 2.0 and follows fox.py/teslemetry.py exactly: this component never runs the
+OAuth dance. It holds an access token plus its expiry and hash, refreshes through
+predbat.com's oauth-refresh edge function before a call, and retries once on a 401.
+Requests additionally carry the application's appkey in the body and its x-access-key in
+the headers, neither of which is an OAuth credential.
+
+A self-hosted install has two other ways in. sungrow_auth_method: token takes a pasted OAuth
+token that nothing can renew. sungrow_auth_method: password logs in with the iSolarCloud
+account and password and renews its own token - see login(). THAT PATH IS UNVERIFIED: where
+the login token goes on later calls is not documented, so the component tries the request
+body, falls back to a bearer header, and logs which one worked. Whatever the server does, a
+login the server answered without letting us in is never sent again until Predbat restarts
+(wrong passwords are counted and lock the account), a login request is sent at most once per
+attempt, and logins that get no readable answer stop after SUNGROW_LOGIN_MAX_UNJUDGED.
+"""
+
+import asyncio
+import hashlib
+import json
+import time
+import aiohttp
+from component_base import ComponentBase
+from coordinator import inverter_record
+from oauth_mixin import OAuthMixin
+from sungrow_const import (
+    SUNGROW_ENDPOINTS,
+    SUNGROW_LANG,
+    SUNGROW_TIMEOUT,
+    SUNGROW_RETRIES,
+    SUNGROW_RESULT_OK,
+    SUNGROW_CHECK_OK,
+    SUNGROW_CHECK_SUPPORTED,
+    SUNGROW_CHECK_UNSUPPORTED,
+    SUNGROW_DEV_RESULT_OK,
+    SUNGROW_TASK_RUNNING,
+    SUNGROW_TASK_DONE,
+    SUNGROW_TASK_FIRST_POLL_SECONDS,
+    SUNGROW_TASK_POLL_SECONDS,
+    SUNGROW_TASK_TIMEOUT_SECONDS,
+    SUNGROW_TASK_EXPIRE_SECONDS,
+    SUNGROW_SET_TYPE_WRITE,
+    SUNGROW_SET_TYPE_READ,
+    SUNGROW_ESS_DEVICE_TYPES,
+    SUNGROW_PARAM_SOC_UPPER,
+    SUNGROW_PARAM_SOC_LOWER,
+    SUNGROW_PARAM_RANGE,
+    SUNGROW_POWER_DOCUMENTED_MAX,
+    SUNGROW_PARAM_FEED_IN_LIMIT,
+    SUNGROW_PARAM_FEED_IN_LIMIT_VALUE,
+    SUNGROW_PARAM_FEED_IN_LIMIT_RATIO,
+    SUNGROW_NO_EXPORT_LIMIT,
+    SUNGROW_LIMIT_AGREEMENT,
+    SUNGROW_LIMITS_RETRY_MINUTES,
+    SUNGROW_RATING_DRIFT,
+    SUNGROW_PARAM_EMS_MODE,
+    SUNGROW_PARAM_COMMAND,
+    SUNGROW_PARAM_POWER,
+    SUNGROW_PARAM_HEARTBEAT,
+    SUNGROW_PARAM_FORCED_CHARGING,
+    SUNGROW_PARAM_FORCED_VALID_TIME,
+    SUNGROW_PARAM_FORCED_START_HOUR_1,
+    SUNGROW_PARAM_FORCED_START_MIN_1,
+    SUNGROW_PARAM_FORCED_END_HOUR_1,
+    SUNGROW_PARAM_FORCED_END_MIN_1,
+    SUNGROW_PARAM_FORCED_TARGET_SOC_1,
+    SUNGROW_PARAM_FORCED_START_HOUR_2,
+    SUNGROW_PARAM_FORCED_START_MIN_2,
+    SUNGROW_PARAM_FORCED_END_HOUR_2,
+    SUNGROW_PARAM_FORCED_END_MIN_2,
+    SUNGROW_PARAM_FORCED_TARGET_SOC_2,
+    SUNGROW_EMS_SELF_CONSUMPTION,
+    SUNGROW_EMS_EXTERNAL_DISPATCH,
+    SUNGROW_CMD_CHARGE,
+    SUNGROW_CMD_DISCHARGE,
+    SUNGROW_CMD_STOP,
+    SUNGROW_ENABLE,
+    SUNGROW_DISABLE,
+    SUNGROW_FORCED_EVERYDAY,
+    SUNGROW_HEARTBEAT_DEFAULT_SECONDS,
+    SUNGROW_HEARTBEAT_MAX_MISSES,
+    SUNGROW_DECISION_STALE_SECONDS,
+    SUNGROW_ESS_POINTS,
+    SUNGROW_ESS_ENERGY,
+    SUNGROW_ERROR_CODES,
+    SUNGROW_CLOCK_ERROR_CODE,
+    SUNGROW_CHECK_RESULTS,
+    SUNGROW_PARAM_STATUS,
+    SUNGROW_PARAM_STATUS_SUCCESS,
+    SUNGROW_DEVICE_ESS,
+    SUNGROW_MAX_POINTS_PER_REQUEST,
+    SUNGROW_AUTH_ERROR_CODES,
+    SUNGROW_RATE_LIMIT_CODES,
+    SUNGROW_LOGIN_OK,
+    SUNGROW_LOGIN_STATES,
+    SUNGROW_LOGIN_RETRY_SECONDS,
+    SUNGROW_LOGIN_MAX_UNJUDGED,
+    SUNGROW_PLACEHOLDER,
+    SUNGROW_LOGIN_BLOCKED_WARN_SECONDS,
+    SUNGROW_BODY_TOKEN_FIELD,
+    SUNGROW_TOKEN_IN_BODY,
+    SUNGROW_TOKEN_AS_BEARER,
+    SUNGROW_TOKEN_EMPTY_CODE,
+    SUNGROW_PLANT_POINTS,
+    SUNGROW_PLANT_TELEMETRY,
+    SUNGROW_PLANT_ENERGY,
+    SUNGROW_WH_TO_KWH,
+    SUNGROW_STORAGE_MODULE,
+    SUNGROW_CACHE_STATIC,
+    SUNGROW_CACHE_CONTROL,
+    SUNGROW_TTL_STATIC,
+    SUNGROW_TTL_POWER,
+    SUNGROW_TELEMETRY_STALE_MINUTES,
+    SUNGROW_DEBUG_REDACT_KEYS,
+    SUNGROW_TIME_OPTIONS,
+    gateway_url,
+    strip_point_prefix,
+    as_float,
+    as_int,
+    scale_for_write,
+    scale_from_read,
+    heartbeat_send_interval,
+    heartbeat_declared_interval,
+    signed_battery_power,
+    signed_grid_power,
+    hhmmss_to_hour_minute,
+    hm_to_minutes,
+    window_is_empty,
+    param_entry,
+    describe_param,
+    clamp_range,
+    inverter_rating_from_model,
+)
+
+# The behaviour a SungrowCloud inverter has, stated for the discovery record's capabilities.
+# A literal, never read back from INVERTER_DEF: the record has to rebuild the row on its own,
+# or the completeness test proves nothing.
+#
+# charge_control_immediate is False even though the underlying commands are instantaneous.
+# The flag describes the CONTROL SURFACE Predbat is given, not the wire protocol: this
+# component takes ordinary charge/export windows and does the "is it now" arithmetic itself
+# (see decide_command), because the external-dispatch parameters it drives carry no time for
+# Predbat to write a window into. Sungrow's forced-charging parameters DO carry times, and
+# the module docstring says why they are not the path taken. support_feedin_first is False -
+# there is no feed-in-first mode in the control parameter table.
+SUNGROW_CAPABILITIES = {
+    "support_charge_freeze": True,
+    "support_discharge_freeze": False,
+    "support_feedin_first": False,
+    "can_span_midnight": False,
+    "charge_discharge_with_rate": False,
+    "charge_control_immediate": False,
+    "target_soc_used_for_discharge": True,
+}
+
+# Not a wire value. Marks a cached applied_command entry as "released to self-consumption
+# with these limits", so the release goes through the same change detection as a command.
+SUNGROW_CMD_RELEASE = "release"
+
+# Predbat's live args and the telemetry leaf that backs each. One table, read by both
+# automatic_config() and _bindable_args(), so what is bound and what is checked cannot drift.
+SUNGROW_POWER_ARGS = (("soc_percent", "soc"), ("battery_power", "battery_power"), ("grid_power", "grid_power"), ("load_power", "load_power"), ("pv_power", "pv_power"))
+
+# Logins iSolarCloud has refused, as {digest of gateway + account + password: reason}. Held at
+# module level, not on the component, because the promise is "never send a refused password
+# again in this process": restarting the component from the web interface, or an apps.yaml
+# reload, builds a NEW SungrowAPI, and a per-instance flag would let each of those spend one
+# more of the attempts iSolarCloud counts towards locking the account. Keyed by the settings
+# themselves, so correcting the account or the password is a different login and gets its one
+# attempt. Only a digest is kept - the password is not held anywhere it was not already.
+SUNGROW_LOGIN_BLOCKED = {}
+# Logins in a row that got no readable answer, under the same key and process-wide for the same
+# reason: the server may have judged the password on any of them, so a rebuilt component must
+# not start the count again. Cleared by a success.
+SUNGROW_LOGIN_UNJUDGED = {}
+
+
+class SungrowAPI(ComponentBase, OAuthMixin):
+    """Sungrow iSolarCloud OpenAPI cloud component."""
+
+    # Trace every API request/response while the Sungrow integration beds in. Nobody on the
+    # project has Sungrow hardware, so a tester's log is the only evidence available for the
+    # inferred behaviour - and for the unverified scaling coefficients in particular. Flip to
+    # False once those are confirmed against a real inverter.
+    api_debug = True
+
+    def initialize(
+        self,
+        appkey="",
+        access_key="",
+        key="",
+        gateway="",
+        auth_method=None,
+        token_expires_at=None,
+        token_hash=None,
+        inverter_sn=None,
+        automatic=False,
+        automatic_ignore_pv=False,
+        control_enable=True,
+        battery_rate_max=None,
+        inverter_limit=None,
+        export_limit=None,
+        heartbeat_interval=SUNGROW_HEARTBEAT_DEFAULT_SECONDS,
+        forced_charge_schedule=False,
+        api_delay=2,
+        min_write_interval=300,
+        api_debug=True,
+        user_account="",
+        user_password="",
+        **kwargs,
+    ):
+        """Initialise the Sungrow component from its resolved config args.
+
+        ComponentBase.__init__ calls initialize(**kwargs); the Components registry has
+        already resolved each arg from its sungrow_* config key and passes it BY ARG NAME
+        (e.g. appkey <- sungrow_appkey), exactly like fox/deye/alphaess. Consume the kwargs
+        directly - do NOT re-derive with get_arg("appkey"): that bare name is not in
+        apps.yaml, so it would always return the default.
+        """
+        self.log("Info: SungrowAPI initialising")
+        self.api_debug = bool(api_debug)
+        self.appkey = appkey or ""
+        self.access_key = access_key or ""
+        self.base_url = gateway_url(gateway)
+        self.automatic = automatic
+        self.automatic_ignore_pv = automatic_ignore_pv
+        self.control_enable = control_enable
+        self.inverter_sn_filter = inverter_sn if isinstance(inverter_sn, list) else ([inverter_sn] if inverter_sn else [])
+        self.battery_rate_max_override = float(battery_rate_max) if battery_rate_max else 0.0
+        self.inverter_limit_override = float(inverter_limit) if inverter_limit else 0.0
+        self.export_limit_override = float(export_limit) if export_limit else 0.0
+        self.heartbeat_interval = int(as_float(heartbeat_interval, SUNGROW_HEARTBEAT_DEFAULT_SECONDS))
+        self.forced_charge_schedule = bool(forced_charge_schedule)
+        self.api_delay = max(0, float(api_delay or 0))
+        self.min_write_interval = max(0, int(min_write_interval or 0))
+
+        # OAuth is wired exactly as fox.py does it - the mixin assigns 'key' to access_token
+        # when auth_method is oauth, and the oauth-refresh edge function owns the refresh chain.
+        self._init_oauth(auth_method, key, token_expires_at, "sungrow")
+        # OAuthMixin drops the key for any method other than oauth, because for the components
+        # it was written for a non-oauth key is an API key sent some other way. Here the key is
+        # always the bearer token, whoever obtained it: in "token" mode a self-hosted user has
+        # pasted one from Sungrow's own authorisation flow, and nothing can refresh it for them.
+        if self.auth_method == "password":
+            # The token comes from login(), never from sungrow_key, and lives in memory only:
+            # it is not written to the Storage cache, so a restart simply logs in once.
+            self.access_token = None
+        elif self.auth_method != "oauth":
+            self.access_token = key or None
+        self.token_hash = token_hash or ""
+
+        # Account-and-password login state. All of it is inert in the other two modes.
+        self.user_account = str(user_account or "")
+        self.user_password = str(user_password or "")
+        # Where the login token is presented: Sungrow do not document it, so it starts in the
+        # body and is switched once on a rejection. Confirmed by the first call that succeeds.
+        self.token_placement = SUNGROW_TOKEN_IN_BODY
+        self.token_placement_confirmed = False
+        # Why login has been given up on for good, or None. Once set, no login is sent again.
+        self.login_blocked = None
+        self._login_blocked_warned = 0.0
+        # When a login last ended with no readable answer, and when a login last succeeded yet
+        # cured nothing. Both only pace the next attempt.
+        self._login_failed_time = 0.0
+        self._relogin_futile_time = 0.0
+        self._login_in_progress = False
+        self._login_unset_warned = False
+        if self.auth_method == "password":
+            self.log("Info: Sungrow is using account-and-password login for account {} (UNVERIFIED against a live account - please report the 'token placement' line from this log)".format(self._masked_account()))
+            self.login_blocked = SUNGROW_LOGIN_BLOCKED.get(self._login_key())
+            if self.login_blocked:
+                self._login_blocked_warned = time.time()
+                self.log("Warn: Sungrow login was already given up on with these settings ({}); it will not be tried again until Predbat is restarted".format(self.login_blocked))
+
+        self.plant_list = []
+        self.plant_detail = {}
+        self.plant_values = {}
+        self.plant_energy = {}
+        # Every per-device map is keyed by the device UUID, because that is what the Grid
+        # Control endpoints address. The serial is display only and is what entity ids are
+        # built from, so the two must never be confused - a write addressed by serial is
+        # simply rejected.
+        self.device_list = []
+        self.device_detail = {}
+        self.device_values = {}
+        self.device_energy = {}
+        # Inverters whose own realtime read is currently failing, so the fallback to plant
+        # figures is logged once per episode rather than once a minute.
+        self._device_read_failing = set()
+        # When each inverter's own telemetry was last read successfully.
+        self._device_read_time = {}
+        # What was read back of each inverter's own feed-in limitation (10012-10014).
+        self.device_limits = {}
+        self.local_schedule = {}
+        self.applied_command = {}
+        self.last_write_time = {}
+        # Devices Predbat has actually been asked to drive, i.e. whose write button has been
+        # pressed at least once. The reconcile loop only re-applies for these, so a startup
+        # cycle can never take control of an inverter before there is a plan to apply.
+        self.control_active = set()
+        # Names automatic_config() has already bound, so run() can tell a figure that just
+        # became available from one that was already mapped on an earlier cycle.
+        self._bound_args = set()
+        # Devices currently held in external dispatch. This is what the heartbeat loop beats
+        # for, and it is deliberately NOT persisted: after a restart the inverter has already
+        # reverted to self-consumption (or is about to), so restoring "we hold control" would
+        # be a claim about hardware state that is no longer true.
+        self.control_held = set()
+        self._heartbeat_task = None
+        self._heartbeat_stop = False
+        self._beat_failures = {}
+        # When each inverter's command was last decided; the heartbeat will not hold one open past it.
+        self._decision_time = {}
+        # Per-device "does this device accept parameter configuration" verdict from
+        # paramSettingCheck. Cached because it is a property of the hardware and the account
+        # tier, not a transient error, and re-probing it every cycle spends a call to be told
+        # the same thing.
+        self._write_supported = {}
+        self._tier_refreshed = {}
+        self._cache_restored = False
+        # The most recent body-level API failure message, and whether the last discovery
+        # attempt actually reached the API. Both exist so the standalone CLI can name
+        # precisely which stage failed.
+        self.last_api_error = ""
+        self.discovery_ok = None
+        # What the discovery report last said for each derived rating, and which inverters have
+        # ever been seen with PV. Both exist to stop the report changing when the hardware has not.
+        self._discovery_ratings = {}
+        self._solar_seen = set()
+        self._stale_logged = False
+        if not self.control_enable:
+            self.log("Info: Sungrow control is disabled (sungrow_control_enable is false); monitoring only")
+        if self.forced_charge_schedule:
+            self.log(
+                "Warn: Sungrow sungrow_forced_charge_schedule is on. The forced-charging window (10065-10076) is stored IN THE INVERTER and survives Predbat stopping, "
+                "so it defeats the external EMS heartbeat's safe revert to self-consumption. Only leave this on if you want the inverter to keep running the last window Predbat wrote."
+            )
+
+    # -------------------------------------------------------------------------
+    # Request layer
+    # -------------------------------------------------------------------------
+
+    def _token_in_body(self, placement=None):
+        """Return whether the token travels in the request body rather than as a bearer header.
+
+        Only ever True for a login token (password mode) while the placement is "body". OAuth
+        and pasted tokens are a bearer header, always. placement is the one a request captured
+        when it started; left out, the current one is used.
+        """
+        return self.auth_method == "password" and (placement or self.token_placement) == SUNGROW_TOKEN_IN_BODY
+
+    def _headers(self, with_token=True, token=None, placement=None):
+        """Return the headers every OpenAPI request carries.
+
+        x-access-key identifies the APPLICATION and is issued with the appkey; the bearer
+        token identifies the PLANT OWNER who authorised it. Both are required - a request
+        with only one of them is rejected, and the two failure messages look alike, which is
+        why _note_failure spells out which credential a rejection points at.
+
+        with_token is False for the login request itself, which must not present the token it
+        is about to replace. A login token placed in the body is likewise left out here. token
+        and placement are what a password-mode request captured when it started, so its body
+        and its headers cannot disagree if another task changes either mid-request.
+        """
+        headers = {
+            "Content-Type": "application/json;charset=UTF-8",
+            "x-access-key": self.access_key,
+        }
+        token = token or self.access_token
+        if token and with_token and not self._token_in_body(placement):
+            headers["Authorization"] = "Bearer {}".format(token)
+        return headers
+
+    @staticmethod
+    def redact(payload):
+        """Return a log-safe copy of a payload with credentials masked.
+
+        Credentials and the personal fields listed in SUNGROW_DEBUG_REDACT_KEYS (location,
+        coordinates, contact details) are masked at any depth; the payload passed in is not
+        modified. result_msg, result_code and req_serial_num are never masked: nobody on the
+        project has Sungrow hardware, so a tester's log is the only diagnostic available and
+        hiding the error text would defeat the point of api_debug.
+        """
+        if isinstance(payload, dict):
+            return {key: ("***" if key in SUNGROW_DEBUG_REDACT_KEYS else SungrowAPI.redact(value)) for key, value in payload.items()}
+        if isinstance(payload, list):
+            return [SungrowAPI.redact(item) for item in payload]
+        return payload
+
+    def debug_api(self, direction, what, payload=None):
+        """Trace one API request or response while api_debug is on."""
+        if not self.api_debug:
+            return
+        if payload is None:
+            self.log("Info: Sungrow API {} {}".format(direction, what))
+            return
+        try:
+            rendered = json.dumps(self.redact(payload), default=str)[:2000]
+        except (TypeError, ValueError):
+            rendered = str(self.redact(payload))[:2000]
+        self.log("Info: Sungrow API {} {} {}".format(direction, what, rendered))
+
+    def _note_failure(self, path, body, server_text=True):
+        """Record and log one API-level failure, without ever logging a credential.
+
+        server_text is False for the login endpoint: the server's free text about a failed
+        login can name the account, so only the code and its documented meaning are reported.
+
+        The full error-code appendix could not be sourced, so this does not pretend to map
+        every code to a meaning. It reports the code and the SERVER'S OWN message, which is
+        strictly more useful than a half-invented table, and separates out the two small
+        groups of codes where the right reaction genuinely differs.
+        """
+        code = str(body.get("result_code", ""))
+        message = (body.get("result_msg") or "") if server_text else ""
+        serial = body.get("req_serial_num") or ""
+        # Sungrow's own result_msg is often terser than Appendix 2's description of the same
+        # code, so both are reported: the description says what the code MEANS and the message
+        # says what this particular call hit.
+        described = SUNGROW_ERROR_CODES.get(code)
+        detail = "{} - {}".format(message, described) if described and described != message else (message or described or "")
+        self.last_api_error = "{} {}".format(code, detail).strip()
+        suffix = " [req {}]".format(serial) if serial else ""
+        if code == SUNGROW_CLOCK_ERROR_CODE:
+            # Called out on its own because it otherwise looks exactly like a bad credential,
+            # which is the same trap AlphaESS's 6006 sets. It is a clock problem on this host.
+            self.log("Warn: Sungrow rejected the request timestamp on {} ({}) - this host's clock is too far from Sungrow server time. It is a clock problem, not a credentials problem{}".format(path, code, suffix))
+            return
+        if code in SUNGROW_AUTH_ERROR_CODES:
+            # Called out because "appkey invalid" and "token expired" otherwise read as an
+            # ordinary API failure and send people looking at the inverter instead of the
+            # credentials.
+            self.log("Warn: Sungrow rejected the credentials on {} ({} {}) - check sungrow_appkey and sungrow_access_key, or reconnect the Sungrow account{}".format(path, code, detail, suffix))
+            return
+        if code in SUNGROW_RATE_LIMIT_CODES:
+            # A pacing signal, not a component fault. Logging it at Warn would read as a
+            # genuine malfunction on an account that is simply being polled hard.
+            self.log("Info: Sungrow rate-limited {} ({} {}); this is a pacing signal, not a fault, and will be retried on the next tier refresh{}".format(path, code, detail, suffix))
+            return
+        self.log("Warn: Sungrow {} returned result_code {} {}{}".format(path, code or "(none)", detail, suffix))
+
+    async def _request(self, endpoint_key, body=None, _retry_after_refresh=False, _placement_switched=False, _logged_in_again=False):
+        """Perform one authorised API call, returning (ok, result_data).
+
+        ok is True only when the envelope itself reported success. A transport failure and
+        an API-level rejection are deliberately collapsed into the same False here - unlike
+        AlphaESS, Sungrow's envelope carries no code the caller branches on - but they are
+        logged differently so the distinction survives where it matters, in the log.
+
+        _retry_after_refresh guards the OAuth retry; _placement_switched and _logged_in_again guard
+        the two password-mode retries the same way (see _retry_password_auth). Each is set on
+        the one recursive call it permits, which is what makes every retry happen at most once.
+        """
+        path = SUNGROW_ENDPOINTS[endpoint_key]
+        url = "{}{}".format(self.base_url, path)
+        payload = dict(body or {})
+        payload["appkey"] = self.appkey
+        payload.setdefault("lang", SUNGROW_LANG)
+
+        # Password mode. The login itself goes out with the appkey and x-access-key like any
+        # other call but with NO token, in either placement. Every other call presents the
+        # login token where token_placement says, and is retried within strict bounds when it
+        # is rejected for authentication reasons.
+        is_login = endpoint_key == "login"
+        password_call = self.auth_method == "password" and not is_login
+        # Captured ONCE. The heartbeat task shares this object, and a placement or token it
+        # changed mid-request would otherwise send the token twice, not at all, or confirm
+        # the placement this request did not use.
+        token_used = self.access_token
+        placement_used = self.token_placement
+        headers = None
+        if password_call:
+            if not token_used:
+                # run() logs in before anything else, so this is only reached by a caller that
+                # skipped it. Sending a call with no token would just be rejected.
+                self.log("Warn: Sungrow has no login token, skipping API call to {}".format(path))
+                return False, None
+            if self._token_in_body(placement_used):
+                payload[SUNGROW_BODY_TOKEN_FIELD] = token_used
+            headers = self._headers(token=token_used, placement=placement_used)
+        # THE LOGIN IS SENT AT MOST ONCE. A timeout or a dropped connection says nothing about
+        # whether the server received and judged the password, so the in-place transport
+        # retry every other call gets would be up to three counted attempts from one login().
+        attempts = 1 if is_login else SUNGROW_RETRIES
+
+        # Refresh BEFORE the call, not after a failure: a token that expires mid-plan would
+        # otherwise cost a whole cycle. _retry_after_refresh guards the reactive path below
+        # from refreshing twice for one request.
+        if self.auth_method == "oauth" and not _retry_after_refresh:
+            if not await self.check_and_refresh_oauth_token():
+                self.log("Warn: Sungrow OAuth token refresh failed, skipping API call to {}".format(path))
+                return False, None
+
+        self.debug_api("request", path, payload)
+        for attempt in range(attempts):
+            try:
+                timeout = aiohttp.ClientTimeout(total=SUNGROW_TIMEOUT)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.post(url, headers=headers or self._headers(with_token=not is_login), json=payload) as response:
+                        status = response.status
+                        if status == 401 and password_call:
+                            return await self._retry_password_auth(endpoint_key, body, path, "HTTP 401", token_used, placement_used, _placement_switched, _logged_in_again)
+                        if status == 401 and is_login:
+                            # Not a judgement on the password (that arrives as login_state in a
+                            # 200), and nothing to do with sungrow_key, which the pasted-token
+                            # message below would blame.
+                            self.log("Warn: Sungrow {} returned HTTP 401 - the login request itself was not accepted; check sungrow_appkey and sungrow_access_key".format(path))
+                            return False, None
+                        if status == 401 and self.auth_method == "oauth" and not _retry_after_refresh:
+                            if await self.handle_oauth_401():
+                                return await self._request(endpoint_key, body=body, _retry_after_refresh=True)
+                            self.log("Warn: Sungrow {} returned HTTP 401 and the token could not be refreshed".format(path))
+                            return False, None
+                        if status == 401 and self.auth_method != "oauth":
+                            # Nothing can renew a pasted token, so say which setting to change
+                            # rather than leaving a bare status code to be read as an outage.
+                            self.log("Warn: Sungrow {} returned HTTP 401 - the access token in sungrow_key was rejected and has probably expired; obtain a new one (Predbat cannot renew a token when sungrow_auth_method is token)".format(path))
+                            return False, None
+                        if status != 200:
+                            self.log("Warn: Sungrow {} returned HTTP {}".format(path, status))
+                            return False, None
+                        if is_login:
+                            # content_type=None: a verdict served with the wrong mimetype is
+                            # still a verdict, and must be read rather than thrown away.
+                            data = await response.json(content_type=None)
+                        else:
+                            data = await response.json()
+            except (aiohttp.ClientError, asyncio.TimeoutError) as error:
+                if attempt + 1 >= attempts:
+                    self.log("Warn: Sungrow {} transport failure: {}".format(path, error))
+                    return False, None
+                await asyncio.sleep(1 + attempt)
+                continue
+            except ValueError as error:
+                # A body that is not JSON at all - a gateway error page, typically. Not retried
+                # in place: it is the far end misbehaving, and the next tier refresh retries.
+                self.log("Warn: Sungrow {} returned a body that is not JSON: {}".format(path, error))
+                return False, None
+
+            if not isinstance(data, dict):
+                self.log("Warn: Sungrow {} returned a non-object body".format(path))
+                return False, None
+            self.debug_api("response", path, data)
+            code = str(data.get("result_code"))
+            if code == SUNGROW_RESULT_OK:
+                if password_call and not self.token_placement_confirmed:
+                    # The placement THIS request used is the one that worked, whatever another
+                    # task has set meanwhile.
+                    self.token_placement = placement_used
+                    self.token_placement_confirmed = True
+                    # The line a tester is asked to report: it settles the undocumented question.
+                    self.log("Info: Sungrow token placement confirmed: the login token is accepted {}".format(self._placement_text(placement_used)))
+                return True, data.get("result_data")
+            if password_call and (code in SUNGROW_AUTH_ERROR_CODES or code == SUNGROW_TOKEN_EMPTY_CODE):
+                return await self._retry_password_auth(endpoint_key, body, path, self._describe_failure(data), token_used, placement_used, _placement_switched, _logged_in_again)
+            self._note_failure(path, data, server_text=not is_login)
+            return False, None
+        return False, None
+
+    # -------------------------------------------------------------------------
+    # Account-and-password login
+    # -------------------------------------------------------------------------
+
+    @staticmethod
+    def _placement_text(placement):
+        """Describe a token placement in words, for the log."""
+        return "in the request body" if placement == SUNGROW_TOKEN_IN_BODY else "as a bearer header"
+
+    def _masked_account(self):
+        """Return the account name with all but its first two characters masked."""
+        return (self.user_account[:2] if len(self.user_account) > 2 else "") + "***"
+
+    def _login_key(self):
+        """Return the digest that identifies this gateway, account and password in SUNGROW_LOGIN_BLOCKED."""
+        return hashlib.sha256("\n".join((self.base_url, self.user_account, self.user_password)).encode("utf-8")).hexdigest()
+
+    def _block_login(self, reason, advice):
+        """Give up on logging in until Predbat restarts, saying why once.
+
+        Recorded both on this component and process-wide (see SUNGROW_LOGIN_BLOCKED), so that
+        nothing short of a Predbat restart or a changed setting sends these credentials again.
+        """
+        self.login_blocked = reason
+        SUNGROW_LOGIN_BLOCKED[self._login_key()] = reason
+        self._login_blocked_warned = time.time()
+        self.log("Warn: Sungrow cannot log in: {}. {}. Predbat will NOT try to log in again until it is restarted, so that repeated attempts do not lock the account".format(reason, advice))
+
+    def _login_settings_unset(self):
+        """Return whether the account or the password is missing or still the template placeholder."""
+        return any(not value or value.strip() == SUNGROW_PLACEHOLDER for value in (self.user_account, self.user_password))
+
+    def _safe_server_text(self, value):
+        """Return a server-supplied value for the log, with the account name and password masked out of it."""
+        text = repr(value)[:200]
+        for secret in (self.user_password, self.user_account):
+            if secret:
+                text = text.replace(secret, "***")
+        return text
+
+    async def login(self):
+        """Log in with the iSolarCloud account and password, returning True when a token is held.
+
+        Wrong passwords are counted by iSolarCloud and lock the account, and a component that
+        retries on a timer is exactly how an account gets locked overnight. So every outcome
+        is decided here, and none of them is an open-ended retry:
+
+          - ANSWERED, and let in (envelope "1", login_state "1", a token): success.
+          - ANSWERED, and not let in - a documented refusal, an unknown or missing login_state,
+            no result_data, success with no token: BLOCKED until Predbat restarts. It is not
+            for this code to guess that an answer it cannot read was not about the password.
+          - NOT ANSWERED - a network error, a timeout, a non-200, a body that will not parse,
+            an envelope that failed: the server may or may not have judged the password. Tried
+            again no sooner than SUNGROW_LOGIN_RETRY_SECONDS later, and after
+            SUNGROW_LOGIN_MAX_UNJUDGED of them in a row BLOCKED until Predbat restarts.
+
+        One call sends at most ONE login request (_request does not retry a login in place).
+        An account or password that is empty or still the template's placeholder sends
+        nothing. Neither the password nor the token is ever logged: the request and response
+        are traced through debug_api, whose redaction covers both, and nothing here prints either.
+        """
+        if self.auth_method != "password" or self.login_blocked:
+            return False
+        if self._login_settings_unset():
+            # Nothing is sent, so nothing is spent and there is nothing to block.
+            if not self._login_unset_warned:
+                self._login_unset_warned = True
+                self.log("Warn: Sungrow cannot log in: sungrow_user_account and sungrow_user_password are not set (sungrow_auth_method: password needs both)")
+            return False
+        if self._login_in_progress:
+            return False
+        if self._login_failed_time and time.time() - self._login_failed_time < SUNGROW_LOGIN_RETRY_SECONDS:
+            return False
+
+        self._login_in_progress = True
+        try:
+            ok, data = await self._request("login", {"user_account": self.user_account, "user_password": self.user_password})
+        finally:
+            self._login_in_progress = False
+
+        key = self._login_key()
+        if not ok:
+            # Not answered. _request has already logged what went wrong.
+            self._login_failed_time = time.time()
+            unjudged = SUNGROW_LOGIN_UNJUDGED.get(key, 0) + 1
+            SUNGROW_LOGIN_UNJUDGED[key] = unjudged
+            if unjudged >= SUNGROW_LOGIN_MAX_UNJUDGED:
+                self._block_login("login could not be completed after {} attempts".format(unjudged), "None of them got a readable answer, so it is not known whether the password was accepted, and Predbat has stopped trying")
+            else:
+                self.log("Info: Sungrow login got no readable answer (attempt {} of {}); it will be tried again, but not for {} seconds".format(unjudged, SUNGROW_LOGIN_MAX_UNJUDGED, SUNGROW_LOGIN_RETRY_SECONDS))
+            return False
+
+        # Answered. From here the server has seen the password and replied, so anything short
+        # of a token ends in a block.
+        state = data.get("login_state") if isinstance(data, dict) else None
+        state_text = str(state) if state is not None else None
+        token = data.get(SUNGROW_BODY_TOKEN_FIELD) if isinstance(data, dict) else None
+        if state_text == SUNGROW_LOGIN_OK and token:
+            self.access_token = str(token)
+            self._login_failed_time = 0.0
+            SUNGROW_LOGIN_UNJUDGED.pop(key, None)
+            self.log("Info: Sungrow login succeeded for account {}".format(self._masked_account()))
+            return True
+
+        if state_text in SUNGROW_LOGIN_STATES:
+            reason = SUNGROW_LOGIN_STATES[state_text]
+            if state_text == "2":
+                advice = "It must be unlocked in iSolarCloud"
+            elif state_text == "5":
+                advice = "An administrator must unlock it"
+            else:
+                advice = "Check sungrow_user_account and sungrow_user_password"
+        else:
+            raw = "login_state {}, msg {}".format(self._safe_server_text(state), self._safe_server_text(data.get("msg") if isinstance(data, dict) else None))
+            if state_text == SUNGROW_LOGIN_OK:
+                reason = "the login reply reported success but carried no token ({})".format(raw)
+            else:
+                reason = "the login was answered but the reply was not understood ({})".format(raw)
+            advice = "Check sungrow_user_account and sungrow_user_password, and please report this line"
+        self._block_login(reason, advice)
+        return False
+
+    @staticmethod
+    def _describe_failure(body):
+        """Return an envelope failure as "code message - description", as _note_failure reports it."""
+        code = str(body.get("result_code", ""))
+        message = body.get("result_msg") or ""
+        described = SUNGROW_ERROR_CODES.get(code)
+        detail = "{} - {}".format(message, described) if described and described != message else (message or described or "")
+        return "{} {}".format(code, detail).strip()
+
+    async def _retry_password_auth(self, endpoint_key, body, path, reason, token_used, placement_used, placement_switched, logged_in_again):
+        """React to an authentication rejection of a password-mode call, returning (ok, result_data).
+
+        Two things can be wrong and the server does not say which: the token may be in the
+        wrong place (its placement is undocumented), or it may have expired. So, in order:
+
+          1. while the placement is unconfirmed and this request has not yet switched it,
+             switch it and retry;
+          2. otherwise log in again and retry with the new token, in the current placement;
+          3. otherwise give up on this request with one Warn naming what was tried.
+
+        STRICTLY BOUNDED: placement_switched and logged_in_again are this request's own record of
+        what it has already done, so it makes at most one switch and one login - four requests
+        in all - and can never loop. Across requests, a login that succeeded and still cured
+        nothing is not repeated for SUNGROW_LOGIN_RETRY_SECONDS: such a rejection is evidently
+        not about the token (an allow-list, a mismatched appkey), and logging in on every call
+        is its own route to "login too frequently". A refused login ends it until Predbat
+        restarts, because login() will not send one twice.
+
+        placement_used and token_used are what the rejected request actually sent, not what
+        the component holds now: another task may have changed either while it was in flight.
+        """
+        if not placement_switched and (not self.token_placement_confirmed or self.token_placement != placement_used):
+            # Switched away from the placement THIS request used. If another task has confirmed
+            # the other one in the meantime, that is simply where the retry goes.
+            if not self.token_placement_confirmed:
+                self.token_placement = SUNGROW_TOKEN_AS_BEARER if placement_used == SUNGROW_TOKEN_IN_BODY else SUNGROW_TOKEN_IN_BODY
+            self.log("Info: Sungrow {} rejected the login token sent {} ({}); trying it {}".format(path, self._placement_text(placement_used), reason, self._placement_text(self.token_placement)))
+            return await self._request(endpoint_key, body=body, _placement_switched=True, _logged_in_again=logged_in_again)
+
+        tried = "sending the login token {}".format("in the request body and as a bearer header" if placement_switched else self._placement_text(placement_used))
+        self.last_api_error = reason
+        if logged_in_again:
+            self._relogin_futile_time = time.time()
+            self.log("Warn: Sungrow {} is still rejected ({}) after {} and after logging in again; giving up on this request. Check sungrow_appkey and sungrow_access_key, and that the application is authorised for this account".format(path, reason, tried))
+            return False, None
+        if self.access_token != token_used:
+            # Another call (the heartbeat runs alongside run()) renewed the token while this one
+            # was in flight. Use it rather than logging in a second time.
+            return await self._request(endpoint_key, body=body, _placement_switched=placement_switched, _logged_in_again=True)
+        if self._relogin_futile_time and time.time() - self._relogin_futile_time < SUNGROW_LOGIN_RETRY_SECONDS:
+            self.log("Warn: Sungrow {} was rejected ({}) after {}; not logging in again yet, because a fresh login less than {} seconds ago did not help".format(path, reason, tried, SUNGROW_LOGIN_RETRY_SECONDS))
+            return False, None
+        if await self.login():
+            return await self._request(endpoint_key, body=body, _placement_switched=placement_switched, _logged_in_again=True)
+        self.log("Warn: Sungrow {} was rejected ({}) after {}, and the login could not be renewed; giving up on this request".format(path, reason, tried))
+        return False, None
+
+    # -------------------------------------------------------------------------
+    # Discovery
+    # -------------------------------------------------------------------------
+
+    async def get_plants(self):
+        """Discover every plant the authorised account can see, returning its ps_ids.
+
+        Sets discovery_ok so an empty account can be told apart from a failed call - the two
+        are indistinguishable from the returned list alone, and the CLI has to name which one
+        happened.
+        """
+        # valid_flag "1,3" is deliberate. The parameter defaults to 1 (Normal) ALONE, so a plant
+        # in the Connected state (3) is silently missing from the default listing - which looks
+        # exactly like an account with no plants and is not something the user could diagnose.
+        ok, data = await self._request("plant_list", {"page": 1, "size": 100, "valid_flag": "1,3"})
+        if not ok:
+            self.discovery_ok = False
+            return list(self.plant_list)
+        self.discovery_ok = True
+        plants = []
+        detail = {}
+        for entry in (data or {}).get("pageList") or []:
+            ps_id = entry.get("ps_id")
+            if ps_id is None:
+                continue
+            plants.append(str(ps_id))
+            detail[str(ps_id)] = entry
+        self.plant_list = plants
+        self.plant_detail = detail
+        return plants
+
+    async def get_devices(self, ps_id):
+        """Discover the energy-storage inverters in one plant, returning their UUIDs.
+
+        Filtered to SUNGROW_ESS_DEVICE_TYPES at the request rather than after it: a plant can
+        contain meters, loggers, string inverters and battery packs, none of which Predbat
+        drives, and asking for everything and discarding most of it just makes the response
+        bigger.
+        """
+        ok, data = await self._request("device_list", {"ps_id": ps_id, "page": 1, "size": 100, "device_type_list": [str(value) for value in SUNGROW_ESS_DEVICE_TYPES]})
+        if not ok:
+            return []
+        wanted = [str(sn).lower() for sn in self.inverter_sn_filter]
+        found = []
+        for entry in (data or {}).get("pageList") or []:
+            uuid = entry.get("uuid")
+            if uuid is None:
+                continue
+            serial = str(entry.get("device_sn") or entry.get("sn") or uuid)
+            if wanted and serial.lower() not in wanted:
+                continue
+            entry = dict(entry)
+            entry["ps_id"] = str(ps_id)
+            entry["serial"] = serial
+            self.device_detail[str(uuid)] = entry
+            found.append(str(uuid))
+        return found
+
+    async def refresh_static(self):
+        """Re-discover plants and their inverters. True when discovery worked.
+
+        Branches on discovery_ok rather than on list emptiness: a failed call and an empty
+        account both produce an empty list but need different handling. Deliberately does NOT
+        assign an empty discovery result over a working device_list - this tier re-runs every
+        eight hours, so one transient failure must not take a working component down until
+        the next success. Absence of a result is not a result.
+        """
+        previous = list(self.device_list)
+        await self.get_plants()
+        if self.discovery_ok is False:
+            if previous:
+                self.log("Warn: Sungrow plant discovery failed; keeping the {} previously known inverter(s)".format(len(previous)))
+            else:
+                self.log("Warn: Sungrow plant discovery failed; the account may still have plants")
+            return False
+        devices = []
+        for ps_id in self.plant_list:
+            devices.extend(await self.get_devices(ps_id))
+            if self.api_delay:
+                await asyncio.sleep(self.api_delay)
+        if not devices:
+            if previous:
+                self.log("Warn: Sungrow discovery returned no energy-storage inverters; keeping the {} previously known one(s)".format(len(previous)))
+                return True
+            self.log("Warn: Sungrow found no energy-storage inverters on this account")
+            self.device_list = []
+            self.mark_refreshed("static")
+            return True
+        self.device_list = devices
+        self.mark_refreshed("static")
+        return True
+
+    # -------------------------------------------------------------------------
+    # Tier clock
+    # -------------------------------------------------------------------------
+
+    def tier_expired(self, tier, ttl_minutes):
+        """Return whether a refresh tier is due."""
+        last = self._tier_refreshed.get(tier)
+        if last is None:
+            return True
+        return (time.time() - last) >= (ttl_minutes * 60)
+
+    def mark_refreshed(self, tier, age_minutes=0.0):
+        """Stamp a refresh tier as just completed, optionally aged by age_minutes."""
+        self._tier_refreshed[tier] = time.time() - (age_minutes * 60)
+
+    def tier_age_minutes(self, tier):
+        """Return how long ago a refresh tier last completed, in minutes (infinite if never)."""
+        last = self._tier_refreshed.get(tier)
+        if last is None:
+            return float("inf")
+        return (time.time() - last) / 60.0
+
+    def telemetry_stale(self):
+        """Return whether the last successful telemetry read is too old to plan on."""
+        return self.tier_age_minutes("power") > SUNGROW_TELEMETRY_STALE_MINUTES
+
+    # -------------------------------------------------------------------------
+    # Telemetry
+    # -------------------------------------------------------------------------
+
+    @staticmethod
+    def _points_from_row(row, point_map):
+        """Turn one realtime data row into {leaf: float}, keeping only points that were reported.
+
+        A point the inverter does not have is absent, or spelled "--". Both become an omitted
+        leaf rather than 0.0, because a fabricated zero is indistinguishable from a real one -
+        publishing 0 W of PV on an AC-coupled battery would look exactly like night time.
+        """
+        values = {}
+        for key, raw in (row or {}).items():
+            point_id = strip_point_prefix(key)
+            if point_id is None:
+                continue
+            leaf = point_map.get(point_id)
+            if leaf is None:
+                continue
+            numeric = as_float(raw, None)
+            if numeric is not None:
+                values[leaf] = numeric
+        return values
+
+    async def fetch_plant_realtime(self, ps_id):
+        """Read one plant's realtime measuring points into plant_values/plant_energy.
+
+        This is the FALLBACK source, not the primary one - telemetry() and energy() both prefer
+        the device read, which describes one inverter where this aggregates the whole site. It
+        is polled anyway, every cycle, because getDeviceRealTimeData is not served by every
+        account and model and a site that loses it would otherwise lose SoC, PV, load, grid and
+        every daily counter in one go. This read is what keeps such a site planning.
+        """
+        ok, data = await self._request("plant_realtime", {"ps_id_list": [ps_id], "point_id_list": list(SUNGROW_PLANT_POINTS.keys()), "is_get_point_dict": "1"})
+        if not ok:
+            return False
+        rows = (data or {}).get("device_point_list") or []
+        for row in rows:
+            if str(row.get("ps_id", ps_id)) != str(ps_id):
+                continue
+            values = self._points_from_row(row, SUNGROW_PLANT_POINTS)
+            self.plant_values[ps_id] = values
+            # Wh on the wire throughout; Predbat works in kWh.
+            energy = {}
+            for leaf, point_leaf in SUNGROW_PLANT_ENERGY.items():
+                if point_leaf in values:
+                    energy[leaf] = round(values[point_leaf] * SUNGROW_WH_TO_KWH, 3)
+            self.plant_energy[ps_id] = energy
+            return True
+        return False
+
+    async def fetch_device_realtime(self, uuid):
+        """Read one inverter's own measuring points into device_values.
+
+        The request carries device_type as well as ps_key_list: this endpoint answers for ONE
+        device type at a time, which is why only the energy-storage inverter's own points are
+        asked for here and not the battery pack's - those belong to a separate battery device.
+
+        A failure is treated as ordinary and non-fatal. Not every account and model serves this
+        endpoint, and publish_data falls back to the plant-level points for everything it would
+        have supplied, so losing it costs battery SoH and the split charge/discharge powers, not
+        the plan.
+        """
+        detail = self.device_detail.get(uuid, {})
+        ps_key = detail.get("ps_key")
+        if not ps_key:
+            return False
+        point_map = dict(SUNGROW_ESS_POINTS)
+        # point_id_list is capped at 100 per request. This map is far smaller, so there is
+        # nothing to chunk today - but adding points without noticing the cap would produce a
+        # rejection that looks like an unsupported endpoint rather than an oversized request.
+        if len(point_map) > SUNGROW_MAX_POINTS_PER_REQUEST:
+            self.log("Warn: Sungrow is asking for {} measuring points, above the documented limit of {}".format(len(point_map), SUNGROW_MAX_POINTS_PER_REQUEST))
+        device_type = detail.get("device_type", SUNGROW_DEVICE_ESS)
+        ok, data = await self._request("device_realtime", {"ps_key_list": [ps_key], "device_type": str(device_type), "point_id_list": list(point_map.keys()), "is_get_point_dict": "1"})
+        if not ok:
+            return False
+        for row in (data or {}).get("device_point_list") or []:
+            values = self._points_from_row(row, point_map)
+            if not values:
+                continue
+            # The two unsigned halves are combined once here so every consumer - the published
+            # sensor, the control decision and the discovery record - sees the same signed
+            # value with the same convention.
+            battery_power = signed_battery_power(values.get("battery_charge_power"), values.get("battery_discharge_power"))
+            if battery_power is not None:
+                values["battery_power"] = battery_power
+            grid_power = signed_grid_power(values.get("purchased_power"), values.get("feed_in_power"))
+            if grid_power is not None:
+                values["grid_power"] = grid_power
+            if "battery_soc" in values:
+                values["soc"] = values["battery_soc"]
+            elif "battery_level" in values:
+                values["soc"] = values["battery_level"]
+            self.device_values[uuid] = values
+            # The daily counters are Wh on the wire like everything else, and are split out into
+            # their own map so energy() can prefer them over the plant's aggregate without
+            # re-converting on every read.
+            self.device_energy[uuid] = {leaf: round(values[leaf] * SUNGROW_WH_TO_KWH, 3) for leaf in SUNGROW_ESS_ENERGY if leaf in values}
+            return True
+        return False
+
+    async def refresh_power(self):
+        """Refresh the telemetry tier. True when at least one plant answered.
+
+        The device read is optional - not every account and model serves it - so its failure
+        does not fail the tier. That inverter's previous device values are kept through a brief
+        failure and discarded once the last good read is SUNGROW_TELEMETRY_STALE_MINUTES old.
+        """
+        any_ok = False
+        for ps_id in list(self.plant_list):
+            if await self.fetch_plant_realtime(ps_id):
+                any_ok = True
+            if self.api_delay:
+                await asyncio.sleep(self.api_delay)
+        for uuid in list(self.device_list):
+            if await self.fetch_device_realtime(uuid):
+                self._device_read_time[uuid] = time.time()
+                self._device_read_failing.discard(uuid)
+            else:
+                # A brief failure KEEPS what the last good read left behind. telemetry() and
+                # energy() prefer the device read, so dropping it for one poll publishes the
+                # plant's daily counters and the next poll publishes the device's again. The
+                # two sources never agree exactly, and Predbat's history cleaner counts every
+                # rise in an incrementing sensor as energy and ignores every fall - so each
+                # flip there and back adds the difference to load, import, export and PV.
+                #
+                # A long failure DISCARDS it. The plant read above still marks this tier fresh,
+                # so keeping the values for ever would freeze SoC at its last value with the
+                # component reporting healthy. Without them telemetry() and energy() fall back
+                # to the plant read - which, for a plant with more than one inverter,
+                # deliberately gives None for power and energy.
+                last = self._device_read_time.get(uuid)
+                if last is None or (time.time() - last) > SUNGROW_TELEMETRY_STALE_MINUTES * 60:
+                    self.device_values.pop(uuid, None)
+                    self.device_energy.pop(uuid, None)
+                    if uuid not in self._device_read_failing:
+                        self._device_read_failing.add(uuid)
+                        self.log("Info: Sungrow {} own telemetry could not be read; plant-level figures are being used until it answers again".format(self._serial(uuid)))
+            if self.api_delay:
+                await asyncio.sleep(self.api_delay)
+        if any_ok:
+            self.mark_refreshed("power")
+        return any_ok
+
+    def _plant_share(self, uuid):
+        """Return (ps_id, how many discovered inverters are in that plant) for one inverter.
+
+        Plant-level points aggregate the whole site. Predbat sums its per-inverter sensors, so
+        anything taken from the plant has to be divided between the inverters that share it, or
+        not used at all where dividing would be a guess.
+        """
+        ps_id = self.device_detail.get(uuid, {}).get("ps_id")
+        if ps_id is None:
+            return None, 1
+        return ps_id, max(1, sum(1 for other in self.device_list if self.device_detail.get(other, {}).get("ps_id") == ps_id))
+
+    def telemetry(self, uuid, leaf):
+        """Return one telemetry value for an inverter, device read first then plant read.
+
+        The device read is preferred because it describes THIS inverter, where the plant read
+        aggregates everything in the plant - identical on a residential single-inverter site
+        and not identical on a site with two. Returns None when neither source reported it.
+        """
+        value = self.device_values.get(uuid, {}).get(leaf)
+        if value is not None:
+            return value
+        ps_id, sharing = self._plant_share(uuid)
+        plant_leaf = SUNGROW_PLANT_TELEMETRY.get(leaf)
+        if ps_id is None or plant_leaf is None:
+            return None
+        # A percentage is the same for the plant and its parts; a power is not, and which
+        # inverter carries how much of it is not something the plant read can say.
+        if sharing > 1 and leaf != "soc":
+            return None
+        return self.plant_values.get(ps_id, {}).get(plant_leaf)
+
+    def energy(self, uuid, leaf):
+        """Return one daily energy counter in kWh for an inverter, device read first then plant.
+
+        Same preference as telemetry(), and for the same reason: the energy-storage inverter
+        carries its own daily counters (13199 load, 13147 import, 13122 export, 13112 PV), which
+        describe THIS inverter, where the plant's counters aggregate everything on the site.
+        Identical on a residential single-inverter plant and not identical on a larger one.
+        """
+        value = self.device_energy.get(uuid, {}).get(leaf)
+        if value is not None:
+            return value
+        ps_id, sharing = self._plant_share(uuid)
+        if ps_id is None or sharing > 1:
+            return None
+        return self.plant_energy.get(ps_id, {}).get(leaf)
+
+    def battery_capacity(self, uuid):
+        """Return the battery capacity in kWh, from the plant's chargeable + dischargeable energy.
+
+        Sungrow report no nameplate capacity anywhere this component can reach. What the plant
+        does report is how much can still go in (83235) and how much can still come out
+        (83236) right now, and those two sum to the usable pack - a derivation, not a reading,
+        so it moves a little with temperature and with the SoC limits in force. Returns 0.0
+        when either half is missing, which leaves soc_max unbound rather than half-sized.
+        """
+        ps_id, sharing = self._plant_share(uuid)
+        values = self.plant_values.get(ps_id, {}) if ps_id else {}
+        chargeable = values.get("chargeable_energy")
+        dischargeable = values.get("dischargeable_energy")
+        if chargeable is None or dischargeable is None:
+            return 0.0
+        return round((chargeable + dischargeable) * SUNGROW_WH_TO_KWH / sharing, 3)
+
+    def battery_rate_max(self, uuid):
+        """Return the battery charge/discharge power limit in watts.
+
+        The plant's maximum rechargeable/dischargeable power points are the inverter's own
+        statement of what the pack will take right now, which is exactly what Predbat wants.
+        Where they are missing the user's override is the only source - leaving this unmapped
+        is NOT neutral, because inverter.py then silently uses a hard-coded 2600 W on every
+        plan, which is roughly half of a 5 kW SH hybrid's real rate.
+        """
+        if self.battery_rate_max_override > 0:
+            return self.battery_rate_max_override
+        ps_id, sharing = self._plant_share(uuid)
+        values = self.plant_values.get(ps_id, {}) if ps_id else {}
+        rates = [values.get("max_rechargeable_power"), values.get("max_dischargeable_power")]
+        rates = [rate for rate in rates if rate]
+        return (max(rates) / sharing) if rates else 0.0
+
+    def power_limit(self, uuid=None):
+        """Return the largest charge/discharge power, in watts, that may be written to 10005.
+
+        The documented range stops at 5000 W, so that is the cap when nothing better is known.
+        A device that reports (or is configured with) a higher battery rate is trusted over the
+        table: a 10 kW hybrid asked for 8 kW must not silently get 5.
+        """
+        known = self.battery_rate_max(uuid) if uuid is not None else 0.0
+        return float(max(SUNGROW_POWER_DOCUMENTED_MAX, known))
+
+    def inverter_limit(self, uuid):
+        """Return the inverter's AC rating in watts, or 0.0 when it is not known.
+
+        The measuring points do not carry a rating, but the model name does, and the device
+        list returns it. sungrow_inverter_limit overrides it for a model this cannot read or a
+        unit that has been derated.
+        """
+        if self.inverter_limit_override > 0:
+            return self.inverter_limit_override
+        detail = self.device_detail.get(uuid, {})
+        return inverter_rating_from_model(detail.get("device_model")) or inverter_rating_from_model(detail.get("device_name"))
+
+    def export_limit(self, uuid):
+        """Return the grid export limit in watts, SUNGROW_NO_EXPORT_LIMIT for none, or None.
+
+        None means "not known well enough to act on", and the caller must not bind anything.
+        The inverter's feed-in limitation is read back as an enable flag, a value and a ratio
+        of rated power. The value's unit is not documented, so it is only believed when it
+        matches the ratio applied to the rating: a limit that is ten times too low would stop
+        Predbat planning exports altogether, silently, which is worse than no limit. A flag
+        that could not be read is None too - only an explicit "disabled" means no limit.
+
+        sungrow_export_limit overrides the read-back and is the limit of the whole SITE.
+        Predbat sums export_limit across inverters, so it is shared equally between the
+        discovered inverters here rather than handed to each of them in full.
+        """
+        if self.export_limit_override > 0:
+            return self.export_limit_override / max(1, len(self.device_list))
+        limits = self.device_limits.get(uuid)
+        if not limits:
+            return None
+        if limits.get("feed_in_enabled") is None:
+            # The flag was blank, missing or not a value this component knows. That is not
+            # "limitation off", and the value and ratio mean nothing without it.
+            return None
+        if limits.get("feed_in_enabled") is False:
+            return float(SUNGROW_NO_EXPORT_LIMIT)
+        value = limits.get("feed_in_value")
+        ratio = limits.get("feed_in_ratio")
+        rating = self.inverter_limit(uuid)
+        if value is None or ratio is None or rating <= 0:
+            return None
+        from_ratio = rating * ratio / 100.0
+        if abs(value - from_ratio) > SUNGROW_LIMIT_AGREEMENT * max(from_ratio, 1.0):
+            return None
+        return float(value)
+
+    async def refresh_limits(self):
+        """Read each inverter's feed-in limitation back, once per static tier.
+
+        A read is the same dispatch-then-poll task as a write, so it is slow and is kept off
+        the per-minute path. A failed read keeps whatever was known: the limitation is a
+        setting that changes when an installer changes it, not from one hour to the next. A
+        read that nobody answers is not retried until SUNGROW_LIMITS_RETRY_MINUTES has passed,
+        rather than on the very next cycle - otherwise a read-back that keeps failing would
+        spend up to the task timeout per inverter on every tick.
+        """
+        if not self.tier_expired("limits", SUNGROW_TTL_STATIC):
+            return
+        if not self.device_list:
+            return
+        codes = [SUNGROW_PARAM_FEED_IN_LIMIT, SUNGROW_PARAM_FEED_IN_LIMIT_VALUE, SUNGROW_PARAM_FEED_IN_LIMIT_RATIO]
+        answered = False
+        for uuid in list(self.device_list):
+            try:
+                values = await self.read_params(uuid, codes)
+            except Exception as error:
+                self.log("Warn: Sungrow could not read the feed-in limitation of {}: {}".format(self._serial(uuid), error))
+                values = None
+            if values is None:
+                continue
+            answered = True
+            # Three states, not two. Only an explicit SUNGROW_DISABLE is "limitation off"; a
+            # blank, missing or unrecognised flag is None, because reading it as off would bind
+            # "no export limit" as though it were a known answer.
+            raw_flag = values.get(SUNGROW_PARAM_FEED_IN_LIMIT)
+            flag = as_int(raw_flag)
+            limits = {
+                "feed_in_enabled": True if flag == SUNGROW_ENABLE else (False if flag == SUNGROW_DISABLE else None),
+                "feed_in_value": scale_from_read(SUNGROW_PARAM_FEED_IN_LIMIT_VALUE, values.get(SUNGROW_PARAM_FEED_IN_LIMIT_VALUE)),
+                "feed_in_ratio": scale_from_read(SUNGROW_PARAM_FEED_IN_LIMIT_RATIO, values.get(SUNGROW_PARAM_FEED_IN_LIMIT_RATIO)),
+            }
+            self.device_limits[uuid] = limits
+            if limits["feed_in_enabled"] is None:
+                self.log("Warn: Sungrow {} feed-in limitation flag could not be read (raw value {!r}), so the export limit is not being set automatically. Set sungrow_export_limit in apps.yaml (watts)".format(self._serial(uuid), raw_flag))
+            if limits["feed_in_enabled"] and self.export_limit(uuid) is None:
+                self.log(
+                    "Warn: Sungrow {} has feed-in limitation on, but its value ({}) and ratio ({}%) of a {}W rating do not agree, so the export limit is not being set automatically. Set sungrow_export_limit in apps.yaml (watts)".format(
+                        self._serial(uuid), limits["feed_in_value"], limits["feed_in_ratio"], self.inverter_limit(uuid)
+                    )
+                )
+        if answered:
+            self.mark_refreshed("limits")
+        else:
+            # Nothing answered. Age the stamp so the tier comes due again after the retry window
+            # rather than on the next tick - otherwise every cycle would spend up to the task
+            # timeout per inverter waiting on a read that is not going to arrive.
+            self.mark_refreshed("limits", age_minutes=max(0, SUNGROW_TTL_STATIC - SUNGROW_LIMITS_RETRY_MINUTES))
+
+    # -------------------------------------------------------------------------
+    # Publishing
+    # -------------------------------------------------------------------------
+
+    def _serial(self, uuid):
+        """Return the display serial for a device UUID, falling back to the UUID itself."""
+        return str(self.device_detail.get(uuid, {}).get("serial") or uuid)
+
+    def _sensor_name(self, uuid, leaf):
+        """Return a namespaced Sungrow sensor entity id."""
+        return "sensor.{}_sungrow_{}_{}".format(self.prefix, self._serial(uuid).lower(), leaf)
+
+    def _control_name(self, domain, uuid, leaf):
+        """Return a namespaced Sungrow control entity id."""
+        return "{}.{}_sungrow_{}_{}".format(domain, self.prefix, self._serial(uuid).lower(), leaf)
+
+    async def publish_data(self):
+        """Publish monitoring sensors for each inverter."""
+        units = {"soc": "%", "battery_power": "W", "grid_power": "W", "pv_power": "W", "load_power": "W", "battery_soh": "%", "battery_temperature": "°C", "battery_voltage": "V", "battery_current": "A"}
+        for uuid in self.device_list:
+            serial = self._serial(uuid)
+            for leaf, unit in units.items():
+                value = self.telemetry(uuid, leaf)
+                if value is None:
+                    continue
+                self.dashboard_item(
+                    self._sensor_name(uuid, leaf),
+                    state=round(value, 3),
+                    attributes={"unit_of_measurement": unit, "friendly_name": "Sungrow {} {}".format(serial, leaf.replace("_", " ").title())},
+                    app="sungrow",
+                )
+
+            # Ratings are published only when actually derivable - an arg pointing at a sensor
+            # that never appears is worse than an absent arg the user can fill in.
+            # Published as a DIAGNOSTIC and never used for soc_max: 13140's name cell says
+            # "Battery Capacity (kWh)" and its unit cell says "Wh" in Sungrow's own table, so one
+            # of the two is wrong by a factor of a thousand and the docs do not say which. It is
+            # surfaced because a tester comparing it against the derived capacity below is
+            # exactly how that gets resolved.
+            reported = self.device_values.get(uuid, {}).get("battery_capacity_reported")
+            if reported is not None:
+                self.dashboard_item(
+                    self._sensor_name(uuid, "battery_capacity_reported"),
+                    state=round(reported, 3),
+                    attributes={"friendly_name": "Sungrow {} Battery Capacity (reported, UNIT UNVERIFIED - Sungrow document this point as both kWh and Wh)".format(serial), "icon": "mdi:help-circle-outline"},
+                    app="sungrow",
+                )
+
+            capacity = self.battery_capacity(uuid)
+            if capacity > 0:
+                self.dashboard_item(self._sensor_name(uuid, "battery_capacity"), state=capacity, attributes={"unit_of_measurement": "kWh", "friendly_name": "Sungrow {} Battery Capacity".format(serial)}, app="sungrow")
+            rate_max = self.battery_rate_max(uuid)
+            if rate_max > 0:
+                self.dashboard_item(self._sensor_name(uuid, "battery_rate_max"), state=round(rate_max), attributes={"unit_of_measurement": "W", "friendly_name": "Sungrow {} Battery Rate Max".format(serial)}, app="sungrow")
+            inverter_limit = self.inverter_limit(uuid)
+            if inverter_limit > 0:
+                self.dashboard_item(self._sensor_name(uuid, "inverter_limit"), state=round(inverter_limit), attributes={"unit_of_measurement": "W", "friendly_name": "Sungrow {} Inverter Limit".format(serial)}, app="sungrow")
+            export_limit = self.export_limit(uuid)
+            if export_limit is not None and export_limit < SUNGROW_NO_EXPORT_LIMIT:
+                self.dashboard_item(self._sensor_name(uuid, "export_limit"), state=round(export_limit), attributes={"unit_of_measurement": "W", "friendly_name": "Sungrow {} Export Limit".format(serial)}, app="sungrow")
+
+            # Daily energy counters feed Predbat's load/import/export learning. They reset at
+            # midnight; minute_data/clean_incrementing_reverse absorbs that.
+            for leaf in SUNGROW_PLANT_ENERGY:
+                value = self.energy(uuid, leaf)
+                if value is None:
+                    continue
+                self.dashboard_item(
+                    self._sensor_name(uuid, leaf),
+                    state=value,
+                    attributes={"unit_of_measurement": "kWh", "device_class": "energy", "state_class": "measurement", "friendly_name": "Sungrow {} {}".format(serial, leaf.replace("_", " ").title())},
+                    app="sungrow",
+                )
+
+            self.dashboard_item(
+                self._sensor_name(uuid, "control_state"),
+                state="external_dispatch" if uuid in self.control_held else "self_consumption",
+                attributes={"friendly_name": "Sungrow {} Control State".format(serial), "icon": "mdi:transmission-tower"},
+                app="sungrow",
+            )
+
+    # -------------------------------------------------------------------------
+    # Control entities
+    # -------------------------------------------------------------------------
+
+    @staticmethod
+    def _empty_schedule():
+        """Return a fresh, disabled schedule shape - the single source of truth for its defaults."""
+        return {
+            "reserve": 0,
+            "charge": {"enable": False, "soc": 0, "power": 0, "start": "00:00:00", "end": "00:00:00"},
+            "export": {"enable": False, "soc": 0, "power": 0, "start": "00:00:00", "end": "00:00:00"},
+        }
+
+    async def publish_schedule_settings_ha(self, uuid):
+        """Publish the charge/export schedule control entities for one inverter."""
+        serial = self._serial(uuid)
+        local = self.local_schedule.get(uuid, {})
+        # Deliberately NOT clamped. These entities are Predbat's control surface: it writes a
+        # value then reads it back to confirm, so publishing anything other than what was
+        # written guarantees a mismatch and a retry storm. Clamping happens at the API
+        # boundary, in scale_for_write.
+        self.dashboard_item(
+            self._control_name("number", uuid, "battery_schedule_reserve"),
+            state=int(local.get("reserve", 0)),
+            attributes={"min": 0, "max": 100, "step": 1, "unit_of_measurement": "%", "friendly_name": "Sungrow {} Battery Schedule Reserve".format(serial), "icon": "mdi:gauge"},
+            app="sungrow",
+        )
+        for direction in ("charge", "export"):
+            window = local.get(direction, {})
+            # HH:MM:SS to match INVERTER_DEF charge_time_format. Any other value makes Predbat
+            # replace these entities with its own dummies and the window never arrives.
+            self.dashboard_item(
+                self._control_name("select", uuid, "battery_schedule_{}_start_time".format(direction)),
+                state=window.get("start", "00:00:00"),
+                attributes={"options": SUNGROW_TIME_OPTIONS, "friendly_name": "Sungrow {} {} Start".format(serial, direction.title()), "icon": "mdi:clock-outline"},
+                app="sungrow",
+            )
+            self.dashboard_item(
+                self._control_name("select", uuid, "battery_schedule_{}_end_time".format(direction)),
+                state=window.get("end", "00:00:00"),
+                attributes={"options": SUNGROW_TIME_OPTIONS, "friendly_name": "Sungrow {} {} End".format(serial, direction.title()), "icon": "mdi:clock-outline"},
+                app="sungrow",
+            )
+            self.dashboard_item(
+                self._control_name("number", uuid, "battery_schedule_{}_soc".format(direction)),
+                state=int(window.get("soc", 0)),
+                attributes={"min": 0, "max": 100, "step": 1, "unit_of_measurement": "%", "friendly_name": "Sungrow {} {} SoC".format(serial, direction.title()), "icon": "mdi:gauge"},
+                app="sungrow",
+            )
+            self.dashboard_item(
+                self._control_name("number", uuid, "battery_schedule_{}_power".format(direction)),
+                state=int(window.get("power", 0)),
+                attributes={"min": 0, "max": 20000, "step": 100, "unit_of_measurement": "W", "friendly_name": "Sungrow {} {} Power".format(serial, direction.title()), "icon": "mdi:flash"},
+                app="sungrow",
+            )
+            self.dashboard_item(
+                self._control_name("switch", uuid, "battery_schedule_{}_enable".format(direction)),
+                state="on" if window.get("enable") else "off",
+                attributes={"friendly_name": "Sungrow {} {} Enable".format(serial, direction.title()), "icon": "mdi:check-circle-outline"},
+                app="sungrow",
+            )
+        self.dashboard_item(
+            self._control_name("switch", uuid, "battery_schedule_charge_write"),
+            state="off",
+            attributes={"friendly_name": "Sungrow {} Schedule Write".format(serial), "icon": "mdi:content-save"},
+            app="sungrow",
+        )
+
+    async def get_schedule_settings_ha(self, uuid):
+        """Read the control entities into the schedule shape decide_command consumes.
+
+        Numeric casts route through as_float so an entity legitimately reporting
+        "unknown"/"unavailable" - right after a Home Assistant restart, before Predbat
+        republishes - falls back to 0 rather than raising and killing the control loop.
+        """
+        schedule = {"reserve": int(as_float(self.get_state_wrapper(self._control_name("number", uuid, "battery_schedule_reserve"), default=0), 0))}
+        for direction in ("charge", "export"):
+            schedule[direction] = {
+                "enable": self.get_state_wrapper(self._control_name("switch", uuid, "battery_schedule_{}_enable".format(direction)), default="off") == "on",
+                "start": self.get_state_wrapper(self._control_name("select", uuid, "battery_schedule_{}_start_time".format(direction)), default="00:00:00"),
+                "end": self.get_state_wrapper(self._control_name("select", uuid, "battery_schedule_{}_end_time".format(direction)), default="00:00:00"),
+                "soc": int(as_float(self.get_state_wrapper(self._control_name("number", uuid, "battery_schedule_{}_soc".format(direction)), default=0), 0)),
+                "power": int(as_float(self.get_state_wrapper(self._control_name("number", uuid, "battery_schedule_{}_power".format(direction)), default=0), 0)),
+            }
+        self.local_schedule[uuid] = schedule
+        return schedule
+
+    def _uuid_from_entity(self, entity_id):
+        """Resolve a control entity id back to its device UUID, or None.
+
+        Entity ids are always {domain}.{prefix}_sungrow_{serial}_{leaf}, so the serial is
+        always followed by "_". Matching serial + "_" rather than a bare prefix keeps
+        prefix-colliding serials apart - an entity for A2211 must never route to A221, which
+        would send a control write to the wrong inverter.
+        """
+        text = str(entity_id).lower()
+        for uuid in self.device_list:
+            if "_sungrow_{}_".format(self._serial(uuid).lower()) in text:
+                return uuid
+        return None
+
+    @staticmethod
+    def _to_bool(value, current=False):
+        """Coerce a switch service or state to a boolean, keeping current when unknown."""
+        if isinstance(value, bool):
+            return value
+        text = str(value).strip().lower()
+        if text in ("turn_on", "on", "true", "1"):
+            return True
+        if text in ("turn_off", "off", "false", "0"):
+            return False
+        if text == "toggle":
+            return not current
+        return current
+
+    def update_local_schedule(self, uuid, entity_id, value):
+        """Apply one control-entity change to the locally held schedule."""
+        schedule = self.local_schedule.setdefault(uuid, self._empty_schedule())
+        leaf = str(entity_id).split("_sungrow_{}_".format(self._serial(uuid).lower()), 1)[-1]
+        if leaf == "battery_schedule_reserve":
+            schedule["reserve"] = int(as_float(value, 0))
+            return
+        for direction in ("charge", "export"):
+            prefix = "battery_schedule_{}_".format(direction)
+            if not leaf.startswith(prefix):
+                continue
+            field = leaf[len(prefix) :]
+            window = schedule.setdefault(direction, {})
+            if field in ("start_time", "end_time"):
+                window[field.replace("_time", "")] = str(value)
+            elif field in ("soc", "power"):
+                window[field] = int(as_float(value, 0))
+            elif field == "enable":
+                window["enable"] = self._to_bool(value, window.get("enable", False))
+            return
+
+    async def select_event(self, entity_id, value):
+        """Handle a select entity change."""
+        await self._handle_control_event(entity_id, value)
+
+    async def number_event(self, entity_id, value):
+        """Handle a number entity change."""
+        await self._handle_control_event(entity_id, value)
+
+    async def switch_event(self, entity_id, service):
+        """Handle a switch entity service call."""
+        await self._handle_control_event(entity_id, service)
+
+    async def _handle_control_event(self, entity_id, value):
+        """Route one control-entity event to the right inverter and record it.
+
+        Nothing is sent to the inverter from here; see the note on the write button below.
+        """
+        uuid = self._uuid_from_entity(entity_id)
+        if not uuid:
+            self.log("Warn: Sungrow could not resolve an inverter for {}".format(entity_id))
+            return
+        # The write button does NOT write. A press records that Predbat is driving this
+        # inverter and returns; run() reads the control entities and calls _reconcile_control()
+        # for every driven inverter on every tick, so the command goes out at most 60 seconds
+        # later, on the component's own loop. Writing here instead was wrong three ways:
+        #
+        # 1. This runs inside the Home Assistant event handler. A cloud write is a dispatched
+        #    task polled to completion, so a slow cloud would block every HA state change
+        #    behind it.
+        # 2. Taking control starts the heartbeat task, which would be created on whichever
+        #    loop happened to deliver the event rather than the component's own.
+        # 3. execute.py presses the button BEFORE it writes the target SoC and the rates, so
+        #    the decision would be taken from half-written entities - and the correction a
+        #    moment later would then be held by sungrow_min_write_interval.
+        #
+        # Nor is the button a FORCED write when the cycle acts on it. Predbat presses it on
+        # every cycle as its normal "apply the schedule" action (INVERTER_DEF
+        # time_button_press), not only when the plan actually changed, so forcing would bypass
+        # the change-detection gate on every single cycle. DEYE hit this exact bug first:
+        # PR #4371 measured 40 button presses producing 36 byte-identical control orders over
+        # two hours on a live site once the button forced the write. Do not introduce
+        # force=True on this path.
+        if str(entity_id).endswith("battery_schedule_charge_write"):
+            if self._to_bool(value):
+                # Marked on the press itself rather than on a successful write: a write that
+                # fails still means Predbat owns this inverter and the next tick should retry.
+                self.control_active.add(uuid)
+                await self.save_control()
+                self.log("Info: Sungrow {} write button pressed; the schedule will be applied on the next cycle".format(self._serial(uuid)))
+            return
+        self.update_local_schedule(uuid, entity_id, value)
+        await self.publish_schedule_settings_ha(uuid)
+
+    # -------------------------------------------------------------------------
+    # The control decision
+    # -------------------------------------------------------------------------
+
+    def _window_active_now(self, window):
+        """Return whether a stored window covers Predbat's current minute.
+
+        Hours above 24 are accepted because Predbat can represent a window crossing midnight
+        as (for example) 23:00-25:00. This component never writes a window to the inverter, so
+        unlike a schedule-based one it does not have to split it - it only has to answer
+        whether now is inside it.
+        """
+        start = hm_to_minutes(window.get("start"))
+        end = hm_to_minutes(window.get("end"))
+        if start == end:
+            return False
+        now = int(self.minutes_now) % (24 * 60)
+        if end > 24 * 60 and now < start:
+            now += 24 * 60
+        if start < end:
+            return start <= now < end
+        return now >= start or now < end
+
+    def decide_command(self, uuid, schedule):
+        """Translate Predbat's plan into the instantaneous command to hold right now.
+
+        Returns the external-dispatch state to put the inverter in, or None meaning "release
+        control and let the inverter run self-consumption". Sungrow's parameters carry no
+        schedule, so the window arithmetic happens here on every cycle.
+
+        The branches read the control entities the way execute.py writes them for a type with
+        no timed pause and charge_discharge_with_rate False:
+
+        1. An enabled, active export window with power, while SoC is above its floor, is a
+           forced discharge. The floor is checked HERE as well as being written to 10002,
+           because 10002 only accepts 0-50% and a higher target would otherwise be overrun.
+        2. An enabled, active charge window with power and a target above SoC is a forced
+           charge.
+        3. Discharge rate zero while the charge rate is still set is Predbat's generic
+           no-discharge hold (freeze charge, car hold, iBoost hold). It carries no window, so
+           it is not gated on one. Both rates zero is an inverter nobody has planned for yet,
+           not a hold.
+        4. An ENABLED charge window whose target is already met holds there. A disabled window
+           is never read: execute.py leaves its times in place when it disables it, so the
+           same hours would otherwise stop the battery again on every later day.
+        5. A reserve above the range 10002 accepts cannot be held by the inverter, so it is
+           held with a stop while SoC is at or below it.
+
+        Freeze export (charge rate zero, discharge rate set) deliberately matches none of
+        these: the type declares support_discharge_freeze False.
+        """
+        charge = schedule.get("charge", {}) or {}
+        export = schedule.get("export", {}) or {}
+        soc_reading = self.telemetry(uuid, "soc")
+        soc_known = soc_reading is not None
+        soc_now = as_float(soc_reading, 0.0)
+        reserve = int(as_float(schedule.get("reserve"), 0))
+
+        charge_active = self._window_active_now(charge)
+        export_active = self._window_active_now(export)
+        charge_target = as_float(charge.get("soc"), 0.0)
+        charge_power = as_float(charge.get("power"), 0.0)
+        export_target = as_float(export.get("soc"), 0.0)
+        export_power = as_float(export.get("power"), 0.0)
+        export_floor = max(reserve, int(export_target))
+
+        if export.get("enable") and export_active and export_power > 0 and (not soc_known or soc_now > export_floor):
+            return {"command": SUNGROW_CMD_DISCHARGE, "power": export_power, "soc_lower": export_floor, "reason": "export window active"}
+
+        if charge.get("enable") and charge_active and charge_power > 0 and charge_target > soc_now:
+            return {"command": SUNGROW_CMD_CHARGE, "power": charge_power, "soc_upper": int(charge_target), "reason": "charge window active"}
+
+        if export_power <= 0 and charge_power > 0:
+            return {"command": SUNGROW_CMD_STOP, "power": 0, "soc_lower": reserve, "reason": "discharge hold"}
+
+        if charge.get("enable") and charge_active and charge_target > 0 and charge_target <= soc_now:
+            return {"command": SUNGROW_CMD_STOP, "power": 0, "soc_upper": int(charge_target), "reason": "charge target reached"}
+
+        if soc_known and reserve > SUNGROW_PARAM_RANGE[SUNGROW_PARAM_SOC_LOWER][1] and soc_now <= reserve:
+            return {"command": SUNGROW_CMD_STOP, "power": 0, "soc_lower": reserve, "reason": "reserve above the inverter's floor range"}
+
+        return None
+
+    def build_param_list(self, decision, uuid=None):
+        """Turn a decision into the param_list paramSetting expects.
+
+        10003 is written FIRST and in the same task as the command. The portal is explicit
+        that the EMS mode and the heartbeat have to travel together when control is taken, and
+        writing 10004 while the inverter is still in self-consumption is simply ignored - the
+        command is accepted and does nothing, which is the worst of both worlds because
+        nothing reports an error.
+
+        The heartbeat is included in the taking-control task for the same reason. The
+        heartbeat LOOP then keeps it alive; this is only the first beat.
+        """
+        params = [
+            param_entry(SUNGROW_PARAM_EMS_MODE, scale_for_write(SUNGROW_PARAM_EMS_MODE, SUNGROW_EMS_EXTERNAL_DISPATCH)),
+            param_entry(SUNGROW_PARAM_HEARTBEAT, scale_for_write(SUNGROW_PARAM_HEARTBEAT, heartbeat_declared_interval(self.heartbeat_interval))),
+            param_entry(SUNGROW_PARAM_COMMAND, scale_for_write(SUNGROW_PARAM_COMMAND, decision["command"])),
+            param_entry(SUNGROW_PARAM_POWER, scale_for_write(SUNGROW_PARAM_POWER, max(0.0, min(as_float(decision.get("power"), 0.0), self.power_limit(uuid))))),
+        ]
+        if "soc_upper" in decision:
+            params.append(param_entry(SUNGROW_PARAM_SOC_UPPER, scale_for_write(SUNGROW_PARAM_SOC_UPPER, decision["soc_upper"])))
+        if "soc_lower" in decision:
+            params.append(param_entry(SUNGROW_PARAM_SOC_LOWER, scale_for_write(SUNGROW_PARAM_SOC_LOWER, decision["soc_lower"])))
+        return params
+
+    def build_forced_charge_params(self, schedule):
+        """Build the forced-charging window parameters (10065-10076) from Predbat's charge window.
+
+        This is the SECOND of Sungrow's two control paths, and the one this component does not
+        drive. It is offered here as an opt-in supplement, never as a replacement - the module
+        docstring gives the full reasoning, but in short it is charge-only, carries no power
+        setpoint, and holds two daily-recurring windows, so it cannot express export, freeze,
+        a charge rate, or more than two slots.
+
+        OFF BY DEFAULT because of the one thing it does that external dispatch does not: this
+        window is stored IN THE INVERTER and survives Predbat stopping, the network dropping
+        and the heartbeat lapsing. That is a feature to a user who wants the battery to keep
+        following the last plan through an outage, and a hazard to everyone else, because the
+        inverter will go on force-charging from the grid to a target nobody is supervising,
+        every day, on whatever rates apply then. Enabling it is a deliberate trade of the safe
+        revert for continuity, so it is the user's call and not the default.
+
+        Window 2 is left disabled. Predbat only ever has one charge window to express at a time
+        here, so writing anything into it would be inventing a second charge the plan never
+        asked for.
+        """
+        charge = schedule.get("charge", {}) or {}
+        enabled = bool(charge.get("enable")) and not window_is_empty(charge.get("start"), charge.get("end"))
+        if not enabled:
+            return [param_entry(SUNGROW_PARAM_FORCED_CHARGING, scale_for_write(SUNGROW_PARAM_FORCED_CHARGING, SUNGROW_DISABLE))]
+        start_hour, start_minute = hhmmss_to_hour_minute(charge.get("start"))
+        end_hour, end_minute = hhmmss_to_hour_minute(charge.get("end"))
+        return [
+            param_entry(SUNGROW_PARAM_FORCED_CHARGING, scale_for_write(SUNGROW_PARAM_FORCED_CHARGING, SUNGROW_ENABLE)),
+            param_entry(SUNGROW_PARAM_FORCED_VALID_TIME, scale_for_write(SUNGROW_PARAM_FORCED_VALID_TIME, SUNGROW_FORCED_EVERYDAY)),
+            param_entry(SUNGROW_PARAM_FORCED_START_HOUR_1, scale_for_write(SUNGROW_PARAM_FORCED_START_HOUR_1, start_hour)),
+            param_entry(SUNGROW_PARAM_FORCED_START_MIN_1, scale_for_write(SUNGROW_PARAM_FORCED_START_MIN_1, start_minute)),
+            param_entry(SUNGROW_PARAM_FORCED_END_HOUR_1, scale_for_write(SUNGROW_PARAM_FORCED_END_HOUR_1, end_hour)),
+            param_entry(SUNGROW_PARAM_FORCED_END_MIN_1, scale_for_write(SUNGROW_PARAM_FORCED_END_MIN_1, end_minute)),
+            param_entry(SUNGROW_PARAM_FORCED_TARGET_SOC_1, scale_for_write(SUNGROW_PARAM_FORCED_TARGET_SOC_1, int(as_float(charge.get("soc"), 0)))),
+            param_entry(SUNGROW_PARAM_FORCED_START_HOUR_2, scale_for_write(SUNGROW_PARAM_FORCED_START_HOUR_2, 0)),
+            param_entry(SUNGROW_PARAM_FORCED_START_MIN_2, scale_for_write(SUNGROW_PARAM_FORCED_START_MIN_2, 0)),
+            param_entry(SUNGROW_PARAM_FORCED_END_HOUR_2, scale_for_write(SUNGROW_PARAM_FORCED_END_HOUR_2, 0)),
+            param_entry(SUNGROW_PARAM_FORCED_END_MIN_2, scale_for_write(SUNGROW_PARAM_FORCED_END_MIN_2, 0)),
+            param_entry(SUNGROW_PARAM_FORCED_TARGET_SOC_2, scale_for_write(SUNGROW_PARAM_FORCED_TARGET_SOC_2, 0)),
+        ]
+
+    # -------------------------------------------------------------------------
+    # The write path: check -> dispatch -> poll
+    # -------------------------------------------------------------------------
+
+    def _is_read_only(self):
+        """Return True when Predbat is in read-only mode and must not write to the inverter."""
+        return self.get_state_wrapper("switch.{}_set_read_only".format(self.prefix), default="off") == "on"
+
+    async def check_write_support(self, uuid):
+        """Return True/False/None for whether this device accepts parameter configuration.
+
+        Cached: it is a property of the hardware and the account tier, not a transient error,
+        so re-probing every cycle spends a call to be told the same thing. A failure leaves
+        the verdict unknown so the next cycle re-probes rather than permanently writing the
+        device off.
+        """
+        if uuid in self._write_supported:
+            return self._write_supported[uuid]
+        ok, data = await self._request("param_check", {"uuid": str(uuid), "set_type": SUNGROW_SET_TYPE_WRITE})
+        if not ok:
+            return None
+        data = data or {}
+        if str(data.get("check_result")) != SUNGROW_CHECK_OK:
+            return None
+        dev_list = data.get("dev_result_list") or []
+        if not dev_list:
+            return None
+        verdict = str(dev_list[0].get("check_result"))
+        if verdict == SUNGROW_CHECK_SUPPORTED:
+            self._write_supported[uuid] = True
+            return True
+        if verdict == SUNGROW_CHECK_UNSUPPORTED:
+            self._write_supported[uuid] = False
+            self.log("Warn: Sungrow {} does not accept parameter configuration; Predbat can monitor it but cannot control it. This is usually an account-tier or model limitation.".format(self._serial(uuid)))
+            return False
+        return None
+
+    async def _await_task(self, uuid, task_id):
+        """Poll getParamSettingTask until the dispatched task finishes, returning its param_list.
+
+        Returns None on failure or timeout. The first poll is delayed deliberately: a task
+        queued microseconds ago is always still running, so polling immediately just spends a
+        request to be told so. The whole wait is bounded so a wedged task cannot stall the
+        component's tick past ComponentBase's run_timeout.
+        """
+        deadline = time.time() + SUNGROW_TASK_TIMEOUT_SECONDS
+        await asyncio.sleep(SUNGROW_TASK_FIRST_POLL_SECONDS)
+        while time.time() < deadline:
+            ok, data = await self._request("param_task", {"uuid": str(uuid), "task_id": str(task_id)})
+            if not ok:
+                return None
+            status = as_int((data or {}).get("command_status"))
+            if status == SUNGROW_TASK_DONE:
+                param_list = (data or {}).get("param_list") or []
+                # A COMPLETED TASK IS NOT A SUCCESSFUL WRITE. The status is two-level: the task
+                # reports 8 once it has finished running, while each parameter inside it carries
+                # its own status, and one of them can have failed or timed out while the task as
+                # a whole "completed". Reading only the task level reports a setpoint as landed
+                # when the inverter never took it, which is the worst possible failure here -
+                # Predbat would cache the decision as applied and never retry it.
+                bad = [entry for entry in param_list if as_int(entry.get("command_status")) not in (None, SUNGROW_PARAM_STATUS_SUCCESS)]
+                if bad:
+                    detail = ", ".join("{} {}".format(describe_param(entry.get("param_code")), SUNGROW_PARAM_STATUS.get(as_int(entry.get("command_status")), entry.get("command_status"))) for entry in bad)
+                    self.log("Warn: Sungrow task {} for {} completed but {} of {} parameter(s) did not take: {}".format(task_id, self._serial(uuid), len(bad), len(param_list), detail))
+                    return None
+                return param_list
+            if status != SUNGROW_TASK_RUNNING:
+                self.log("Warn: Sungrow task {} for {} ended in command_status {}".format(task_id, self._serial(uuid), status))
+                return None
+            await asyncio.sleep(SUNGROW_TASK_POLL_SECONDS)
+        self.log("Warn: Sungrow task {} for {} did not finish within {}s".format(task_id, self._serial(uuid), SUNGROW_TASK_TIMEOUT_SECONDS))
+        return None
+
+    async def dispatch_params(self, uuid, param_list, set_type=SUNGROW_SET_TYPE_WRITE, task_name="Predbat"):
+        """Dispatch one parameter task and wait for its result. Returns param_list or None.
+
+        This is the whole asynchronous write in one place. paramSetting does NOT apply
+        anything by itself - it queues a task and answers with a task_id, and the inverter may
+        take seconds to pick it up. Treating its success envelope as "the inverter has the
+        value" is the single easiest mistake to make against this API, so no caller sees the
+        task_id: they get either the completed read-back or None.
+        """
+        body = {
+            "set_type": set_type,
+            "uuid": str(uuid),
+            "task_name": "{} {}".format(task_name, time.strftime("%Y-%m-%d %H:%M:%S")),
+            "expire_second": SUNGROW_TASK_EXPIRE_SECONDS,
+            "param_list": param_list,
+        }
+        ok, data = await self._request("param_setting", body)
+        if not ok:
+            return None
+        data = data or {}
+        if str(data.get("check_result")) != SUNGROW_CHECK_OK:
+            check = str(data.get("check_result"))
+            self.log("Warn: Sungrow rejected the parameter task for {} with check_result {} ({})".format(self._serial(uuid), check, SUNGROW_CHECK_RESULTS.get(check, "undocumented")))
+            return None
+        dev_list = data.get("dev_result_list") or []
+        if not dev_list or str(dev_list[0].get("code")) != SUNGROW_DEV_RESULT_OK:
+            code = str(dev_list[0].get("code")) if dev_list else ""
+            self.log("Warn: Sungrow rejected the parameter task for {}: {} ({})".format(self._serial(uuid), code or "no device result", SUNGROW_CHECK_RESULTS.get(code, "undocumented")))
+            return None
+        task_id = dev_list[0].get("task_id")
+        if not task_id:
+            self.log("Warn: Sungrow accepted the parameter task for {} but returned no task_id".format(self._serial(uuid)))
+            return None
+        return await self._await_task(uuid, task_id)
+
+    async def read_params(self, uuid, param_codes):
+        """Read parameters back from the inverter, returning {param_code: raw set value}.
+
+        A read is the same dispatch-then-poll flow as a write with set_type 2 and an empty
+        set_value, which is why it shares dispatch_params rather than having its own client.
+        """
+        results = await self.dispatch_params(uuid, [param_entry(code) for code in param_codes], set_type=SUNGROW_SET_TYPE_READ, task_name="Predbat readback")
+        if results is None:
+            return None
+        return {str(entry.get("param_code")): entry.get("return_value") for entry in results}
+
+    def _write_allowed(self, uuid, force=False):
+        """Return True when a control write for one inverter may go out now.
+
+        A change arriving inside the pacing window is HELD, not dropped: apply_settings leaves
+        the applied-command cache untouched, so the next eligible tick rebuilds and sends it.
+        The heartbeat deliberately does NOT go through this gate - it is not a change of plan
+        and holding it back would drop control of the battery.
+        """
+        if force or not self.min_write_interval:
+            return True
+        last = self.last_write_time.get(uuid)
+        if last is None:
+            return True
+        return (time.time() - last) >= self.min_write_interval
+
+    async def _write_params(self, uuid, decision, force=False):
+        """Send one control decision if it differs from the last applied one and pacing allows.
+
+        Returns whether the inverter is now KNOWN TO MATCH this decision, not merely whether
+        an exception was avoided. True covers "sent and confirmed" and "already matched, so
+        nothing needed sending" alike. False covers both a HELD change and an outright
+        rejection - a caller must not read either of those as the inverter matching the plan.
+        """
+        if self._is_read_only():
+            # Checked here, not only in the callers: the write button is pressed by anything
+            # that can reach the entity, and read-only has to mean no command leaves at all.
+            return False
+        if self._write_supported.get(uuid) is False:
+            return False
+        if self.forced_charge_schedule:
+            # The stored window is part of what is written, so it is part of what is compared.
+            charge = self.local_schedule.get(uuid, {}).get("charge", {}) or {}
+            decision = dict(decision, forced_window=[bool(charge.get("enable")), str(charge.get("start")), str(charge.get("end")), int(as_float(charge.get("soc"), 0))])
+        if not force and self.applied_command.get(uuid) == decision:
+            return True
+        if not self._write_allowed(uuid, force=force):
+            self.log("Info: Sungrow {} change is held by sungrow_min_write_interval ({}s) and will be applied on the next eligible cycle".format(self._serial(uuid), self.min_write_interval))
+            return False
+
+        supported = await self.check_write_support(uuid)
+        if supported is False:
+            return False
+
+        params = self.build_param_list(decision, uuid)
+        if self.forced_charge_schedule:
+            params.extend(self.build_forced_charge_params(self.local_schedule.get(uuid, {})))
+
+        # Stamp every attempt, success or not. A persistently rejected write must still be
+        # paced, or the reconcile loop re-dispatches it on every single tick forever. The
+        # decision is deliberately NOT cached as applied on any failure path, so it keeps
+        # retrying - just paced, not hammering.
+        self.last_write_time[uuid] = time.time()
+        results = await self.dispatch_params(uuid, params)
+        if results is None:
+            self.log("Warn: Sungrow control write for {} was not confirmed ({})".format(self._serial(uuid), decision.get("reason", "")))
+            await self.save_control()
+            return False
+
+        self.applied_command[uuid] = dict(decision)
+        for key, code in (("soc_upper", SUNGROW_PARAM_SOC_UPPER), ("soc_lower", SUNGROW_PARAM_SOC_LOWER)):
+            if key in decision and clamp_range(code, decision[key]) != decision[key]:
+                low, high = SUNGROW_PARAM_RANGE[code]
+                self.log(
+                    "Info: Sungrow {} only accepts {}-{}% for {}, so {}% was written as {}%; Predbat enforces the real target itself from telemetry".format(
+                        self._serial(uuid), low, high, describe_param(code), decision[key], clamp_range(code, decision[key])
+                    )
+                )
+        # Control is only marked as HELD once the task has actually completed. Starting the
+        # heartbeat for a task that never landed would beat for a mode the inverter is not in.
+        self.control_held.add(uuid)
+        # Control has just been taken on a fresh decision, whoever called.
+        self._decision_time[uuid] = time.time()
+        # A fresh hold starts with a clean count; a miss from an earlier hold is not this one's.
+        self._beat_failures.pop(uuid, None)
+        self._ensure_heartbeat()
+        self.log("Info: Sungrow wrote {} for {} ({})".format(describe_param(SUNGROW_PARAM_COMMAND), self._serial(uuid), decision.get("reason", "")))
+        await self.save_control()
+        return True
+
+    @staticmethod
+    def _release_params(reserve):
+        """Return the param_list that hands an inverter back to self-consumption.
+
+        A dispatch narrows 10001 and 10002 to the plan's targets, and nothing says the inverter
+        widens them again by itself when it leaves external dispatch. So release writes them
+        explicitly: the ceiling back to 100%, and the floor to Predbat's reserve, which is also
+        the only point at which the reserve reaches the inverter at all.
+        """
+        return [
+            param_entry(SUNGROW_PARAM_EMS_MODE, scale_for_write(SUNGROW_PARAM_EMS_MODE, SUNGROW_EMS_SELF_CONSUMPTION)),
+            param_entry(SUNGROW_PARAM_SOC_UPPER, scale_for_write(SUNGROW_PARAM_SOC_UPPER, 100)),
+            param_entry(SUNGROW_PARAM_SOC_LOWER, scale_for_write(SUNGROW_PARAM_SOC_LOWER, reserve)),
+        ]
+
+    async def release_control(self, uuid, reserve=0):
+        """Hand the inverter back to self-consumption with full-range limits and Predbat's reserve.
+
+        Returns True when the inverter is known to be released with these limits. The device
+        leaves control_held before anything is sent, so the beats stop even if the write fails -
+        the lapsing heartbeat then reverts the mode on its own, and the write is retried on a
+        later cycle because nothing is cached as applied until it lands.
+
+        Also called while already released: a changed reserve is a changed release and is
+        written, paced by sungrow_min_write_interval like any other change of plan.
+        """
+        self._beat_failures.pop(uuid, None)
+        self._decision_time.pop(uuid, None)
+        was_held = uuid in self.control_held
+        self.control_held.discard(uuid)
+        release = {"command": SUNGROW_CMD_RELEASE, "soc_lower": int(clamp_range(SUNGROW_PARAM_SOC_LOWER, as_float(reserve, 0.0)))}
+        if not was_held and self.applied_command.get(uuid) == release:
+            return True
+        self.applied_command.pop(uuid, None)
+        if not self.control_enable or self._write_supported.get(uuid) is False:
+            return True
+        if self._is_read_only() and not was_held:
+            # Read-only changes no settings. Handing back control Predbat was holding is the
+            # exception, and was_held makes it happen exactly once.
+            return True
+        if not was_held and not self._write_allowed(uuid):
+            return False
+        self.last_write_time[uuid] = time.time()
+        params = self._release_params(release["soc_lower"])
+        if self.forced_charge_schedule:
+            # Stored IN THE INVERTER and recurring daily, so leaving it would force-charge at
+            # the same hours tomorrow whether or not anything planned it.
+            params.append(param_entry(SUNGROW_PARAM_FORCED_CHARGING, scale_for_write(SUNGROW_PARAM_FORCED_CHARGING, SUNGROW_DISABLE)))
+        results = await self.dispatch_params(uuid, params, task_name="Predbat release")
+        if results is None:
+            self.log("Info: Sungrow could not confirm the release of {} to self-consumption; the external EMS heartbeat has stopped so the inverter reverts on its own, and the release will be retried".format(self._serial(uuid)))
+            await self.save_control()
+            return False
+        self.applied_command[uuid] = release
+        self.log("Info: Sungrow released {} to self-consumption with a {}% floor".format(self._serial(uuid), release["soc_lower"]))
+        await self.save_control()
+        return True
+
+    async def apply_settings(self, uuid, schedule, force=False):
+        """Decide and apply the command for one inverter."""
+        if not self.control_enable:
+            return False
+        decision = self.decide_command(uuid, schedule)
+        if decision is None:
+            return await self.release_control(uuid, int(as_float(schedule.get("reserve"), 0)))
+        return await self._write_params(uuid, decision, force=force)
+
+    async def apply_schedule(self, uuid, force=False):
+        """Apply the locally held schedule for one inverter."""
+        schedule = self.local_schedule.get(uuid)
+        if not schedule:
+            return False
+        return await self.apply_settings(uuid, schedule, force=force)
+
+    async def _reconcile_control(self, uuid):
+        """Re-apply this inverter's decision if Predbat already controls it, unforced.
+
+        Gated on read-only for a specific reason. Predbat's own read-only handling covers every
+        write that originates from a plan, but NOT one this component initiates itself - and
+        this is exactly that. The decision is time-aware, so simply crossing a window boundary
+        changes it with no plan change at all, and without this gate that transition would
+        write to the inverter while Predbat was in read-only mode (GH#4436).
+        """
+        if uuid not in self.control_active or self._is_read_only() or not self.control_enable:
+            return
+        # Stamped past the gate only: a reconcile stopped there decided nothing. This is what
+        # the heartbeat reads to tell a command that is still supervised from one that is not.
+        self._decision_time[uuid] = time.time()
+        try:
+            await self.apply_schedule(uuid)
+        except Exception as error:
+            self.log("Warn: Sungrow control apply failed for {}: {}".format(self._serial(uuid), error))
+
+    # -------------------------------------------------------------------------
+    # The heartbeat
+    # -------------------------------------------------------------------------
+
+    def _drop_control(self, uuids, reason):
+        """Forget that these inverters are held, because they have reverted or are about to.
+
+        The cached applied command goes too. It is what makes _write_params skip an unchanged
+        decision, and once the inverter has left external dispatch that decision is no longer
+        applied - keeping it would mean the command is never sent again.
+        """
+        for uuid in uuids:
+            self.control_held.discard(uuid)
+            self.applied_command.pop(uuid, None)
+            self._beat_failures.pop(uuid, None)
+            self._decision_time.pop(uuid, None)
+            # The inverter's state is now unknown, so the write that re-establishes control
+            # must not wait out sungrow_min_write_interval. This cannot become a retry storm:
+            # a re-establishing write that fails stamps the clock again in _write_params.
+            self.last_write_time.pop(uuid, None)
+            self.log("Info: Sungrow no longer holds {} ({}); control will be re-established on the next cycle that needs it".format(self._serial(uuid), reason))
+
+    def _ensure_heartbeat(self):
+        """Start the heartbeat loop if control is held and it is not already running.
+
+        Idempotent, and called from every path that takes control, so there is never more than
+        one loop and never a held device without one.
+        """
+        if not self.control_held:
+            return
+        if self._heartbeat_task is not None and not self._heartbeat_task.done():
+            return
+        self._heartbeat_stop = False
+        self._heartbeat_task = asyncio.ensure_future(self._heartbeat_loop())
+
+    async def _heartbeat_loop(self):
+        """Keep writing parameter 10017 for every device Predbat currently holds.
+
+        This runs on its OWN cadence, not run()'s. ComponentBase ticks run() once a minute,
+        which is already too slow for a user who has set sungrow_heartbeat_interval near the
+        documented one-second minimum, and it would couple losing control of the battery to
+        any slow API call inside a normal cycle.
+
+        The loop exits when nothing is held any more, which is what makes it safe to restart
+        from _ensure_heartbeat() without tracking its lifetime anywhere else.
+
+        Beats go out at a fraction of the promised interval (heartbeat_send_interval), which
+        leaves room for a slow dispatch. It does not leave room for a lost one: the next beat
+        is half an interval plus its own duration away, so after SUNGROW_HEARTBEAT_MAX_MISSES
+        (one) unconfirmed beat the inverter can no longer be assumed to be in external dispatch.
+        Control is dropped there and then, and the next run() cycle writes the full command
+        again. Nothing else is escalated: the inverter's own response to missing beats is a
+        revert to self-consumption, which is the safe state.
+
+        A beat only goes out for a command that has been decided recently. run() is the only
+        place a command is decided, and it is not always running once a minute: in
+        ComponentBase's start-up backoff it is called at gaps of up to two hours. If no decision
+        has been made for an inverter within SUNGROW_DECISION_STALE_SECONDS, nobody is checking
+        that its command is still wanted, so it is handed back here instead of being kept alive
+        past the end of its window.
+        """
+        interval = heartbeat_send_interval(self.heartbeat_interval)
+        self.log("Info: Sungrow heartbeat loop started, beating every {:.0f}s for a declared interval of {}s".format(interval, self.heartbeat_interval))
+        while not self._heartbeat_stop and not self.api_stop and self.control_held:
+            await asyncio.sleep(interval)
+            if self._heartbeat_stop or self.api_stop:
+                break
+            # Read-only mode must stop the beats, not just the plan writes. Continuing to beat
+            # would hold the inverter in external dispatch with whatever setpoint it last had,
+            # which is precisely the "Predbat is not driving but the battery is still forced"
+            # state read-only exists to avoid. Letting the beats lapse returns it to
+            # self-consumption within one interval.
+            if self._is_read_only() or not self.control_enable:
+                self.log("Info: Sungrow heartbeat paused (read-only or control disabled); handing the inverter back to self-consumption")
+                for uuid in list(self.control_held):
+                    try:
+                        await self.release_control(uuid, int(as_float(self.local_schedule.get(uuid, {}).get("reserve"), 0)))
+                    except Exception as error:
+                        self.log("Warn: Sungrow could not release {} on pausing: {}; it will revert when the heartbeat lapses".format(self._serial(uuid), error))
+                self._drop_control(list(self.control_held), "heartbeat paused")
+                break
+            for uuid in list(self.control_held):
+                decided = self._decision_time.get(uuid)
+                if decided is None or (time.time() - decided) > SUNGROW_DECISION_STALE_SECONDS:
+                    # Nobody has decided this command recently, so nobody is checking that it
+                    # is still wanted. Hand the inverter back rather than hold it open.
+                    self.log("Warn: Sungrow {} command has not been re-decided for over {}s (the component cycle is not running); handing the inverter back to self-consumption".format(self._serial(uuid), SUNGROW_DECISION_STALE_SECONDS))
+                    try:
+                        await self.release_control(uuid, int(as_float(self.local_schedule.get(uuid, {}).get("reserve"), 0)))
+                    except Exception as error:
+                        self.log("Warn: Sungrow could not release {}: {}; it will revert when the heartbeat lapses".format(self._serial(uuid), error))
+                    self._drop_control([uuid] if uuid in self.control_held else [], "its command was no longer being decided")
+                    continue
+                try:
+                    confirmed = await self.send_heartbeat(uuid)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as error:
+                    # Nothing may end this task except its own exit conditions: it is the only
+                    # thing keeping control of the battery, and run() cannot see it fail.
+                    self.log("Warn: Sungrow heartbeat for {} raised {}: {}".format(self._serial(uuid), type(error).__name__, error))
+                    confirmed = False
+                if confirmed:
+                    self._beat_failures.pop(uuid, None)
+                    continue
+                self._beat_failures[uuid] = self._beat_failures.get(uuid, 0) + 1
+                if self._beat_failures[uuid] >= SUNGROW_HEARTBEAT_MAX_MISSES:
+                    self._drop_control([uuid], "a heartbeat was not confirmed")
+        self.log("Info: Sungrow heartbeat loop stopped")
+
+    async def send_heartbeat(self, uuid):
+        """Write one heartbeat to parameter 10017 for a single inverter.
+
+        Deliberately not routed through _write_params: a beat is not a change of plan, so it
+        must bypass both the change-detection cache (every beat is byte-identical to the last
+        one by design) and the write pacing gate (holding a beat back drops control).
+        """
+        results = await self.dispatch_params(uuid, [param_entry(SUNGROW_PARAM_HEARTBEAT, scale_for_write(SUNGROW_PARAM_HEARTBEAT, heartbeat_declared_interval(self.heartbeat_interval)))], task_name="Predbat heartbeat")
+        if results is None:
+            self.log("Warn: Sungrow heartbeat for {} was not confirmed; the inverter may revert to self-consumption, so control will be re-established on the next cycle".format(self._serial(uuid)))
+            return False
+        return True
+
+    async def _stop_heartbeat(self):
+        """Stop the heartbeat loop and wait for it to unwind."""
+        self._heartbeat_stop = True
+        task = self._heartbeat_task
+        self._heartbeat_task = None
+        if task is None or task.done():
+            return
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    # -------------------------------------------------------------------------
+    # Automatic configuration and discovery
+    # -------------------------------------------------------------------------
+
+    def _bindable_args(self):
+        """Return the names of the settings automatic_config() could bind right now.
+
+        A name is present only when EVERY inverter has the figure behind it, which is the rule
+        automatic_config() itself binds by. run() compares this with what has already been
+        bound, so a figure that was missing on the first cycle is bound when it turns up
+        rather than at the next restart. The export limit's name carries its kind as well,
+        because switching the inverter's limitation on or off changes what is bound. Settings
+        the user has opted out of with automatic_ignore_pv are never listed, exactly as
+        automatic_config() never binds them.
+        """
+        devices = list(self.device_list)
+        if not devices:
+            return set()
+        found = set()
+        for arg, leaf in SUNGROW_POWER_ARGS:
+            if arg == "pv_power" and self.automatic_ignore_pv:
+                continue
+            if all(self.telemetry(uuid, leaf) is not None for uuid in devices):
+                found.add(arg)
+        for leaf in ("load_today", "import_today", "export_today", "pv_today"):
+            if leaf == "pv_today" and self.automatic_ignore_pv:
+                continue
+            if all(self.energy(uuid, leaf) is not None for uuid in devices):
+                found.add(leaf)
+        if all(self.battery_capacity(uuid) > 0 for uuid in devices):
+            found.add("soc_max")
+        if all(self.battery_rate_max(uuid) > 0 for uuid in devices):
+            found.add("battery_rate_max")
+        if all(self.telemetry(uuid, "battery_temperature") is not None for uuid in devices):
+            found.add("battery_temperature")
+        if all(self.inverter_limit(uuid) > 0 for uuid in devices):
+            found.add("inverter_limit")
+        export_limits = [self.export_limit(uuid) for uuid in devices]
+        if all(limit is not None for limit in export_limits):
+            found.add("export_limit:" + ",".join("limit" if limit < SUNGROW_NO_EXPORT_LIMIT else "none" for limit in export_limits))
+        return found
+
+    async def automatic_config(self):
+        """Register every discovered inverter as a SungrowCloud Predbat inverter."""
+        devices = list(self.device_list)
+        if not devices:
+            self.log("Warn: Sungrow automatic_config found no inverters")
+            return
+        if len(devices) > len(set(self.device_detail.get(uuid, {}).get("ps_id") for uuid in devices)):
+            self.log("Warn: Sungrow found more than one inverter in a plant; battery capacity and rate are the plant figures split equally between them. Set soc_max and battery_rate_max in apps.yaml if the batteries differ")
+        self.set_arg_auto("inverter_type", ["SungrowCloud" for _ in devices])
+        self.set_arg_auto("num_inverters", len(devices))
+        # Bound only when every inverter reports the point: the sensor is only published when
+        # there is a value for it, and an arg naming a sensor that never appears reads as a
+        # broken install rather than as a figure this hardware does not have.
+        for arg, leaf in SUNGROW_POWER_ARGS:
+            if arg == "pv_power" and self.automatic_ignore_pv:
+                continue
+            if all(self.telemetry(uuid, leaf) is not None for uuid in devices):
+                self.set_arg_auto(arg, [self._sensor_name(uuid, leaf) for uuid in devices])
+            elif arg == "pv_power":
+                self.log("Info: Sungrow reports no PV power for every inverter, so pv_power is left unset; set it in apps.yaml if your solar is on another inverter")
+            else:
+                self.log("Warn: Sungrow not every inverter reports {}, it must be set manually in apps.yaml".format(arg))
+        # Own the sign flags rather than leaving them to whatever else configured this install.
+        # base.args is shared and NOT namespaced per inverter type, so a component that
+        # legitimately inverts its own grid sensor - teslemetry and fox both do - leaves that
+        # key set for every inverter index, and a Sungrow inverter that never claims it
+        # inherits the flip. All three are False because the publish path already emits
+        # Predbat's conventions (see signed_grid_power and signed_battery_power).
+        for flag in ("grid_power_invert", "battery_power_invert", "load_power_invert"):
+            self.set_arg_auto(flag, [False for _ in devices])
+
+        # Only map an arg when EVERY inverter reports the underlying value.
+        for leaf in ("load_today", "import_today", "export_today", "pv_today"):
+            if leaf == "pv_today" and self.automatic_ignore_pv:
+                continue
+            if all(self.energy(uuid, leaf) is not None for uuid in devices):
+                self.set_arg_auto(leaf, [self._sensor_name(uuid, leaf) for uuid in devices])
+            else:
+                self.log("Warn: Sungrow not every inverter reports {}, it must be set manually in apps.yaml".format(leaf))
+
+        if all(self.battery_capacity(uuid) > 0 for uuid in devices):
+            self.set_arg_auto("soc_max", [self._sensor_name(uuid, "battery_capacity") for uuid in devices])
+        else:
+            self.log("Warn: Sungrow could not derive a battery capacity for every inverter (it needs both the chargeable and dischargeable energy points), soc_max must be set manually in apps.yaml")
+        if all(self.battery_rate_max(uuid) > 0 for uuid in devices):
+            self.set_arg_auto("battery_rate_max", [self._sensor_name(uuid, "battery_rate_max") for uuid in devices])
+        else:
+            self.log("Warn: Sungrow no battery power limit available, battery_rate_max must be set manually in apps.yaml or with sungrow_battery_rate_max")
+        if all(self.telemetry(uuid, "battery_temperature") is not None for uuid in devices):
+            self.set_arg_auto("battery_temperature", [self._sensor_name(uuid, "battery_temperature") for uuid in devices])
+            self.set_arg_auto("battery_temperature_history", self._sensor_name(devices[0], "battery_temperature"))
+        if all(self.inverter_limit(uuid) > 0 for uuid in devices):
+            self.set_arg_auto("inverter_limit", [self._sensor_name(uuid, "inverter_limit") for uuid in devices])
+        else:
+            self.log("Warn: Sungrow could not read the inverter rating from every model name; set sungrow_inverter_limit (watts) in apps.yaml")
+        # Bound only when EVERY inverter's limit is known. A limitation that is switched off is
+        # a known answer (no limit); one whose value cannot be trusted is not, and Predbat's
+        # own default of no limit is not a safe stand-in on a G98/G99-capped site, so the user
+        # is told rather than left with a silent guess.
+        export_limits = [self.export_limit(uuid) for uuid in devices]
+        if all(limit is not None for limit in export_limits):
+            self.set_arg_auto("export_limit", [self._sensor_name(uuid, "export_limit") if limit < SUNGROW_NO_EXPORT_LIMIT else SUNGROW_NO_EXPORT_LIMIT for uuid, limit in zip(devices, export_limits)])
+        else:
+            self.log("Warn: Sungrow could not establish the grid export limit; if your connection is capped below the inverter rating, set sungrow_export_limit (watts) in apps.yaml, otherwise Predbat will plan exports it cannot deliver")
+
+        self.set_arg_auto("reserve", [self._control_name("number", uuid, "battery_schedule_reserve") for uuid in devices])
+        self.set_arg_auto("charge_start_time", [self._control_name("select", uuid, "battery_schedule_charge_start_time") for uuid in devices])
+        self.set_arg_auto("charge_end_time", [self._control_name("select", uuid, "battery_schedule_charge_end_time") for uuid in devices])
+        self.set_arg_auto("charge_limit", [self._control_name("number", uuid, "battery_schedule_charge_soc") for uuid in devices])
+        self.set_arg_auto("charge_rate", [self._control_name("number", uuid, "battery_schedule_charge_power") for uuid in devices])
+        self.set_arg_auto("scheduled_charge_enable", [self._control_name("switch", uuid, "battery_schedule_charge_enable") for uuid in devices])
+        self.set_arg_auto("discharge_start_time", [self._control_name("select", uuid, "battery_schedule_export_start_time") for uuid in devices])
+        self.set_arg_auto("discharge_end_time", [self._control_name("select", uuid, "battery_schedule_export_end_time") for uuid in devices])
+        self.set_arg_auto("discharge_target_soc", [self._control_name("number", uuid, "battery_schedule_export_soc") for uuid in devices])
+        self.set_arg_auto("discharge_rate", [self._control_name("number", uuid, "battery_schedule_export_power") for uuid in devices])
+        self.set_arg_auto("scheduled_discharge_enable", [self._control_name("switch", uuid, "battery_schedule_export_enable") for uuid in devices])
+        self.set_arg_auto("schedule_write_button", [self._control_name("switch", uuid, "battery_schedule_charge_write") for uuid in devices])
+
+        self._bound_args = self._bound_args | self._bindable_args()
+
+    def _discovery_entities(self, uuid):
+        """The settings automatic_config() binds for one inverter, as discovery entity descriptors.
+
+        Each entity id is formed with the same _sensor_name()/_control_name() call
+        automatic_config() makes, so the two cannot drift apart. The record describes this
+        inverter alone: a setting automatic_config() binds only when a figure is known - an
+        energy counter, the capacity, the rate - is described whenever this inverter reports
+        it, although automatic_config() binds it only once every inverter does. What is
+        returned here is everything that COULD be described; build_discovery() filters it
+        down to what has been published. The three *_power_invert settings are always
+        False, which is the descriptor's default, so no descriptor carries invert.
+        inverter_limit and export_limit are described when known.
+        """
+        entities = {
+            "soc_percent": {"entity_id": self._sensor_name(uuid, "soc"), "access": "r", "unit": "%"},
+            "battery_power": {"entity_id": self._sensor_name(uuid, "battery_power"), "access": "r", "unit": "W"},
+            "grid_power": {"entity_id": self._sensor_name(uuid, "grid_power"), "access": "r", "unit": "W"},
+            "load_power": {"entity_id": self._sensor_name(uuid, "load_power"), "access": "r", "unit": "W"},
+            "pv_power": {"entity_id": self._sensor_name(uuid, "pv_power"), "access": "r", "unit": "W"},
+        }
+        for leaf in ("load_today", "import_today", "export_today", "pv_today"):
+            if self.energy(uuid, leaf) is not None:
+                entities[leaf] = {"entity_id": self._sensor_name(uuid, leaf), "access": "r", "unit": "kWh"}
+        if self.battery_capacity(uuid) > 0:
+            entities["soc_max"] = {"entity_id": self._sensor_name(uuid, "battery_capacity"), "access": "r", "unit": "kWh"}
+        if self.battery_rate_max(uuid) > 0:
+            entities["battery_rate_max"] = {"entity_id": self._sensor_name(uuid, "battery_rate_max"), "access": "r", "unit": "W"}
+        if self.inverter_limit(uuid) > 0:
+            entities["inverter_limit"] = {"entity_id": self._sensor_name(uuid, "inverter_limit"), "access": "r", "unit": "W"}
+        export_limit = self.export_limit(uuid)
+        if export_limit is not None and export_limit < SUNGROW_NO_EXPORT_LIMIT:
+            entities["export_limit"] = {"entity_id": self._sensor_name(uuid, "export_limit"), "access": "r", "unit": "W"}
+        if self.telemetry(uuid, "battery_temperature") is not None:
+            entities["battery_temperature"] = {"entity_id": self._sensor_name(uuid, "battery_temperature"), "access": "r", "unit": "°C"}
+
+        entities["reserve"] = {"entity_id": self._control_name("number", uuid, "battery_schedule_reserve"), "access": "rw", "unit": "%"}
+        for direction, prefix in (("charge", "charge"), ("export", "discharge")):
+            entities["{}_start_time".format(prefix)] = {"entity_id": self._control_name("select", uuid, "battery_schedule_{}_start_time".format(direction)), "access": "rw", "domain": "select", "format": "HH:MM:SS"}
+            entities["{}_end_time".format(prefix)] = {"entity_id": self._control_name("select", uuid, "battery_schedule_{}_end_time".format(direction)), "access": "rw", "domain": "select", "format": "HH:MM:SS"}
+            entities["scheduled_{}_enable".format(prefix)] = {"entity_id": self._control_name("switch", uuid, "battery_schedule_{}_enable".format(direction)), "access": "rw", "domain": "switch"}
+        entities["charge_limit"] = {"entity_id": self._control_name("number", uuid, "battery_schedule_charge_soc"), "access": "rw", "unit": "%"}
+        entities["charge_rate"] = {"entity_id": self._control_name("number", uuid, "battery_schedule_charge_power"), "access": "rw", "unit": "W", "step": 100}
+        entities["discharge_target_soc"] = {"entity_id": self._control_name("number", uuid, "battery_schedule_export_soc"), "access": "rw", "unit": "%"}
+        entities["discharge_rate"] = {"entity_id": self._control_name("number", uuid, "battery_schedule_export_power"), "access": "rw", "unit": "W", "step": 100}
+        entities["schedule_write_button"] = {"entity_id": self._control_name("switch", uuid, "battery_schedule_charge_write"), "access": "rw", "domain": "switch"}
+        return entities
+
+    def _stable_rating(self, uuid, key, value, step):
+        """Return the figure the discovery report should carry for one derived rating.
+
+        refresh_discovery() files the report again whenever it differs at all, and these
+        ratings are derived from live readings, so reporting them raw would file a new report
+        on most telemetry polls. The reported figure is rounded to step and then held until
+        the live one has moved more than SUNGROW_RATING_DRIFT away from it.
+        """
+        held = self._discovery_ratings.get((uuid, key))
+        if held is None or abs(value - held) > SUNGROW_RATING_DRIFT * held:
+            held = round(round(value / step) * step, 3)
+            self._discovery_ratings[(uuid, key)] = held
+        return held
+
+    def build_discovery(self):
+        """Describe the discovered Sungrow inverters for the discovery catalogue.
+
+        Reads only what discovery and the telemetry tier already hold, so this adds no API
+        calls and cannot change what the inverter does. Reporting is independent of
+        self.automatic: the catalogue records the hardware, and the report's own "automatic"
+        flag says whether Predbat wired apps.yaml to it.
+
+        capabilities is the SUNGROW_CAPABILITIES constant and entities is
+        _discovery_entities(uuid): together they rebuild the SungrowCloud INVERTER_DEF row,
+        and entities holds the settings automatic_config() binds, less any whose entity Home
+        Assistant has not seen yet.
+
+        Deliberately not reported:
+        - firmware: the OpenAPI device list carries no firmware version.
+        - a battery SoH rating: SoH is a value that CHANGES, and refresh_discovery() compares
+          whole reports, so reporting it would re-file the report every time it moved.
+        - an AC-coupled verdict: nothing in the device list distinguishes hybrid from
+          AC-coupled, and inventing one from "PV power reads zero" would call every AC-coupled
+          site hybrid on a cloudy night.
+
+        Returns None when nothing has been discovered yet, which refresh_discovery() treats as
+        "nothing to report, ask again next cycle".
+        """
+        if not self.device_list:
+            return None
+
+        inverters = []
+        for uuid in self.device_list:
+            detail = self.device_detail.get(uuid, {}) or {}
+            serial = self._serial(uuid)
+
+            # telemetry() reads the inverter's own PV point and falls back to the plant's, so
+            # either is evidence of solar. It is remembered once seen: solar that is absent
+            # from one response is still on the roof, and flipping the record back to
+            # battery-only would re-file the report for nothing.
+            ps_id = detail.get("ps_id")
+            if self.telemetry(uuid, "pv_power") is not None:
+                self._solar_seen.add(uuid)
+            functions = ["solar", "battery"] if uuid in self._solar_seen else ["battery"]
+
+            info = {}
+            if detail.get("device_model"):
+                info["model"] = str(detail["device_model"])
+            elif detail.get("device_name"):
+                info["model"] = str(detail["device_name"])
+
+            ratings = {}
+            battery_kwh = self.battery_capacity(uuid)
+            if battery_kwh > 0:
+                ratings["soc_max"] = self._stable_rating(uuid, "soc_max", battery_kwh, 0.1)
+            rate_max = self.battery_rate_max(uuid)
+            if rate_max > 0:
+                ratings["battery_rate_max"] = self._stable_rating(uuid, "battery_rate_max", rate_max, 100)
+
+            hardware_ids = {"serial": serial, "uuid": str(uuid)}
+
+            inverters.append(
+                inverter_record(
+                    "sungrow:{}".format(serial),
+                    inverter_type="SungrowCloud",
+                    control=bool(self.control_enable),
+                    composition="direct",
+                    functions=functions,
+                    capabilities=dict(SUNGROW_CAPABILITIES),
+                    hardware_ids=hardware_ids,
+                    account_ids={"ps_id": str(ps_id)} if ps_id else None,
+                    info=info,
+                    ratings=ratings,
+                    entities=self.discovery_entities(self._discovery_entities(uuid)),
+                )
+            )
+
+        return {"automatic": self.automatic, "inverters": inverters}
+
+    # -------------------------------------------------------------------------
+    # Persistence
+    # -------------------------------------------------------------------------
+
+    async def load_cache(self, name):
+        """Load one cache blob from the Storage component, or None when unavailable."""
+        storage = self.storage
+        if storage is None:
+            return None
+        try:
+            return await storage.load(SUNGROW_STORAGE_MODULE, name)
+        except Exception as error:
+            self.log("Warn: Sungrow could not load the {} cache: {}".format(name, error))
+            return None
+
+    async def save_cache(self, name, data):
+        """Save one cache blob to the Storage component, ignoring an absent Storage."""
+        storage = self.storage
+        if storage is None:
+            return
+        try:
+            await storage.save(SUNGROW_STORAGE_MODULE, name, data)
+        except Exception as error:
+            self.log("Warn: Sungrow could not save the {} cache: {}".format(name, error))
+
+    async def save_static(self):
+        """Persist discovery so a restart resumes without re-listing plants and devices."""
+        await self.save_cache(SUNGROW_CACHE_STATIC, {"plant_list": self.plant_list, "plant_detail": self.plant_detail, "device_list": self.device_list, "device_detail": self.device_detail, "write_supported": self._write_supported})
+
+    async def save_control(self):
+        """Persist the write pacing clock and which inverters Predbat drives.
+
+        Neither control_held nor applied_command is persisted. After a restart the inverter has
+        already reverted to self-consumption, or is within one heartbeat interval of doing so,
+        so both would be claims about hardware state that is no longer true: the first would
+        beat for a mode the inverter is not in, the second would stop the command that puts it
+        there from ever being sent again. control_active IS persisted - it records that Predbat
+        has a plan for this inverter, so the reconcile loop can act on the first cycle rather
+        than waiting for a button press that only comes when the plan changes.
+        """
+        await self.save_cache(SUNGROW_CACHE_CONTROL, {"last_write_time": {str(key): value for key, value in self.last_write_time.items()}, "control_active": sorted(str(uuid) for uuid in self.control_active)})
+
+    async def restore_state(self):
+        """Restore the caches on the first cycle, marking the guard only on success."""
+        static = await self.load_cache(SUNGROW_CACHE_STATIC)
+        if static:
+            self.plant_list = static.get("plant_list") or []
+            self.plant_detail = static.get("plant_detail") or {}
+            self.device_list = static.get("device_list") or []
+            self.device_detail = static.get("device_detail") or {}
+            self._write_supported = static.get("write_supported") or {}
+            if self.device_list:
+                # Aged so the static tier still re-discovers soon after a restart rather than
+                # trusting an eight-hour-old device list for a further eight hours.
+                self.mark_refreshed("static", age_minutes=SUNGROW_TTL_STATIC / 2)
+        control = await self.load_cache(SUNGROW_CACHE_CONTROL)
+        if control:
+            self.last_write_time = {key: value for key, value in (control.get("last_write_time") or {}).items()}
+            self.control_active = set(str(uuid) for uuid in (control.get("control_active") or []))
+        self._cache_restored = True
+
+    # -------------------------------------------------------------------------
+    # Lifecycle
+    # -------------------------------------------------------------------------
+
+    async def run(self, seconds, first):
+        """Main component tick: refresh by tier, publish, and apply any control change.
+
+        Returns True on a completed cycle, False on a failure that should hold the component
+        in ComponentBase's startup backoff and be retried. Deliberately explicit rather than
+        falling through to Python's implicit None: ComponentBase only clears its `first` flag
+        when this returns something truthy, so an accidental None would strand the component
+        in the ever-growing startup backoff forever.
+        """
+        if first and not self._cache_restored:
+            await self.restore_state()
+        if not self.appkey or not self.access_key:
+            self.log("Warn: Sungrow needs both sungrow_appkey and sungrow_access_key; register an application at https://developer-api.isolarcloud.com/")
+            return False
+        if self.auth_method == "password":
+            if not self.login_blocked and not self.access_token:
+                await self.login()
+            if self.login_blocked:
+                # login() said why when it gave up. Repeated only as an occasional reminder:
+                # this is reached on every backoff attempt and nothing about it will change.
+                if time.time() - self._login_blocked_warned >= SUNGROW_LOGIN_BLOCKED_WARN_SECONDS:
+                    self._login_blocked_warned = time.time()
+                    self.log("Warn: Sungrow is not logging in: {}. It will not try again until Predbat is restarted".format(self.login_blocked))
+                return False
+        if not self.access_token:
+            self.log(
+                "Warn: Sungrow has no access token; reconnect the Sungrow account, or on a self-hosted install set sungrow_user_account and sungrow_user_password with sungrow_auth_method: password "
+                "(the login has not succeeded yet if that is already set), or sungrow_key with sungrow_auth_method: token"
+            )
+            return False
+
+        if self.tier_expired("static", SUNGROW_TTL_STATIC) or not self.device_list:
+            if await self.refresh_static() and self.device_list:
+                await self.save_static()
+        if not self.device_list:
+            self.log("Warn: Sungrow found no energy-storage inverters on this account")
+            return False
+
+        live_ok = True
+        if self.tier_expired("power", SUNGROW_TTL_POWER):
+            live_ok = await self.refresh_power()
+
+        for uuid in list(self.device_list):
+            # Read the control entities EVERY tick, the first one included. Home Assistant
+            # retains them across a Predbat restart, so on a restart they already hold the live
+            # plan; seeding local_schedule from _empty_schedule() and publishing that back would
+            # overwrite it and cancel an in-flight charge until Predbat next replanned.
+            try:
+                await self.get_schedule_settings_ha(uuid)
+            except Exception as error:
+                self.log("Warn: Sungrow schedule read failed for {}: {}".format(self._serial(uuid), error))
+            await self._reconcile_control(uuid)
+            await self.publish_schedule_settings_ha(uuid)
+
+        # Start the heartbeat if it is not running while something is held. This is the normal
+        # way the loop is (re)started after it has exited - it ends itself whenever nothing is
+        # held, and when control is dropped - and not only a safety net: a held inverter with
+        # no heartbeat is the one state this component must not sit in.
+        self._ensure_heartbeat()
+
+        # After the control loop on purpose: a read-back is a dispatched task that can take a
+        # while, and the battery's command must not wait on a setting that changes once a year.
+        # Still ahead of publish_data() and automatic_config(), which both use the result.
+        await self.refresh_limits()
+
+        await self.publish_data()
+
+        # Filed right after this cycle's publish and BEFORE the deferred-startup branch below:
+        # that branch returns False when the first telemetry poll fails, so a report filed any
+        # later would never be filed on exactly the installs whose dump most needs to say what
+        # hardware was found.
+        self.refresh_discovery()
+
+        if first and not live_ok:
+            # Startup has not really succeeded without telemetry: automatic_config() runs on the
+            # first cycle ALONE, so it would map only the args backed by cached ratings and
+            # permanently skip soc_max and the energy args for the whole session.
+            self.log("Warn: Sungrow first telemetry poll returned nothing, deferring startup; it will be retried after a backoff")
+            return False
+
+        stale = self.telemetry_stale()
+        if stale and not self._stale_logged:
+            # Logged once per episode, not once a minute. The cycle is NOT failed: a False from
+            # run() after start-up marks the whole of Predbat as having had an error and stops
+            # its status being recorded, which is far out of proportion to one cloud being down.
+            # is_alive() and health_message() below are what report it.
+            self.log("Warn: Sungrow telemetry is {:.0f} minutes old and could not be refreshed; SoC and power are stale".format(self.tier_age_minutes("power")))
+        self._stale_logged = stale
+
+        if self.automatic:
+            newly_available = self._bindable_args() - self._bound_args
+            if first or newly_available:
+                if not first:
+                    self.log("Info: Sungrow now reports {}; re-running automatic configuration".format(", ".join(sorted(newly_available))))
+                await self.automatic_config()
+        if not stale:
+            self.update_success_timestamp()
+        return True
+
+    def is_alive(self):
+        """Return whether the component has started, has an inverter, has current telemetry and can still log in."""
+        return bool(self.api_started and self.device_list and not self.telemetry_stale() and not self.login_blocked)
+
+    def health_message(self):
+        """Return why the component is unhealthy, for the run status, or None."""
+        if self.login_blocked:
+            return self.login_blocked
+        if self.api_started and self.device_list and self.telemetry_stale():
+            return "telemetry is {:.0f} minutes old".format(self.tier_age_minutes("power"))
+        return None
+
+    async def final(self):
+        """Persist state and hand every held inverter back to self-consumption on shutdown.
+
+        The heartbeat is stopped FIRST, so a beat cannot race the release and put the inverter
+        straight back into external dispatch. Releasing explicitly is a courtesy rather than a
+        requirement: if this never ran - a container kill, a power cut - the beats simply stop
+        and the inverter reverts by itself within one interval. That is the whole point of the
+        dead-man's switch, and it is why a Predbat that dies leaves a customer's battery in
+        self-consumption rather than stopped or stuck on a stale setpoint.
+        """
+        await self._stop_heartbeat()
+        for uuid in list(self.control_held):
+            try:
+                await self.release_control(uuid, int(as_float(self.local_schedule.get(uuid, {}).get("reserve"), 0)))
+            except Exception as error:
+                self.log("Warn: Sungrow could not release {} on shutdown: {}; the heartbeat has stopped, so it will revert to self-consumption on its own".format(self._serial(uuid), error))
+        await self.save_static()
+        await self.save_control()
+
+
+def _cli_password(args):  # pragma: no cover
+    """Return the iSolarCloud password for the command-line tool without echoing it.
+
+    A password typed as an argument is visible to every user of the machine in the process
+    list and is kept in the shell history, so the argument is the last resort: the
+    SUNGROW_USER_PASSWORD environment variable is read next, and failing that it is asked
+    for with getpass, which does not echo.
+    """
+    import getpass
+    import os
+    import sys
+
+    if args.user_password:
+        return args.user_password
+    from_environment = os.environ.get("SUNGROW_USER_PASSWORD", "")
+    if from_environment:
+        return from_environment
+    try:
+        password = getpass.getpass("iSolarCloud password for {}: ".format(args.user_account))
+    except (EOFError, KeyboardInterrupt):
+        sys.exit("\nNo password given; nothing was sent.")
+    if not password:
+        sys.exit("No password given; nothing was sent.")
+    return password
+
+
+def _build_sungrow(mock_base, args):  # pragma: no cover
+    """Construct a SungrowAPI around a MockBase for standalone command-line use.
+
+    Control is disabled and the token is used as pasted: this tool exists to let a tester
+    compare what the API reports against the iSolarCloud app before Predbat is given control.
+    Given an account and password instead of a token, it logs in the way the component does.
+    """
+    password = _cli_password(args) if args.user_account else ""
+    return SungrowAPI(
+        mock_base,
+        appkey=args.appkey,
+        access_key=args.access_key,
+        key=args.token,
+        gateway=args.gateway,
+        auth_method="password" if args.user_account else "token",
+        user_account=args.user_account,
+        user_password=password,
+        inverter_sn=args.serial,
+        automatic=False,
+        control_enable=False,
+        api_delay=args.api_delay,
+    )
+
+
+async def test_sungrow_api(args):  # pragma: no cover
+    """Run one read-only Sungrow diagnostic pass and print what was found."""
+    from mock_base import MockBase
+
+    client = _build_sungrow(MockBase(), args)
+    password_mode = client.auth_method == "password"
+    if password_mode and not await client.login():
+        print("FAILED at login: {}".format(client.login_blocked or client.last_api_error or "no response - check the gateway region, the appkey and the access key"))
+        return
+    await client.refresh_static()
+    if password_mode:
+        # The one line to report: where the login token goes is not documented by Sungrow.
+        print("Token placement: {} ({})".format(client.token_placement, "confirmed - a call succeeded with it" if client.token_placement_confirmed else "NOT confirmed - no call has succeeded yet"))
+    if client.discovery_ok is False:
+        print("FAILED at plant discovery: {}".format(client.last_api_error or "no response - check the gateway region and the three credentials"))
+        return
+    print("Plants: {}".format(", ".join(client.plant_list) or "none"))
+    if not client.device_list:
+        print("No energy-storage inverters found. If the account has one, the gateway region is the usual cause.")
+        return
+    if not await client.refresh_power():
+        print("FAILED at telemetry: {}".format(client.last_api_error or "no plant answered"))
+    await client.refresh_limits()
+    for uuid in client.device_list:
+        detail = client.device_detail.get(uuid, {})
+        print("\nInverter {} (uuid {}, model {}, plant {})".format(client._serial(uuid), uuid, detail.get("device_model") or detail.get("device_name") or "unknown", detail.get("ps_id")))
+        for leaf in ("soc", "battery_power", "grid_power", "pv_power", "load_power", "battery_soh", "battery_temperature"):
+            print("  {:22s} {}".format(leaf, client.telemetry(uuid, leaf)))
+        for leaf in ("load_today", "import_today", "export_today", "pv_today"):
+            print("  {:22s} {} kWh".format(leaf, client.energy(uuid, leaf)))
+        print("  {:22s} {} kWh (chargeable + dischargeable energy)".format("battery_capacity", client.battery_capacity(uuid)))
+        print("  {:22s} {} (point 13140, unit disputed)".format("capacity_reported", client.device_values.get(uuid, {}).get("battery_capacity_reported")))
+        print("  {:22s} {} W".format("battery_rate_max", client.battery_rate_max(uuid)))
+        print("  {:22s} {} W (from the model name)".format("inverter_limit", client.inverter_limit(uuid)))
+        print("  {:22s} {} (read-back: {})".format("export_limit", client.export_limit(uuid), client.device_limits.get(uuid)))
+        if args.read_params:
+            codes = [SUNGROW_PARAM_SOC_UPPER, SUNGROW_PARAM_SOC_LOWER, SUNGROW_PARAM_EMS_MODE, SUNGROW_PARAM_COMMAND, SUNGROW_PARAM_POWER, SUNGROW_PARAM_HEARTBEAT]
+            values = await client.read_params(uuid, codes)
+            if values is None:
+                print("  parameter read-back FAILED: {}".format(client.last_api_error or "see the trace above"))
+            else:
+                for code in codes:
+                    print("  {:40s} raw {}".format(describe_param(code), values.get(code)))
+    print("\nCompare SoC (is it 64 or 640?), the sign of battery_power while charging, and the sign of grid_power while importing against the iSolarCloud app, and report them on the Predbat issue tracker.")
+
+
+def main():  # pragma: no cover
+    """Command-line entry point for read-only Sungrow diagnostics."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Sungrow iSolarCloud OpenAPI diagnostics (read-only)")
+    parser.add_argument("--appkey", required=True, help="Application appkey from https://developer-api.isolarcloud.com/")
+    parser.add_argument("--access-key", required=True, help="Application x-access-key, issued with the appkey")
+    parser.add_argument("--token", default=None, help="OAuth access token from Sungrow's authorisation-code flow (give this or --user-account, not both)")
+    parser.add_argument("--user-account", default=None, help="iSolarCloud account name, to log in with a password instead of a token. You are asked for the password, unless the SUNGROW_USER_PASSWORD environment variable holds it")
+    parser.add_argument(
+        "--user-password",
+        default=None,
+        help="iSolarCloud password. Best left out: an argument shows in the process list and the shell history, so prefer the prompt or SUNGROW_USER_PASSWORD. Each run makes one login attempt, and iSolarCloud counts wrong passwords towards locking the account",
+    )
+    parser.add_argument("--gateway", default="europe", help="Region name (europe, australia, international, china, india) or a full gateway URL")
+    parser.add_argument("--serial", default=None, help="Restrict to one inverter serial")
+    parser.add_argument("--api-delay", type=float, default=2, help="Seconds to wait between API calls")
+    parser.add_argument("--read-params", action="store_true", help="Also read back the control parameters (10001-10005, 10017); this queues a read task, it changes nothing")
+    args = parser.parse_args()
+    if args.user_password and not args.user_account:
+        parser.error("--user-password needs --user-account")
+    if bool(args.token) == bool(args.user_account):
+        parser.error("give exactly one of --token or --user-account")
+    asyncio.run(test_sungrow_api(args))
+
+
+if __name__ == "__main__":  # pragma: no cover
+    main()
