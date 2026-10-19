@@ -566,7 +566,9 @@ class Inverter:
             self.log("Note: Inverter {}: Using inverter type {} - not all features are available on all Inverter types".format(self.id, self.inverter_type))
 
         # Load inverter brand definitions
-        self.reserve_max = self.base.get_arg("inverter_reserve_max", 100)
+        # One value for every inverter (as documented) or a per-inverter list (#5369)
+        reserve_max_index = self.id if isinstance(self.base.get_arg("inverter_reserve_max", indirect=False, can_override=False), list) else None
+        self.reserve_max = self.base.get_arg("inverter_reserve_max", 100, index=reserve_max_index)
         self.inv_has_mqtt_api = INVERTER_DEF[self.inverter_type]["has_mqtt_api"]
         self.inv_mqtt_topic = self.base.get_arg("mqtt_topic", "Sofar2mqtt")
         self.inv_output_charge_control = INVERTER_DEF[self.inverter_type]["output_charge_control"]

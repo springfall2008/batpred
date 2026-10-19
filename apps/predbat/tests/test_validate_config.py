@@ -525,6 +525,17 @@ def test_validate_config(my_predbat):
         my_predbat.args = saved_args
         my_predbat.ha_interface.dummy_items = saved_states
 
+    # inverter_reserve_max (#5369): single_value_ok lets one value cover every inverter, as the docs
+    # show, while a per-inverter list must still have an entry for each one
+    print("  [integer single_value_ok] inverter_reserve_max single value passes with two inverters")
+    _run(my_predbat, {"inverter_reserve_max": 98, "num_inverters": 2}, expect_clean=["inverter_reserve_max"])
+    print("  [integer single_value_ok] inverter_reserve_max list per inverter passes")
+    _run(my_predbat, {"inverter_reserve_max": [98, 98], "num_inverters": 2}, expect_clean=["inverter_reserve_max"])
+    print("  [integer single_value_ok] inverter_reserve_max short list still fails")
+    _run(my_predbat, {"inverter_reserve_max": [98], "num_inverters": 2}, expect_errors=["inverter_reserve_max"])
+    print("  [integer single_value_ok] inverter_reserve_max zero still fails")
+    _run(my_predbat, {"inverter_reserve_max": 0, "num_inverters": 2}, expect_errors=["inverter_reserve_max"])
+
     print("**** test_validate_config PASSED ****")
     return False
 

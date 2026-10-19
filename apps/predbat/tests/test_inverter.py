@@ -616,6 +616,41 @@ def test_battery_rate_max_source(test_name, my_predbat, ha, inverter_type, charg
     return failed
 
 
+def test_inverter_reserve_max_forms(my_predbat):
+    """
+    Test
+       inverter_reserve_max is read both as one value for every inverter and as a per-inverter list.
+
+    GH#5369: the validator wants one entry per inverter, but the reader took the whole list and failed
+    the int conversion, logging "Return bad int value" every cycle and falling back to 100.
+    """
+    failed = False
+    print("Test: test_inverter_reserve_max_forms")
+
+    saved = {arg: copy.deepcopy(my_predbat.args.get(arg, None)) for arg in ("inverter_type", "inverter_reserve_max", "num_inverters")}
+    try:
+        my_predbat.args["num_inverters"] = 2
+        my_predbat.args["inverter_type"] = ["GE", "GE"]
+        for case, value, expect in (("list", [97, 98], [97, 98]), ("single", 98, [98, 98]), ("unset", None, [100, 100])):
+            if value is None:
+                my_predbat.args.pop("inverter_reserve_max", None)
+            else:
+                my_predbat.args["inverter_reserve_max"] = value
+            for inverter_id in (0, 1):
+                inv = Inverter(my_predbat, inverter_id)
+                if inv.reserve_max != expect[inverter_id]:
+                    print("ERROR: test_inverter_reserve_max_forms: {}: inverter {} reserve_max should be {} got {}".format(case, inverter_id, expect[inverter_id], inv.reserve_max))
+                    failed = True
+    finally:
+        for arg, value in saved.items():
+            if value is None:
+                my_predbat.args.pop(arg, None)
+            else:
+                my_predbat.args[arg] = value
+
+    return failed
+
+
 def test_solis_cloud_rate_limits(test_name, my_predbat, ha, user_limits, expect_charge, expect_discharge, expect_export):
     """
     Test
@@ -5922,6 +5957,7 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_battery_rate_max_source("battery_rate_max_percent_only", my_predbat, ha, "GEC", None, charge_rate_max=None, battery_rate_max_arg="sensor.battery_rate_max", expect_rate_raw=9984)
     failed |= test_battery_rate_max_source("battery_rate_max_percent_only_ge", my_predbat, ha, "GE", None, charge_rate_max=None, battery_rate_max_arg="sensor.battery_rate_max", expect_rate_raw=9984)
     failed |= test_battery_rate_max_source("battery_rate_max_no_source", my_predbat, ha, "GEC", None, charge_rate_max=None, battery_rate_max_arg=None, expect_rate_raw=2600)
+    failed |= test_inverter_reserve_max_forms(my_predbat)
     if failed:
         return failed
 
