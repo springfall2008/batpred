@@ -706,10 +706,18 @@ class Inverter:
             inverter_limit_charge = min(inverter_limit_override, inverter_limit_charge)
             inverter_limit_discharge = min(inverter_limit_override, inverter_limit_discharge)
         inverter_limit_charge_dc = self.base.get_arg("inverter_limit_charge_dc", inverter_limit_charge, index=self.id, required_unit="W")
+        # The same mirror loop applies to the DC and export limits when they are bound to a sensor -
+        # fall back to the value they would take if unbound
+        if inverter_limit_charge_dc <= 0:
+            self.log("Warn: Inverter {} inverter_limit_charge_dc reads {}W, ignoring it and using charge limit {}W".format(self.id, inverter_limit_charge_dc, inverter_limit_charge))
+            inverter_limit_charge_dc = inverter_limit_charge
         self.battery_rate_max_charge = min(inverter_limit_charge, self.battery_rate_max_raw) / MINUTE_WATT
         self.battery_rate_max_charge_dc = inverter_limit_charge_dc / MINUTE_WATT
         self.battery_rate_max_discharge = min(inverter_limit_discharge, self.battery_rate_max_raw) / MINUTE_WATT
         inverter_limit_export = self.base.get_arg("inverter_limit_export", inverter_limit_discharge, index=self.id, required_unit="W")
+        if inverter_limit_export <= 0:
+            self.log("Warn: Inverter {} inverter_limit_export reads {}W, ignoring it and using discharge limit {}W".format(self.id, inverter_limit_export, inverter_limit_discharge))
+            inverter_limit_export = inverter_limit_discharge
         self.battery_rate_max_export = min(inverter_limit_export, self.battery_rate_max_raw) / MINUTE_WATT
         self.battery_rate_min = min(self.base.get_arg("inverter_battery_rate_min", 0, index=self.id, required_unit="W"), self.battery_rate_max_raw) / MINUTE_WATT
 

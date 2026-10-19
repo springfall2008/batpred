@@ -661,7 +661,7 @@ def test_solis_cloud_rate_limits(test_name, my_predbat, ha, user_limits, expect_
 def test_zero_limit_sensor_falls_back(test_name, my_predbat, ha):
     """
     Test
-       Inverter.__init__ ignores a 0W inverter_limit_charge/_discharge reading and plans at battery_rate_max.
+       Inverter.__init__ ignores a 0W inverter_limit_charge/_discharge/_charge_dc/_export reading and plans at battery_rate_max.
 
     GH#5219: the Sunsynk template's limit sensors mirror the charge/discharge current Predbat writes,
     so its own 0W freeze-export write came back as a 0W limit and every curve search divided by zero.
@@ -669,9 +669,15 @@ def test_zero_limit_sensor_falls_back(test_name, my_predbat, ha):
     failed = False
     print("Test: {}".format(test_name))
 
-    entities = {"sensor.zero_battery_rate_max": 5000, "sensor.zero_limit_charge": 0, "sensor.zero_limit_discharge": 0}
-    bindings = {"battery_rate_max": "sensor.zero_battery_rate_max", "inverter_limit_charge": "sensor.zero_limit_charge", "inverter_limit_discharge": "sensor.zero_limit_discharge"}
-    saved_args = ("inverter_type", "charge_rate", "battery_rate_max", "inverter_limit_charge", "inverter_limit_discharge", "inverter_limit_export", "inverter_limit_override")
+    entities = {"sensor.zero_battery_rate_max": 5000, "sensor.zero_limit_charge": 0, "sensor.zero_limit_discharge": 0, "sensor.zero_limit_charge_dc": 0, "sensor.zero_limit_export": 0}
+    bindings = {
+        "battery_rate_max": "sensor.zero_battery_rate_max",
+        "inverter_limit_charge": "sensor.zero_limit_charge",
+        "inverter_limit_discharge": "sensor.zero_limit_discharge",
+        "inverter_limit_charge_dc": "sensor.zero_limit_charge_dc",
+        "inverter_limit_export": "sensor.zero_limit_export",
+    }
+    saved_args = ("inverter_type", "charge_rate", "battery_rate_max", "inverter_limit_charge", "inverter_limit_discharge", "inverter_limit_charge_dc", "inverter_limit_export", "inverter_limit_override")
     saved = {arg: my_predbat.args.get(arg, None) for arg in saved_args}
     try:
         for arg in saved_args:
@@ -681,7 +687,7 @@ def test_zero_limit_sensor_falls_back(test_name, my_predbat, ha):
         ha.dummy_items.update(entities)
 
         inv = Inverter(my_predbat, 0)
-        for label, value in (("charge", inv.battery_rate_max_charge), ("discharge", inv.battery_rate_max_discharge), ("export", inv.battery_rate_max_export)):
+        for label, value in (("charge", inv.battery_rate_max_charge), ("charge_dc", inv.battery_rate_max_charge_dc), ("discharge", inv.battery_rate_max_discharge), ("export", inv.battery_rate_max_export)):
             if round(value * MINUTE_WATT) != 5000:
                 print("ERROR: battery_rate_max_{} should fall back to 5000W from a 0W limit, got {}W".format(label, round(value * MINUTE_WATT)))
                 failed = True
