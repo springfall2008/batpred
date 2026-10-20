@@ -3807,6 +3807,63 @@ def test_sigenergy_discover_systems_empty_device_list_onboards(my_predbat):
     return failed
 
 
+def test_sigenergy_request_403_is_not_retried(my_predbat):
+    """HTTP 403 is a refusal: one attempt, status recorded. Other HTTP errors are still retried."""
+    failed = False
+    api = MockSigenergyAPI()
+    api.access_token = "fake_token"
+    api.token_expires_at = 9_999_999_999
+    api._last_request_time = 0
+    session = _make_mock_session(_make_mock_response(status=403, json_data={}))
+    with patch("sigenergy.aiohttp.ClientSession", return_value=session):
+        result = run_async(api._request("GET", "/openapi/system/dummy/devices"))
+    assert result is None, "403 fails the request"
+    assert session.get.call_count == 1, "403 not retried, got {} attempts".format(session.get.call_count)
+    assert api._last_http_status == 403, "status recorded, got {}".format(api._last_http_status)
+
+    session = _make_mock_session(_make_mock_response(status=500, json_data={}))
+    with patch("sigenergy.aiohttp.ClientSession", return_value=session):
+        result = run_async(api._request("GET", "/openapi/system/SIG001/devices", retries=3))
+    assert result is None and session.get.call_count == 3, "500 still retried, got {} attempts".format(session.get.call_count)
+    assert api._last_http_status == 500, "status recorded, got {}".format(api._last_http_status)
+
+    # A later successful request clears it
+    session = _make_mock_session(_make_mock_response(status=200, json_data={"code": 0, "data": [{"deviceType": "Inverter"}]}))
+    with patch("sigenergy.aiohttp.ClientSession", return_value=session):
+        run_async(api._request("GET", "/openapi/system/SIG001/devices"))
+    assert api._last_http_status is None, "cleared by a successful request, got {}".format(api._last_http_status)
+    return failed
+
+
+def test_sigenergy_discover_systems_403_defers_to_system_list(my_predbat):
+    """A device list refused with HTTP 403 - an unauthorised system, live 2026-10-20 - lets the system list decide."""
+    failed = False
+
+    # System list read, system absent: onboard it
+    api = _make_discovery_api()
+    api.access_token = "fake_token"
+    api.token_expires_at = 9_999_999_999
+    api._last_request_time = 0
+    api.fetch_system_list = AsyncMock(return_value=False)
+    with patch("sigenergy.aiohttp.ClientSession", return_value=_make_mock_session(_make_mock_response(status=403, json_data={}))):
+        run_async(api.run(seconds=0, first=True))
+    assert api._unconfirmed_systems == set(), "a 403 is an answer, not left unconfirmed"
+    api.fetch_system_list.assert_awaited()
+    api.onboard_systems.assert_awaited_once_with(["SIG001"])
+
+    # System list unreadable too: retry, never onboard on the 403 alone
+    api = _make_discovery_api()
+    api.access_token = "fake_token"
+    api.token_expires_at = 9_999_999_999
+    api._last_request_time = 0
+    api.fetch_system_list = AsyncMock(return_value=None)
+    with patch("sigenergy.aiohttp.ClientSession", return_value=_make_mock_session(_make_mock_response(status=403, json_data={}))):
+        result = run_async(api.run(seconds=0, first=True))
+    assert result is False and api._unconfirmed_systems == {"SIG001"}, "unconfirmed, got {}".format(api._unconfirmed_systems)
+    api.onboard_systems.assert_not_awaited()
+    return failed
+
+
 def test_sigenergy_run_first_reads_device_list_once(my_predbat):
     """The first run's device refresh skips a system discovery has just read (five-minute restriction)."""
     failed = False
@@ -4010,6 +4067,8 @@ def run_sigenergy_tests(my_predbat):
         ("discover_systems_rejected_checks_system_list", test_sigenergy_discover_systems_rejected_checks_system_list),
         ("fetch_device_list_empty_is_not_a_confirmation", test_sigenergy_fetch_device_list_empty_is_not_a_confirmation),
         ("discover_systems_empty_device_list_onboards", test_sigenergy_discover_systems_empty_device_list_onboards),
+        ("request_403_is_not_retried", test_sigenergy_request_403_is_not_retried),
+        ("discover_systems_403_defers_to_system_list", test_sigenergy_discover_systems_403_defers_to_system_list),
         ("run_first_reads_device_list_once", test_sigenergy_run_first_reads_device_list_once),
         ("system_status_from_inverter_device", test_sigenergy_system_status_from_inverter_device),
         ("fetch_system_list_does_not_log_other_systems", test_sigenergy_fetch_system_list_does_not_log_other_systems),

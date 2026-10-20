@@ -419,6 +419,7 @@ class SigenergyAPI(ComponentBase):
 
         # Last non-zero API response code — set by _request for callers to inspect
         self._last_api_code = 0
+        self._last_http_status = None  # HTTP status of the last _request() response that was not 200/201 (None when it succeeded or never got one)
 
         # Rate-limit tracking
         self._last_request_time = 0.0
@@ -554,6 +555,7 @@ class SigenergyAPI(ComponentBase):
         }
 
         self.log("Requesting {} {} with params={} json={}".format(method, path, self.redact(params), self.redact(json_data)))
+        self._last_http_status = None
 
         for attempt in range(retries):
             await self._enforce_rate_limit()
@@ -582,8 +584,13 @@ class SigenergyAPI(ComponentBase):
                             continue
 
                         if response.status not in (200, 201):
+                            self._last_http_status = response.status
                             self.log("Warn: SigenergyAPI: HTTP {} for {} {}".format(response.status, method, path))
                             record_api_call("sigenergy", False, "server_error")
+                            if response.status == 403:
+                                # Forbidden is an answer, not a fault - e.g. a system ID this app key cannot see -
+                                # so retrying only spends rate-limited calls on the same refusal
+                                return None
                             if attempt < retries - 1:
                                 await asyncio.sleep(SIGENERGY_COMMAND_RETRY_DELAY)
                                 continue
@@ -703,9 +710,9 @@ class SigenergyAPI(ComponentBase):
         together hit 1201 Access restriction.  The device list is throttled per system instead,
         and its inventory is needed anyway, so a configured system_id is confirmed with it.
 
-        The system list is still used when no system_id is configured, and when a device list
-        fails with an API error that is not a throttle: that is how a system that is not yet
-        authorised looks, and fetch_system_list() is what run() relies on before onboarding it.
+        The system list is still used when no system_id is configured, and when a device list is
+        refused - HTTP 403, or an API error that is not a throttle: that is how a system that is
+        not yet authorised looks, and fetch_system_list() is what run() relies on before onboarding it.
         A throttled or failed request leaves the system unconfirmed, without consulting the
         system list, so a transient error never leads to an onboarding attempt.
 
@@ -726,7 +733,9 @@ class SigenergyAPI(ComponentBase):
             if await self.fetch_device_list(sid):
                 self.systems.setdefault(sid, {})
                 self.log("SigenergyAPI: Found system {} from its device list".format(sid))
-            elif self._last_api_code not in (None, SIGENERGY_CODE_ACCESS_RESTRICTION):
+            elif self._last_http_status == 403 or self._last_api_code not in (None, SIGENERGY_CODE_ACCESS_RESTRICTION):
+                # Refused: HTTP 403 is what an invalid system ID returned (seen 2026-10-20; a valid but
+                # unauthorised one is unverified), and any non-throttle API error is treated the same way
                 rejected.add(sid)
             else:
                 self._unconfirmed_systems.add(sid)
