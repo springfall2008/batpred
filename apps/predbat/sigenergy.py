@@ -137,6 +137,7 @@ SIGENERGY_VPP_RECLAIM_INTERVAL = 60   # re-assert VPP ownership every minute (se
 SIGENERGY_DEVICE_POLL_INTERVAL = 1800  # device list refresh every 30 minutes
 SIGENERGY_RATE_LIMIT_BACKOFF = [15, 30, 60, 120, 480]  # seconds to wait after code 1201
 SIGENERGY_BATTERY_NOMINAL_VOLTAGE_V = 28.8  # 8S LiFePO4 pack: 8 × 3.6V; used to convert ratedEnergy (Ah) → kWh
+SIGENERGY_RATED_ENERGY_AH_THRESHOLD = 100.0  # a ratedEnergy above this is Ah (e.g. 314), below it kWh (e.g. 9.04) - see _get_battery_capacity_kwh
 SIGENERGY_MQTT_PORT = 8883             # TLS MQTT port on the Sigenergy broker
 
 # MQTT topic patterns — format with app_key and system_id
@@ -392,6 +393,7 @@ class SigenergyAPI(ComponentBase):
 
         # Data stores keyed by systemId
         self.systems = {}         # systemId → system info dict
+        self._unconfirmed_systems = set()  # configured systems discover_systems() could not confirm either way (throttled / request failed)
         self.devices = {}         # systemId → list of device dicts
         self.energy_flow = {}     # systemId → latest energyFlow dict
         self.system_status = {}   # systemId → latest systemStatus dict
@@ -526,7 +528,7 @@ class SigenergyAPI(ComponentBase):
             await asyncio.sleep(SIGENERGY_MIN_REQUEST_INTERVAL - elapsed)
         self._last_request_time = time.monotonic()
 
-    async def _request(self, method, path, params=None, json_data=None, retries=SIGENERGY_MAX_RETRIES):
+    async def _request(self, method, path, params=None, json_data=None, retries=SIGENERGY_MAX_RETRIES, log_response=True):
         """Perform an authenticated HTTP request with retry logic.
 
         Args:
@@ -535,6 +537,8 @@ class SigenergyAPI(ComponentBase):
             params: URL query parameters dict.
             json_data: Request body dict (serialised to JSON).
             retries: Number of retry attempts.
+            log_response: Log the successful response body.  False for responses that carry other
+                people's data, such as the system list (every system on the app key).
 
         Returns:
             Parsed 'data' field from the response JSON, or None on failure.
@@ -591,20 +595,22 @@ class SigenergyAPI(ComponentBase):
                             self.log("Warn: SigenergyAPI: Failed to decode response from {}: {}".format(path, e))
                             return None
 
-                        self.log("SigenergyAPI: Response from {} {}: {}".format(method, path, self.redact(body)))
-
                         code = body.get("code", -1)
+                        if log_response or code != 0:
+                            self.log("SigenergyAPI: Response from {} {}: {}".format(method, path, self.redact(body)))
+
                         if code != 0:
                             self._last_api_code = code
                             self.log("Warn: SigenergyAPI: API error code={} msg={} for {}".format(code, body.get("msg", ""), path))
                             record_api_call("sigenergy", False, "server_error")
                             if code == SIGENERGY_CODE_ACCESS_RESTRICTION:
                                 # Rate-limited — exponential backoff then retry
-                                wait = SIGENERGY_RATE_LIMIT_BACKOFF[min(attempt, len(SIGENERGY_RATE_LIMIT_BACKOFF) - 1)]
-                                self.log("Warn: SigenergyAPI: Rate limited (1201) — waiting {}s before retry (attempt {}/{})" .format(wait, attempt + 1, retries))
                                 if attempt < retries - 1:
+                                    wait = SIGENERGY_RATE_LIMIT_BACKOFF[min(attempt, len(SIGENERGY_RATE_LIMIT_BACKOFF) - 1)]
+                                    self.log("Warn: SigenergyAPI: Rate limited (1201) — waiting {}s before retry (attempt {}/{})".format(wait, attempt + 1, retries))
                                     await asyncio.sleep(wait)
                                     continue
+                                self.log("Warn: SigenergyAPI: Rate limited (1201) — giving up after {} attempts".format(retries))
                             return None
 
                         data = body.get("data")
@@ -649,14 +655,15 @@ class SigenergyAPI(ComponentBase):
         """Fetch the list of authorised power stations.
 
         Returns:
-            True on success, False on failure.
+            True when matching systems were found, False when the list was read but none matched,
+            None when the list could not be read at all (request failed, throttled or unparseable).
         """
-        data = await self._request("GET", "/openapi/system")
+        # The response lists every system on the app key - other customers' names and addresses -
+        # so it is never logged, and only the matched systems below are named.
+        data = await self._request("GET", "/openapi/system", log_response=False)
         if data is None:
             self.log("Warn: SigenergyAPI: Failed to fetch system list")
-            return False
-
-        self.log("SigenergyAPI: System list raw data type={} value={}".format(type(data).__name__, repr(data)[:200]))
+            return None
 
         # data may be a JSON string (some Sigenergy endpoints double-encode), a list, or a dict
         if isinstance(data, str):
@@ -664,13 +671,13 @@ class SigenergyAPI(ComponentBase):
                 data = json.loads(data)
             except Exception as e:
                 self.log("Warn: SigenergyAPI: Failed to parse system list JSON string: {}".format(e))
-                return False
+                return None
 
         # data may be a list directly or wrapped in a dict
         systems = data if isinstance(data, list) else data.get("list", data.get("records", []))
         if not isinstance(systems, list):
             self.log("Warn: SigenergyAPI: Unexpected system list format: {}".format(type(systems)))
-            return False
+            return None
 
         for system in systems:
             sid = system.get("systemId")
@@ -680,12 +687,53 @@ class SigenergyAPI(ComponentBase):
                 continue
             self.systems[sid] = system
             self.log("SigenergyAPI: Found system {} ({})".format(sid, system.get("systemName", "unnamed")))
+        self.log("SigenergyAPI: System list returned {} system(s), {} matched".format(len(systems), len(self.systems)))
 
         if not self.systems:
             self.log("Warn: SigenergyAPI: No matching systems found (filter={})".format(self.system_id_filter or "all"))
             return False
 
         return True
+
+    async def discover_systems(self):
+        """Populate self.systems, preferring each configured system's device list over the system list.
+
+        The system list returns every system on the app key, so it is shared by all Predbat
+        instances and throttled globally to one call per five minutes - instances starting
+        together hit 1201 Access restriction.  The device list is throttled per system instead,
+        and its inventory is needed anyway, so a configured system_id is confirmed with it.
+
+        The system list is still used when no system_id is configured, and when a device list
+        fails with an API error that is not a throttle: that is how a system that is not yet
+        authorised looks, and fetch_system_list() is what run() relies on before onboarding it.
+        A throttled or failed request leaves the system unconfirmed, without consulting the
+        system list, so a transient error never leads to an onboarding attempt.
+
+        Returns:
+            True when at least one system was found, False otherwise.
+        """
+        self._unconfirmed_systems = set()
+        if not self.system_id_filter:
+            return await self.fetch_system_list()
+
+        rejected = set()
+        for sid in sorted(self.system_id_filter):
+            if sid in self.systems and sid in self.devices:
+                continue  # confirmed by an earlier attempt - don't spend its five-minute allowance again
+            self._last_api_code = None
+            if await self.fetch_device_list(sid):
+                self.systems.setdefault(sid, {})
+                self.log("SigenergyAPI: Found system {} from its device list".format(sid))
+            elif self._last_api_code not in (None, SIGENERGY_CODE_ACCESS_RESTRICTION):
+                rejected.add(sid)
+            else:
+                self._unconfirmed_systems.add(sid)
+                self.log("Warn: SigenergyAPI: Could not confirm system {} (device list unavailable), will retry".format(sid))
+
+        if rejected and await self.fetch_system_list() is None:
+            # Could not check whether they are authorised either - retry rather than onboard
+            self._unconfirmed_systems |= rejected - set(self.systems.keys())
+        return bool(self.systems)
 
     async def fetch_device_list(self, system_id):
         """Fetch the device inventory for a power station.
@@ -1409,23 +1457,43 @@ class SigenergyAPI(ComponentBase):
     def _get_battery_capacity_kwh(self, system_id):
         """Return the rated battery capacity in kWh for a system.
 
-        Prefers the batteryCapacity field from the system-list response (already in kWh).
-        Falls back to summing ratedEnergy from individual Battery devices.
-        The device-level ratedEnergy field is in Ah; multiply by the nominal pack voltage
-        (SIGENERGY_BATTERY_NOMINAL_VOLTAGE_V = 28.8 V for an 8S LiFePO4 pack) to convert to kWh.
+        Prefers batteryCapacity (kWh) from the system list or an MQTT change message.
+        Falls back to summing ratedEnergy from individual Battery devices - the only source
+        when systems are discovered from their device list and MQTT is quiet.
+
+        ratedEnergy is documented and observed in kWh (9.04 per module; five modules matched the
+        system list's 45.2).  An earlier response gave it in Ah (314 = 9.04kWh at the 28.8V
+        pack voltage), so a value above SIGENERGY_RATED_ENERGY_AH_THRESHOLD - impossible for
+        one module in kWh - is still converted from Ah.
         """
         system_info = self.systems.get(system_id, {})
         capacity = _safe_float(system_info.get("batteryCapacity", 0))
         if capacity > 0:
             return capacity
 
-        # Fallback: sum device-level ratedEnergy (Ah) converted to kWh
+        # Fallback: sum device-level ratedEnergy (kWh, or Ah from older responses)
         for device in self.devices.get(system_id, []):
             if device.get("deviceType") == SIGENERGY_DEVICE_BATTERY:
                 attr = device.get("attrMap", {})
-                rated_ah = _safe_float(attr.get("ratedEnergy", 0))
-                capacity += rated_ah * SIGENERGY_BATTERY_NOMINAL_VOLTAGE_V / 1000.0
+                rated = _safe_float(attr.get("ratedEnergy", 0))
+                if rated > SIGENERGY_RATED_ENERGY_AH_THRESHOLD:
+                    rated = rated * SIGENERGY_BATTERY_NOMINAL_VOLTAGE_V / 1000.0
+                capacity += rated
         return capacity
+
+    def _system_status(self, system_id):
+        """Return the system status: the system list's own when known, else the inverter device's.
+
+        Systems discovered from their device list have no system-level status, so the Inverter
+        (or AIO) device's status - same enum, e.g. "Normal" - stands in for it.
+        """
+        status = self.systems.get(system_id, {}).get("status")
+        if status:
+            return status
+        for device in self.devices.get(system_id, []):
+            if device.get("deviceType") in (SIGENERGY_DEVICE_INVERTER, SIGENERGY_DEVICE_AIO) and device.get("status"):
+                return device["status"]
+        return "Unknown"
 
     def _get_battery_max_power_kw(self, system_id):
         """Return the combined rated charge/discharge power in kW for a system."""
@@ -2019,7 +2087,7 @@ class SigenergyAPI(ComponentBase):
         )
 
         # --- System status ---
-        system_status = system_info.get("status", "Unknown")
+        system_status = self._system_status(system_id)
         self.dashboard_item(
             "sensor.{}_sigenergy_{}_status".format(self.prefix, slug),
             state=system_status,
@@ -2826,7 +2894,13 @@ class SigenergyAPI(ComponentBase):
             if not token:
                 self.log("Warn: SigenergyAPI: Authentication failed — cannot proceed")
                 return False
-            await self.fetch_system_list()
+            await self.discover_systems()
+            if self._unconfirmed_systems:
+                # A throttled or failed lookup says nothing about authorisation, so this must not
+                # fall through to onboarding; returning False retries discovery on the startup backoff.
+                self._publish_onboard_status()
+                self.log("Warn: SigenergyAPI: Could not confirm system(s) {} yet, will retry discovery".format(sorted(self._unconfirmed_systems)))
+                return False
 
             # For each expected system ID not yet visible, attempt onboarding
             missing_ids = self.system_id_filter - set(self.systems.keys()) if self.system_id_filter else set()
@@ -2875,6 +2949,10 @@ class SigenergyAPI(ComponentBase):
         # Refresh device inventory periodically
         if first or seconds % SIGENERGY_DEVICE_POLL_INTERVAL == 0:
             for sid in list(self.systems.keys()):
+                if first and sid in self.devices:
+                    # discover_systems() has just fetched it, and the device list may only be
+                    # read once every five minutes per system
+                    continue
                 await self.fetch_device_list(sid)
 
         # VPP registration management — runs at startup and every minute.
@@ -3112,7 +3190,10 @@ async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode
         print("+ Initialisation successful")
 
     if test_mode:
-        await sig.fetch_system_list()
+        await sig.discover_systems()
+        if not sig.systems:
+            print("x No systems found")
+            return 1
         sid = list(sig.systems.keys())[0]
         #await sig.fetch_current_mode(sid)
         flow = sig.energy_flow.get(sid, {})
@@ -3314,7 +3395,7 @@ async def test_mqtt_command(app_key, app_secret, base_url, system_id=None, activ
     print("+ REST authentication successful")
     print("+ MQTT broker: {}:{}".format(sig.mqtt_host, sig.mqtt_port))
 
-    await sig.fetch_system_list()
+    await sig.discover_systems()
     system_ids = list(sig.systems.keys())
     if not system_ids:
         print("x No authorised systems found")

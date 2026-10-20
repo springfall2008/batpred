@@ -334,6 +334,15 @@ def test_sigenergy_battery_capacity(my_predbat):
     actual_kwh = api._get_battery_capacity_kwh("sys2")
     assert abs(actual_kwh - expected_kwh) < 0.001, "Capacity summed from Battery devices, expected {:.4f} got {:.4f}".format(expected_kwh, actual_kwh)
 
+    # Current responses give ratedEnergy in kWh, as documented - live device list of a 5-module
+    # system, whose system-list batteryCapacity was 45.2. Read as Ah this came to ~1.3kWh.
+    api.systems["sys3"] = {}
+    api.devices["sys3"] = [{"deviceType": "Inverter", "attrMap": {"ratedActivePower": 12.0}}] + [
+        {"deviceType": "Battery", "attrMap": {"ratedEnergy": 9.04, "ratedChargePower": 4.4, "ratedDischargePower": 4.8}} for _ in range(5)
+    ]
+    actual_kwh = api._get_battery_capacity_kwh("sys3")
+    assert abs(actual_kwh - 45.2) < 0.001, "kWh ratedEnergy summed unconverted, expected 45.2 got {:.4f}".format(actual_kwh)
+
     return failed
 
 
@@ -2889,8 +2898,14 @@ def test_sigenergy_offboard_switch_survives_restart(my_predbat):
         return True
 
     api.onboard_systems = mock_onboard
+    # Without a token run() stops at authentication and never reaches the switch check
+    api.get_access_token = AsyncMock(return_value="tok")
+    # Not authorised: the device list is refused and the system list is read but does not include it
+    _reject_device_list(api)
+    api.fetch_system_list = AsyncMock(return_value=False)
 
     run_async(api.run(seconds=0, first=True))
+    api.fetch_system_list.assert_awaited_once()
     assert not onboarded, "A restart must not re-onboard a system whose offboard switch is on"
 
     return failed
@@ -3088,7 +3103,8 @@ def test_sigenergy_run_pending_publishes_before_early_exit(my_predbat):
     api = MockSigenergyAPI()
     api.system_id_filter = {sid}
     api.get_access_token = AsyncMock(return_value="tok")
-    api.fetch_system_list = AsyncMock()  # leaves self.systems empty (system not yet visible)
+    _reject_device_list(api)
+    api.fetch_system_list = AsyncMock(return_value=False)  # read, but the system is not yet visible
     api.onboard_systems = AsyncMock(return_value=None)
 
     result = run_async(api.run(seconds=0, first=True))
@@ -3621,6 +3637,224 @@ def test_sigenergy_command_probe_verdict_no_command(my_predbat):
     return failed
 
 
+# ---------------------------------------------------------------------------
+# Discovery from the device list (avoids the globally throttled system list)
+# ---------------------------------------------------------------------------
+
+
+def _reject_device_list(api, code=1401):
+    """Make fetch_device_list fail the way an unauthorised system does: an API error code."""
+    calls = []
+
+    async def _rejected(system_id):
+        calls.append(system_id)
+        api._last_api_code = code
+        return False
+
+    api.fetch_device_list = _rejected
+    return calls
+
+
+def _device_list_ok(api, devices=None):
+    """Make fetch_device_list succeed, storing the given inventory."""
+    calls = []
+
+    async def _ok(system_id):
+        calls.append(system_id)
+        api.devices[system_id] = devices if devices is not None else [{"deviceType": "Inverter", "serialNumber": "INV1", "status": "Normal"}]
+        return True
+
+    api.fetch_device_list = _ok
+    return calls
+
+
+def _make_discovery_api(sid="SIG001"):
+    """MockSigenergyAPI configured for one system and stubbed past discovery."""
+    api = MockSigenergyAPI()
+    api.system_id_filter = {sid}
+    api.get_access_token = AsyncMock(return_value="tok")
+    api.fetch_current_mode = AsyncMock(return_value=True)
+    api._manage_vpp_registration = AsyncMock(return_value=True)
+    api.fetch_controls = AsyncMock()
+    api.publish_controls = AsyncMock()
+    api.fetch_energy_flow = AsyncMock(return_value=True)
+    api.fetch_daily_summary = AsyncMock(return_value=True)
+    api.fetch_history_totals = AsyncMock(return_value=True)
+    api.publish_system_entities = AsyncMock()
+    api.apply_controls = AsyncMock()
+    api.onboard_systems = AsyncMock(return_value=True)
+    task = MagicMock()
+    task.done = MagicMock(return_value=False)
+    api._mqtt_task = task
+    return api
+
+
+def test_sigenergy_discover_systems_from_device_list(my_predbat):
+    """A configured system is confirmed from its device list; the system list is never read."""
+    failed = False
+    api = _make_discovery_api()
+    calls = _device_list_ok(api)
+    api.fetch_system_list = AsyncMock(return_value=True)
+
+    found = run_async(api.discover_systems())
+    assert found is True and "SIG001" in api.systems, "system confirmed, got {}".format(api.systems)
+    assert calls == ["SIG001"], "one device-list read, got {}".format(calls)
+    api.fetch_system_list.assert_not_awaited()
+    assert api._unconfirmed_systems == set(), "nothing left unconfirmed"
+
+    # A retried discovery does not spend the system's five-minute device-list allowance again
+    run_async(api.discover_systems())
+    assert calls == ["SIG001"], "already-confirmed system skipped on retry, got {}".format(calls)
+
+    # No system_id configured: only the system list can enumerate systems
+    api = _make_discovery_api()
+    api.system_id_filter = set()
+    calls = _device_list_ok(api)
+    api.fetch_system_list = AsyncMock(return_value=True)
+    run_async(api.discover_systems())
+    api.fetch_system_list.assert_awaited_once()
+    assert calls == [], "device list not used for discovery without a system_id"
+    return failed
+
+
+def test_sigenergy_discover_systems_throttled_does_not_onboard(my_predbat):
+    """A throttled (1201) or failed device list leaves the system unconfirmed: retry, never onboard."""
+    failed = False
+    for code in (1201, None):
+        api = _make_discovery_api()
+        _reject_device_list(api, code=code)
+        api.fetch_system_list = AsyncMock(return_value=True)
+
+        result = run_async(api.run(seconds=0, first=True))
+        assert result is False, "first run fails so discovery retries on the startup backoff (code {})".format(code)
+        assert api._unconfirmed_systems == {"SIG001"}, "system unconfirmed (code {}), got {}".format(code, api._unconfirmed_systems)
+        api.fetch_system_list.assert_not_awaited()
+        api.onboard_systems.assert_not_awaited()
+        assert any("Could not confirm system" in m for m in api.log_messages), "retry logged (code {})".format(code)
+    return failed
+
+
+def test_sigenergy_discover_systems_rejected_checks_system_list(my_predbat):
+    """A device list refused with an API error falls back to the system list, which decides onboarding."""
+    failed = False
+
+    # Listed after all: confirmed from the system list, no onboarding
+    api = _make_discovery_api()
+    _reject_device_list(api)
+
+    async def _listed():
+        api.systems["SIG001"] = {"systemId": "SIG001", "systemName": "Home"}
+        return True
+
+    api.fetch_system_list = _listed
+    assert run_async(api.discover_systems()) is True, "found via the system list"
+    assert api.systems["SIG001"]["systemName"] == "Home" and api._unconfirmed_systems == set(), "confirmed, got {}".format(api.systems)
+
+    # Read but absent: genuinely not authorised, so run() goes on to onboard it
+    api = _make_discovery_api()
+    _reject_device_list(api)
+    api.fetch_system_list = AsyncMock(return_value=False)
+    run_async(api.run(seconds=0, first=True))
+    api.onboard_systems.assert_awaited_once_with(["SIG001"])
+
+    # System list unreadable too (None): cannot tell, so retry rather than onboard
+    api = _make_discovery_api()
+    _reject_device_list(api)
+    api.fetch_system_list = AsyncMock(return_value=None)
+    result = run_async(api.run(seconds=0, first=True))
+    assert result is False and api._unconfirmed_systems == {"SIG001"}, "unconfirmed, got {}".format(api._unconfirmed_systems)
+    api.onboard_systems.assert_not_awaited()
+    return failed
+
+
+def test_sigenergy_run_first_reads_device_list_once(my_predbat):
+    """The first run's device refresh skips a system discovery has just read (five-minute restriction)."""
+    failed = False
+    api = _make_discovery_api()
+    calls = _device_list_ok(api)
+    api.fetch_system_list = AsyncMock(return_value=True)
+
+    result = run_async(api.run(seconds=0, first=True))
+    assert result is True, "first run succeeds"
+    assert calls == ["SIG001"], "device list read once on the first run, got {}".format(calls)
+    api.fetch_system_list.assert_not_awaited()
+
+    # The periodic refresh still runs afterwards
+    run_async(api.run(seconds=1800, first=False))
+    assert calls == ["SIG001", "SIG001"], "30-minute refresh reads it again, got {}".format(calls)
+    return failed
+
+
+def test_sigenergy_system_status_from_inverter_device(my_predbat):
+    """Status comes from the system list when present, else from the Inverter/AIO device."""
+    failed = False
+    api = MockSigenergyAPI()
+    api.systems["S1"] = {"status": "Disconnection"}
+    api.devices["S1"] = [{"deviceType": "Inverter", "status": "Normal"}]
+    assert api._system_status("S1") == "Disconnection", "system-list status preferred"
+
+    api.systems["S2"] = {}
+    api.devices["S2"] = [{"deviceType": "Battery", "status": "Fault"}, {"deviceType": "AIO", "status": "Normal"}]
+    assert api._system_status("S2") == "Normal", "inverter/AIO device status used, not a battery's"
+
+    api.systems["S3"] = {}
+    assert api._system_status("S3") == "Unknown", "unknown without either"
+    return failed
+
+
+def test_sigenergy_fetch_system_list_does_not_log_other_systems(my_predbat):
+    """The system list carries every system on the app key; neither the body nor unmatched names are logged."""
+    import json
+    failed = False
+    api = MockSigenergyAPI()
+    api.access_token = "fake_token"
+    api.token_expires_at = 9_999_999_999
+    api._last_request_time = 0
+    api.system_id_filter = {"MINE1"}
+    listing = [
+        {"systemId": "MINE1", "systemName": "My House", "addr": "1 My Road"},
+        {"systemId": "OTHER1", "systemName": "Someone Else", "addr": "2 Their Road"},
+    ]
+    response = {"code": 0, "msg": "success", "data": json.dumps(listing)}
+    with patch("sigenergy.aiohttp.ClientSession", return_value=_make_mock_session(_make_mock_response(status=200, json_data=response))):
+        ok = run_async(api.fetch_system_list())
+
+    assert ok is True and list(api.systems) == ["MINE1"], "own system matched, got {}".format(api.systems)
+    joined = "\n".join(api.log_messages)
+    assert "Someone Else" not in joined and "Their Road" not in joined and "OTHER1" not in joined, "other customers never logged:\n{}".format(joined)
+    assert "1 My Road" not in joined, "addresses never logged"
+    assert "returned 2 system(s), 1 matched" in joined, "count logged instead, got:\n{}".format(joined)
+
+    # An error response is still logged in full - it carries no system data and is needed for diagnosis
+    api = MockSigenergyAPI()
+    api.access_token = "fake_token"
+    api.token_expires_at = 9_999_999_999
+    api._last_request_time = 0
+    with patch("sigenergy.aiohttp.ClientSession", return_value=_make_mock_session(_make_mock_response(status=200, json_data={"code": 1502, "msg": "internal", "data": {}}))):
+        ok = run_async(api.fetch_system_list())
+    assert ok is None, "an unreadable list returns None, not False, got {}".format(ok)
+    assert any("Response from GET /openapi/system" in m and "1502" in m for m in api.log_messages), "error body logged"
+    return failed
+
+
+def test_sigenergy_rate_limit_last_attempt_does_not_claim_to_wait(my_predbat):
+    """On the final 1201 attempt the log says it gave up, not that it is waiting to retry."""
+    failed = False
+    api = MockSigenergyAPI()
+    api.access_token = "fake_token"
+    api.token_expires_at = 9_999_999_999
+    api._last_request_time = 0
+    response = {"code": 1201, "msg": "Access restriction", "data": {}}
+    with patch("sigenergy.aiohttp.ClientSession", return_value=_make_mock_session(_make_mock_response(status=200, json_data=response))):
+        result = run_async(api._request("GET", "/openapi/system", retries=2))
+
+    assert result is None, "throttled request fails"
+    waits = [m for m in api.log_messages if "waiting" in m]
+    assert len(waits) == 1 and "attempt 1/2" in waits[0], "only the first attempt waits, got {}".format(waits)
+    assert any("giving up after 2 attempts" in m for m in api.log_messages), "final attempt logs giving up, got {}".format(api.log_messages)
+    return failed
+
+
 def run_sigenergy_tests(my_predbat):
     """Run all Sigenergy API unit tests.
 
@@ -3731,6 +3965,13 @@ def run_sigenergy_tests(my_predbat):
         ("mqtt_command_probe_listen_timeout", test_sigenergy_mqtt_command_probe_listen_timeout),
         ("mqtt_command_probe_no_token", test_sigenergy_mqtt_command_probe_no_token),
         ("command_probe_verdict_no_command", test_sigenergy_command_probe_verdict_no_command),
+        ("discover_systems_from_device_list", test_sigenergy_discover_systems_from_device_list),
+        ("discover_systems_throttled_does_not_onboard", test_sigenergy_discover_systems_throttled_does_not_onboard),
+        ("discover_systems_rejected_checks_system_list", test_sigenergy_discover_systems_rejected_checks_system_list),
+        ("run_first_reads_device_list_once", test_sigenergy_run_first_reads_device_list_once),
+        ("system_status_from_inverter_device", test_sigenergy_system_status_from_inverter_device),
+        ("fetch_system_list_does_not_log_other_systems", test_sigenergy_fetch_system_list_does_not_log_other_systems),
+        ("rate_limit_last_attempt_does_not_claim_to_wait", test_sigenergy_rate_limit_last_attempt_does_not_claim_to_wait),
     ]
 
     for name, fn in tests:
