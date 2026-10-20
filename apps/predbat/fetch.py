@@ -621,15 +621,20 @@ class Fetch:
 
     def fill_load_from_history(self, load_minutes, load_minutes_age):
         """
-        Fill stretches where load_today stopped counting from the history of Predbat's own load_energy_h0 sensor.
+        Fill the days before load_today's history starts from the history of Predbat's own load_energy_h0 sensor.
 
-        load_energy_h0 republishes today's measured load (unscaled, unfiltered, summed across inverters) every
-        cycle under an entity id that never changes, so its history outlives a change of load_today sensor - a
-        new inverter, or a cut over to another sensor and back. Where load_today is flat for at least
-        load_filter_threshold minutes, including the days before its own history starts, the increments
-        load_energy_h0 recorded over that stretch are put in its place. Where load_energy_h0 is flat too
-        (Predbat saw the same dead sensor) the stretch is left for fill_load_from_power and the average gap
-        filler. Records tagged as published from load_forecast alone are skipped, as they are not measured.
+        load_energy_h0 republishes today's load (unscaled, unfiltered, summed across inverters) every cycle
+        under an entity id that never changes, so its history outlives a change of load_today sensor, such as a
+        new inverter. Where load_today is flat from the oldest minute back for at least a day (the sensor did
+        not exist yet), the increments load_energy_h0 recorded over that stretch are put in its place.
+
+        Flat stretches inside load_today's own history are left for fill_load_from_power and the average gap
+        filler. There load_energy_h0 was published from this same sensor, so it adds nothing true: it holds
+        what load_today counted, a cycle late, so smoothing spreads each step back into the flat before it,
+        plus whatever this fill added the cycle before, so the fill fed on its own output and today's load
+        climbed every cycle (#5652). History backends that keep only the state cannot say which sensor a
+        record came from, so the stretch it was measured over is the only safe test. Records tagged as
+        published from load_forecast alone are skipped, as they are not measured.
 
         Returns (load_minutes, load_minutes_age), with the age extended over any older days filled in.
         """
@@ -641,20 +646,13 @@ class Fetch:
         max_minute = (len(data) - 1) if isinstance(data, MinuteArray) else max(data.keys())
         gap_size = max(self.get_arg("load_filter_threshold", self.plan_interval_minutes), 5)
 
-        # Find the stretches where load_today did not increment, as (newest, oldest) minute pairs
-        gaps = []
-        gap_start = None
-        for minute in range(max_minute):
-            if data.get(minute, 0) == data.get(minute + 1, 0):
-                if gap_start is None:
-                    gap_start = minute
-            else:
-                if gap_start is not None and minute - gap_start >= gap_size:
-                    gaps.append((gap_start, minute))
-                gap_start = None
-        if gap_start is not None and max_minute - gap_start >= gap_size:
-            gaps.append((gap_start, max_minute))
-        if not gaps:
+        # Find where load_today's history starts: the newest minute of the flat run back to the oldest minute.
+        # Under a day is not a missing sensor - a history that only lists changes can open hours into the
+        # window on a quiet night - and load_energy_h0 then came from this same sensor
+        gap_start = max_minute
+        while gap_start > 0 and data.get(gap_start - 1, 0) == data.get(max_minute, 0):
+            gap_start -= 1
+        if max_minute - gap_start < 24 * 60:
             return load_minutes, load_minutes_age
 
         entity_id = self.prefix + ".load_energy_h0"
@@ -689,12 +687,11 @@ class Fetch:
         # it would add the last rate seen on top of what was published from the last fill, cycle after cycle
         history_minutes, _ = minute_data(records, self.max_days_previous, self.now_utc, "state", "last_updated", backwards=True, smoothing=True, clean_increment=True, required_unit="kWh", interpolate=False)
 
-        # Mark the gap minutes load_energy_h0 measured, then walk from oldest to newest carrying the energy added
-        # so far forward, so the data keeps incrementing all the way to minute 0
+        # Mark the minutes before load_today's history that load_energy_h0 measured, then walk from oldest to
+        # newest carrying the energy added so far forward, so the data keeps incrementing all the way to minute 0
         in_gap = bytearray(max_minute + 1)
-        for newest, oldest_minute in gaps:
-            for minute in range(newest, oldest_minute):
-                in_gap[minute] = 1
+        for minute in range(gap_start, max_minute):
+            in_gap[minute] = 1
         for newest, oldest_minute in unknown:
             for minute in range(newest, min(oldest_minute, max_minute + 1)):
                 in_gap[minute] = 0
@@ -709,16 +706,15 @@ class Fetch:
             return load_minutes, load_minutes_age
 
         # Days older than load_today's own history are now real data, so extend the age to cover them
-        newest, oldest_minute = gaps[-1]
-        if oldest_minute == max_minute and history_minutes.get(newest, 0) > history_minutes.get(oldest_minute, 0):
+        if history_minutes.get(gap_start, 0) > history_minutes.get(max_minute, 0):
             load_minutes_age = min(max(load_minutes_age, history_age), self.max_days_previous)
 
-        self.log("Filled {} gaps in load_today totalling {}kWh from {} history, data now goes back {} days".format(len(gaps), dp2(added), entity_id, load_minutes_age))
+        self.log("Filled load_today before its history starts {} minutes ago with {}kWh from {} history, data now goes back {} days".format(gap_start, dp2(added), entity_id, load_minutes_age))
         return data, load_minutes_age
 
     def fetch_load_today(self):
         """
-        Read the load_today history, backfill the stretches it did not count from load_energy_h0, then work out
+        Read the load_today history, backfill the days before it starts from load_energy_h0, then work out
         today's load so far and the last period's load from the filled data.
         """
         load_minutes, load_minutes_age = self.minute_data_load(self.now_utc, "load_today", self.max_days_previous, required_unit="kWh", load_scaling=1.0, interpolate=True)
