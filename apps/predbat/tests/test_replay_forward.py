@@ -525,6 +525,12 @@ INVALID_LOG = """2026-10-04 04:01:03.000000: --------------- PredBat - update at
 2026-10-04 12:05:17.111195: Recompute is saving previous plan...
 2026-10-04 12:05:17.115425: Best export window [ 04-10 14:00:00 - 04-10 14:30:00 @ 7.45p 100.0% ]
 2026-10-04 12:05:19.357686: Export windows filtered [ 04-10 16:50:00 - 04-10 19:00:00 @ 23.02p 29.0% ]
+2026-10-05 00:00:00.000000: --------------- PredBat - update at 2026-10-05 00:00:00+01:00 with clock skew 0 minutes, minutes now 0
+2026-10-05 00:00:10.000000: Inverter 0 SoC: 0.00kWh 0%, current charge rate 5500W, current discharge rate 5500W, current battery power 0W
+2026-10-05 00:00:49.000000: Force recompute due to start of day
+2026-10-05 00:00:49.100000: Recompute, previous plan is invalid...
+2026-10-05 00:00:49.200000: Best export window [ 05-10 00:00:00 - 05-10 00:30:00 @ 15.84p 100.0% ]
+2026-10-05 00:00:52.000000: Export windows filtered [ 05-10 00:50:00 - 05-10 01:00:00 @ 15.8p 0.0% ]
 """
 
 
@@ -534,13 +540,17 @@ def test_parse_log_invalid_plan():
         path = os.path.join(folder, "predbat.log")
         with open(path, "w") as handle:
             handle.write(INVALID_LOG)
-        run, recompute = parse_log(path)
+        run, recompute, midnight = parse_log(path)
     if not run.get("invalid") or run["in_force"] is not None or run["filtered"] is None:
         print("ERROR: an invalid-plan run parsed wrongly: invalid {} in force {} filtered {}".format(run.get("invalid"), run["in_force"], run["filtered"]))
         return 1
     # A sensor-triggered recompute logs the same "Will recompute" line, but its plan is valid and is compared with the new one
     if recompute.get("invalid") or not recompute.get("recompute") or recompute["in_force"] is not None:
         print("ERROR: a valid recompute parsed wrongly: invalid {} recompute {} in force {}".format(recompute.get("invalid"), recompute.get("recompute"), recompute["in_force"]))
+        return 1
+    # The fresh plan forced at the start of each day prints its blank starting list (every window at 100%), not a plan in force
+    if not midnight.get("invalid") or midnight["in_force"] is not None:
+        print("ERROR: the start-of-day recompute's blank window list was taken as the plan in force: {}".format(midnight["in_force"]))
         return 1
     return 0
 

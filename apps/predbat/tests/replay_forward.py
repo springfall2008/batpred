@@ -93,7 +93,9 @@ IN_FORCE_RE = re.compile(r"Best export window (\[.*\])")
 # Logged just before it, as percent limits: the charge windows in force
 IN_FORCE_CHARGE_RE = re.compile(r"Best charge window (\[.*\])")
 # Logged for every recompute, whatever triggered it (a sensor change too), despite its wording
-RECOMPUTE_RE = re.compile(r"Will recompute the plan as it is invalid")
+# A run that throws its plan away - found invalid, or the forced fresh plan at the start of each day - prints the
+# re-plan's starting window list (every window at 100%, not yet planned) where the plan in force would be
+RECOMPUTE_RE = re.compile(r"Will recompute the plan as it is invalid|Force recompute due to start of day")
 # Logged by calculate_plan only when the plan really is invalid, so the new plan is adopted without comparing it to the old
 INVALID_RE = re.compile(r"Recompute, previous plan is invalid")
 FORCE_RE = re.compile(r"Inverter 0 Adjust force export to (True|False), change times from \S+ - \S+ to (\d+):(\d+):\d+ - (\d+):(\d+):\d+")
@@ -206,6 +208,7 @@ def parse_log(path):
             # config refresh is pending) adopts its re-plan without comparing it to the old plan
             if INVALID_RE.search(line):
                 run["invalid"] = True
+                run["recompute"] = True
                 continue
             # The first "Best export window" of a run is the plan in force when it starts - the one the previous
             # run adopted. Later ones in the same run are the re-plan's working lists.
