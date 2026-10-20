@@ -551,6 +551,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.discharge_rate_now = 0
         self.car_charging_hold = False
         self.car_charging_manual_soc = []
+        self.car_charging_manual_energy_last = {}
         self.car_charging_threshold = 99
         self.car_charging_energy = {}
         self.car_charging_energy_warned = False
@@ -1158,15 +1159,55 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 extra=status_extra,
             )
 
+    def car_manual_soc_measured_energy(self, car_n):
+        """
+        Energy in kWh delivered to car_n since the last call, read from the car_charging_energy session counter.
+
+        Returns None when there is no usable counter for this car: car_charging_energy is a single total
+        across all cars, so it is only attributed to a car when there is exactly one. The first reading
+        only sets the baseline, and a counter that drops is a new session, so everything it shows since
+        the reset is new energy - the result is never negative.
+        """
+        if self.num_cars != 1:
+            return None
+        entity_id = self.get_arg("car_charging_energy", None, indirect=False)
+        if isinstance(entity_id, list) and len(entity_id) == 1:
+            entity_id = entity_id[0]
+        if not is_entity_id(entity_id):
+            return None
+        try:
+            energy_now = float(self.resolve_arg("car_charging_energy", entity_id, default=None, required_unit="kWh")) * self.get_arg("car_charging_energy_scale", 1.0)
+        except (ValueError, TypeError):
+            return None
+        energy_last = self.car_charging_manual_energy_last.get(car_n)
+        self.car_charging_manual_energy_last[car_n] = energy_now
+        if energy_last is None:
+            return 0.0
+        if energy_now < energy_last:
+            return energy_now
+        return energy_now - energy_last
+
     def update_car_manual_soc(self):
         """
-        Write the predicted next car SoC back to the manual car SoC tracker for cars using car_charging_manual_soc
+        Advance the manual car SoC tracker for cars using car_charging_manual_soc.
+
+        A measured source wins over the plan: with a car_charging_energy counter the SoC advances by the
+        energy actually delivered (less car_charging_loss), and with a car_charging_now sensor reporting
+        the car is not charging it does not advance at all. Only with neither is the plan's predicted
+        next SoC written back, which advances the SoC whether or not the charger delivers anything.
         """
         for car_n in range(self.num_cars):
             if car_n < len(self.car_charging_manual_soc) and self.car_charging_manual_soc[car_n]:
                 car_postfix = "" if car_n == 0 else "_" + str(car_n)
                 self.log("Car {} charging Manual SoC current is {} next is {}".format(car_n, self.car_charging_soc[car_n], self.car_charging_soc_next[car_n]))
-                if self.car_charging_soc_next[car_n] is not None:
+                measured_kwh = self.car_manual_soc_measured_energy(car_n)
+                charging_now_sensor = is_entity_id(self.get_arg("car_charging_now", None, indirect=False, index=car_n))
+                if measured_kwh is not None or (charging_now_sensor and not self.car_charging_now[car_n]):
+                    soc_next = self.car_charging_soc[car_n] + (measured_kwh or 0.0) * self.car_charging_loss
+                    soc_next = max(0.0, min(soc_next, self.car_charging_battery_size[car_n]))
+                    self.log("Car {} charging Manual SoC advanced by measured energy {} kWh to {}".format(car_n, dp3(measured_kwh or 0.0), dp3(soc_next)))
+                    self.expose_config("car_charging_manual_soc_kwh" + car_postfix, dp3(soc_next))
+                elif self.car_charging_soc_next[car_n] is not None:
                     soc_next = self.car_charging_soc_next[car_n]
                     # The modelled car SoC can run past the real charge limit when the prediction's fill
                     # clamp is inert (octopus_intelligent_consider_full off, #4967) - the tracked manual

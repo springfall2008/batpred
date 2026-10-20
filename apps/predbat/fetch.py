@@ -1873,6 +1873,15 @@ class Fetch:
             return None
         return planned_entity_id
 
+    def car_manual_soc_kwh(self, car_n):
+        """
+        Read car_n's manual SoC tracker in kWh, kept within [0, battery size] - it is a free-entry number
+        that can hold anything, e.g. 100 kWh entered for a 10 kWh car.
+        """
+        car_postfix = "" if car_n == 0 else "_" + str(car_n)
+        soc_kwh = self.get_arg("car_charging_manual_soc_kwh" + car_postfix, 0.0)
+        return max(0.0, min(soc_kwh, self.car_charging_battery_size[car_n]))
+
     def fetch_sensor_data_cars(self, save=True):
         """
         Fetch car specific data such as Octopus intelligent slots and vehicle data if we can get it, and calculate current SoC and limits based on that
@@ -1890,8 +1899,7 @@ class Fetch:
         self.car_charging_soc_next = [None for car_n in range(self.num_cars)]
         for car_n in range(self.num_cars):
             if car_n < len(self.car_charging_manual_soc) and self.car_charging_manual_soc[car_n]:
-                car_postfix = "" if car_n == 0 else "_" + str(car_n)
-                self.car_charging_soc[car_n] = self.get_arg("car_charging_manual_soc_kwh" + car_postfix, 0.0)
+                self.car_charging_soc[car_n] = self.car_manual_soc_kwh(car_n)
             else:
                 self.car_charging_soc[car_n] = (self.get_arg("car_charging_soc", 0.0, index=car_n) * self.car_charging_battery_size[car_n]) / 100.0
 

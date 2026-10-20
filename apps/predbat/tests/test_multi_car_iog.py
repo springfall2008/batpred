@@ -1077,6 +1077,109 @@ def run_update_car_manual_soc_cap_test(testname, my_predbat):
     return failed
 
 
+def run_car_manual_soc_measured_test(testname, my_predbat):
+    """
+    The manual car SoC tracker must follow measurement, not the plan: it is clamped to the car's battery
+    when read, advances by the energy the car_charging_energy session counter shows was delivered (less
+    car_charging_loss, surviving a counter reset), stays put while car_charging_now says the car is not
+    charging, and only falls back to the plan's predicted SoC when neither source is configured.
+    """
+    failed = False
+    print("**** Running Test: multi_car_iog {} ****".format(testname))
+
+    energy_entity = "sensor.test_manual_soc_session_energy"
+    now_entity = "binary_sensor.test_manual_soc_charging"
+    attrs = ["num_cars", "car_charging_manual_soc", "car_charging_soc", "car_charging_soc_next", "car_charging_limit", "car_charging_battery_size", "car_charging_now", "car_charging_loss", "car_charging_manual_energy_last"]
+    saved = {attr: copy.deepcopy(getattr(my_predbat, attr)) for attr in attrs}
+    arg_keys = ["car_charging_energy", "car_charging_now", "car_charging_energy_scale"]
+    saved_args = {key: copy.deepcopy(my_predbat.args[key]) for key in arg_keys if key in my_predbat.args}
+    saved_manual_soc_switch = my_predbat.get_arg("car_charging_manual_soc", default=False)
+    saved_soc_kwh = my_predbat.get_arg("car_charging_manual_soc_kwh", 0.0)
+
+    def written():
+        """The value update_car_manual_soc() wrote back to the tracker."""
+        return my_predbat.get_arg("car_charging_manual_soc_kwh", 0.0)
+
+    def check(label, expected):
+        """Record a failure when the tracker does not hold the expected kWh."""
+        nonlocal failed
+        if abs(written() - expected) > 0.001:
+            print("ERROR: {}: manual SoC should be {}, got {}".format(label, expected, written()))
+            failed = True
+
+    def cycle(soc_kwh, energy=None, charging=False):
+        """One scheduled write-back with the tracker at soc_kwh, the counter at energy and the car charging or not."""
+        my_predbat.car_charging_soc = [soc_kwh]
+        my_predbat.car_charging_now = [charging]
+        if energy is not None:
+            my_predbat.ha_interface.set_state(energy_entity, str(energy), attributes={"unit_of_measurement": "kWh"})
+        my_predbat.update_car_manual_soc()
+
+    try:
+        my_predbat.num_cars = 1
+        my_predbat.car_charging_manual_soc = [True]
+        my_predbat.expose_config("car_charging_manual_soc", True)
+        my_predbat.car_charging_battery_size = [10.0]
+        my_predbat.car_charging_limit = [8.0]
+        my_predbat.car_charging_loss = 0.9  # 10% loss
+        my_predbat.car_charging_manual_energy_last = {}
+        my_predbat.car_charging_soc_next = [6.0]  # the plan always predicts +1 kWh from 5.0
+        for key in arg_keys:
+            my_predbat.args.pop(key, None)
+
+        # Clamp on read: 100 kWh entered on a 10 kWh car, and a negative value
+        my_predbat.expose_config("car_charging_manual_soc_kwh", 100.0)
+        if abs(my_predbat.car_manual_soc_kwh(0) - 10.0) > 0.001:
+            print("ERROR: manual SoC read should clamp 100 kWh to the 10 kWh battery, got {}".format(my_predbat.car_manual_soc_kwh(0)))
+            failed = True
+        my_predbat.expose_config("car_charging_manual_soc_kwh", -3.0)
+        if abs(my_predbat.car_manual_soc_kwh(0)) > 0.001:
+            print("ERROR: manual SoC read should clamp a negative value to 0, got {}".format(my_predbat.car_manual_soc_kwh(0)))
+            failed = True
+
+        # No measured source configured: unchanged plan-based behaviour
+        cycle(5.0)
+        check("no measured source", 6.0)
+
+        # car_charging_now sensor only: not charging means no advance, charging falls back to the plan
+        my_predbat.args["car_charging_now"] = [now_entity]
+        cycle(5.0, charging=False)
+        check("car_charging_now off", 5.0)
+        cycle(5.0, charging=True)
+        check("car_charging_now on, no energy counter", 6.0)
+
+        # Energy counter: first reading is only the baseline, then the delivered delta (x efficiency)
+        my_predbat.args["car_charging_energy"] = energy_entity
+        cycle(5.0, energy=2.0, charging=True)
+        check("energy baseline", 5.0)
+        cycle(5.0, energy=3.0, charging=True)
+        check("energy delta 1.0 kWh", 5.9)
+        # The charger delivers nothing although the plan says charge - no drift
+        cycle(5.9, energy=3.0, charging=True)
+        check("energy counter flat", 5.9)
+        # New session: counter drops to 0.5 - everything since the reset is new energy, never negative
+        cycle(5.9, energy=0.5, charging=True)
+        check("energy counter reset", 6.35)
+        # Measured energy can never push the tracker past the battery
+        cycle(9.9, energy=10.5, charging=True)
+        check("energy capped at battery size", 10.0)
+    finally:
+        my_predbat.expose_config("car_charging_manual_soc_kwh", saved_soc_kwh)
+        my_predbat.expose_config("car_charging_manual_soc", saved_manual_soc_switch)
+        for key in arg_keys:
+            my_predbat.args.pop(key, None)
+        my_predbat.args.update(saved_args)
+        for attr, value in saved.items():
+            setattr(my_predbat, attr, value)
+
+    if failed:
+        print("Test: {} FAILED".format(testname))
+    else:
+        print("Test: {} PASSED".format(testname))
+
+    return failed
+
+
 def run_multi_car_iog_tests(my_predbat):
     """
     Run all multi-car IOG tests
@@ -1090,6 +1193,7 @@ def run_multi_car_iog_tests(my_predbat):
     failed |= run_iog_model_limit_fetch_test("multi_car_iog_model_limit_fetch_4967", my_predbat)
     failed |= run_iog_consider_full_predict_test("multi_car_iog_consider_full_predict_4967", my_predbat)
     failed |= run_update_car_manual_soc_cap_test("multi_car_iog_manual_soc_cap_4967", my_predbat)
+    failed |= run_car_manual_soc_measured_test("car_manual_soc_measured", my_predbat)
     failed |= run_charger_schedule_plan_test("charger_schedule_is_the_car_plan_5399", my_predbat)
     failed |= run_planned_slot_sensor_test("planned_slot_sensor_5413", my_predbat)
     return failed
