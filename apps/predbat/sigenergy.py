@@ -322,6 +322,8 @@ def topic_scan_summary(report):
         lines.append("x Could not connect to the MQTT broker: {}".format(report.get("error") or "unknown error"))
         return lines
     lines.append("+ Connected using MQTT {}{}".format(report.get("protocol"), " - CONNACK {}".format(report["connack"]) if report.get("connack") else ""))
+    if report.get("ack_capture") is False:
+        lines.append("x Could not hook paho's callbacks - PUBACK codes, reason strings and CONNACK properties below are missing, not absent")
 
     granted = [sub for sub in report.get("subscribe", []) if sub["ok"]]
     refused = [sub for sub in report.get("subscribe", []) if not sub["ok"]]
@@ -389,6 +391,10 @@ def command_probe_verdict(report):
     unheard = [pub["topic"] for pub in report.get("publish", []) if pub.get("no_subscribers")]
     if unheard:
         lines.append("~ Broker reports no subscribers (0x10) for {} - nothing at Sigenergy appears to be listening, so these were probably discarded; check the battery responded".format(", ".join(sorted(set(unheard)))))
+
+    if report.get("ack_capture") is False:
+        ok = False
+        lines.append("x Could not capture the broker's PUBACK reason codes (aiomqtt's paho client not reachable) - the publish results above are unverified")
 
     if report.get("error"):
         ok = False
@@ -470,6 +476,7 @@ class SigenergyAPI(ComponentBase):
         self.systems = {}         # systemId → system info dict
         self._unconfirmed_systems = set()  # configured systems discover_systems() could not confirm either way (throttled / request failed)
         self._not_onboarded = set()  # configured systems whose device list was refused with HTTP 403 - not authorised, so onboard
+        self._grid_load_unknown_warned = set()  # systems warned that the realtimeInfo fallback is publishing placeholder grid/load 0s
         self.devices = {}         # systemId → list of device dicts
         self.energy_flow = {}     # systemId → latest energyFlow dict
         self.system_status = {}   # systemId → latest systemStatus dict
@@ -948,6 +955,10 @@ class SigenergyAPI(ComponentBase):
         previous = self.energy_flow.get(system_id, {})
         grid_power_kw = _safe_float(previous.get("gridPower", 0))
         load_power_kw = _safe_float(previous.get("loadPower", 0))
+        # With no measured reading to hold (a fresh install whose energyFlow has never succeeded, or
+        # only earlier fallbacks), the 0s published are placeholders - flag them so the next fallback
+        # does not take them for a reading, and warn once so a held 0 can be told from a measured 0
+        grid_load_unknown = "gridPower" not in previous or "loadPower" not in previous or bool(previous.get("gridLoadUnknown"))
 
         flow = {
             "batterySoc": bat_soc,
@@ -957,6 +968,11 @@ class SigenergyAPI(ComponentBase):
             "loadPower": load_power_kw,
             "evPower": 0.0,
         }
+        if grid_load_unknown:
+            flow["gridLoadUnknown"] = True
+            if system_id not in self._grid_load_unknown_warned:
+                self._grid_load_unknown_warned.add(system_id)
+                self.log("Warn: SigenergyAPI: System {} has no grid/load reading yet (energyFlow and MQTT unavailable) - publishing 0 for both until one arrives".format(system_id))
         self.energy_flow[system_id] = flow
 
         # Update daily summary from pvEnergyDaily if present
@@ -966,8 +982,11 @@ class SigenergyAPI(ComponentBase):
                 self.daily_summary[system_id] = {}
             self.daily_summary[system_id]["dailyPowerGeneration"] = _safe_float(pv_daily)
 
-        self.log("SigenergyAPI: System {} realtimeInfo — SOC {:.0f}% battery {:.2f}kW pv {:.2f}kW (grid {:.2f}kW and load {:.2f}kW held from last reading)".format(
-            system_id, bat_soc, bat_power_kw, pv_power_kw, grid_power_kw, load_power_kw))
+        if grid_load_unknown:
+            self.log("SigenergyAPI: System {} realtimeInfo — SOC {:.0f}% battery {:.2f}kW pv {:.2f}kW (grid and load unknown, published as 0)".format(system_id, bat_soc, bat_power_kw, pv_power_kw))
+        else:
+            self.log("SigenergyAPI: System {} realtimeInfo — SOC {:.0f}% battery {:.2f}kW pv {:.2f}kW (grid {:.2f}kW and load {:.2f}kW held from last reading)".format(
+                system_id, bat_soc, bat_power_kw, pv_power_kw, grid_power_kw, load_power_kw))
         return True
 
     async def fetch_energy_flow(self, system_id):
@@ -1019,6 +1038,7 @@ class SigenergyAPI(ComponentBase):
             "evPower": _safe_float(data.get("evPower", 0)),
         }
         self.log("SigenergyAPI: System {} — SOC {:.0f}% battery {:.2f}kW pv {:.2f}kW grid {:.2f}kW".format(system_id, soc, battery_kw, pv_kw, grid_kw))
+        self._grid_load_unknown_warned.discard(system_id)  # measured again - warn afresh if it is lost later
         return True
 
     async def fetch_daily_summary(self, system_id):
@@ -1452,7 +1472,7 @@ class SigenergyAPI(ComponentBase):
             Report dict: connected, protocol, error, subscribe/publish lists of
             {topic, ok, reason}, messages list of {topic, payload}, listen_seconds.
         """
-        report = {"connected": False, "protocol": None, "error": None, "subscribe": [], "publish": [], "messages": [], "listen_seconds": listen_seconds}
+        report = {"connected": False, "protocol": None, "error": None, "ack_capture": True, "subscribe": [], "publish": [], "messages": [], "listen_seconds": listen_seconds}
         token = await self.get_access_token()
         if not token:
             report["error"] = "no access token - REST authentication failed"
@@ -1482,7 +1502,10 @@ class SigenergyAPI(ComponentBase):
                     # aiomqtt drops the PUBACK reason code, so chain paho's on_publish to keep it.
                     # Publishes are awaited one at a time, so the code recorded during an await is that publish's.
                     puback_codes = []
-                    _chain_paho_callback(client, "on_publish", lambda *args: puback_codes.append(args[3]))
+                    if not _chain_paho_callback(client, "on_publish", lambda *args: puback_codes.append(args[3])):
+                        # Without the hook every publish reads as "acknowledged" - the blind spot this probe exists to close
+                        report["ack_capture"] = False
+                        self.log("Warn: SigenergyAPI: Probe could not hook paho's on_publish (aiomqtt internals changed?) - PUBACK reason codes will not be captured")
 
                     async def _publish(topic, payload):
                         """Publish at QoS 1 and record how the broker acknowledged it."""
@@ -1572,7 +1595,7 @@ class SigenergyAPI(ComponentBase):
             {filter, ok, reason}, publish list of {topic, ok, reason}, topics {topic: {count,
             retained}}, messages list of {topic, retained, payload}, listen_seconds.
         """
-        report = {"connected": False, "protocol": None, "error": None, "connack": "", "subscribe": [], "publish": [], "topics": {}, "messages": [], "listen_seconds": listen_seconds}
+        report = {"connected": False, "protocol": None, "error": None, "ack_capture": True, "connack": "", "subscribe": [], "publish": [], "topics": {}, "messages": [], "listen_seconds": listen_seconds}
         token = await self.get_access_token()
         if not token:
             report["error"] = "no access token - REST authentication failed"
@@ -1603,9 +1626,14 @@ class SigenergyAPI(ComponentBase):
                     protocol=protocol,
                 )
                 connect_acks, suback_properties, publish_acks = [], [], []
-                _chain_paho_callback(client, "on_connect", lambda *args: connect_acks.append(args[4] if len(args) > 4 else None))
-                _chain_paho_callback(client, "on_subscribe", lambda *args: suback_properties.append(args[4] if len(args) > 4 else None))
-                _chain_paho_callback(client, "on_publish", lambda *args: publish_acks.append((args[3], args[4] if len(args) > 4 else None)))
+                hooked = [
+                    _chain_paho_callback(client, "on_connect", lambda *args: connect_acks.append(args[4] if len(args) > 4 else None)),
+                    _chain_paho_callback(client, "on_subscribe", lambda *args: suback_properties.append(args[4] if len(args) > 4 else None)),
+                    _chain_paho_callback(client, "on_publish", lambda *args: publish_acks.append((args[3], args[4] if len(args) > 4 else None))),
+                ]
+                if not all(hooked):
+                    report["ack_capture"] = False
+                    self.log("Warn: SigenergyAPI: Scan could not hook paho's callbacks (aiomqtt internals changed?) - PUBACK codes and MQTT 5 properties will not be captured")
                 async with client:
                     report["connected"] = True
                     report["error"] = None

@@ -3365,8 +3365,8 @@ class FakeProbeClient:
 
     instances = []
 
-    def __init__(self, protocol, refuse_connect=False, suback=1, puback=None, messages=None):
-        """Record construction so tests can assert on protocol fallback."""
+    def __init__(self, protocol, refuse_connect=False, suback=1, puback=None, messages=None, paho=True):
+        """Record construction so tests can assert on protocol fallback; paho=False hides the paho client."""
         self.protocol = protocol
         self.refuse_connect = refuse_connect
         self.suback = suback
@@ -3374,8 +3374,9 @@ class FakeProbeClient:
         self._messages = messages
         self.subscribed = []
         self.published = []
-        self._client = MagicMock()
-        self._client.on_publish = MagicMock()
+        self._client = MagicMock() if paho else None
+        if paho:
+            self._client.on_publish = MagicMock()
         FakeProbeClient.instances.append(self)
 
     async def __aenter__(self):
@@ -3400,7 +3401,7 @@ class FakeProbeClient:
         from paho.mqtt.packettypes import PacketTypes
         self.published.append((topic, payload, qos))
         code = self.puback(topic)
-        if code is not None:
+        if code is not None and self._client is not None:
             self._client.on_publish(None, None, len(self.published), _reason(PacketTypes.PUBACK, code), None)
 
     @property
@@ -4026,8 +4027,8 @@ class FakeScanClient:
 
     instances = []
 
-    def __init__(self, protocol, suback=None, drop_on=None, messages=None, connack_props=None):
-        """Record construction; paho's callbacks are MagicMocks the scan chains in front of."""
+    def __init__(self, protocol, suback=None, drop_on=None, messages=None, connack_props=None, paho=True):
+        """Record construction; paho's callbacks are MagicMocks the scan chains in front of (paho=False hides them)."""
         self.protocol = protocol
         self.suback = suback or (lambda topic_filter: (0, None))
         self.drop_on = drop_on
@@ -4035,16 +4036,18 @@ class FakeScanClient:
         self.connack_props = connack_props
         self.subscribed = []
         self.published = []
-        self._client = MagicMock()
-        self._client.on_connect = MagicMock()
-        self._client.on_subscribe = MagicMock()
-        self._client.on_publish = MagicMock()
+        self._client = MagicMock() if paho else None
+        if paho:
+            self._client.on_connect = MagicMock()
+            self._client.on_subscribe = MagicMock()
+            self._client.on_publish = MagicMock()
         FakeScanClient.instances.append(self)
 
     async def __aenter__(self):
         """Connect, delivering the CONNACK through on_connect as paho would."""
         from paho.mqtt.packettypes import PacketTypes
-        self._client.on_connect(None, None, {}, _reason(PacketTypes.CONNACK, 0), self.connack_props)
+        if self._client is not None:
+            self._client.on_connect(None, None, {}, _reason(PacketTypes.CONNACK, 0), self.connack_props)
         return self
 
     async def __aexit__(self, *args):
@@ -4060,14 +4063,16 @@ class FakeScanClient:
             raise aiomqtt.MqttError("[code:7] The connection was lost.")
         identifier, props = self.suback(topic_filter)
         code = _reason(PacketTypes.SUBACK, identifier)
-        self._client.on_subscribe(None, None, len(self.subscribed), [code], props)
+        if self._client is not None:
+            self._client.on_subscribe(None, None, len(self.subscribed), [code], props)
         return [code]
 
     async def publish(self, topic, payload=None, qos=0, **kwargs):
         """Deliver a PUBACK 0x10 with a reason string through on_publish."""
         from paho.mqtt.packettypes import PacketTypes
         self.published.append(topic)
-        self._client.on_publish(None, None, len(self.published), _reason(PacketTypes.PUBACK, 0x10), _props(PacketTypes.PUBACK, ReasonString="no subscribers"))
+        if self._client is not None:
+            self._client.on_publish(None, None, len(self.published), _reason(PacketTypes.PUBACK, 0x10), _props(PacketTypes.PUBACK, ReasonString="no subscribers"))
 
     @property
     def messages(self):
@@ -4198,6 +4203,80 @@ def test_sigenergy_mqtt_topic_scan_dropped_on_filter(my_predbat):
     return failed
 
 
+def test_sigenergy_ack_capture_failure_is_not_silent(my_predbat):
+    """If paho's callbacks cannot be hooked, the probe and scan say so instead of passing on uncaptured codes."""
+    from sigenergy import command_probe_verdict, topic_scan_summary
+    failed = False
+
+    # Probe: data still flows, but with no PUBACK codes captured the verdict must not pass
+    api = _probe_api()
+    report = _run_probe(api, ["SIG001"], lambda protocol: FakeProbeClient(protocol, paho=False, messages=[("openapi/period/test_app_key/SIG001", b"{}")]), listen_seconds=5)
+    assert report["ack_capture"] is False, "capture failure recorded"
+    assert all(pub["reason"] == "acknowledged (no reason code)" for pub in report["publish"]), "codes genuinely missing, got {}".format(report["publish"])
+    ok, lines = command_probe_verdict(report)
+    assert ok is False, "verdict fails rather than passing on uncaptured codes, got {}".format(lines)
+    assert any("Could not capture the broker's PUBACK reason codes" in line for line in lines), "explained, got {}".format(lines)
+    assert any(m.startswith("Warn:") and "could not hook" in m for m in api.log_messages), "warned, got {}".format(api.log_messages)
+
+    # Probe with the hook in place is unaffected
+    report = _run_probe(api, ["SIG001"], lambda protocol: FakeProbeClient(protocol, messages=[("t/test_app_key/SIG001", b"{}")]), listen_seconds=5)
+    assert report["ack_capture"] is True and command_probe_verdict(report)[0] is True, "normal run still passes"
+
+    # Scan: same disclosure
+    api = _probe_api()
+    report = _run_scan(api, ["SIG001"], lambda protocol: FakeScanClient(protocol, paho=False), listen_seconds=5)
+    assert report["ack_capture"] is False, "scan records the capture failure"
+    assert any("Could not hook paho's callbacks" in line for line in topic_scan_summary(report)), "scan summary explains it"
+    return failed
+
+
+def test_sigenergy_realtime_fallback_unknown_grid_load(my_predbat):
+    """With no measured grid/load to hold, the fallback flags its 0s as unknown, warns once, and says so in the log."""
+    failed = False
+    api = MockSigenergyAPI()
+    api.access_token = "fake_token"
+    api.token_expires_at = 9_999_999_999
+    api._last_request_time = 0
+    api.devices["SIG001"] = [{"deviceType": "Inverter", "serialNumber": "INV001"}]
+    realtime = {"code": 0, "data": {"realTimeInfo": {"batSoc": 40.0, "batPower": 1.0, "pVPower": 0.5, "activePower": 1.5}}}
+
+    def _realtime():
+        with patch("sigenergy.aiohttp.ClientSession", return_value=_make_mock_session(_make_mock_response(status=200, json_data=realtime))):
+            assert run_async(api.fetch_inverter_realtime("SIG001")) is True
+
+    # Fresh install: nothing to hold
+    _realtime()
+    flow = api.energy_flow["SIG001"]
+    assert flow["gridPower"] == 0.0 and flow["loadPower"] == 0.0 and flow.get("gridLoadUnknown") is True, "placeholder 0s flagged, got {}".format(flow)
+    warnings = [m for m in api.log_messages if m.startswith("Warn:") and "no grid/load reading yet" in m]
+    assert len(warnings) == 1, "warned, got {}".format(api.log_messages)
+    assert any("grid and load unknown, published as 0" in m for m in api.log_messages), "log line does not claim a held reading"
+    assert not any("held from last reading" in m for m in api.log_messages), "no false 'held' claim"
+
+    # A second fallback still knows its 0s are placeholders, and does not warn again
+    api.log_messages.clear()
+    _realtime()
+    assert api.energy_flow["SIG001"].get("gridLoadUnknown") is True, "still unknown - a placeholder is not a reading"
+    assert not any("no grid/load reading yet" in m for m in api.log_messages), "warned once only"
+
+    # energyFlow measures it: the next fallback holds a real reading, without the flag or the wording
+    energy = {"code": 0, "data": '{"pvPower":0.5,"gridPower":-0.3,"loadPower":1.8,"batteryPower":-1.0,"batterySoc":40}'}
+    with patch("sigenergy.aiohttp.ClientSession", return_value=_make_mock_session(_make_mock_response(status=200, json_data=energy))):
+        assert run_async(api.fetch_energy_flow("SIG001")) is True
+    assert "gridLoadUnknown" not in api.energy_flow["SIG001"], "a measured reading carries no flag"
+    api.log_messages.clear()
+    _realtime()
+    flow = api.energy_flow["SIG001"]
+    assert flow["gridPower"] == -0.3 and flow["loadPower"] == 1.8 and "gridLoadUnknown" not in flow, "real reading held, got {}".format(flow)
+    assert any("held from last reading" in m for m in api.log_messages), "held wording when it is true"
+
+    # Losing it again after a measurement warns afresh
+    api.energy_flow["SIG001"] = {}
+    _realtime()
+    assert sum("no grid/load reading yet" in m for m in api.log_messages) == 1, "warns again after energyFlow had recovered"
+    return failed
+
+
 def run_sigenergy_tests(my_predbat):
     """Run all Sigenergy API unit tests.
 
@@ -4312,6 +4391,8 @@ def run_sigenergy_tests(my_predbat):
         ("scan_filters_order", test_sigenergy_scan_filters_order),
         ("mqtt_topic_scan", test_sigenergy_mqtt_topic_scan),
         ("mqtt_topic_scan_dropped_on_filter", test_sigenergy_mqtt_topic_scan_dropped_on_filter),
+        ("ack_capture_failure_is_not_silent", test_sigenergy_ack_capture_failure_is_not_silent),
+        ("realtime_fallback_unknown_grid_load", test_sigenergy_realtime_fallback_unknown_grid_load),
         ("discover_systems_from_device_list", test_sigenergy_discover_systems_from_device_list),
         ("discover_systems_throttled_does_not_onboard", test_sigenergy_discover_systems_throttled_does_not_onboard),
         ("discover_systems_403_onboards_directly", test_sigenergy_discover_systems_403_onboards_directly),
