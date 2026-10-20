@@ -709,6 +709,8 @@ class SigenergyAPI(ComponentBase):
         A throttled or failed request leaves the system unconfirmed, without consulting the
         system list, so a transient error never leads to an onboarding attempt.
 
+        An empty device list counts as refused, not as a confirmation (see fetch_device_list).
+
         Returns:
             True when at least one system was found, False otherwise.
         """
@@ -749,9 +751,24 @@ class SigenergyAPI(ComponentBase):
             self.log("Warn: SigenergyAPI: Failed to fetch device list for {}".format(system_id))
             return False
 
-        devices = data if isinstance(data, list) else data.get("list", data.get("records", []))
+        if data is _SIGENERGY_OK:
+            devices = []  # success with no data field
+        elif isinstance(data, list):
+            devices = data
+        elif isinstance(data, dict):
+            devices = data.get("list", data.get("records", []))
+        else:
+            devices = None
         if not isinstance(devices, list):
             self.log("Warn: SigenergyAPI: Unexpected device list format for {}: {}".format(system_id, type(devices)))
+            return False
+        if not devices:
+            # Answered, but with nothing in it - which may be how a system that is not yet authorised
+            # looks, and leaves nothing to read either way.  Not a confirmation, and the inventory
+            # already held is kept.  _last_api_code 0 tells discover_systems() the API did answer
+            # (so it asks the system list, which decides onboarding) rather than the request failing.
+            self._last_api_code = SIGENERGY_CODE_SUCCESS
+            self.log("Warn: SigenergyAPI: Device list for {} is empty".format(system_id))
             return False
 
         self.devices[system_id] = devices

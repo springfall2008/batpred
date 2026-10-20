@@ -3767,6 +3767,46 @@ def test_sigenergy_discover_systems_rejected_checks_system_list(my_predbat):
     return failed
 
 
+def test_sigenergy_fetch_device_list_empty_is_not_a_confirmation(my_predbat):
+    """A device list answered with no devices returns False, keeps the inventory held, and reads as 'answered'."""
+    failed = False
+    held = [{"deviceType": "Inverter", "serialNumber": "INV1", "status": "Normal"}]
+    for label, data in (("null data", None), ("empty list", []), ("empty wrapped list", {"list": []})):
+        api = MockSigenergyAPI()
+        api.access_token = "fake_token"
+        api.token_expires_at = 9_999_999_999
+        api._last_request_time = 0
+        api.devices["SIG001"] = list(held)
+        api._last_api_code = None
+        response = {"code": 0, "msg": "success", "data": data}
+        with patch("sigenergy.aiohttp.ClientSession", return_value=_make_mock_session(_make_mock_response(status=200, json_data=response))):
+            ok = run_async(api.fetch_device_list("SIG001"))
+        assert ok is False, "{}: not a confirmation, got {}".format(label, ok)
+        assert api.devices["SIG001"] == held, "{}: inventory already held is kept, got {}".format(label, api.devices["SIG001"])
+        assert api._last_api_code == 0, "{}: marked as answered, got {}".format(label, api._last_api_code)
+        assert any("is empty" in m for m in api.log_messages), "{}: logged".format(label)
+    return failed
+
+
+def test_sigenergy_discover_systems_empty_device_list_onboards(my_predbat):
+    """An empty device list defers to the system list; read but absent, run() goes on to onboard."""
+    failed = False
+    api = _make_discovery_api()
+    api.access_token = "fake_token"
+    api.token_expires_at = 9_999_999_999
+    api._last_request_time = 0
+    api.fetch_system_list = AsyncMock(return_value=False)
+    response = {"code": 0, "msg": "success", "data": []}
+    with patch("sigenergy.aiohttp.ClientSession", return_value=_make_mock_session(_make_mock_response(status=200, json_data=response))):
+        run_async(api.run(seconds=0, first=True))
+
+    assert "SIG001" not in api.systems, "an empty device list does not confirm the system, got {}".format(api.systems)
+    assert api._unconfirmed_systems == set(), "answered, so not left unconfirmed"
+    api.fetch_system_list.assert_awaited()
+    api.onboard_systems.assert_awaited_once_with(["SIG001"])
+    return failed
+
+
 def test_sigenergy_run_first_reads_device_list_once(my_predbat):
     """The first run's device refresh skips a system discovery has just read (five-minute restriction)."""
     failed = False
@@ -3968,6 +4008,8 @@ def run_sigenergy_tests(my_predbat):
         ("discover_systems_from_device_list", test_sigenergy_discover_systems_from_device_list),
         ("discover_systems_throttled_does_not_onboard", test_sigenergy_discover_systems_throttled_does_not_onboard),
         ("discover_systems_rejected_checks_system_list", test_sigenergy_discover_systems_rejected_checks_system_list),
+        ("fetch_device_list_empty_is_not_a_confirmation", test_sigenergy_fetch_device_list_empty_is_not_a_confirmation),
+        ("discover_systems_empty_device_list_onboards", test_sigenergy_discover_systems_empty_device_list_onboards),
         ("run_first_reads_device_list_once", test_sigenergy_run_first_reads_device_list_once),
         ("system_status_from_inverter_device", test_sigenergy_system_status_from_inverter_device),
         ("fetch_system_list_does_not_log_other_systems", test_sigenergy_fetch_system_list_does_not_log_other_systems),
