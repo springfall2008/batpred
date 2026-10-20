@@ -197,6 +197,7 @@ class Prediction(PredictionBatch):
             self.io_adjusted = base.io_adjusted
             # Off trusts Intelligent dispatch rates in PV10 too, without touching io_adjusted itself (GH#5540)
             self.octopus_intelligent_pv10_dispatch_gone = getattr(base, "octopus_intelligent_pv10_dispatch_gone", True)
+            self.io_confirmed_credit = base.io_confirmed_credit
             # The tariff's own highest import rate, without event rewards - the floor for a dispatch that goes away
             self.rate_max = base.rate_import_tariff_max
             self.pv_forecast_minute_step = pv_forecast_minute_step
@@ -557,6 +558,8 @@ class Prediction(PredictionBatch):
 
         rate_import = self.rate_import
         rate_export = self.rate_export
+
+        io_confirmed_credit = self.io_confirmed_credit
         # With the switch Off no minute is assumed gone in PV10. io_adjusted itself is kept for the rate replication,
         # the IOG charge skew and the dynamic dispatch check, so only this local view is emptied.
         io_adjusted = self.io_adjusted if getattr(self, "octopus_intelligent_pv10_dispatch_gone", True) else {}
@@ -739,6 +742,7 @@ class Prediction(PredictionBatch):
             minute_absolute = minute + self.minutes_now
             prev_soc = soc
             reserve_expected = reserve
+            force_charging = False
             import_rate = rate_import.get(minute_absolute, 0)
             dispatch_rate = import_rate
             dispatch_gone = io_adjusted.get(minute_absolute, 0) and pv_scenario == PV_SCENARIO_PV10 and minute > 30
@@ -1139,6 +1143,7 @@ class Prediction(PredictionBatch):
 
                 battery_draw = -max(min(charge_rate_now_curve_step, max(charge_limit_n - soc, pv_now)), 0, -battery_to_max)
                 battery_state = "f+"
+                force_charging = True
                 first_charge = min(first_charge, minute)
 
                 if inverter_hybrid:
@@ -1326,6 +1331,11 @@ class Prediction(PredictionBatch):
             if battery_draw > 0:
                 soc = max(soc - battery_draw / battery_loss_discharge, reserve_expected)
             else:
+                if force_charging and io_confirmed_credit:
+                    # Bird in hand: score only credit for what a charge window stores in a confirmed dispatch run
+                    credit = io_confirmed_credit.get(minute_absolute, 0)
+                    if credit:
+                        metric_keep -= min(-battery_draw * battery_loss, soc_max - soc) * credit
                 soc = min(soc - battery_draw * battery_loss, soc_max)
 
             # Iboost finally count
