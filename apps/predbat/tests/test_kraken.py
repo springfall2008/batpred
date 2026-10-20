@@ -872,6 +872,58 @@ def test_fetch_rates_undecodable_200_is_counted_not_raised():
     api.async_fetch_rates_graphql.assert_not_called()
 
 
+# JSON bodies that parse but are not an object, so data.get() on them would raise AttributeError.
+NON_OBJECT_JSON_BODIES = [[], None, "Bad gateway", 42]
+
+
+def _mk_non_object_get_ctx(body):
+    """Build a mock GET context yielding a 200 whose body parses as JSON but is not an object."""
+    ctx = _mk_get_ctx(200)
+    resp = ctx.__aenter__.return_value
+    resp.json = AsyncMock(return_value=body)
+    return ctx
+
+
+def test_fetch_standing_charges_non_object_200_is_counted_not_raised():
+    """A 200 whose JSON is not an object is logged and counted rather than escaping as AttributeError."""
+    for body in NON_OBJECT_JSON_BODIES:
+        api = make_kraken_api()
+        api.current_tariff = {"tariff_code": "E-1R-VAR-01-J", "product_code": "VAR-01"}
+        api.failures_total = 0
+
+        mock_session = AsyncMock()
+        mock_session.get = MagicMock(side_effect=lambda url, **kwargs: _mk_non_object_get_ctx(body))
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            result = asyncio.run(api.async_fetch_standing_charges())
+
+        assert result is None, f"body {body!r}: expected None, got {result!r}"
+        assert api.failures_total == 1, f"body {body!r}: expected one failure, got {api.failures_total}"
+
+
+def test_fetch_rates_non_object_200_is_counted_not_raised():
+    """A 200 whose JSON is not an object on the REST rates endpoint is a counted failure, not an exception."""
+    for body in NON_OBJECT_JSON_BODIES:
+        api = make_kraken_api()
+        api.current_tariff = {"tariff_code": "E-1R-VAR-01-J", "product_code": "VAR-01"}
+        api.failures_total = 0
+        api.async_fetch_rates_graphql = AsyncMock()
+
+        mock_session = AsyncMock()
+        mock_session.get = MagicMock(side_effect=lambda url, **kwargs: _mk_non_object_get_ctx(body))
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            result = asyncio.run(api.async_fetch_rates())
+
+        assert result is None, f"body {body!r}: expected None, got {result!r}"
+        assert api.failures_total == 1, f"body {body!r}: expected one failure, got {api.failures_total}"
+        api.async_fetch_rates_graphql.assert_not_called()
+
+
 def test_export_discovery_clears_stale_when_not_found():
     """Export tariff is cleared if all strategies fail (prevents stale rates)."""
     api = make_kraken_api()

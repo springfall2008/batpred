@@ -896,6 +896,11 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                             return all_results, response.status
                         data = await response.json()
 
+                    if not isinstance(data, dict):
+                        # A 200 whose JSON is not an object ([], null, a bare string) would raise at data.get(),
+                        # so treat it like the undecodable body below: a failed fetch, not an exception.
+                        self.log(f"Warn: Kraken: Invalid response fetching rates: expected a JSON object, got {type(data).__name__}")
+                        return None, None
                     all_results.extend(data.get("results", []))
                     url = data.get("next")  # Pagination
                     pages += 1
@@ -1084,6 +1089,12 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                     self.failures_total += 1
                 return value
             self.log(f"Warn: Kraken: Standing charges HTTP {http_error_status}")
+            self.failures_total += 1
+            return None
+
+        if not isinstance(data, dict):
+            # A 200 whose JSON is not an object ([], null, a bare string) would raise at data.get() below.
+            self.log(f"Warn: Kraken: Invalid response fetching standing charges: expected a JSON object, got {type(data).__name__}")
             self.failures_total += 1
             return None
 
