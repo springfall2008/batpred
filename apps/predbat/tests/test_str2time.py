@@ -74,8 +74,67 @@ def test_str2time(my_predbat):
         utils.STR2TIME_USE_FROMISOFORMAT = save_flag
 
     failed |= test_strptime_aware()
+    failed |= test_no_raw_offset_strptime()
 
     print("**** str2time tests completed ****")
+    return failed
+
+
+def offset_strptime_calls(source, constants):
+    """
+    Return the line numbers of strptime() calls in source whose format is a string literal, or a name
+    bound to one in constants or at module level, that contains %z
+    """
+    import ast
+
+    tree = ast.parse(source)
+    known = dict(constants)
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    known[target.id] = node.value.value
+    lines = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "strptime" and len(node.args) >= 2):
+            continue
+        fmt = node.args[1]
+        if isinstance(fmt, ast.Constant) and isinstance(fmt.value, str):
+            fmt_text = fmt.value
+        elif isinstance(fmt, ast.Name):
+            fmt_text = known.get(fmt.id, "")
+        else:
+            fmt_text = ""
+        if "%z" in fmt_text:
+            lines.append(node.lineno)
+    return lines
+
+
+def test_no_raw_offset_strptime():
+    """
+    Test that no production code calls strptime() directly with a %z format - on Python 3.15 that returns
+    a naive datetime for a string with no offset, so it must go through strptime_aware() instead
+    """
+    import glob
+    import os
+    import const
+
+    failed = False
+    print("Test 6: no production strptime() call uses a %z format directly")
+    constants = {name: value for name, value in vars(const).items() if isinstance(value, str)}
+    source_dir = os.path.dirname(const.__file__)
+
+    # The scan must find a raw call when there is one
+    if offset_strptime_calls('x = datetime.strptime(s, TIME_FORMAT)\ny = datetime.strptime(s, "%H:%M")\n', constants) != [1]:
+        print("ERROR: Test 6 failed - the scan did not find a raw strptime call with TIME_FORMAT")
+        failed = True
+
+    for path in sorted(glob.glob(os.path.join(source_dir, "*.py"))):
+        with open(path, encoding="utf-8") as handle:
+            lines = offset_strptime_calls(handle.read(), constants)
+        for line in lines:
+            print(f"ERROR: Test 6 failed - {os.path.basename(path)}:{line} calls strptime with a %z format; use utils.strptime_aware()")
+            failed = True
     return failed
 
 
