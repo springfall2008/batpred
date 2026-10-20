@@ -156,6 +156,7 @@ async def test_octopus_tou_windows(my_predbat):
     - Test 12: an IOG meter's TOU labels never become a recurring schedule (issue: phantom slot)
     - Test 13: a TOU-derived window on a local wall-clock tariff holds across a DST change
     - Test 14: the hard-wired GO window keeps 8 contiguous nights across both clock changes
+    - Test 15: IOG and manual windows in the changeover hour stay contiguous and never invert
     """
     print("\n**** Running Octopus TOU window tests ****")
     failed = False
@@ -457,5 +458,40 @@ async def test_octopus_tou_windows(my_predbat):
             failed = True
         else:
             print("PASS: {}: 8 nights at 00:30-05:30 local, contiguous, changeover night included".format(label14))
+
+    # ------------------------------------------------------------------
+    # Test 15: windows that cross midnight or sit in the changeover hour itself
+    #
+    # IOG's 23:30-05:30 spans the change. A manual window starting in the repeated autumn hour takes
+    # its first occurrence, and one starting in the skipped spring hour opens when the clocks jump -
+    # in neither case may an interval end before it starts or the schedule leave a gap.
+    # ------------------------------------------------------------------
+    cases15 = [
+        ("IOG autumn", LONDON.localize(datetime(2026, 10, 20, 9, 0, 0)), "E-1R-IOG-SMB-TOU-25-12-12-H", None, datetime(2026, 10, 24, 22, 30, tzinfo=timezone.utc), datetime(2026, 10, 25, 5, 30, tzinfo=timezone.utc)),
+        ("IOG spring", LONDON.localize(datetime(2026, 3, 25, 9, 0, 0)), "E-1R-IOG-SMB-TOU-25-12-12-H", None, datetime(2026, 3, 28, 23, 30, tzinfo=timezone.utc), datetime(2026, 3, 29, 4, 30, tzinfo=timezone.utc)),
+        ("manual 01:30 autumn", LONDON.localize(datetime(2026, 10, 20, 9, 0, 0)), eco7, [{"start": "01:30:00", "end": "05:30:00"}], datetime(2026, 10, 25, 0, 30, tzinfo=timezone.utc), datetime(2026, 10, 25, 5, 30, tzinfo=timezone.utc)),
+        ("manual 01:30 spring", LONDON.localize(datetime(2026, 3, 25, 9, 0, 0)), eco7, [{"start": "01:30:00", "end": "02:15:00"}], datetime(2026, 3, 29, 1, 0, tzinfo=timezone.utc), datetime(2026, 3, 29, 1, 15, tzinfo=timezone.utc)),
+    ]
+    for label15, now15, tariff15, manual15, want_start15, want_end15 in cases15:
+        print("\n*** Test 15: {} ***".format(label15))
+        api15 = _make_api(my_predbat, day_rate=29.14, night_rate=7.00, now=now15)
+        _stub_tou_unavailable(api15)
+        if manual15:
+            my_predbat.args["octopus_night_times"] = manual15
+        try:
+            mdata15 = await _run(api15, base_url, tariff15)
+        finally:
+            my_predbat.args.pop("octopus_night_times", None)
+        entries15 = [(datetime.strptime(entry["valid_from"], DATE_TIME_STR_FORMAT), datetime.strptime(entry["valid_to"], DATE_TIME_STR_FORMAT)) for entry in mdata15]
+        inverted15 = [(s, e) for s, e in entries15 if e <= s]
+        gaps15 = [index for index in range(len(entries15) - 1) if entries15[index][1] != entries15[index + 1][0]]
+        if len(entries15) != 16 or inverted15 or gaps15:
+            print("ERROR: {}: expected 16 contiguous forward entries, got {} with inverted {} and gaps at {}".format(label15, len(entries15), inverted15[:2], gaps15))
+            failed = True
+        elif (want_start15, want_end15) not in _night_slots_utc(mdata15, 7.00):
+            print("ERROR: {}: changeover night {} - {} UTC missing, got {}".format(label15, want_start15, want_end15, [(s.strftime("%d %H:%M"), e.strftime("%d %H:%M")) for s, e in _night_slots_utc(mdata15, 7.00)]))
+            failed = True
+        else:
+            print("PASS: {}: changeover night runs {} - {} UTC, schedule contiguous".format(label15, want_start15.strftime("%d %H:%M"), want_end15.strftime("%d %H:%M")))
 
     return failed

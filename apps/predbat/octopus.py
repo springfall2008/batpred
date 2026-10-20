@@ -2021,9 +2021,21 @@ class OctopusAPI(ComponentBase):
             local_midnight_naive = self.now_utc_exact.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
 
             def localise(wall_clock):
-                """Attach the local zone to a naive wall-clock time, taking the offset in force at that time"""
+                """
+                Attach the local zone to a naive wall-clock time, taking the offset in force at that time.
+
+                A time in the repeated autumn hour takes its first occurrence, and one in the skipped
+                spring hour moves to the moment the clocks jump, so later wall-clock times never map to
+                earlier instants and no interval can invert across a change.
+                """
                 if hasattr(local_tz, "localize"):
-                    return local_tz.localize(wall_clock)
+                    while True:
+                        try:
+                            return local_tz.localize(wall_clock, is_dst=None)
+                        except pytz.exceptions.AmbiguousTimeError:
+                            return local_tz.localize(wall_clock, is_dst=True)
+                        except pytz.exceptions.NonExistentTimeError:
+                            wall_clock = wall_clock.replace(second=0, microsecond=0) + timedelta(minutes=1)
                 return wall_clock.replace(tzinfo=local_tz)
 
             # Build the off-peak intervals over the 8-day schedule, starting 2 days back. A ninth

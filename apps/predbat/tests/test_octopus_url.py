@@ -240,9 +240,7 @@ async def test_async_get_day_night_rates(my_predbat):
     # Create API instance
     api = OctopusAPI(my_predbat, key="", account_id="", automatic=False)
 
-    # Set a fixed current time for predictable testing via my_predbat mock
-    fixed_time = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
-    my_predbat.now_utc_exact = fixed_time
+    # The clock is pinned by the wrapper, _test_async_get_day_night_rates_wrapper
 
     # Test 1: Successful fetch with valid day and night rates
     print("\n*** Test 1: Successful fetch with valid day and night rates ***")
