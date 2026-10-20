@@ -863,34 +863,29 @@ def test_hanchu_hold_inside_a_charge_window_stops_charging_only_at_the_target():
     assert not failed, "test_hanchu_hold_inside_a_charge_window_stops_charging_only_at_the_target"
 
 
-def test_hanchu_freeze_export_opens_a_discharge_slot_at_zero_power():
-    """Freeze export (charge rate 0, no window running) is written as a discharge slot covering now with no discharge power.
+def test_hanchu_freeze_export_passes_the_zero_charge_rate_through_without_a_slot():
+    """Freeze export (charge rate 0, no window running) adds no slot: the battery must stay free to cover the house.
 
-    Not yet proven on hardware: a zero charge rate outside a slot is expected to fail exactly as the zero
-    discharge rate did, so this mirrors the hold that worked. To be live-tested with surplus solar.
+    Predbat's freeze export exports surplus solar while the battery still covers the house load. Hardware
+    (batpred#5305): a discharge slot at zero power stopped the battery covering the house, so it is the
+    wrong tool. Outside a slot the inverter is in self-use, which covers the house; whether a zero charge
+    rate there stops the battery absorbing solar is still to be live-tested in sunshine.
     """
     failed = False
     client = ready()
     client.device_values[SN] = {"soc": 60.0}
     client.set_mock_clock(12 * 60 + 10)
     payload = client.build_write_payload(SN, schedule(charge={"power": 0}, reserve=10))
-    if enabled_slots(payload, HANCHU_KEY_DISCHARGE_START, HANCHU_KEY_DISCHARGE_END) != {3: (12 * 3600, 13 * 3600)}:
-        print(f"ERROR: freeze export should be a discharge slot 12:00-13:00 in slot 3: {enabled_slots(payload, HANCHU_KEY_DISCHARGE_START, HANCHU_KEY_DISCHARGE_END)}")
+    if enabled_slots(payload, HANCHU_KEY_DISCHARGE_START, HANCHU_KEY_DISCHARGE_END) or enabled_slots(payload, HANCHU_KEY_CHARGE_START, HANCHU_KEY_CHARGE_END):
+        print(f"ERROR: freeze export must open no slot: {payload}")
         failed = True
-    if enabled_slots(payload, HANCHU_KEY_CHARGE_START, HANCHU_KEY_CHARGE_END):
-        print("ERROR: freeze export must not open a charge slot")
+    if payload.get(HANCHU_KEY_CHARGE_POWER) != 0 or payload.get(HANCHU_KEY_DISCHARGE_POWER) != 5000:
+        print(f"ERROR: freeze export should pass the zero charge rate through and leave discharge at 5000: {payload.get(HANCHU_KEY_CHARGE_POWER)} / {payload.get(HANCHU_KEY_DISCHARGE_POWER)}")
         failed = True
-    if payload.get(HANCHU_KEY_DISCHARGE_POWER) != 0 or payload.get(HANCHU_KEY_CHARGE_POWER) != 0:
-        print(f"ERROR: freeze export should write zero discharge and charge power: {payload.get(HANCHU_KEY_DISCHARGE_POWER)} / {payload.get(HANCHU_KEY_CHARGE_POWER)}")
+    if HANCHU_KEY_WORK_MODE in payload:
+        print("ERROR: with no slot there is no window to run, so the work mode is left alone")
         failed = True
-    if payload.get(HANCHU_KEY_WORK_MODE) != HANCHU_WORK_MODE_FOR_SCHEDULE:
-        print("ERROR: the freeze-export slot only runs in User-defined, so the work mode must be written")
-        failed = True
-    # The floor stays the reserve - a frozen export is not an export down to a target.
-    if payload.get(HANCHU_KEY_DISCHARGE_SOC) != 10:
-        print(f"ERROR: freeze export floor {payload.get(HANCHU_KEY_DISCHARGE_SOC)}, expected the 10% reserve")
-        failed = True
-    assert not failed, "test_hanchu_freeze_export_opens_a_discharge_slot_at_zero_power"
+    assert not failed, "test_hanchu_freeze_export_passes_the_zero_charge_rate_through_without_a_slot"
 
 
 def test_hanchu_no_rate_signal_adds_no_slot():
@@ -941,7 +936,7 @@ def run_hanchu_control_tests(my_predbat):
         ("overlap", test_hanchu_overlapping_windows_keep_only_one),
         ("hold_slot", test_hanchu_hold_opens_a_charge_slot_at_zero_power),
         ("hold_in_window", test_hanchu_hold_inside_a_charge_window_stops_charging_only_at_the_target),
-        ("freeze_export_slot", test_hanchu_freeze_export_opens_a_discharge_slot_at_zero_power),
+        ("freeze_export_no_slot", test_hanchu_freeze_export_passes_the_zero_charge_rate_through_without_a_slot),
         ("no_rate_signal", test_hanchu_no_rate_signal_adds_no_slot),
     ]:
         try:

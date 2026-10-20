@@ -1399,10 +1399,10 @@ class HanchuAPI(ComponentBase):
         A charge window and an export window that overlap are never both written - the vendor's own
         settings card refuses to submit that. See _resolve_overlap().
 
-        Holds and freeze-export are written as slots, because a zero rate on its own does nothing
-        outside a slot on this hardware - see _rate_signal(). The reserve is never written above the
-        current SoC: the slot does the holding, and a reserve above the SoC could make the inverter
-        charge from the grid to reach it.
+        A hold is written as a charge slot at zero power, because a zero discharge rate on its own
+        does nothing outside a slot on this hardware - see _rate_signal(). The reserve is never
+        written above the current SoC: the slot does the holding, and a reserve above the SoC could
+        make the inverter charge from the grid to reach it.
 
         Every one of the three charge and three discharge slots is written, and any the plan does
         not use is set to 00:00-00:00 - see HANCHU_SLOT_DISABLED. User-defined mode runs all six,
@@ -1416,11 +1416,10 @@ class HanchuAPI(ComponentBase):
 
         # Power. Rate 0 is how Predbat expresses freeze, and 0 is inside the accepted range, so it
         # survives the clamp and is passed straight through. A hold zeroes the charge rate as well,
-        # and freeze-export the discharge rate, because each is carried by a slot at zero power.
+        # because it is carried by a charge slot at zero power.
         charge_power = 0 if signal == "hold" else charge.get("power", 0)
-        export_power = 0 if signal == "freeze_export" else export.get("power", 0)
         payload[HANCHU_KEY_CHARGE_POWER] = self._clamp(sn, HANCHU_KEY_CHARGE_POWER, charge_power, ranges)
-        payload[HANCHU_KEY_DISCHARGE_POWER] = self._clamp(sn, HANCHU_KEY_DISCHARGE_POWER, export_power, ranges)
+        payload[HANCHU_KEY_DISCHARGE_POWER] = self._clamp(sn, HANCHU_KEY_DISCHARGE_POWER, export.get("power", 0), ranges)
 
         # The charge target goes in the grid-charge limit, clamped to 20-100 on this hardware, so a
         # plan asking for less cannot be expressed - _clamp says so once per device.
@@ -1436,7 +1435,7 @@ class HanchuAPI(ComponentBase):
 
         pairs = {"charge": self._slot_pairs(sn, "charge", charge), "export": self._slot_pairs(sn, "export", export)}
         if extra_direction:
-            # The hold / freeze-export slot goes in slot 3, which Predbat's own window never uses.
+            # The hold slot goes in slot 3, which Predbat's own window never uses.
             other = "export" if extra_direction == "charge" else "charge"
             extra = self._extra_slot(sn, pairs[extra_direction][:2] + pairs[other])
             if extra:
@@ -1457,14 +1456,19 @@ class HanchuAPI(ComponentBase):
         return payload
 
     def _rate_signal(self, sn, charge, export):
-        """Read a hold or freeze-export out of Predbat's rates, returning (signal, direction of the slot to add).
+        """Read a hold out of Predbat's rates, returning (signal, direction of the slot to add).
 
         On an inverter with no pause mode, execute.py asks for every hold - freeze charge, hold
         charging, holding for a car or for iBoost - with a discharge rate of 0, and for freeze-export
         with a charge rate of 0. HARDWARE (batpred#5305): on a HESS-HY-S-6.0K neither rate does
         anything outside a slot - the battery kept feeding the house at a zero discharge rate - but a
-        charge slot at zero power held it. So a hold becomes a charge slot at zero power, and
-        freeze-export the mirror image, a discharge slot at zero power (not yet proven on hardware).
+        charge slot at zero power held it. So a hold becomes a charge slot at zero power.
+
+        Freeze-export (a zero charge rate) adds no slot. Predbat's freeze-export exports surplus solar
+        while the battery still covers the house, and HARDWARE (batpred#5305) showed a discharge slot
+        at zero power stopping the battery covering the house - so no slot fits. The zero charge rate
+        is passed through to self-use; whether it stops the battery absorbing solar there is still to
+        be live-tested. If it does not, "Maximum Charge SOC" held at the current SoC would, from 50% up.
 
         Returns (None, None) for an export that is running (it owns the battery), for both rates
         zero or both set (no signal - an unset schedule reads as zeros), and for a charge window that
@@ -1484,12 +1488,10 @@ class HanchuAPI(ComponentBase):
                     return "hold", None
                 return None, None
             return "hold", "charge"
-        if self._window_active_now(charge):
-            return None, None
-        return "freeze_export", "export"
+        return None, None
 
     def _extra_slot(self, sn, taken):
-        """Return the (start, end) seconds for a hold or freeze-export slot, or None if there is no room.
+        """Return the (start, end) seconds for a hold slot, or None if there is no room.
 
         It runs from the start of the current half hour to an hour later, so it changes - and is
         written - only every 30 minutes, and if Predbat stops renewing it the inverter is back in
