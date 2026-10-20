@@ -377,7 +377,6 @@ class GatewayMQTT(ComponentBase):
         self.topic_online = f"{self._topic_base}/online"
         self.topic_schedule = f"{self._topic_base}/schedule"
         self.topic_command = f"{self._topic_base}/command"
-        self.topic_ev_command = f"{self._topic_base}/ev/command"
         self.topic_ack = f"{self._topic_base}/ack/+"
         self._ack_topic_prefix = f"{self._topic_base}/ack/"
 
@@ -643,20 +642,28 @@ class GatewayMQTT(ComponentBase):
         if should_charge:
             current_a = self._ev_max_current.get(cp_id, 32)
             self.log(f"Info: GatewayMQTT: EVC start charging — current_a={current_a} for '{cp_id}'")
-            await self._send_ev_command({"action": "SetChargingProfile", "current_a": int(current_a)})
-            await self._send_ev_command({"action": "RemoteStartTransaction", "id_tag": "predbat"})
+            await self._send_ev_command(cp_id, {"action": "SetChargingProfile", "current_a": int(current_a)})
+            await self._send_ev_command(cp_id, {"action": "RemoteStartTransaction", "id_tag": "predbat"})
         else:
             self.log(f"Info: GatewayMQTT: EVC stop charging for '{cp_id}'")
-            await self._send_ev_command({"action": "RemoteStopTransaction"})
+            await self._send_ev_command(cp_id, {"action": "RemoteStopTransaction"})
         self._ev_charging_active = should_charge
 
-    async def _send_ev_command(self, command):
-        """Publish a single EV command dict as JSON to the EV command topic.
+    async def _send_ev_command(self, charge_point_id, command):
+        """Publish a single EV command to the shared device command topic.
+
+        The hub only subscribes to ``/command``; EV commands are recognised there by
+        ``"command": "ev"`` and routed to its OCPP server, which targets the charger
+        named by ``charge_point_id``. The hub answers with a transport ack on
+        ``/ack/<command_id>``.
 
         Args:
+            charge_point_id: OCPP charge point id of the charger to control.
             command: Dict with ``action`` key and any command-specific fields.
         """
-        await self._publish_raw(self.topic_ev_command, json.dumps(command).encode())
+        payload = {"command": "ev", "command_id": "PBAT" + str(self._next_command_id()), "charge_point_id": charge_point_id}
+        payload.update(command)
+        await self._publish_raw(self.topic_command, json.dumps(payload).encode())
 
     async def _startup_wait(self, ticks, ready):
         """Poll ``ready`` at 0.5 s intervals until it is true or the startup budget is spent.

@@ -6007,6 +6007,8 @@ class TestEvControl:
         gw._ev_windows = []
         gw._ev_charging_active = False
         gw.local_tz = pytz.timezone("Europe/London")
+        gw.topic_command = "predbat/devices/test/command"
+        gw._command_id = 1000
         return gw
 
     def _planned(self, windows):
@@ -6129,10 +6131,10 @@ class TestEvControl:
         published = []
 
         async def fake_publish_raw(topic, payload, **kwargs):
+            assert topic == gw.topic_command
             published.append(json.loads(payload.decode()))
 
         gw._publish_raw = fake_publish_raw
-        gw.topic_ev_command = "predbat/devices/test/ev/command"
 
         now = dt_mod.datetime.now(gw.local_tz)
         gw._ev_windows = [(now - dt_mod.timedelta(minutes=5), now + dt_mod.timedelta(hours=1))]
@@ -6141,8 +6143,13 @@ class TestEvControl:
         asyncio.run(gw._apply_ev_charging_state())
 
         assert len(published) == 2
-        assert published[0] == {"action": "SetChargingProfile", "current_a": 32}
-        assert published[1] == {"action": "RemoteStartTransaction", "id_tag": "predbat"}
+        cp_id = min(gw._configured_ev_chargers)
+        assert published[0]["command_id"] != published[1]["command_id"]
+        assert all(p["command_id"].startswith("PBAT") for p in published)
+        for p in published:
+            p.pop("command_id")
+        assert published[0] == {"command": "ev", "charge_point_id": cp_id, "action": "SetChargingProfile", "current_a": 32}
+        assert published[1] == {"command": "ev", "charge_point_id": cp_id, "action": "RemoteStartTransaction", "id_tag": "predbat"}
         assert gw._ev_charging_active is True
 
     def test_apply_sends_stop_on_transition(self):
@@ -6154,17 +6161,18 @@ class TestEvControl:
         published = []
 
         async def fake_publish_raw(topic, payload, **kwargs):
+            assert topic == gw.topic_command
             published.append(json.loads(payload.decode()))
 
         gw._publish_raw = fake_publish_raw
-        gw.topic_ev_command = "predbat/devices/test/ev/command"
         gw._ev_windows = []  # no active window
         gw._ev_charging_active = True  # was charging
 
         asyncio.run(gw._apply_ev_charging_state())
 
         assert len(published) == 1
-        assert published[0] == {"action": "RemoteStopTransaction"}
+        assert published[0].pop("command_id").startswith("PBAT")
+        assert published[0] == {"command": "ev", "charge_point_id": min(gw._configured_ev_chargers), "action": "RemoteStopTransaction"}
         assert gw._ev_charging_active is False
 
     def test_apply_no_command_when_state_unchanged(self):
@@ -6178,7 +6186,6 @@ class TestEvControl:
             published.append((topic, payload))
 
         gw._publish_raw = fake_publish_raw
-        gw.topic_ev_command = "predbat/devices/test/ev/command"
         gw._ev_windows = []
         gw._ev_charging_active = False  # already stopped
 
@@ -6196,10 +6203,10 @@ class TestEvControl:
         published = []
 
         async def fake_publish_raw(topic, payload, **kwargs):
+            assert topic == gw.topic_command
             published.append(json.loads(payload.decode()))
 
         gw._publish_raw = fake_publish_raw
-        gw.topic_ev_command = "predbat/devices/test/ev/command"
 
         now = dt_mod.datetime.now(gw.local_tz)
         gw._ev_windows = [(now - dt_mod.timedelta(minutes=5), now + dt_mod.timedelta(hours=1))]
