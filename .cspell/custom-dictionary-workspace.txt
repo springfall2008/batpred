@@ -481,6 +481,8 @@ oversizing
 overvoltage
 ownerapi
 pac
+packettypes
+paho
 parseable
 pbat
 pbgw
@@ -524,6 +526,7 @@ pseudonymised
 pseudonymises
 psum
 pthread
+puback
 pvbat
 pvenergytotal
 pvlib
@@ -548,6 +551,7 @@ rarr
 reactivepower
 readback
 readbacks
+reasoncodes
 recp
 redownload
 Referer
@@ -643,6 +647,7 @@ Stromligning
 strptime
 strtod
 Strømligning
+suback
 subclassing
 submessage
 substep
