@@ -410,6 +410,11 @@ A value of 0.1p is the default which prevents any marginal freezes as they must 
 If you increase this value (e.g. you only want to freeze export if very profitable), then freeze exports will become less common.
 The value is in currency minor unit (pence, cents, etc) per slot of export time.
 
+**input_number.predbat_metric_min_improvement_plan** (_expert mode_) sets the minimum cost improvement in currency minor unit (pence, cents, etc) that a newly computed Predbat plan has to have over the current plan for that new plan to be adopted.
+Every 10 minutes (by default) Predbat will re-calculate and optimise the full plan and calculate the cost of that new plan. The new plan cost will be compared to the current plan cost (`predbat.metric`) and the new plan adopted only if it is better by the metric_min_improvement_plan amount.
+The default value is 2.0p which means that a new plan has to be worth 2p more than the current Predbat plan for Predbat to adopt it.
+Set to 0p to disable this feature (so Predbat automatically adopts the newly evaluated plan), or increase the value if you want Predbat to have more stability in the adopted plan. However, be careful of setting this to too high a value as Predbat can retain an older plan that is no longer optimal for your battery SoC, house load prediction, etc.
+
 **input_number.predbat_metric_min_improvement_swap** (_expert mode_) Sets the minimum improvement in cost to swap an export slot to a later time in the day.
 The default for this setting is -0.25p, meaning that export will be moved later even if it costs up to an extra 0.25p on the plan.
 The advantage of having late exports means that you are less likely to run out of battery earlier in the day.
