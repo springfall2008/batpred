@@ -103,6 +103,7 @@ from hanchu_const import (
     HANCHU_RANGES,
     HANCHU_REFRESH_MIN_INTERVAL,
     HANCHU_RETRIES,
+    HANCHU_SECONDS_PER_DAY,
     HANCHU_SLOT_COUNT,
     HANCHU_SLOT_DISABLED,
     HANCHU_SOC_SCALE,
@@ -753,9 +754,23 @@ class HanchuAPI(ComponentBase):
         The menu's own bounds where it reported them, and the built-in defaults for everything
         else. Built per call rather than cached as a merged dict so a later menu poll cannot leave
         a stale entry behind.
+
+        A power limit's ceiling is raised to any higher value the device already holds. HARDWARE
+        (batpred#5305): the menu's 0-5000 W power range is one entry shared by 2-10 kW models, and a
+        HESS-HY-S-6.0K (nameplate 6000 W) holds DSCHG_PWR_LMT 6000 - a value the device holds is one
+        it accepts, and taking the menu's word would cap every discharge below the inverter's rating.
         """
         merged = dict(HANCHU_RANGES)
         merged.update(self.device_ranges.get(sn) or {})
+        settings = self.device_settings.get(sn) or {}
+        for key in (HANCHU_KEY_CHARGE_POWER, HANCHU_KEY_DISCHARGE_POWER):
+            held = self._as_float(settings.get(key), 0.0)
+            low, high = merged[key]
+            if held > high:
+                merged[key] = (low, int(held))
+                if (sn, "held", key) not in self._clamp_logged:
+                    self._clamp_logged.add((sn, "held", key))
+                    self.log("Info: Hanchu {} holds {} {:.0f} W, above the menu's {} W maximum (a range the menu shares across models), so {:.0f} W is used as its limit".format(sn, key, held, high, held))
         return merged
 
     def _warn_if_default_power(self, sn, ranges):
@@ -814,8 +829,8 @@ class HanchuAPI(ComponentBase):
     def battery_rate_max(self, sn):
         """Return the battery charge/discharge power limit in watts.
 
-        Taken from the CHARGE POWER key's own upper bound, which the menu reports per device - the
-        only power ceiling this API exposes. Leaving battery_rate_max unmapped is NOT neutral:
+        Taken from the CHARGE POWER key's upper bound - the menu's, or a higher value the device
+        holds (see ranges_for) - the only power ceiling this API exposes. Leaving battery_rate_max unmapped is NOT neutral:
         inverter.py then uses a hard-coded 2600 W silently on every plan, and makes it the
         governing term in the charge rate calculation, so an absent value is worse than this one.
         The user's override wins where they know the pack's real limit.
@@ -828,7 +843,8 @@ class HanchuAPI(ComponentBase):
         """Return the inverter's nominal AC power in watts.
 
         The API reports no inverter rating, so the discharge power ceiling stands in for it: it is
-        the largest AC figure the device will accept and on a matched package the two are close.
+        the largest AC figure the device will accept, raised to a higher value the device holds (see
+        ranges_for). HARDWARE (batpred#5305): on a HESS-HY-S-6.0K that gives the nameplate 6000 W.
         Deliberately the DISCHARGE bound rather than the charge one, because that is the direction
         the inverter's AC rating actually limits. The user's override wins.
         """
@@ -1144,7 +1160,8 @@ class HanchuAPI(ComponentBase):
         ranges = self.ranges_for(sn)
         charge_low, charge_high = ranges.get(HANCHU_KEY_GRID_CHARGE_SOC, (0, 100))
         floor_low, floor_high = ranges.get(HANCHU_KEY_DISCHARGE_SOC, (0, 100))
-        power_high = int(ranges.get(HANCHU_KEY_CHARGE_POWER, (0, 20000))[1]) or 20000
+        # Each direction advertises its own ceiling: a 6 kW unit can discharge more than it charges.
+        power_high = {direction: int(ranges.get(key, (0, 20000))[1]) or 20000 for direction, key in (("charge", HANCHU_KEY_CHARGE_POWER), ("export", HANCHU_KEY_DISCHARGE_POWER))}
 
         # Deliberately NOT clamped to the device's range on publish. This entity is Predbat's
         # control surface: it writes a value then reads it back to confirm (write_and_poll_value),
@@ -1182,7 +1199,7 @@ class HanchuAPI(ComponentBase):
             self.dashboard_item(
                 self._control_name("number", sn, "battery_schedule_{}_power".format(direction)),
                 state=int(window.get("power", 0)),
-                attributes={"min": 0, "max": power_high, "step": HANCHU_POWER_STEP, "unit_of_measurement": "W", "friendly_name": "Hanchu {} {} Power".format(sn, direction.title()), "icon": "mdi:flash"},
+                attributes={"min": 0, "max": power_high[direction], "step": HANCHU_POWER_STEP, "unit_of_measurement": "W", "friendly_name": "Hanchu {} {} Power".format(sn, direction.title()), "icon": "mdi:flash"},
                 app="hanchu",
             )
             self.dashboard_item(
@@ -1382,6 +1399,11 @@ class HanchuAPI(ComponentBase):
         A charge window and an export window that overlap are never both written - the vendor's own
         settings card refuses to submit that. See _resolve_overlap().
 
+        Holds and freeze-export are written as slots, because a zero rate on its own does nothing
+        outside a slot on this hardware - see _rate_signal(). The reserve is never written above the
+        current SoC: the slot does the holding, and a reserve above the SoC could make the inverter
+        charge from the grid to reach it.
+
         Every one of the three charge and three discharge slots is written, and any the plan does
         not use is set to 00:00-00:00 - see HANCHU_SLOT_DISABLED. User-defined mode runs all six,
         so a slot left over from the Hanchu app would otherwise fight the plan.
@@ -1389,11 +1411,16 @@ class HanchuAPI(ComponentBase):
         ranges = self.ranges_for(sn)
         charge, export = self._resolve_overlap(sn, schedule.get("charge", {}), schedule.get("export", {}))
         payload = {}
+        signal, extra_direction = self._rate_signal(sn, charge, export)
+        soc = self.device_values.get(sn, {}).get("soc")
 
         # Power. Rate 0 is how Predbat expresses freeze, and 0 is inside the accepted range, so it
-        # survives the clamp and is passed straight through.
-        payload[HANCHU_KEY_CHARGE_POWER] = self._clamp(sn, HANCHU_KEY_CHARGE_POWER, charge.get("power", 0), ranges)
-        payload[HANCHU_KEY_DISCHARGE_POWER] = self._clamp(sn, HANCHU_KEY_DISCHARGE_POWER, export.get("power", 0), ranges)
+        # survives the clamp and is passed straight through. A hold zeroes the charge rate as well,
+        # and freeze-export the discharge rate, because each is carried by a slot at zero power.
+        charge_power = 0 if signal == "hold" else charge.get("power", 0)
+        export_power = 0 if signal == "freeze_export" else export.get("power", 0)
+        payload[HANCHU_KEY_CHARGE_POWER] = self._clamp(sn, HANCHU_KEY_CHARGE_POWER, charge_power, ranges)
+        payload[HANCHU_KEY_DISCHARGE_POWER] = self._clamp(sn, HANCHU_KEY_DISCHARGE_POWER, export_power, ranges)
 
         # The charge target goes in the grid-charge limit, clamped to 20-100 on this hardware, so a
         # plan asking for less cannot be expressed - _clamp says so once per device.
@@ -1403,13 +1430,21 @@ class HanchuAPI(ComponentBase):
         # window is actually running and the reserve at every other moment - the same shape every
         # other cloud adapter with a single floor register uses.
         floor = export.get("soc", 0) if self._window_active_now(export) else schedule.get("reserve", 0)
+        if soc is not None and not self._window_active_now(export):
+            floor = min(self._as_float(floor, 0), int(self._as_float(soc, 0)))
         payload[HANCHU_KEY_DISCHARGE_SOC] = self._clamp(sn, HANCHU_KEY_DISCHARGE_SOC, floor, ranges)
 
-        for direction, window, start_key, end_key in (
-            ("charge", charge, HANCHU_KEY_CHARGE_START, HANCHU_KEY_CHARGE_END),
-            ("export", export, HANCHU_KEY_DISCHARGE_START, HANCHU_KEY_DISCHARGE_END),
-        ):
-            for index, (start, end) in enumerate(self._slot_pairs(sn, direction, window), start=1):
+        pairs = {"charge": self._slot_pairs(sn, "charge", charge), "export": self._slot_pairs(sn, "export", export)}
+        if extra_direction:
+            # The hold / freeze-export slot goes in slot 3, which Predbat's own window never uses.
+            other = "export" if extra_direction == "charge" else "charge"
+            extra = self._extra_slot(sn, pairs[extra_direction][:2] + pairs[other])
+            if extra:
+                pairs[extra_direction][2] = extra
+            else:
+                signal = None
+        for direction, start_key, end_key in (("charge", HANCHU_KEY_CHARGE_START, HANCHU_KEY_CHARGE_END), ("export", HANCHU_KEY_DISCHARGE_START, HANCHU_KEY_DISCHARGE_END)):
+            for index, (start, end) in enumerate(pairs[direction], start=1):
                 payload[start_key.format(index)] = start
                 payload[end_key.format(index)] = end
 
@@ -1417,9 +1452,64 @@ class HanchuAPI(ComponentBase):
         # user has not opted out. It is the least well evidenced thing in this component (see
         # HANCHU_WORK_MODE_FOR_SCHEDULE), so it is never written speculatively - with no window
         # enabled the mode is the user's business.
-        if self.work_mode_control and (charge.get("enable") or export.get("enable")):
+        if self.work_mode_control and (charge.get("enable") or export.get("enable") or signal):
             payload[HANCHU_KEY_WORK_MODE] = self.slot_work_mode(sn)
         return payload
+
+    def _rate_signal(self, sn, charge, export):
+        """Read a hold or freeze-export out of Predbat's rates, returning (signal, direction of the slot to add).
+
+        On an inverter with no pause mode, execute.py asks for every hold - freeze charge, hold
+        charging, holding for a car or for iBoost - with a discharge rate of 0, and for freeze-export
+        with a charge rate of 0. HARDWARE (batpred#5305): on a HESS-HY-S-6.0K neither rate does
+        anything outside a slot - the battery kept feeding the house at a zero discharge rate - but a
+        charge slot at zero power held it. So a hold becomes a charge slot at zero power, and
+        freeze-export the mirror image, a discharge slot at zero power (not yet proven on hardware).
+
+        Returns (None, None) for an export that is running (it owns the battery), for both rates
+        zero or both set (no signal - an unset schedule reads as zeros), and for a charge window that
+        is running with the battery still below its target (that is charging). A running charge
+        window whose target is met is a hold carried by that window, so no slot is added.
+        """
+        if self._window_active_now(export):
+            return None, None
+        charge_zero = self._as_float(charge.get("power"), 0) == 0
+        export_zero = self._as_float(export.get("power"), 0) == 0
+        if charge_zero == export_zero:
+            return None, None
+        if export_zero:
+            if self._window_active_now(charge):
+                soc = self.device_values.get(sn, {}).get("soc")
+                if soc is not None and self._as_float(soc, 0) >= self._as_float(charge.get("soc"), 0):
+                    return "hold", None
+                return None, None
+            return "hold", "charge"
+        if self._window_active_now(charge):
+            return None, None
+        return "freeze_export", "export"
+
+    def _extra_slot(self, sn, taken):
+        """Return the (start, end) seconds for a hold or freeze-export slot, or None if there is no room.
+
+        It runs from the start of the current half hour to an hour later, so it changes - and is
+        written - only every 30 minutes, and if Predbat stops renewing it the inverter is back in
+        self-use within the hour. It stops at 23:59 rather than wrapping, and is cut short of any
+        enabled slot it would overlap (the vendor card refuses overlapping slots).
+        """
+        start = (self.minutes_now - self.minutes_now % 30) * 60
+        end = min(start + 3600, HANCHU_SECONDS_PER_DAY - 60)
+        for other_start, other_end in taken:
+            if (other_start, other_end) == (HANCHU_SLOT_DISABLED, HANCHU_SLOT_DISABLED):
+                continue
+            if other_start < end and start < other_end:
+                if other_start > start:
+                    end = other_start
+                else:
+                    self.log("Info: Hanchu {} has no free time for a hold slot now - an enabled slot already covers it".format(sn))
+                    return None
+        if end <= start:
+            return None
+        return (start, end)
 
     def _resolve_overlap(self, sn, charge, export):
         """Return (charge, export) with one of them disabled if their slots would overlap.
@@ -1836,7 +1926,7 @@ class HanchuAPI(ComponentBase):
 # ----------------------------------------------------------------------
 
 # The live tests, each named after the Predbat state it reproduces.
-HANCHU_CLI_SCENARIOS = ("charge", "export", "freeze-charge", "freeze-export")
+HANCHU_CLI_SCENARIOS = ("charge", "export", "freeze-charge", "freeze-export", "hold")
 
 # What each scenario should make the battery do, printed before anything is written so the tester
 # knows what they are watching for.
@@ -1845,6 +1935,7 @@ HANCHU_CLI_EXPECTATION = {
     "export": "the battery DISCHARGES (battery power positive) and the surplus is exported",
     "freeze-charge": "the battery neither charges nor discharges while the house draws from the grid",
     "freeze-export": "the battery does not charge, so surplus solar is exported instead",
+    "hold": "the battery neither charges nor discharges, because the open charge slot's target is already met",
 }
 
 # Every key a restore may write back: everything build_write_payload() can touch. The overall charge
@@ -1910,8 +2001,12 @@ def build_cli_schedule(scenario, start_minutes, soc, settings, ranges, window_mi
 
     - charge: a charge window from start_minutes, target 10 points above the current SoC.
     - export: an export window from start_minutes, floor 10 points below the current SoC.
-    - freeze-charge: no window, discharge rate 0 (how Predbat holds the battery with no pause mode).
+    - freeze-charge: no window, discharge rate 0 and the reserve raised to SoC + 1 (how Predbat
+      holds the battery on an inverter with no pause mode).
     - freeze-export: no window, charge rate 0 (how Predbat stops the battery soaking up solar).
+    - hold: a charge window from start_minutes whose grid-charge target is the current SoC, with no
+      charge or discharge power - a candidate single hold for every SoC from 20% up, where the
+      reserve stops at 45%. It holds only if the inverter idles in a slot whose target is met.
 
     The rate Predbat is not using is left at the device maximum, as Predbat does outside a window,
     and a disabled charge window carries a 100% target - Predbat's demand-mode value, and the one
@@ -1956,7 +2051,7 @@ def build_cli_schedule(scenario, start_minutes, soc, settings, ranges, window_mi
         "export": {"enable": False, "soc": reserve, "power": discharge_max, "start": "00:00:00", "end": "00:00:00"},
     }
 
-    if scenario in ("charge", "export"):
+    if scenario in ("charge", "export", "hold"):
         end_minutes = start_minutes + int(window_minutes)
         if end_minutes > 23 * 60 + 59:
             end_minutes = 23 * 60 + 59
@@ -1985,7 +2080,19 @@ def build_cli_schedule(scenario, start_minutes, soc, settings, ranges, window_mi
         if require_effect and soc <= floor + (0 if target is not None else 2):
             raise ValueError("the battery is at {:.0f}%, too close to the {}% floor for an export to show anything - try charge or freeze-export".format(soc, floor))
         schedule["export"] = dict(window, soc=floor, power=capped(power, discharge_max))
+    elif scenario == "hold":
+        if int(soc) < charge_low:
+            notes.append("target set to {}%, the lowest the grid-charge limit accepts; with no charge power the slot still cannot charge".format(charge_low))
+        schedule["charge"] = dict(window, soc=max(int(charge_low), min(int(charge_high), int(soc))), power=0)
+        schedule["export"]["power"] = 0
     elif scenario == "freeze-charge":
+        # execute.py, on an inverter with no pause mode: discharge rate 0 AND the reserve raised to
+        # SoC + 1. HARDWARE (batpred#5305): the rate alone does not hold the battery outside a slot.
+        # Above the floor's ceiling Predbat will not freeze at all (inverter_reserve_max).
+        if require_effect and int(soc) + 1 > floor_high:
+            raise ValueError("the battery is at {:.0f}%, above the {}% the reserve can be set to - above that Predbat holds with its charge window instead, which --live-window hold reproduces".format(soc, floor_high))
+        schedule["reserve"] = max(int(floor_low), min(int(floor_high), int(soc) + 1))
+        schedule["export"]["soc"] = schedule["reserve"]
         schedule["export"]["power"] = 0
     else:
         schedule["charge"]["power"] = 0
@@ -2060,7 +2167,7 @@ def load_cli_snapshot(path):
     return str(data["serial"]), data["settings"]
 
 
-def judge_live_window(scenario, samples, threshold=HANCHU_CLI_THRESHOLD_W, settle_seconds=HANCHU_CLI_SETTLE_SECONDS):
+def judge_live_window(scenario, samples, threshold=HANCHU_CLI_THRESHOLD_W, settle_seconds=HANCHU_CLI_SETTLE_SECONDS, target=None):
     """Decide whether a live test did what the scenario expects, from its telemetry samples.
 
     samples are dicts of Predbat-convention readings (battery negative on charge) plus "elapsed",
@@ -2069,6 +2176,10 @@ def judge_live_window(scenario, samples, threshold=HANCHU_CLI_THRESHOLD_W, settl
     A freeze is only judged on readings where it could show something: freeze-charge needs the house
     to be drawing more than solar supplies, freeze-export needs a solar surplus. Without that, a held
     battery and a free one look identical, and the answer is INCONCLUSIVE rather than a false PASS.
+
+    With a target (--target) on a charge or export, the question is instead whether the inverter
+    stops at the target by itself: moving before the SoC reaches it, idle once it has. A run that
+    never reaches the target says nothing about stopping, so it is INCONCLUSIVE.
 
     Returns (verdict, reason), verdict one of PASS, FAIL or INCONCLUSIVE.
     """
@@ -2090,6 +2201,16 @@ def judge_live_window(scenario, samples, threshold=HANCHU_CLI_THRESHOLD_W, settl
 
     battery = [reading(item, "battery_power") for item in settled]
     median = statistics.median(battery)
+    if target is not None and scenario in ("charge", "export"):
+        charging = scenario == "charge"
+        reached = [index for index, item in enumerate(settled) if (reading(item, "soc") >= target if charging else reading(item, "soc") <= target)]
+        if not reached:
+            return "INCONCLUSIVE", "the SoC never reached the {}% target in the window, so stopping at it was not tested - set --target closer or run longer".format(target)
+        after = [reading(item, "battery_power") for item in settled[reached[0] :]]
+        moving = sum(1 for value in after if (value <= -threshold if charging else value >= threshold))
+        if moving * 2 > len(after):
+            return "FAIL", "the battery kept {} past the {}% target (median {:.0f} W after reaching it)".format("charging" if charging else "discharging", target, statistics.median(after))
+        return "PASS", "the battery stopped at the {}% target by itself (median {:.0f} W after reaching it)".format(target, statistics.median(after))
     if scenario == "charge":
         if sum(1 for value in battery if value <= -threshold) * 2 > len(battery):
             return "PASS", "the battery charged at a median {:.0f} W".format(-median)
@@ -2098,13 +2219,17 @@ def judge_live_window(scenario, samples, threshold=HANCHU_CLI_THRESHOLD_W, settl
         if sum(1 for value in battery if value >= threshold) * 2 > len(battery):
             return "PASS", "the battery discharged at a median {:.0f} W".format(median)
         return "FAIL", "the battery did not discharge - median battery power {:.0f} W (positive is discharging)".format(median)
-    if scenario == "freeze-charge":
+    if scenario in ("freeze-charge", "hold"):
         demand = [item for item in settled if reading(item, "load_power") - solar(item) > threshold]
         if not demand:
             return "INCONCLUSIVE", "solar covered the house load throughout, so a held battery and a free one look the same - retry when the house is drawing power"
         draining = [reading(item, "battery_power") for item in demand]
         if sum(1 for value in draining if value >= threshold) * 2 > len(draining):
             return "FAIL", "the battery fed the house at a median {:.0f} W when it should have been held".format(statistics.median(draining))
+        # With the house drawing more than solar supplies, any charging is coming from the grid - a
+        # reserve above the SoC can make an inverter do that, and it is no more a hold than draining.
+        if sum(1 for value in draining if value <= -threshold) * 2 > len(draining):
+            return "FAIL", "the battery charged from the grid at a median {:.0f} W when it should have been held".format(-statistics.median(draining))
         return "PASS", "the battery held (median {:.0f} W) while the house drew more than solar supplied".format(statistics.median(draining))
     surplus = [item for item in settled if solar(item) - reading(item, "load_power") > threshold]
     if not surplus:
@@ -2241,6 +2366,48 @@ async def _cli_print_coupling(client, sn):  # pragma: no cover
     switch = data.get("bypMeterSwitch")
     print("  coupling        bypMeterSwitch={!r} bypMeterTotalPower={!r} pvTtPwr={!r} -> {}".format(switch, data.get("bypMeterTotalPower"), data.get("pvTtPwr"), {1: "AC-coupled", 0: "DC-coupled"}.get(_cli_number(switch), "unknown")))
     print("  generator       hasDg={!r} dgPAcTotal={!r} {} (load {!r}, grid {!r}, battery {!r})".format(data.get("hasDg"), data.get("dgPAcTotal"), data.get("dgPAcTotalUnit") or "", data.get("loadPwr"), data.get("meterPPwr"), data.get("batP")))
+    # Raw fields whose meaning is not yet known, printed so a run can be compared against the app: the
+    # several mode fields, the vendor's own schedulers (which could fight Predbat if switched on), and
+    # the two different "PV today" figures the status carries.
+    for label, keys in (
+        ("modes", ("devModel", "workModeCmb", "workMode", "workModeFlag", "pcsStatusDesc", "batSts")),
+        ("vendor schedulers", ("strategyOpen", "schedulePending", "scheduleExecuting", "smartflexAuthSts", "smartflexSchedule", "smartflexExecuting")),
+        ("today (status)", ("pvTdGe", "pvDge", "loadTdEe", "gridTdEe", "gridTdFe", "batTdChg", "batTdDschg")),
+    ):
+        print("  {:15} {}".format(label, "  ".join("{}={!r}".format(key, data.get(key)) for key in keys)))
+
+
+async def _cli_print_menu(client, sn, dump_path=None):  # pragma: no cover
+    """List the menu's energy items, and optionally save the whole raw menu to a file.
+
+    The menu can list one setting several times, each for a different set of product models, and a
+    trace line is cut at 2000 characters, so the full menu is the only way to see which entry the
+    range parser should have used.
+    """
+    ok, data = await client._post("menu", body={"sn": sn})
+    if not ok or not isinstance(data, dict):
+        print("  menu            could not be read")
+        return
+    if dump_path:
+        path = dump_path if len(client.device_list) == 1 else "{}_{}".format(sn, dump_path)
+        with open(path, "w") as handle:
+            json.dump(data, handle, indent=2, ensure_ascii=False)
+        print("  menu            saved in full to {}".format(path))
+    print("  menu energy items (signal, type, min-max, models, shown when):")
+    for item in client._menu_items(data):
+        signal = item.get("itemCodeSignal") or item.get("itemCode") or "?"
+        bounds = "{}-{}".format(item.get("minVal"), item.get("maxVal")) if item.get("minVal") not in (None, "") or item.get("maxVal") not in (None, "") else ""
+        listener = item.get("listener") if isinstance(item.get("listener"), dict) else {}
+        print(
+            "    {:32} type {:3} {:12} models {}{}{}".format(
+                signal,
+                str(item.get("itemType")),
+                bounds,
+                item.get("productModel") or "all",
+                "  when {}={}".format(listener.get("code"), listener.get("show")) if listener else "",
+                "  hidden" if item.get("hidden") else "",
+            )
+        )
 
 
 async def _cli_prepare(client):  # pragma: no cover
@@ -2328,14 +2495,14 @@ async def _cli_restore(client, sn, snapshot, keys, snapshot_path, args):  # prag
         return
     if not await _cli_write(client, sn, payload, "the original settings back"):
         print("WARNING: {} was NOT fully restored. Check it in the Hanchu app, or retry with:".format(sn))
-        print("  python3 hanchu.py --account {} --restore {}".format(args.account, snapshot_path))
+        print("  python3 hanchu.py --account <your account> --restore {}".format(snapshot_path))
 
 
 def _cli_snapshot(client, sn, settings, args):  # pragma: no cover
     """Save the pre-write settings to disk and tell the tester how to restore them by hand."""
     path = save_cli_snapshot(args.snapshot_dir, sn, settings)
     print("\nSaved the current settings to {}".format(path))
-    print("If this run is interrupted, put them back with:  python3 hanchu.py --account {} --restore {}".format(args.account, path))
+    print("If this run is interrupted, put them back with:  python3 hanchu.py --account <your account> --restore {}".format(path))
     return path
 
 
@@ -2358,6 +2525,7 @@ async def test_hanchu_api(args):  # pragma: no cover
     for sn in client.device_list:
         _cli_print_device(client, sn)
         await _cli_print_coupling(client, sn)
+        await _cli_print_menu(client, sn, args.dump_menu)
     print("\nThe 'Set arg' lines above are what hanchu_automatic: true would put in apps.yaml.")
     await client.final()
     print("Done")
@@ -2423,7 +2591,7 @@ async def test_hanchu_live_window(args):  # pragma: no cover
     if scenario.startswith("freeze"):
         if args.user_defined:
             payload[HANCHU_KEY_WORK_MODE] = HANCHU_WORK_MODE_FOR_SCHEDULE
-        elif _cli_number(settings.get(HANCHU_KEY_WORK_MODE)) != HANCHU_WORK_MODE_FOR_SCHEDULE:
+        elif HANCHU_KEY_WORK_MODE not in payload and _cli_number(settings.get(HANCHU_KEY_WORK_MODE)) != HANCHU_WORK_MODE_FOR_SCHEDULE:
             print("\nNOTE: the work mode is not User-defined, and a freeze writes no window, so Predbat would not change it.")
             print("  In practice an earlier Predbat window has usually set User-defined already; add --user-defined to test that case.")
 
@@ -2481,7 +2649,7 @@ async def test_hanchu_live_window(args):  # pragma: no cover
     except (KeyboardInterrupt, asyncio.CancelledError):
         print("\nInterrupted - restoring")
     finally:
-        verdict, reason = judge_live_window(scenario, samples)
+        verdict, reason = judge_live_window(scenario, samples, target=window.get("soc") if args.target is not None and window["enable"] else None)
         print("\n{}: {} - {}".format(verdict, scenario, reason))
         await _cli_restore(client, sn, settings, list(payload), path, args)
     print("Done")
@@ -2529,6 +2697,7 @@ def main():  # pragma: no cover
     parser.add_argument("--config", help="Read hanchu_account, hanchu_password and hanchu_inverter_sn from an apps.yaml, resolving !secret as Predbat does")
     parser.add_argument("--api-delay", type=float, default=1, help="Seconds to wait between API calls (default 1)")
     parser.add_argument("--no-trace", action="store_true", help="Stop printing every API request and response")
+    parser.add_argument("--dump-menu", metavar="FILE", help="With the read-only report, save the device's full settings menu as JSON to FILE")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--write-test", action="store_true", help="Write a charge window three hours from now, read it back, then restore - moves no energy")
     mode.add_argument("--live-window", choices=HANCHU_CLI_SCENARIOS, help="Run this Predbat state on the inverter now, watch the battery, then restore")

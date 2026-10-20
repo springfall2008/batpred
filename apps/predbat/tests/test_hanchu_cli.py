@@ -118,15 +118,52 @@ def test_hanchu_cli_export_schedule_floors_inside_the_device_range():
 
 
 def test_hanchu_cli_freeze_schedules_use_the_rates_alone():
-    """Freeze charge holds through a zero discharge rate and freeze export through a zero charge rate, with no window - the shape execute.py produces."""
+    """The freezes reproduce execute.py: no window, the rate in the frozen direction at zero, and for freeze charge the reserve raised to SoC + 1.
+
+    Hardware (batpred#5305): a zero discharge rate alone does NOT hold the battery outside a slot - a
+    HESS-HY-S-6.0K kept feeding a 1 kW house load for ten minutes. Predbat also raises the reserve to
+    SoC + 1 when it freezes charging on an inverter with no pause mode, so the test must too.
+    """
     failed = False
-    schedule, _ = build_cli_schedule("freeze-charge", 600, 60, SETTINGS, HANCHU_RANGES, window_minutes=10, power=None)
+    schedule, _ = build_cli_schedule("freeze-charge", 600, 20, SETTINGS, HANCHU_RANGES, window_minutes=10, power=None)
     failed = expect(failed, not schedule["charge"]["enable"] and not schedule["export"]["enable"], "freeze charge writes no window")
     failed = expect(failed, schedule["export"]["power"] == 0 and schedule["charge"]["power"] == HANCHU_RANGES[HANCHU_KEY_CHARGE_POWER][1], f"freeze charge rates {schedule}")
+    failed = expect(failed, schedule["reserve"] == 21, f"freeze charge should raise the reserve to SoC + 1 = 21, got {schedule['reserve']}")
+    # Above the floor's 45% ceiling Predbat will not freeze at all (inverter_reserve_max), so neither does the test.
+    try:
+        build_cli_schedule("freeze-charge", 600, 60, SETTINGS, HANCHU_RANGES, window_minutes=10, power=None)
+        failed = expect(failed, False, "freeze charge at 60% should be refused - the reserve cannot go above 45")
+    except ValueError:
+        pass
 
     schedule, _ = build_cli_schedule("freeze-export", 600, 60, SETTINGS, HANCHU_RANGES, window_minutes=10, power=None)
     failed = expect(failed, not schedule["charge"]["enable"] and not schedule["export"]["enable"], "freeze export writes no window")
     failed = expect(failed, schedule["charge"]["power"] == 0 and schedule["export"]["power"] == HANCHU_RANGES[HANCHU_KEY_DISCHARGE_POWER][1], f"freeze export rates {schedule}")
+    return failed
+
+
+def test_hanchu_cli_hold_is_a_charge_slot_already_at_its_target():
+    """The hold test opens a charge slot now with its target at the current SoC and no charge or discharge power.
+
+    One mechanism for every SoC from the grid-charge limit's 20% floor to 100%, unlike the reserve,
+    which stops at 45%. It holds only if the inverter idles in a charge slot whose target is met.
+    """
+    failed = False
+    schedule, _ = build_cli_schedule("hold", 600, 60, SETTINGS, HANCHU_RANGES, window_minutes=10, power=None)
+    charge = schedule["charge"]
+    failed = expect(failed, charge["enable"] and charge["soc"] == 60 and charge["power"] == 0 and charge["start"] == "10:00:00", f"hold charge slot {charge}")
+    failed = expect(failed, not schedule["export"]["enable"] and schedule["export"]["power"] == 0, f"hold export {schedule['export']}")
+    failed = expect(failed, schedule["reserve"] == 10, f"hold leaves the reserve alone: {schedule['reserve']}")
+    # Below the grid-charge target's 20% floor the target is 20, said in a note - with no charge power
+    # the slot still cannot charge, so it remains a test of whether the slot stops discharge.
+    schedule, notes = build_cli_schedule("hold", 600, 15, SETTINGS, HANCHU_RANGES, window_minutes=10, power=None)
+    failed = expect(failed, schedule["charge"]["soc"] == 20 and schedule["charge"]["power"] == 0, f"hold at 15% {schedule['charge']}")
+    failed = expect(failed, any("20" in note for note in notes), f"the raised target should be explained: {notes}")
+    # Judged exactly like freeze charge.
+    verdict, _ = judge_live_window("hold", [sample(70, 0, load=800), sample(100, 10, load=800)])
+    failed = expect(failed, verdict == "PASS", f"hold verdict {verdict}")
+    verdict, _ = judge_live_window("hold", [sample(70, 900, load=900), sample(100, 900, load=900)])
+    failed = expect(failed, verdict == "FAIL", f"hold drain verdict {verdict}")
     return failed
 
 
@@ -212,9 +249,28 @@ def test_hanchu_cli_snapshot_round_trips():
     return failed
 
 
-def sample(elapsed, battery, load=500, pv=0, ac_pv=0, grid=0):
+def sample(elapsed, battery, load=500, pv=0, ac_pv=0, grid=0, soc=50):
     """Build one live-window telemetry sample in Predbat's sign convention."""
-    return {"elapsed": elapsed, "battery_power": battery, "load_power": load, "pv_power": pv, "ac_pv_power": ac_pv, "grid_power": grid, "soc": 50}
+    return {"elapsed": elapsed, "battery_power": battery, "load_power": load, "pv_power": pv, "ac_pv_power": ac_pv, "grid_power": grid, "soc": soc}
+
+
+def test_hanchu_cli_judges_a_target_by_whether_the_battery_stops_there():
+    """With --target the question is whether the inverter stops at the target by itself, not whether it charged throughout."""
+    failed = False
+    stopped = [sample(70, -3000, soc=20), sample(100, -3000, soc=21), sample(130, -2900, soc=22), sample(160, 0, soc=22), sample(190, 10, soc=22)]
+    verdict, reason = judge_live_window("charge", stopped, target=22)
+    failed = expect(failed, verdict == "PASS" and "stopped" in reason, f"stopped at target: {verdict} {reason}")
+    overran = [sample(70, -3000, soc=20), sample(100, -3000, soc=22), sample(130, -3000, soc=23), sample(160, -3000, soc=24)]
+    verdict, reason = judge_live_window("charge", overran, target=22)
+    failed = expect(failed, verdict == "FAIL" and "past" in reason, f"charged past target: {verdict} {reason}")
+    never = [sample(70, -3000, soc=20), sample(100, -3000, soc=21)]
+    verdict, reason = judge_live_window("charge", never, target=30)
+    failed = expect(failed, verdict == "INCONCLUSIVE" and "never reached" in reason, f"target not reached: {verdict} {reason}")
+    # The export floor is the mirror image: discharging above it, stopped at or below it.
+    floor = [sample(70, 2000, soc=40), sample(100, 2000, soc=39), sample(130, 0, soc=38), sample(160, 0, soc=38)]
+    verdict, reason = judge_live_window("export", floor, target=38)
+    failed = expect(failed, verdict == "PASS", f"stopped at floor: {verdict} {reason}")
+    return failed
 
 
 def test_hanchu_cli_judges_charge_and_export():
@@ -242,6 +298,9 @@ def test_hanchu_cli_judges_freezes_only_when_they_can_show_something():
     failed = expect(failed, verdict == "PASS", f"freeze-charge hold verdict {verdict}")
     verdict, _ = judge_live_window("freeze-charge", [sample(70, 750, load=800), sample(100, 760, load=800)])
     failed = expect(failed, verdict == "FAIL", f"freeze-charge drain verdict {verdict}")
+    # A reserve above the SoC can make an inverter charge from the grid to reach it - not a hold either.
+    verdict, reason = judge_live_window("freeze-charge", [sample(70, -2000, load=800), sample(100, -2100, load=800)])
+    failed = expect(failed, verdict == "FAIL" and "grid" in reason, f"freeze-charge grid-charge verdict {verdict}: {reason}")
     # Solar covering the load means a held battery and a free one look the same.
     verdict, _ = judge_live_window("freeze-charge", [sample(70, 0, load=300, pv=900), sample(100, 0, load=300, pv=900)])
     failed = expect(failed, verdict == "INCONCLUSIVE", f"freeze-charge no-demand verdict {verdict}")
@@ -269,6 +328,7 @@ def run_hanchu_cli_tests(my_predbat):
         ("power_cap", test_hanchu_cli_power_is_capped_at_the_device_range),
         ("export_schedule", test_hanchu_cli_export_schedule_floors_inside_the_device_range),
         ("freeze_schedules", test_hanchu_cli_freeze_schedules_use_the_rates_alone),
+        ("hold_schedule", test_hanchu_cli_hold_is_a_charge_slot_already_at_its_target),
         ("refuse_no_effect", test_hanchu_cli_refuses_a_test_that_could_show_nothing),
         ("midnight", test_hanchu_cli_window_never_crosses_midnight),
         ("future_start", test_hanchu_cli_future_start_avoids_now_and_midnight),
@@ -277,6 +337,7 @@ def run_hanchu_cli_tests(my_predbat):
         ("snapshot", test_hanchu_cli_snapshot_round_trips),
         ("judge_charge_export", test_hanchu_cli_judges_charge_and_export),
         ("judge_freezes", test_hanchu_cli_judges_freezes_only_when_they_can_show_something),
+        ("judge_target", test_hanchu_cli_judges_a_target_by_whether_the_battery_stops_there),
     ]:
         try:
             if fn():

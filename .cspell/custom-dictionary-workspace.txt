@@ -598,6 +598,7 @@ slugified
 slugifies
 slugify
 slugifying
+smartflex
 snakeviz
 snprintf
 socb

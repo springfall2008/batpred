@@ -42,11 +42,16 @@ def ready(client=None, **kwargs):
 
 
 def schedule(charge=None, export=None, reserve=10):
-    """Build a schedule dict in the shape get_schedule_settings_ha() produces."""
+    """Build a schedule dict in the shape get_schedule_settings_ha() produces.
+
+    Both rates default to 5000 W, as Predbat leaves them outside a freeze: a zero rate is how Predbat
+    asks this inverter to hold (discharge 0) or to freeze export (charge 0), so a test sets one only
+    when it means to.
+    """
     base = {
         "reserve": reserve,
-        "charge": {"enable": False, "soc": 0, "power": 0, "start": "00:00:00", "end": "00:00:00"},
-        "export": {"enable": False, "soc": 0, "power": 0, "start": "00:00:00", "end": "00:00:00"},
+        "charge": {"enable": False, "soc": 0, "power": 5000, "start": "00:00:00", "end": "00:00:00"},
+        "export": {"enable": False, "soc": 0, "power": 5000, "start": "00:00:00", "end": "00:00:00"},
     }
     if charge:
         base["charge"].update(charge)
@@ -786,6 +791,122 @@ def test_hanchu_overlapping_windows_keep_only_one():
     assert not failed, "test_hanchu_overlapping_windows_keep_only_one"
 
 
+def enabled_slots(payload, start_key, end_key):
+    """Return {slot index: (start, end)} for one direction's enabled slots."""
+    slots = {}
+    for index in range(1, 4):
+        pair = (payload.get(start_key.format(index)), payload.get(end_key.format(index)))
+        if pair != (HANCHU_SLOT_DISABLED, HANCHU_SLOT_DISABLED):
+            slots[index] = pair
+    return slots
+
+
+def test_hanchu_hold_opens_a_charge_slot_at_zero_power():
+    """A hold (discharge rate 0, no export running) is written as a charge slot covering now with no charge power.
+
+    Hardware (batpred#5305): on a HESS-HY-S-6.0K a zero discharge rate alone did not stop the battery
+    feeding the house, but an open charge slot at zero charge power held it at 0 W. The slot runs from
+    the current half hour to an hour on, so it changes - and is written - only every 30 minutes, and if
+    Predbat stops renewing it the inverter is back in self-use within the hour.
+    """
+    failed = False
+    client = ready()
+    client.device_values[SN] = {"soc": 20.0}
+    client.set_mock_clock(19 * 60 + 47)
+    payload = client.build_write_payload(SN, schedule(export={"power": 0}, reserve=21))
+    if enabled_slots(payload, HANCHU_KEY_CHARGE_START, HANCHU_KEY_CHARGE_END) != {3: (19 * 3600 + 1800, 20 * 3600 + 1800)}:
+        print(f"ERROR: the hold should be a charge slot 19:30-20:30 in slot 3: {enabled_slots(payload, HANCHU_KEY_CHARGE_START, HANCHU_KEY_CHARGE_END)}")
+        failed = True
+    if payload.get(HANCHU_KEY_CHARGE_POWER) != 0 or payload.get(HANCHU_KEY_DISCHARGE_POWER) != 0:
+        print(f"ERROR: the hold should write zero charge and discharge power: {payload.get(HANCHU_KEY_CHARGE_POWER)} / {payload.get(HANCHU_KEY_DISCHARGE_POWER)}")
+        failed = True
+    if payload.get(HANCHU_KEY_WORK_MODE) != HANCHU_WORK_MODE_FOR_SCHEDULE:
+        print("ERROR: the hold slot only runs in User-defined, so the work mode must be written")
+        failed = True
+    # The reserve is never written above the SoC: the slot holds the battery, and a reserve above the SoC
+    # could make the inverter charge from the grid to reach it.
+    if payload.get(HANCHU_KEY_DISCHARGE_SOC) != 20:
+        print(f"ERROR: reserve {payload.get(HANCHU_KEY_DISCHARGE_SOC)} should be capped at the 20% SoC")
+        failed = True
+    # Near midnight the slot stops at 23:59 rather than wrapping.
+    client.set_mock_clock(23 * 60 + 50)
+    payload = client.build_write_payload(SN, schedule(export={"power": 0}, reserve=21))
+    if enabled_slots(payload, HANCHU_KEY_CHARGE_START, HANCHU_KEY_CHARGE_END) != {3: (23 * 3600 + 1800, HANCHU_SECONDS_PER_DAY - 60)}:
+        print(f"ERROR: the late hold slot should be 23:30-23:59: {enabled_slots(payload, HANCHU_KEY_CHARGE_START, HANCHU_KEY_CHARGE_END)}")
+        failed = True
+    # A charge window Predbat has planned for later keeps slot 1.
+    client.set_mock_clock(19 * 60)
+    payload = client.build_write_payload(SN, schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "23:30:00", "end": "23:59:00"}, export={"power": 0}))
+    slots = enabled_slots(payload, HANCHU_KEY_CHARGE_START, HANCHU_KEY_CHARGE_END)
+    if slots.get(1) != (23 * 3600 + 1800, 23 * 3600 + 59 * 60) or 3 not in slots:
+        print(f"ERROR: Predbat's later window should stay in slot 1 beside the hold in slot 3: {slots}")
+        failed = True
+    assert not failed, "test_hanchu_hold_opens_a_charge_slot_at_zero_power"
+
+
+def test_hanchu_hold_inside_a_charge_window_stops_charging_only_at_the_target():
+    """Inside Predbat's charge window a zero discharge rate is a hold once the SoC has reached the target, and charging below it."""
+    failed = False
+    client = ready()
+    client.set_mock_clock(19 * 60 + 30)
+    window = {"enable": True, "soc": 50, "power": 3000, "start": "19:00:00", "end": "21:00:00"}
+    client.device_values[SN] = {"soc": 60.0}
+    payload = client.build_write_payload(SN, schedule(charge=window, export={"power": 0}))
+    if payload.get(HANCHU_KEY_CHARGE_POWER) != 0 or enabled_slots(payload, HANCHU_KEY_CHARGE_START, HANCHU_KEY_CHARGE_END) != {1: (19 * 3600, 21 * 3600)}:
+        print(f"ERROR: at 60% with a 50% target the window should hold at zero charge power: {payload}")
+        failed = True
+    client.device_values[SN] = {"soc": 40.0}
+    payload = client.build_write_payload(SN, schedule(charge=window, export={"power": 0}))
+    if payload.get(HANCHU_KEY_CHARGE_POWER) != 3000:
+        print(f"ERROR: at 40% with a 50% target the window is charging, so the rate stays 3000: {payload.get(HANCHU_KEY_CHARGE_POWER)}")
+        failed = True
+    assert not failed, "test_hanchu_hold_inside_a_charge_window_stops_charging_only_at_the_target"
+
+
+def test_hanchu_freeze_export_opens_a_discharge_slot_at_zero_power():
+    """Freeze export (charge rate 0, no window running) is written as a discharge slot covering now with no discharge power.
+
+    Not yet proven on hardware: a zero charge rate outside a slot is expected to fail exactly as the zero
+    discharge rate did, so this mirrors the hold that worked. To be live-tested with surplus solar.
+    """
+    failed = False
+    client = ready()
+    client.device_values[SN] = {"soc": 60.0}
+    client.set_mock_clock(12 * 60 + 10)
+    payload = client.build_write_payload(SN, schedule(charge={"power": 0}, reserve=10))
+    if enabled_slots(payload, HANCHU_KEY_DISCHARGE_START, HANCHU_KEY_DISCHARGE_END) != {3: (12 * 3600, 13 * 3600)}:
+        print(f"ERROR: freeze export should be a discharge slot 12:00-13:00 in slot 3: {enabled_slots(payload, HANCHU_KEY_DISCHARGE_START, HANCHU_KEY_DISCHARGE_END)}")
+        failed = True
+    if enabled_slots(payload, HANCHU_KEY_CHARGE_START, HANCHU_KEY_CHARGE_END):
+        print("ERROR: freeze export must not open a charge slot")
+        failed = True
+    if payload.get(HANCHU_KEY_DISCHARGE_POWER) != 0 or payload.get(HANCHU_KEY_CHARGE_POWER) != 0:
+        print(f"ERROR: freeze export should write zero discharge and charge power: {payload.get(HANCHU_KEY_DISCHARGE_POWER)} / {payload.get(HANCHU_KEY_CHARGE_POWER)}")
+        failed = True
+    if payload.get(HANCHU_KEY_WORK_MODE) != HANCHU_WORK_MODE_FOR_SCHEDULE:
+        print("ERROR: the freeze-export slot only runs in User-defined, so the work mode must be written")
+        failed = True
+    # The floor stays the reserve - a frozen export is not an export down to a target.
+    if payload.get(HANCHU_KEY_DISCHARGE_SOC) != 10:
+        print(f"ERROR: freeze export floor {payload.get(HANCHU_KEY_DISCHARGE_SOC)}, expected the 10% reserve")
+        failed = True
+    assert not failed, "test_hanchu_freeze_export_opens_a_discharge_slot_at_zero_power"
+
+
+def test_hanchu_no_rate_signal_adds_no_slot():
+    """Demand mode (both rates set) and an unknown schedule (both zero) open no slot and leave the work mode alone."""
+    failed = False
+    client = ready()
+    client.device_values[SN] = {"soc": 60.0}
+    client.set_mock_clock(12 * 60)
+    for label, plan in (("demand", schedule()), ("unknown", schedule(charge={"power": 0}, export={"power": 0}))):
+        payload = client.build_write_payload(SN, plan)
+        if enabled_slots(payload, HANCHU_KEY_CHARGE_START, HANCHU_KEY_CHARGE_END) or enabled_slots(payload, HANCHU_KEY_DISCHARGE_START, HANCHU_KEY_DISCHARGE_END) or HANCHU_KEY_WORK_MODE in payload:
+            print(f"ERROR: {label} should open no slot: {payload}")
+            failed = True
+    assert not failed, "test_hanchu_no_rate_signal_adds_no_slot"
+
+
 def run_hanchu_control_tests(my_predbat):
     """Run all Hanchu control-logic tests."""
     failed = False
@@ -818,6 +939,10 @@ def run_hanchu_control_tests(my_predbat):
         ("restore_state", test_hanchu_restore_state_rebuilds_the_range_tuples),
         ("empty_payload", test_hanchu_empty_payload_sends_nothing),
         ("overlap", test_hanchu_overlapping_windows_keep_only_one),
+        ("hold_slot", test_hanchu_hold_opens_a_charge_slot_at_zero_power),
+        ("hold_in_window", test_hanchu_hold_inside_a_charge_window_stops_charging_only_at_the_target),
+        ("freeze_export_slot", test_hanchu_freeze_export_opens_a_discharge_slot_at_zero_power),
+        ("no_rate_signal", test_hanchu_no_rate_signal_adds_no_slot),
     ]:
         try:
             if fn():

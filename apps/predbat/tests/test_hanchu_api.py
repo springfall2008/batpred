@@ -233,9 +233,9 @@ def test_hanchu_login_failure_names_the_credentials():
 
 
 def test_hanchu_password_is_never_logged():
-    """The trace masks the password, and nothing else in the envelope."""
+    """The trace masks the password and the account e-mail, and nothing else in the envelope."""
     failed = False
-    client = MockHanchu(password="super-secret-password")
+    client = MockHanchu(account="owner@example.com", password="super-secret-password")
     with patched_session([(200, envelope(data="tok-abc123"))]):
         run_async_local(client.fetch_token())
     joined = "\n".join(client.log_messages)
@@ -244,6 +244,10 @@ def test_hanchu_password_is_never_logged():
         failed = True
     if "tok-abc123" in joined:
         print("ERROR: the token reached the log")
+        failed = True
+    # Testers post these logs on GitHub, so the account e-mail is masked too.
+    if "owner@example.com" in joined:
+        print("ERROR: the account e-mail reached the log")
         failed = True
     # The trace has to remain useful: nobody on the project has Hanchu hardware, so a tester's log
     # is the only evidence there is.
@@ -860,6 +864,46 @@ def test_hanchu_generator_fields_are_read():
     assert not failed, "test_hanchu_generator_fields_are_read"
 
 
+def test_hanchu_power_limit_follows_a_higher_value_the_device_holds():
+    """The menu's 0-5000 W power range is shared by 2-10 kW models, so a higher value the device already holds wins.
+
+    Hardware (batpred#5305): a HESS-HY-S-6.0K, nameplate 6000 W grid output, holds DSCHG_PWR_LMT 6000
+    while its menu says 0-5000. Taken at the menu's word, inverter_limit came out at 5000 and every
+    discharge would be capped below what the inverter does.
+    """
+    failed = False
+    client = ready_client()
+    sn = "HC240100001"
+    client.device_ranges[sn] = {"CHG_PWR_LMT": (0, 5000), "DSCHG_PWR_LMT": (0, 5000)}
+    client.device_settings[sn] = {"CHG_PWR_LMT": "5000", "DSCHG_PWR_LMT": "6000", "DSCHG_BAT_SOC_LMT": "10.00"}
+    ranges = client.ranges_for(sn)
+    if ranges.get("DSCHG_PWR_LMT") != (0, 6000) or ranges.get("CHG_PWR_LMT") != (0, 5000):
+        print(f"ERROR: power ranges {ranges.get('CHG_PWR_LMT')} / {ranges.get('DSCHG_PWR_LMT')}, expected 0-5000 / 0-6000")
+        failed = True
+    if client.inverter_limit(sn) != 6000.0 or client.battery_rate_max(sn) != 5000.0:
+        print(f"ERROR: inverter_limit {client.inverter_limit(sn)} battery_rate_max {client.battery_rate_max(sn)}, expected 6000 / 5000")
+        failed = True
+    client.ranges_for(sn)
+    raised = [message for message in client.log_messages if "above the menu" in message]
+    if len(raised) != 1 or "6000" not in raised[0]:
+        print(f"ERROR: the raise should be logged once, naming 6000: {raised}")
+        failed = True
+    # A held value below the menu's maximum leaves the menu's range alone.
+    client.device_settings[sn]["DSCHG_PWR_LMT"] = "3000"
+    if client.ranges_for(sn).get("DSCHG_PWR_LMT") != (0, 5000):
+        print(f"ERROR: a lower held value changed the range: {client.ranges_for(sn).get('DSCHG_PWR_LMT')}")
+        failed = True
+    # Each published power control advertises its own direction's maximum.
+    client.device_settings[sn]["DSCHG_PWR_LMT"] = "6000"
+    run_async_local(client.publish_schedule_settings_ha(sn))
+    charge = client.published.get(client._control_name("number", sn, "battery_schedule_charge_power"), {}).get("attributes", {})
+    export = client.published.get(client._control_name("number", sn, "battery_schedule_export_power"), {}).get("attributes", {})
+    if charge.get("max") != 5000 or export.get("max") != 6000:
+        print(f"ERROR: power controls advertise charge max {charge.get('max')} export max {export.get('max')}, expected 5000 / 6000")
+        failed = True
+    assert not failed, "test_hanchu_power_limit_follows_a_higher_value_the_device_holds"
+
+
 def test_hanchu_config_read_is_one_call_per_device():
     """Nineteen keys are read in ONE iotGet - the same batching rationale as the write path."""
     failed = False
@@ -977,6 +1021,7 @@ def run_hanchu_api_tests(my_predbat):
         ("offline", test_hanchu_offline_device_is_reported),
         ("session_reuse", test_hanchu_http_session_is_reused_and_closed),
         ("generator", test_hanchu_generator_fields_are_read),
+        ("held_power_limit", test_hanchu_power_limit_follows_a_higher_value_the_device_holds),
         ("transport_failure", test_hanchu_transport_failure_is_retried_then_reported),
         ("no_credentials", test_hanchu_run_refuses_to_start_without_credentials),
         ("retry_delay_default", test_hanchu_retry_delay_default),

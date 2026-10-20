@@ -452,10 +452,10 @@ HANCHU_FAILED_WRITE_INTERVAL = 30
 # because the inverter may no longer match the plan and may need stepping in on by hand.
 HANCHU_WRITE_FAILURE_NOTIFY = 3
 
-# Keys never written to the log. The login body's password, and the token in every header and in
-# both auth responses. `msg`, `code` and `data` for non-auth endpoints are always logged: nobody on
+# Keys never written to the log. The login body's password and account e-mail (testers post these
+# logs on GitHub), and the token in every header and in both auth responses. `msg`, `code` and `data` for non-auth endpoints are always logged: nobody on
 # the project has Hanchu hardware, so a tester's log is the only evidence available.
-HANCHU_DEBUG_REDACT_KEYS = ("pwd", "password", "token", "access-token", "accessToken")
+HANCHU_DEBUG_REDACT_KEYS = ("account", "pwd", "password", "token", "access-token", "accessToken")
 
 
 def seconds_to_hhmmss(value):
