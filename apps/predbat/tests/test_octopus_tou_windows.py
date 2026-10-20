@@ -155,6 +155,7 @@ async def test_octopus_tou_windows(my_predbat):
     - Test 11: an hour of 24 is normalised to 0, matching how basic_rates parses times
     - Test 12: an IOG meter's TOU labels never become a recurring schedule (issue: phantom slot)
     - Test 13: a TOU-derived window on a local wall-clock tariff holds across a DST change
+    - Test 14: the hard-wired GO window keeps 8 contiguous nights across both clock changes
     """
     print("\n**** Running Octopus TOU window tests ****")
     failed = False
@@ -407,12 +408,12 @@ async def test_octopus_tou_windows(my_predbat):
     _stub_tou(api13, [(1410, 1440), (0, 270)])  # 23:30-04:30 UTC, which is 00:30-05:30 BST
     all_slots13 = _night_slots_local(await _run(api13, base_url, "E-1R-GO-VAR-22-10-14-M"), 7.00)
 
-    # The changeover day itself is excluded: a window that spans the 02:00 change comes out an hour
-    # short, because the schedule builder adds a timedelta to an already-localised midnight and so
-    # keeps that day's opening UTC offset for the whole window. That is pre-existing behaviour of
-    # every local-anchored window - the hard-wired GO window produces the same two entries on this
-    # date with no TOU labels involved at all - so it is not what this test is pinning down.
-    slots13 = [(s, e) for s, e in all_slots13 if (s.month, s.day) != (10, 25)]
+    # The changeover day is included: the window opens at 00:30 BST and closes at 05:30 GMT.
+    slots13 = all_slots13
+    nights13 = [(s.month, s.day) for s, _ in slots13]
+    if len(nights13) != len(set(nights13)) or (10, 25) not in nights13 or (10, 26) not in nights13:
+        print("ERROR: expected one night per date including 25 and 26 Oct, got {}".format(nights13))
+        failed = True
 
     drifted = [(s, e) for s, e in slots13 if (s.hour, s.minute) != (0, 30) or (e.hour, e.minute) != (5, 30)]
     if not slots13:
@@ -423,5 +424,38 @@ async def test_octopus_tou_windows(my_predbat):
         failed = True
     else:
         print("PASS: TOU-derived window stays 00:30-05:30 local on both sides of the DST change")
+
+    # ------------------------------------------------------------------
+    # Test 14: the hard-wired GO window across both clock changes
+    #
+    # Adding days to a localised midnight keeps the starting UTC offset, so across the autumn change
+    # the last day of the schedule landed on the day before and the 8-day schedule lost an entry.
+    # ------------------------------------------------------------------
+    for label14, now14, changeover14 in (
+        ("autumn", LONDON.localize(datetime(2026, 10, 20, 9, 0, 0)), (10, 25)),
+        ("spring", LONDON.localize(datetime(2026, 3, 25, 9, 0, 0)), (3, 29)),
+    ):
+        print("\n*** Test 14: hard-wired GO window across the {} clock change ***".format(label14))
+        api14 = _make_api(my_predbat, day_rate=29.14, night_rate=7.00, now=now14)
+        _stub_tou_unavailable(api14)
+        mdata14 = await _run(api14, base_url, "E-1R-GO-VAR-22-10-14-M")
+        slots14 = _night_slots_local(mdata14, 7.00)
+        nights14 = [(s.month, s.day) for s, _ in slots14]
+        drifted14 = [(s, e) for s, e in slots14 if (s.hour, s.minute) != (0, 30) or (e.hour, e.minute) != (5, 30)]
+        gaps14 = [index for index in range(len(mdata14) - 1) if datetime.strptime(mdata14[index]["valid_to"], DATE_TIME_STR_FORMAT) != datetime.strptime(mdata14[index + 1]["valid_from"], DATE_TIME_STR_FORMAT)]
+        if len(mdata14) != 16:
+            print("ERROR: {}: expected 16 entries (8 days), got {} - nights {}".format(label14, len(mdata14), nights14))
+            failed = True
+        elif len(nights14) != len(set(nights14)) or changeover14 not in nights14:
+            print("ERROR: {}: expected one night per date including the changeover, got {}".format(label14, nights14))
+            failed = True
+        elif drifted14:
+            print("ERROR: {}: night window drifted off 00:30-05:30 local, e.g. {}".format(label14, [(s.strftime("%d %H:%M"), e.strftime("%H:%M")) for s, e in drifted14[:3]]))
+            failed = True
+        elif gaps14:
+            print("ERROR: {}: schedule is not contiguous at entries {}".format(label14, gaps14))
+            failed = True
+        else:
+            print("PASS: {}: 8 nights at 00:30-05:30 local, contiguous, changeover night included".format(label14))
 
     return failed

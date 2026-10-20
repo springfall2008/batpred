@@ -11,7 +11,8 @@
 import asyncio
 import json
 from datetime import datetime, timezone, timedelta
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, PropertyMock
+import pytz
 from octopus import OctopusAPI, DATE_TIME_STR_FORMAT
 from const import TIME_FORMAT_OCTOPUS
 from utils import dp4
@@ -211,8 +212,13 @@ async def test_download_octopus_url(my_predbat):
 def _test_async_get_day_night_rates_wrapper(my_predbat):
     """
     Wrapper to run the async test function for day/night rates
+
+    The clock is pinned clear of a DST change: the 8-day schedule is built from the component's own
+    now_utc_exact, so an unpinned run inside a week of the clocks changing sees a different shape.
     """
-    return asyncio.run(test_async_get_day_night_rates(my_predbat))
+    pinned_now = pytz.timezone("Europe/London").localize(datetime(2024, 7, 1, 12, 0, 0))
+    with patch.object(OctopusAPI, "now_utc_exact", new_callable=PropertyMock, return_value=pinned_now):
+        return asyncio.run(test_async_get_day_night_rates(my_predbat))
 
 
 async def test_async_get_day_night_rates(my_predbat):

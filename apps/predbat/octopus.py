@@ -2017,21 +2017,30 @@ class OctopusAPI(ComponentBase):
             # British Summer Time; GO and Intelligent GO are local wall-clock windows and must not
             # move with the seasons. A hand-configured schedule may mix the two.
             utc_midnight = self.now_utc_exact.astimezone(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-            local_midnight = self.now_utc_exact.replace(hour=0, minute=0, second=0, microsecond=0)
+            local_tz = self.now_utc_exact.tzinfo
+            local_midnight_naive = self.now_utc_exact.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+
+            def localise(wall_clock):
+                """Attach the local zone to a naive wall-clock time, taking the offset in force at that time"""
+                if hasattr(local_tz, "localize"):
+                    return local_tz.localize(wall_clock)
+                return wall_clock.replace(tzinfo=local_tz)
 
             # Build the off-peak intervals over the 8-day schedule, starting 2 days back. A ninth
             # day is generated so the last day-rate gap has a following off-peak window to end at.
+            # Local windows are worked out in naive wall-clock time and only then localised, so each
+            # end takes the offset in force at that moment. Adding days or minutes to an aware
+            # datetime keeps the original offset, which across the autumn clock change put two nights
+            # on the same date and dropped the last day of the schedule.
             night_intervals = []
             for day in range(-2, 7):
                 utc_base = utc_midnight + timedelta(days=day)
-                local_base = local_midnight + timedelta(days=day)
-                # Re-normalise the local anchor so the wall-clock time holds across a DST change,
-                # since adding days to a localised datetime keeps the original UTC offset.
-                if hasattr(local_base.tzinfo, "normalize"):
-                    local_base = local_base.tzinfo.normalize(local_base).replace(hour=0, minute=0, second=0, microsecond=0)
+                local_base_naive = local_midnight_naive + timedelta(days=day)
                 for start_minute, end_minute, window_is_utc in windows:
-                    base = utc_base if window_is_utc else local_base
-                    night_intervals.append((base + timedelta(minutes=start_minute), base + timedelta(minutes=end_minute)))
+                    if window_is_utc:
+                        night_intervals.append((utc_base + timedelta(minutes=start_minute), utc_base + timedelta(minutes=end_minute)))
+                    else:
+                        night_intervals.append((localise(local_base_naive + timedelta(minutes=start_minute)), localise(local_base_naive + timedelta(minutes=end_minute))))
             night_intervals.sort()
 
             # The day rate fills each gap between consecutive off-peak windows, which generalises to
