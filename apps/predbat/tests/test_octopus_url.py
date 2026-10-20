@@ -11,7 +11,8 @@
 import asyncio
 import json
 from datetime import datetime, timezone, timedelta
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, PropertyMock
+import pytz
 from octopus import OctopusAPI, DATE_TIME_STR_FORMAT
 from const import TIME_FORMAT_OCTOPUS
 from utils import dp4
@@ -211,8 +212,13 @@ async def test_download_octopus_url(my_predbat):
 def _test_async_get_day_night_rates_wrapper(my_predbat):
     """
     Wrapper to run the async test function for day/night rates
+
+    The clock is pinned clear of a DST change: the 8-day schedule is built from the component's own
+    now_utc_exact, so an unpinned run inside a week of the clocks changing sees a different shape.
     """
-    return asyncio.run(test_async_get_day_night_rates(my_predbat))
+    pinned_now = pytz.timezone("Europe/London").localize(datetime(2024, 7, 1, 12, 0, 0))
+    with patch.object(OctopusAPI, "now_utc_exact", new_callable=PropertyMock, return_value=pinned_now):
+        return asyncio.run(test_async_get_day_night_rates(my_predbat))
 
 
 async def test_async_get_day_night_rates(my_predbat):
@@ -234,9 +240,7 @@ async def test_async_get_day_night_rates(my_predbat):
     # Create API instance
     api = OctopusAPI(my_predbat, key="", account_id="", automatic=False)
 
-    # Set a fixed current time for predictable testing via my_predbat mock
-    fixed_time = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
-    my_predbat.now_utc_exact = fixed_time
+    # The clock is pinned by the wrapper, _test_async_get_day_night_rates_wrapper
 
     # Test 1: Successful fetch with valid day and night rates
     print("\n*** Test 1: Successful fetch with valid day and night rates ***")
@@ -1145,6 +1149,118 @@ async def test_async_find_tariffs(my_predbat):
         failed = True
     else:
         print("PASS: Found both import/export tariffs and preserved existing data")
+
+    # GH#5595: an export agreement goes live before Octopus attaches a meter to the export MPAN
+    import_meterpoint = {
+        "mpan": "2324000000001",
+        "meters": [{"activeFrom": "2024-01-01", "activeTo": None, "smartImportElectricityMeter": {"deviceId": "IMPORT-DEVICE"}, "smartExportElectricityMeter": None}],
+        "agreements": [{"validFrom": "2024-01-01T00:00:00+00:00", "validTo": None, "tariff": {"tariffCode": "E-1R-IOG-24-01-01-A", "productCode": "IOG-24-01-01"}}],
+    }
+
+    def unmetered_export_meterpoint(valid_to=None, meters=None):
+        """Build an export meterPoint with an Agile Outgoing agreement and the given meters list."""
+        return {
+            "mpan": "2394000000002",
+            "meters": meters if meters is not None else [],
+            "agreements": [{"validFrom": "2024-03-01T00:00:00+00:00", "validTo": valid_to, "tariff": {"tariffCode": "E-1R-AGILE-OUTGOING-19-05-13-M", "productCode": "AGILE-OUTGOING-19-05-13"}}],
+        }
+
+    # Test 8: Active export agreement on a meterPoint with no meters - export tariff with device ID None
+    print("\nTest 8: Active export agreement with no meter attached")
+    api = OctopusAPI(my_predbat, key="", account_id="", automatic=False)
+    api.tariffs = {}
+    api.account_data = {"account": {"electricityAgreements": [{"meterPoint": unmetered_export_meterpoint()}, {"meterPoint": import_meterpoint}], "gasAgreements": []}}
+
+    with patch.object(type(api), "now_utc_exact", new_callable=lambda: property(lambda self: fixed_time)):
+        result = await api.async_find_tariffs()
+
+    if "export" not in result:
+        print("ERROR: Expected 'export' key for unmetered export agreement, got: {}".format(list(result.keys())))
+        failed = True
+    elif result["export"]["tariffCode"] != "E-1R-AGILE-OUTGOING-19-05-13-M":
+        print("ERROR: Expected export tariffCode 'E-1R-AGILE-OUTGOING-19-05-13-M', got: {}".format(result["export"]["tariffCode"]))
+        failed = True
+    elif result["export"]["deviceID"] is not None:
+        print("ERROR: Expected export deviceID None, got: {}".format(result["export"]["deviceID"]))
+        failed = True
+    elif result["export"]["mpan"] != "2394000000002":
+        print("ERROR: Expected export mpan '2394000000002', got: {}".format(result["export"]["mpan"]))
+        failed = True
+    elif result.get("import", {}).get("deviceID") != "IMPORT-DEVICE":
+        print("ERROR: Expected import tariff alongside unmetered export, got: {}".format(result.get("import")))
+        failed = True
+    else:
+        print("PASS: Unmetered export agreement produced an export tariff with device ID None")
+
+    # Test 9: Expired export agreement on a meterPoint with no meters - no export tariff
+    print("\nTest 9: Expired export agreement with no meter attached")
+    api = OctopusAPI(my_predbat, key="", account_id="", automatic=False)
+    api.tariffs = {}
+    api.account_data = {"account": {"electricityAgreements": [{"meterPoint": unmetered_export_meterpoint(valid_to="2024-03-10T00:00:00+00:00")}], "gasAgreements": []}}
+
+    with patch.object(type(api), "now_utc_exact", new_callable=lambda: property(lambda self: fixed_time)):
+        result = await api.async_find_tariffs()
+
+    if result != {}:
+        print("ERROR: Expected empty dict for expired unmetered export agreement, got: {}".format(result))
+        failed = True
+    else:
+        print("PASS: Expired unmetered export agreement ignored")
+
+    # Test 10: Import and gas meterPoints with no meters are still skipped
+    print("\nTest 10: Import and gas agreements with no meter attached are skipped")
+    api = OctopusAPI(my_predbat, key="", account_id="", automatic=False)
+    api.tariffs = {}
+    api.account_data = {
+        "account": {
+            "electricityAgreements": [{"meterPoint": {"mpan": "2324000000009", "meters": [], "agreements": [{"validFrom": "2024-01-01T00:00:00+00:00", "validTo": None, "tariff": {"tariffCode": "E-1R-AGILE-24-01-01-A", "productCode": "AGILE-24-01-01"}}]}}],
+            "gasAgreements": [{"meterPoint": {"meters": [], "agreements": [{"validFrom": "2024-01-01T00:00:00+00:00", "validTo": None, "tariff": {"tariffCode": "G-1R-VAR-24-01-01-A", "productCode": "VAR-24-01-01"}}]}}],
+        }
+    }
+
+    with patch.object(type(api), "now_utc_exact", new_callable=lambda: property(lambda self: fixed_time)):
+        result = await api.async_find_tariffs()
+
+    if result != {}:
+        print("ERROR: Expected empty dict for unmetered import/gas agreements, got: {}".format(result))
+        failed = True
+    else:
+        print("PASS: Unmetered import and gas agreements skipped")
+
+    # Test 11: Export meter gets linked later - tariff keys stay stable, reconfigure only fires when export first appears
+    print("\nTest 11: Unmetered export becomes metered without a second reconfigure")
+    api = OctopusAPI(my_predbat, key="", account_id="", automatic=True)
+    api.tariffs = {}
+    api.automatic_config = Mock()
+    api.refresh_discovery = Mock()
+
+    with patch.object(type(api), "now_utc_exact", new_callable=lambda: property(lambda self: fixed_time)):
+        api.account_data = {"account": {"electricityAgreements": [{"meterPoint": import_meterpoint}], "gasAgreements": []}}
+        await api.async_find_tariffs()
+        api.account_data = {"account": {"electricityAgreements": [{"meterPoint": unmetered_export_meterpoint()}, {"meterPoint": import_meterpoint}], "gasAgreements": []}}
+        result_unmetered = await api.async_find_tariffs()
+        reconfigure_after_unmetered = api.automatic_config.call_count
+        linked_meters = [{"activeFrom": "2024-03-10", "activeTo": None, "smartExportElectricityMeter": {"deviceId": "EXPORT-LINKED"}, "smartImportElectricityMeter": None}]
+        api.account_data = {"account": {"electricityAgreements": [{"meterPoint": unmetered_export_meterpoint(meters=linked_meters)}, {"meterPoint": import_meterpoint}], "gasAgreements": []}}
+        result_linked = await api.async_find_tariffs()
+
+    if set(result_unmetered.keys()) != {"import", "export"}:
+        print("ERROR: Expected import and export keys while export is unmetered, got: {}".format(list(result_unmetered.keys())))
+        failed = True
+    elif reconfigure_after_unmetered != 1:
+        print("ERROR: Expected one reconfigure when the unmetered export first appeared, got {}".format(reconfigure_after_unmetered))
+        failed = True
+    elif set(result_linked.keys()) != {"import", "export"}:
+        print("ERROR: Expected import and export keys after meter linked, got: {}".format(list(result_linked.keys())))
+        failed = True
+    elif result_linked["export"]["deviceID"] != "EXPORT-LINKED":
+        print("ERROR: Expected linked export deviceID 'EXPORT-LINKED', got: {}".format(result_linked["export"]["deviceID"]))
+        failed = True
+    elif api.automatic_config.call_count != 1:
+        print("ERROR: Expected no further reconfigure once the meter linked, got {} total".format(api.automatic_config.call_count))
+        failed = True
+    else:
+        print("PASS: Export tariff keys stable across meter linking, single reconfigure")
 
     if not failed:
         print("\n**** All async_find_tariffs tests PASSED ****")

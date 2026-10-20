@@ -1360,8 +1360,8 @@ class Fetch:
         """
         Fetch the PV forecast, compute the dawn light/dark split from it, and publish the dawn
         binary_sensor - as one call so the ordering that #4699 regressed on (the split must be
-        computed from a freshly-fetched forecast, not the empty dict fetch_sensor_data() resets it
-        to at the top of each cycle) can't drift apart again. Published unconditionally regardless
+        computed from a freshly-fetched forecast, not the one left over from the previous cycle)
+        can't drift apart again. Published unconditionally regardless
         of whether import rates currently exist, so the sensor never goes stale.
 
         Returns:
@@ -1452,9 +1452,9 @@ class Fetch:
         self.load_minutes_age = 0
         self.load_forecast = {}
         self.load_forecast_array = []
-        self.pv_forecast_minute = {}
-        self.pv_forecast_minute10 = {}
-        self.pv_forecast_minute90 = {}
+        # The PV forecasts are not reset here: fetch_pv_forecast_and_dawn() below replaces all three
+        # at once, and until then a debug dump taken mid-fetch keeps last cycle's forecast rather
+        # than capturing it empty (#4317)
         self.pv_light_dark = {}
         # See Plan.refresh_pv_forecast_minute90(): both series are re-fetched together below, so no
         # earlier pair of signatures may be held against them
@@ -1742,6 +1742,8 @@ class Fetch:
         self.rate_import = import_rates
         # A charger's own schedule is costed at the tariff, which the car slots were built too early to know
         self.reprice_charger_schedule_slots()
+        # Needs this cycle's dispatch decision and the final io_adjusted
+        io_confirmed_changed = self.io_confirmed_credit_update(save=save)
 
         # Replicate and scan export rates
         if export_rates:
@@ -1781,8 +1783,9 @@ class Fetch:
 
         # Needed here, ahead of "Find charging windows" below, because calc_pv_light_dark() reads
         # self.pv_forecast_minute to locate dawn - it was previously fetched further down in this
-        # function, after the dawn calculation had already run against the freshly-reset empty dict
-        # from the top of fetch_sensor_data(), so the dawn split could never actually trigger (#4699).
+        # function, after the dawn calculation had already run against an empty dict, so the dawn
+        # split could never actually trigger (#4699). Anything that reads it must still come after
+        # this line: before it, the attribute holds last cycle's forecast (#4317).
         pv_light_dark = self.fetch_pv_forecast_and_dawn(save=save)
 
         # Find discharging windows
@@ -1869,7 +1872,7 @@ class Fetch:
         else:
             self.load_inday_adjustment = 1.0
 
-        force_replan = dynamic_load_car_changed or octopus_surplus_changed
+        force_replan = dynamic_load_car_changed or octopus_surplus_changed or io_confirmed_changed
         # Compare on the change-detection signature, not the raw slots, so the per-cycle re-clocking
         # of an in-progress dispatch (start advanced to now, energy scaled to remaining time) does not
         # force a replan every cycle while a slot is active - only genuine slot changes do
