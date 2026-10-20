@@ -19,7 +19,7 @@ from unittest.mock import patch, PropertyMock
 
 import pytz
 
-from octopus import OctopusAPI, DATE_TIME_STR_FORMAT, _night_time_to_minutes, _windows_from_night_times
+from octopus import OctopusAPI, DATE_TIME_STR_FORMAT, _night_time_to_minutes, _windows_from_night_times, _localise_wall_clock
 
 
 LONDON = pytz.timezone("Europe/London")
@@ -157,6 +157,7 @@ async def test_octopus_tou_windows(my_predbat):
     - Test 13: a TOU-derived window on a local wall-clock tariff holds across a DST change
     - Test 14: the hard-wired GO window keeps 8 contiguous nights across both clock changes
     - Test 15: IOG and manual windows in the changeover hour stay contiguous and never invert
+    - Test 16: _localise_wall_clock directly, and a window wholly inside the skipped hour
     """
     print("\n**** Running Octopus TOU window tests ****")
     failed = False
@@ -476,12 +477,16 @@ async def test_octopus_tou_windows(my_predbat):
         print("\n*** Test 15: {} ***".format(label15))
         api15 = _make_api(my_predbat, day_rate=29.14, night_rate=7.00, now=now15)
         _stub_tou_unavailable(api15)
+        saved15 = my_predbat.args.get("octopus_night_times")
         if manual15:
             my_predbat.args["octopus_night_times"] = manual15
         try:
             mdata15 = await _run(api15, base_url, tariff15)
         finally:
-            my_predbat.args.pop("octopus_night_times", None)
+            if saved15 is None:
+                my_predbat.args.pop("octopus_night_times", None)
+            else:
+                my_predbat.args["octopus_night_times"] = saved15
         entries15 = [(datetime.strptime(entry["valid_from"], DATE_TIME_STR_FORMAT), datetime.strptime(entry["valid_to"], DATE_TIME_STR_FORMAT)) for entry in mdata15]
         inverted15 = [(s, e) for s, e in entries15 if e <= s]
         gaps15 = [index for index in range(len(entries15) - 1) if entries15[index][1] != entries15[index + 1][0]]
@@ -493,5 +498,51 @@ async def test_octopus_tou_windows(my_predbat):
             failed = True
         else:
             print("PASS: {}: changeover night runs {} - {} UTC, schedule contiguous".format(label15, want_start15.strftime("%d %H:%M"), want_end15.strftime("%d %H:%M")))
+
+    # ------------------------------------------------------------------
+    # Test 16: _localise_wall_clock on its own, at both changes and for a non-pytz zone
+    # ------------------------------------------------------------------
+    print("\n*** Test 16: _localise_wall_clock resolves repeated and skipped wall-clock times ***")
+    cases16 = [
+        ("before the autumn change", LONDON, datetime(2026, 10, 25, 0, 59), datetime(2026, 10, 24, 23, 59, tzinfo=timezone.utc)),
+        ("repeated autumn hour takes the first occurrence", LONDON, datetime(2026, 10, 25, 1, 30), datetime(2026, 10, 25, 0, 30, tzinfo=timezone.utc)),
+        ("after the autumn change", LONDON, datetime(2026, 10, 25, 2, 0), datetime(2026, 10, 25, 2, 0, tzinfo=timezone.utc)),
+        ("before the spring change", LONDON, datetime(2026, 3, 29, 0, 59), datetime(2026, 3, 29, 0, 59, tzinfo=timezone.utc)),
+        ("skipped spring hour moves to the jump", LONDON, datetime(2026, 3, 29, 1, 0), datetime(2026, 3, 29, 1, 0, tzinfo=timezone.utc)),
+        ("late in the skipped spring hour moves to the jump", LONDON, datetime(2026, 3, 29, 1, 59, 30), datetime(2026, 3, 29, 1, 0, tzinfo=timezone.utc)),
+        ("after the spring change", LONDON, datetime(2026, 3, 29, 2, 15), datetime(2026, 3, 29, 1, 15, tzinfo=timezone.utc)),
+        ("non-pytz zone is attached as it stands", timezone.utc, datetime(2026, 10, 25, 1, 30), datetime(2026, 10, 25, 1, 30, tzinfo=timezone.utc)),
+    ]
+    for label16, tz16, wall16, want16 in cases16:
+        got16 = _localise_wall_clock(tz16, wall16)
+        if got16 != want16:
+            print("ERROR: {}: {} localised to {}, expected {}".format(label16, wall16, got16, want16))
+            failed = True
+        else:
+            print("PASS: {}: {} -> {} UTC".format(label16, wall16.strftime("%d %b %H:%M:%S"), got16.astimezone(timezone.utc).strftime("%H:%M")))
+
+    # A manual window lying wholly in the skipped hour is dropped that night rather than emitted
+    # with zero length, and the day rate runs on across it.
+    api16 = _make_api(my_predbat, day_rate=29.14, night_rate=7.00, now=LONDON.localize(datetime(2026, 3, 25, 9, 0, 0)))
+    _stub_tou_unavailable(api16)
+    saved16 = my_predbat.args.get("octopus_night_times")
+    my_predbat.args["octopus_night_times"] = [{"start": "01:00:00", "end": "01:30:00"}]
+    try:
+        mdata16 = await _run(api16, base_url, eco7)
+    finally:
+        if saved16 is None:
+            my_predbat.args.pop("octopus_night_times", None)
+        else:
+            my_predbat.args["octopus_night_times"] = saved16
+    entries16 = [(datetime.strptime(entry["valid_from"], DATE_TIME_STR_FORMAT), datetime.strptime(entry["valid_to"], DATE_TIME_STR_FORMAT)) for entry in mdata16]
+    nights16 = [s.astimezone(LONDON).day for s, _ in _night_slots_utc(mdata16, 7.00)]
+    if any(e <= s for s, e in entries16) or any(entries16[index][1] != entries16[index + 1][0] for index in range(len(entries16) - 1)):
+        print("ERROR: skipped-hour window left an empty or broken schedule: {}".format([(s.strftime("%d %H:%M%z"), e.strftime("%d %H:%M%z")) for s, e in entries16]))
+        failed = True
+    elif 29 in nights16 or 28 not in nights16 or 30 not in nights16:
+        print("ERROR: skipped-hour window should be dropped on 29 Mar only, got nights on {}".format(nights16))
+        failed = True
+    else:
+        print("PASS: a window wholly inside the skipped hour is dropped on 29 Mar, schedule contiguous")
 
     return failed

@@ -629,6 +629,26 @@ def _tou_window_to_local(start_minute, end_minute, utc_offset_minutes):
     return start_minute, end_minute
 
 
+def _localise_wall_clock(local_tz, wall_clock):
+    """
+    Attach a zone to a naive wall-clock time, taking the offset in force at that time.
+
+    For a pytz zone, a time in the repeated autumn hour takes its first occurrence and one in the
+    skipped spring hour moves to the moment the clocks jump, so later wall-clock times never map
+    to earlier instants and no interval can invert across a change. Any other tzinfo is attached
+    as it stands.
+    """
+    if not hasattr(local_tz, "localize"):
+        return wall_clock.replace(tzinfo=local_tz)
+    while True:
+        try:
+            return local_tz.localize(wall_clock, is_dst=None)
+        except pytz.exceptions.AmbiguousTimeError:
+            return local_tz.localize(wall_clock, is_dst=True)
+        except pytz.exceptions.NonExistentTimeError:
+            wall_clock = wall_clock.replace(second=0, microsecond=0) + timedelta(minutes=1)
+
+
 def _tou_windows_from_measurements(response_data):
     """
     Derive the meter's off-peak windows from measurement TOU bucket labels.
@@ -2020,24 +2040,6 @@ class OctopusAPI(ComponentBase):
             local_tz = self.now_utc_exact.tzinfo
             local_midnight_naive = self.now_utc_exact.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
 
-            def localise(wall_clock):
-                """
-                Attach the local zone to a naive wall-clock time, taking the offset in force at that time.
-
-                A time in the repeated autumn hour takes its first occurrence, and one in the skipped
-                spring hour moves to the moment the clocks jump, so later wall-clock times never map to
-                earlier instants and no interval can invert across a change.
-                """
-                if hasattr(local_tz, "localize"):
-                    while True:
-                        try:
-                            return local_tz.localize(wall_clock, is_dst=None)
-                        except pytz.exceptions.AmbiguousTimeError:
-                            return local_tz.localize(wall_clock, is_dst=True)
-                        except pytz.exceptions.NonExistentTimeError:
-                            wall_clock = wall_clock.replace(second=0, microsecond=0) + timedelta(minutes=1)
-                return wall_clock.replace(tzinfo=local_tz)
-
             # Build the off-peak intervals over the 8-day schedule, starting 2 days back. A ninth
             # day is generated so the last day-rate gap has a following off-peak window to end at.
             # Local windows are worked out in naive wall-clock time and only then localised, so each
@@ -2052,7 +2054,11 @@ class OctopusAPI(ComponentBase):
                     if window_is_utc:
                         night_intervals.append((utc_base + timedelta(minutes=start_minute), utc_base + timedelta(minutes=end_minute)))
                     else:
-                        night_intervals.append((localise(local_base_naive + timedelta(minutes=start_minute)), localise(local_base_naive + timedelta(minutes=end_minute))))
+                        night_start = _localise_wall_clock(local_tz, local_base_naive + timedelta(minutes=start_minute))
+                        night_end = _localise_wall_clock(local_tz, local_base_naive + timedelta(minutes=end_minute))
+                        # A window lying wholly in the skipped spring hour never happens that night
+                        if night_end > night_start:
+                            night_intervals.append((night_start, night_end))
             night_intervals.sort()
 
             # The day rate fills each gap between consecutive off-peak windows, which generalises to
