@@ -73,6 +73,7 @@ OCTOPUS_SLOT_MAX_DEFAULT = 48  # 24 hours with 30-minute slots
 OCTOPUS_SLOT_MAX_CAPPED = 12  # 6 hours with 30-minute slots
 OCTOPUS_SLOT_MAX_MINUTES = 30  # octopus_slot_max is set in 30-minute slots, the cap itself is counted in dispatch minutes (#5510)
 IO_RATE_TOLERANCE = 0.01  # A dispatch lowers a rate by pence; anything closer is rate_min_base's dp2 rounding against the unrounded tariff feed (#5392)
+OCTOPUS_SLOT_MIN_MINUTES = 5  # Shorter dispatches are only low rate where the car was seen charging (dispatch_too_short())
 
 # Per-device settings read from the Octopus intelligent settings query. Kept as a list so a poll
 # whose settings query fails can carry the previous values forward rather than dropping the device.
@@ -3451,7 +3452,7 @@ class Octopus:
 
         return start_minutes, end_minutes, kwh, source, location
 
-    def dispatch_billed_off_peak(self, source, location, end_minutes):
+    def dispatch_billed_off_peak(self, car_n, source, location, start_minutes, end_minutes, held=False):
         """
         Decide whether an Octopus Intelligent dispatch should be priced at the off-peak rate.
 
@@ -3476,9 +3477,17 @@ class Octopus:
         rate_max_base. That is deliberate: Octopus's 6-hour guarantee is a daily allowance and a
         completed dispatch consumes it like any other.
 
+        A dispatch too short to trust (see dispatch_too_short()) is not eligible either, completed or not:
+        it was never priced cheap while it was to come, so it cannot step the day's cost up once it is over.
+        A held half hour (octopus_held_dispatches()) is exempt: it passed this test when it was seen running,
+        and the one in progress only runs to now, so it can be any length.
+
+        :param car_n: Car the dispatch belongs to
         :param source: Dispatch source, e.g. smart-charge, bump-charge, BOOST or charger-schedule
         :param location: Dispatch location label - AT_HOME, AWAY, UNABLE_TO_IDENTIFY or blank
-        :param end_minutes: Dispatch end time in minutes from midnight
+        :param start_minutes: Dispatch start time in minutes from midnight - the dispatch's own, not a trimmed piece of it
+        :param end_minutes: Dispatch end time in minutes from midnight - likewise
+        :param held: True for a held half hour from octopus_held_dispatches()
         :return: True if the dispatch is eligible for the off-peak rate
         """
         # Ignore bump-charge slots as their cost won't change
@@ -3487,9 +3496,39 @@ class Octopus:
         # A charger's own schedule on a tariff with no dispatch rate: car load only, never a cheap slot
         if source == DISPATCH_SOURCE_CHARGER_SCHEDULE:
             return False
+        if not held and self.dispatch_too_short(car_n, start_minutes, end_minutes):
+            return False
         if end_minutes <= self.minutes_now:
             return True
         return not location or location == "AT_HOME"
+
+    def dispatch_too_short(self, car_n, start_minutes, end_minutes):
+        """
+        Whether an Octopus Intelligent dispatch is too short to be trusted as off-peak.
+
+        Octopus now issues dispatches as short as one minute. A car is unlikely to start charging in one,
+        yet rounded out to its half hour such a dispatch would have the planner charge the house battery at
+        the cheap rate for thirty minutes. So a dispatch shorter than OCTOPUS_SLOT_MIN_MINUTES is only cheap
+        in a half hour dynamic load saw the car charging in (dynamic_load_car_confirmed_periods). That needs
+        octopus_intelligent_dynamic On and a car_charging_now sensor - the 15 second poll is the only check
+        fine enough to catch a one-minute dispatch - or, much less reliably, the car inside the CT clamp.
+
+        Never under the window billing rule (dispatch_billing_window()): the supplier bills the whole planned
+        window whether the car charges or not, and dynamic load confirms nothing there.
+
+        start_minutes/end_minutes must be the dispatch's own boundaries: load_octopus_slots() trims and splits
+        slots, and the last few minutes left of a long dispatch are not a short one.
+        """
+        if end_minutes - start_minutes >= OCTOPUS_SLOT_MIN_MINUTES:
+            return False
+        if self.dispatch_billing_window():
+            return False
+        periods = self.dynamic_load_car_confirmed_periods.get(car_n, set())
+        period_start, period_end = round_out_to_period(start_minutes, end_minutes)
+        for period in range(period_start, period_end, 30):
+            if self.midnight_utc + timedelta(minutes=period + 30) in periods:
+                return False
+        return True
 
     def get_octopus_slot_max(self):
         """
@@ -3845,7 +3884,10 @@ class Octopus:
             # with a duration-based kwh so the "Hold for car" guard in execute.py still fires.
             # The cap is counted from the dispatch's own start, as rate_add_io_slots() counts it, so the
             # part already gone is kept as a part with no load: it uses the budget and emits nothing.
-            dispatch_start, dispatch_end = start_minutes, end_minutes
+            # Uncapped, as rate_add_io_slots() decodes it too: a long dispatch that began before midnight
+            # must not look like a short one (dispatch_too_short()) from the part of it left today
+            dispatch_start, dispatch_end, _, _, _ = self.decode_octopus_slot(car_n, slot, raw=True, boundaries_only=True)
+            held = slot.get("held", False)
             parts = []
             if kwh == 0 and start_minutes <= self.minutes_now < end_minutes:
                 remaining_minutes = end_minutes - self.minutes_now
@@ -3889,14 +3931,14 @@ class Octopus:
                     if seg_start == seg_end:
                         continue
                     seg_kwh = kwh * (seg_end - seg_start) / original_span if (split and original_span > 0) else kwh
-                    slots_decoded.append((seg_start, seg_end, seg_kwh, source, location, dispatch_start, dispatch_end))
+                    slots_decoded.append((seg_start, seg_end, seg_kwh, source, location, dispatch_start, dispatch_end, held))
 
         # Sort slots by start time
         slots_sorted = sorted(slots_decoded, key=lambda x: x[0])
 
         # Add in the current charging slot
         for slot in slots_sorted:
-            start_minutes, end_minutes, kwh, source, location, dispatch_start, dispatch_end = slot
+            start_minutes, end_minutes, kwh, source, location, dispatch_start, dispatch_end, held = slot
 
             # Determine rate for this slot, applying the midday-to-midday cap. A slot that only
             # partly fits the remaining daily budget is split at the point the budget runs out -
@@ -3912,7 +3954,7 @@ class Octopus:
             charger_schedule = source == DISPATCH_SOURCE_CHARGER_SCHEDULE
             if charger_schedule:
                 chunks = self.split_slot_by_rate(start_minutes, end_minutes, kwh)
-            elif octopus_slot_low_rate and self.dispatch_billed_off_peak(source, location, dispatch_end):
+            elif octopus_slot_low_rate and self.dispatch_billed_off_peak(car_n, source, location, dispatch_start, dispatch_end, held):
                 # Eligibility and the budget's period go by the whole dispatch, not by the part of it
                 # this slot is, so every part of one dispatch is treated alike
                 day_offset = (dispatch_start - 720) // (24 * 60)
@@ -4034,10 +4076,10 @@ class Octopus:
 
         if octopus_slots:
             # Earliest first, as load_octopus_slots() takes them, so the budget goes to the same dispatches in both
-            decoded_slots = sorted((self.decode_octopus_slot(car_n, slot, raw=True) for slot in octopus_slots), key=lambda decoded: decoded[0])
+            decoded_slots = sorted((self.decode_octopus_slot(car_n, slot, raw=True) + (slot.get("held", False),) for slot in octopus_slots), key=lambda decoded: decoded[0])
 
             # Add in IO slots
-            for dispatch_start, dispatch_end, kwh, source, location in decoded_slots:
+            for dispatch_start, dispatch_end, kwh, source, location, held in decoded_slots:
                 # A dispatch that's already fully in the past and delivered zero kWh either never
                 # actually happened (a withdrawn planned slot Octopus hasn't dropped yet) or genuinely
                 # delivered nothing, so it shouldn't use up any of the day's capped low-rate minutes.
@@ -4050,7 +4092,7 @@ class Octopus:
 
                 # Off-peak eligibility (source, location and the completed-dispatch exemption for
                 # issue #4946) is shared with load_octopus_slots() so the two cap counters agree.
-                if self.dispatch_billed_off_peak(source, location, dispatch_end):
+                if self.dispatch_billed_off_peak(car_n, source, location, dispatch_start, dispatch_end, held):
                     # Round slots to 30 minute boundary
                     # Floor the start (round down) and ceiling the end (round up)
                     # This ensures any partial overlap with a 30-min slot marks the entire slot as off-peak
@@ -4114,6 +4156,12 @@ class Octopus:
                                     self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), dp2(assumed_price), dp2(kwh), location, source, octopus_slot_low_rate
                                 )
                             )
+                elif not held and dispatch_start > -24 * 60 and self.dispatch_too_short(car_n, dispatch_start, dispatch_end):
+                    slot_lines.append(
+                        "Octopus: Intelligent slot at {}-{} is under {} minutes and car {} has not been seen charging in it, not treated as low rate".format(
+                            self.time_abs_str(dispatch_start), self.time_abs_str(dispatch_end), OCTOPUS_SLOT_MIN_MINUTES, car_n
+                        )
+                    )
 
         # The slot list is re-derived every plan but rarely changes, so log it only when it does, and at least hourly
         if slot_lines:
@@ -4149,7 +4197,7 @@ class Octopus:
         minute_exact = self.dynamic_load_car_minute(self.now_utc_real)
         for slot in planned:
             start_minutes, end_minutes, _, source, location = self.decode_octopus_slot(car_n, slot, raw=True)
-            if start_minutes == end_minutes or not self.dispatch_billed_off_peak(source, location, end_minutes):
+            if start_minutes == end_minutes or not self.dispatch_billed_off_peak(car_n, source, location, start_minutes, end_minutes):
                 continue
             if start_minutes <= minute_exact < end_minutes:
                 return source
