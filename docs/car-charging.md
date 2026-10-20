@@ -616,7 +616,10 @@ Set **car_charging_max_rate** to the car's own maximum charge rate in kW, as a l
     - 3.6
 ```
 
-If it is not set, or set to 0, the charger's rate is used.
+Each entry can instead point to a sensor holding the car's rate in kW (for example `- sensor.my_car_max_charge_kw`). Predbat re-reads it every minute, so a change of car takes effect without a restart.
+If it is not set, set to 0, or the sensor is unknown or unavailable, the charger's rate is used.
+As with `car_charging_battery_size`, write it as a list: a number on the same line as the key fails `apps.yaml` validation.
+On Octopus Intelligent, Predbat plans the car at whichever is higher of the charger power Octopus reports and **input_number.predbat_car_charging_rate** (see above), so the Octopus figure can raise the rate back above this cap.
 
 To also have Predbat send the plan to the charger (so the EVC charges according to Predbat's schedule), add a second flag:
 

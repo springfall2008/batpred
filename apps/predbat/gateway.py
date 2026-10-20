@@ -423,6 +423,8 @@ class GatewayMQTT(ComponentBase):
         self._discovery_save_retry_at = 0
         self._unavailable_inverters = ((), ())
         self._configured_ev_chargers = frozenset()  # EV charge point ids registered at the last auto-config
+        self._ev_charger_rate_kw = None  # uncapped charger rate (kW) of the charger registered as car 0, None until registered
+        self._ev_exposed_car_rate_kw = None  # car_charging_rate last exposed for that car, so a re-check only writes on change
         self._last_published_plan = None
         self._pending_plan = None
         self._ev_windows: list = []  # parsed (start_dt, end_dt) charge windows from HA plan attribute
@@ -750,6 +752,11 @@ class GatewayMQTT(ComponentBase):
                 plan_entries, tz = self._pending_plan
                 self._pending_plan = None
                 await self.publish_plan(plan_entries, tz)
+
+            # Re-apply the car's own max rate (car_charging_max_rate) to the registered charger, so a
+            # car swap or edit takes effect without waiting for the next auto-config
+            if self.gateway_evc_automatic and self._auto_configured:
+                self._refresh_ev_car_rate()
 
             # EVC minute-level control: refresh windows from HA plan, then start/stop if needed
             if self.gateway_evc_control and self._auto_configured:
@@ -1553,7 +1560,29 @@ class GatewayMQTT(ComponentBase):
             return round(ev.max_current_a * 230 / 1000.0, 2)
         return 7.4
 
-    def _ev_car_charging_rate_kw(self, ev):
+    def _ev_car_max_rate_kw(self):
+        """Return car 0's own maximum charge rate from ``car_charging_max_rate``, or 0 when unknown.
+
+        The arg is usually a per-car list of entity pointers, so it is read without a default and
+        parsed here: an entity that is ``unknown``/``unavailable``, a blank entry or a non-number all
+        mean "no cap" quietly, rather than going through get_arg's float coercion, which would log a
+        bad value and flag an error on every read.
+
+        Returns:
+            float: The car's max rate in kW, or 0.0 when not set or not usable.
+        """
+        value = self.get_arg("car_charging_max_rate", None, index=0)
+        if value is None or isinstance(value, bool):
+            return 0.0
+        try:
+            value = float(value)
+        except (ValueError, TypeError):
+            return 0.0
+        if value != value or value <= 0:  # NaN or non-positive
+            return 0.0
+        return value
+
+    def _ev_car_charging_rate_kw(self, charger_rate):
         """Return the rate the registered car can actually charge at, in kW.
 
         The charger's capability (``_ev_charge_rate_kw``) is only an upper bound: a car's
@@ -1563,21 +1592,47 @@ class GatewayMQTT(ComponentBase):
         charger's rate is returned unchanged.
 
         Args:
-            ev: An EV charger entry from GatewayStatus.ev_chargers.
+            charger_rate: The charger's capability in kW.
 
         Returns:
             float: The charge rate in kW.
         """
-        charger_rate = self._ev_charge_rate_kw(ev)
-        car_max = self.get_arg("car_charging_max_rate", 0.0, index=0)
-        try:
-            car_max = float(car_max)
-        except (ValueError, TypeError):
-            car_max = 0.0
+        car_max = self._ev_car_max_rate_kw()
         if car_max > 0 and car_max < charger_rate:
-            self.log(f"Info: GatewayMQTT: car charging rate limited to car_charging_max_rate {car_max}kW (charger capability {charger_rate}kW)")
             return round(car_max, 2)
         return charger_rate
+
+    def _expose_ev_car_rate(self):
+        """Expose car_charging_rate for the registered charger, capped at the car's max rate.
+
+        Writes only when the value differs from the last one exposed, so calling it every cycle
+        causes no churn. Does nothing until a charger has been registered.
+        """
+        charger_rate = getattr(self, "_ev_charger_rate_kw", None)
+        if charger_rate is None:
+            return
+        rate = self._ev_car_charging_rate_kw(charger_rate)
+        if rate == getattr(self, "_ev_exposed_car_rate_kw", None):
+            return
+        # car_charging_rate is a UI config item (input_number), so update it via
+        # expose_config. get_arg() consults HA/UI config before args, so set_arg() would
+        # be ignored (and indirect entity resolution would never run).
+        self.base.expose_config("car_charging_rate", rate)
+        self._ev_exposed_car_rate_kw = rate
+        if rate < charger_rate:
+            self.log(f"Info: GatewayMQTT: car charging rate {rate}kW from car_charging_max_rate (charger capability {charger_rate}kW)")
+        else:
+            self.log(f"Info: GatewayMQTT: car charging rate {rate}kW (charger capability)")
+
+    def _refresh_ev_car_rate(self):
+        """Re-apply car_charging_max_rate to the registered charger once per cycle.
+
+        car_charging_max_rate is normally an entity pointer, so swapping or editing the car changes
+        its value without re-running auto-config; this picks the change up on the next cycle.
+        """
+        if not self.gateway_evc_automatic:
+            return
+        self._expose_ev_car_rate()
 
     def _inject_ev_entities(self, status):
         """Inject EV charger entities from GatewayStatus.ev_chargers.
@@ -2290,10 +2345,12 @@ class GatewayMQTT(ComponentBase):
         self.set_arg("car_charging_energy", f"sensor.{pfx}_session_energy")
         # Live charge power - display only, for the web power flow diagram
         self.set_arg("car_charging_power", f"sensor.{pfx}_power")
-        # car_charging_rate is a UI config item (input_number), so update it via
-        # expose_config. get_arg() consults HA/UI config before args, so set_arg() would
-        # be ignored (and indirect entity resolution would never run).
-        self.base.expose_config("car_charging_rate", self._ev_car_charging_rate_kw(ev))
+        # car_charging_rate is capped at the car's own max rate (car_charging_max_rate) and
+        # re-checked every cycle by _refresh_ev_car_rate(). Registration always exposes, even
+        # when the value is unchanged, as before.
+        self._ev_charger_rate_kw = self._ev_charge_rate_kw(ev)
+        self._ev_exposed_car_rate_kw = None
+        self._expose_ev_car_rate()
 
         self.log(f"Info: GatewayMQTT: registered EV charger '{ev.charge_point_id or 'unknown'}' as car 1")
 
