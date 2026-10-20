@@ -166,6 +166,7 @@ dlimit
 dlopen
 dnoregion
 docstrings
+dschg
 dstamp
 dstart
 dtype
@@ -275,6 +276,8 @@ gridconsumptionpower
 Groq
 growatt
 growattsph
+guoxia
+guoxiatech
 GWMQTT
 HACS
 hadashboard
@@ -308,6 +311,7 @@ idag
 idef
 idetails
 idxs
+iess
 iflux
 importlimit
 inday
@@ -612,6 +616,7 @@ slugified
 slugifies
 slugify
 slugifying
+smartflex
 snakeviz
 snprintf
 socb
