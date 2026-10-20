@@ -3999,6 +3999,205 @@ def test_sigenergy_rate_limit_last_attempt_does_not_claim_to_wait(my_predbat):
     return failed
 
 
+# ---------------------------------------------------------------------------
+# MQTT topic scan (--mqtt-scan)
+# ---------------------------------------------------------------------------
+
+
+def _props(packet_type, **values):
+    """Build real paho-mqtt Properties carrying the given MQTT 5 fields."""
+    from paho.mqtt.properties import Properties
+    props = Properties(packet_type)
+    for key, value in values.items():
+        setattr(props, key, value)
+    return props
+
+
+class FakeScanClient:
+    """Fake aiomqtt.Client for mqtt_topic_scan: replays paho's connect/subscribe/publish callbacks.
+
+    Args:
+        protocol: The ProtocolVersion asked for.
+        suback: Callable(filter) -> (reason identifier, Properties or None).
+        drop_on: A filter whose subscription drops the connection (raises MqttError).
+        messages: List of (topic, payload, retain) delivered once subscribed.
+        connack_props: Properties delivered with the CONNACK.
+    """
+
+    instances = []
+
+    def __init__(self, protocol, suback=None, drop_on=None, messages=None, connack_props=None):
+        """Record construction; paho's callbacks are MagicMocks the scan chains in front of."""
+        self.protocol = protocol
+        self.suback = suback or (lambda topic_filter: (0, None))
+        self.drop_on = drop_on
+        self._messages = messages or []
+        self.connack_props = connack_props
+        self.subscribed = []
+        self.published = []
+        self._client = MagicMock()
+        self._client.on_connect = MagicMock()
+        self._client.on_subscribe = MagicMock()
+        self._client.on_publish = MagicMock()
+        FakeScanClient.instances.append(self)
+
+    async def __aenter__(self):
+        """Connect, delivering the CONNACK through on_connect as paho would."""
+        from paho.mqtt.packettypes import PacketTypes
+        self._client.on_connect(None, None, {}, _reason(PacketTypes.CONNACK, 0), self.connack_props)
+        return self
+
+    async def __aexit__(self, *args):
+        """Disconnect."""
+        return False
+
+    async def subscribe(self, topic_filter, *args, **kwargs):
+        """Deliver the SUBACK (with properties) through on_subscribe, or drop the connection."""
+        import aiomqtt
+        from paho.mqtt.packettypes import PacketTypes
+        self.subscribed.append(topic_filter)
+        if topic_filter == self.drop_on:
+            raise aiomqtt.MqttError("[code:7] The connection was lost.")
+        identifier, props = self.suback(topic_filter)
+        code = _reason(PacketTypes.SUBACK, identifier)
+        self._client.on_subscribe(None, None, len(self.subscribed), [code], props)
+        return [code]
+
+    async def publish(self, topic, payload=None, qos=0, **kwargs):
+        """Deliver a PUBACK 0x10 with a reason string through on_publish."""
+        from paho.mqtt.packettypes import PacketTypes
+        self.published.append(topic)
+        self._client.on_publish(None, None, len(self.published), _reason(PacketTypes.PUBACK, 0x10), _props(PacketTypes.PUBACK, ReasonString="no subscribers"))
+
+    @property
+    def messages(self):
+        """Async iterator over the queued messages."""
+        queued = list(self._messages)
+
+        class _Iter:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if not queued:
+                    raise StopAsyncIteration
+                topic, payload, retain = queued.pop(0)
+                msg = MagicMock()
+                msg.topic = topic
+                msg.payload = payload
+                msg.retain = retain
+                return msg
+
+        return _Iter()
+
+
+def _run_scan(api, system_ids, factory, **kwargs):
+    """Run mqtt_topic_scan with aiomqtt.Client replaced by factory(protocol)."""
+    FakeScanClient.instances = []
+
+    def _client(*args, **client_kwargs):
+        return factory(client_kwargs["protocol"])
+
+    with patch("sigenergy.aiomqtt.Client", side_effect=_client):
+        with patch("sigenergy.ssl.create_default_context", return_value=MagicMock()):
+            return run_async(api.mqtt_topic_scan(system_ids, **kwargs))
+
+
+def test_sigenergy_mqtt_properties_text(my_predbat):
+    """MQTT 5 properties render as key=value text; none (MQTT 3.1.1) renders as empty."""
+    from paho.mqtt.packettypes import PacketTypes
+    from sigenergy import _mqtt_properties_text
+    failed = False
+    assert _mqtt_properties_text(None) == "", "no properties"
+    assert _mqtt_properties_text(_props(PacketTypes.PUBACK)) == "", "empty properties"
+    assert _mqtt_properties_text(_props(PacketTypes.PUBACK, ReasonString="not allowed")) == "ReasonString=not allowed", "reason string"
+    text = _mqtt_properties_text(_props(PacketTypes.CONNACK, ServerReference="mqtt-eu2.example", ReasonString="moved"))
+    assert "ServerReference=mqtt-eu2.example" in text and "ReasonString=moved" in text, "several fields, got {}".format(text)
+    return failed
+
+
+def test_sigenergy_scan_filters_order(my_predbat):
+    """Caller's filters first, then per-system and app-key filters, the broad wildcards last; no duplicates."""
+    failed = False
+    api = MockSigenergyAPI()
+    filters = api._scan_filters(["S1", "S2"], extra_filters=["custom/#", "openapi/#"])
+    assert filters[:2] == ["custom/#", "openapi/#"], "caller's filters first, got {}".format(filters)
+    assert filters.count("openapi/#") == 1, "no duplicates, got {}".format(filters)
+    for sid in ("S1", "S2"):
+        for f in ("openapi/+/+/{}".format(sid), "openapi/{}/#".format(sid), "+/{}/#".format(sid)):
+            assert f in filters, "{} present".format(f)
+    assert "openapi/+/test_app_key/#" in filters and "+/test_app_key/#" in filters, "app-key filters present"
+    assert filters[-2:] == ["#", "$SYS/#"], "broadest last, got {}".format(filters[-2:])
+    assert filters.index("openapi/+/test_app_key/#") < filters.index("#"), "narrow before broad"
+    return failed
+
+
+def test_sigenergy_mqtt_topic_scan(my_predbat):
+    """The scan reports each filter's SUBACK with its reason string, the CONNACK properties, and topics seen."""
+    from paho.mqtt.packettypes import PacketTypes
+    from sigenergy import topic_scan_summary
+    failed = False
+    api = _probe_api()
+
+    def _suback(topic_filter):
+        if topic_filter in ("#", "$SYS/#", "openapi/#"):
+            return 0x87, _props(PacketTypes.SUBACK, ReasonString="ACL deny")
+        return 0, None
+
+    messages = [
+        ("openapi/v2/period/test_app_key/SIG001", b"{\"soc\": 50}", True),
+        ("openapi/v2/period/test_app_key/SIG001", b"{\"soc\": 51}", False),
+        ("openapi/SIG001/status", b"{}", False),
+    ]
+    connack = _props(PacketTypes.CONNACK, ServerReference="mqtt-eu2.example")
+    report = _run_scan(api, ["SIG001"], lambda protocol: FakeScanClient(protocol, suback=_suback, messages=messages, connack_props=connack), extra_filters=["mine/#"], listen_seconds=5)
+
+    assert report["connected"] is True and report["protocol"] == "V5" and report["error"] is None, "connected, got {}".format(report)
+    assert report["connack"] == "ServerReference=mqtt-eu2.example", "CONNACK properties kept, got {}".format(report["connack"])
+    client = FakeScanClient.instances[0]
+    assert client.subscribed[0] == "mine/#" and client.subscribed[-1] == "$SYS/#", "order, got {}".format(client.subscribed)
+
+    by_filter = {sub["filter"]: sub for sub in report["subscribe"]}
+    assert by_filter["#"]["ok"] is False and "Not authorized (0x87)" in by_filter["#"]["reason"], "refusal recorded, got {}".format(by_filter["#"])
+    assert "ReasonString=ACL deny" in by_filter["#"]["reason"], "SUBACK reason string kept, got {}".format(by_filter["#"])
+    assert by_filter["openapi/+/<redacted>/#"]["ok"] is True, "app key masked in the filter, got {}".format(list(by_filter))
+    assert not any("test_app_key" in f for f in by_filter), "app key never in the report"
+
+    assert [pub["topic"] for pub in report["publish"]] == ["openapi/subscription/period", "openapi/subscription/change", "openapi/subscription/alarm"], "data-push requests only"
+    assert "No matching subscribers (0x10) [ReasonString=no subscribers]" == report["publish"][0]["reason"], "PUBACK reason string kept, got {}".format(report["publish"][0])
+
+    topics = report["topics"]
+    assert topics["openapi/v2/period/<redacted>/SIG001"] == {"count": 2, "retained": True}, "counted and retained flagged, got {}".format(topics)
+    assert topics["openapi/SIG001/status"]["count"] == 1, "second topic counted"
+    assert not any("probe_token" in m for m in api.log_messages), "token never logged"
+
+    lines = topic_scan_summary(report)
+    assert any("CONNACK ServerReference=mqtt-eu2.example" in line for line in lines), "CONNACK in summary, got {}".format(lines)
+    assert any("granted" in line and "refused" in line for line in lines), "subscription tally, got {}".format(lines)
+    assert any("(retained)" in line and "openapi/v2/period" in line for line in lines), "retained topic shown, got {}".format(lines)
+    return failed
+
+
+def test_sigenergy_mqtt_topic_scan_dropped_on_filter(my_predbat):
+    """A broker that drops the connection on a refused filter is reported with the filter that triggered it."""
+    from sigenergy import topic_scan_summary
+    failed = False
+    api = _probe_api()
+    report = _run_scan(api, ["SIG001"], lambda protocol: FakeScanClient(protocol, drop_on="#"), listen_seconds=5)
+    assert report["connected"] is True, "had connected"
+    assert "while subscribing to #" in report["error"], "names the filter, got {}".format(report["error"])
+    assert len(FakeScanClient.instances) == 1, "no protocol fallback once connected"
+    assert all(sub["ok"] for sub in report["subscribe"]) and "openapi/#" in [sub["filter"] for sub in report["subscribe"]], "filters before it recorded, got {}".format(report["subscribe"])
+    lines = topic_scan_summary(report)
+    assert any("Connection dropped" in line and "while subscribing to #" in line for line in lines), "drop explained, got {}".format(lines)
+    assert any("No messages" in line for line in lines), "silence reported"
+
+    # Not connected at all
+    report = _run_scan(api, ["SIG001"], lambda protocol: FakeProbeClient(protocol, refuse_connect=True), listen_seconds=5)
+    assert report["connected"] is False and topic_scan_summary(report)[0].startswith("x Could not connect"), "connect failure, got {}".format(report)
+    return failed
+
+
 def run_sigenergy_tests(my_predbat):
     """Run all Sigenergy API unit tests.
 
@@ -4109,6 +4308,10 @@ def run_sigenergy_tests(my_predbat):
         ("mqtt_command_probe_listen_timeout", test_sigenergy_mqtt_command_probe_listen_timeout),
         ("mqtt_command_probe_no_token", test_sigenergy_mqtt_command_probe_no_token),
         ("command_probe_verdict_no_command", test_sigenergy_command_probe_verdict_no_command),
+        ("mqtt_properties_text", test_sigenergy_mqtt_properties_text),
+        ("scan_filters_order", test_sigenergy_scan_filters_order),
+        ("mqtt_topic_scan", test_sigenergy_mqtt_topic_scan),
+        ("mqtt_topic_scan_dropped_on_filter", test_sigenergy_mqtt_topic_scan_dropped_on_filter),
         ("discover_systems_from_device_list", test_sigenergy_discover_systems_from_device_list),
         ("discover_systems_throttled_does_not_onboard", test_sigenergy_discover_systems_throttled_does_not_onboard),
         ("discover_systems_403_onboards_directly", test_sigenergy_discover_systems_403_onboards_directly),

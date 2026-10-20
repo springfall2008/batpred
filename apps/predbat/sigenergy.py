@@ -268,6 +268,81 @@ def _mqtt_ack_result(code):
     return value < 0x80, "{} (0x{:02x})".format(code, value)
 
 
+def _mqtt_properties_text(properties):
+    """Render the MQTT 5 properties carried on an ack (reason string, server reference, ...) as text.
+
+    aiomqtt discards these, but they are where a broker explains a refusal or points at another
+    server.  Returns "" when there are none (always the case under MQTT 3.1.1).
+    """
+    if properties is None:
+        return ""
+    try:
+        values = properties.json()
+    except Exception:
+        return str(properties)
+    return ", ".join("{}={}".format(key, value) for key, value in values.items() if value not in (None, "", [], {}))
+
+
+def _chain_paho_callback(client, name, record):
+    """Have record(*args) see each call of paho callback `name` on an aiomqtt client, before aiomqtt does.
+
+    aiomqtt installs its own paho callbacks and keeps only part of what they receive (it drops
+    PUBACK reason codes and every MQTT 5 property), so the probes chain in front of it.  Install
+    before connecting to see on_connect.
+
+    Returns:
+        True when the callback was chained, False when the client has no such callback.
+    """
+    paho_client = getattr(client, "_client", None)
+    original = getattr(paho_client, name, None)
+    if original is None:
+        return False
+
+    def _chained(*args):
+        """Record the call, then hand it on to aiomqtt."""
+        record(*args)
+        original(*args)
+
+    setattr(paho_client, name, _chained)
+    return True
+
+
+def topic_scan_summary(report):
+    """Turn a mqtt_topic_scan() report into readable lines.
+
+    Args:
+        report: Dict returned by SigenergyAPI.mqtt_topic_scan().
+
+    Returns:
+        List of lines: connection, each filter granted or refused, each publish ack, and every
+        topic seen with its message count and whether it was retained.
+    """
+    lines = []
+    if not report.get("connected"):
+        lines.append("x Could not connect to the MQTT broker: {}".format(report.get("error") or "unknown error"))
+        return lines
+    lines.append("+ Connected using MQTT {}{}".format(report.get("protocol"), " - CONNACK {}".format(report["connack"]) if report.get("connack") else ""))
+
+    granted = [sub for sub in report.get("subscribe", []) if sub["ok"]]
+    refused = [sub for sub in report.get("subscribe", []) if not sub["ok"]]
+    lines.append("Subscriptions: {} granted, {} refused".format(len(granted), len(refused)))
+    for sub in report.get("subscribe", []):
+        lines.append("  {} {:<40} {}".format("+" if sub["ok"] else "x", sub["filter"], sub["reason"]))
+    for pub in report.get("publish", []):
+        lines.append("  {} publish {:<32} {}".format("+" if pub["ok"] else "x", pub["topic"], pub["reason"]))
+    if report.get("error"):
+        lines.append("x Connection dropped: {}".format(report["error"]))
+
+    topics = report.get("topics", {})
+    if topics:
+        lines.append("Topics seen in {}s ({} message(s)):".format(report.get("listen_seconds"), sum(entry["count"] for entry in topics.values())))
+        for topic, entry in sorted(topics.items(), key=lambda item: -item[1]["count"]):
+            lines.append("  {:>5}  {}{}".format(entry["count"], topic, "  (retained)" if entry["retained"] else ""))
+    else:
+        lines.append("x No messages on any granted filter in {}s".format(report.get("listen_seconds")))
+    return lines
+
+
 def command_probe_verdict(report):
     """Turn a mqtt_command_probe() report into a pass/fail verdict with explanatory lines.
 
@@ -1407,16 +1482,7 @@ class SigenergyAPI(ComponentBase):
                     # aiomqtt drops the PUBACK reason code, so chain paho's on_publish to keep it.
                     # Publishes are awaited one at a time, so the code recorded during an await is that publish's.
                     puback_codes = []
-                    paho_client = getattr(client, "_client", None)
-                    original_on_publish = getattr(paho_client, "on_publish", None)
-                    if original_on_publish is not None:
-
-                        def _record_puback(paho, userdata, mid, reason_code, properties):
-                            """Record the PUBACK reason code, then hand on to aiomqtt."""
-                            puback_codes.append(reason_code)
-                            original_on_publish(paho, userdata, mid, reason_code, properties)
-
-                        paho_client.on_publish = _record_puback
+                    _chain_paho_callback(client, "on_publish", lambda *args: puback_codes.append(args[3]))
 
                     async def _publish(topic, payload):
                         """Publish at QoS 1 and record how the broker acknowledged it."""
@@ -1465,6 +1531,133 @@ class SigenergyAPI(ComponentBase):
                 self.log("Warn: SigenergyAPI: Probe MQTT {} error: {}".format(protocol.name, e))
                 if report["connected"]:
                     # Connected then dropped - falling back to another protocol would hide what happened
+                    return report
+        return report
+
+    def _scan_filters(self, system_ids, extra_filters=None):
+        """Topic filters for mqtt_topic_scan(), narrowest first.
+
+        Order matters: some brokers drop the connection on a refused subscription, so the filters
+        most likely to be granted - the caller's own, then those naming a system or the app key -
+        come before the broad wildcards ("openapi/#", "#", "$SYS/#") that permissions often refuse.
+        """
+        filters = list(extra_filters or [])
+        for sid in system_ids:
+            filters += ["openapi/+/+/{}".format(sid), "openapi/{}/#".format(sid), "+/{}/#".format(sid)]
+        filters += ["openapi/+/{}/#".format(self.app_key), "+/{}/#".format(self.app_key), "openapi/#", "#", "$SYS/#"]
+        seen = set()
+        return [f for f in filters if not (f in seen or seen.add(f))]
+
+    async def mqtt_topic_scan(self, system_ids, extra_filters=None, listen_seconds=60, try_v5=True, max_messages=500):
+        """Look for the topics the broker will actually deliver, in case Sigenergy has moved them.
+
+        MQTT has no way to list topics, so this subscribes to a ladder of wildcard filters (see
+        _scan_filters) and reports the SUBACK code for each - under MQTT 5 a refusal says where
+        the permission boundary is - then asks for data as the listener does and records every
+        message that arrives, by topic, with its retained flag (retained messages arrive at once,
+        so they reveal topic names even when nothing is publishing).  The MQTT 5 properties aiomqtt
+        throws away are kept: the CONNACK's (e.g. a server reference) and each ack's reason string.
+
+        Nothing is published except the usual data-push subscription requests.
+
+        Args:
+            system_ids: Sigenergy system IDs to build per-system filters for.
+            extra_filters: Further topic filters to try first.
+            listen_seconds: How long to listen after subscribing.
+            try_v5: Try MQTT 5 before falling back to 3.1.1.
+            max_messages: Cap on stored message payloads (topic counts are always complete).
+
+        Returns:
+            Report dict: connected, protocol, error, connack (properties text), subscribe list of
+            {filter, ok, reason}, publish list of {topic, ok, reason}, topics {topic: {count,
+            retained}}, messages list of {topic, retained, payload}, listen_seconds.
+        """
+        report = {"connected": False, "protocol": None, "error": None, "connack": "", "subscribe": [], "publish": [], "topics": {}, "messages": [], "listen_seconds": listen_seconds}
+        token = await self.get_access_token()
+        if not token:
+            report["error"] = "no access token - REST authentication failed"
+            return report
+
+        def _safe(topic):
+            """Mask the app_key, which appears in topics and filters."""
+            return topic.replace(self.app_key, "<redacted>") if self.app_key else topic
+
+        def _with_properties(reason, properties):
+            """Append any MQTT 5 properties to an ack's reason text."""
+            text = _mqtt_properties_text(properties)
+            return "{} [{}]".format(reason, text) if text else reason
+
+        filters = self._scan_filters(system_ids, extra_filters)
+        protocols = [aiomqtt.ProtocolVersion.V5, aiomqtt.ProtocolVersion.V311] if try_v5 else [aiomqtt.ProtocolVersion.V311]
+        for protocol in protocols:
+            report["protocol"] = protocol.name
+            pending = None
+            try:
+                client = aiomqtt.Client(
+                    hostname=self.mqtt_host,
+                    port=self.mqtt_port,
+                    username=self.app_key,
+                    password=token,
+                    tls_context=self._build_tls_context(),
+                    keepalive=30,
+                    protocol=protocol,
+                )
+                connect_acks, suback_properties, publish_acks = [], [], []
+                _chain_paho_callback(client, "on_connect", lambda *args: connect_acks.append(args[4] if len(args) > 4 else None))
+                _chain_paho_callback(client, "on_subscribe", lambda *args: suback_properties.append(args[4] if len(args) > 4 else None))
+                _chain_paho_callback(client, "on_publish", lambda *args: publish_acks.append((args[3], args[4] if len(args) > 4 else None)))
+                async with client:
+                    report["connected"] = True
+                    report["error"] = None
+                    report["connack"] = _mqtt_properties_text(connect_acks[-1] if connect_acks else None)
+                    self.log("SigenergyAPI: Scan connected to {}:{} using MQTT {}{}".format(self.mqtt_host, self.mqtt_port, protocol.name, " - CONNACK {}".format(report["connack"]) if report["connack"] else ""))
+
+                    for topic_filter in filters:
+                        pending = "subscribing to {}".format(_safe(topic_filter))
+                        suback_properties.clear()
+                        codes = await client.subscribe(topic_filter)
+                        ok, reason = _mqtt_ack_result(codes[0] if codes else None)
+                        reason = _with_properties(reason, suback_properties[-1] if suback_properties else None)
+                        report["subscribe"].append({"filter": _safe(topic_filter), "ok": ok, "reason": reason})
+                        self.log("SigenergyAPI: Scan subscribe {} {} - {}".format(_safe(topic_filter), "granted" if ok else "REFUSED", reason))
+
+                    for sub_topic in ("openapi/subscription/period", "openapi/subscription/change", "openapi/subscription/alarm"):
+                        pending = "publishing to {}".format(sub_topic)
+                        publish_acks.clear()
+                        await client.publish(sub_topic, payload=json.dumps({"accessToken": token, "systemIdList": list(system_ids)}), qos=1)
+                        code, properties = publish_acks[-1] if publish_acks else (None, None)
+                        ok, reason = _mqtt_ack_result(code)
+                        reason = _with_properties(reason, properties)
+                        report["publish"].append({"topic": sub_topic, "ok": ok, "reason": reason})
+                        self.log("SigenergyAPI: Scan publish to {} {} - {}".format(sub_topic, "accepted" if ok else "REFUSED", reason))
+
+                    pending = "listening"
+                    self.log("SigenergyAPI: Scan listening for {}s ...".format(listen_seconds))
+
+                    async def _collect():
+                        """Record every message the broker delivers until the listen window closes."""
+                        async for message in client.messages:
+                            topic = _safe(str(message.topic))
+                            retained = bool(getattr(message, "retain", False))
+                            entry = report["topics"].setdefault(topic, {"count": 0, "retained": False})
+                            entry["count"] += 1
+                            entry["retained"] = entry["retained"] or retained
+                            raw = message.payload if isinstance(message.payload, (bytes, bytearray)) else str(message.payload).encode()
+                            text = raw.decode("utf-8", errors="replace")
+                            if len(report["messages"]) < max_messages:
+                                report["messages"].append({"topic": topic, "retained": retained, "payload": text[:1000]})
+                            self.log("SigenergyAPI: Scan received on {}{}: {}".format(topic, " (retained)" if retained else "", text[:300]))
+
+                    try:
+                        await asyncio.wait_for(_collect(), timeout=listen_seconds)
+                    except asyncio.TimeoutError:
+                        pass
+                return report
+            except aiomqtt.MqttError as e:
+                report["error"] = "{}{}".format(e, " (while {})".format(pending) if pending else "")
+                self.log("Warn: SigenergyAPI: Scan MQTT {} error: {}".format(protocol.name, report["error"]))
+                if report["connected"]:
+                    # Connected then dropped - most likely on the filter being subscribed - so report rather than retry
                     return report
         return report
 
@@ -3466,6 +3659,49 @@ async def test_mqtt_command(app_key, app_secret, base_url, system_id=None, activ
     return 0 if ok else 1
 
 
+async def test_mqtt_scan(app_key, app_secret, base_url, system_id=None, extra_filters=None, listen_seconds=60, mqtt_host=None, ca_cert=None, client_cert=None, client_key=None):  # pragma: no cover
+    """Run SigenergyAPI.mqtt_topic_scan() and print which filters were granted and what arrived.
+
+    With --system-id the IDs are used as given, so no REST discovery call is spent (the device
+    list may only be read once per five minutes per system).
+
+    Returns:
+        0 when the broker connected, 1 otherwise.
+    """
+    if not HAS_AIOMQTT:
+        print("x aiomqtt is not installed.  Run: pip install aiomqtt")
+        return 1
+
+    print("\n{}".format("=" * 60))
+    print("Sigenergy MQTT topic scan")
+    print("Base URL : {}".format(base_url))
+    print("App Key  : {}...".format(app_key[:10] if len(app_key) >= 10 else app_key))
+    print("{}\n".format("=" * 60))
+
+    sig = SigenergyAPI(MockBase(), app_key=app_key, app_secret=app_secret, base_url=base_url, mqtt_host=mqtt_host, ca_cert=ca_cert, client_cert=client_cert, client_key=client_key, system_id=system_id)
+    if not await sig.get_access_token():
+        print("x REST authentication failed")
+        return 1
+    print("+ MQTT broker: {}:{}".format(sig.mqtt_host, sig.mqtt_port))
+
+    if system_id:
+        system_ids = [sid.strip() for sid in system_id.split(",") if sid.strip()]
+    else:
+        await sig.discover_systems()
+        system_ids = list(sig.systems.keys())
+    if not system_ids:
+        print("x No systems to build filters for")
+        return 1
+    print("+ Systems: {}\n".format(system_ids))
+
+    report = await sig.mqtt_topic_scan(system_ids, extra_filters=extra_filters, listen_seconds=listen_seconds)
+    print("\n{}".format("=" * 60))
+    for line in topic_scan_summary(report):
+        print(line)
+    print("=" * 60)
+    return 0 if report.get("connected") else 1
+
+
 def main():  # pragma: no cover
     """Main entry point for standalone testing."""
     parser = argparse.ArgumentParser(
@@ -3483,7 +3719,7 @@ def main():  # pragma: no cover
         help="Control mode to test",
     )
     parser.add_argument("--mqtt-host", default=None, help="Override MQTT broker hostname (default: derived from --base-url)")
-    parser.add_argument("--mqtt-topic", default=None, help="MQTT topic filter for --mqtt-test; omit to use per-app-key topic patterns")
+    parser.add_argument("--mqtt-topic", action="append", default=None, help="Extra topic filter for --mqtt-scan, tried before the built-in ones (repeatable)")
     parser.add_argument("--cert-dir", default=None, help="Directory containing ca.pem, client.pem and client.key TLS certificate files")
     parser.add_argument("--ca-cert", default=None, help="Path to CA certificate PEM file (overrides --cert-dir/ca.pem)")
     parser.add_argument("--client-cert", default=None, help="Path to client certificate PEM file (overrides --cert-dir/client.pem)")
@@ -3520,14 +3756,23 @@ def main():  # pragma: no cover
         action="store_true",
         help="Send a battery command over MQTT and report whether the broker accepted it and still pushes data",
     )
+    action_group.add_argument(
+        "--mqtt-scan",
+        action="store_true",
+        help="Subscribe to a ladder of wildcard topic filters and report which the broker grants and what arrives, in case the topics have moved",
+    )
 
     args = parser.parse_args()
 
-    # These only shape --command-test; without it they would be silently ignored and the run would look like a command test
-    command_options = {"--command-mode": args.command_mode, "--command-duration": args.command_duration, "--command-power": args.command_power, "--listen-seconds": args.listen_seconds}
+    # These only shape --command-test (and --mqtt-scan); without it they would be silently ignored and the run would look like a test
+    command_options = {"--command-mode": args.command_mode, "--command-duration": args.command_duration, "--command-power": args.command_power}
     orphaned = [flag for flag, value in command_options.items() if value is not None]
     if orphaned and not args.command_test:
         parser.error("{} only applies with --command-test".format(", ".join(orphaned)))
+    if args.listen_seconds is not None and not (args.command_test or args.mqtt_scan):
+        parser.error("--listen-seconds only applies with --command-test or --mqtt-scan")
+    if args.mqtt_topic and not args.mqtt_scan:
+        parser.error("--mqtt-topic only applies with --mqtt-scan")
 
     # Resolve TLS certificate file paths — individual flags override cert-dir — then read contents
     import os
@@ -3568,8 +3813,23 @@ def main():  # pragma: no cover
                 client_key=client_key,
             )
         )
+    elif args.mqtt_scan:
+        result = asyncio.run(
+            test_mqtt_scan(
+                args.app_key,
+                args.app_secret,
+                args.base_url,
+                args.system_id,
+                extra_filters=args.mqtt_topic,
+                listen_seconds=args.listen_seconds if args.listen_seconds is not None else 60,
+                mqtt_host=args.mqtt_host,
+                ca_cert=ca_cert,
+                client_cert=client_cert,
+                client_key=client_key,
+            )
+        )
     elif args.mqtt_test:
-        result = asyncio.run(test_mqtt_connection(args.app_key, args.app_secret, args.base_url, args.system_id, args.mqtt_topic, ca_cert=ca_cert, client_cert=client_cert, client_key=client_key))
+        result = asyncio.run(test_mqtt_connection(args.app_key, args.app_secret, args.base_url, args.system_id, None, ca_cert=ca_cert, client_cert=client_cert, client_key=client_key))
     else:
         action = "onboard" if args.onboard else ("offboard" if args.offboard else None)
         result = asyncio.run(test_sigenergy_api(args.app_key, args.app_secret, args.base_url, args.system_id, args.test_mode, action, mqtt_host=args.mqtt_host, ca_cert=ca_cert, client_cert=client_cert, client_key=client_key, readonly=args.readonly))
