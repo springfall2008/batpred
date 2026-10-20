@@ -235,7 +235,7 @@ Predbat makes cost optimisation decisions so unless the current import rate is m
 If you turn [debug mode on for the Predbat plan](predbat-plan-card.md#debug-mode-for-predbat-plan) then you can see the
 effective import and export rates after losses that Predbat calculates in the Predbat plan.
 
-Predbat also uses **input_number.predbat_metric_battery_cycle** (*expert mode* setting) to apply a 'virtual cost' in pence per kWh for charging and discharging the battery.
+Predbat also uses **input_number.predbat_metric_battery_cycle** (*expert mode* setting) to apply a 'virtual cost' in currency minor unit (pence, cents, etc) per kWh for charging and discharging the battery.
 The default value is 1p but this this can be changed to a different value to recognise the 'cost of using the battery', or set to zero to disable this feature.
 
 So if the metric battery cycle is set to 1p, and continuing the example above, each kWh of battery charge will be costed at 22.7p (21.7p + 1p battery metric to charge),
