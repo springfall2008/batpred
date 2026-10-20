@@ -14,6 +14,7 @@ Two behaviours are covered:
 """
 
 import asyncio
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from unittest.mock import patch, PropertyMock
 
@@ -119,6 +120,24 @@ def _stub_tou(api_and_now, labelled_windows_utc):
         return {"account": {"properties": [{"measurements": {"edges": edges}}]}}
 
     api.async_graphql_query = mock_query
+
+
+@contextmanager
+def _night_times(my_predbat, value):
+    """Set octopus_night_times on the shared fixture for the block (None clears it), restoring the prior state after."""
+    had_key = "octopus_night_times" in my_predbat.args
+    saved = my_predbat.args.get("octopus_night_times")
+    if value is None:
+        my_predbat.args.pop("octopus_night_times", None)
+    else:
+        my_predbat.args["octopus_night_times"] = value
+    try:
+        yield
+    finally:
+        if had_key:
+            my_predbat.args["octopus_night_times"] = saved
+        else:
+            my_predbat.args.pop("octopus_night_times", None)
 
 
 def _stub_tou_unavailable(api_and_now):
@@ -408,18 +427,16 @@ async def test_octopus_tou_windows(my_predbat):
     print("\n*** Test 13: TOU window on a local-anchored tariff holds across DST ***")
     api13 = _make_api(my_predbat, day_rate=29.14, night_rate=7.00, now=LONDON.localize(datetime(2026, 10, 22, 12, 0, 0)))
     _stub_tou(api13, [(1410, 1440), (0, 270)])  # 23:30-04:30 UTC, which is 00:30-05:30 BST
-    all_slots13 = _night_slots_local(await _run(api13, base_url, "E-1R-GO-VAR-22-10-14-M"), 7.00)
+    slots13 = _night_slots_local(await _run(api13, base_url, "E-1R-GO-VAR-22-10-14-M"), 7.00)
 
     # The changeover day is included: the window opens at 00:30 BST and closes at 05:30 GMT.
-    slots13 = all_slots13
     nights13 = [(s.month, s.day) for s, _ in slots13]
-    if len(nights13) != len(set(nights13)) or (10, 25) not in nights13 or (10, 26) not in nights13:
-        print("ERROR: expected one night per date including 25 and 26 Oct, got {}".format(nights13))
-        failed = True
-
     drifted = [(s, e) for s, e in slots13 if (s.hour, s.minute) != (0, 30) or (e.hour, e.minute) != (5, 30)]
     if not slots13:
         print("ERROR: no night slots produced for the GO meter across the DST change")
+        failed = True
+    elif len(nights13) != len(set(nights13)) or (10, 25) not in nights13 or (10, 26) not in nights13:
+        print("ERROR: expected one night per date including 25 and 26 Oct, got {}".format(nights13))
         failed = True
     elif drifted:
         print("ERROR: TOU window drifted off local time across the DST change - {} of {} slots wrong, e.g. {}".format(len(drifted), len(slots13), [(s.strftime("%d %H:%M"), e.strftime("%H:%M")) for s, e in drifted[:3]]))
@@ -477,16 +494,8 @@ async def test_octopus_tou_windows(my_predbat):
         print("\n*** Test 15: {} ***".format(label15))
         api15 = _make_api(my_predbat, day_rate=29.14, night_rate=7.00, now=now15)
         _stub_tou_unavailable(api15)
-        saved15 = my_predbat.args.get("octopus_night_times")
-        if manual15:
-            my_predbat.args["octopus_night_times"] = manual15
-        try:
+        with _night_times(my_predbat, manual15):
             mdata15 = await _run(api15, base_url, tariff15)
-        finally:
-            if saved15 is None:
-                my_predbat.args.pop("octopus_night_times", None)
-            else:
-                my_predbat.args["octopus_night_times"] = saved15
         entries15 = [(datetime.strptime(entry["valid_from"], DATE_TIME_STR_FORMAT), datetime.strptime(entry["valid_to"], DATE_TIME_STR_FORMAT)) for entry in mdata15]
         inverted15 = [(s, e) for s, e in entries15 if e <= s]
         gaps15 = [index for index in range(len(entries15) - 1) if entries15[index][1] != entries15[index + 1][0]]
@@ -525,15 +534,8 @@ async def test_octopus_tou_windows(my_predbat):
     # with zero length, and the day rate runs on across it.
     api16 = _make_api(my_predbat, day_rate=29.14, night_rate=7.00, now=LONDON.localize(datetime(2026, 3, 25, 9, 0, 0)))
     _stub_tou_unavailable(api16)
-    saved16 = my_predbat.args.get("octopus_night_times")
-    my_predbat.args["octopus_night_times"] = [{"start": "01:00:00", "end": "01:30:00"}]
-    try:
+    with _night_times(my_predbat, [{"start": "01:00:00", "end": "01:30:00"}]):
         mdata16 = await _run(api16, base_url, eco7)
-    finally:
-        if saved16 is None:
-            my_predbat.args.pop("octopus_night_times", None)
-        else:
-            my_predbat.args["octopus_night_times"] = saved16
     entries16 = [(datetime.strptime(entry["valid_from"], DATE_TIME_STR_FORMAT), datetime.strptime(entry["valid_to"], DATE_TIME_STR_FORMAT)) for entry in mdata16]
     nights16 = [s.astimezone(LONDON).day for s, _ in _night_slots_utc(mdata16, 7.00)]
     if any(e <= s for s, e in entries16) or any(entries16[index][1] != entries16[index + 1][0] for index in range(len(entries16) - 1)):
