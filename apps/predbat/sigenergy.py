@@ -394,6 +394,7 @@ class SigenergyAPI(ComponentBase):
         # Data stores keyed by systemId
         self.systems = {}         # systemId → system info dict
         self._unconfirmed_systems = set()  # configured systems discover_systems() could not confirm either way (throttled / request failed)
+        self._not_onboarded = set()  # configured systems whose device list was refused with HTTP 403 - not authorised, so onboard
         self.devices = {}         # systemId → list of device dicts
         self.energy_flow = {}     # systemId → latest energyFlow dict
         self.system_status = {}   # systemId → latest systemStatus dict
@@ -703,29 +704,32 @@ class SigenergyAPI(ComponentBase):
         return True
 
     async def discover_systems(self):
-        """Populate self.systems, preferring each configured system's device list over the system list.
+        """Populate self.systems from each configured system's device list, without the system list.
 
         The system list returns every system on the app key, so it is shared by all Predbat
         instances and throttled globally to one call per five minutes - instances starting
         together hit 1201 Access restriction.  The device list is throttled per system instead,
         and its inventory is needed anyway, so a configured system_id is confirmed with it.
 
-        The system list is still used when no system_id is configured, and when a device list is
-        refused - HTTP 403, or an API error that is not a throttle: that is how a system that is
-        not yet authorised looks, and fetch_system_list() is what run() relies on before onboarding it.
-        A throttled or failed request leaves the system unconfirmed, without consulting the
-        system list, so a transient error never leads to an onboarding attempt.
+        Each configured system ends up in exactly one place:
+          - self.systems when its device list was read;
+          - self._not_onboarded when the device list was refused with HTTP 403, which is what a
+            system the app key is not authorised for returns (verified 2026-10-20 for both a
+            valid not-onboarded system and an invalid ID) - run() then calls onboard_systems(),
+            whose result code says why (pending approval, another VPP, firmware, permission);
+          - self._unconfirmed_systems for anything else (throttled, request failed, another API
+            error, an empty list), so a transient error never leads to an onboarding attempt.
 
-        An empty device list counts as refused, not as a confirmation (see fetch_device_list).
+        The system list is used only when no system_id is configured - the only way to enumerate.
 
         Returns:
             True when at least one system was found, False otherwise.
         """
         self._unconfirmed_systems = set()
+        self._not_onboarded = set()
         if not self.system_id_filter:
             return await self.fetch_system_list()
 
-        rejected = set()
         for sid in sorted(self.system_id_filter):
             if sid in self.systems and sid in self.devices:
                 continue  # confirmed by an earlier attempt - don't spend its five-minute allowance again
@@ -733,17 +737,12 @@ class SigenergyAPI(ComponentBase):
             if await self.fetch_device_list(sid):
                 self.systems.setdefault(sid, {})
                 self.log("SigenergyAPI: Found system {} from its device list".format(sid))
-            elif self._last_http_status == 403 or self._last_api_code not in (None, SIGENERGY_CODE_ACCESS_RESTRICTION):
-                # Refused: HTTP 403 is what an invalid system ID returned (seen 2026-10-20; a valid but
-                # unauthorised one is unverified), and any non-throttle API error is treated the same way
-                rejected.add(sid)
+            elif self._last_http_status == 403:
+                self._not_onboarded.add(sid)
+                self.log("SigenergyAPI: System {} is not authorised for this app key (HTTP 403)".format(sid))
             else:
                 self._unconfirmed_systems.add(sid)
                 self.log("Warn: SigenergyAPI: Could not confirm system {} (device list unavailable), will retry".format(sid))
-
-        if rejected and await self.fetch_system_list() is None:
-            # Could not check whether they are authorised either - retry rather than onboard
-            self._unconfirmed_systems |= rejected - set(self.systems.keys())
         return bool(self.systems)
 
     async def fetch_device_list(self, system_id):
@@ -772,11 +771,9 @@ class SigenergyAPI(ComponentBase):
             self.log("Warn: SigenergyAPI: Unexpected device list format for {}: {}".format(system_id, type(devices)))
             return False
         if not devices:
-            # Answered, but with nothing in it - which may be how a system that is not yet authorised
-            # looks, and leaves nothing to read either way.  Not a confirmation, and the inventory
-            # already held is kept.  _last_api_code 0 tells discover_systems() the API did answer
-            # (so it asks the system list, which decides onboarding) rather than the request failing.
-            self._last_api_code = SIGENERGY_CODE_SUCCESS
+            # Answered, but with nothing to read - not a confirmation, and the inventory already held
+            # is kept.  An unauthorised system is refused with HTTP 403 instead, so discover_systems()
+            # leaves this one unconfirmed and retries rather than onboarding it.
             self.log("Warn: SigenergyAPI: Device list for {} is empty".format(system_id))
             return False
 
@@ -1085,6 +1082,9 @@ class SigenergyAPI(ComponentBase):
         if isinstance(system_ids, str):
             system_ids = [system_ids]
         self.log("SigenergyAPI: Onboarding systems: {}".format(system_ids))
+        # _request only sets _last_api_code on an API error, so clear it or a code left by an earlier
+        # call would be read as this request's outcome (e.g. after an HTTP failure that sets none)
+        self._last_api_code = None
         result = await self._request("POST", "/openapi/board/onboard", json_data=system_ids)
 
         # Extract the outcome code: prefer codeList[0] from the first per-system result dict,
@@ -2928,9 +2928,9 @@ class SigenergyAPI(ComponentBase):
                 self.log("Warn: SigenergyAPI: Could not confirm system(s) {} yet, will retry discovery".format(sorted(self._unconfirmed_systems)))
                 return False
 
-            # For each expected system ID not yet visible, attempt onboarding
-            missing_ids = self.system_id_filter - set(self.systems.keys()) if self.system_id_filter else set()
-            for sid in missing_ids:
+            # Onboard each configured system its device list refused with HTTP 403 (not authorised)
+            missing_ids = set(self._not_onboarded)
+            for sid in sorted(missing_ids):
                 self.onboard_status.setdefault(str(sid), "not_onboarded")
                 slug = self._system_slug(sid)
                 # The switch is the source of truth: it is a control entity, so its state
@@ -2940,13 +2940,19 @@ class SigenergyAPI(ComponentBase):
                 if is_offboard_at_start:
                     self.log("SigenergyAPI: System {} offboard toggle is on — skipping onboard attempt".format(sid))
                     continue
-                self.log("SigenergyAPI: System {} not found in authorised list — attempting onboard".format(sid))
+                self.log("SigenergyAPI: System {} not authorised — attempting onboard".format(sid))
                 result = await self.onboard_systems([sid])
                 if result is not True:
                     # Publish status before exiting — run() won't reach the normal publish block.
                     self._publish_onboard_status()
                     return False
-                await self.fetch_system_list()
+                # Confirm it from its device list, as discovery would; if that is not readable yet
+                # (the 403 may count against its five-minute allowance), retry discovery on the backoff
+                if not await self.fetch_device_list(sid):
+                    self._publish_onboard_status()
+                    self.log("SigenergyAPI: System {} onboarded, device list not readable yet — will retry discovery".format(sid))
+                    return False
+                self.systems.setdefault(sid, {})
 
 
             if not self.systems:

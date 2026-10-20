@@ -2900,12 +2900,13 @@ def test_sigenergy_offboard_switch_survives_restart(my_predbat):
     api.onboard_systems = mock_onboard
     # Without a token run() stops at authentication and never reaches the switch check
     api.get_access_token = AsyncMock(return_value="tok")
-    # Not authorised: the device list is refused and the system list is read but does not include it
+    # Not authorised: the device list is refused with HTTP 403
     _reject_device_list(api)
     api.fetch_system_list = AsyncMock(return_value=False)
 
     run_async(api.run(seconds=0, first=True))
-    api.fetch_system_list.assert_awaited_once()
+    assert api._not_onboarded == {sid}, "403 marks it not onboarded, got {}".format(api._not_onboarded)
+    api.fetch_system_list.assert_not_awaited()
     assert not onboarded, "A restart must not re-onboard a system whose offboard switch is on"
 
     return failed
@@ -2972,17 +2973,22 @@ def test_sigenergy_onboard_status(my_predbat):
     api = MockSigenergyAPI()
     assert api.onboard_status == {}, "onboard_status starts empty"
 
+    def _api_error(target, code):
+        """A _request stand-in that fails with an API error code, setting it as the real _request does."""
+        async def _request(*args, **kwargs):
+            target._last_api_code = code
+            return None
+        return _request
+
     # Pending approval (1116) → pending_approval, returns None
-    api._request = AsyncMock(return_value=None)
-    api._last_api_code = SIGENERGY_CODE_SYSTEM_PENDING_REVIEW
+    api._request = _api_error(api, SIGENERGY_CODE_SYSTEM_PENDING_REVIEW)
     result = run_async(api.onboard_systems(["sys-1"]))
     assert result is None, "pending review returns None"
     assert api.onboard_status["sys-1"] == "pending_approval", "pending_approval status set"
 
     # Registered to another VPP (1103) → in_other_vpp, returns False
     api2 = MockSigenergyAPI()
-    api2._request = AsyncMock(return_value=None)
-    api2._last_api_code = SIGENERGY_CODE_IN_OTHER_VPP
+    api2._request = _api_error(api2, SIGENERGY_CODE_IN_OTHER_VPP)
     result2 = run_async(api2.onboard_systems("sys-2"))
     assert result2 is False, "in-other-vpp returns False"
     assert api2.onboard_status["sys-2"] == "in_other_vpp", "in_other_vpp status set"
@@ -3103,8 +3109,7 @@ def test_sigenergy_run_pending_publishes_before_early_exit(my_predbat):
     api = MockSigenergyAPI()
     api.system_id_filter = {sid}
     api.get_access_token = AsyncMock(return_value="tok")
-    _reject_device_list(api)
-    api.fetch_system_list = AsyncMock(return_value=False)  # read, but the system is not yet visible
+    _reject_device_list(api)  # HTTP 403 - not authorised yet
     api.onboard_systems = AsyncMock(return_value=None)
 
     result = run_async(api.run(seconds=0, first=True))
@@ -3642,16 +3647,30 @@ def test_sigenergy_command_probe_verdict_no_command(my_predbat):
 # ---------------------------------------------------------------------------
 
 
-def _reject_device_list(api, code=1401):
-    """Make fetch_device_list fail the way an unauthorised system does: an API error code."""
+def _reject_device_list(api):
+    """Make fetch_device_list fail the way an unauthorised system does: HTTP 403 (verified live)."""
     calls = []
 
     async def _rejected(system_id):
         calls.append(system_id)
-        api._last_api_code = code
+        api._last_http_status = 403
         return False
 
     api.fetch_device_list = _rejected
+    return calls
+
+
+def _device_list_error(api, code):
+    """Make fetch_device_list fail with an API error code (None: the request itself failed)."""
+    calls = []
+
+    async def _failed(system_id):
+        calls.append(system_id)
+        api._last_http_status = None
+        api._last_api_code = code
+        return False
+
+    api.fetch_device_list = _failed
     return calls
 
 
@@ -3718,52 +3737,65 @@ def test_sigenergy_discover_systems_from_device_list(my_predbat):
 
 
 def test_sigenergy_discover_systems_throttled_does_not_onboard(my_predbat):
-    """A throttled (1201) or failed device list leaves the system unconfirmed: retry, never onboard."""
+    """Anything but a 403 - throttle, failed request, other API error - leaves the system unconfirmed: retry, never onboard."""
     failed = False
-    for code in (1201, None):
+    for code in (1201, None, 1001, 1502):
         api = _make_discovery_api()
-        _reject_device_list(api, code=code)
+        _device_list_error(api, code)
         api.fetch_system_list = AsyncMock(return_value=True)
 
         result = run_async(api.run(seconds=0, first=True))
         assert result is False, "first run fails so discovery retries on the startup backoff (code {})".format(code)
         assert api._unconfirmed_systems == {"SIG001"}, "system unconfirmed (code {}), got {}".format(code, api._unconfirmed_systems)
+        assert api._not_onboarded == set(), "not treated as unauthorised (code {})".format(code)
         api.fetch_system_list.assert_not_awaited()
         api.onboard_systems.assert_not_awaited()
         assert any("Could not confirm system" in m for m in api.log_messages), "retry logged (code {})".format(code)
     return failed
 
 
-def test_sigenergy_discover_systems_rejected_checks_system_list(my_predbat):
-    """A device list refused with an API error falls back to the system list, which decides onboarding."""
+def test_sigenergy_discover_systems_403_onboards_directly(my_predbat):
+    """A 403 device list goes straight to onboard_systems(), whose result decides; the system list is never read."""
     failed = False
 
-    # Listed after all: confirmed from the system list, no onboarding
+    # Onboarded, and its device list is readable straight after: confirmed in the same run
     api = _make_discovery_api()
-    _reject_device_list(api)
+    responses = [False, True]
+    reads = []
 
-    async def _listed():
-        api.systems["SIG001"] = {"systemId": "SIG001", "systemName": "Home"}
-        return True
+    async def _device_list(system_id):
+        reads.append(system_id)
+        ok = responses.pop(0)
+        if ok:
+            api.devices[system_id] = [{"deviceType": "Inverter", "serialNumber": "INV1", "status": "Normal"}]
+        else:
+            api._last_http_status = 403
+        return ok
 
-    api.fetch_system_list = _listed
-    assert run_async(api.discover_systems()) is True, "found via the system list"
-    assert api.systems["SIG001"]["systemName"] == "Home" and api._unconfirmed_systems == set(), "confirmed, got {}".format(api.systems)
-
-    # Read but absent: genuinely not authorised, so run() goes on to onboard it
-    api = _make_discovery_api()
-    _reject_device_list(api)
-    api.fetch_system_list = AsyncMock(return_value=False)
-    run_async(api.run(seconds=0, first=True))
-    api.onboard_systems.assert_awaited_once_with(["SIG001"])
-
-    # System list unreadable too (None): cannot tell, so retry rather than onboard
-    api = _make_discovery_api()
-    _reject_device_list(api)
-    api.fetch_system_list = AsyncMock(return_value=None)
+    api.fetch_device_list = _device_list
+    api.fetch_system_list = AsyncMock(return_value=True)
     result = run_async(api.run(seconds=0, first=True))
-    assert result is False and api._unconfirmed_systems == {"SIG001"}, "unconfirmed, got {}".format(api._unconfirmed_systems)
-    api.onboard_systems.assert_not_awaited()
+    api.onboard_systems.assert_awaited_once_with(["SIG001"])
+    api.fetch_system_list.assert_not_awaited()
+    assert reads == ["SIG001", "SIG001"], "device list re-read after onboarding, got {}".format(reads)
+    assert result is True and "SIG001" in api.systems, "confirmed after onboarding, got {} {}".format(result, api.systems)
+
+    # Onboarded, but the device list is not readable yet: retry discovery
+    api = _make_discovery_api()
+    _reject_device_list(api)
+    result = run_async(api.run(seconds=0, first=True))
+    api.onboard_systems.assert_awaited_once_with(["SIG001"])
+    assert result is False and "SIG001" not in api.systems, "retries discovery, got {} {}".format(result, api.systems)
+    assert any("device list not readable yet" in m for m in api.log_messages), "logged"
+
+    # Refused (e.g. 1103, registered to another VPP) or pending approval: stop and retry
+    for outcome in (False, None):
+        api = _make_discovery_api()
+        calls = _reject_device_list(api)
+        api.onboard_systems = AsyncMock(return_value=outcome)
+        result = run_async(api.run(seconds=0, first=True))
+        assert result is False, "run fails while onboarding is {}".format(outcome)
+        assert calls == ["SIG001"], "no device-list re-read when onboarding did not succeed, got {}".format(calls)
     return failed
 
 
@@ -3783,13 +3815,12 @@ def test_sigenergy_fetch_device_list_empty_is_not_a_confirmation(my_predbat):
             ok = run_async(api.fetch_device_list("SIG001"))
         assert ok is False, "{}: not a confirmation, got {}".format(label, ok)
         assert api.devices["SIG001"] == held, "{}: inventory already held is kept, got {}".format(label, api.devices["SIG001"])
-        assert api._last_api_code == 0, "{}: marked as answered, got {}".format(label, api._last_api_code)
         assert any("is empty" in m for m in api.log_messages), "{}: logged".format(label)
     return failed
 
 
-def test_sigenergy_discover_systems_empty_device_list_onboards(my_predbat):
-    """An empty device list defers to the system list; read but absent, run() goes on to onboard."""
+def test_sigenergy_discover_systems_empty_device_list_retries(my_predbat):
+    """An empty device list (200, code 0) is neither a confirmation nor a refusal: retry, never onboard."""
     failed = False
     api = _make_discovery_api()
     api.access_token = "fake_token"
@@ -3798,12 +3829,12 @@ def test_sigenergy_discover_systems_empty_device_list_onboards(my_predbat):
     api.fetch_system_list = AsyncMock(return_value=False)
     response = {"code": 0, "msg": "success", "data": []}
     with patch("sigenergy.aiohttp.ClientSession", return_value=_make_mock_session(_make_mock_response(status=200, json_data=response))):
-        run_async(api.run(seconds=0, first=True))
+        result = run_async(api.run(seconds=0, first=True))
 
-    assert "SIG001" not in api.systems, "an empty device list does not confirm the system, got {}".format(api.systems)
-    assert api._unconfirmed_systems == set(), "answered, so not left unconfirmed"
-    api.fetch_system_list.assert_awaited()
-    api.onboard_systems.assert_awaited_once_with(["SIG001"])
+    assert result is False and "SIG001" not in api.systems, "not confirmed, got {} {}".format(result, api.systems)
+    assert api._unconfirmed_systems == {"SIG001"}, "left unconfirmed, got {}".format(api._unconfirmed_systems)
+    api.fetch_system_list.assert_not_awaited()
+    api.onboard_systems.assert_not_awaited()
     return failed
 
 
@@ -3835,32 +3866,48 @@ def test_sigenergy_request_403_is_not_retried(my_predbat):
     return failed
 
 
-def test_sigenergy_discover_systems_403_defers_to_system_list(my_predbat):
-    """A device list refused with HTTP 403 - an unauthorised system, live 2026-10-20 - lets the system list decide."""
+def test_sigenergy_discover_systems_403_end_to_end(my_predbat):
+    """Through the real _request: a 403 device list marks the system not onboarded and run() onboards it."""
     failed = False
-
-    # System list read, system absent: onboard it
     api = _make_discovery_api()
     api.access_token = "fake_token"
     api.token_expires_at = 9_999_999_999
     api._last_request_time = 0
-    api.fetch_system_list = AsyncMock(return_value=False)
-    with patch("sigenergy.aiohttp.ClientSession", return_value=_make_mock_session(_make_mock_response(status=403, json_data={}))):
-        run_async(api.run(seconds=0, first=True))
-    assert api._unconfirmed_systems == set(), "a 403 is an answer, not left unconfirmed"
-    api.fetch_system_list.assert_awaited()
-    api.onboard_systems.assert_awaited_once_with(["SIG001"])
-
-    # System list unreadable too: retry, never onboard on the 403 alone
-    api = _make_discovery_api()
-    api.access_token = "fake_token"
-    api.token_expires_at = 9_999_999_999
-    api._last_request_time = 0
-    api.fetch_system_list = AsyncMock(return_value=None)
-    with patch("sigenergy.aiohttp.ClientSession", return_value=_make_mock_session(_make_mock_response(status=403, json_data={}))):
+    api.fetch_system_list = AsyncMock(return_value=True)
+    api.onboard_systems = AsyncMock(return_value=False)  # e.g. 1103, registered to another VPP
+    session = _make_mock_session(_make_mock_response(status=403, json_data={}))
+    with patch("sigenergy.aiohttp.ClientSession", return_value=session):
         result = run_async(api.run(seconds=0, first=True))
-    assert result is False and api._unconfirmed_systems == {"SIG001"}, "unconfirmed, got {}".format(api._unconfirmed_systems)
-    api.onboard_systems.assert_not_awaited()
+    assert api._not_onboarded == {"SIG001"} and api._unconfirmed_systems == set(), "403 is not onboarded, got {} / {}".format(api._not_onboarded, api._unconfirmed_systems)
+    assert session.get.call_count == 1, "the 403 is not retried, got {} calls".format(session.get.call_count)
+    api.onboard_systems.assert_awaited_once_with(["SIG001"])
+    api.fetch_system_list.assert_not_awaited()
+    assert result is False, "run fails while the onboard is refused"
+    return failed
+
+
+def test_sigenergy_onboard_systems_ignores_stale_api_code(my_predbat):
+    """onboard_systems() must not read a code left by an earlier call as its own outcome."""
+    failed = False
+    api = MockSigenergyAPI()
+    api._last_api_code = 1116  # left over from an earlier call - would read as 'pending approval'
+
+    async def _http_failure(*args, **kwargs):
+        api._last_http_status = 503
+        return None  # an HTTP failure sets no API code
+
+    api._request = _http_failure
+    result = run_async(api.onboard_systems(["SIG001"]))
+    assert result is False, "plain failure, not pending approval, got {}".format(result)
+    assert api.onboard_status.get("SIG001") != "pending_approval", "status not set from the stale code"
+
+    # The live response for a system in another VPP (2026-10-20): code 0, per-item result False, codeList [1103]
+    async def _other_vpp(*args, **kwargs):
+        return [{"systemId": "SIG001", "result": False, "codeList": [1103]}]
+
+    api._request = _other_vpp
+    assert run_async(api.onboard_systems(["SIG001"])) is False, "refused"
+    assert api.onboard_status["SIG001"] == "in_other_vpp", "status from the per-item code, got {}".format(api.onboard_status)
     return failed
 
 
@@ -4064,11 +4111,12 @@ def run_sigenergy_tests(my_predbat):
         ("command_probe_verdict_no_command", test_sigenergy_command_probe_verdict_no_command),
         ("discover_systems_from_device_list", test_sigenergy_discover_systems_from_device_list),
         ("discover_systems_throttled_does_not_onboard", test_sigenergy_discover_systems_throttled_does_not_onboard),
-        ("discover_systems_rejected_checks_system_list", test_sigenergy_discover_systems_rejected_checks_system_list),
+        ("discover_systems_403_onboards_directly", test_sigenergy_discover_systems_403_onboards_directly),
         ("fetch_device_list_empty_is_not_a_confirmation", test_sigenergy_fetch_device_list_empty_is_not_a_confirmation),
-        ("discover_systems_empty_device_list_onboards", test_sigenergy_discover_systems_empty_device_list_onboards),
+        ("discover_systems_empty_device_list_retries", test_sigenergy_discover_systems_empty_device_list_retries),
         ("request_403_is_not_retried", test_sigenergy_request_403_is_not_retried),
-        ("discover_systems_403_defers_to_system_list", test_sigenergy_discover_systems_403_defers_to_system_list),
+        ("discover_systems_403_end_to_end", test_sigenergy_discover_systems_403_end_to_end),
+        ("onboard_systems_ignores_stale_api_code", test_sigenergy_onboard_systems_ignores_stale_api_code),
         ("run_first_reads_device_list_once", test_sigenergy_run_first_reads_device_list_once),
         ("system_status_from_inverter_device", test_sigenergy_system_status_from_inverter_device),
         ("fetch_system_list_does_not_log_other_systems", test_sigenergy_fetch_system_list_does_not_log_other_systems),
