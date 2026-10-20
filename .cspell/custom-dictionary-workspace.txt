@@ -33,6 +33,7 @@ armhf
 armv
 ASHP
 asn
+astimezone
 asyncio
 atfork
 atleast
@@ -692,6 +693,7 @@ Trefor
 treforsiphone
 treforsouthwell
 triggerable
+trydan
 tunables
 twinx
 typecode
@@ -755,6 +757,7 @@ xlabel
 xlim
 xload
 xrtkq
+xtest
 xticks
 xxabcdefyy
 yaxis
