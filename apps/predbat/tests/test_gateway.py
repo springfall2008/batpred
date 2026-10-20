@@ -5764,11 +5764,12 @@ class TestEvTelemetry:
 class TestEvAutoConfig:
     """Tests for GatewayMQTT._register_ev_car() — conservative car registration."""
 
-    def _make_gateway(self, ev_enable=True, num_cars=0, args=None, evc_control=False):
+    def _make_gateway(self, ev_enable=True, num_cars=0, args=None, evc_control=False, car_max_rate="unset"):
         from gateway import GatewayMQTT
         from unittest.mock import MagicMock
 
         gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw._get_arg_calls = []
         gw.base = MagicMock()
         gw.log = MagicMock()
         gw.prefix = "predbat"
@@ -5781,8 +5782,11 @@ class TestEvAutoConfig:
             gw._args[key] = value
 
         def fake_get_arg(key, default=None, **kwargs):
+            gw._get_arg_calls.append((key, default, kwargs))
             if key == "num_cars":
                 return num_cars
+            if key == "car_charging_max_rate" and car_max_rate != "unset":
+                return car_max_rate
             return default
 
         gw.set_arg = capture_set_arg
@@ -5897,6 +5901,54 @@ class TestEvAutoConfig:
         gw = self._make_gateway(ev_enable=True, num_cars=0)
         gw._register_ev_car(self._status_with_ev(max_current_a=32, voltage_v=0))
         gw.base.expose_config.assert_called_once_with("car_charging_rate", 7.36)  # 32A * 230V / 1000
+
+    def test_charge_rate_capped_by_car_max_rate_when_car_is_lower(self):
+        """A car whose on-board charger is slower than the charger plans at the car's rate.
+
+        Real case: a 3.6 kW plug-in hybrid on a 32 A charger (7.84 kW) was planned to fill in a third of the
+        time it needed, so a Predbat-controlled stop left it about half full.
+        """
+        gw = self._make_gateway(ev_enable=True, num_cars=0, car_max_rate=3.6)
+        gw._register_ev_car(self._status_with_ev(max_current_a=32, voltage_v=245))
+        gw.base.expose_config.assert_called_once_with("car_charging_rate", 3.6)
+        # Read for car 0, the slot the gateway charger is registered in
+        assert ("car_charging_max_rate", 0.0, {"index": 0}) in gw._get_arg_calls
+
+    def test_charge_rate_capped_by_charger_when_charger_is_lower(self):
+        """A car that can take more than the charger delivers plans at the charger's rate."""
+        gw = self._make_gateway(ev_enable=True, num_cars=0, car_max_rate=11.0)
+        gw._register_ev_car(self._status_with_ev(max_current_a=16, voltage_v=230))
+        gw.base.expose_config.assert_called_once_with("car_charging_rate", 3.68)
+
+    def test_charge_rate_unchanged_when_car_max_rate_absent(self):
+        """Without car_charging_max_rate the charger's rate is used, as before."""
+        gw = self._make_gateway(ev_enable=True, num_cars=0)
+        gw._register_ev_car(self._status_with_ev(max_current_a=32, voltage_v=245))
+        gw.base.expose_config.assert_called_once_with("car_charging_rate", 7.84)
+
+    def test_charge_rate_unchanged_when_car_max_rate_zero(self):
+        """car_charging_max_rate 0 means unknown, so the charger's rate is used."""
+        gw = self._make_gateway(ev_enable=True, num_cars=0, car_max_rate=0)
+        gw._register_ev_car(self._status_with_ev(max_current_a=32, voltage_v=245))
+        gw.base.expose_config.assert_called_once_with("car_charging_rate", 7.84)
+
+    def test_charge_rate_unchanged_when_car_max_rate_none(self):
+        """car_charging_max_rate None (e.g. a blank list entry) means unknown."""
+        gw = self._make_gateway(ev_enable=True, num_cars=0, car_max_rate=None)
+        gw._register_ev_car(self._status_with_ev(max_current_a=32, voltage_v=245))
+        gw.base.expose_config.assert_called_once_with("car_charging_rate", 7.84)
+
+    def test_charge_rate_unchanged_when_car_max_rate_not_a_number(self):
+        """An unparseable car_charging_max_rate is ignored rather than breaking registration."""
+        gw = self._make_gateway(ev_enable=True, num_cars=0, car_max_rate="unknown")
+        gw._register_ev_car(self._status_with_ev(max_current_a=32, voltage_v=245))
+        gw.base.expose_config.assert_called_once_with("car_charging_rate", 7.84)
+
+    def test_charge_rate_car_max_rate_caps_fallback_rate(self):
+        """The cap also applies to the 7.4 kW fallback used when the charger reports no current."""
+        gw = self._make_gateway(ev_enable=True, num_cars=0, car_max_rate=3.6)
+        gw._register_ev_car(self._status_with_ev(max_current_a=0, voltage_v=0))
+        gw.base.expose_config.assert_called_once_with("car_charging_rate", 3.6)
 
 
 class TestEvInitialize:
@@ -6333,6 +6385,66 @@ def test_ev_soc_battery_size_through_get_arg(my_predbat):
             my_predbat.ha_interface.dummy_items.pop(entity_id, None)
         my_predbat.had_errors = original_had_errors
         my_predbat.current_status = original_status
+
+
+def test_ev_car_max_rate_through_get_arg(my_predbat):
+    """car_charging_max_rate caps the registered car's rate through the real get_arg, in every form.
+
+    TestEvAutoConfig stubs get_arg; this runs against a real PredBat so a single number, a per-car
+    list, and the arg being absent all resolve as expected, and validate_config() accepts the forms
+    documented in car-charging.md. Charger: 32 A x 245 V = 7.84 kW.
+    """
+    from unittest.mock import MagicMock
+
+    helper = TestEvAutoConfig()
+    gw = helper._make_gateway(ev_enable=True, num_cars=0)
+    del gw.get_arg  # use ComponentBase.get_arg -> PredBat.get_arg
+    gw.base = my_predbat
+    original_expose = my_predbat.expose_config
+    had_arg = "car_charging_max_rate" in my_predbat.args
+    original_arg = my_predbat.args.get("car_charging_max_rate")
+    original_had_errors = my_predbat.had_errors
+    original_status = my_predbat.current_status
+    original_arg_errors = dict(getattr(my_predbat, "arg_errors", {}) or {})
+
+    cases = [
+        ("absent", None, 7.84),
+        ("single number below charger", 3.6, 3.6),
+        ("per-car list below charger", [3.6, 11.0], 3.6),
+        ("per-car list above charger", [11.0], 7.84),
+        ("zero", [0], 7.84),
+    ]
+    try:
+        for label, value, expected in cases:
+            if value is None:
+                my_predbat.args.pop("car_charging_max_rate", None)
+            else:
+                my_predbat.args["car_charging_max_rate"] = value
+            my_predbat.had_errors = False
+            my_predbat.expose_config = MagicMock()
+            gw._register_ev_car(helper._status_with_ev(max_current_a=32, voltage_v=245))
+            my_predbat.expose_config.assert_called_once_with("car_charging_rate", expected)
+            assert not my_predbat.had_errors, "{}: reading car_charging_max_rate must not flag an error".format(label)
+            if value is not None:
+                my_predbat.expose_config = original_expose
+                my_predbat.validate_config()
+                assert "car_charging_max_rate" not in my_predbat.arg_errors, "{}: apps.yaml validation rejected {}: {}".format(label, value, my_predbat.arg_errors.get("car_charging_max_rate"))
+        # The arg is declared in APPS_SCHEMA, so validation really checks it: a non-number is rejected
+        from config import APPS_SCHEMA
+
+        assert "car_charging_max_rate" in APPS_SCHEMA
+        my_predbat.args["car_charging_max_rate"] = "fast"
+        my_predbat.validate_config()
+        assert "car_charging_max_rate" in my_predbat.arg_errors, "a non-numeric car_charging_max_rate must fail apps.yaml validation"
+    finally:
+        my_predbat.expose_config = original_expose
+        if had_arg:
+            my_predbat.args["car_charging_max_rate"] = original_arg
+        else:
+            my_predbat.args.pop("car_charging_max_rate", None)
+        my_predbat.had_errors = original_had_errors
+        my_predbat.current_status = original_status
+        my_predbat.arg_errors = original_arg_errors
 
 
 class TestCommandAck:
@@ -7628,4 +7740,13 @@ def run_gateway_tests(my_predbat=None):
             traceback.print_exc()
             return True
         print("  OK: test_ev_soc_battery_size_through_get_arg")
+        try:
+            test_ev_car_max_rate_through_get_arg(my_predbat)
+        except Exception as e:
+            print(f"  FAIL: test_ev_car_max_rate_through_get_arg: {e}")
+            import traceback
+
+            traceback.print_exc()
+            return True
+        print("  OK: test_ev_car_max_rate_through_get_arg")
     return False

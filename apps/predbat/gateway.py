@@ -1553,6 +1553,32 @@ class GatewayMQTT(ComponentBase):
             return round(ev.max_current_a * 230 / 1000.0, 2)
         return 7.4
 
+    def _ev_car_charging_rate_kw(self, ev):
+        """Return the rate the registered car can actually charge at, in kW.
+
+        The charger's capability (``_ev_charge_rate_kw``) is only an upper bound: a car's
+        on-board charger can limit it further (e.g. a 3.6 kW plug-in hybrid on a 7.4 kW wallbox).
+        When ``car_charging_max_rate`` is set for car 0 (the slot the gateway charger is
+        registered in) and is positive, the lower of the two is used; otherwise the
+        charger's rate is returned unchanged.
+
+        Args:
+            ev: An EV charger entry from GatewayStatus.ev_chargers.
+
+        Returns:
+            float: The charge rate in kW.
+        """
+        charger_rate = self._ev_charge_rate_kw(ev)
+        car_max = self.get_arg("car_charging_max_rate", 0.0, index=0)
+        try:
+            car_max = float(car_max)
+        except (ValueError, TypeError):
+            car_max = 0.0
+        if car_max > 0 and car_max < charger_rate:
+            self.log(f"Info: GatewayMQTT: car charging rate limited to car_charging_max_rate {car_max}kW (charger capability {charger_rate}kW)")
+            return round(car_max, 2)
+        return charger_rate
+
     def _inject_ev_entities(self, status):
         """Inject EV charger entities from GatewayStatus.ev_chargers.
 
@@ -2267,7 +2293,7 @@ class GatewayMQTT(ComponentBase):
         # car_charging_rate is a UI config item (input_number), so update it via
         # expose_config. get_arg() consults HA/UI config before args, so set_arg() would
         # be ignored (and indirect entity resolution would never run).
-        self.base.expose_config("car_charging_rate", self._ev_charge_rate_kw(ev))
+        self.base.expose_config("car_charging_rate", self._ev_car_charging_rate_kw(ev))
 
         self.log(f"Info: GatewayMQTT: registered EV charger '{ev.charge_point_id or 'unknown'}' as car 1")
 
