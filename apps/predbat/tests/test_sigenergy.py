@@ -1049,7 +1049,8 @@ def test_sigenergy_run_skips_refresh_when_cache_fresh(my_predbat):
 
     run_async(api_cold.run(seconds=300, first=False))
 
-    api_cold.fetch_inverter_realtime.assert_called_once_with(sid)
+    api_cold.fetch_energy_flow.assert_called_once_with(sid)
+    api_cold.fetch_inverter_realtime.assert_not_called()
     api_cold.fetch_daily_summary.assert_called_once_with(sid)
     api_cold.fetch_history_totals.assert_called_once_with(sid)
     assert "energy_flow" in api_cold.data_age, "energy_flow age recorded after a real fetch"
@@ -1062,7 +1063,7 @@ def test_sigenergy_run_skips_refresh_when_cache_fresh(my_predbat):
 def test_sigenergy_run_energy_flow_not_bumped_on_fetch_failure(my_predbat):
     """run() must not bump energy_flow's data_age when both realtime fetches fail.
 
-    If fetch_inverter_realtime and its fetch_energy_flow fallback both fail, self.energy_flow is
+    If fetch_energy_flow and its fetch_inverter_realtime fallback both fail, self.energy_flow is
     unchanged — treating that as "updated" would falsely renew the refresh_energy freshness
     window and could mask a persistently broken realtime poll.
     """
@@ -2027,7 +2028,7 @@ def test_sigenergy_fetch_inverter_realtime(my_predbat):
     ]
 
     # realtimeInfo response: batPower positive=discharging (3.0 kW discharging)
-    # activePower positive=export (1.5 kW export)
+    # activePower is the inverter's AC output, not the grid - it must not reach gridPower
     # pvPower 5.0 kW
     # batSoc 72.0 %
     # pvEnergyDaily 12.5 kWh
@@ -2041,7 +2042,7 @@ def test_sigenergy_fetch_inverter_realtime(my_predbat):
                 "batSoc": 72.0,
                 "batPower": 3.0,   # discharging → batteryPower should be -3.0
                 "pvPower": 5.0,
-                "activePower": 1.5,  # export → gridPower = 1.5
+                "activePower": 1.5,  # inverter AC output - ignored
                 "pvEnergyDaily": 12.5,
             },
         },
@@ -2060,9 +2061,9 @@ def test_sigenergy_fetch_inverter_realtime(my_predbat):
     # batPower 3.0 (discharging) already matches Predbat convention (positive=discharge) - no negation
     assert flow.get("batteryPower") == 3.0, "batteryPower = 3.0 (discharging, unchanged)"
     assert flow.get("pvPower") == 5.0, "pvPower = 5.0"
-    assert flow.get("gridPower") == 1.5, "gridPower = 1.5 (export)"
-    # loadPower = pv + battery_discharge - grid_export = 5.0 + 3.0 - 1.5 = 6.5
-    assert flow.get("loadPower") == 6.5, "loadPower = 6.5 (derived)"
+    # No earlier reading to hold, and realtimeInfo has no grid figure - so grid and load stay 0
+    assert flow.get("gridPower") == 0.0, "gridPower not taken from activePower, got {}".format(flow.get("gridPower"))
+    assert flow.get("loadPower") == 0.0, "loadPower not derived without a grid figure, got {}".format(flow.get("loadPower"))
     assert flow.get("evPower") == 0.0, "evPower = 0.0 (not available)"
 
     # pvEnergyDaily should update daily_summary
@@ -2161,6 +2162,115 @@ def test_sigenergy_fetch_energy_flow(my_predbat):
     assert flow.get("loadPower") == 3.2, "loadPower = 3.2 (unchanged)"
     assert flow.get("evPower") == 0.4, "evPower = 0.4 (unchanged)"
 
+    return failed
+
+
+def test_sigenergy_run_falls_back_to_realtime_when_energy_flow_fails(my_predbat):
+    """run() polls energyFlow first and only calls realtimeInfo when energyFlow fails."""
+    failed = False
+    sid = "SIG001"
+
+    def _make_api(energy_flow_ok):
+        api = MockSigenergyAPI()
+        api.systems = {sid: {"deviceList": []}}
+        api.current_mode = {sid: SIGENERGY_MODE_VPP}
+        api.system_id_filter = {sid}
+        task = MagicMock()
+        task.done = MagicMock(return_value=False)
+        api._mqtt_task = task
+        api._manage_vpp_registration = AsyncMock(return_value=True)
+        api.fetch_energy_flow = AsyncMock(return_value=energy_flow_ok)
+        api.fetch_inverter_realtime = AsyncMock(return_value=True)
+        api.fetch_daily_summary = AsyncMock(return_value=True)
+        api.fetch_history_totals = AsyncMock(return_value=True)
+        api.publish_system_entities = AsyncMock()
+        api.apply_controls = AsyncMock()
+        return api
+
+    api = _make_api(energy_flow_ok=True)
+    run_async(api.run(seconds=300, first=False))
+    api.fetch_energy_flow.assert_called_once_with(sid)
+    api.fetch_inverter_realtime.assert_not_called()
+    assert "energy_flow" in api.data_age, "energy_flow age recorded"
+
+    api = _make_api(energy_flow_ok=False)
+    run_async(api.run(seconds=300, first=False))
+    api.fetch_energy_flow.assert_called_once_with(sid)
+    api.fetch_inverter_realtime.assert_called_once_with(sid)
+    assert "energy_flow" in api.data_age, "energy_flow age recorded after the realtime fallback succeeded"
+    return failed
+
+
+def test_sigenergy_fetch_inverter_realtime_live_sample_holds_grid_and_load(my_predbat):
+    """realtimeInfo's activePower is inverter output; grid and load hold the last energyFlow values.
+
+    Regression from a live VPP-mode system on 2026-10-20 while MQTT was down: realtimeInfo gave
+    activePower 1.19 (== pcsActivePower, == phase V x I 245.72 x 4.89), which was read as 1.19kW
+    export and gave a derived load of 0, while energyFlow polled 90s apart reported grid 0 and a
+    house load being met by the battery.
+    """
+    failed = False
+    api = MockSigenergyAPI()
+    api.access_token = "fake_token"
+    api.token_expires_at = 9_999_999_999
+    api._last_request_time = 0
+    api.devices["MPV1"] = [{"deviceType": "Inverter", "serialNumber": "INV001"}]
+    # Last energyFlow reading for the system: battery discharging 1.1kW into a 1.1kW load, grid 0
+    api.energy_flow["MPV1"] = {"batterySoc": 30.9, "batteryPower": 1.1, "pvPower": 0.0, "gridPower": 0.0, "loadPower": 1.1, "evPower": 0.0}
+
+    fake_response = {
+        "code": 0,
+        "data": {
+            "systemId": "MPV1",
+            "serialNumber": "INV001",
+            "deviceType": "Inverter",
+            "realTimeInfo": {
+                "activePower": "1.19",
+                "pcsActivePower": "1.19",
+                "aPhaseVoltage": "245.72",
+                "aPhaseCurrent": "4.89",
+                "pVPower": 0.085,
+                "pvTotalPower": "0.00",
+                "batSoc": "31.10",
+                "batPower": -0.638,
+                "pvEnergyDaily": "0.05",
+            },
+        },
+    }
+    with patch("sigenergy.aiohttp.ClientSession", return_value=_make_mock_session(_make_mock_response(status=200, json_data=fake_response))):
+        ok = run_async(api.fetch_inverter_realtime("MPV1"))
+
+    assert ok is True, "fetch_inverter_realtime should return True"
+    flow = api.energy_flow["MPV1"]
+    assert flow["gridPower"] == 0.0, "grid held from energyFlow, not activePower 1.19 - got {}".format(flow["gridPower"])
+    assert flow["loadPower"] == 1.1, "load held from energyFlow, not derived as 0 - got {}".format(flow["loadPower"])
+    assert abs(flow["batterySoc"] - 31.1) < 0.01, "SOC still updated from realtimeInfo"
+    assert abs(flow["pvPower"] - 0.085) < 1e-9, "PV still updated from pVPower"
+    return failed
+
+
+def test_sigenergy_fetch_energy_flow_live_sample_balances(my_predbat):
+    """energyFlow from the same live system balances: load = pv + battery discharge + grid import.
+
+    Raw batteryPower -1.1 (raw convention positive=charging) is a 1.1kW discharge, which with no
+    PV and no grid exactly meets the reported 1.1kW load - the cross-check that makes energyFlow
+    the trustworthy REST source.
+    """
+    failed = False
+    api = MockSigenergyAPI()
+    api.access_token = "fake_token"
+    api.token_expires_at = 9_999_999_999
+    api._last_request_time = 0
+
+    fake_response = {"code": 0, "data": '{"pvPower":0.0,"gridPower":0.0,"evPower":0.0,"acPower":0.0,"loadPower":1.1,"heatPumpPower":0.0,"batteryPower":-1.1,"batterySoc":30.9}'}
+    with patch("sigenergy.aiohttp.ClientSession", return_value=_make_mock_session(_make_mock_response(status=200, json_data=fake_response))):
+        ok = run_async(api.fetch_energy_flow("MPV1"))
+
+    assert ok is True, "fetch_energy_flow should return True"
+    flow = api.energy_flow["MPV1"]
+    assert flow["batteryPower"] == 1.1, "raw -1.1 is a 1.1kW discharge in Predbat convention, got {}".format(flow["batteryPower"])
+    # Predbat convention: grid +export/-import, so import = -gridPower
+    assert abs(flow["loadPower"] - (flow["pvPower"] + flow["batteryPower"] - flow["gridPower"])) < 0.01, "energy balance holds: {}".format(flow)
     return failed
 
 
@@ -2930,6 +3040,7 @@ def test_sigenergy_run_derives_onboard_status(my_predbat):
             api.dashboard_items["switch.predbat_sigenergy_{}_offboard".format(slug)] = {"state": "on"}
         # Stub async helpers called by run()
         api._manage_vpp_registration = AsyncMock(return_value=True)
+        api.fetch_energy_flow = AsyncMock(return_value=True)
         api.fetch_inverter_realtime = AsyncMock(return_value=True)
         api.fetch_daily_summary = AsyncMock()
         api.fetch_history_totals = AsyncMock()
@@ -3014,6 +3125,7 @@ def _make_contended_api(sid, mode, axle_control=False, axle_event="off"):
     task.done = MagicMock(return_value=False)
     api._mqtt_task = task
     api.set_operating_mode = AsyncMock(return_value=True)
+    api.fetch_energy_flow = AsyncMock(return_value=True)
     api.fetch_inverter_realtime = AsyncMock(return_value=True)
     api.fetch_daily_summary = AsyncMock()
     api.fetch_history_totals = AsyncMock()
@@ -3208,6 +3320,306 @@ def test_sigenergy_axle_standoff_survives_restart(my_predbat):
 
     return failed
 
+# ---------------------------------------------------------------------------
+# MQTT command probe (--command-test)
+# ---------------------------------------------------------------------------
+
+
+def _reason(packet_type, identifier):
+    """Build a real paho-mqtt ReasonCode, as aiomqtt hands back from SUBACK/PUBACK."""
+    from paho.mqtt.reasoncodes import ReasonCode
+    return ReasonCode(packet_type, identifier=identifier)
+
+
+class FakeProbeClient:
+    """Fake aiomqtt.Client for mqtt_command_probe: fires paho's on_publish hook and yields queued messages.
+
+    Args:
+        protocol: The ProtocolVersion the probe asked for.
+        refuse_connect: When True, entering the context raises MqttError (broker rejected the connection).
+        suback: Reason code identifier returned for every subscribe.
+        puback: Callable(topic) -> reason code identifier delivered via on_publish, or None to send no ack callback.
+        messages: Payload list yielded by client.messages; when None the iterator blocks until cancelled.
+    """
+
+    instances = []
+
+    def __init__(self, protocol, refuse_connect=False, suback=1, puback=None, messages=None):
+        """Record construction so tests can assert on protocol fallback."""
+        self.protocol = protocol
+        self.refuse_connect = refuse_connect
+        self.suback = suback
+        self.puback = puback or (lambda topic: 0)
+        self._messages = messages
+        self.subscribed = []
+        self.published = []
+        self._client = MagicMock()
+        self._client.on_publish = MagicMock()
+        FakeProbeClient.instances.append(self)
+
+    async def __aenter__(self):
+        """Connect, or refuse to."""
+        if self.refuse_connect:
+            import aiomqtt
+            raise aiomqtt.MqttError("[code:132] Unsupported protocol version")
+        return self
+
+    async def __aexit__(self, *args):
+        """Disconnect."""
+        return False
+
+    async def subscribe(self, topic, *args, **kwargs):
+        """Record the subscription and return its SUBACK reason codes."""
+        from paho.mqtt.packettypes import PacketTypes
+        self.subscribed.append(topic)
+        return [_reason(PacketTypes.SUBACK, self.suback)]
+
+    async def publish(self, topic, payload=None, qos=0, **kwargs):
+        """Record the publish and deliver its PUBACK through paho's on_publish, as the network loop would."""
+        from paho.mqtt.packettypes import PacketTypes
+        self.published.append((topic, payload, qos))
+        code = self.puback(topic)
+        if code is not None:
+            self._client.on_publish(None, None, len(self.published), _reason(PacketTypes.PUBACK, code), None)
+
+    @property
+    def messages(self):
+        """Async iterator over the queued messages, or one that never yields."""
+        queued = self._messages
+
+        class _Iter:
+            def __init__(self):
+                self._items = iter(queued or [])
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if queued is None:
+                    await asyncio.Event().wait()
+                try:
+                    topic, payload = next(self._items)
+                except StopIteration:
+                    raise StopAsyncIteration
+                msg = MagicMock()
+                msg.topic = topic
+                msg.payload = payload
+                return msg
+
+        return _Iter()
+
+
+def _run_probe(api, system_ids, factory, **kwargs):
+    """Run mqtt_command_probe with aiomqtt.Client replaced by factory(protocol=...)."""
+    FakeProbeClient.instances = []
+
+    def _client(*args, **client_kwargs):
+        return factory(client_kwargs["protocol"])
+
+    with patch("sigenergy.aiomqtt.Client", side_effect=_client):
+        with patch("sigenergy.ssl.create_default_context", return_value=MagicMock()):
+            return run_async(api.mqtt_command_probe(system_ids, **kwargs))
+
+
+def _probe_api():
+    """A MockSigenergyAPI with a valid token, ready to probe."""
+    api = MockSigenergyAPI()
+    api.access_token = "probe_token"
+    api.token_expires_at = 9_999_999_999
+    return api
+
+
+def test_sigenergy_mqtt_ack_result(my_predbat):
+    """_mqtt_ack_result treats reason codes >= 0x80 as refusals and a missing code as acknowledged."""
+    from paho.mqtt.packettypes import PacketTypes
+    from sigenergy import _mqtt_ack_result
+    failed = False
+
+    ok, text = _mqtt_ack_result(None)
+    assert ok is True and "no reason code" in text, "missing code (MQTT 3.1.1 PUBACK) is an acknowledgement, got {} {}".format(ok, text)
+    ok, text = _mqtt_ack_result(_reason(PacketTypes.PUBACK, 0))
+    assert ok is True and text == "Success (0x00)", "PUBACK success, got {} {}".format(ok, text)
+    ok, text = _mqtt_ack_result(_reason(PacketTypes.PUBACK, 0x87))
+    assert ok is False and text == "Not authorized (0x87)", "PUBACK not authorised is a refusal, got {} {}".format(ok, text)
+    ok, text = _mqtt_ack_result(_reason(PacketTypes.SUBACK, 1))
+    assert ok is True and "Granted QoS 1" in text, "SUBACK granted, got {} {}".format(ok, text)
+    ok, text = _mqtt_ack_result(_reason(PacketTypes.SUBACK, 0x80))
+    assert ok is False, "MQTT 3.1.1 SUBACK failure (0x80) is a refusal, got {} {}".format(ok, text)
+    ok, text = _mqtt_ack_result(0x80)
+    assert ok is False and "0x80" in text, "a raw integer code is interpreted too, got {} {}".format(ok, text)
+    ok, text = _mqtt_ack_result("garbage")
+    assert ok is False, "an unreadable code is not treated as success, got {} {}".format(ok, text)
+    return failed
+
+
+def test_sigenergy_mqtt_command_probe_success(my_predbat):
+    """The probe subscribes, requests push data, sends one command per system and records acks and messages."""
+    import json
+    from sigenergy import command_probe_verdict
+    failed = False
+    api = _probe_api()
+    messages = [("openapi/period/test_app_key/SIG001", b'[{"systemId": "SIG001", "value": {}}]')]
+
+    report = _run_probe(api, ["SIG001", "SIG002"], lambda protocol: FakeProbeClient(protocol, messages=messages), active_mode="idle", duration_minutes=3, charging_power_kw=0.0, listen_seconds=5)
+
+    assert report["connected"] is True and report["error"] is None, "connected cleanly, got {}".format(report)
+    assert report["protocol"] == "V5", "MQTT 5 is tried first, got {}".format(report["protocol"])
+    assert len(FakeProbeClient.instances) == 1, "no fallback needed"
+    client = FakeProbeClient.instances[0]
+
+    assert len(client.subscribed) == 6, "change/period/alarm for each of two systems, got {}".format(client.subscribed)
+    assert all(sub["ok"] for sub in report["subscribe"]), "all subscriptions granted"
+    assert not any("test_app_key" in sub["topic"] for sub in report["subscribe"]), "app_key masked in report topics: {}".format(report["subscribe"])
+
+    topics = [t for t, _, _ in client.published]
+    assert topics[:3] == ["openapi/subscription/period", "openapi/subscription/change", "openapi/subscription/alarm"], "push-data requests first, got {}".format(topics)
+    assert topics[3:] == ["openapi/instruction/command", "openapi/instruction/command"], "one command per system, got {}".format(topics)
+    assert all(qos == 1 for _, _, qos in client.published), "every publish is QoS 1 so the broker must acknowledge it"
+    cmd = json.loads(client.published[3][1])
+    assert cmd["accessToken"] == "probe_token", "command carries the token"
+    assert cmd["commands"][0]["systemId"] == "SIG001" and cmd["commands"][0]["activeMode"] == "idle", "command for the first system, got {}".format(cmd)
+    assert cmd["commands"][0]["duration"] == 3 and cmd["commands"][0]["chargingPower"] == 0.0, "duration and power passed through, got {}".format(cmd)
+    assert json.loads(client.published[4][1])["commands"][0]["systemId"] == "SIG002", "second command for the second system"
+
+    assert len(report["publish"]) == 5 and all(pub["ok"] for pub in report["publish"]), "all publishes acknowledged, got {}".format(report["publish"])
+    assert report["publish"][3]["reason"] == "Success (0x00)", "PUBACK reason code captured from paho, got {}".format(report["publish"][3])
+    assert client._client.on_publish is not None, "on_publish hook installed"
+
+    assert len(report["messages"]) == 1 and "<redacted>" in report["messages"][0]["topic"], "message recorded with app_key masked, got {}".format(report["messages"])
+    assert not any("probe_token" in m for m in api.log_messages), "token never logged"
+
+    ok, lines = command_probe_verdict(report)
+    assert ok is True, "verdict passes, got {}".format(lines)
+    assert any("accepted 2 command(s)" in line for line in lines), "MQTT 5 acceptance reported, got {}".format(lines)
+    return failed
+
+
+def test_sigenergy_mqtt_command_probe_refused_command(my_predbat):
+    """A command refused by the broker (MQTT 5 PUBACK 0x87) fails the verdict even though data still flows."""
+    from sigenergy import command_probe_verdict
+    failed = False
+    api = _probe_api()
+
+    def _factory(protocol):
+        return FakeProbeClient(protocol, puback=lambda topic: 0x87 if topic == "openapi/instruction/command" else 0, messages=[("openapi/period/test_app_key/SIG001", b"{}")])
+
+    report = _run_probe(api, ["SIG001"], _factory, listen_seconds=5)
+    command = [pub for pub in report["publish"] if pub["topic"] == "openapi/instruction/command"]
+    assert len(command) == 1 and command[0]["ok"] is False, "command refusal recorded, got {}".format(report["publish"])
+    assert "Not authorized" in command[0]["reason"], "reason given, got {}".format(command[0])
+
+    ok, lines = command_probe_verdict(report)
+    assert ok is False, "verdict fails on a refused command"
+    assert any("refused publish to openapi/instruction/command" in line and "Not authorized" in line for line in lines), "refusal explained, got {}".format(lines)
+    assert any("REFUSED" in m for m in api.log_messages), "refusal logged, got {}".format(api.log_messages)
+    return failed
+
+
+def test_sigenergy_mqtt_command_probe_no_subscribers(my_predbat):
+    """MQTT 5 PUBACK 0x10 (no matching subscribers) is accepted but flagged, since Sigenergy's backend should be listening."""
+    from sigenergy import command_probe_verdict
+    failed = False
+    api = _probe_api()
+
+    def _factory(protocol):
+        return FakeProbeClient(protocol, puback=lambda topic: 0x10, messages=[("openapi/period/test_app_key/SIG001", b"{}")])
+
+    report = _run_probe(api, ["SIG001"], _factory, listen_seconds=5)
+    assert all(pub["ok"] and pub["no_subscribers"] for pub in report["publish"]), "0x10 recorded as accepted with no subscribers, got {}".format(report["publish"])
+    assert "No matching subscribers (0x10)" in report["publish"][-1]["reason"], "reason given, got {}".format(report["publish"][-1])
+
+    ok, lines = command_probe_verdict(report)
+    warning = [line for line in lines if "no subscribers (0x10)" in line]
+    assert len(warning) == 1, "one 0x10 warning line, got {}".format(lines)
+    assert "openapi/instruction/command" in warning[0] and "openapi/subscription/period" in warning[0], "names the unheard topics, got {}".format(warning)
+    assert ok is True, "a warning, not a failure, while data still flows, got {}".format(lines)
+
+    # A normal success code does not trigger the warning
+    report = _run_probe(api, ["SIG001"], lambda protocol: FakeProbeClient(protocol, messages=[("t/test_app_key/SIG001", b"{}")]), listen_seconds=5)
+    assert not any(pub["no_subscribers"] for pub in report["publish"]), "0x00 is not flagged"
+    assert not any("0x10" in line for line in command_probe_verdict(report)[1]), "no warning on 0x00"
+    return failed
+
+
+def test_sigenergy_mqtt_command_probe_v311_fallback(my_predbat):
+    """A broker that rejects MQTT 5 is retried on 3.1.1; refused subscriptions and silence fail the verdict."""
+    from sigenergy import command_probe_verdict
+    failed = False
+    api = _probe_api()
+
+    def _factory(protocol):
+        return FakeProbeClient(protocol, refuse_connect=(protocol.name == "V5"), suback=0x80, messages=[])
+
+    report = _run_probe(api, ["SIG001"], _factory, listen_seconds=5)
+    assert [c.protocol.name for c in FakeProbeClient.instances] == ["V5", "V311"], "V5 then V311, got {}".format([c.protocol for c in FakeProbeClient.instances])
+    assert report["protocol"] == "V311" and report["connected"] is True, "connected on 3.1.1, got {}".format(report)
+    assert report["error"] is None, "the V5 rejection does not linger as an error once 3.1.1 connects, got {}".format(report["error"])
+    assert len(report["subscribe"]) == 3 and not any(sub["ok"] for sub in report["subscribe"]), "SUBACK 0x80 recorded as refused, got {}".format(report["subscribe"])
+
+    ok, lines = command_probe_verdict(report)
+    assert ok is False, "verdict fails"
+    assert any("refused subscription" in line for line in lines), "subscription refusal explained, got {}".format(lines)
+    assert any("MQTT 3.1.1 cannot report a refused publish" in line for line in lines), "3.1.1 caveat on the command ack, got {}".format(lines)
+    assert any("No messages received" in line for line in lines), "silence reported, got {}".format(lines)
+    return failed
+
+
+def test_sigenergy_mqtt_command_probe_connect_refused(my_predbat):
+    """When every protocol is refused the report carries the broker error and no publish is attempted."""
+    from sigenergy import command_probe_verdict
+    failed = False
+    api = _probe_api()
+
+    report = _run_probe(api, ["SIG001"], lambda protocol: FakeProbeClient(protocol, refuse_connect=True), listen_seconds=5)
+    assert report["connected"] is False, "never connected"
+    assert "Unsupported protocol version" in report["error"], "broker error kept, got {}".format(report["error"])
+    assert report["publish"] == [] and report["subscribe"] == [], "nothing sent"
+
+    ok, lines = command_probe_verdict(report)
+    assert ok is False and lines[0].startswith("x Could not connect"), "connect failure explained, got {}".format(lines)
+    return failed
+
+
+def test_sigenergy_mqtt_command_probe_listen_timeout(my_predbat):
+    """A broker that pushes nothing ends the listen window on the timeout rather than hanging."""
+    failed = False
+    api = _probe_api()
+
+    report = _run_probe(api, ["SIG001"], lambda protocol: FakeProbeClient(protocol, messages=None), listen_seconds=0.05)
+    assert report["connected"] is True and report["messages"] == [], "listen window closed with no messages, got {}".format(report)
+    assert len(report["publish"]) == 4, "push-data requests and the command were still published, got {}".format(report["publish"])
+    return failed
+
+
+def test_sigenergy_mqtt_command_probe_no_token(my_predbat):
+    """Without an access token the probe stops before touching the broker."""
+    failed = False
+    api = MockSigenergyAPI()
+
+    async def _no_token():
+        return None
+
+    api.get_access_token = _no_token
+    report = _run_probe(api, ["SIG001"], lambda protocol: FakeProbeClient(protocol))
+    assert report["connected"] is False and "no access token" in report["error"], "token failure reported, got {}".format(report)
+    assert FakeProbeClient.instances == [], "no MQTT connection attempted"
+    return failed
+
+
+def test_sigenergy_command_probe_verdict_no_command(my_predbat):
+    """A connected report with no command publish fails rather than passing on data alone."""
+    from sigenergy import command_probe_verdict
+    failed = False
+    report = {"connected": True, "protocol": "V5", "error": None, "subscribe": [], "publish": [], "messages": [{"topic": "t", "payload": "{}"}], "listen_seconds": 5}
+    ok, lines = command_probe_verdict(report)
+    assert ok is False and any("No command was published" in line for line in lines), "missing command explained, got {}".format(lines)
+
+    report["error"] = "[code:7] The connection was lost."
+    report["publish"] = [{"topic": "openapi/instruction/command", "ok": True, "reason": "Success (0x00)"}]
+    ok, lines = command_probe_verdict(report)
+    assert ok is False and any("Connection dropped" in line for line in lines), "mid-test drop fails the verdict, got {}".format(lines)
+    return failed
+
 
 def run_sigenergy_tests(my_predbat):
     """Run all Sigenergy API unit tests.
@@ -3271,6 +3683,9 @@ def run_sigenergy_tests(my_predbat):
         ("fetch_inverter_realtime_pv_power_key_fallback", test_sigenergy_fetch_inverter_realtime_pv_power_key_fallback),
         ("fetch_energy_flow", test_sigenergy_fetch_energy_flow),
         ("fetch_inverter_realtime_no_inverter", test_sigenergy_fetch_inverter_realtime_no_inverter),
+        ("run_falls_back_to_realtime_when_energy_flow_fails", test_sigenergy_run_falls_back_to_realtime_when_energy_flow_fails),
+        ("fetch_inverter_realtime_live_sample_holds_grid_and_load", test_sigenergy_fetch_inverter_realtime_live_sample_holds_grid_and_load),
+        ("fetch_energy_flow_live_sample_balances", test_sigenergy_fetch_energy_flow_live_sample_balances),
         ("get_inverter_serial", test_sigenergy_get_inverter_serial),
         ("build_tls_context", test_sigenergy_build_tls_context),
         ("battery_max_power", test_sigenergy_battery_max_power),
@@ -3307,6 +3722,15 @@ def run_sigenergy_tests(my_predbat):
         ("axle_event_skips_controls", test_sigenergy_axle_event_skips_controls),
         ("axle_event_end_resumes_control", test_sigenergy_axle_event_end_resumes_control),
         ("axle_standoff_survives_restart", test_sigenergy_axle_standoff_survives_restart),
+        ("mqtt_ack_result", test_sigenergy_mqtt_ack_result),
+        ("mqtt_command_probe_success", test_sigenergy_mqtt_command_probe_success),
+        ("mqtt_command_probe_refused_command", test_sigenergy_mqtt_command_probe_refused_command),
+        ("mqtt_command_probe_no_subscribers", test_sigenergy_mqtt_command_probe_no_subscribers),
+        ("mqtt_command_probe_v311_fallback", test_sigenergy_mqtt_command_probe_v311_fallback),
+        ("mqtt_command_probe_connect_refused", test_sigenergy_mqtt_command_probe_connect_refused),
+        ("mqtt_command_probe_listen_timeout", test_sigenergy_mqtt_command_probe_listen_timeout),
+        ("mqtt_command_probe_no_token", test_sigenergy_mqtt_command_probe_no_token),
+        ("command_probe_verdict_no_command", test_sigenergy_command_probe_verdict_no_command),
     ]
 
     for name, fn in tests:

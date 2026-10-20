@@ -145,6 +145,7 @@ SIGENERGY_MQTT_TOPIC_PERIOD = "openapi/period/{app_key}/{system_id}"    # teleme
 SIGENERGY_MQTT_TOPIC_ALARM = "openapi/alarm/{app_key}/{system_id}"      # alarm data
 SIGENERGY_MQTT_TOPIC_COMMAND = "openapi/instruction/command"            # battery command publish
 SIGENERGY_MQTT_TOPIC_MODE = "openapi/instruction/mode"                  # V1 operating mode switch (MQTT)
+MQTT_RC_NO_MATCHING_SUBSCRIBERS = 0x10  # MQTT 5 PUBACK: accepted, but no client is subscribed so the message went nowhere
 
 # Payload keys masked before a payload is written to the log. The MQTT command payloads
 # carry the live accessToken (it doubles as the MQTT broker password), and Predbat logs are
@@ -247,6 +248,83 @@ def _safe_int(value, default=0):
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _mqtt_ack_result(code):
+    """Interpret the reason code from an MQTT SUBACK or PUBACK.
+
+    paho-mqtt reports these as ReasonCode objects (value >= 0x80 is a refusal). An MQTT 3.1.1
+    PUBACK carries no code at all, so None means the broker acknowledged without saying more.
+
+    Returns:
+        (ok, text) - ok is False when the broker refused, text is a human-readable description.
+    """
+    if code is None:
+        return True, "acknowledged (no reason code)"
+    value = _safe_int(getattr(code, "value", code), default=None)
+    if value is None:
+        return False, "unrecognised reason code {}".format(code)
+    return value < 0x80, "{} (0x{:02x})".format(code, value)
+
+
+def command_probe_verdict(report):
+    """Turn a mqtt_command_probe() report into a pass/fail verdict with explanatory lines.
+
+    Args:
+        report: Dict returned by SigenergyAPI.mqtt_command_probe().
+
+    Returns:
+        (ok, lines) - ok is True only when the broker took the connection, every subscription
+        and every command, and pushed at least one message back during the listen window.
+    """
+    lines = []
+    if not report.get("connected"):
+        lines.append("x Could not connect to the MQTT broker: {}".format(report.get("error") or "unknown error"))
+        return False, lines
+
+    ok = True
+    protocol = report.get("protocol")
+    lines.append("+ Connected to the MQTT broker using MQTT {}".format(protocol))
+
+    for sub in report.get("subscribe", []):
+        if not sub["ok"]:
+            ok = False
+            lines.append("x Broker refused subscription to {}: {}".format(sub["topic"], sub["reason"]))
+    if ok and report.get("subscribe"):
+        lines.append("+ Broker granted all {} topic subscriptions".format(len(report["subscribe"])))
+
+    commands = [pub for pub in report.get("publish", []) if pub["topic"] == SIGENERGY_MQTT_TOPIC_COMMAND]
+    for pub in report.get("publish", []):
+        if not pub["ok"]:
+            ok = False
+            lines.append("x Broker refused publish to {}: {}".format(pub["topic"], pub["reason"]))
+    if not commands:
+        ok = False
+        lines.append("x No command was published")
+    elif all(pub["ok"] for pub in commands):
+        if protocol == "V5":
+            lines.append("+ Broker accepted {} command(s): {}".format(len(commands), commands[0]["reason"]))
+        else:
+            lines.append("~ Broker acknowledged {} command(s), but MQTT 3.1.1 cannot report a refused publish - check the battery responded".format(len(commands)))
+
+    # 0x10 is a success code in MQTT 5, but for these topics the subscriber is Sigenergy's own backend - with
+    # none attached the broker accepts the message and discards it.  Warn rather than fail: a broker that feeds
+    # its backend through a rule engine rather than a subscription would also answer 0x10.
+    unheard = [pub["topic"] for pub in report.get("publish", []) if pub.get("no_subscribers")]
+    if unheard:
+        lines.append("~ Broker reports no subscribers (0x10) for {} - nothing at Sigenergy appears to be listening, so these were probably discarded; check the battery responded".format(", ".join(sorted(set(unheard)))))
+
+    if report.get("error"):
+        ok = False
+        lines.append("x Connection dropped during the test: {}".format(report["error"]))
+
+    messages = report.get("messages", [])
+    if messages:
+        lines.append("+ Received {} message(s) from the broker in {}s".format(len(messages), report.get("listen_seconds")))
+    else:
+        ok = False
+        lines.append("x No messages received in {}s - the broker is not pushing data for these systems".format(report.get("listen_seconds")))
+    return ok, lines
 
 
 class SigenergyAPI(ComponentBase):
@@ -662,10 +740,17 @@ class SigenergyAPI(ComponentBase):
         that all downstream code (publish_system_entities, apply_controls) works
         unchanged.  Also updates daily_summary with pvEnergyDaily if present.
 
-        Field sign conventions map directly onto Predbat's own convention, no negation needed:
+        This is only the fallback for fetch_energy_flow: it is a device-level reading with no
+        grid figure, so it cannot give grid or load power.
+
+        Field sign conventions:
           batPower:    positive=discharging, negative=charging (same as Predbat battery_power)
-          activePower: positive=export, negative=import (same as Predbat grid_power)
-          loadPower is derived as: pv + battery_discharge - grid_export
+          activePower: the inverter's own AC output - NOT the grid connection.  It equals
+                       pcsActivePower and the inverter's phase V x I, while energyFlow polled
+                       90s apart reported gridPower 0.  Reading it as grid made Predbat publish the
+                       inverter output as export and derive a house load of ~0 whenever MQTT was
+                       down and REST took over.
+          gridPower/loadPower are therefore held at their last known values (0 if none).
 
         Note: The API enforces a 5-minute access restriction per device, so this
         should only be called at SIGENERGY_POLL_INTERVAL intervals (default 5 min).
@@ -711,12 +796,12 @@ class SigenergyAPI(ComponentBase):
             if pv_key in rt:
                 pv_power_kw = _safe_float(rt[pv_key])
                 break
-        # activePower: positive=export (net generation to grid), negative=import.
-        # Maps directly to gridPower in the Predbat convention (positive=export).
-        grid_power_kw = _safe_float(rt.get("activePower", 0))
-        # Energy balance in Predbat convention (bat: +discharge/-charge, grid: +export/-import):
-        # load = pv + battery_discharge - grid_export
-        load_power_kw = max(0.0, pv_power_kw + bat_power_kw - grid_power_kw)
+        # activePower is the inverter's AC output, not the grid meter (see docstring), and this
+        # endpoint has nothing else that measures the grid - so without a grid figure the load
+        # cannot be derived either.  Hold the last known values rather than invent new ones.
+        previous = self.energy_flow.get(system_id, {})
+        grid_power_kw = _safe_float(previous.get("gridPower", 0))
+        load_power_kw = _safe_float(previous.get("loadPower", 0))
 
         flow = {
             "batterySoc": bat_soc,
@@ -735,7 +820,7 @@ class SigenergyAPI(ComponentBase):
                 self.daily_summary[system_id] = {}
             self.daily_summary[system_id]["dailyPowerGeneration"] = _safe_float(pv_daily)
 
-        self.log("SigenergyAPI: System {} realtimeInfo — SOC {:.0f}% battery {:.2f}kW pv {:.2f}kW grid {:.2f}kW load {:.2f}kW".format(
+        self.log("SigenergyAPI: System {} realtimeInfo — SOC {:.0f}% battery {:.2f}kW pv {:.2f}kW (grid {:.2f}kW and load {:.2f}kW held from last reading)".format(
             system_id, bat_soc, bat_power_kw, pv_power_kw, grid_power_kw, load_power_kw))
         return True
 
@@ -1134,8 +1219,50 @@ class SigenergyAPI(ComponentBase):
             self.log("Warn: SigenergyAPI: No access token for MQTT battery command")
             return False
 
-        # The optional fields belong inside the command object, next to systemId - at the top level of the payload they are ignored
-        command = {"systemId": system_id, "activeMode": active_mode, "startTime": now_ts, "duration": int(duration_minutes)}
+        command = self._build_battery_command(
+            system_id,
+            active_mode,
+            duration_minutes,
+            now_ts,
+            charging_power_kw=charging_power_kw,
+            pv_power_kw=pv_power_kw,
+            max_sell_power_kw=max_sell_power_kw,
+            max_purchase_power_kw=max_purchase_power_kw,
+            charge_priority_type=charge_priority_type,
+            discharge_priority_type=discharge_priority_type,
+        )
+        payload = {"accessToken": token, "commands": [command]}
+
+        self.log("SigenergyAPI: Sending MQTT battery command {} ({} min, {:.2f}kW) to system {}".format(
+            active_mode, duration_minutes, charging_power_kw or 0.0, system_id))
+
+        ok = await self._publish_mqtt(SIGENERGY_MQTT_TOPIC_COMMAND, payload)
+        if ok:
+            self._last_battery_command[system_id] = (command_hash, now_ts)
+        return ok
+
+    @staticmethod
+    def _build_battery_command(
+        system_id,
+        active_mode,
+        duration_minutes,
+        start_ts,
+        charging_power_kw=None,
+        pv_power_kw=None,
+        max_sell_power_kw=None,
+        max_purchase_power_kw=None,
+        charge_priority_type=None,
+        discharge_priority_type=None,
+    ):
+        """Build one per-system entry for the ``commands`` list of a battery command payload.
+
+        The optional fields belong inside the command object, next to systemId - at the top
+        level of the payload they are ignored.  Fields left as None are omitted.
+
+        Returns:
+            Dict for one system's command.
+        """
+        command = {"systemId": system_id, "activeMode": active_mode, "startTime": start_ts, "duration": int(duration_minutes)}
         if charging_power_kw is not None:
             command["chargingPower"] = round(charging_power_kw, 2)
         if pv_power_kw is not None:
@@ -1148,15 +1275,124 @@ class SigenergyAPI(ComponentBase):
             command["chargePriorityType"] = charge_priority_type
         if discharge_priority_type is not None:
             command["dischargePriorityType"] = discharge_priority_type
-        payload = {"accessToken": token, "commands": [command]}
+        return command
 
-        self.log("SigenergyAPI: Sending MQTT battery command {} ({} min, {:.2f}kW) to system {}".format(
-            active_mode, duration_minutes, charging_power_kw or 0.0, system_id))
+    async def mqtt_command_probe(self, system_ids, active_mode=SIGENERGY_ACTIVE_MODE_SELF, duration_minutes=5, charging_power_kw=None, listen_seconds=60, try_v5=True):
+        """Check end to end that the MQTT broker still accepts battery commands and pushes data.
 
-        ok = await self._publish_mqtt(SIGENERGY_MQTT_TOPIC_COMMAND, payload)
-        if ok:
-            self._last_battery_command[system_id] = (command_hash, now_ts)
-        return ok
+        ``_publish_mqtt`` reports success as soon as the publish call returns, which proves very
+        little: aiomqtt discards the PUBACK reason code, and under MQTT 3.1.1 a broker cannot
+        signal a refused publish at all.  The live listener likewise ignores SUBACK results, so a
+        broker that refuses our subscriptions looks the same as one with nothing to say.
+
+        This probe opens one connection (MQTT 5 first, so a refusal comes back as a reason code,
+        falling back to 3.1.1 if the broker rejects it), subscribes to each system's
+        change/period/alarm topics, publishes the data-push subscription requests and one battery
+        command per system, then listens for ``listen_seconds`` - recording every SUBACK/PUBACK
+        reason code and every message received.
+
+        Args:
+            system_ids: List of Sigenergy system IDs to command.
+            active_mode: SIGENERGY_ACTIVE_MODE_* to send (default selfConsumption, the least intrusive).
+            duration_minutes: Command duration in minutes.
+            charging_power_kw: Optional chargingPower for the command (kW).
+            listen_seconds: How long to wait for messages after publishing.
+            try_v5: Try MQTT 5 before falling back to 3.1.1.
+
+        Returns:
+            Report dict: connected, protocol, error, subscribe/publish lists of
+            {topic, ok, reason}, messages list of {topic, payload}, listen_seconds.
+        """
+        report = {"connected": False, "protocol": None, "error": None, "subscribe": [], "publish": [], "messages": [], "listen_seconds": listen_seconds}
+        token = await self.get_access_token()
+        if not token:
+            report["error"] = "no access token - REST authentication failed"
+            return report
+
+        def _safe(topic):
+            """Mask the app_key, which is embedded in the per-system topics."""
+            return topic.replace(self.app_key, "<redacted>") if self.app_key else topic
+
+        protocols = [aiomqtt.ProtocolVersion.V5, aiomqtt.ProtocolVersion.V311] if try_v5 else [aiomqtt.ProtocolVersion.V311]
+        for protocol in protocols:
+            report["protocol"] = protocol.name
+            try:
+                async with aiomqtt.Client(
+                    hostname=self.mqtt_host,
+                    port=self.mqtt_port,
+                    username=self.app_key,
+                    password=token,
+                    tls_context=self._build_tls_context(),
+                    keepalive=30,
+                    protocol=protocol,
+                ) as client:
+                    report["connected"] = True
+                    report["error"] = None
+                    self.log("SigenergyAPI: Probe connected to {}:{} using MQTT {}".format(self.mqtt_host, self.mqtt_port, protocol.name))
+
+                    # aiomqtt drops the PUBACK reason code, so chain paho's on_publish to keep it.
+                    # Publishes are awaited one at a time, so the code recorded during an await is that publish's.
+                    puback_codes = []
+                    paho_client = getattr(client, "_client", None)
+                    original_on_publish = getattr(paho_client, "on_publish", None)
+                    if original_on_publish is not None:
+
+                        def _record_puback(paho, userdata, mid, reason_code, properties):
+                            """Record the PUBACK reason code, then hand on to aiomqtt."""
+                            puback_codes.append(reason_code)
+                            original_on_publish(paho, userdata, mid, reason_code, properties)
+
+                        paho_client.on_publish = _record_puback
+
+                    async def _publish(topic, payload):
+                        """Publish at QoS 1 and record how the broker acknowledged it."""
+                        puback_codes.clear()
+                        await client.publish(topic, payload=json.dumps(payload), qos=1)
+                        code = puback_codes[-1] if puback_codes else None
+                        ok, reason = _mqtt_ack_result(code)
+                        no_subscribers = code is not None and _safe_int(getattr(code, "value", code), default=None) == MQTT_RC_NO_MATCHING_SUBSCRIBERS
+                        report["publish"].append({"topic": topic, "ok": ok, "reason": reason, "no_subscribers": no_subscribers})
+                        self.log("SigenergyAPI: Probe publish to {} {} - {}".format(topic, "accepted" if ok else "REFUSED", reason))
+
+                    for sid in system_ids:
+                        for pattern in (SIGENERGY_MQTT_TOPIC_CHANGE, SIGENERGY_MQTT_TOPIC_PERIOD, SIGENERGY_MQTT_TOPIC_ALARM):
+                            topic = pattern.format(app_key=self.app_key, system_id=sid)
+                            codes = await client.subscribe(topic)
+                            ok, reason = _mqtt_ack_result(codes[0] if codes else None)
+                            report["subscribe"].append({"topic": _safe(topic), "ok": ok, "reason": reason})
+                            self.log("SigenergyAPI: Probe subscribe to {} {} - {}".format(_safe(topic), "granted" if ok else "REFUSED", reason))
+
+                    for sub_topic in ("openapi/subscription/period", "openapi/subscription/change", "openapi/subscription/alarm"):
+                        await _publish(sub_topic, {"accessToken": token, "systemIdList": list(system_ids)})
+
+                    now_ts = int(time.time())
+                    for sid in system_ids:
+                        command = self._build_battery_command(sid, active_mode, duration_minutes, now_ts, charging_power_kw=charging_power_kw)
+                        self.log("SigenergyAPI: Probe sending command {}".format(command))
+                        await _publish(SIGENERGY_MQTT_TOPIC_COMMAND, {"accessToken": token, "commands": [command]})
+
+                    self.log("SigenergyAPI: Probe listening for {}s ...".format(listen_seconds))
+
+                    async def _collect():
+                        """Record every message the broker pushes until the listen window closes."""
+                        async for message in client.messages:
+                            raw = message.payload if isinstance(message.payload, (bytes, bytearray)) else str(message.payload).encode()
+                            text = raw.decode("utf-8", errors="replace")
+                            report["messages"].append({"topic": _safe(str(message.topic)), "payload": text})
+                            self.log("SigenergyAPI: Probe received on {}: {}".format(_safe(str(message.topic)), text[:300]))
+
+                    try:
+                        await asyncio.wait_for(_collect(), timeout=listen_seconds)
+                    except asyncio.TimeoutError:
+                        pass
+                return report
+            except aiomqtt.MqttError as e:
+                report["error"] = str(e)
+                self.log("Warn: SigenergyAPI: Probe MQTT {} error: {}".format(protocol.name, e))
+                if report["connected"]:
+                    # Connected then dropped - falling back to another protocol would hide what happened
+                    return report
+        return report
 
     # -----------------------------------------------------------------------
     # HA entity publishing
@@ -2718,7 +2954,9 @@ class SigenergyAPI(ComponentBase):
                     self.log("SigenergyAPI: Skipping REST energy poll for {} (MQTT data {:.0f}s old)".format(sid, mqtt_age))
                     energy_updated = True
                 elif refresh_energy:
-                    if await self.fetch_inverter_realtime(sid) or await self.fetch_energy_flow(sid):
+                    # energyFlow is system-level and reports grid and load directly; realtimeInfo is
+                    # only a fallback because it has no grid figure (see fetch_inverter_realtime)
+                    if await self.fetch_energy_flow(sid) or await self.fetch_inverter_realtime(sid):
                         energy_updated = True
                 else:
                     # Neither MQTT nor a fresh REST fetch — leave data_age untouched so it keeps
@@ -3037,6 +3275,84 @@ async def test_mqtt_connection(app_key, app_secret, base_url, system_id=None, to
         print("\n[{}] Ctrl+C received".format(datetime.now().strftime("%H:%M:%S")))
 
 
+async def test_mqtt_command(app_key, app_secret, base_url, system_id=None, active_mode=SIGENERGY_ACTIVE_MODE_SELF, duration_minutes=5, charging_power_kw=None, listen_seconds=60, mqtt_host=None, ca_cert=None, client_cert=None, client_key=None):  # pragma: no cover
+    """Check whether the Sigenergy MQTT broker still accepts battery commands, and print a verdict.
+
+    Reads each system's operating mode and battery power over REST, runs
+    ``SigenergyAPI.mqtt_command_probe()``, then reads battery power again so the effect of the
+    command can be compared.  Commands are only actioned while a system is in VPP mode.
+
+    Returns:
+        0 when the broker accepted everything and pushed data back, 1 otherwise.
+    """
+    if not HAS_AIOMQTT:
+        print("x aiomqtt is not installed.  Run: pip install aiomqtt")
+        return 1
+
+    print("\n{}".format("=" * 60))
+    print("Sigenergy MQTT command test")
+    print("Base URL : {}".format(base_url))
+    print("App Key  : {}...".format(app_key[:10] if len(app_key) >= 10 else app_key))
+    print("Command  : {} for {} min{}".format(active_mode, duration_minutes, " at {}kW".format(charging_power_kw) if charging_power_kw is not None else ""))
+    print("{}\n".format("=" * 60))
+
+    sig = SigenergyAPI(
+        MockBase(),
+        app_key=app_key,
+        app_secret=app_secret,
+        base_url=base_url,
+        mqtt_host=mqtt_host,
+        ca_cert=ca_cert,
+        client_cert=client_cert,
+        client_key=client_key,
+        system_id=system_id,
+    )
+
+    if not await sig.get_access_token():
+        print("x REST authentication failed")
+        return 1
+    print("+ REST authentication successful")
+    print("+ MQTT broker: {}:{}".format(sig.mqtt_host, sig.mqtt_port))
+
+    await sig.fetch_system_list()
+    system_ids = list(sig.systems.keys())
+    if not system_ids:
+        print("x No authorised systems found")
+        return 1
+    print("+ Systems: {}".format(system_ids))
+
+    def _battery_kw(sid):
+        """Battery power from the last energy-flow read (+discharge / -charge), or None."""
+        flow = sig.energy_flow.get(sid)
+        return flow.get("batteryPower") if flow else None
+
+    before = {}
+    for sid in system_ids:
+        await sig.fetch_current_mode(sid)
+        await sig.fetch_energy_flow(sid)
+        before[sid] = _battery_kw(sid)
+        mode = sig.current_mode.get(sid)
+        print("  {}: mode {} battery {}kW".format(sid, SIGENERGY_MODE_NAMES.get(mode, mode), before[sid]))
+        if mode != SIGENERGY_MODE_VPP:
+            print("  ~ {} is not in VPP mode - the system will ignore battery commands even if the broker accepts them".format(sid))
+
+    print("\nRunning MQTT probe ...\n")
+    report = await sig.mqtt_command_probe(system_ids, active_mode=active_mode, duration_minutes=duration_minutes, charging_power_kw=charging_power_kw, listen_seconds=listen_seconds)
+
+    print("\nBattery power before / after the command (REST energy flow):")
+    for sid in system_ids:
+        await sig.fetch_energy_flow(sid)
+        print("  {}: {}kW -> {}kW".format(sid, before[sid], _battery_kw(sid)))
+
+    ok, lines = command_probe_verdict(report)
+    print("\n{}".format("=" * 60))
+    for line in lines:
+        print(line)
+    print("{}".format("=" * 60))
+    print("RESULT: {}".format("PASS" if ok else "FAIL"))
+    return 0 if ok else 1
+
+
 def main():  # pragma: no cover
     """Main entry point for standalone testing."""
     parser = argparse.ArgumentParser(
@@ -3060,6 +3376,15 @@ def main():  # pragma: no cover
     parser.add_argument("--client-cert", default=None, help="Path to client certificate PEM file (overrides --cert-dir/client.pem)")
     parser.add_argument("--client-key", default=None, help="Path to client private key file (overrides --cert-dir/client.key)")
     parser.add_argument("--readonly", action="store_true", help="Simulate read-only mode (switch.predbat_set_read_only = on)")
+    parser.add_argument(
+        "--command-mode",
+        default=None,
+        choices=[SIGENERGY_ACTIVE_MODE_SELF, SIGENERGY_ACTIVE_MODE_IDLE, SIGENERGY_ACTIVE_MODE_CHARGE, SIGENERGY_ACTIVE_MODE_DISCHARGE],
+        help="Battery command sent by --command-test (default: {})".format(SIGENERGY_ACTIVE_MODE_SELF),
+    )
+    parser.add_argument("--command-duration", type=int, default=None, help="Duration in minutes of the --command-test command (default: 5)")
+    parser.add_argument("--command-power", type=float, default=None, help="Optional chargingPower in kW for the --command-test command")
+    parser.add_argument("--listen-seconds", type=int, default=None, help="How long --command-test waits for broker messages after publishing (default: 60)")
 
     action_group = parser.add_mutually_exclusive_group()
     action_group.add_argument(
@@ -3077,8 +3402,19 @@ def main():  # pragma: no cover
         action="store_true",
         help="Connect to the MQTT broker and print all received messages until Ctrl+C",
     )
+    action_group.add_argument(
+        "--command-test",
+        action="store_true",
+        help="Send a battery command over MQTT and report whether the broker accepted it and still pushes data",
+    )
 
     args = parser.parse_args()
+
+    # These only shape --command-test; without it they would be silently ignored and the run would look like a command test
+    command_options = {"--command-mode": args.command_mode, "--command-duration": args.command_duration, "--command-power": args.command_power, "--listen-seconds": args.listen_seconds}
+    orphaned = [flag for flag, value in command_options.items() if value is not None]
+    if orphaned and not args.command_test:
+        parser.error("{} only applies with --command-test".format(", ".join(orphaned)))
 
     # Resolve TLS certificate file paths — individual flags override cert-dir — then read contents
     import os
@@ -3102,7 +3438,24 @@ def main():  # pragma: no cover
     client_cert = _read_cert(client_cert_path)
     client_key = _read_cert(client_key_path)
 
-    if args.mqtt_test:
+    if args.command_test:
+        result = asyncio.run(
+            test_mqtt_command(
+                args.app_key,
+                args.app_secret,
+                args.base_url,
+                args.system_id,
+                active_mode=args.command_mode if args.command_mode is not None else SIGENERGY_ACTIVE_MODE_SELF,
+                duration_minutes=args.command_duration if args.command_duration is not None else 5,
+                charging_power_kw=args.command_power,
+                listen_seconds=args.listen_seconds if args.listen_seconds is not None else 60,
+                mqtt_host=args.mqtt_host,
+                ca_cert=ca_cert,
+                client_cert=client_cert,
+                client_key=client_key,
+            )
+        )
+    elif args.mqtt_test:
         result = asyncio.run(test_mqtt_connection(args.app_key, args.app_secret, args.base_url, args.system_id, args.mqtt_topic, ca_cert=ca_cert, client_cert=client_cert, client_key=client_key))
     else:
         action = "onboard" if args.onboard else ("offboard" if args.offboard else None)
