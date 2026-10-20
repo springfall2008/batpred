@@ -496,7 +496,7 @@ COMPONENT_LIST = {
             # Same idea for the inverter's AC rating, which is taken from the discharge power
             # setting's upper bound. Hanchu units come in 3.68, 5, 6 and 10 kW.
             "inverter_limit": {"required": False, "config": "hanchu_inverter_limit"},
-            "api_delay": {"required": False, "default": 1, "config": "hanchu_api_delay"},
+            "api_delay": {"required": False, "default": 1.0, "config": "hanchu_api_delay"},
             "min_write_interval": {"required": False, "default": 60, "config": "hanchu_min_write_interval"},
         },
         # Gate activation on having an account. Without this the component would start for every
