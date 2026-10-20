@@ -1151,26 +1151,14 @@ def _run_short_dispatch(my_predbat):
         _cycle(my_predbat, 910, slots=[{"start": 900, "end": 930, "kwh": 3.0, "octopus": True}])
         failed |= _check("t56 old half hour pruned", old not in my_predbat.dynamic_load_car_confirmed_periods[0], "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods))
 
-        print("Test 57: a one-minute dispatch at the start of a half hour can be confirmed in its first minute")
+        print("Test 57: a one-minute dispatch in the first 2 minutes of a half hour is never confirmed")
+        # Deliberate: the sensor can still show charging for a car that stopped just before the boundary, and a
+        # dispatch that short is not trusted (dispatch_too_short()), so the guard is kept for it too
         _reset(my_predbat)
         _sensor(my_predbat, "on")
         my_predbat.car_charging_slots = [[{"start": 840, "end": 841, "kwh": 0.1, "octopus": True}]]
         my_predbat.dynamic_load_car_poll(_at(my_predbat, 840, 30))
-        failed |= _check("t57 14:00-14:30 confirmed at 14:00:30", my_predbat.midnight_utc + timedelta(minutes=870) in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()), "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods))
-        # One still running when the guard lifts waits for a reading after it, as before
-        _reset(my_predbat)
-        _sensor(my_predbat, "on")
-        my_predbat.car_charging_slots = [[{"start": 840, "end": 845, "kwh": 0.5, "octopus": True}]]
-        my_predbat.dynamic_load_car_poll(_at(my_predbat, 840, 30))
-        failed |= _check("t57 a longer dispatch waits for the guard", not my_predbat.dynamic_load_car_confirmed_periods.get(0), "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods))
-        # A dispatch running on from the half hour before keeps the guard: the sensor may lag a car that just stopped
-        _reset(my_predbat)
-        _sensor(my_predbat, "on")
-        my_predbat.car_charging_slots = [[{"start": 810, "end": 840, "kwh": 3.0, "octopus": True}, {"start": 840, "end": 841, "kwh": 0.1, "octopus": True}]]
-        my_predbat.dynamic_load_car_poll(_at(my_predbat, 840, 30))
-        failed |= _check(
-            "t57 a dispatch from the half hour before keeps the guard", my_predbat.midnight_utc + timedelta(minutes=870) not in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()), "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods)
-        )
+        failed |= _check("t57 14:00-14:30 not confirmed at 14:00:30", not my_predbat.dynamic_load_car_confirmed_periods.get(0), "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods))
     finally:
         for key, value in (("octopus_slot_low_rate", saved_low_rate), ("octopus_slot_max", saved_slot_max)):
             if value is None:

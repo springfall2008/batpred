@@ -683,13 +683,9 @@ class Plan:
                 # can still show charging for a car that stopped just before the boundary, so it only confirms
                 # from DYNAMIC_LOAD_CAR_CONFIRM_MINUTES into the half hour - the slot is trusted straight away
                 # either way. The load test only needs load that is not low to trust the slot, which a cooker or
-                # hot tub also gives; keeping the cheap rate needs load at the car's own charging rate.
-                # A dispatch that began in this half hour and is over before that guard lifts (a one-minute
-                # dispatch at 14:00, see dispatch_too_short()) can only ever be confirmed by an earlier reading
+                # hot tub also gives; keeping the cheap rate needs load at the car's own charging rate
                 if car_n in self.dynamic_load_car_sensors:
-                    period_minute = (int(minute) // 30) * 30
-                    over_before_guard = dispatch_start >= period_minute and dispatch_end <= period_minute + DYNAMIC_LOAD_CAR_CONFIRM_MINUTES
-                    seen_minute = minute if minute % 30 >= DYNAMIC_LOAD_CAR_CONFIRM_MINUTES or over_before_guard else None
+                    seen_minute = minute if minute % 30 >= DYNAMIC_LOAD_CAR_CONFIRM_MINUTES else None
                 elif self.load_last_period >= self.car_charging_threshold_kw():
                     seen_minute = self.minutes_now - 1
                 else:
