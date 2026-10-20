@@ -4183,7 +4183,7 @@ class Octopus:
         """
         return (strip_from is not None and minute >= strip_from) or minute in self.octopus_surplus
 
-    def octopus_planned_running(self, car_n, planned):
+    def octopus_planned_running(self, car_n, planned, minute_exact=None):
         """
         The source of the planned dispatch that is pricing the current half hour off-peak for car_n, or None
         when none is.
@@ -4193,8 +4193,11 @@ class Octopus:
         ended. One still to start is not counted, though rate_add_io_slots() prices its half hour too:
         Octopus can withdraw it before it runs. Nor is an entry still listed after its end, which was never
         seen running, and which dispatch_billed_off_peak() would take as finished whatever its location.
+
+        minute_exact is the minute to judge it at on that clock, from the 15 second poll; None for this cycle's.
         """
-        minute_exact = self.dynamic_load_car_minute(self.now_utc_real)
+        if minute_exact is None:
+            minute_exact = self.dynamic_load_car_minute(self.now_utc_real)
         for slot in planned:
             start_minutes, end_minutes, _, source, location = self.decode_octopus_slot(car_n, slot, raw=True)
             if start_minutes == end_minutes or not self.dispatch_billed_off_peak(car_n, source, location, start_minutes, end_minutes):
@@ -4232,7 +4235,7 @@ class Octopus:
         """
         return OCTOPUS_DISPATCH_WINDOW_HOLD_MINUTES if self.dispatch_billing_window() else OCTOPUS_DISPATCH_HOLD_MINUTES
 
-    def octopus_held_update(self):
+    def octopus_held_update(self, now=None):
         """
         Remember the half hour a planned Octopus Intelligent dispatch is running in, per car, so it keeps the
         dispatch rate once it has passed (see octopus_held_dispatches()).
@@ -4243,9 +4246,13 @@ class Octopus:
         is never cancelled (see dynamic_load_car_active()), so every half hour of a running dispatch is kept.
         Half hours are kept by their absolute start, as minutes since midnight_utc mean something else after
         midnight, dropped octopus_hold_minutes() after they end, and saved to storage when they change.
+
+        Also called from the 15 second poll with its time as now, judged on that exact clock: a dispatch
+        shorter than the 5 minute cycle is never running at one (see dispatch_too_short()).
         """
         hold_minutes = self.octopus_hold_minutes()
-        period_minute = (self.minutes_now // 30) * 30
+        minute_exact = self.dynamic_load_car_minute(now) if now is not None else None
+        period_minute = int(minute_exact // 30) * 30 if now is not None else (self.minutes_now // 30) * 30
         period_start = self.midnight_utc + timedelta(minutes=period_minute)
         for car_n in range(self.num_cars):
             held = self.octopus_slots_held.setdefault(car_n, {})
@@ -4256,7 +4263,7 @@ class Octopus:
             if strip_from is not None and strip_from < period_minute + 30:
                 held.pop(period_start, None)
                 continue
-            source = self.octopus_planned_running(car_n, self.octopus_slots_planned.get(car_n, []))
+            source = self.octopus_planned_running(car_n, self.octopus_slots_planned.get(car_n, []), minute_exact)
             if source is not None:
                 held[period_start] = source
         self.octopus_held_save()

@@ -771,6 +771,7 @@ That check needs **switch.predbat_octopus_intelligent_dynamic** On. In practice 
 Without one, very short dispatches always stay at the normal rate.
 The car's own plan still includes them, priced at the normal rate.
 This does not apply when **intelligent_dispatch_billing** is `window`, where the supplier bills every dispatch half hour cheap whether or not the car charges.
+This only covers the dispatches Predbat prices itself. If your import rates come from the Octopus Energy integration and the integration has already lowered the rate for a short dispatch, Predbat leaves that rate as it is.
 
 **What happens when the car is not charging**
 

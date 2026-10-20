@@ -36,6 +36,7 @@ STATE_FIELDS = (
     "num_cars",
     "minutes_now",
     "now_utc_real",
+    "now_utc",
     "car_charging_slots",
     "car_energy_reported_load",
     "car_charging_threshold",
@@ -46,6 +47,8 @@ STATE_FIELDS = (
     "dynamic_load_car_run",
     "dynamic_load_car_confirmed",
     "dynamic_load_car_confirmed_periods",
+    "octopus_slots_planned",
+    "octopus_slots_held",
     "dynamic_load_car_saved",
     "octopus_slots",
     "io_adjusted",
@@ -116,6 +119,8 @@ def _reset(my_predbat):
     my_predbat.dynamic_load_car_run = {}
     my_predbat.dynamic_load_car_confirmed = {}
     my_predbat.dynamic_load_car_confirmed_periods = {}
+    my_predbat.octopus_slots_planned = {}
+    my_predbat.octopus_slots_held = {}
     my_predbat.dynamic_load_car_saved = {}
     my_predbat.car_energy_reported_load = False
     my_predbat.car_charging_threshold = 3.0 / 60.0
@@ -1118,8 +1123,20 @@ def _run_short_dispatch(my_predbat):
 
         # The 15 second poll catches the car charging at 14:13:20, inside the blip
         my_predbat.car_charging_slots = [[{"start": 853, "end": 854, "kwh": 0.1, "octopus": True}]]
+        my_predbat.octopus_slots_planned = {0: blip}
+        my_predbat.now_utc = my_predbat.midnight_utc + timedelta(minutes=850)  # the last cycle's clock
         my_predbat.dynamic_load_car_poll(_at(my_predbat, 853, 20))
         failed |= _check("t55 half hour confirmed", my_predbat.midnight_utc + timedelta(minutes=870) in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()), "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods))
+        # ...and holds it, as no 5 minute cycle sees the blip running and Octopus lists it as completed only later
+        failed |= _check("t55 half hour held by the poll", my_predbat.midnight_utc + timedelta(minutes=840) in my_predbat.octopus_slots_held.get(0, {}), "held {}".format(my_predbat.octopus_slots_held))
+        print("Test 55b: the held half hour keeps the blip cheap once it has gone from the planned dispatches")
+        _at(my_predbat, 855)
+        my_predbat.now_utc = my_predbat.midnight_utc + timedelta(minutes=855)
+        held = my_predbat.octopus_held_dispatches(0, [], [])
+        rates = my_predbat.rate_add_io_slots(0, {minute: 10.0 for minute in range(0, 2 * 24 * 60)}, held)
+        failed |= _check("t55b held half hour cheap", len(held) == 1 and all(rates[minute] == 4.0 for minute in range(840, 870)), "held {} rates {}".format(held, sorted(set(rates[minute] for minute in range(840, 870)))))
+        my_predbat.octopus_slots_planned = {}
+        my_predbat.octopus_slots_held = {}
 
         # Charging again in a later dispatch confirms 15:00-15:30 as well, without losing 14:00-14:30
         _cycle(my_predbat, 905, slots=[{"start": 900, "end": 930, "kwh": 3.0, "octopus": True}])
@@ -1133,6 +1150,27 @@ def _run_short_dispatch(my_predbat):
         my_predbat.dynamic_load_car_confirmed_periods[0].add(old)
         _cycle(my_predbat, 910, slots=[{"start": 900, "end": 930, "kwh": 3.0, "octopus": True}])
         failed |= _check("t56 old half hour pruned", old not in my_predbat.dynamic_load_car_confirmed_periods[0], "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods))
+
+        print("Test 57: a one-minute dispatch at the start of a half hour can be confirmed in its first minute")
+        _reset(my_predbat)
+        _sensor(my_predbat, "on")
+        my_predbat.car_charging_slots = [[{"start": 840, "end": 841, "kwh": 0.1, "octopus": True}]]
+        my_predbat.dynamic_load_car_poll(_at(my_predbat, 840, 30))
+        failed |= _check("t57 14:00-14:30 confirmed at 14:00:30", my_predbat.midnight_utc + timedelta(minutes=870) in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()), "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods))
+        # One still running when the guard lifts waits for a reading after it, as before
+        _reset(my_predbat)
+        _sensor(my_predbat, "on")
+        my_predbat.car_charging_slots = [[{"start": 840, "end": 845, "kwh": 0.5, "octopus": True}]]
+        my_predbat.dynamic_load_car_poll(_at(my_predbat, 840, 30))
+        failed |= _check("t57 a longer dispatch waits for the guard", not my_predbat.dynamic_load_car_confirmed_periods.get(0), "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods))
+        # A dispatch running on from the half hour before keeps the guard: the sensor may lag a car that just stopped
+        _reset(my_predbat)
+        _sensor(my_predbat, "on")
+        my_predbat.car_charging_slots = [[{"start": 810, "end": 840, "kwh": 3.0, "octopus": True}, {"start": 840, "end": 841, "kwh": 0.1, "octopus": True}]]
+        my_predbat.dynamic_load_car_poll(_at(my_predbat, 840, 30))
+        failed |= _check(
+            "t57 a dispatch from the half hour before keeps the guard", my_predbat.midnight_utc + timedelta(minutes=870) not in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()), "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods)
+        )
     finally:
         for key, value in (("octopus_slot_low_rate", saved_low_rate), ("octopus_slot_max", saved_slot_max)):
             if value is None:
@@ -1147,6 +1185,7 @@ def _restart(my_predbat):
     Lose the in-memory dispatch-check state, as a restart does, then restore it from storage.
     """
     my_predbat.dynamic_load_car_confirmed = {}
+    my_predbat.dynamic_load_car_confirmed_periods = {}
     my_predbat.dynamic_load_car_since = {}
     my_predbat.dynamic_load_car_cancelled = {}
     my_predbat.dynamic_load_car_run = {}
@@ -1188,6 +1227,8 @@ def _run_persistence(my_predbat):
         _at(my_predbat, 403)
         _restart(my_predbat)
         failed |= _check("t49 confirmed restored", my_predbat.dynamic_load_car_confirmed.get(0) == my_predbat.midnight_utc + timedelta(minutes=420), "confirmed {}".format(my_predbat.dynamic_load_car_confirmed))
+        # Every confirmed half hour too, which a short dispatch's rate is priced from after it is over
+        failed |= _check("t49 confirmed half hours restored", my_predbat.dynamic_load_car_confirmed_periods.get(0) == {my_predbat.midnight_utc + timedelta(minutes=420)}, "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods))
         failed |= _check("t49 grace clock not restored", my_predbat.dynamic_load_car_since.get(0) is None, "since {}".format(my_predbat.dynamic_load_car_since))
         failed |= _check("t49 run restored", my_predbat.dynamic_load_car_run.get(0) == {"start": 390, "end": 450}, "run {}".format(my_predbat.dynamic_load_car_run))
         failed |= _check("t49 still trusted", my_predbat.dynamic_load_car_cancelled.get(0) is False, "cancelled {}".format(my_predbat.dynamic_load_car_cancelled))
