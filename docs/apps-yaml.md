@@ -2568,6 +2568,15 @@ The recommended setting is 200 for Gen 1 hybrids with this issue.
 Global, sets the maximum reserve % that may be set to the inverter, the default is 98, as some Gen 2 & Gen 3 inverters and
 AIO firmware versions refuse to be set to 100.  Comment the line out or set it to 100 if your inverter allows setting it to 100%.
 
+A single value applies to every inverter. With more than one inverter you can instead give one value per inverter as a list,
+which must have an entry for each inverter:
+
+```yaml
+  inverter_reserve_max:
+    - 100
+    - 98
+```
+
 ### Savings Max Charge Slots
 
 Every day Predbat calculates the [financial savings you have made by running Predbat](output-data.md#cost-saving-data) vs not using Predbat to automate your battery activity.

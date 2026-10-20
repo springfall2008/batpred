@@ -567,7 +567,7 @@ class Inverter:
 
         # Load inverter brand definitions
         # One value for every inverter (as documented) or a per-inverter list (#5369)
-        reserve_max_index = self.id if isinstance(self.base.get_arg("inverter_reserve_max", indirect=False, can_override=False), list) else None
+        reserve_max_index = self.id if isinstance(self.base.args.get("inverter_reserve_max"), list) else None
         self.reserve_max = self.base.get_arg("inverter_reserve_max", 100, index=reserve_max_index)
         self.inv_has_mqtt_api = INVERTER_DEF[self.inverter_type]["has_mqtt_api"]
         self.inv_mqtt_topic = self.base.get_arg("mqtt_topic", "Sofar2mqtt")
