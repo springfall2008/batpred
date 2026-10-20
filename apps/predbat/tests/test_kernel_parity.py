@@ -107,9 +107,11 @@ SCENARIO_STATE_ATTRS = [
     "battery_temperature_charge_curve",
     "battery_temperature_discharge_curve",
     "rate_max",
+    "rate_import_tariff_max",
     "rate_import",
     "rate_export",
     "io_adjusted",
+    "io_confirmed_credit",
     "all_active_keep",
     "all_active_keep_max",
     "carbon_enable",
@@ -263,13 +265,18 @@ def apply_random_scenario(my_predbat, rng):
             my_predbat.rate_import[minute + offset] = import_rate
             my_predbat.rate_export[minute + offset] = export_rate
     my_predbat.rate_max = max(my_predbat.rate_import.values())
+    my_predbat.rate_import_tariff_max = my_predbat.rate_max
 
     # Octopus intelligent adjusted slots and alerts
     my_predbat.io_adjusted = {}
+    my_predbat.io_confirmed_credit = {}
     if rng.random() < 0.3:
         start = my_predbat.minutes_now + rng.randrange(0, my_predbat.forecast_minutes - 60, 5)
         for minute in range(start, start + 60):
             my_predbat.io_adjusted[minute] = True
+        if rng.random() < 0.5:
+            # A bird-in-hand credit over the dispatch, tapering per half hour as io_confirmed_credit_update() builds it
+            my_predbat.io_confirmed_credit = {minute: 0.1 / (1 + (minute - start) // 30) for minute in range(start, start + 60)}
     my_predbat.all_active_keep = {}
     if rng.random() < 0.3:
         start = my_predbat.minutes_now + rng.randrange(0, my_predbat.forecast_minutes - 60, 5)
@@ -679,9 +686,47 @@ def run_edge_case_tests(my_predbat):
         ),
     ]
 
+    # An Intelligent dispatch assumed gone in PV10: the car keeps charging at the slot rate but no longer
+    # holds the battery, and joins the grid balance after the battery has acted. Kept last because some
+    # overrides persist into later cases: reset_inverter() removes the car (num_cars 0, slots cleared) at
+    # the start of every case, including the pv90 block below, but car_charging_loss and
+    # car_charging_limit_model stay set, harmless without a car. io_adjusted is cleared after the loop.
+    dispatch_car = {
+        "num_cars": 1,
+        "car_charging_from_battery": False,
+        "car_charging_slots": [[{"start": minutes_now, "end": minutes_now + 300, "kwh": 15.0, "average": 5, "octopus": True}], [], [], []],
+        "car_charging_soc": [0, 0, 0, 0],
+        "car_charging_limit": [100, 100, 100, 100],
+        "car_charging_limit_model": None,
+        "car_charging_loss": 0.9,
+        "soc_kw": 50.0,
+        "io_adjusted": {minute: 1 for minute in range(minutes_now, minutes_now + 300)},
+        "rate_max": 40.0,
+        "rate_import_tariff_max": 40.0,
+    }
+    cases += [
+        ("car_dispatch_gone", dict(dispatch_car, car_energy_reported_load=True), [], [], [], [], 0, 0.5, forecast_minutes),
+        ("car_dispatch_gone_pv_surplus", dict(dispatch_car, car_energy_reported_load=True), [], [], [], [], 3.0, 0.5, forecast_minutes),
+        ("car_dispatch_gone_charging", dict(dispatch_car, car_energy_reported_load=True), [100.0], half_window, [], [], 0, 0.5, forecast_minutes),
+        ("car_dispatch_gone_not_reported", dict(dispatch_car, car_energy_reported_load=False), [], [], [], [], 1.0, 0.5, forecast_minutes),
+        # A confirmed dispatch run: a charge window storing energy in it earns the bird-in-hand credit, also as it hits the limit
+        (
+            "car_dispatch_confirmed_credit",
+            dict(dispatch_car, car_energy_reported_load=True, soc_kw=40.0, io_confirmed_credit={minute: 0.1 / (1 + (minute - minutes_now) // 30) for minute in range(minutes_now, minutes_now + 300)}),
+            [100.0],
+            half_window,
+            [],
+            [],
+            0,
+            0.5,
+            forecast_minutes,
+        ),
+    ]
+
     for name, overrides, charge_limit, charge_window, export_window, export_limits, pv_kw, load_kw, end_record in cases:
         reset_inverter(my_predbat)
         reset_rates(my_predbat, 10.0, 5.0)
+        my_predbat.io_confirmed_credit = {}
         my_predbat.battery_rate_max_export = my_predbat.battery_rate_max_discharge
         for key, value in overrides.items():
             setattr(my_predbat, key, value)
@@ -701,6 +746,8 @@ def run_edge_case_tests(my_predbat):
                 pv_scenario,
                 end_record,
             )
+    my_predbat.io_adjusted = {}
+    my_predbat.io_confirmed_credit = {}
 
     # pv90: the kernel must select the p90 arrays, skip the pv10 charge de-rate, and skip the
     # io_adjusted worst-case import rate. Distinct series per scenario so a wrong selection shows up.
@@ -727,11 +774,13 @@ def run_edge_case_tests(my_predbat):
         my_predbat.charge_scaling10 = 0.5
         my_predbat.io_adjusted = {minute: 1 for minute in range(0, my_predbat.forecast_minutes + my_predbat.minutes_now)}
         # reset_rates leaves rate_max equal to the flat import rate, which would make the pv10 worst-case
-        # substitution (import_rate = rate_max) a no-op and hide a kernel that wrongly applied it to pv90
+        # substitution (import_rate = the tariff max) a no-op and hide a kernel that wrongly applied it to pv90.
+        # A tariff max below the slot's own rate checks both engines keep the slot's rate as the floor (#5163).
         my_predbat.rate_max = 50.0
-        for scenario in (PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90):
+        for tariff_max, scenario in [(50.0, PV_SCENARIO_NOMINAL), (50.0, PV_SCENARIO_PV10), (50.0, PV_SCENARIO_PV90), (5.0, PV_SCENARIO_PV10)]:
+            my_predbat.rate_import_tariff_max = tariff_max
             failed |= dual_run(
-                "{}_scenario_{}".format(case_name, scenario),
+                "{}_scenario_{}_tariff_max_{}".format(case_name, scenario, tariff_max),
                 my_predbat,
                 pv_step,
                 pv10_step,

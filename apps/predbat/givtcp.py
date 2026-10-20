@@ -92,6 +92,10 @@ GIVTCP_POLL_SECONDS = 60
 # restart. Only endpoints not already being managed are probed, and only ever to add them.
 GIVTCP_REDISCOVER_SECONDS = 3600
 
+# GivEnergy holds the charge and discharge rates as a whole percent of nominal battery capacity,
+# rounded down - 1300W on a 13.41kWh battery reads back 1206W (#5324)
+GIVTCP_RATE_STEP_PERCENT_OF_CAPACITY = 1
+
 # control name -> (domain, GivTCPRest write method name, HA entity attributes)
 GIVTCP_CONTROLS = {
     "charge_rate": ("number", "set_charge_rate", {"unit_of_measurement": "W", "device_class": "power", "icon": "mdi:battery-charging", "min": 0, "max": 20000, "step": 100}),
@@ -1038,6 +1042,7 @@ class GivTCPComponent(ComponentBase):
         elif options:
             descriptor["options"] = options
         if name in ("charge_rate", "discharge_rate"):
+            descriptor["step_percent_of_capacity"] = GIVTCP_RATE_STEP_PERCENT_OF_CAPACITY
             if max_battery_rate:
                 descriptor["max"] = max_battery_rate
             else:

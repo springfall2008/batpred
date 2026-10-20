@@ -33,6 +33,7 @@ armhf
 armv
 ASHP
 asn
+astimezone
 asyncio
 atfork
 atleast
@@ -65,6 +66,7 @@ BLAS
 boostable
 Bottlecap
 brickatius
+britkat1980
 bwignore
 byok
 cadata
@@ -144,6 +146,7 @@ denorm
 derate
 derated
 derating
+dess
 desync
 desynced
 devcontainer
@@ -170,6 +173,8 @@ dtype
 dwindow
 eauth
 echargingpile
+ECONNRESET
+ecosmart
 Eddi
 eddis
 efgh
@@ -194,15 +199,18 @@ energythroughput
 enho
 Enlighten
 enlm
+ENOTFOUND
 enph
 enphase
 enphaseenergy
 Enpower
+entityfilter
 entrez
 epod
 epvtoday
 errno
 ESSAPI
+ETIMEDOUT
 etoday
 etok
 euids
@@ -252,6 +260,7 @@ getall
 getattr
 getrusage
 Ginlong
+githubusercontent
 gitnexus
 giv
 GivEnergy
@@ -349,6 +358,7 @@ labelcolor
 labelledby
 labelnames
 ladybugdb
+Lanmate
 larr
 libbi
 libc
@@ -356,6 +366,7 @@ libyaml
 LIFEPO
 linebreak
 linestyle
+Liskov
 loadml
 loadmlpower
 loadspower
@@ -473,6 +484,9 @@ overfitting
 oversizing
 overvoltage
 ownerapi
+pac
+packettypes
+paho
 parseable
 pbat
 pbgw
@@ -503,6 +517,7 @@ preclip
 pred
 predai
 predbat
+predbatsolcast
 predbatt
 predheat
 preseed
@@ -515,6 +530,7 @@ pseudonymised
 pseudonymises
 psum
 pthread
+puback
 pvbat
 pvenergytotal
 pvlib
@@ -531,6 +547,7 @@ pyproject
 pytest
 pythonhashseed
 pytz
+Quattro
 Qwen
 randn
 rany2
@@ -538,6 +555,7 @@ rarr
 reactivepower
 readback
 readbacks
+reasoncodes
 recp
 redownload
 Referer
@@ -628,11 +646,13 @@ startswith
 startt
 stdlib
 stepline
+stevekirtley
 Storion
 Stromligning
 strptime
 strtod
 Strømligning
+suback
 subclassing
 submessage
 substep
@@ -683,6 +703,7 @@ Trefor
 treforsiphone
 treforsouthwell
 triggerable
+trydan
 tunables
 twinx
 typecode
@@ -699,6 +720,7 @@ undriven
 unencodable
 unfetchable
 unflushed
+unhashable
 unindexed
 unnormalised
 unparseable
@@ -745,6 +767,7 @@ xlabel
 xlim
 xload
 xrtkq
+xtest
 xticks
 xxabcdefyy
 yaxis

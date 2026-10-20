@@ -551,7 +551,6 @@ pred_bat:
     #- '{octopus_saving_session}'
   - '+[car_charging_planned]'
     #- '+[car_charging_soc]'
-    # - '{car_charging_now}'
   device_id: "dummy_device"
 
   #charge_start_service:

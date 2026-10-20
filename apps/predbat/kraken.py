@@ -19,7 +19,9 @@ import types as _types
 from datetime import datetime, timedelta, timezone
 
 from component_base import ComponentBase
+from utils import filter_payment_method
 from mock_base import MockBase as KrakenMockBase
+from utils import str2time
 
 # Auth strategy selection — OAuthMixin for SaaS OAuth, KrakenAuthMixin for local auth.
 # Both may ship in the same release package.  _KrakenAuthMixin is stored at module level
@@ -71,6 +73,9 @@ except ImportError:
 # The tariff is queried via the `... on TariffType` interface fragment (all concrete
 # tariff types implement it) rather than an enumerated list of concrete fragments —
 # so an export/SEG tariff whose type wasn't in the old list is no longer dropped.
+#
+# standingCharge / preVatStandingCharge are on the same interface (EDF and E.ON alike). Their
+# ratio is the VAT multiplier used to bring exc-VAT applicableRates prices up to inc-VAT.
 KRAKEN_ACCOUNT_QUERY = """{{
   account(accountNumber: "{account_number}") {{
     number
@@ -83,7 +88,7 @@ KRAKEN_ACCOUNT_QUERY = """{{
           validFrom
           validTo
           tariff {{
-            ... on TariffType {{ tariffCode displayName productCode }}
+            ... on TariffType {{ tariffCode displayName productCode standingCharge preVatStandingCharge }}
           }}
         }}
       }}
@@ -99,7 +104,9 @@ KRAKEN_VIEWER_QUERY = """{ viewer { accounts { number } } }"""
 # product such as an EDF SEG export tariff, or a TOU tariff absent from the REST API such as
 # E-TOU-* on E.ON Next) or 400 (the product is in the REST API but has no /standard-unit-rates/
 # resource, as day/night-structured EDF tariffs answer — GH#5166).
-# Returns value (pence/kWh inc VAT), validFrom, validTo for the requested window.
+# Returns value (pence/kWh EXC VAT), validFrom, validTo for the requested window. Unlike the
+# REST products API there is no inc-VAT field, so the caller scales by the VAT multiplier taken
+# from the account agreement (see KrakenAPI._vat_multiplier).
 # applicableRates is a Relay-style connection (ApplicableRateConnectionTypeConnection),
 # so the rate fields live under edges { node { ... } }, not directly on the field. The
 # connection is mandatory-paginated (KT-CT-1201) — a `first` value is required, and `after`
@@ -205,8 +212,10 @@ KRAKEN_BASE_URLS = {
     "eon": "https://api.eonnext-kraken.energy",
 }
 
-# Auth error codes that trigger token refresh + retry
-KRAKEN_AUTH_ERROR_CODES = ("KT-CT-1139", "KT-CT-1111", "KT-CT-1143")
+# Auth error codes that trigger token refresh + retry. KT-CT-1124 is "Signature of the JWT has expired."
+KRAKEN_AUTH_ERROR_CODES = ("KT-CT-1139", "KT-CT-1111", "KT-CT-1143", "KT-CT-1124")
+
+KRAKEN_PROVIDER_NAMES = {"edf": "EDF", "eon": "E.ON Next"}
 
 # REST statuses meaning "the products API cannot serve this tariff's rates", as opposed to a
 # transient outage (429/500/503) — these are the ones worth falling back to GraphQL for.
@@ -224,6 +233,10 @@ KRAKEN_REST_RATES_UNAVAILABLE_STATUSES = (400,) + KRAKEN_REST_PRODUCT_NOT_FOUND_
 # more than the ~4-day planning window ever needs.
 KRAKEN_RATES_PAGE_SIZE = 100
 KRAKEN_RATES_MAX_PAGES = 20
+
+# Largest inc-VAT / exc-VAT ratio accepted from an agreement's standing charges. VAT only ever
+# adds, and never more than a quarter, so anything outside 1.0 - this is bad data, not a VAT rate.
+KRAKEN_VAT_MULTIPLIER_MAX = 1.25
 
 # How stale cached data may get before run() re-queries the API (minutes). Tariff/account data
 # changes rarely so it is cached for hours; rates are published roughly daily so a 30-minute
@@ -268,6 +281,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         self.account_id = account_id
         self.configured_mpan = mpan  # From SaaS config — preferred MPAN to match
         self.import_mpan = None  # Set after first successful tariff discovery
+        self.import_vat_multiplier = 1.0  # inc-VAT / exc-VAT ratio from the import agreement, for applicableRates
         self.current_tariff = None
         self.export_tariff = None  # Export tariff (discovered dynamically)
         self.wired = False
@@ -321,6 +335,22 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             self.token_hash = token_hash or ""
         elif hasattr(self, "_init_kraken_auth"):
             self._init_kraken_auth(auth_method, key=key, email=email, password=password)
+
+    def is_alive(self):
+        """Report unhealthy once the login has been rejected, however much cached data is still being served."""
+        return self.api_started and not self.oauth_failed
+
+    def health_message(self):
+        """Say why Kraken is unhealthy so the run status points at the login rather than just naming the component."""
+        if not self.oauth_failed:
+            return None
+        name = KRAKEN_PROVIDER_NAMES.get(self.provider, "Kraken")
+        if self.provider == "eon" and self.auth_method == "email":
+            # E.ON Next stopped accepting email/password in obtainKrakenToken around 16 Oct 2026 (#5580)
+            return f"{name} login failed - email/password sign-in is rejected, switch kraken_auth_method to api_key"
+        if self.auth_method == "oauth":
+            return f"{name} authorisation failed - reconnect the {name} account"
+        return f"{name} login failed - check the Kraken credentials, then restart the Kraken component"
 
     async def async_graphql_query(self, query, request_context, _retry_count=0):
         """Execute a GraphQL query with auth and auto-retry on auth errors."""
@@ -387,6 +417,30 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             self.failures_total += 1
             return None
 
+    @staticmethod
+    def _vat_multiplier(tariff):
+        """Return the inc-VAT / exc-VAT ratio for a GraphQL tariff, or 1.0 if it cannot be derived.
+
+        applicableRates publishes exc-VAT prices only, while everything downstream expects the
+        inc-VAT basis the REST products API uses. The VAT rate is not hardcoded - GB domestic
+        electricity is zero-rated from October 2026 to March 2027 and 5% either side - but taken
+        from the tariff's own standingCharge (inc VAT) / preVatStandingCharge pair, which follows
+        whatever rate applies now. A missing, zero or implausible pair leaves prices unscaled.
+        """
+        if not isinstance(tariff, dict):
+            return 1.0
+        try:
+            inc_vat = float(tariff.get("standingCharge"))
+            exc_vat = float(tariff.get("preVatStandingCharge"))
+        except (TypeError, ValueError):
+            return 1.0
+        if exc_vat <= 0:
+            return 1.0
+        ratio = inc_vat / exc_vat
+        if 1.0 <= ratio <= KRAKEN_VAT_MULTIPLIER_MAX:
+            return ratio
+        return 1.0
+
     def _find_active_tariff(self, meter_points, preferred_mpan=None, is_export=False):
         """Find the current active tariff from a list of meter points.
 
@@ -396,7 +450,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             is_export: If True, only match EXPORT tariff codes; if False, skip them
 
         Returns:
-            dict with tariff_code, product_code, mpan or None
+            dict with tariff_code, product_code, mpan, vat_multiplier or None
         """
         now = datetime.now(timezone.utc)
 
@@ -451,6 +505,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                     "tariff_code": tariff_code,
                     "product_code": product_code,
                     "mpan": mpan,
+                    "vat_multiplier": self._vat_multiplier(tariff),
                 }
 
         return None
@@ -614,6 +669,13 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         # Store MPAN for GraphQL fallback in async_fetch_rates_graphql()
         self.import_mpan = import_result["mpan"]
 
+        # Refreshed on every discovery, not only a tariff change: the VAT rate can move while the
+        # tariff stays the same. Kept off the tariff dict so it never reads as a tariff change.
+        vat_multiplier = import_result["vat_multiplier"]
+        if vat_multiplier != self.import_vat_multiplier:
+            self.log(f"Kraken: Import VAT multiplier {self.import_vat_multiplier:.4f} -> {vat_multiplier:.4f} (from agreement standing charge)")
+            self.import_vat_multiplier = vat_multiplier
+
         # Discover export tariff — always re-discover to detect tariff changes
         await self._discover_export_tariff(all_meter_points, my_address)
 
@@ -694,7 +756,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
 
         return results
 
-    async def async_fetch_rates_graphql(self, mpan, account_id=None):
+    async def async_fetch_rates_graphql(self, mpan, account_id=None, vat_multiplier=1.0):
         """Fetch rates via GraphQL applicableRates — fallback when REST returns non-200.
 
         Used when the product code has been removed from the REST API (e.g. product replaced
@@ -706,6 +768,8 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             mpan: The MPAN (meter point access number) to query rates for.
             account_id: Account number that owns the MPAN. Defaults to the configured
                 import account; pass the export account for E.ON split import/export accounts.
+            vat_multiplier: inc-VAT / exc-VAT ratio to scale the exc-VAT prices by. Pass the import
+                agreement's ratio for import; leave at 1.0 for export, which carries no VAT.
 
         Returns list of rate dicts with value_inc_vat, value_exc_vat, valid_from, valid_to, or None.
         """
@@ -738,7 +802,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             data = await self.async_graphql_query(query, "applicable-rates-graphql")
             if not data:
                 # Network/auth failure mid-pagination: return what we have if any, else None.
-                return self._finalize_graphql_rates(raw_rates, mpan) if raw_rates else None
+                return self._finalize_graphql_rates(raw_rates, mpan, vat_multiplier) if raw_rates else None
 
             connection = data.get("applicableRates") or {}
             raw_rates.extend(self._connection_nodes(connection))
@@ -757,17 +821,20 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             self.log("Warn: Kraken: applicableRates GraphQL returned no rate periods")
             return None
 
-        return self._finalize_graphql_rates(raw_rates, mpan)
+        return self._finalize_graphql_rates(raw_rates, mpan, vat_multiplier)
 
-    def _finalize_graphql_rates(self, raw_rates, mpan):
-        """Convert applicableRates connection nodes into rate dicts, or None if none are valid."""
+    def _finalize_graphql_rates(self, raw_rates, mpan, vat_multiplier=1.0):
+        """Convert applicableRates connection nodes into rate dicts, or None if none are valid.
+
+        The node value is exc-VAT; vat_multiplier scales it to the inc-VAT basis used downstream.
+        """
         results = []
         for r in raw_rates:
             value = r.get("value")
             if value is None:
                 continue
-            value_inc_vat = float(value)
-            value_exc_vat = round(value_inc_vat / 1.05, 4)
+            value_exc_vat = float(value)
+            value_inc_vat = round(value_exc_vat * vat_multiplier, 4)
             results.append(
                 {
                     "value_inc_vat": value_inc_vat,
@@ -862,9 +929,11 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         if is_export:
             fallback_mpan = self.export_mpan
             fallback_account = self.export_account_id or self.account_id
+            fallback_vat_multiplier = 1.0  # export payments carry no VAT
         else:
             fallback_mpan = self.import_mpan
             fallback_account = self.account_id
+            fallback_vat_multiplier = self.import_vat_multiplier
         url = self.build_rates_url(tariff["product_code"], tariff["tariff_code"])
 
         # 1) Public (unauthenticated) attempt.
@@ -898,7 +967,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                 reason = "product not in the REST API" if err in KRAKEN_REST_PRODUCT_NOT_FOUND_STATUSES else "tariff has no standard-unit-rates endpoint"
                 self.log(f"Kraken: REST rates HTTP {err} for {tariff['tariff_code']} ({reason}), using GraphQL applicableRates for {kind} MPAN {fallback_mpan}")
                 failures_before = self.failures_total
-                rates = await self.async_fetch_rates_graphql(fallback_mpan, account_id=fallback_account)
+                rates = await self.async_fetch_rates_graphql(fallback_mpan, account_id=fallback_account, vat_multiplier=fallback_vat_multiplier)
                 if rates is None and self.failures_total == failures_before:
                     # async_graphql_query counts its own failures (auth, non-200, GraphQL errors,
                     # network), so only add a count when the fallback came back empty without
@@ -913,7 +982,9 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             self.failures_total += 1
             return None
 
-        results = self._normalize_rate_timestamps(results)
+        # Same DIRECT_DEBIT / NON_DIRECT_DEBIT overlap as the standing charges (GH#5502): the rows
+        # are merged last-write-wins downstream, so without this the rate depends on row order.
+        results = self._normalize_rate_timestamps(filter_payment_method(results))
         self.log(f"Kraken: Fetched {len(results)} rate periods for {tariff['tariff_code']}")
         return results
 
@@ -1007,7 +1078,9 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                 return await self.async_fetch_standing_charges_graphql(self.import_mpan)
             return None
 
-        results = data.get("results", [])
+        # The REST endpoint returns a DIRECT_DEBIT and a NON_DIRECT_DEBIT row for each period, and
+        # EDF lists the NON_DIRECT_DEBIT one first, so keep the Direct Debit row (GH#5502).
+        results = filter_payment_method(data.get("results", []))
         if results:
             # API returns pence/day; fetch.py multiplies by 100 expecting pounds/day
             value = results[0].get("value_inc_vat")
@@ -1051,6 +1124,8 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         self.current_tariff = data.get("current_tariff")
         self.export_tariff = data.get("export_tariff")
         self.import_mpan = data.get("import_mpan")
+        # Absent from a cache written before the multiplier existed; the next discovery sets it.
+        self.import_vat_multiplier = data.get("import_vat_multiplier") or 1.0
         # Prefer cached discovered values but never clobber a configured value with None.
         self.export_mpan = data.get("export_mpan") or self.export_mpan
         self.export_account_id = data.get("export_account_id") or self.export_account_id
@@ -1082,6 +1157,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             "current_tariff": self.current_tariff,
             "export_tariff": self.export_tariff,
             "import_mpan": self.import_mpan,
+            "import_vat_multiplier": self.import_vat_multiplier,
             "export_mpan": self.export_mpan,
             "export_account_id": self.export_account_id,
             "import_rates": self.import_rates,
@@ -1095,19 +1171,71 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         }
         await self.storage.save("kraken", self._cache_filename(), cache, format="yaml", expiry=datetime.now(timezone.utc) + timedelta(days=7))
 
+    @staticmethod
+    def _rates_in_window(rates, window_start, window_end):
+        """Return the rate periods that overlap [window_start, window_end], in their original order.
+
+        The end is inclusive because minute_data() keeps its last minute too: a period starting
+        exactly there still sets it. A period ending exactly at window_start sets nothing inside.
+
+        A period with no valid_to is open-ended and a period with no valid_from has no start, so
+        each is kept if the rest of it overlaps. A period whose timestamps cannot be parsed is kept
+        too, so that minute_data() meets it just as it did before the trim was added.
+        """
+        kept = []
+        for rate in rates:
+            try:
+                valid_from = str2time(rate["valid_from"]) if rate.get("valid_from") else None
+                valid_to = str2time(rate["valid_to"]) if rate.get("valid_to") else None
+            except (ValueError, TypeError):
+                kept.append(rate)
+                continue
+            if valid_from is not None and valid_from > window_end:
+                continue
+            if valid_to is not None and valid_to <= window_start:
+                continue
+            kept.append(rate)
+        return kept
+
+    def _published_rates(self, rates):
+        """Trim a rate list to the window Predbat reads back, for publishing as a sensor attribute.
+
+        A long fixed contract returns every period since it started - about three a day, so a few
+        months reaches 255+ periods (~38 KB), past Home Assistant's 16 KB recorder limit for a
+        state's attributes (#5534). Predbat reads the sensor back through fetch_octopus_rates(),
+        whose minute_data() keeps only (forecast_days + 1) days either side of midnight and drops
+        the rest, so publish just that and the plan sees exactly the rates it did before. The
+        back end is deliberately wider than the Octopus component's -24h: when fetches keep
+        failing, rate_replicate() copies the last real day forward from up to two days back, and
+        trimming that away would lose the rates sooner than before. The in-memory list and the
+        cache keep the full set.
+
+        The forward end has one day to spare: the sensor is republished only on the first run and
+        when a rates refresh is due (every 30 minutes), so one published just before midnight can
+        still be what Predbat reads just after it, when its own window has moved on a day. forecast_days is worked out as fetch.py does,
+        including its 24 hour minimum.
+        """
+        forecast_hours = max(self.get_arg("forecast_hours", 48), 24)
+        forecast_days = int((forecast_hours + 23) / 24)
+        midnight = self.midnight_utc
+        return self._rates_in_window(rates, midnight - timedelta(days=forecast_days + 1), midnight + timedelta(days=forecast_days + 2))
+
     def _publish_rate_sensors(self):
         """Publish the import/export rate + standing-charge sensors from the current in-memory data.
 
         Called on the first run (so cached data populates HA immediately) and whenever rates are
-        refreshed. No-ops for any datum that is not present yet.
+        refreshed. No-ops for any datum that is not present yet. The rates attributes carry only
+        the window Predbat reads back (see _published_rates()), and the state is the number of
+        periods published.
         """
         if self.import_rates:
+            import_rates = self._published_rates(self.import_rates)
             self.dashboard_item(
                 self.get_entity_name("sensor", "import_rates"),
-                state=len(self.import_rates),
+                state=len(import_rates),
                 attributes={
                     "friendly_name": "Kraken Import Rates",
-                    "rates": self.import_rates,
+                    "rates": import_rates,
                     "tariff_code": self.current_tariff["tariff_code"],
                     "product_code": self.current_tariff["product_code"],
                     "icon": "mdi:currency-gbp",
@@ -1127,12 +1255,13 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                 app="kraken",
             )
         if self.export_rates and self.export_tariff:
+            export_rates = self._published_rates(self.export_rates)
             self.dashboard_item(
                 self.get_entity_name("sensor", "export_rates"),
-                state=len(self.export_rates),
+                state=len(export_rates),
                 attributes={
                     "friendly_name": "Kraken Export Rates",
-                    "rates": self.export_rates,
+                    "rates": export_rates,
                     "tariff_code": self.export_tariff["tariff_code"],
                     "product_code": self.export_tariff["product_code"],
                     "icon": "mdi:currency-gbp",
@@ -1190,6 +1319,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                 "charge_point_power_in_kw": existing.get("charge_point_power_in_kw"),
                 "planned_dispatches": existing.get("planned_dispatches", []),
                 "completed_dispatches": existing.get("completed_dispatches", []),
+                "dispatches_fetched_at": existing.get("dispatches_fetched_at"),
             }
 
         added = sorted(set(live) - set(self.intelligent_devices))
@@ -1263,7 +1393,12 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         Planned dispatches replace the previous set (they are the current optimiser schedule);
         completed dispatches merge with the cached history so metered charging is retained across
         the API's rolling window and restarts.
+
+        Returns True if at least one device's dispatches were fetched. Each device records its own
+        dispatches_fetched_at (published as an attribute), so a device whose query failed keeps its
+        cached lists and its old timestamp even when another device refreshed.
         """
+        fetched = False
         for device_id, device in self.intelligent_devices.items():
             data = await self.async_graphql_query(
                 KRAKEN_DISPATCHES_QUERY.format(account_number=self.account_id, device_id=device_id),
@@ -1271,9 +1406,12 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             )
             if data is None:
                 continue
+            fetched = True
+            device["dispatches_fetched_at"] = datetime.now(timezone.utc).isoformat()
             device["planned_dispatches"] = self._normalize_dispatches(data.get("flexPlannedDispatches"), completed=False)
             new_completed = self._normalize_dispatches(data.get("completedDispatches"), completed=True)
             device["completed_dispatches"] = self._merge_completed_dispatches(device.get("completed_dispatches", []), new_completed)
+        return fetched
 
     def _publish_dispatch_sensors(self):
         """Publish an intelligent_dispatch binary_sensor per device and wire octopus_intelligent_slot.
@@ -1385,10 +1523,12 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         # Fetch SmartFlex intelligent dispatches for any known devices, then publish + wire them.
         # dispatch_due stays permanently true for accounts with no devices (dispatch_fetched_at
         # never gets set), so track whether we actually refreshed to avoid saving the cache every
-        # cycle in the common no-EV case.
-        dispatches_refreshed = bool(self.intelligent_devices) and dispatch_due
+        # cycle in the common no-EV case. A fetch where every device's query failed is not a
+        # refresh: the cached dispatches keep their old timestamp and are retried next cycle.
+        dispatches_refreshed = False
+        if self.intelligent_devices and dispatch_due:
+            dispatches_refreshed = await self.async_fetch_dispatches()
         if dispatches_refreshed:
-            await self.async_fetch_dispatches()
             self.dispatch_fetched_at = datetime.now()
             had_success = True
         if self.intelligent_devices and (first or dispatch_due):
@@ -1421,6 +1561,8 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                 "provider": self.provider,
                 "account_id": self.account_id,
                 "has_export": self.export_tariff is not None,
+                "requests_total": self.requests_total,
+                "failures_total": self.failures_total,
                 "icon": "mdi:account-check" if status == "connected" else "mdi:account-alert",
             },
             app="kraken",

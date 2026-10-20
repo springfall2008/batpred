@@ -15,13 +15,16 @@ import json
 import re
 import time
 import copy
+import os
 import threading
+import yaml
 from datetime import datetime, timedelta, UTC
 from predbat_metrics import record_api_call
 from component_base import ComponentBase
 from coordinator import inverter_record
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
+from utils import load_apps_yaml
 
 
 # API Endpoints
@@ -237,6 +240,25 @@ SOLIS_HOLD_HYSTERESIS = 1
 # (issue #4774) - so the read is given a chance to settle before the write is called a failure.
 # Only a mismatched write pays this, so the cost is one pause per refused register per cycle.
 SOLIS_VERIFY_SETTLE_SECONDS = 5
+
+# The slot-current cap's starting point when CID 7224/7226 has not been read
+SOLIS_SLOT_CURRENT_DEFAULT_AMPS = 60.0
+
+# Slot current ceiling probe (issue #5187): how far each refused probe steps down, and the lowest
+# current worth trying - refusing everything down to it is not a ceiling, so the probe gives up
+SOLIS_SLOT_PROBE_STEP_DOWN_AMPS = 5
+# The finest step tried once 1A up has been refused - some ceilings are on a half amp (62.5A is seen)
+SOLIS_SLOT_PROBE_FINE_STEP_AMPS = 0.5
+SOLIS_SLOT_PROBE_MIN_AMPS = 10
+# A learned ceiling is semi-static: checked again once it is this old, keeping the old one until a new probe succeeds
+SOLIS_SLOT_PROBE_REFRESH_SECONDS = 24 * 60 * 60
+# After a probe that learned nothing, wait this long before trying again, doubling on each further failure up to
+# SOLIS_SLOT_PROBE_REFRESH_SECONDS - an inverter that never gives a verdict must not be probed every hour for good
+SOLIS_SLOT_PROBE_RETRY_SECONDS = 60 * 60
+
+# inverterDetail fields worth a line in the log, matched by name. An allow-list, because the same
+# reply carries the owner's station name and address, which must stay out of a log shared with support.
+SOLIS_DETAIL_SUMMARY_PATTERN = re.compile(r"model|version|firmware|machine|^power(Str)?$|^parallelBattery$|^batteryType(Name)?$|^batteryCount$", re.IGNORECASE)
 
 def parse_cid_int(value, default=None):
     """Convert a CID register value to an int, returning default when it is missing or not numeric.
@@ -523,6 +545,15 @@ class SolisAPI(ComponentBase, OAuthMixin):
         self.automatic_config_done = False  # Auto-config succeeded, so it does not need re-running
         self.capacity_voltage_warned = set()  # Inverters already warned about an estimated capacity voltage
         self.verify_settle_seconds = SOLIS_VERIFY_SETTLE_SECONDS  # Pause before a verify read is re-taken, 0 in tests
+        self.detail_summary_logged = {}  # {inverter_sn: the inverter summary last logged}, so it is logged on change only
+        self.slot_limits_logged = {}  # {inverter_sn: the slot current limits last logged}, so they are logged on change only
+        self.response_observer = None  # Called with (endpoint, payload, reply) for every reply received; the CLI's --dump-raw sets it
+        self.slot_current_probed = {}  # {inverter_sn: {"charge": A, "discharge": A, "probed_at": ISO time}} slot current ceilings learned by probing, saved to storage
+        self.slot_current_probes_loaded = False  # Whether the saved ceilings have been loaded yet
+        self.slot_probe_no_slot_logged = set()  # Inverters already logged as having no disabled slot to probe
+        self.slot_probe_pending_logged = set()  # Inverters already logged as waiting for read-only to be turned off
+        self.slot_probe_failures = {}  # {inverter_sn: consecutive probes that learned nothing}
+        self.slot_probe_retry_at = {}  # {inverter_sn: datetime} not before which a failed probe is tried again
         self.mode_asserted_for = {}  # Inverter -> the window whose start already had the storage mode asserted
 
         self.log(f"Solis API: Initialised with inverter_sn={self.configured_inverter_sn}, automatic={automatic}")
@@ -726,6 +757,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
                     # Check HTTP status
                     if response.status != 200:
                         error_text = await response.text()
+                        if self.response_observer:
+                            self.response_observer(endpoint, payload, {"http_status": response.status, "text": error_text})
                         if response.status in (401, 403) and self.auth_method == "oauth":
                             # Force a token refresh; _with_retry re-issues the request with the new token.
                             await self.handle_oauth_401()
@@ -736,8 +769,9 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
                     # Parse JSON response
                     response_json = await response.json()
-
-                    #self.log("Request to Solis API endpoint {} with payload {} returned response: {}".format(endpoint, payload, response_json))
+                    if self.response_observer:
+                        # The whole reply, not just its data field - for finding fields this code does not read yet
+                        self.response_observer(endpoint, payload, response_json)
 
                     # Check API response code
                     code = response_json.get("code", "Unknown")
@@ -1157,6 +1191,347 @@ class SolisAPI(ComponentBase, OAuthMixin):
         self.log(f"Solis API: In a charge slot at its target SOC on {inverter_sn}, setting storage mode to 'Self-Use - No Grid Charging' so it holds without importing")
         await self.set_storage_mode_if_needed(inverter_sn, "Self-Use - No Grid Charging")
 
+    def slot_current_limits(self, inverter_sn, include_probed=True):
+        """The most a V2 slot current may be set to in each direction, with every input that decided it.
+
+        The cap starts from the battery limit register (CID 7224 charge, 7226 discharge - read as is,
+        not multiplied by the pack count, and SOLIS_SLOT_CURRENT_DEFAULT_AMPS when it has not been
+        read). That is the battery-side cap.
+
+        The sysCommand min/max SolisCloud returns with each slot register is deliberately not used
+        (issue #5068). It is a UI definition for a list of model codes (its productModel), and the
+        cloud hands back one for other models: an S5-EH1P5K-L (model 3104) was given the 60A limit
+        of models 3101/3102 while its slots 2-6 held 100A, which held its exports to about 3.6kW.
+        The probe measures what the slots really accept instead.
+
+        Then, once ensure_slot_current_probed() has measured what the slots really accept, the cap is
+        held to that ceiling. Until then it is held to the rated current instead - an estimate that
+        can be too high (a 3.6kW inverter rated for 75A keeps only 60A, issue #5187) or too low (an
+        8kW hybrid rated for 156A takes 180A, charging from PV), so a measured ceiling replaces it.
+
+        Returns a dict: for each of "charge" and "discharge", "<direction>_register" (the raw register
+        value, None when not read), "<direction>_base" (the starting point), "<direction>_battery" (the
+        battery-side cap), "<direction>_probed" (the measured ceiling, None when not probed) and
+        "<direction>" (the cap); plus "rated" (None when the size is unknown) and "rated_capped"
+        (whether the rated current lowered a cap). include_probed=False leaves the measured ceiling
+        out, which is what the probe itself starts from.
+        """
+        values = self.cached_values.get(inverter_sn, {})
+        limits = {}
+        for direction, register_cid in (("charge", SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT), ("discharge", SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT)):
+            # This feeds publish_entities() as well as the write path, so an unreadable register is
+            # treated as not read rather than raising and stopping everything from being published
+            register = values.get(register_cid)
+            try:
+                base = float(register) if register is not None else SOLIS_SLOT_CURRENT_DEFAULT_AMPS
+            except (TypeError, ValueError):
+                register, base = None, SOLIS_SLOT_CURRENT_DEFAULT_AMPS
+            limits[direction + "_register"] = register
+            limits[direction + "_base"] = base
+            limits[direction + "_battery"] = base
+            limits[direction] = base
+
+        rated = self.get_rated_current(inverter_sn)
+        limits["rated"] = rated
+        probed = self.slot_current_probed.get(inverter_sn, {}) if include_probed else {}
+        for direction in ("charge", "discharge"):
+            limits[direction + "_probed"] = probed.get(direction)
+        if limits["charge_probed"] is not None and limits["discharge_probed"] is not None:
+            # Measured, so the rated estimate no longer applies
+            limits["rated_capped"] = False
+            for direction in ("charge", "discharge"):
+                limits[direction] = min(limits[direction], limits[direction + "_probed"])
+        else:
+            limits["rated_capped"] = rated is not None and rated < max(limits["charge"], limits["discharge"])
+            if limits["rated_capped"]:
+                limits["charge"] = min(limits["charge"], rated)
+                limits["discharge"] = min(limits["discharge"], rated)
+        return limits
+
+    def describe_slot_current_limits(self, inverter_sn, limits):
+        """One log line naming each slot current cap, which input set it, and everything that went into it."""
+        detail = self.inverter_details.get(inverter_sn, {})
+        parts = []
+        for direction in ("charge", "discharge"):
+            cap = limits[direction]
+            register = limits[direction + "_register"]
+            probed = limits.get(direction + "_probed")
+            # The lowest input wins; name it, most specific first when two agree
+            if probed is not None and cap == probed:
+                source = "probed ceiling"
+            elif limits["rated_capped"] and cap == limits["rated"]:
+                source = "rated current"
+            else:
+                source = "register" if register is not None else "default"
+            inputs = [f"register {register}A" if register is not None else f"register not read, default {limits[direction + '_base']}A"]
+            if probed is not None:
+                inputs.append(f"probed max {probed}A")
+            parts.append(f"{direction} {cap}A from the {source} ({', '.join(inputs)})")
+        if limits["rated"] is not None:
+            superseded = ", not used once probed" if limits.get("charge_probed") is not None and limits.get("discharge_probed") is not None else ""
+            rated_text = f"rated {limits['rated']}A from {detail.get('power')}{detail.get('powerStr') or 'kW'} at {self.get_nominal_voltage(inverter_sn)}V{superseded}"
+        else:
+            rated_text = "rated current unknown"
+        return f"Solis API: Slot current limits for {inverter_sn}: {', '.join(parts)}; {rated_text}"
+
+    def slot_power_limits(self, inverter_sn):
+        """The most each direction's slot can be set to, in watts - what Predbat should plan with.
+
+        The slot current cap from slot_current_limits() (the battery limit register, the rated
+        current and any probed ceiling) at get_nominal_voltage(). The raw CID 7224/7226 limits are
+        not what a slot can deliver: a 3.6kW inverter reads 100A (4800W) there and keeps 60A (issue
+        #5187). None for a direction whose register has not been read, as there is no figure yet.
+        """
+        limits = self.slot_current_limits(inverter_sn)
+        voltage = self.get_nominal_voltage(inverter_sn)
+        return {direction: int(limits[direction] * voltage) if limits[direction + "_register"] is not None else None for direction in ("charge", "discharge")}
+
+    def log_slot_current_limits(self, inverter_sn, limits):
+        """Log the slot current limits when they differ from what was last logged for this inverter.
+
+        Compared on the limits themselves, not the line: the line names the conversion voltage,
+        which on an HV pack is the live reading and moves every cycle.
+        """
+        key = tuple(sorted(limits.items()))
+        if self.slot_limits_logged.get(inverter_sn) != key:
+            self.slot_limits_logged[inverter_sn] = key
+            self.log(self.describe_slot_current_limits(inverter_sn, limits))
+
+    def describe_inverter_detail(self, inverter_sn, detail):
+        """One log line with the inverterDetail fields that matter when debugging limits, allow-listed by name."""
+        fields = [f"{key}={detail[key]!r}" for key in sorted(detail) if SOLIS_DETAIL_SUMMARY_PATTERN.search(key) and not isinstance(detail[key], (dict, list))]
+        packs = self.parallel_battery_count.get(inverter_sn, 1)
+        return f"Solis API: Inverter {inverter_sn} details: {', '.join(fields) or 'none of the summary fields reported'}; {packs} battery pack(s)"
+
+    async def load_slot_current_probes(self):
+        """Load the slot current ceilings learned on an earlier run, so a known inverter is not probed again.
+
+        Marked loaded only once the load has actually happened - a storage error is retried at the next
+        hourly poll, and ensure_slot_current_probed() waits for it, so a transient failure cannot lead to
+        a fresh probe overwriting what was saved.
+        """
+        if self.slot_current_probes_loaded:
+            return
+        if not self.storage:
+            self.slot_current_probes_loaded = True
+            return
+        try:
+            data = await self.storage.load("solis", "slot_current_limits")
+        except Exception as e:
+            self.log("Warn: Solis API: Could not load the probed slot current limits, will try again: {}".format(e))
+            return
+        self.slot_current_probes_loaded = True
+        if not isinstance(data, dict):
+            if data is not None:
+                self.log("Warn: Solis API: Ignoring unreadable probed slot current limits: {}".format(data))
+            return
+        for inverter_sn, probed in data.items():
+            try:
+                entry = {direction: float(probed[direction]) for direction in ("charge", "discharge")}
+                entry["probed_at"] = probed.get("probed_at")
+            except (AttributeError, KeyError, TypeError, ValueError):
+                self.log("Warn: Solis API: Ignoring an unreadable probed slot current limit for {}: {}".format(inverter_sn, probed))
+                continue
+            self.slot_current_probed[inverter_sn] = entry
+
+    async def save_slot_current_probes(self):
+        """Save the learned slot current ceilings so a restart does not probe again."""
+        if not self.storage:
+            return
+        try:
+            await self.storage.save("solis", "slot_current_limits", self.slot_current_probed, format="json", expiry=None)
+        except Exception as e:
+            self.log("Warn: Solis API: Could not save the probed slot current limits: {}".format(e))
+
+    def slot_probe_due(self, inverter_sn):
+        """Whether this inverter's slot current ceiling needs probing: never learned, or learned over SOLIS_SLOT_PROBE_REFRESH_SECONDS ago."""
+        probed = self.slot_current_probed.get(inverter_sn)
+        if not probed:
+            return True
+        try:
+            probed_at = datetime.fromisoformat(probed.get("probed_at"))
+        except (TypeError, ValueError):
+            return True  # No usable time, so its age is unknown
+        return (self.now_utc_exact - probed_at).total_seconds() >= SOLIS_SLOT_PROBE_REFRESH_SECONDS
+
+    def find_probe_slot(self, inverter_sn):
+        """A slot Predbat does not drive with neither its charge nor discharge enabled, or None - the highest is used first."""
+        windows = self.charge_discharge_time_windows.get(inverter_sn, {})
+        for slot in range(6, 1, -1):
+            slot_data = windows.get(slot)
+            if slot_data and not slot_data.get("charge_enable", 0) and not slot_data.get("discharge_enable", 0):
+                return slot
+        return None
+
+    async def probe_slot_write(self, inverter_sn, cid, value, field_description):
+        """Write one probe value and say whether the inverter kept it: True, False when it refused it, or None for no verdict.
+
+        A refusal is only ever concluded from an answer: the write is acknowledged and the register,
+        read again after verify_settle_seconds, still holds the value it had before - which is what
+        this inverter family does with a current above its ceiling. Anything else - an error, no
+        reply, an offline datalogger, or the register changing to something else - is no verdict,
+        so an unreachable inverter can never be mistaken for one that refuses every current.
+        """
+        try:
+            old_value, _ = await self.read_cid(inverter_sn, cid)
+            if cid_value_matches(old_value, value):
+                return True
+            # A candidate current is written as the inverter shows it: "60", or "62.5" on a half amp
+            written = f"{value:g}" if isinstance(value, float) else str(value)
+            if not await self.write_cid(inverter_sn, cid, written, old_value=old_value, field_description=field_description):
+                return None
+            read_back, _ = await self.read_cid(inverter_sn, cid)
+            if not cid_value_matches(read_back, value):
+                await asyncio.sleep(self.verify_settle_seconds)
+                read_back, _ = await self.read_cid(inverter_sn, cid)
+            if cid_value_matches(read_back, value):
+                self.log(f"Solis API: {field_description} on {inverter_sn}: kept")
+                return True
+            if cid_value_matches(read_back, old_value):
+                # A refusal is saved for a day, so give a slow relay one more settle before calling it one
+                await asyncio.sleep(self.verify_settle_seconds)
+                read_back, _ = await self.read_cid(inverter_sn, cid)
+                if cid_value_matches(read_back, value):
+                    self.log(f"Solis API: {field_description} on {inverter_sn}: kept, after a second settle")
+                    return True
+                if cid_value_matches(read_back, old_value):
+                    self.log(f"Solis API: {field_description} on {inverter_sn}: refused, still {read_back}")
+                    return False
+            self.log(f"Warn: Solis API: Probe of CID {cid} on {inverter_sn} wrote {value} and read back {read_back}, neither that nor the {old_value} it held - no verdict")
+            return None
+        except Exception as e:
+            self.log(f"Warn: Solis API: Probe of CID {cid} on {inverter_sn} got no answer: {e}")
+            return None
+
+    async def probe_slot_current_ceiling(self, inverter_sn, direction, slot, start, upper):
+        """Find the most one direction's slot current may be set to, on a disabled slot, then restore it.
+
+        Writes start first - the battery-side cap on a first probe, the known ceiling on a re-check.
+        If it is refused, steps down SOLIS_SLOT_PROBE_STEP_DOWN_AMPS at a time until one is kept;
+        then steps up 1A at a time until one is refused or upper (the battery-side cap, never
+        exceeded) is reached, and finally tries SOLIS_SLOT_PROBE_FINE_STEP_AMPS above that, so a
+        ceiling on a half amp (62.5A) is found too. A first probe whose start is kept is done in one
+        write, and a re-check that finds the ceiling unchanged in three.
+        Returns None - nothing learned - if any write gets no verdict, or if every current down to
+        SOLIS_SLOT_PROBE_MIN_AMPS is refused, which is not a ceiling any real inverter has.
+        """
+        cid = (SOLIS_CID_CHARGE_CURRENT if direction == "charge" else SOLIS_CID_DISCHARGE_CURRENT)[slot - 1]
+        try:
+            original, _ = await self.read_cid(inverter_sn, cid)
+        except Exception as e:
+            self.log(f"Warn: Solis API: Could not read {direction} slot {slot} current on {inverter_sn} to probe it: {e}")
+            return None
+
+        async def attempt(amps):
+            """Write one candidate current."""
+            return await self.probe_slot_write(inverter_sn, cid, amps, f"probe {direction} slot {slot} current {amps:g}A")
+
+        try:
+            upper = float(upper)
+            amps = min(float(start), upper)
+            verdict = await attempt(amps)
+            if verdict is None:
+                return None
+            if verdict:
+                refused = upper + 1  # Nothing above the battery-side cap is tried
+            else:
+                refused = amps
+            while not verdict:
+                amps -= SOLIS_SLOT_PROBE_STEP_DOWN_AMPS
+                if amps < SOLIS_SLOT_PROBE_MIN_AMPS:
+                    self.log(f"Warn: Solis API: {inverter_sn} refused every {direction} slot current down to {amps + SOLIS_SLOT_PROBE_STEP_DOWN_AMPS:g}A - not a real ceiling, nothing learned")
+                    return None
+                verdict = await attempt(amps)
+                if verdict is None:
+                    return None
+                if verdict:
+                    break
+                refused = amps
+            while amps + 1 < refused:
+                verdict = await attempt(amps + 1)
+                if verdict is None:
+                    return None
+                if not verdict:
+                    refused = amps + 1
+                    break
+                amps += 1
+            # Some ceilings sit on a half amp, so one step finer before settling
+            fine = amps + SOLIS_SLOT_PROBE_FINE_STEP_AMPS
+            if fine < refused and fine <= upper:
+                verdict = await attempt(fine)
+                if verdict is None:
+                    return None
+                if verdict:
+                    amps = fine
+            return amps
+        finally:
+            if await self.probe_slot_write(inverter_sn, cid, original, f"restore {direction} slot {slot} current") is not True:
+                self.log(f"Warn: Solis API: Could not restore {direction} slot {slot} current on {inverter_sn} to {original} after probing it")
+
+    async def ensure_slot_current_probed(self, inverter_sn):
+        """Learn the most this inverter's slot currents may be set to, once, by probing a disabled slot (issue #5187).
+
+        The inverter enforces a slot current ceiling it does not report - a 3.6kW S5-EH1P3.6K-L reads
+        100A in CID 7224/7226 and refused anything over 60A, on enabled and disabled slots alike, in
+        both directions - and a refused write leaves the slot Predbat drives at whatever it held,
+        0A during an export. Predbat only drives slot 1, so a slot with neither direction enabled can
+        be written without touching the running schedule. Only saved once both directions have a
+        verdict; a probe that learns nothing is tried again after SOLIS_SLOT_PROBE_RETRY_SECONDS,
+        doubling on each further failure up to a day. The ceiling is semi-static: a new inverter is
+        probed straight away, a known one only once its result is a day old, and a failed re-check
+        keeps the ceiling it already had. Nothing is probed until the saved ceilings have loaded, and
+        while read-only is on the probe stays pending, running on the first cycle after it is off.
+        """
+        if not self.control_enable or not self.slot_current_probes_loaded or not self.slot_probe_due(inverter_sn):
+            return
+        retry_at = self.slot_probe_retry_at.get(inverter_sn)
+        if retry_at is not None and self.now_utc_exact < retry_at:
+            return
+        if not self.is_battery_inverter(inverter_sn) or not self.is_tou_v2_mode(inverter_sn):
+            return
+        limits = self.slot_current_limits(inverter_sn, include_probed=False)
+        if limits["charge_register"] is None or limits["discharge_register"] is None:
+            return  # The probe starts from the registers, so wait until they have been read
+        slot = self.find_probe_slot(inverter_sn)
+        if slot is None:
+            if inverter_sn not in self.slot_probe_no_slot_logged:
+                self.slot_probe_no_slot_logged.add(inverter_sn)
+                self.log(f"Solis API: No disabled slot on {inverter_sn} to probe the slot current ceiling on, keeping the {limits['charge']}A/{limits['discharge']}A caps")
+            return
+        # Read-only means no writes at all, the probe's included: it stays pending until writes are allowed again
+        if self.get_state_wrapper(f"switch.{self.prefix}_set_read_only", default="off") == "on":
+            if inverter_sn not in self.slot_probe_pending_logged:
+                self.slot_probe_pending_logged.add(inverter_sn)
+                self.log(f"Solis API: Slot current probe on {inverter_sn} is pending until read-only is turned off")
+            return
+        self.slot_probe_pending_logged.discard(inverter_sn)
+
+        # A first probe starts at the battery-side cap, not the rated estimate, which can be below
+        # what the inverter really takes; a re-check starts at the known ceiling, so an unchanged
+        # one costs two writes rather than a fresh search
+        known = self.slot_current_probed.get(inverter_sn) or {}
+        starts = {direction: known.get(direction, limits[direction + "_battery"]) for direction in ("charge", "discharge")}
+        self.log(f"Solis API: {'Re-checking' if known else 'Probing'} the slot current ceiling on {inverter_sn} using disabled slot {slot}, starting at charge {starts['charge']}A and discharge {starts['discharge']}A (battery limits {limits['charge_battery']}A/{limits['discharge_battery']}A)")
+        probed = {}
+        for direction in ("charge", "discharge"):
+            ceiling = await self.probe_slot_current_ceiling(inverter_sn, direction, slot, starts[direction], limits[direction + "_battery"])
+            if ceiling is None:
+                failures = self.slot_probe_failures.get(inverter_sn, 0) + 1
+                self.slot_probe_failures[inverter_sn] = failures
+                wait = min(SOLIS_SLOT_PROBE_RETRY_SECONDS * (2 ** (failures - 1)), SOLIS_SLOT_PROBE_REFRESH_SECONDS)
+                self.slot_probe_retry_at[inverter_sn] = self.now_utc_exact + timedelta(seconds=wait)
+                kept = self.slot_current_probed.get(inverter_sn)
+                keeping = f", keeping charge {kept['charge']}A, discharge {kept['discharge']}A" if kept else ""
+                self.log(f"Warn: Solis API: Slot current probe on {inverter_sn} abandoned ({direction} had no verdict){keeping}, will try again in {wait // 3600}h")
+                return
+            probed[direction] = ceiling
+        self.slot_probe_failures.pop(inverter_sn, None)
+        self.slot_probe_retry_at.pop(inverter_sn, None)
+        probed["probed_at"] = self.now_utc_exact.isoformat()
+        self.slot_current_probed[inverter_sn] = probed
+        self.log(f"Solis API: Slot current ceiling on {inverter_sn} is charge {probed['charge']}A, discharge {probed['discharge']}A")
+        await self.save_slot_current_probes()
+
     async def write_time_windows_if_changed(self, inverter_sn):
         """Write charge/discharge time windows, SOC, and current to inverter, only if values changed from cache.
         Automatically handles V1 vs V2 modes and only writes registers that have changed.
@@ -1180,27 +1555,18 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 #  V2 mode: check and write individual registers for changed values only
                 slots_to_check = range(1, 7)
                 success = True
-                max_charge_current_amps = float(self.cached_values.get(inverter_sn, {}).get(SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT, 60.0))
-                max_discharge_current_amps = float(self.cached_values.get(inverter_sn, {}).get(SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT, 60.0))
-                charge_current = max_charge_current_amps
-                discharge_current = max_discharge_current_amps
+                # The slot current caps: the battery limit registers, lowered to the smallest limit
+                # SolisCloud advertises for any slot, then to what the inverter can deliver at its
+                # rated power - CID 7224/7226 are battery limits, and a 3.6kW inverter reading 100A
+                # there refused every 100A write and left its discharge slot at 0A (issue #5187).
+                # Every input is logged whenever the result changes, so a refused write can be traced.
+                limits = self.slot_current_limits(inverter_sn)
+                self.log_slot_current_limits(inverter_sn, limits)
+                charge_current = limits["charge_base"]
+                discharge_current = limits["discharge_base"]
+                max_charge_current_amps = limits["charge"]
+                max_discharge_current_amps = limits["discharge"]
                 slot1_active = False  # Whether slot 1 has any charge/discharge window configured
-
-                # There appears to be charge current limit on the slots which confused as slot 1 has a higher limit than the others,
-                # but the value isn't accepted, find the lowest slot limit
-                for slot in slots_to_check:
-                    current_cid = SOLIS_CID_CHARGE_CURRENT[slot - 1]
-                    max_charge_current_amps = min(self.cached_infos.get(inverter_sn, {}).get(current_cid, {}).get('sysCommand', {}).get('max', max_charge_current_amps), max_charge_current_amps)
-                    current_cid = SOLIS_CID_DISCHARGE_CURRENT[slot - 1]
-                    max_discharge_current_amps = min(self.cached_infos.get(inverter_sn, {}).get(current_cid, {}).get('sysCommand', {}).get('max', max_discharge_current_amps), max_discharge_current_amps)
-
-                # Then cap both at what the inverter can deliver at its rated power. CID 7224/7226 are battery limits: a
-                # 3.6kW inverter reading 100A there refused every 100A write and left its discharge slot at 0A (issue #5187)
-                rated_current = self.get_rated_current(inverter_sn)
-                if rated_current is not None and rated_current < max(max_charge_current_amps, max_discharge_current_amps):
-                    self.log(f"Solis API: Capping slot currents on {inverter_sn} at {rated_current}A, the most the inverter can deliver at its rated power")
-                    max_charge_current_amps = min(max_charge_current_amps, rated_current)
-                    max_discharge_current_amps = min(max_discharge_current_amps, rated_current)
 
                 # Prep: extract active currents from slot 1 and zero out times for disabled slots
                 # so that the two-pass write below has clean data to compare against.
@@ -1990,7 +2356,14 @@ class SolisAPI(ComponentBase, OAuthMixin):
         self.set_arg_auto("discharge_target_soc", [f"number.{self.prefix}_solis_{device}_discharge_slot1_soc" for device in devices])
         self.set_arg_auto("discharge_rate", [f"number.{self.prefix}_solis_{device}_discharge_slot1_power" for device in devices])
         self.set_arg_auto("scheduled_discharge_enable", [f"switch.{self.prefix}_solis_{device}_discharge_slot1_enable" for device in devices])
-        self.set_arg_auto("battery_rate_max", [f"number.{self.prefix}_solis_{device}_max_charge_power" for device in devices])
+        # The inverter holds separate charge and discharge limits, which can differ (GH#4940), and a
+        # slot can only be set as high as its cap (issue #5187). Each direction's slot power limit
+        # goes to inverter_limit_charge/_discharge, and battery_rate_max, which caps both, is the
+        # larger of the two. The limits are overwrite=False so one stated in apps.yaml (an AC
+        # rating, a DNO cap) still wins.
+        self.set_arg_auto("battery_rate_max", [f"sensor.{self.prefix}_solis_{device}_battery_rate_max" for device in devices])
+        self.set_arg_auto("inverter_limit_charge", [f"sensor.{self.prefix}_solis_{device}_slot_charge_power_max" for device in devices], overwrite=False)
+        self.set_arg_auto("inverter_limit_discharge", [f"sensor.{self.prefix}_solis_{device}_slot_discharge_power_max" for device in devices], overwrite=False)
         self.set_arg_auto("inverter_limit", [f"sensor.{self.prefix}_solis_{device}_inverter_size" for device in devices])
         self.set_arg_auto("export_limit", [f"number.{self.prefix}_solis_{device}_max_export_power" for device in devices])
 
@@ -2057,7 +2430,9 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 "discharge_target_soc": {"entity_id": f"number.{prefix}_solis_{device}_discharge_slot1_soc", "access": "rw", "unit": "%"},
                 "discharge_rate": {"entity_id": f"number.{prefix}_solis_{device}_discharge_slot1_power", "access": "rw", "unit": "W"},
                 "scheduled_discharge_enable": {"entity_id": f"switch.{prefix}_solis_{device}_discharge_slot1_enable", "access": "rw", "domain": "switch"},
-                "battery_rate_max": {"entity_id": f"number.{prefix}_solis_{device}_max_charge_power", "access": "r", "unit": "W"},
+                "battery_rate_max": {"entity_id": f"sensor.{prefix}_solis_{device}_battery_rate_max", "access": "r", "unit": "W"},
+                "inverter_limit_charge": {"entity_id": f"sensor.{prefix}_solis_{device}_slot_charge_power_max", "access": "r", "unit": "W"},
+                "inverter_limit_discharge": {"entity_id": f"sensor.{prefix}_solis_{device}_slot_discharge_power_max", "access": "r", "unit": "W"},
                 "inverter_limit": {"entity_id": f"sensor.{prefix}_solis_{device}_inverter_size", "access": "r"},
                 "export_limit": {"entity_id": f"number.{prefix}_solis_{device}_max_export_power", "access": "r", "unit": "W"},
             }
@@ -2113,10 +2488,11 @@ class SolisAPI(ComponentBase, OAuthMixin):
         cap (_discovery_export_limit()), each only once the register has been read.
 
         A rating is a figure the device reports (spec D14), so two Predbat derivations are left out.
-        battery_rate_max is an entity only: the max_charge_power number is register current x
-        get_nominal_voltage(). soc_max is not reported at all: a kWh capacity is register 172 x a
-        voltage that is either inferred (for an HV pack still a live reading, GH#5090) or the user's
-        solis_nominal_voltage, and automatic_config() binds no soc_max entity either.
+        battery_rate_max is an entity only: the larger of the max_charge_power and max_discharge_power
+        numbers, each register current x get_nominal_voltage(). soc_max is not reported at all: a kWh
+        capacity is register 172 x a voltage that is either inferred (for an HV pack still a live
+        reading, GH#5090) or the user's solis_nominal_voltage, and automatic_config() binds no soc_max
+        entity either.
 
         Battery ratings carry only stated facts. Register 172 (SOLIS_CID_BATTERY_CAPACITY) is the
         per-battery Ah; battery_capacity_ah reports the bank total - register 172 x
@@ -2266,7 +2642,11 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 pass
         self.max_discharge_current[inverter_sn] = max_discharge
 
-        self.log(f"Solis API: Calculated max currents for {inverter_sn}: charge={max_charge}A, discharge={max_discharge}A")
+        # Name the inputs: the product alone cannot tell a 100A register on one pack from 50A on two,
+        # or either from the 100A used when the register was never read
+        charge_source = f"register {max_charge_current_str}A x {battery_count} pack(s)" if max_charge_current_str else "register not read, default"
+        discharge_source = f"register {max_discharge_current_str}A x {battery_count} pack(s)" if max_discharge_current_str else "register not read, default"
+        self.log(f"Solis API: Calculated max currents for {inverter_sn}: charge={max_charge}A ({charge_source}), discharge={max_discharge}A ({discharge_source})")
 
     def get_live_battery_voltage(self, inverter_sn):
         """
@@ -2544,9 +2924,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
                     except (ValueError, TypeError):
                         self.log("Warn: Failed to convert charge current to watts for {} slot {}: {}".format(inverter_sn, slot_num, current_value_amps))  # Debug log
 
-                # Use pre-calculated max current (convert to watts)
-                max_current_amps = self.max_charge_current.get(inverter_sn, 100)
-                max_power_watts = int(max_current_amps * self.get_nominal_voltage(inverter_sn))
+                # The most the slot can actually be set to, falling back to the battery limit until it is known
+                max_power_watts = self.slot_power_limits(inverter_sn)["charge"] or int(self.max_charge_current.get(inverter_sn, 100) * self.get_nominal_voltage(inverter_sn))
 
                 self.dashboard_item(
                     entity_id,
@@ -2661,9 +3040,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
                     except (ValueError, TypeError):
                         self.log("Warn: Failed to convert discharge current to watts for {} slot {}: {}".format(inverter_sn, slot_num, current_value_amps))  # Debug log
 
-                # Use pre-calculated max current (convert to watts)
-                max_current_amps = self.max_discharge_current.get(inverter_sn, 100)
-                max_power_watts = int(max_current_amps * self.get_nominal_voltage(inverter_sn))
+                # The most the slot can actually be set to, falling back to the battery limit until it is known
+                max_power_watts = self.slot_power_limits(inverter_sn)["discharge"] or int(self.max_discharge_current.get(inverter_sn, 100) * self.get_nominal_voltage(inverter_sn))
 
                 self.dashboard_item(
                     entity_id,
@@ -3227,6 +3605,35 @@ class SolisAPI(ComponentBase, OAuthMixin):
                     "step": self.get_nominal_voltage(inverter_sn),
                     "device_class": "power",
                     "icon": "mdi:battery-arrow-up-outline",
+                },
+                app="solis"
+            )
+
+            # What each direction's slot can actually be set to - the planner's limits, not the raw
+            # battery limit registers above (issue #5187). battery_rate_max caps charge and discharge
+            # alike, so it is the larger of the two; automatic_config() binds each one separately (GH#4940)
+            slot_power = self.slot_power_limits(inverter_sn)
+            for direction in ("charge", "discharge"):
+                self.dashboard_item(
+                    f"sensor.{prefix}_solis_{inverter_sn_lower}_slot_{direction}_power_max",
+                    state=slot_power[direction],
+                    attributes={
+                        "friendly_name": f"Solis {inverter_name} Slot {direction.capitalize()} Power Max",
+                        "unit_of_measurement": "W",
+                        "device_class": "power",
+                        "icon": "mdi:battery-arrow-down-outline" if direction == "charge" else "mdi:battery-arrow-up-outline",
+                    },
+                    app="solis"
+                )
+            known_limits = [watts for watts in slot_power.values() if watts is not None]
+            self.dashboard_item(
+                f"sensor.{prefix}_solis_{inverter_sn_lower}_battery_rate_max",
+                state=max(known_limits) if known_limits else None,
+                attributes={
+                    "friendly_name": f"Solis {inverter_name} Battery Rate Max",
+                    "unit_of_measurement": "W",
+                    "device_class": "power",
+                    "icon": "mdi:battery-sync-outline",
                 },
                 app="solis"
             )
@@ -4024,7 +4431,6 @@ class SolisAPI(ComponentBase, OAuthMixin):
         try:
             detail = await self.get_inverter_detail(sn)
             self.inverter_details[sn] = detail
-            # self.log(f"Solis API: Loaded details for inverter {sn} - {detail}")
 
             # Extract parallel battery count (format: "2.0" means 3 batteries total)
             parallel_battery = detail.get("parallelBattery", "0")
@@ -4032,6 +4438,13 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 self.parallel_battery_count[sn] = int(float(parallel_battery)) + 1
             except (ValueError, TypeError):
                 self.parallel_battery_count[sn] = 1
+
+            # Model, rating, firmware and pack count, logged when they change - the inputs to every
+            # limit this component derives, and otherwise missing from a user's log
+            summary = self.describe_inverter_detail(sn, detail)
+            if self.detail_summary_logged.get(sn) != summary:
+                self.detail_summary_logged[sn] = summary
+                self.log(summary)
             return True
 
         except Exception as e:
@@ -4271,6 +4684,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 if not self.is_battery_inverter(sn):
                     # Every register below is a storage setting a PV-only inverter does not have (issue #5279)
                     continue
+                # Ceilings learned on an earlier run, needed before the first slot write
+                await self.load_slot_current_probes()
                 self.log(f"Solis API: Performing infrequent data poll for inverter {sn}...")
                 await self.poll_inverter_data(sn, SOLIS_CID_INFREQUENT)
                 # Read separately, the batch endpoint mis-reports these (see SOLIS_CID_INFREQUENT_SINGLE)
@@ -4361,6 +4776,15 @@ class SolisAPI(ComponentBase, OAuthMixin):
         if self.automatic and self.inverter_sn and not self.automatic_config_done:
             self.automatic_config_done = bool(await self.automatic_config())
 
+        # Learn the slot current ceiling the inverter enforces but does not report. Last in the cycle,
+        # so a first probe - a minute or two of writes - never delays the control writes, the publish
+        # or auto-config; and checked every cycle, so one held back by read-only runs as soon as
+        # writes are allowed. ensure_slot_current_probed() returns at once when nothing is due.
+        if first or (seconds % 60 == 0):
+            for sn in self.inverter_sn:
+                if not self.datalogger_offline(sn):
+                    await self.ensure_slot_current_probed(sn)
+
         # Return status. A refused control write must not refresh the success timestamp:
         # components.is_alive() treats a stale timestamp as unhealthy, which surfaces as
         # "component errors: Solis" in the run status. Without this a register the inverter
@@ -4385,22 +4809,128 @@ class SolisAPI(ComponentBase, OAuthMixin):
         self.log("Solis API: Component stopped")
 
 
-async def test_solis_api(key_id, secret, write=False):  # pragma: no cover
+# Solis settings as they appear in apps.yaml, mapped to the SolisAPI argument each one supplies, so
+# --config can read them from a real config. Written out by hand rather than read from
+# COMPONENT_LIST: components.py imports this module. test_solis_cli_config_keys_match_component
+# keeps it in step with what the component declares. automatic and control_enable are left out on
+# purpose - the CLI decides those itself (--write).
+SOLIS_CLI_CONFIG_KEYS = {
+    "api_key": "solis_api_key",
+    "api_secret": "solis_api_secret",
+    "auth_method": "solis_auth_method",
+    "access_token": "solis_access_token",
+    "token_expires_at": "solis_token_expires_at",
+    "token_hash": "solis_token_hash",
+    "inverter_sn": "solis_inverter_sn",
+    "base_url": "solis_base_url",
+    "nominal_voltage": "solis_nominal_voltage",
+}
+
+# The OAuth refresh settings, which are not Solis component args: oauth_mixin reads
+# SUPABASE_URL/SUPABASE_KEY from the environment and user_id from base.args. Without them an OAuth
+# run cannot refresh its token, so --config reads them too.
+SOLIS_CLI_OAUTH_KEYS = {
+    "user_id": "user_id",
+    "supabase_url": "supabase_url",
+    "supabase_key": "supabase_key",
+}
+
+
+def load_solis_cli_config(path):
+    """
+    Read the pred_bat section of an apps.yaml-format file, resolving !secret as Predbat does
+
+    load_secrets() looks in the working directory and the Home Assistant config paths, so a copy of
+    a config kept elsewhere would lose its secrets. Unless PREDBAT_SECRETS_FILE already names one,
+    a secrets.yaml sitting beside the file is used.
+    """
+    beside = os.path.join(os.path.dirname(os.path.abspath(path)), "secrets.yaml")
+    if not os.getenv("PREDBAT_SECRETS_FILE") and os.path.isfile(beside):
+        os.environ["PREDBAT_SECRETS_FILE"] = beside
+    config, _ = load_apps_yaml(path)
+    return config
+
+
+def merge_solis_cli_settings(cli, config):
+    """
+    Fill in any Solis setting not given on the command line from an apps.yaml pred_bat section
+
+    An explicit command line value always wins. Returns (merged, used), where used lists the config
+    keys actually taken so the caller can name them - a key the CLI does not look for otherwise
+    fails silently, with an auth error several lines later as its only symptom.
+
+    With no solis_auth_method in either place, OAuth is chosen only when there is a token and no
+    API key, matching the component's own api_key default.
+    """
+    merged = dict(cli)
+    used = []
+    for mapping in (SOLIS_CLI_CONFIG_KEYS, SOLIS_CLI_OAUTH_KEYS):
+        for name, config_key in mapping.items():
+            if merged.get(name) not in (None, ""):
+                continue
+            value = config.get(config_key)
+            if value not in (None, "", []):
+                merged[name] = value
+                used.append(config_key)
+    if not merged.get("auth_method"):
+        has_token = merged.get("access_token") or merged.get("token_hash")
+        merged["auth_method"] = "oauth" if has_token and not merged.get("api_key") else "api_key"
+    return merged, used
+
+
+def print_raw_response(endpoint, payload, reply):  # pragma: no cover
+    """Print one request and its whole reply, for --dump-raw."""
+    print(f"RAW {endpoint} {json.dumps(payload)}")
+    print(json.dumps(reply, indent=2, default=str))
+
+
+async def read_limit_registers(solis_api, inverter_sn):  # pragma: no cover
+    """Read the battery limit and slot current CIDs one at a time, so --dump-raw shows each single-read reply.
+
+    run() reads these in a batch; a single read's reply may carry fields the batch reply leaves out.
+    Costs one request per CID against the daily allowance.
+    """
+    for cid in [SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT, SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT] + SOLIS_CID_CHARGE_CURRENT + SOLIS_CID_DISCHARGE_CURRENT:
+        try:
+            await solis_api.read_cid(inverter_sn, cid)
+        except SolisAPIError as exc:
+            print(f"Single read of CID {cid} failed: {exc}")
+
+
+async def test_solis_api(solis_args, write=False, user_id=None, supabase_url=None, supabase_key=None, dump_raw=False, probe_ceiling=False):  # pragma: no cover
     """
     Run a test of Solis API
+
+    solis_args are SolisAPI keyword arguments. For OAuth, user_id and the Supabase settings are put
+    where oauth_mixin looks for them: base.args and the environment.
     """
-    print(f"Testing Solis API with key_id: {key_id[:10]}...")
+    if supabase_url:
+        os.environ["SUPABASE_URL"] = supabase_url
+    if supabase_key:
+        os.environ["SUPABASE_KEY"] = supabase_key
+    if solis_args.get("auth_method") == "oauth":
+        print("Testing Solis API with OAuth")
+        if not (os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_KEY") and user_id):
+            print("Warning: the OAuth token cannot be refreshed without supabase_url, supabase_key and user_id - expect auth failures once it expires")
+    else:
+        print(f"Testing Solis API with key_id: {str(solis_args.get('api_key'))[:10]}...")
     # Read-only unless asked: with control enabled run() does the startup register reset and the
     # control-path writes against the real inverter, which reprogrammed the storage mode of an
-    # inverter that was only being inspected (issue #5279)
-    print("Control writes ENABLED - this run will write to the inverter" if write else "Read-only - no control writes (pass --write to enable them)")
+    # inverter that was only being inspected (issue #5279). The ceiling probe writes only its own
+    # registers, so run() stays read-only for it.
+    control_enable = write and not probe_ceiling
+    print("Control writes ENABLED - this run will write to the inverter" if control_enable else "Read-only - no control writes (pass --write to enable them)")
 
     # Create a mock base object
     mock_base = MockBase()
+    if user_id:
+        mock_base.args["user_id"] = user_id
 
-    # Create SolisAPI instance with correct parameter names
-    arg_dict = {"api_key": key_id, "api_secret": secret, "automatic": True, "control_enable": write}
+    arg_dict = dict(solis_args, automatic=True, control_enable=control_enable)
     solis_api = SolisAPI(mock_base, **arg_dict)
+    if dump_raw:
+        print("Raw dump ON - every reply is printed in full, including the owner's station and address details in inverterDetail; do not share it publicly")
+        solis_api.response_observer = print_raw_response
 
     # Call run() once
     print("Calling run() once...")
@@ -4428,6 +4958,24 @@ async def test_solis_api(key_id, secret, write=False):  # pragma: no cover
         for key in sorted(detail):
             if field_pattern.search(key):
                 print(f"  {key} = {detail[key]!r}")
+        if solis_api.is_battery_inverter(device_sn):
+            if dump_raw:
+                print(f"Reading the limit and slot current CIDs on {device_sn} one at a time...")
+                await read_limit_registers(solis_api, device_sn)
+            print("  " + solis_api.describe_slot_current_limits(device_sn, solis_api.slot_current_limits(device_sn)))
+
+    if probe_ceiling:
+        # The same probe Predbat runs on discovery, with only its own writes enabled; the CLI has no
+        # storage, so the result is shown rather than saved
+        for sn in [sn for sn in solis_api.inverter_sn if solis_api.is_battery_inverter(sn)]:
+            solis_api.slot_current_probed.pop(sn, None)
+            solis_api.control_enable = True
+            try:
+                await solis_api.ensure_slot_current_probed(sn)
+            finally:
+                solis_api.control_enable = False
+            print(f"CEILING: {sn} {solis_api.slot_current_probed.get(sn) or 'nothing learned'}")
+            print("  " + solis_api.describe_slot_current_limits(sn, solis_api.slot_current_limits(sn)))
     print("Run completed successfully")
 
     await solis_api.final()
@@ -4438,16 +4986,58 @@ def main():  # pragma: no cover
     Main function for command line execution
     """
     parser = argparse.ArgumentParser(description="Test Solis Cloud API")
-    parser.add_argument("--key-id", required=True, help="Solis Cloud API Key ID")
-    parser.add_argument("--secret", required=True, help="Solis Cloud API Secret")
+    parser.add_argument("--config", help="Read settings from an apps.yaml-format file, resolving !secret as Predbat does (a secrets.yaml beside the file is used unless PREDBAT_SECRETS_FILE is set). Reads " + ", ".join(list(SOLIS_CLI_CONFIG_KEYS.values()) + list(SOLIS_CLI_OAUTH_KEYS.values())) + ". Anything also given on the command line wins")
+    parser.add_argument("--key-id", help="Solis Cloud API Key ID")
+    parser.add_argument("--secret", help="Solis Cloud API Secret")
+    parser.add_argument("--auth-method", choices=["api_key", "oauth"], help="api_key (HMAC) or oauth (default: oauth only when there is a token and no API key)")
+    parser.add_argument("--access-token", help="OAuth access token")
+    parser.add_argument("--token-hash", help="OAuth token hash, echoed to the refresh function")
+    parser.add_argument("--token-expires-at", help="OAuth token expiry (ISO timestamp)")
+    parser.add_argument("--user-id", help="predbat.com instance id, for an OAuth token refresh")
+    parser.add_argument("--supabase-url", help="Supabase URL, for an OAuth token refresh")
+    parser.add_argument("--supabase-key", help="Supabase key, for an OAuth token refresh")
+    parser.add_argument("--inverter-sn", help="Only use this inverter serial number")
     parser.add_argument("--write", action="store_true", help="Allow control writes to the inverter (default: read-only)")
+    parser.add_argument("--dump-raw", action="store_true", help="Print every request and its whole reply, and read the battery limit and slot current CIDs one at a time (14 extra requests) so their single-read replies are shown too. The inverter detail reply includes the owner's station and address")
+    parser.add_argument("--probe-ceiling", action="store_true", help="With --write: run Predbat's own slot current ceiling probe (on a disabled slot, restored afterwards) and show what it learns. run() stays read-only")
 
     args = parser.parse_args()
-    key_id = args.key_id
-    secret = args.secret
+    cli = {
+        "api_key": args.key_id,
+        "api_secret": args.secret,
+        "auth_method": args.auth_method,
+        "access_token": args.access_token,
+        "token_hash": args.token_hash,
+        "token_expires_at": args.token_expires_at,
+        "inverter_sn": args.inverter_sn,
+        "user_id": args.user_id,
+        "supabase_url": args.supabase_url,
+        "supabase_key": args.supabase_key,
+    }
+    config = {}
+    if args.config:
+        try:
+            config = load_solis_cli_config(args.config)
+        except (yaml.YAMLError, KeyError, OSError) as exc:
+            parser.error(f"could not read Solis settings from {args.config}: {exc}")
+    settings, used = merge_solis_cli_settings(cli, config)
+    if args.config:
+        # Names only - never the values, which are credentials
+        print("Read from {}: {}".format(args.config, ", ".join(used) if used else "nothing - no keys the CLI looks for"))
+
+    if settings["auth_method"] == "oauth":
+        if not (settings.get("access_token") or settings.get("token_hash")):
+            parser.error("OAuth needs --access-token or --token-hash, or --config pointing at an apps.yaml holding solis_access_token or solis_token_hash")
+    elif not (settings.get("api_key") and settings.get("api_secret")):
+        parser.error("no Solis credentials: pass --key-id and --secret, or --config pointing at an apps.yaml holding solis_api_key and solis_api_secret")
+    if args.probe_ceiling and not args.write:
+        parser.error("--probe-ceiling writes to the inverter, so it needs --write as well")
+
+    oauth_settings = {name: settings.pop(name, None) for name in SOLIS_CLI_OAUTH_KEYS}
+    solis_args = {name: value for name, value in settings.items() if value not in (None, "")}
 
     # Run the test
-    asyncio.run(test_solis_api(key_id, secret, write=args.write))
+    asyncio.run(test_solis_api(solis_args, write=args.write, dump_raw=args.dump_raw, probe_ceiling=args.probe_ceiling, **oauth_settings))
 
 
 if __name__ == "__main__":
