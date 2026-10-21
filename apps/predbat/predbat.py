@@ -344,8 +344,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.define_service_list()
         self.stop_thread = False
 
-        # Forecast.solar API request metrics for monitoring
-
         # get currency_symbols from apps.yaml, default to £p, then set the icons on money entities based on the major currency symbol
         self.currency_symbols = self.args.get("currency_symbols", "£p")
         apply_currency_icon(self.CONFIG_ITEMS, self.currency_symbols[0])
