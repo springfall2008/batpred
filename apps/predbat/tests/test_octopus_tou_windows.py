@@ -14,12 +14,13 @@ Two behaviours are covered:
 """
 
 import asyncio
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from unittest.mock import patch, PropertyMock
 
 import pytz
 
-from octopus import OctopusAPI, DATE_TIME_STR_FORMAT, _night_time_to_minutes, _windows_from_night_times
+from octopus import OctopusAPI, DATE_TIME_STR_FORMAT, _night_time_to_minutes, _windows_from_night_times, _localise_wall_clock
 
 
 LONDON = pytz.timezone("Europe/London")
@@ -121,6 +122,24 @@ def _stub_tou(api_and_now, labelled_windows_utc):
     api.async_graphql_query = mock_query
 
 
+@contextmanager
+def _night_times(my_predbat, value):
+    """Set octopus_night_times on the shared fixture for the block (None clears it), restoring the prior state after."""
+    had_key = "octopus_night_times" in my_predbat.args
+    saved = my_predbat.args.get("octopus_night_times")
+    if value is None:
+        my_predbat.args.pop("octopus_night_times", None)
+    else:
+        my_predbat.args["octopus_night_times"] = value
+    try:
+        yield
+    finally:
+        if had_key:
+            my_predbat.args["octopus_night_times"] = saved
+        else:
+            my_predbat.args.pop("octopus_night_times", None)
+
+
 def _stub_tou_unavailable(api_and_now):
     """Stub the measurements query so it returns nothing, as it would for a meter with no history."""
     api = api_and_now[0]
@@ -155,6 +174,9 @@ async def test_octopus_tou_windows(my_predbat):
     - Test 11: an hour of 24 is normalised to 0, matching how basic_rates parses times
     - Test 12: an IOG meter's TOU labels never become a recurring schedule (issue: phantom slot)
     - Test 13: a TOU-derived window on a local wall-clock tariff holds across a DST change
+    - Test 14: the hard-wired GO window keeps 8 contiguous nights across both clock changes
+    - Test 15: IOG and manual windows in the changeover hour stay contiguous and never invert
+    - Test 16: _localise_wall_clock directly, and a window wholly inside the skipped hour
     """
     print("\n**** Running Octopus TOU window tests ****")
     failed = False
@@ -405,23 +427,124 @@ async def test_octopus_tou_windows(my_predbat):
     print("\n*** Test 13: TOU window on a local-anchored tariff holds across DST ***")
     api13 = _make_api(my_predbat, day_rate=29.14, night_rate=7.00, now=LONDON.localize(datetime(2026, 10, 22, 12, 0, 0)))
     _stub_tou(api13, [(1410, 1440), (0, 270)])  # 23:30-04:30 UTC, which is 00:30-05:30 BST
-    all_slots13 = _night_slots_local(await _run(api13, base_url, "E-1R-GO-VAR-22-10-14-M"), 7.00)
+    slots13 = _night_slots_local(await _run(api13, base_url, "E-1R-GO-VAR-22-10-14-M"), 7.00)
 
-    # The changeover day itself is excluded: a window that spans the 02:00 change comes out an hour
-    # short, because the schedule builder adds a timedelta to an already-localised midnight and so
-    # keeps that day's opening UTC offset for the whole window. That is pre-existing behaviour of
-    # every local-anchored window - the hard-wired GO window produces the same two entries on this
-    # date with no TOU labels involved at all - so it is not what this test is pinning down.
-    slots13 = [(s, e) for s, e in all_slots13 if (s.month, s.day) != (10, 25)]
-
+    # The changeover day is included: the window opens at 00:30 BST and closes at 05:30 GMT.
+    nights13 = [(s.month, s.day) for s, _ in slots13]
     drifted = [(s, e) for s, e in slots13 if (s.hour, s.minute) != (0, 30) or (e.hour, e.minute) != (5, 30)]
     if not slots13:
         print("ERROR: no night slots produced for the GO meter across the DST change")
+        failed = True
+    elif len(nights13) != len(set(nights13)) or (10, 25) not in nights13 or (10, 26) not in nights13:
+        print("ERROR: expected one night per date including 25 and 26 Oct, got {}".format(nights13))
         failed = True
     elif drifted:
         print("ERROR: TOU window drifted off local time across the DST change - {} of {} slots wrong, e.g. {}".format(len(drifted), len(slots13), [(s.strftime("%d %H:%M"), e.strftime("%H:%M")) for s, e in drifted[:3]]))
         failed = True
     else:
         print("PASS: TOU-derived window stays 00:30-05:30 local on both sides of the DST change")
+
+    # ------------------------------------------------------------------
+    # Test 14: the hard-wired GO window across both clock changes
+    #
+    # Adding days to a localised midnight keeps the starting UTC offset, so across the autumn change
+    # the last day of the schedule landed on the day before and the 8-day schedule lost an entry.
+    # ------------------------------------------------------------------
+    for label14, now14, changeover14 in (
+        ("autumn", LONDON.localize(datetime(2026, 10, 20, 9, 0, 0)), (10, 25)),
+        ("spring", LONDON.localize(datetime(2026, 3, 25, 9, 0, 0)), (3, 29)),
+    ):
+        print("\n*** Test 14: hard-wired GO window across the {} clock change ***".format(label14))
+        api14 = _make_api(my_predbat, day_rate=29.14, night_rate=7.00, now=now14)
+        _stub_tou_unavailable(api14)
+        mdata14 = await _run(api14, base_url, "E-1R-GO-VAR-22-10-14-M")
+        slots14 = _night_slots_local(mdata14, 7.00)
+        nights14 = [(s.month, s.day) for s, _ in slots14]
+        drifted14 = [(s, e) for s, e in slots14 if (s.hour, s.minute) != (0, 30) or (e.hour, e.minute) != (5, 30)]
+        gaps14 = [index for index in range(len(mdata14) - 1) if datetime.strptime(mdata14[index]["valid_to"], DATE_TIME_STR_FORMAT) != datetime.strptime(mdata14[index + 1]["valid_from"], DATE_TIME_STR_FORMAT)]
+        if len(mdata14) != 16:
+            print("ERROR: {}: expected 16 entries (8 days), got {} - nights {}".format(label14, len(mdata14), nights14))
+            failed = True
+        elif len(nights14) != len(set(nights14)) or changeover14 not in nights14:
+            print("ERROR: {}: expected one night per date including the changeover, got {}".format(label14, nights14))
+            failed = True
+        elif drifted14:
+            print("ERROR: {}: night window drifted off 00:30-05:30 local, e.g. {}".format(label14, [(s.strftime("%d %H:%M"), e.strftime("%H:%M")) for s, e in drifted14[:3]]))
+            failed = True
+        elif gaps14:
+            print("ERROR: {}: schedule is not contiguous at entries {}".format(label14, gaps14))
+            failed = True
+        else:
+            print("PASS: {}: 8 nights at 00:30-05:30 local, contiguous, changeover night included".format(label14))
+
+    # ------------------------------------------------------------------
+    # Test 15: windows that cross midnight or sit in the changeover hour itself
+    #
+    # IOG's 23:30-05:30 spans the change. A manual window starting in the repeated autumn hour takes
+    # its first occurrence, and one starting in the skipped spring hour opens when the clocks jump -
+    # in neither case may an interval end before it starts or the schedule leave a gap.
+    # ------------------------------------------------------------------
+    cases15 = [
+        ("IOG autumn", LONDON.localize(datetime(2026, 10, 20, 9, 0, 0)), "E-1R-IOG-SMB-TOU-25-12-12-H", None, datetime(2026, 10, 24, 22, 30, tzinfo=timezone.utc), datetime(2026, 10, 25, 5, 30, tzinfo=timezone.utc)),
+        ("IOG spring", LONDON.localize(datetime(2026, 3, 25, 9, 0, 0)), "E-1R-IOG-SMB-TOU-25-12-12-H", None, datetime(2026, 3, 28, 23, 30, tzinfo=timezone.utc), datetime(2026, 3, 29, 4, 30, tzinfo=timezone.utc)),
+        ("manual 01:30 autumn", LONDON.localize(datetime(2026, 10, 20, 9, 0, 0)), eco7, [{"start": "01:30:00", "end": "05:30:00"}], datetime(2026, 10, 25, 0, 30, tzinfo=timezone.utc), datetime(2026, 10, 25, 5, 30, tzinfo=timezone.utc)),
+        ("manual 01:30 spring", LONDON.localize(datetime(2026, 3, 25, 9, 0, 0)), eco7, [{"start": "01:30:00", "end": "02:15:00"}], datetime(2026, 3, 29, 1, 0, tzinfo=timezone.utc), datetime(2026, 3, 29, 1, 15, tzinfo=timezone.utc)),
+    ]
+    for label15, now15, tariff15, manual15, want_start15, want_end15 in cases15:
+        print("\n*** Test 15: {} ***".format(label15))
+        api15 = _make_api(my_predbat, day_rate=29.14, night_rate=7.00, now=now15)
+        _stub_tou_unavailable(api15)
+        with _night_times(my_predbat, manual15):
+            mdata15 = await _run(api15, base_url, tariff15)
+        entries15 = [(datetime.strptime(entry["valid_from"], DATE_TIME_STR_FORMAT), datetime.strptime(entry["valid_to"], DATE_TIME_STR_FORMAT)) for entry in mdata15]
+        inverted15 = [(s, e) for s, e in entries15 if e <= s]
+        gaps15 = [index for index in range(len(entries15) - 1) if entries15[index][1] != entries15[index + 1][0]]
+        if len(entries15) != 16 or inverted15 or gaps15:
+            print("ERROR: {}: expected 16 contiguous forward entries, got {} with inverted {} and gaps at {}".format(label15, len(entries15), inverted15[:2], gaps15))
+            failed = True
+        elif (want_start15, want_end15) not in _night_slots_utc(mdata15, 7.00):
+            print("ERROR: {}: changeover night {} - {} UTC missing, got {}".format(label15, want_start15, want_end15, [(s.strftime("%d %H:%M"), e.strftime("%d %H:%M")) for s, e in _night_slots_utc(mdata15, 7.00)]))
+            failed = True
+        else:
+            print("PASS: {}: changeover night runs {} - {} UTC, schedule contiguous".format(label15, want_start15.strftime("%d %H:%M"), want_end15.strftime("%d %H:%M")))
+
+    # ------------------------------------------------------------------
+    # Test 16: _localise_wall_clock on its own, at both changes and for a non-pytz zone
+    # ------------------------------------------------------------------
+    print("\n*** Test 16: _localise_wall_clock resolves repeated and skipped wall-clock times ***")
+    cases16 = [
+        ("before the autumn change", LONDON, datetime(2026, 10, 25, 0, 59), datetime(2026, 10, 24, 23, 59, tzinfo=timezone.utc)),
+        ("repeated autumn hour takes the first occurrence", LONDON, datetime(2026, 10, 25, 1, 30), datetime(2026, 10, 25, 0, 30, tzinfo=timezone.utc)),
+        ("after the autumn change", LONDON, datetime(2026, 10, 25, 2, 0), datetime(2026, 10, 25, 2, 0, tzinfo=timezone.utc)),
+        ("before the spring change", LONDON, datetime(2026, 3, 29, 0, 59), datetime(2026, 3, 29, 0, 59, tzinfo=timezone.utc)),
+        ("skipped spring hour moves to the jump", LONDON, datetime(2026, 3, 29, 1, 0), datetime(2026, 3, 29, 1, 0, tzinfo=timezone.utc)),
+        ("late in the skipped spring hour moves to the jump", LONDON, datetime(2026, 3, 29, 1, 59, 30), datetime(2026, 3, 29, 1, 0, tzinfo=timezone.utc)),
+        ("after the spring change", LONDON, datetime(2026, 3, 29, 2, 15), datetime(2026, 3, 29, 1, 15, tzinfo=timezone.utc)),
+        ("non-pytz zone is attached as it stands", timezone.utc, datetime(2026, 10, 25, 1, 30), datetime(2026, 10, 25, 1, 30, tzinfo=timezone.utc)),
+    ]
+    for label16, tz16, wall16, want16 in cases16:
+        got16 = _localise_wall_clock(tz16, wall16)
+        if got16 != want16:
+            print("ERROR: {}: {} localised to {}, expected {}".format(label16, wall16, got16, want16))
+            failed = True
+        else:
+            print("PASS: {}: {} -> {} UTC".format(label16, wall16.strftime("%d %b %H:%M:%S"), got16.astimezone(timezone.utc).strftime("%H:%M")))
+
+    # A manual window lying wholly in the skipped hour is dropped that night rather than emitted
+    # with zero length, and the day rate runs on across it.
+    api16 = _make_api(my_predbat, day_rate=29.14, night_rate=7.00, now=LONDON.localize(datetime(2026, 3, 25, 9, 0, 0)))
+    _stub_tou_unavailable(api16)
+    with _night_times(my_predbat, [{"start": "01:00:00", "end": "01:30:00"}]):
+        mdata16 = await _run(api16, base_url, eco7)
+    entries16 = [(datetime.strptime(entry["valid_from"], DATE_TIME_STR_FORMAT), datetime.strptime(entry["valid_to"], DATE_TIME_STR_FORMAT)) for entry in mdata16]
+    nights16 = [s.astimezone(LONDON).day for s, _ in _night_slots_utc(mdata16, 7.00)]
+    if any(e <= s for s, e in entries16) or any(entries16[index][1] != entries16[index + 1][0] for index in range(len(entries16) - 1)):
+        print("ERROR: skipped-hour window left an empty or broken schedule: {}".format([(s.strftime("%d %H:%M%z"), e.strftime("%d %H:%M%z")) for s, e in entries16]))
+        failed = True
+    elif 29 in nights16 or 28 not in nights16 or 30 not in nights16:
+        print("ERROR: skipped-hour window should be dropped on 29 Mar only, got nights on {}".format(nights16))
+        failed = True
+    else:
+        print("PASS: a window wholly inside the skipped hour is dropped on 29 Mar, schedule contiguous")
 
     return failed

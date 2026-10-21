@@ -14,7 +14,7 @@ once; a component supplies only what is specific to its charger.
 
 from datetime import datetime, timezone
 
-from utils import parse_car_plan_windows, in_car_plan_window
+from utils import parse_car_plan_windows, in_car_plan_window, strptime_aware
 
 
 def parse_dispatch_time(value):
@@ -28,7 +28,7 @@ def parse_dispatch_time(value):
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         try:
-            parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%S%z")
+            parsed = strptime_aware(value, "%Y-%m-%dT%H:%M:%S%z")
         except ValueError:
             return None
     # A time with no offset cannot be compared with the clock; both sources write UTC

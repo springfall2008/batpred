@@ -45,7 +45,7 @@ DEFAULT_SCENARIO = {
     "inverter_loss": 0.95,
     "battery_loss": 0.96,
     "metric_battery_cycle": 0.0,
-    "kernel": False,
+    "kernel": True,  # the C++ kernel, for speed; the car case below also runs on the Python engine
     "car_kw": 0.0,
 }
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
@@ -248,7 +248,7 @@ def run_iog_early_slot_flat_battery_tests(my_predbat):
         )
 
         car_hold = {"car_kw": 7.0}
-        _, car_python, _, _ = _run_case(my_predbat, "slot path, 7 kW car in the dispatch, car_charging_from_battery off", "slot", 0.15, car_hold)
+        _, car_python, _, _ = _run_case(my_predbat, "slot path, 7 kW car in the dispatch, car_charging_from_battery off", "slot", 0.15, dict(car_hold, kernel=False))
         _, car_kernel, _, _ = _run_case(my_predbat, "same with the C++ kernel", "slot", 0.15, dict(car_hold, kernel=True))
 
         if slot_path < load_to_night:

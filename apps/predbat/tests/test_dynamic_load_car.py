@@ -36,6 +36,7 @@ STATE_FIELDS = (
     "num_cars",
     "minutes_now",
     "now_utc_real",
+    "now_utc",
     "car_charging_slots",
     "car_energy_reported_load",
     "car_charging_threshold",
@@ -45,6 +46,9 @@ STATE_FIELDS = (
     "octopus_intelligent_dynamic",
     "dynamic_load_car_run",
     "dynamic_load_car_confirmed",
+    "dynamic_load_car_confirmed_periods",
+    "octopus_slots_planned",
+    "octopus_slots_held",
     "dynamic_load_car_saved",
     "octopus_slots",
     "io_adjusted",
@@ -114,6 +118,9 @@ def _reset(my_predbat):
     my_predbat.octopus_intelligent_dynamic = True
     my_predbat.dynamic_load_car_run = {}
     my_predbat.dynamic_load_car_confirmed = {}
+    my_predbat.dynamic_load_car_confirmed_periods = {}
+    my_predbat.octopus_slots_planned = {}
+    my_predbat.octopus_slots_held = {}
     my_predbat.dynamic_load_car_saved = {}
     my_predbat.car_energy_reported_load = False
     my_predbat.car_charging_threshold = 3.0 / 60.0
@@ -369,6 +376,7 @@ def _run(my_predbat):
         failed |= _run_untrusted(my_predbat)
         failed |= _run_kwh_cancelled(my_predbat)
         failed |= _run_confirmed_half_hour(my_predbat)
+        failed |= _run_short_dispatch(my_predbat)
         failed |= _run_persistence(my_predbat)
     finally:
         if had_sensor:
@@ -1091,11 +1099,81 @@ def _run_confirmed_half_hour(my_predbat):
     return failed
 
 
+def _run_short_dispatch(my_predbat):
+    """
+    A one-minute dispatch is only given the cheap rate in a half hour the car was seen charging in
+    (OCTOPUS_SLOT_MIN_MINUTES). Every confirmed half hour is kept, not only the latest, so the blip's half
+    hour stays cheap once a later one is confirmed too - otherwise the day's cost would step up.
+    """
+    failed = False
+    saved_low_rate = my_predbat.args.get("octopus_slot_low_rate", None)
+    saved_slot_max = my_predbat.args.get("octopus_slot_max", None)
+    try:
+        print("Test 55: a car seen charging in a one-minute dispatch makes its half hour cheap")
+        _reset(my_predbat)
+        _sensor(my_predbat, "on")
+        my_predbat.forecast_minutes = 2 * 24 * 60
+        my_predbat.args["octopus_slot_low_rate"] = True
+        my_predbat.args["octopus_slot_max"] = 48
+        my_predbat.rate_min_base = 4.0
+        my_predbat.rate_max_base = 30.0
+        blip = [_dispatch(my_predbat, 853, 854)]
+        rates = my_predbat.rate_add_io_slots(0, {minute: 10.0 for minute in range(0, 2 * 24 * 60)}, blip)
+        failed |= _check("t55 not cheap before the car is seen", all(rates[minute] == 10.0 for minute in range(840, 870)), "rates {}".format(sorted(set(rates[minute] for minute in range(840, 870)))))
+
+        # The 15 second poll catches the car charging at 14:13:20, inside the blip
+        my_predbat.car_charging_slots = [[{"start": 853, "end": 854, "kwh": 0.1, "octopus": True}]]
+        my_predbat.octopus_slots_planned = {0: blip}
+        my_predbat.now_utc = my_predbat.midnight_utc + timedelta(minutes=850)  # the last cycle's clock
+        my_predbat.dynamic_load_car_poll(_at(my_predbat, 853, 20))
+        failed |= _check("t55 half hour confirmed", my_predbat.midnight_utc + timedelta(minutes=870) in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()), "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods))
+        # ...and holds it, as no 5 minute cycle sees the blip running and Octopus lists it as completed only later
+        failed |= _check("t55 half hour held by the poll", my_predbat.midnight_utc + timedelta(minutes=840) in my_predbat.octopus_slots_held.get(0, {}), "held {}".format(my_predbat.octopus_slots_held))
+        print("Test 55b: the held half hour keeps the blip cheap once it has gone from the planned dispatches")
+        _at(my_predbat, 855)
+        my_predbat.now_utc = my_predbat.midnight_utc + timedelta(minutes=855)
+        held = my_predbat.octopus_held_dispatches(0, [], [])
+        rates = my_predbat.rate_add_io_slots(0, {minute: 10.0 for minute in range(0, 2 * 24 * 60)}, held)
+        failed |= _check("t55b held half hour cheap", len(held) == 1 and all(rates[minute] == 4.0 for minute in range(840, 870)), "held {} rates {}".format(held, sorted(set(rates[minute] for minute in range(840, 870)))))
+        my_predbat.octopus_slots_planned = {}
+        my_predbat.octopus_slots_held = {}
+
+        # Charging again in a later dispatch confirms 15:00-15:30 as well, without losing 14:00-14:30
+        _cycle(my_predbat, 905, slots=[{"start": 900, "end": 930, "kwh": 3.0, "octopus": True}])
+        failed |= _check("t55 latest confirmation moved on", my_predbat.dynamic_load_car_confirmed.get(0) == my_predbat.midnight_utc + timedelta(minutes=930), "confirmed {}".format(my_predbat.dynamic_load_car_confirmed))
+        rates = my_predbat.rate_add_io_slots(0, {minute: 10.0 for minute in range(0, 2 * 24 * 60)}, blip + [_dispatch(my_predbat, 960, 961)])
+        failed |= _check("t55 completed blip still cheap", all(rates[minute] == 4.0 for minute in range(840, 870)), "rates {}".format(sorted(set(rates[minute] for minute in range(840, 870)))))
+        failed |= _check("t55 later unconfirmed blip not cheap", all(rates[minute] == 10.0 for minute in range(960, 990)), "rates {}".format(sorted(set(rates[minute] for minute in range(960, 990)))))
+
+        print("Test 56: confirmed half hours older than two days are dropped")
+        old = my_predbat.midnight_utc - timedelta(days=3)
+        my_predbat.dynamic_load_car_confirmed_periods[0].add(old)
+        _cycle(my_predbat, 910, slots=[{"start": 900, "end": 930, "kwh": 3.0, "octopus": True}])
+        failed |= _check("t56 old half hour pruned", old not in my_predbat.dynamic_load_car_confirmed_periods[0], "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods))
+
+        print("Test 57: a one-minute dispatch in the first 2 minutes of a half hour is never confirmed")
+        # Deliberate: the sensor can still show charging for a car that stopped just before the boundary, and a
+        # dispatch that short is not trusted (dispatch_too_short()), so the guard is kept for it too
+        _reset(my_predbat)
+        _sensor(my_predbat, "on")
+        my_predbat.car_charging_slots = [[{"start": 840, "end": 841, "kwh": 0.1, "octopus": True}]]
+        my_predbat.dynamic_load_car_poll(_at(my_predbat, 840, 30))
+        failed |= _check("t57 14:00-14:30 not confirmed at 14:00:30", not my_predbat.dynamic_load_car_confirmed_periods.get(0), "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods))
+    finally:
+        for key, value in (("octopus_slot_low_rate", saved_low_rate), ("octopus_slot_max", saved_slot_max)):
+            if value is None:
+                my_predbat.args.pop(key, None)
+            else:
+                my_predbat.args[key] = value
+    return failed
+
+
 def _restart(my_predbat):
     """
     Lose the in-memory dispatch-check state, as a restart does, then restore it from storage.
     """
     my_predbat.dynamic_load_car_confirmed = {}
+    my_predbat.dynamic_load_car_confirmed_periods = {}
     my_predbat.dynamic_load_car_since = {}
     my_predbat.dynamic_load_car_cancelled = {}
     my_predbat.dynamic_load_car_run = {}
@@ -1137,6 +1215,8 @@ def _run_persistence(my_predbat):
         _at(my_predbat, 403)
         _restart(my_predbat)
         failed |= _check("t49 confirmed restored", my_predbat.dynamic_load_car_confirmed.get(0) == my_predbat.midnight_utc + timedelta(minutes=420), "confirmed {}".format(my_predbat.dynamic_load_car_confirmed))
+        # Every confirmed half hour too, which a short dispatch's rate is priced from after it is over
+        failed |= _check("t49 confirmed half hours restored", my_predbat.dynamic_load_car_confirmed_periods.get(0) == {my_predbat.midnight_utc + timedelta(minutes=420)}, "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods))
         failed |= _check("t49 grace clock not restored", my_predbat.dynamic_load_car_since.get(0) is None, "since {}".format(my_predbat.dynamic_load_car_since))
         failed |= _check("t49 run restored", my_predbat.dynamic_load_car_run.get(0) == {"start": 390, "end": 450}, "run {}".format(my_predbat.dynamic_load_car_run))
         failed |= _check("t49 still trusted", my_predbat.dynamic_load_car_cancelled.get(0) is False, "cancelled {}".format(my_predbat.dynamic_load_car_cancelled))

@@ -211,6 +211,41 @@ def test_hainterface_update_state_item_db_mirror(my_predbat=None):
     return failed
 
 
+def test_hainterface_update_state_item_db_mirror_no_offset(my_predbat=None):
+    """Test update_state_item() mirrors a timezone-aware time when last_changed has no UTC offset or is missing"""
+    print("\n=== Testing HAInterface update_state_item() DB mirroring without an offset ===")
+    failed = 0
+
+    for label, last_changed in [("no offset", "2025-12-25T10:00:00"), ("missing", None)]:
+        mock_base = MockBase()
+        mock_db = MockDatabaseManager()
+        mock_base.components.register_component("db", mock_db)
+
+        ha_interface = create_ha_interface(mock_base, ha_key="test_key", db_enable=True, db_mirror_ha=True, db_primary=False)
+        ha_interface.db_enable = True
+        ha_interface.db_mirror_ha = True
+        ha_interface.db_primary = False
+        ha_interface.db_manager = mock_db
+        ha_interface.db_mirror_list = {"sensor.battery": True}
+        ha_interface.state_data = {}
+
+        item = {"state": "42", "attributes": {"unit": "kWh"}, "last_changed": last_changed}
+        ha_interface.update_state_item(item, "sensor.battery", nodb=False)
+
+        # DatabaseManager.set_state_db reads utcoffset() from the timestamp, so a naive one would crash it;
+        # the mock formats it with %z, which is empty for a naive datetime
+        if len(mock_db.set_state_calls) != 1:
+            print("ERROR: last_changed {}: DatabaseManager should be called once, got {}".format(label, len(mock_db.set_state_calls)))
+            failed += 1
+        elif not mock_db.set_state_calls[0]["timestamp"].endswith("+0000"):
+            print("ERROR: last_changed {}: mirrored timestamp should be UTC, got {}".format(label, mock_db.set_state_calls[0]["timestamp"]))
+            failed += 1
+        else:
+            print("✓ last_changed {}: mirrored with a UTC timestamp".format(label))
+
+    return failed
+
+
 def test_hainterface_update_state_with_api(my_predbat=None):
     """Test update_state() fetches from API"""
     print("\n=== Testing HAInterface update_state() with API ===")
@@ -546,6 +581,7 @@ def run_hainterface_state_tests(my_predbat):
     # update_state_item tests
     failed += test_hainterface_update_state_item_basic(my_predbat)
     failed += test_hainterface_update_state_item_db_mirror(my_predbat)
+    failed += test_hainterface_update_state_item_db_mirror_no_offset(my_predbat)
 
     # update_state tests
     failed += test_hainterface_update_state_with_api(my_predbat)

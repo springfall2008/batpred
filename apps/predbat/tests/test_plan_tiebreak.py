@@ -79,6 +79,30 @@ def _tiebreak_decision_tests(my_predbat, failures):
     _check(my_predbat.should_replace_plan(-200.0, -200.0, 4, 2) is True, "cost-neutral cleaner plan adopts new", failures)
 
 
+def _boost_tiebreak_tests(my_predbat, failures):
+    """should_replace_plan: on the first replan of a boosted dispatch run, a plan that scores better and costs no more wins a near-tie."""
+    my_predbat.metric_min_improvement_plan = 2.0
+    saved_tiebreak = my_predbat.io_confirmed_tiebreak
+    try:
+        my_predbat.io_confirmed_tiebreak = False
+        # No fresh boost (none, or later in the run): a same-cost plan ahead only by a fraction of a penny keeps the incumbent, as before
+        _check(my_predbat.should_replace_plan(217.889, 217.739, 3, 3, cost_prev=237.425, cost_new=237.425) is False, "no fresh boost, same-cost near-tie keeps previous", failures)
+
+        my_predbat.io_confirmed_tiebreak = True
+        # Boosted: the same cost and a better score - the bird-in-hand credit - adopts the new plan
+        _check(my_predbat.should_replace_plan(217.889, 217.739, 3, 3, cost_prev=237.425, cost_new=237.425) is True, "boosted same-cost better-scoring plan adopts new", failures)
+        # Cheaper and better scoring adopts too
+        _check(my_predbat.should_replace_plan(217.889, 217.739, 3, 3, cost_prev=237.425, cost_new=237.0) is True, "boosted cheaper better-scoring plan adopts new", failures)
+        # A real cost increase is never bought with the credit
+        _check(my_predbat.should_replace_plan(217.889, 217.739, 3, 3, cost_prev=237.425, cost_new=237.5) is False, "boosted costlier plan keeps previous", failures)
+        # An equal score is no reason to change
+        _check(my_predbat.should_replace_plan(217.889, 217.889, 3, 3, cost_prev=237.425, cost_new=237.425) is False, "boosted equal-score plan keeps previous", failures)
+        # Without the costs (any other caller) the rule does not apply
+        _check(my_predbat.should_replace_plan(217.889, 217.739, 3, 3) is False, "boosted without costs keeps previous", failures)
+    finally:
+        my_predbat.io_confirmed_tiebreak = saved_tiebreak
+
+
 def _scoring_pair_tests(my_predbat, failures):
     """plan_scoring_pair: selection scores the pre-clip plans, and never mixes a clipped side with a pre-clip one.
 
@@ -110,5 +134,6 @@ def run_plan_tiebreak_tests(my_predbat):
     failures = []
     _fragmentation_tests(my_predbat, failures)
     _tiebreak_decision_tests(my_predbat, failures)
+    _boost_tiebreak_tests(my_predbat, failures)
     _scoring_pair_tests(my_predbat, failures)
     return len(failures) > 0

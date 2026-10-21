@@ -260,6 +260,71 @@ def run_charger_schedule_reprice_tests(my_predbat, slot, slot_iog):
     return failed
 
 
+def run_short_dispatch_slot_tests(my_predbat, midnight_utc, time_format):
+    """
+    load_octopus_slots() prices a dispatch shorter than OCTOPUS_SLOT_MIN_MINUTES at the tariff, not the
+    low rate, unless dynamic load saw the car charging in its half hour - judged on the dispatch's own
+    length, so the last few minutes of a long dispatch in progress keep the low rate.
+    """
+    failed = False
+    print("**** Checking short dispatches in load_octopus_slots ****")
+    saved = (my_predbat.minutes_now, my_predbat.rate_import, my_predbat.dynamic_load_car_confirmed_periods, my_predbat.args.get("octopus_slot_max"), my_predbat.args.get("octopus_slot_low_rate"))
+    try:
+        my_predbat.minutes_now = 845  # 14:05
+        my_predbat.rate_import = {minute: 10.0 for minute in range(0, 2 * 24 * 60)}
+        my_predbat.args["octopus_slot_low_rate"] = True
+        my_predbat.args["octopus_slot_max"] = 12
+        my_predbat.car_charging_soc[0] = 0.0
+        my_predbat.car_charging_limit[0] = 100.0
+        my_predbat.car_charging_loss = 1.0
+
+        def dispatch(start_minute, end_minute, kwh=0.1):
+            """A raw AT_HOME smart-charge dispatch from start_minute to end_minute past midnight."""
+            start = midnight_utc + timedelta(minutes=start_minute)
+            end = midnight_utc + timedelta(minutes=end_minute)
+            return {"start": start.strftime(time_format), "end": end.strftime(time_format), "charge_in_kwh": kwh, "source": "smart-charge", "location": "AT_HOME"}
+
+        def averages(slots):
+            """Each emitted slot's start and rate."""
+            return [(slot["start"], slot["average"]) for slot in my_predbat.load_octopus_slots(0, slots, False)]
+
+        # 15:13-15:14, unconfirmed: still a car slot, but at the tariff rate
+        my_predbat.dynamic_load_car_confirmed_periods = {}
+        result = averages([dispatch(913, 914)])
+        if result != [(913, 10.0)]:
+            print("ERROR: unconfirmed one-minute dispatch should be priced at the tariff 10.0, got {}".format(result))
+            failed = True
+
+        # Seen charging in its half hour (15:00-15:30): the low rate
+        my_predbat.dynamic_load_car_confirmed_periods = {0: {midnight_utc + timedelta(minutes=930)}}
+        result = averages([dispatch(913, 914)])
+        if result != [(913, my_predbat.rate_min_base)]:
+            print("ERROR: confirmed one-minute dispatch should be priced at {}, got {}".format(my_predbat.rate_min_base, result))
+            failed = True
+
+        # A long dispatch 13:00-14:08 whose kWh Octopus has zeroed: trimmed to 3 minutes from now, still low rate
+        my_predbat.dynamic_load_car_confirmed_periods = {}
+        result = averages([dispatch(780, 848, kwh=0)])
+        if result != [(845, my_predbat.rate_min_base)]:
+            print("ERROR: the tail of a long dispatch should keep the low rate {}, got {}".format(my_predbat.rate_min_base, result))
+            failed = True
+
+        # An unconfirmed short dispatch does not spend the one block left for the day
+        my_predbat.args["octopus_slot_max"] = 1
+        result = averages([dispatch(883, 884), dispatch(900, 930)])
+        if result != [(883, 10.0), (900, my_predbat.rate_min_base)]:
+            print("ERROR: unconfirmed short dispatch should not spend the cap, got {}".format(result))
+            failed = True
+    finally:
+        my_predbat.minutes_now, my_predbat.rate_import, my_predbat.dynamic_load_car_confirmed_periods, saved_slot_max, saved_low_rate = saved
+        for key, value in (("octopus_slot_max", saved_slot_max), ("octopus_slot_low_rate", saved_low_rate)):
+            if value is None:
+                my_predbat.args.pop(key, None)
+            else:
+                my_predbat.args[key] = value
+    return failed
+
+
 def run_load_octopus_slots_tests(my_predbat):
     """
     Test for load octopus slots
@@ -534,6 +599,8 @@ def run_load_octopus_slots_tests(my_predbat):
         my_predbat.args.pop("octopus_slot_max", None)
     else:
         my_predbat.args["octopus_slot_max"] = saved_octopus_slot_max
+
+    failed |= run_short_dispatch_slot_tests(my_predbat, midnight_utc, TIME_FORMAT)
 
     if failed:
         return failed

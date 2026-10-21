@@ -530,7 +530,20 @@ class GivTCPRest:
             self.base.log("Error: GivTCP: Exception raised {}".format(e))
 
         if r and (r.status_code == 200):
-            return r.json()
+            # GivTCP can answer 200 with an empty or non-JSON body while it starts up (#2828), and a proxy
+            # can answer with an error page. Treat anything that is not a JSON object as a failed read, so
+            # read_data() retries it like a non-200 instead of the error escaping GivTCPComponent.run()
+            try:
+                data = r.json()
+            except ValueError as e:
+                data = None
+                reason = "a body that is not JSON ({})".format(e)
+            else:
+                reason = "JSON that is not an object"
+            if isinstance(data, dict):
+                return data
+            self.base.log('Warn: GivTCP: Inverter {} REST GET {} returned {}: "{}"'.format(self.inverter.id, url, reason, str(r.text)[:100]))
+            return None
         else:
             return None
 

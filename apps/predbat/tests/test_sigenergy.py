@@ -334,6 +334,15 @@ def test_sigenergy_battery_capacity(my_predbat):
     actual_kwh = api._get_battery_capacity_kwh("sys2")
     assert abs(actual_kwh - expected_kwh) < 0.001, "Capacity summed from Battery devices, expected {:.4f} got {:.4f}".format(expected_kwh, actual_kwh)
 
+    # Current responses give ratedEnergy in kWh, as documented - live device list of a 5-module
+    # system, whose system-list batteryCapacity was 45.2. Read as Ah this came to ~1.3kWh.
+    api.systems["sys3"] = {}
+    api.devices["sys3"] = [{"deviceType": "Inverter", "attrMap": {"ratedActivePower": 12.0}}] + [
+        {"deviceType": "Battery", "attrMap": {"ratedEnergy": 9.04, "ratedChargePower": 4.4, "ratedDischargePower": 4.8}} for _ in range(5)
+    ]
+    actual_kwh = api._get_battery_capacity_kwh("sys3")
+    assert abs(actual_kwh - 45.2) < 0.001, "kWh ratedEnergy summed unconverted, expected 45.2 got {:.4f}".format(actual_kwh)
+
     return failed
 
 
@@ -1049,7 +1058,8 @@ def test_sigenergy_run_skips_refresh_when_cache_fresh(my_predbat):
 
     run_async(api_cold.run(seconds=300, first=False))
 
-    api_cold.fetch_inverter_realtime.assert_called_once_with(sid)
+    api_cold.fetch_energy_flow.assert_called_once_with(sid)
+    api_cold.fetch_inverter_realtime.assert_not_called()
     api_cold.fetch_daily_summary.assert_called_once_with(sid)
     api_cold.fetch_history_totals.assert_called_once_with(sid)
     assert "energy_flow" in api_cold.data_age, "energy_flow age recorded after a real fetch"
@@ -1062,7 +1072,7 @@ def test_sigenergy_run_skips_refresh_when_cache_fresh(my_predbat):
 def test_sigenergy_run_energy_flow_not_bumped_on_fetch_failure(my_predbat):
     """run() must not bump energy_flow's data_age when both realtime fetches fail.
 
-    If fetch_inverter_realtime and its fetch_energy_flow fallback both fail, self.energy_flow is
+    If fetch_energy_flow and its fetch_inverter_realtime fallback both fail, self.energy_flow is
     unchanged — treating that as "updated" would falsely renew the refresh_energy freshness
     window and could mask a persistently broken realtime poll.
     """
@@ -2027,7 +2037,7 @@ def test_sigenergy_fetch_inverter_realtime(my_predbat):
     ]
 
     # realtimeInfo response: batPower positive=discharging (3.0 kW discharging)
-    # activePower positive=export (1.5 kW export)
+    # activePower is the inverter's AC output, not the grid - it must not reach gridPower
     # pvPower 5.0 kW
     # batSoc 72.0 %
     # pvEnergyDaily 12.5 kWh
@@ -2041,7 +2051,7 @@ def test_sigenergy_fetch_inverter_realtime(my_predbat):
                 "batSoc": 72.0,
                 "batPower": 3.0,   # discharging → batteryPower should be -3.0
                 "pvPower": 5.0,
-                "activePower": 1.5,  # export → gridPower = 1.5
+                "activePower": 1.5,  # inverter AC output - ignored
                 "pvEnergyDaily": 12.5,
             },
         },
@@ -2060,9 +2070,9 @@ def test_sigenergy_fetch_inverter_realtime(my_predbat):
     # batPower 3.0 (discharging) already matches Predbat convention (positive=discharge) - no negation
     assert flow.get("batteryPower") == 3.0, "batteryPower = 3.0 (discharging, unchanged)"
     assert flow.get("pvPower") == 5.0, "pvPower = 5.0"
-    assert flow.get("gridPower") == 1.5, "gridPower = 1.5 (export)"
-    # loadPower = pv + battery_discharge - grid_export = 5.0 + 3.0 - 1.5 = 6.5
-    assert flow.get("loadPower") == 6.5, "loadPower = 6.5 (derived)"
+    # No earlier reading to hold, and realtimeInfo has no grid figure - so grid and load stay 0
+    assert flow.get("gridPower") == 0.0, "gridPower not taken from activePower, got {}".format(flow.get("gridPower"))
+    assert flow.get("loadPower") == 0.0, "loadPower not derived without a grid figure, got {}".format(flow.get("loadPower"))
     assert flow.get("evPower") == 0.0, "evPower = 0.0 (not available)"
 
     # pvEnergyDaily should update daily_summary
@@ -2161,6 +2171,115 @@ def test_sigenergy_fetch_energy_flow(my_predbat):
     assert flow.get("loadPower") == 3.2, "loadPower = 3.2 (unchanged)"
     assert flow.get("evPower") == 0.4, "evPower = 0.4 (unchanged)"
 
+    return failed
+
+
+def test_sigenergy_run_falls_back_to_realtime_when_energy_flow_fails(my_predbat):
+    """run() polls energyFlow first and only calls realtimeInfo when energyFlow fails."""
+    failed = False
+    sid = "SIG001"
+
+    def _make_api(energy_flow_ok):
+        api = MockSigenergyAPI()
+        api.systems = {sid: {"deviceList": []}}
+        api.current_mode = {sid: SIGENERGY_MODE_VPP}
+        api.system_id_filter = {sid}
+        task = MagicMock()
+        task.done = MagicMock(return_value=False)
+        api._mqtt_task = task
+        api._manage_vpp_registration = AsyncMock(return_value=True)
+        api.fetch_energy_flow = AsyncMock(return_value=energy_flow_ok)
+        api.fetch_inverter_realtime = AsyncMock(return_value=True)
+        api.fetch_daily_summary = AsyncMock(return_value=True)
+        api.fetch_history_totals = AsyncMock(return_value=True)
+        api.publish_system_entities = AsyncMock()
+        api.apply_controls = AsyncMock()
+        return api
+
+    api = _make_api(energy_flow_ok=True)
+    run_async(api.run(seconds=300, first=False))
+    api.fetch_energy_flow.assert_called_once_with(sid)
+    api.fetch_inverter_realtime.assert_not_called()
+    assert "energy_flow" in api.data_age, "energy_flow age recorded"
+
+    api = _make_api(energy_flow_ok=False)
+    run_async(api.run(seconds=300, first=False))
+    api.fetch_energy_flow.assert_called_once_with(sid)
+    api.fetch_inverter_realtime.assert_called_once_with(sid)
+    assert "energy_flow" in api.data_age, "energy_flow age recorded after the realtime fallback succeeded"
+    return failed
+
+
+def test_sigenergy_fetch_inverter_realtime_live_sample_holds_grid_and_load(my_predbat):
+    """realtimeInfo's activePower is inverter output; grid and load hold the last energyFlow values.
+
+    Regression from a live VPP-mode system on 2026-10-20 while MQTT was down: realtimeInfo gave
+    activePower 1.19 (== pcsActivePower, == phase V x I 245.72 x 4.89), which was read as 1.19kW
+    export and gave a derived load of 0, while energyFlow polled 90s apart reported grid 0 and a
+    house load being met by the battery.
+    """
+    failed = False
+    api = MockSigenergyAPI()
+    api.access_token = "fake_token"
+    api.token_expires_at = 9_999_999_999
+    api._last_request_time = 0
+    api.devices["MPV1"] = [{"deviceType": "Inverter", "serialNumber": "INV001"}]
+    # Last energyFlow reading for the system: battery discharging 1.1kW into a 1.1kW load, grid 0
+    api.energy_flow["MPV1"] = {"batterySoc": 30.9, "batteryPower": 1.1, "pvPower": 0.0, "gridPower": 0.0, "loadPower": 1.1, "evPower": 0.0}
+
+    fake_response = {
+        "code": 0,
+        "data": {
+            "systemId": "MPV1",
+            "serialNumber": "INV001",
+            "deviceType": "Inverter",
+            "realTimeInfo": {
+                "activePower": "1.19",
+                "pcsActivePower": "1.19",
+                "aPhaseVoltage": "245.72",
+                "aPhaseCurrent": "4.89",
+                "pVPower": 0.085,
+                "pvTotalPower": "0.00",
+                "batSoc": "31.10",
+                "batPower": -0.638,
+                "pvEnergyDaily": "0.05",
+            },
+        },
+    }
+    with patch("sigenergy.aiohttp.ClientSession", return_value=_make_mock_session(_make_mock_response(status=200, json_data=fake_response))):
+        ok = run_async(api.fetch_inverter_realtime("MPV1"))
+
+    assert ok is True, "fetch_inverter_realtime should return True"
+    flow = api.energy_flow["MPV1"]
+    assert flow["gridPower"] == 0.0, "grid held from energyFlow, not activePower 1.19 - got {}".format(flow["gridPower"])
+    assert flow["loadPower"] == 1.1, "load held from energyFlow, not derived as 0 - got {}".format(flow["loadPower"])
+    assert abs(flow["batterySoc"] - 31.1) < 0.01, "SOC still updated from realtimeInfo"
+    assert abs(flow["pvPower"] - 0.085) < 1e-9, "PV still updated from pVPower"
+    return failed
+
+
+def test_sigenergy_fetch_energy_flow_live_sample_balances(my_predbat):
+    """energyFlow from the same live system balances: load = pv + battery discharge + grid import.
+
+    Raw batteryPower -1.1 (raw convention positive=charging) is a 1.1kW discharge, which with no
+    PV and no grid exactly meets the reported 1.1kW load - the cross-check that makes energyFlow
+    the trustworthy REST source.
+    """
+    failed = False
+    api = MockSigenergyAPI()
+    api.access_token = "fake_token"
+    api.token_expires_at = 9_999_999_999
+    api._last_request_time = 0
+
+    fake_response = {"code": 0, "data": '{"pvPower":0.0,"gridPower":0.0,"evPower":0.0,"acPower":0.0,"loadPower":1.1,"heatPumpPower":0.0,"batteryPower":-1.1,"batterySoc":30.9}'}
+    with patch("sigenergy.aiohttp.ClientSession", return_value=_make_mock_session(_make_mock_response(status=200, json_data=fake_response))):
+        ok = run_async(api.fetch_energy_flow("MPV1"))
+
+    assert ok is True, "fetch_energy_flow should return True"
+    flow = api.energy_flow["MPV1"]
+    assert flow["batteryPower"] == 1.1, "raw -1.1 is a 1.1kW discharge in Predbat convention, got {}".format(flow["batteryPower"])
+    # Predbat convention: grid +export/-import, so import = -gridPower
+    assert abs(flow["loadPower"] - (flow["pvPower"] + flow["batteryPower"] - flow["gridPower"])) < 0.01, "energy balance holds: {}".format(flow)
     return failed
 
 
@@ -2779,8 +2898,15 @@ def test_sigenergy_offboard_switch_survives_restart(my_predbat):
         return True
 
     api.onboard_systems = mock_onboard
+    # Without a token run() stops at authentication and never reaches the switch check
+    api.get_access_token = AsyncMock(return_value="tok")
+    # Not authorised: the device list is refused with HTTP 403
+    _reject_device_list(api)
+    api.fetch_system_list = AsyncMock(return_value=False)
 
     run_async(api.run(seconds=0, first=True))
+    assert api._not_onboarded == {sid}, "403 marks it not onboarded, got {}".format(api._not_onboarded)
+    api.fetch_system_list.assert_not_awaited()
     assert not onboarded, "A restart must not re-onboard a system whose offboard switch is on"
 
     return failed
@@ -2847,17 +2973,22 @@ def test_sigenergy_onboard_status(my_predbat):
     api = MockSigenergyAPI()
     assert api.onboard_status == {}, "onboard_status starts empty"
 
+    def _api_error(target, code):
+        """A _request stand-in that fails with an API error code, setting it as the real _request does."""
+        async def _request(*args, **kwargs):
+            target._last_api_code = code
+            return None
+        return _request
+
     # Pending approval (1116) → pending_approval, returns None
-    api._request = AsyncMock(return_value=None)
-    api._last_api_code = SIGENERGY_CODE_SYSTEM_PENDING_REVIEW
+    api._request = _api_error(api, SIGENERGY_CODE_SYSTEM_PENDING_REVIEW)
     result = run_async(api.onboard_systems(["sys-1"]))
     assert result is None, "pending review returns None"
     assert api.onboard_status["sys-1"] == "pending_approval", "pending_approval status set"
 
     # Registered to another VPP (1103) → in_other_vpp, returns False
     api2 = MockSigenergyAPI()
-    api2._request = AsyncMock(return_value=None)
-    api2._last_api_code = SIGENERGY_CODE_IN_OTHER_VPP
+    api2._request = _api_error(api2, SIGENERGY_CODE_IN_OTHER_VPP)
     result2 = run_async(api2.onboard_systems("sys-2"))
     assert result2 is False, "in-other-vpp returns False"
     assert api2.onboard_status["sys-2"] == "in_other_vpp", "in_other_vpp status set"
@@ -2930,6 +3061,7 @@ def test_sigenergy_run_derives_onboard_status(my_predbat):
             api.dashboard_items["switch.predbat_sigenergy_{}_offboard".format(slug)] = {"state": "on"}
         # Stub async helpers called by run()
         api._manage_vpp_registration = AsyncMock(return_value=True)
+        api.fetch_energy_flow = AsyncMock(return_value=True)
         api.fetch_inverter_realtime = AsyncMock(return_value=True)
         api.fetch_daily_summary = AsyncMock()
         api.fetch_history_totals = AsyncMock()
@@ -2977,7 +3109,7 @@ def test_sigenergy_run_pending_publishes_before_early_exit(my_predbat):
     api = MockSigenergyAPI()
     api.system_id_filter = {sid}
     api.get_access_token = AsyncMock(return_value="tok")
-    api.fetch_system_list = AsyncMock()  # leaves self.systems empty (system not yet visible)
+    _reject_device_list(api)  # HTTP 403 - not authorised yet
     api.onboard_systems = AsyncMock(return_value=None)
 
     result = run_async(api.run(seconds=0, first=True))
@@ -3014,6 +3146,7 @@ def _make_contended_api(sid, mode, axle_control=False, axle_event="off"):
     task.done = MagicMock(return_value=False)
     api._mqtt_task = task
     api.set_operating_mode = AsyncMock(return_value=True)
+    api.fetch_energy_flow = AsyncMock(return_value=True)
     api.fetch_inverter_realtime = AsyncMock(return_value=True)
     api.fetch_daily_summary = AsyncMock()
     api.fetch_history_totals = AsyncMock()
@@ -3208,6 +3341,941 @@ def test_sigenergy_axle_standoff_survives_restart(my_predbat):
 
     return failed
 
+# ---------------------------------------------------------------------------
+# MQTT command probe (--command-test)
+# ---------------------------------------------------------------------------
+
+
+def _reason(packet_type, identifier):
+    """Build a real paho-mqtt ReasonCode, as aiomqtt hands back from SUBACK/PUBACK."""
+    from paho.mqtt.reasoncodes import ReasonCode
+    return ReasonCode(packet_type, identifier=identifier)
+
+
+class FakeProbeClient:
+    """Fake aiomqtt.Client for mqtt_command_probe: fires paho's on_publish hook and yields queued messages.
+
+    Args:
+        protocol: The ProtocolVersion the probe asked for.
+        refuse_connect: When True, entering the context raises MqttError (broker rejected the connection).
+        suback: Reason code identifier returned for every subscribe.
+        puback: Callable(topic) -> reason code identifier delivered via on_publish, or None to send no ack callback.
+        messages: Payload list yielded by client.messages; when None the iterator blocks until cancelled.
+    """
+
+    instances = []
+
+    def __init__(self, protocol, refuse_connect=False, suback=1, puback=None, messages=None, paho=True):
+        """Record construction so tests can assert on protocol fallback; paho=False hides the paho client."""
+        self.protocol = protocol
+        self.refuse_connect = refuse_connect
+        self.suback = suback
+        self.puback = puback or (lambda topic: 0)
+        self._messages = messages
+        self.subscribed = []
+        self.published = []
+        self._client = MagicMock() if paho else None
+        if paho:
+            self._client.on_publish = MagicMock()
+        FakeProbeClient.instances.append(self)
+
+    async def __aenter__(self):
+        """Connect, or refuse to."""
+        if self.refuse_connect:
+            import aiomqtt
+            raise aiomqtt.MqttError("[code:132] Unsupported protocol version")
+        return self
+
+    async def __aexit__(self, *args):
+        """Disconnect."""
+        return False
+
+    async def subscribe(self, topic, *args, **kwargs):
+        """Record the subscription and return its SUBACK reason codes."""
+        from paho.mqtt.packettypes import PacketTypes
+        self.subscribed.append(topic)
+        return [_reason(PacketTypes.SUBACK, self.suback)]
+
+    async def publish(self, topic, payload=None, qos=0, **kwargs):
+        """Record the publish and deliver its PUBACK through paho's on_publish, as the network loop would."""
+        from paho.mqtt.packettypes import PacketTypes
+        self.published.append((topic, payload, qos))
+        code = self.puback(topic)
+        if code is not None and self._client is not None:
+            self._client.on_publish(None, None, len(self.published), _reason(PacketTypes.PUBACK, code), None)
+
+    @property
+    def messages(self):
+        """Async iterator over the queued messages, or one that never yields."""
+        queued = self._messages
+
+        class _Iter:
+            def __init__(self):
+                self._items = iter(queued or [])
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if queued is None:
+                    await asyncio.Event().wait()
+                try:
+                    topic, payload = next(self._items)
+                except StopIteration:
+                    raise StopAsyncIteration
+                msg = MagicMock()
+                msg.topic = topic
+                msg.payload = payload
+                return msg
+
+        return _Iter()
+
+
+def _run_probe(api, system_ids, factory, **kwargs):
+    """Run mqtt_command_probe with aiomqtt.Client replaced by factory(protocol=...)."""
+    FakeProbeClient.instances = []
+
+    def _client(*args, **client_kwargs):
+        return factory(client_kwargs["protocol"])
+
+    with patch("sigenergy.aiomqtt.Client", side_effect=_client):
+        with patch("sigenergy.ssl.create_default_context", return_value=MagicMock()):
+            return run_async(api.mqtt_command_probe(system_ids, **kwargs))
+
+
+def _probe_api():
+    """A MockSigenergyAPI with a valid token, ready to probe."""
+    api = MockSigenergyAPI()
+    api.access_token = "probe_token"
+    api.token_expires_at = 9_999_999_999
+    return api
+
+
+def test_sigenergy_mqtt_ack_result(my_predbat):
+    """_mqtt_ack_result treats reason codes >= 0x80 as refusals and a missing code as acknowledged."""
+    from paho.mqtt.packettypes import PacketTypes
+    from sigenergy import _mqtt_ack_result
+    failed = False
+
+    ok, text = _mqtt_ack_result(None)
+    assert ok is True and "no reason code" in text, "missing code (MQTT 3.1.1 PUBACK) is an acknowledgement, got {} {}".format(ok, text)
+    ok, text = _mqtt_ack_result(_reason(PacketTypes.PUBACK, 0))
+    assert ok is True and text == "Success (0x00)", "PUBACK success, got {} {}".format(ok, text)
+    ok, text = _mqtt_ack_result(_reason(PacketTypes.PUBACK, 0x87))
+    assert ok is False and text == "Not authorized (0x87)", "PUBACK not authorised is a refusal, got {} {}".format(ok, text)
+    ok, text = _mqtt_ack_result(_reason(PacketTypes.SUBACK, 1))
+    assert ok is True and "Granted QoS 1" in text, "SUBACK granted, got {} {}".format(ok, text)
+    ok, text = _mqtt_ack_result(_reason(PacketTypes.SUBACK, 0x80))
+    assert ok is False, "MQTT 3.1.1 SUBACK failure (0x80) is a refusal, got {} {}".format(ok, text)
+    ok, text = _mqtt_ack_result(0x80)
+    assert ok is False and "0x80" in text, "a raw integer code is interpreted too, got {} {}".format(ok, text)
+    ok, text = _mqtt_ack_result("garbage")
+    assert ok is False, "an unreadable code is not treated as success, got {} {}".format(ok, text)
+    return failed
+
+
+def test_sigenergy_mqtt_command_probe_success(my_predbat):
+    """The probe subscribes, requests push data, sends one command per system and records acks and messages."""
+    import json
+    from sigenergy import command_probe_verdict
+    failed = False
+    api = _probe_api()
+    messages = [("openapi/period/test_app_key/SIG001", b'[{"systemId": "SIG001", "value": {}}]')]
+
+    report = _run_probe(api, ["SIG001", "SIG002"], lambda protocol: FakeProbeClient(protocol, messages=messages), active_mode="idle", duration_minutes=3, charging_power_kw=0.0, listen_seconds=5)
+
+    assert report["connected"] is True and report["error"] is None, "connected cleanly, got {}".format(report)
+    assert report["protocol"] == "V5", "MQTT 5 is tried first, got {}".format(report["protocol"])
+    assert len(FakeProbeClient.instances) == 1, "no fallback needed"
+    client = FakeProbeClient.instances[0]
+
+    assert len(client.subscribed) == 6, "change/period/alarm for each of two systems, got {}".format(client.subscribed)
+    assert all(sub["ok"] for sub in report["subscribe"]), "all subscriptions granted"
+    assert not any("test_app_key" in sub["topic"] for sub in report["subscribe"]), "app_key masked in report topics: {}".format(report["subscribe"])
+
+    topics = [t for t, _, _ in client.published]
+    assert topics[:3] == ["openapi/subscription/period", "openapi/subscription/change", "openapi/subscription/alarm"], "push-data requests first, got {}".format(topics)
+    assert topics[3:] == ["openapi/instruction/command", "openapi/instruction/command"], "one command per system, got {}".format(topics)
+    assert all(qos == 1 for _, _, qos in client.published), "every publish is QoS 1 so the broker must acknowledge it"
+    cmd = json.loads(client.published[3][1])
+    assert cmd["accessToken"] == "probe_token", "command carries the token"
+    assert cmd["commands"][0]["systemId"] == "SIG001" and cmd["commands"][0]["activeMode"] == "idle", "command for the first system, got {}".format(cmd)
+    assert cmd["commands"][0]["duration"] == 3 and cmd["commands"][0]["chargingPower"] == 0.0, "duration and power passed through, got {}".format(cmd)
+    assert json.loads(client.published[4][1])["commands"][0]["systemId"] == "SIG002", "second command for the second system"
+
+    assert len(report["publish"]) == 5 and all(pub["ok"] for pub in report["publish"]), "all publishes acknowledged, got {}".format(report["publish"])
+    assert report["publish"][3]["reason"] == "Success (0x00)", "PUBACK reason code captured from paho, got {}".format(report["publish"][3])
+    assert client._client.on_publish is not None, "on_publish hook installed"
+
+    assert len(report["messages"]) == 1 and "<redacted>" in report["messages"][0]["topic"], "message recorded with app_key masked, got {}".format(report["messages"])
+    assert not any("probe_token" in m for m in api.log_messages), "token never logged"
+
+    ok, lines = command_probe_verdict(report)
+    assert ok is True, "verdict passes, got {}".format(lines)
+    assert any("accepted 2 command(s)" in line for line in lines), "MQTT 5 acceptance reported, got {}".format(lines)
+    return failed
+
+
+def test_sigenergy_mqtt_command_probe_refused_command(my_predbat):
+    """A command refused by the broker (MQTT 5 PUBACK 0x87) fails the verdict even though data still flows."""
+    from sigenergy import command_probe_verdict
+    failed = False
+    api = _probe_api()
+
+    def _factory(protocol):
+        return FakeProbeClient(protocol, puback=lambda topic: 0x87 if topic == "openapi/instruction/command" else 0, messages=[("openapi/period/test_app_key/SIG001", b"{}")])
+
+    report = _run_probe(api, ["SIG001"], _factory, listen_seconds=5)
+    command = [pub for pub in report["publish"] if pub["topic"] == "openapi/instruction/command"]
+    assert len(command) == 1 and command[0]["ok"] is False, "command refusal recorded, got {}".format(report["publish"])
+    assert "Not authorized" in command[0]["reason"], "reason given, got {}".format(command[0])
+
+    ok, lines = command_probe_verdict(report)
+    assert ok is False, "verdict fails on a refused command"
+    assert any("refused publish to openapi/instruction/command" in line and "Not authorized" in line for line in lines), "refusal explained, got {}".format(lines)
+    assert any("REFUSED" in m for m in api.log_messages), "refusal logged, got {}".format(api.log_messages)
+    return failed
+
+
+def test_sigenergy_mqtt_command_probe_no_subscribers(my_predbat):
+    """MQTT 5 PUBACK 0x10 (no matching subscribers) is accepted but flagged, since Sigenergy's backend should be listening."""
+    from sigenergy import command_probe_verdict
+    failed = False
+    api = _probe_api()
+
+    def _factory(protocol):
+        return FakeProbeClient(protocol, puback=lambda topic: 0x10, messages=[("openapi/period/test_app_key/SIG001", b"{}")])
+
+    report = _run_probe(api, ["SIG001"], _factory, listen_seconds=5)
+    assert all(pub["ok"] and pub["no_subscribers"] for pub in report["publish"]), "0x10 recorded as accepted with no subscribers, got {}".format(report["publish"])
+    assert "No matching subscribers (0x10)" in report["publish"][-1]["reason"], "reason given, got {}".format(report["publish"][-1])
+
+    ok, lines = command_probe_verdict(report)
+    warning = [line for line in lines if "no subscribers (0x10)" in line]
+    assert len(warning) == 1, "one 0x10 warning line, got {}".format(lines)
+    assert "openapi/instruction/command" in warning[0] and "openapi/subscription/period" in warning[0], "names the unheard topics, got {}".format(warning)
+    assert ok is True, "a warning, not a failure, while data still flows, got {}".format(lines)
+
+    # A normal success code does not trigger the warning
+    report = _run_probe(api, ["SIG001"], lambda protocol: FakeProbeClient(protocol, messages=[("t/test_app_key/SIG001", b"{}")]), listen_seconds=5)
+    assert not any(pub["no_subscribers"] for pub in report["publish"]), "0x00 is not flagged"
+    assert not any("0x10" in line for line in command_probe_verdict(report)[1]), "no warning on 0x00"
+    return failed
+
+
+def test_sigenergy_mqtt_command_probe_v311_fallback(my_predbat):
+    """A broker that rejects MQTT 5 is retried on 3.1.1; refused subscriptions and silence fail the verdict."""
+    from sigenergy import command_probe_verdict
+    failed = False
+    api = _probe_api()
+
+    def _factory(protocol):
+        return FakeProbeClient(protocol, refuse_connect=(protocol.name == "V5"), suback=0x80, messages=[])
+
+    report = _run_probe(api, ["SIG001"], _factory, listen_seconds=5)
+    assert [c.protocol.name for c in FakeProbeClient.instances] == ["V5", "V311"], "V5 then V311, got {}".format([c.protocol for c in FakeProbeClient.instances])
+    assert report["protocol"] == "V311" and report["connected"] is True, "connected on 3.1.1, got {}".format(report)
+    assert report["error"] is None, "the V5 rejection does not linger as an error once 3.1.1 connects, got {}".format(report["error"])
+    assert len(report["subscribe"]) == 3 and not any(sub["ok"] for sub in report["subscribe"]), "SUBACK 0x80 recorded as refused, got {}".format(report["subscribe"])
+
+    ok, lines = command_probe_verdict(report)
+    assert ok is False, "verdict fails"
+    assert any("refused subscription" in line for line in lines), "subscription refusal explained, got {}".format(lines)
+    assert any("MQTT 3.1.1 cannot report a refused publish" in line for line in lines), "3.1.1 caveat on the command ack, got {}".format(lines)
+    assert any("No messages received" in line for line in lines), "silence reported, got {}".format(lines)
+    return failed
+
+
+def test_sigenergy_mqtt_command_probe_connect_refused(my_predbat):
+    """When every protocol is refused the report carries the broker error and no publish is attempted."""
+    from sigenergy import command_probe_verdict
+    failed = False
+    api = _probe_api()
+
+    report = _run_probe(api, ["SIG001"], lambda protocol: FakeProbeClient(protocol, refuse_connect=True), listen_seconds=5)
+    assert report["connected"] is False, "never connected"
+    assert "Unsupported protocol version" in report["error"], "broker error kept, got {}".format(report["error"])
+    assert report["publish"] == [] and report["subscribe"] == [], "nothing sent"
+
+    ok, lines = command_probe_verdict(report)
+    assert ok is False and lines[0].startswith("x Could not connect"), "connect failure explained, got {}".format(lines)
+    return failed
+
+
+def test_sigenergy_mqtt_command_probe_listen_timeout(my_predbat):
+    """A broker that pushes nothing ends the listen window on the timeout rather than hanging."""
+    failed = False
+    api = _probe_api()
+
+    report = _run_probe(api, ["SIG001"], lambda protocol: FakeProbeClient(protocol, messages=None), listen_seconds=0.05)
+    assert report["connected"] is True and report["messages"] == [], "listen window closed with no messages, got {}".format(report)
+    assert len(report["publish"]) == 4, "push-data requests and the command were still published, got {}".format(report["publish"])
+    return failed
+
+
+def test_sigenergy_mqtt_command_probe_no_token(my_predbat):
+    """Without an access token the probe stops before touching the broker."""
+    failed = False
+    api = MockSigenergyAPI()
+
+    async def _no_token():
+        return None
+
+    api.get_access_token = _no_token
+    report = _run_probe(api, ["SIG001"], lambda protocol: FakeProbeClient(protocol))
+    assert report["connected"] is False and "no access token" in report["error"], "token failure reported, got {}".format(report)
+    assert FakeProbeClient.instances == [], "no MQTT connection attempted"
+    return failed
+
+
+def test_sigenergy_command_probe_verdict_no_command(my_predbat):
+    """A connected report with no command publish fails rather than passing on data alone."""
+    from sigenergy import command_probe_verdict
+    failed = False
+    report = {"connected": True, "protocol": "V5", "error": None, "subscribe": [], "publish": [], "messages": [{"topic": "t", "payload": "{}"}], "listen_seconds": 5}
+    ok, lines = command_probe_verdict(report)
+    assert ok is False and any("No command was published" in line for line in lines), "missing command explained, got {}".format(lines)
+
+    report["error"] = "[code:7] The connection was lost."
+    report["publish"] = [{"topic": "openapi/instruction/command", "ok": True, "reason": "Success (0x00)"}]
+    ok, lines = command_probe_verdict(report)
+    assert ok is False and any("Connection dropped" in line for line in lines), "mid-test drop fails the verdict, got {}".format(lines)
+    return failed
+
+
+# ---------------------------------------------------------------------------
+# Discovery from the device list (avoids the globally throttled system list)
+# ---------------------------------------------------------------------------
+
+
+def _reject_device_list(api):
+    """Make fetch_device_list fail the way an unauthorised system does: HTTP 403 (verified live)."""
+    calls = []
+
+    async def _rejected(system_id):
+        calls.append(system_id)
+        api._last_http_status = 403
+        return False
+
+    api.fetch_device_list = _rejected
+    return calls
+
+
+def _device_list_error(api, code):
+    """Make fetch_device_list fail with an API error code (None: the request itself failed)."""
+    calls = []
+
+    async def _failed(system_id):
+        calls.append(system_id)
+        api._last_http_status = None
+        api._last_api_code = code
+        return False
+
+    api.fetch_device_list = _failed
+    return calls
+
+
+def _device_list_ok(api, devices=None):
+    """Make fetch_device_list succeed, storing the given inventory."""
+    calls = []
+
+    async def _ok(system_id):
+        calls.append(system_id)
+        api.devices[system_id] = devices if devices is not None else [{"deviceType": "Inverter", "serialNumber": "INV1", "status": "Normal"}]
+        return True
+
+    api.fetch_device_list = _ok
+    return calls
+
+
+def _make_discovery_api(sid="SIG001"):
+    """MockSigenergyAPI configured for one system and stubbed past discovery."""
+    api = MockSigenergyAPI()
+    api.system_id_filter = {sid}
+    api.get_access_token = AsyncMock(return_value="tok")
+    api.fetch_current_mode = AsyncMock(return_value=True)
+    api._manage_vpp_registration = AsyncMock(return_value=True)
+    api.fetch_controls = AsyncMock()
+    api.publish_controls = AsyncMock()
+    api.fetch_energy_flow = AsyncMock(return_value=True)
+    api.fetch_daily_summary = AsyncMock(return_value=True)
+    api.fetch_history_totals = AsyncMock(return_value=True)
+    api.publish_system_entities = AsyncMock()
+    api.apply_controls = AsyncMock()
+    api.onboard_systems = AsyncMock(return_value=True)
+    task = MagicMock()
+    task.done = MagicMock(return_value=False)
+    api._mqtt_task = task
+    return api
+
+
+def test_sigenergy_discover_systems_from_device_list(my_predbat):
+    """A configured system is confirmed from its device list; the system list is never read."""
+    failed = False
+    api = _make_discovery_api()
+    calls = _device_list_ok(api)
+    api.fetch_system_list = AsyncMock(return_value=True)
+
+    found = run_async(api.discover_systems())
+    assert found is True and "SIG001" in api.systems, "system confirmed, got {}".format(api.systems)
+    assert calls == ["SIG001"], "one device-list read, got {}".format(calls)
+    api.fetch_system_list.assert_not_awaited()
+    assert api._unconfirmed_systems == set(), "nothing left unconfirmed"
+
+    # A retried discovery does not spend the system's five-minute device-list allowance again
+    run_async(api.discover_systems())
+    assert calls == ["SIG001"], "already-confirmed system skipped on retry, got {}".format(calls)
+
+    # No system_id configured: only the system list can enumerate systems
+    api = _make_discovery_api()
+    api.system_id_filter = set()
+    calls = _device_list_ok(api)
+    api.fetch_system_list = AsyncMock(return_value=True)
+    run_async(api.discover_systems())
+    api.fetch_system_list.assert_awaited_once()
+    assert calls == [], "device list not used for discovery without a system_id"
+    return failed
+
+
+def test_sigenergy_discover_systems_throttled_does_not_onboard(my_predbat):
+    """Anything but a 403 - throttle, failed request, other API error - leaves the system unconfirmed: retry, never onboard."""
+    failed = False
+    for code in (1201, None, 1001, 1502):
+        api = _make_discovery_api()
+        _device_list_error(api, code)
+        api.fetch_system_list = AsyncMock(return_value=True)
+
+        result = run_async(api.run(seconds=0, first=True))
+        assert result is False, "first run fails so discovery retries on the startup backoff (code {})".format(code)
+        assert api._unconfirmed_systems == {"SIG001"}, "system unconfirmed (code {}), got {}".format(code, api._unconfirmed_systems)
+        assert api._not_onboarded == set(), "not treated as unauthorised (code {})".format(code)
+        api.fetch_system_list.assert_not_awaited()
+        api.onboard_systems.assert_not_awaited()
+        assert any("Could not confirm system" in m for m in api.log_messages), "retry logged (code {})".format(code)
+    return failed
+
+
+def test_sigenergy_discover_systems_403_onboards_directly(my_predbat):
+    """A 403 device list goes straight to onboard_systems(), whose result decides; the system list is never read."""
+    failed = False
+
+    # Onboarded, and its device list is readable straight after: confirmed in the same run
+    api = _make_discovery_api()
+    responses = [False, True]
+    reads = []
+
+    async def _device_list(system_id):
+        reads.append(system_id)
+        ok = responses.pop(0)
+        if ok:
+            api.devices[system_id] = [{"deviceType": "Inverter", "serialNumber": "INV1", "status": "Normal"}]
+        else:
+            api._last_http_status = 403
+        return ok
+
+    api.fetch_device_list = _device_list
+    api.fetch_system_list = AsyncMock(return_value=True)
+    result = run_async(api.run(seconds=0, first=True))
+    api.onboard_systems.assert_awaited_once_with(["SIG001"])
+    api.fetch_system_list.assert_not_awaited()
+    assert reads == ["SIG001", "SIG001"], "device list re-read after onboarding, got {}".format(reads)
+    assert result is True and "SIG001" in api.systems, "confirmed after onboarding, got {} {}".format(result, api.systems)
+
+    # Onboarded, but the device list is not readable yet: retry discovery
+    api = _make_discovery_api()
+    _reject_device_list(api)
+    result = run_async(api.run(seconds=0, first=True))
+    api.onboard_systems.assert_awaited_once_with(["SIG001"])
+    assert result is False and "SIG001" not in api.systems, "retries discovery, got {} {}".format(result, api.systems)
+    assert any("device list not readable yet" in m for m in api.log_messages), "logged"
+
+    # Refused (e.g. 1103, registered to another VPP) or pending approval: stop and retry
+    for outcome in (False, None):
+        api = _make_discovery_api()
+        calls = _reject_device_list(api)
+        api.onboard_systems = AsyncMock(return_value=outcome)
+        result = run_async(api.run(seconds=0, first=True))
+        assert result is False, "run fails while onboarding is {}".format(outcome)
+        assert calls == ["SIG001"], "no device-list re-read when onboarding did not succeed, got {}".format(calls)
+    return failed
+
+
+def test_sigenergy_fetch_device_list_empty_is_not_a_confirmation(my_predbat):
+    """A device list answered with no devices returns False, keeps the inventory held, and reads as 'answered'."""
+    failed = False
+    held = [{"deviceType": "Inverter", "serialNumber": "INV1", "status": "Normal"}]
+    for label, data in (("null data", None), ("empty list", []), ("empty wrapped list", {"list": []})):
+        api = MockSigenergyAPI()
+        api.access_token = "fake_token"
+        api.token_expires_at = 9_999_999_999
+        api._last_request_time = 0
+        api.devices["SIG001"] = list(held)
+        api._last_api_code = None
+        response = {"code": 0, "msg": "success", "data": data}
+        with patch("sigenergy.aiohttp.ClientSession", return_value=_make_mock_session(_make_mock_response(status=200, json_data=response))):
+            ok = run_async(api.fetch_device_list("SIG001"))
+        assert ok is False, "{}: not a confirmation, got {}".format(label, ok)
+        assert api.devices["SIG001"] == held, "{}: inventory already held is kept, got {}".format(label, api.devices["SIG001"])
+        assert any("is empty" in m for m in api.log_messages), "{}: logged".format(label)
+    return failed
+
+
+def test_sigenergy_discover_systems_empty_device_list_retries(my_predbat):
+    """An empty device list (200, code 0) is neither a confirmation nor a refusal: retry, never onboard."""
+    failed = False
+    api = _make_discovery_api()
+    api.access_token = "fake_token"
+    api.token_expires_at = 9_999_999_999
+    api._last_request_time = 0
+    api.fetch_system_list = AsyncMock(return_value=False)
+    response = {"code": 0, "msg": "success", "data": []}
+    with patch("sigenergy.aiohttp.ClientSession", return_value=_make_mock_session(_make_mock_response(status=200, json_data=response))):
+        result = run_async(api.run(seconds=0, first=True))
+
+    assert result is False and "SIG001" not in api.systems, "not confirmed, got {} {}".format(result, api.systems)
+    assert api._unconfirmed_systems == {"SIG001"}, "left unconfirmed, got {}".format(api._unconfirmed_systems)
+    api.fetch_system_list.assert_not_awaited()
+    api.onboard_systems.assert_not_awaited()
+    return failed
+
+
+def test_sigenergy_request_403_is_not_retried(my_predbat):
+    """HTTP 403 is a refusal: one attempt, status recorded. Other HTTP errors are still retried."""
+    failed = False
+    api = MockSigenergyAPI()
+    api.access_token = "fake_token"
+    api.token_expires_at = 9_999_999_999
+    api._last_request_time = 0
+    session = _make_mock_session(_make_mock_response(status=403, json_data={}))
+    with patch("sigenergy.aiohttp.ClientSession", return_value=session):
+        result = run_async(api._request("GET", "/openapi/system/dummy/devices"))
+    assert result is None, "403 fails the request"
+    assert session.get.call_count == 1, "403 not retried, got {} attempts".format(session.get.call_count)
+    assert api._last_http_status == 403, "status recorded, got {}".format(api._last_http_status)
+
+    session = _make_mock_session(_make_mock_response(status=500, json_data={}))
+    with patch("sigenergy.aiohttp.ClientSession", return_value=session):
+        result = run_async(api._request("GET", "/openapi/system/SIG001/devices", retries=3))
+    assert result is None and session.get.call_count == 3, "500 still retried, got {} attempts".format(session.get.call_count)
+    assert api._last_http_status == 500, "status recorded, got {}".format(api._last_http_status)
+
+    # A later successful request clears it
+    session = _make_mock_session(_make_mock_response(status=200, json_data={"code": 0, "data": [{"deviceType": "Inverter"}]}))
+    with patch("sigenergy.aiohttp.ClientSession", return_value=session):
+        run_async(api._request("GET", "/openapi/system/SIG001/devices"))
+    assert api._last_http_status is None, "cleared by a successful request, got {}".format(api._last_http_status)
+    return failed
+
+
+def test_sigenergy_discover_systems_403_end_to_end(my_predbat):
+    """Through the real _request: a 403 device list marks the system not onboarded and run() onboards it."""
+    failed = False
+    api = _make_discovery_api()
+    api.access_token = "fake_token"
+    api.token_expires_at = 9_999_999_999
+    api._last_request_time = 0
+    api.fetch_system_list = AsyncMock(return_value=True)
+    api.onboard_systems = AsyncMock(return_value=False)  # e.g. 1103, registered to another VPP
+    session = _make_mock_session(_make_mock_response(status=403, json_data={}))
+    with patch("sigenergy.aiohttp.ClientSession", return_value=session):
+        result = run_async(api.run(seconds=0, first=True))
+    assert api._not_onboarded == {"SIG001"} and api._unconfirmed_systems == set(), "403 is not onboarded, got {} / {}".format(api._not_onboarded, api._unconfirmed_systems)
+    assert session.get.call_count == 1, "the 403 is not retried, got {} calls".format(session.get.call_count)
+    api.onboard_systems.assert_awaited_once_with(["SIG001"])
+    api.fetch_system_list.assert_not_awaited()
+    assert result is False, "run fails while the onboard is refused"
+    return failed
+
+
+def test_sigenergy_onboard_systems_ignores_stale_api_code(my_predbat):
+    """onboard_systems() must not read a code left by an earlier call as its own outcome."""
+    failed = False
+    api = MockSigenergyAPI()
+    api._last_api_code = 1116  # left over from an earlier call - would read as 'pending approval'
+
+    async def _http_failure(*args, **kwargs):
+        api._last_http_status = 503
+        return None  # an HTTP failure sets no API code
+
+    api._request = _http_failure
+    result = run_async(api.onboard_systems(["SIG001"]))
+    assert result is False, "plain failure, not pending approval, got {}".format(result)
+    assert api.onboard_status.get("SIG001") != "pending_approval", "status not set from the stale code"
+
+    # The live response for a system in another VPP (2026-10-20): code 0, per-item result False, codeList [1103]
+    async def _other_vpp(*args, **kwargs):
+        return [{"systemId": "SIG001", "result": False, "codeList": [1103]}]
+
+    api._request = _other_vpp
+    assert run_async(api.onboard_systems(["SIG001"])) is False, "refused"
+    assert api.onboard_status["SIG001"] == "in_other_vpp", "status from the per-item code, got {}".format(api.onboard_status)
+    return failed
+
+
+def test_sigenergy_run_first_reads_device_list_once(my_predbat):
+    """The first run's device refresh skips a system discovery has just read (five-minute restriction)."""
+    failed = False
+    api = _make_discovery_api()
+    calls = _device_list_ok(api)
+    api.fetch_system_list = AsyncMock(return_value=True)
+
+    result = run_async(api.run(seconds=0, first=True))
+    assert result is True, "first run succeeds"
+    assert calls == ["SIG001"], "device list read once on the first run, got {}".format(calls)
+    api.fetch_system_list.assert_not_awaited()
+
+    # The periodic refresh still runs afterwards
+    run_async(api.run(seconds=1800, first=False))
+    assert calls == ["SIG001", "SIG001"], "30-minute refresh reads it again, got {}".format(calls)
+    return failed
+
+
+def test_sigenergy_system_status_from_inverter_device(my_predbat):
+    """Status comes from the system list when present, else from the Inverter/AIO device."""
+    failed = False
+    api = MockSigenergyAPI()
+    api.systems["S1"] = {"status": "Disconnection"}
+    api.devices["S1"] = [{"deviceType": "Inverter", "status": "Normal"}]
+    assert api._system_status("S1") == "Disconnection", "system-list status preferred"
+
+    api.systems["S2"] = {}
+    api.devices["S2"] = [{"deviceType": "Battery", "status": "Fault"}, {"deviceType": "AIO", "status": "Normal"}]
+    assert api._system_status("S2") == "Normal", "inverter/AIO device status used, not a battery's"
+
+    api.systems["S3"] = {}
+    assert api._system_status("S3") == "Unknown", "unknown without either"
+    return failed
+
+
+def test_sigenergy_fetch_system_list_does_not_log_other_systems(my_predbat):
+    """The system list carries every system on the app key; neither the body nor unmatched names are logged."""
+    import json
+    failed = False
+    api = MockSigenergyAPI()
+    api.access_token = "fake_token"
+    api.token_expires_at = 9_999_999_999
+    api._last_request_time = 0
+    api.system_id_filter = {"MINE1"}
+    listing = [
+        {"systemId": "MINE1", "systemName": "My House", "addr": "1 My Road"},
+        {"systemId": "OTHER1", "systemName": "Someone Else", "addr": "2 Their Road"},
+    ]
+    response = {"code": 0, "msg": "success", "data": json.dumps(listing)}
+    with patch("sigenergy.aiohttp.ClientSession", return_value=_make_mock_session(_make_mock_response(status=200, json_data=response))):
+        ok = run_async(api.fetch_system_list())
+
+    assert ok is True and list(api.systems) == ["MINE1"], "own system matched, got {}".format(api.systems)
+    joined = "\n".join(api.log_messages)
+    assert "Someone Else" not in joined and "Their Road" not in joined and "OTHER1" not in joined, "other customers never logged:\n{}".format(joined)
+    assert "1 My Road" not in joined, "addresses never logged"
+    assert "returned 2 system(s), 1 matched" in joined, "count logged instead, got:\n{}".format(joined)
+
+    # An error response is still logged in full - it carries no system data and is needed for diagnosis
+    api = MockSigenergyAPI()
+    api.access_token = "fake_token"
+    api.token_expires_at = 9_999_999_999
+    api._last_request_time = 0
+    with patch("sigenergy.aiohttp.ClientSession", return_value=_make_mock_session(_make_mock_response(status=200, json_data={"code": 1502, "msg": "internal", "data": {}}))):
+        ok = run_async(api.fetch_system_list())
+    assert ok is None, "an unreadable list returns None, not False, got {}".format(ok)
+    assert any("Response from GET /openapi/system" in m and "1502" in m for m in api.log_messages), "error body logged"
+    return failed
+
+
+def test_sigenergy_rate_limit_last_attempt_does_not_claim_to_wait(my_predbat):
+    """On the final 1201 attempt the log says it gave up, not that it is waiting to retry."""
+    failed = False
+    api = MockSigenergyAPI()
+    api.access_token = "fake_token"
+    api.token_expires_at = 9_999_999_999
+    api._last_request_time = 0
+    response = {"code": 1201, "msg": "Access restriction", "data": {}}
+    with patch("sigenergy.aiohttp.ClientSession", return_value=_make_mock_session(_make_mock_response(status=200, json_data=response))):
+        result = run_async(api._request("GET", "/openapi/system", retries=2))
+
+    assert result is None, "throttled request fails"
+    waits = [m for m in api.log_messages if "waiting" in m]
+    assert len(waits) == 1 and "attempt 1/2" in waits[0], "only the first attempt waits, got {}".format(waits)
+    assert any("giving up after 2 attempts" in m for m in api.log_messages), "final attempt logs giving up, got {}".format(api.log_messages)
+    return failed
+
+
+# ---------------------------------------------------------------------------
+# MQTT topic scan (--mqtt-scan)
+# ---------------------------------------------------------------------------
+
+
+def _props(packet_type, **values):
+    """Build real paho-mqtt Properties carrying the given MQTT 5 fields."""
+    from paho.mqtt.properties import Properties
+    props = Properties(packet_type)
+    for key, value in values.items():
+        setattr(props, key, value)
+    return props
+
+
+class FakeScanClient:
+    """Fake aiomqtt.Client for mqtt_topic_scan: replays paho's connect/subscribe/publish callbacks.
+
+    Args:
+        protocol: The ProtocolVersion asked for.
+        suback: Callable(filter) -> (reason identifier, Properties or None).
+        drop_on: A filter whose subscription drops the connection (raises MqttError).
+        messages: List of (topic, payload, retain) delivered once subscribed.
+        connack_props: Properties delivered with the CONNACK.
+    """
+
+    instances = []
+
+    def __init__(self, protocol, suback=None, drop_on=None, messages=None, connack_props=None, paho=True):
+        """Record construction; paho's callbacks are MagicMocks the scan chains in front of (paho=False hides them)."""
+        self.protocol = protocol
+        self.suback = suback or (lambda topic_filter: (0, None))
+        self.drop_on = drop_on
+        self._messages = messages or []
+        self.connack_props = connack_props
+        self.subscribed = []
+        self.published = []
+        self._client = MagicMock() if paho else None
+        if paho:
+            self._client.on_connect = MagicMock()
+            self._client.on_subscribe = MagicMock()
+            self._client.on_publish = MagicMock()
+        FakeScanClient.instances.append(self)
+
+    async def __aenter__(self):
+        """Connect, delivering the CONNACK through on_connect as paho would."""
+        from paho.mqtt.packettypes import PacketTypes
+        if self._client is not None:
+            self._client.on_connect(None, None, {}, _reason(PacketTypes.CONNACK, 0), self.connack_props)
+        return self
+
+    async def __aexit__(self, *args):
+        """Disconnect."""
+        return False
+
+    async def subscribe(self, topic_filter, *args, **kwargs):
+        """Deliver the SUBACK (with properties) through on_subscribe, or drop the connection."""
+        import aiomqtt
+        from paho.mqtt.packettypes import PacketTypes
+        self.subscribed.append(topic_filter)
+        if topic_filter == self.drop_on:
+            raise aiomqtt.MqttError("[code:7] The connection was lost.")
+        identifier, props = self.suback(topic_filter)
+        code = _reason(PacketTypes.SUBACK, identifier)
+        if self._client is not None:
+            self._client.on_subscribe(None, None, len(self.subscribed), [code], props)
+        return [code]
+
+    async def publish(self, topic, payload=None, qos=0, **kwargs):
+        """Deliver a PUBACK 0x10 with a reason string through on_publish."""
+        from paho.mqtt.packettypes import PacketTypes
+        self.published.append(topic)
+        if self._client is not None:
+            self._client.on_publish(None, None, len(self.published), _reason(PacketTypes.PUBACK, 0x10), _props(PacketTypes.PUBACK, ReasonString="no subscribers"))
+
+    @property
+    def messages(self):
+        """Async iterator over the queued messages."""
+        queued = list(self._messages)
+
+        class _Iter:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if not queued:
+                    raise StopAsyncIteration
+                topic, payload, retain = queued.pop(0)
+                msg = MagicMock()
+                msg.topic = topic
+                msg.payload = payload
+                msg.retain = retain
+                return msg
+
+        return _Iter()
+
+
+def _run_scan(api, system_ids, factory, **kwargs):
+    """Run mqtt_topic_scan with aiomqtt.Client replaced by factory(protocol)."""
+    FakeScanClient.instances = []
+
+    def _client(*args, **client_kwargs):
+        return factory(client_kwargs["protocol"])
+
+    with patch("sigenergy.aiomqtt.Client", side_effect=_client):
+        with patch("sigenergy.ssl.create_default_context", return_value=MagicMock()):
+            return run_async(api.mqtt_topic_scan(system_ids, **kwargs))
+
+
+def test_sigenergy_mqtt_properties_text(my_predbat):
+    """MQTT 5 properties render as key=value text; none (MQTT 3.1.1) renders as empty."""
+    from paho.mqtt.packettypes import PacketTypes
+    from sigenergy import _mqtt_properties_text
+    failed = False
+    assert _mqtt_properties_text(None) == "", "no properties"
+    assert _mqtt_properties_text(_props(PacketTypes.PUBACK)) == "", "empty properties"
+    assert _mqtt_properties_text(_props(PacketTypes.PUBACK, ReasonString="not allowed")) == "ReasonString=not allowed", "reason string"
+    text = _mqtt_properties_text(_props(PacketTypes.CONNACK, ServerReference="mqtt-eu2.example", ReasonString="moved"))
+    assert "ServerReference=mqtt-eu2.example" in text and "ReasonString=moved" in text, "several fields, got {}".format(text)
+    return failed
+
+
+def test_sigenergy_scan_filters_order(my_predbat):
+    """Caller's filters first, then per-system and app-key filters, the broad wildcards last; no duplicates."""
+    failed = False
+    api = MockSigenergyAPI()
+    filters = api._scan_filters(["S1", "S2"], extra_filters=["custom/#", "openapi/#"])
+    assert filters[:2] == ["custom/#", "openapi/#"], "caller's filters first, got {}".format(filters)
+    assert filters.count("openapi/#") == 1, "no duplicates, got {}".format(filters)
+    for sid in ("S1", "S2"):
+        for f in ("openapi/+/+/{}".format(sid), "openapi/{}/#".format(sid), "+/{}/#".format(sid)):
+            assert f in filters, "{} present".format(f)
+    assert "openapi/+/test_app_key/#" in filters and "+/test_app_key/#" in filters, "app-key filters present"
+    assert filters[-2:] == ["#", "$SYS/#"], "broadest last, got {}".format(filters[-2:])
+    assert filters.index("openapi/+/test_app_key/#") < filters.index("#"), "narrow before broad"
+    return failed
+
+
+def test_sigenergy_mqtt_topic_scan(my_predbat):
+    """The scan reports each filter's SUBACK with its reason string, the CONNACK properties, and topics seen."""
+    from paho.mqtt.packettypes import PacketTypes
+    from sigenergy import topic_scan_summary
+    failed = False
+    api = _probe_api()
+
+    def _suback(topic_filter):
+        if topic_filter in ("#", "$SYS/#", "openapi/#"):
+            return 0x87, _props(PacketTypes.SUBACK, ReasonString="ACL deny")
+        return 0, None
+
+    messages = [
+        ("openapi/v2/period/test_app_key/SIG001", b"{\"soc\": 50}", True),
+        ("openapi/v2/period/test_app_key/SIG001", b"{\"soc\": 51}", False),
+        ("openapi/SIG001/status", b"{}", False),
+    ]
+    connack = _props(PacketTypes.CONNACK, ServerReference="mqtt-eu2.example")
+    report = _run_scan(api, ["SIG001"], lambda protocol: FakeScanClient(protocol, suback=_suback, messages=messages, connack_props=connack), extra_filters=["mine/#"], listen_seconds=5)
+
+    assert report["connected"] is True and report["protocol"] == "V5" and report["error"] is None, "connected, got {}".format(report)
+    assert report["connack"] == "ServerReference=mqtt-eu2.example", "CONNACK properties kept, got {}".format(report["connack"])
+    client = FakeScanClient.instances[0]
+    assert client.subscribed[0] == "mine/#" and client.subscribed[-1] == "$SYS/#", "order, got {}".format(client.subscribed)
+
+    by_filter = {sub["filter"]: sub for sub in report["subscribe"]}
+    assert by_filter["#"]["ok"] is False and "Not authorized (0x87)" in by_filter["#"]["reason"], "refusal recorded, got {}".format(by_filter["#"])
+    assert "ReasonString=ACL deny" in by_filter["#"]["reason"], "SUBACK reason string kept, got {}".format(by_filter["#"])
+    assert by_filter["openapi/+/<redacted>/#"]["ok"] is True, "app key masked in the filter, got {}".format(list(by_filter))
+    assert not any("test_app_key" in f for f in by_filter), "app key never in the report"
+
+    assert [pub["topic"] for pub in report["publish"]] == ["openapi/subscription/period", "openapi/subscription/change", "openapi/subscription/alarm"], "data-push requests only"
+    assert "No matching subscribers (0x10) [ReasonString=no subscribers]" == report["publish"][0]["reason"], "PUBACK reason string kept, got {}".format(report["publish"][0])
+
+    topics = report["topics"]
+    assert topics["openapi/v2/period/<redacted>/SIG001"] == {"count": 2, "retained": True}, "counted and retained flagged, got {}".format(topics)
+    assert topics["openapi/SIG001/status"]["count"] == 1, "second topic counted"
+    assert not any("probe_token" in m for m in api.log_messages), "token never logged"
+
+    lines = topic_scan_summary(report)
+    assert any("CONNACK ServerReference=mqtt-eu2.example" in line for line in lines), "CONNACK in summary, got {}".format(lines)
+    assert any("granted" in line and "refused" in line for line in lines), "subscription tally, got {}".format(lines)
+    assert any("(retained)" in line and "openapi/v2/period" in line for line in lines), "retained topic shown, got {}".format(lines)
+    return failed
+
+
+def test_sigenergy_mqtt_topic_scan_dropped_on_filter(my_predbat):
+    """A broker that drops the connection on a refused filter is reported with the filter that triggered it."""
+    from sigenergy import topic_scan_summary
+    failed = False
+    api = _probe_api()
+    report = _run_scan(api, ["SIG001"], lambda protocol: FakeScanClient(protocol, drop_on="#"), listen_seconds=5)
+    assert report["connected"] is True, "had connected"
+    assert "while subscribing to #" in report["error"], "names the filter, got {}".format(report["error"])
+    assert len(FakeScanClient.instances) == 1, "no protocol fallback once connected"
+    assert all(sub["ok"] for sub in report["subscribe"]) and "openapi/#" in [sub["filter"] for sub in report["subscribe"]], "filters before it recorded, got {}".format(report["subscribe"])
+    lines = topic_scan_summary(report)
+    assert any("Connection dropped" in line and "while subscribing to #" in line for line in lines), "drop explained, got {}".format(lines)
+    assert any("No messages" in line for line in lines), "silence reported"
+
+    # Not connected at all
+    report = _run_scan(api, ["SIG001"], lambda protocol: FakeProbeClient(protocol, refuse_connect=True), listen_seconds=5)
+    assert report["connected"] is False and topic_scan_summary(report)[0].startswith("x Could not connect"), "connect failure, got {}".format(report)
+    return failed
+
+
+def test_sigenergy_ack_capture_failure_is_not_silent(my_predbat):
+    """If paho's callbacks cannot be hooked, the probe and scan say so instead of passing on uncaptured codes."""
+    from sigenergy import command_probe_verdict, topic_scan_summary
+    failed = False
+
+    # Probe: data still flows, but with no PUBACK codes captured the verdict must not pass
+    api = _probe_api()
+    report = _run_probe(api, ["SIG001"], lambda protocol: FakeProbeClient(protocol, paho=False, messages=[("openapi/period/test_app_key/SIG001", b"{}")]), listen_seconds=5)
+    assert report["ack_capture"] is False, "capture failure recorded"
+    assert all(pub["reason"] == "acknowledged (no reason code)" for pub in report["publish"]), "codes genuinely missing, got {}".format(report["publish"])
+    ok, lines = command_probe_verdict(report)
+    assert ok is False, "verdict fails rather than passing on uncaptured codes, got {}".format(lines)
+    assert any("Could not capture the broker's PUBACK reason codes" in line for line in lines), "explained, got {}".format(lines)
+    assert any(m.startswith("Warn:") and "could not hook" in m for m in api.log_messages), "warned, got {}".format(api.log_messages)
+
+    # Probe with the hook in place is unaffected
+    report = _run_probe(api, ["SIG001"], lambda protocol: FakeProbeClient(protocol, messages=[("t/test_app_key/SIG001", b"{}")]), listen_seconds=5)
+    assert report["ack_capture"] is True and command_probe_verdict(report)[0] is True, "normal run still passes"
+
+    # Scan: same disclosure
+    api = _probe_api()
+    report = _run_scan(api, ["SIG001"], lambda protocol: FakeScanClient(protocol, paho=False), listen_seconds=5)
+    assert report["ack_capture"] is False, "scan records the capture failure"
+    assert any("Could not hook paho's callbacks" in line for line in topic_scan_summary(report)), "scan summary explains it"
+    return failed
+
+
+def test_sigenergy_realtime_fallback_unknown_grid_load(my_predbat):
+    """With no measured grid/load to hold, the fallback flags its 0s as unknown, warns once, and says so in the log."""
+    failed = False
+    api = MockSigenergyAPI()
+    api.access_token = "fake_token"
+    api.token_expires_at = 9_999_999_999
+    api._last_request_time = 0
+    api.devices["SIG001"] = [{"deviceType": "Inverter", "serialNumber": "INV001"}]
+    realtime = {"code": 0, "data": {"realTimeInfo": {"batSoc": 40.0, "batPower": 1.0, "pVPower": 0.5, "activePower": 1.5}}}
+
+    def _realtime():
+        with patch("sigenergy.aiohttp.ClientSession", return_value=_make_mock_session(_make_mock_response(status=200, json_data=realtime))):
+            assert run_async(api.fetch_inverter_realtime("SIG001")) is True
+
+    # Fresh install: nothing to hold
+    _realtime()
+    flow = api.energy_flow["SIG001"]
+    assert flow["gridPower"] == 0.0 and flow["loadPower"] == 0.0 and flow.get("gridLoadUnknown") is True, "placeholder 0s flagged, got {}".format(flow)
+    warnings = [m for m in api.log_messages if m.startswith("Warn:") and "no grid/load reading yet" in m]
+    assert len(warnings) == 1, "warned, got {}".format(api.log_messages)
+    assert any("grid and load unknown, published as 0" in m for m in api.log_messages), "log line does not claim a held reading"
+    assert not any("held from last reading" in m for m in api.log_messages), "no false 'held' claim"
+
+    # A second fallback still knows its 0s are placeholders, and does not warn again
+    api.log_messages.clear()
+    _realtime()
+    assert api.energy_flow["SIG001"].get("gridLoadUnknown") is True, "still unknown - a placeholder is not a reading"
+    assert not any("no grid/load reading yet" in m for m in api.log_messages), "warned once only"
+
+    # energyFlow measures it: the next fallback holds a real reading, without the flag or the wording
+    energy = {"code": 0, "data": '{"pvPower":0.5,"gridPower":-0.3,"loadPower":1.8,"batteryPower":-1.0,"batterySoc":40}'}
+    with patch("sigenergy.aiohttp.ClientSession", return_value=_make_mock_session(_make_mock_response(status=200, json_data=energy))):
+        assert run_async(api.fetch_energy_flow("SIG001")) is True
+    assert "gridLoadUnknown" not in api.energy_flow["SIG001"], "a measured reading carries no flag"
+    api.log_messages.clear()
+    _realtime()
+    flow = api.energy_flow["SIG001"]
+    assert flow["gridPower"] == -0.3 and flow["loadPower"] == 1.8 and "gridLoadUnknown" not in flow, "real reading held, got {}".format(flow)
+    assert any("held from last reading" in m for m in api.log_messages), "held wording when it is true"
+
+    # Losing it again after a measurement warns afresh
+    api.energy_flow["SIG001"] = {}
+    _realtime()
+    assert sum("no grid/load reading yet" in m for m in api.log_messages) == 1, "warns again after energyFlow had recovered"
+    return failed
+
 
 def run_sigenergy_tests(my_predbat):
     """Run all Sigenergy API unit tests.
@@ -3271,6 +4339,9 @@ def run_sigenergy_tests(my_predbat):
         ("fetch_inverter_realtime_pv_power_key_fallback", test_sigenergy_fetch_inverter_realtime_pv_power_key_fallback),
         ("fetch_energy_flow", test_sigenergy_fetch_energy_flow),
         ("fetch_inverter_realtime_no_inverter", test_sigenergy_fetch_inverter_realtime_no_inverter),
+        ("run_falls_back_to_realtime_when_energy_flow_fails", test_sigenergy_run_falls_back_to_realtime_when_energy_flow_fails),
+        ("fetch_inverter_realtime_live_sample_holds_grid_and_load", test_sigenergy_fetch_inverter_realtime_live_sample_holds_grid_and_load),
+        ("fetch_energy_flow_live_sample_balances", test_sigenergy_fetch_energy_flow_live_sample_balances),
         ("get_inverter_serial", test_sigenergy_get_inverter_serial),
         ("build_tls_context", test_sigenergy_build_tls_context),
         ("battery_max_power", test_sigenergy_battery_max_power),
@@ -3307,6 +4378,33 @@ def run_sigenergy_tests(my_predbat):
         ("axle_event_skips_controls", test_sigenergy_axle_event_skips_controls),
         ("axle_event_end_resumes_control", test_sigenergy_axle_event_end_resumes_control),
         ("axle_standoff_survives_restart", test_sigenergy_axle_standoff_survives_restart),
+        ("mqtt_ack_result", test_sigenergy_mqtt_ack_result),
+        ("mqtt_command_probe_success", test_sigenergy_mqtt_command_probe_success),
+        ("mqtt_command_probe_refused_command", test_sigenergy_mqtt_command_probe_refused_command),
+        ("mqtt_command_probe_no_subscribers", test_sigenergy_mqtt_command_probe_no_subscribers),
+        ("mqtt_command_probe_v311_fallback", test_sigenergy_mqtt_command_probe_v311_fallback),
+        ("mqtt_command_probe_connect_refused", test_sigenergy_mqtt_command_probe_connect_refused),
+        ("mqtt_command_probe_listen_timeout", test_sigenergy_mqtt_command_probe_listen_timeout),
+        ("mqtt_command_probe_no_token", test_sigenergy_mqtt_command_probe_no_token),
+        ("command_probe_verdict_no_command", test_sigenergy_command_probe_verdict_no_command),
+        ("mqtt_properties_text", test_sigenergy_mqtt_properties_text),
+        ("scan_filters_order", test_sigenergy_scan_filters_order),
+        ("mqtt_topic_scan", test_sigenergy_mqtt_topic_scan),
+        ("mqtt_topic_scan_dropped_on_filter", test_sigenergy_mqtt_topic_scan_dropped_on_filter),
+        ("ack_capture_failure_is_not_silent", test_sigenergy_ack_capture_failure_is_not_silent),
+        ("realtime_fallback_unknown_grid_load", test_sigenergy_realtime_fallback_unknown_grid_load),
+        ("discover_systems_from_device_list", test_sigenergy_discover_systems_from_device_list),
+        ("discover_systems_throttled_does_not_onboard", test_sigenergy_discover_systems_throttled_does_not_onboard),
+        ("discover_systems_403_onboards_directly", test_sigenergy_discover_systems_403_onboards_directly),
+        ("fetch_device_list_empty_is_not_a_confirmation", test_sigenergy_fetch_device_list_empty_is_not_a_confirmation),
+        ("discover_systems_empty_device_list_retries", test_sigenergy_discover_systems_empty_device_list_retries),
+        ("request_403_is_not_retried", test_sigenergy_request_403_is_not_retried),
+        ("discover_systems_403_end_to_end", test_sigenergy_discover_systems_403_end_to_end),
+        ("onboard_systems_ignores_stale_api_code", test_sigenergy_onboard_systems_ignores_stale_api_code),
+        ("run_first_reads_device_list_once", test_sigenergy_run_first_reads_device_list_once),
+        ("system_status_from_inverter_device", test_sigenergy_system_status_from_inverter_device),
+        ("fetch_system_list_does_not_log_other_systems", test_sigenergy_fetch_system_list_does_not_log_other_systems),
+        ("rate_limit_last_attempt_does_not_claim_to_wait", test_sigenergy_rate_limit_last_attempt_does_not_claim_to_wait),
     ]
 
     for name, fn in tests:
