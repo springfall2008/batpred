@@ -228,7 +228,7 @@ SIGENERGY_HISTORY_NODES = [
 # Storage cache keys for poll-interval system state persisted between restarts (see
 # load_cached_data()). System/device discovery is deliberately excluded — it is always
 # re-fetched fresh on startup.
-SIGENERGY_CACHE_KEYS = ["energy_flow", "daily_summary", "history_totals", "onboard_status"]
+SIGENERGY_CACHE_KEYS = ["energy_flow", "daily_summary", "history_totals", "onboard_status", "grid_export"]
 
 # Sentinel returned by _request() when the API responds with code=0 but an empty/null data field.
 # Distinguishes "success with no payload" from None which always means "request failed".
@@ -489,6 +489,7 @@ class SigenergyAPI(ComponentBase):
         self._offboard_vpp_exit_done = set()  # systemIds confirmed out of VPP ahead of an offboard
         self._offboard_done = set()           # systemIds successfully offboarded this process
         self.onboard_status = {}  # systemId → onboarding status string (published for the SaaS UI)
+        self.grid_export = {}     # systemId → {"antiReflux": "on"/"off", "gridMaxBackfeedPowerW": W} from openapi/change, cached
 
         # Age (datetime of last update) of each SIGENERGY_CACHE_KEYS category, used to avoid an
         # unnecessary API refresh on restart when the persisted cache is still fresh
@@ -1769,13 +1770,21 @@ class SigenergyAPI(ComponentBase):
         return power
 
     def _get_export_limit_w(self, system_id):
-        """Return the grid export limit in W, or 99999 (no limit) when the system has not reported one.
+        """Return the grid export limit in W, or 99999 (no limit) when the system is not limiting export.
 
-        The limit is the grid max backfeed power, which only arrives in an ``openapi/change`` MQTT
-        message (see _handle_mqtt_change). A reported 0 is skipped there, so it also reads as no limit.
+        Both fields only arrive in an ``openapi/change`` MQTT message (see _handle_mqtt_change):
+          antiReflux "off" → 99999, whatever gridMaxBackfeedPowerW says
+          antiReflux "on"  → gridMaxBackfeedPowerW, including 0 (zero export)
+          antiReflux never reported → gridMaxBackfeedPowerW when above 0, otherwise 99999
         """
-        backfeed_kw = _safe_float(self.systems.get(system_id, {}).get("gridMaxBackfeedPower", 0))
-        return round(backfeed_kw * 1000) if backfeed_kw > 0 else 99999
+        grid_export = self.grid_export.get(system_id, {})
+        anti_reflux = grid_export.get("antiReflux", None)
+        backfeed_w = grid_export.get("gridMaxBackfeedPowerW", None)
+        if anti_reflux == "off" or backfeed_w is None:
+            return 99999
+        if anti_reflux == "on" or backfeed_w > 0:
+            return round(backfeed_w)
+        return 99999
 
     # -----------------------------------------------------------------------
     # MQTT message handlers
@@ -1891,33 +1900,36 @@ class SigenergyAPI(ComponentBase):
     def _handle_mqtt_change(self, system_id, value_dict):
         """Handle a Sigenergy ``openapi/change`` MQTT message.
 
-        Updates ``self.controls[system_id]`` with the SOC limit values and
-        updates capacity/power fields in ``self.systems[system_id]``.
+        Updates ``self.controls[system_id]`` with the SOC limit values,
+        capacity/power fields in ``self.systems[system_id]`` and the export
+        limiting fields in ``self.grid_export[system_id]``.
 
         The ``change`` topic fires whenever the inverter's configuration
-        changes (e.g. via the Sigenergy app or a remote API command).
+        changes (e.g. via the Sigenergy app or a remote API command), which can
+        be days apart - hence grid_export is cached across restarts.
 
         Per the user's clarification:
           backupCutOffSOC%   → reserve (backup/emergency minimum)
           chargeCutOffSOC%   → charge target_soc
           dischargeCutOffSOC% → export target_soc (minimum discharge floor)
+          antiReflux + gridMaxBackfeedPowerW → export limit (see _get_export_limit_w)
 
-
-        example message:
+        Example message, from a plant with a 3.68 kW G98 export cap on a 12 kW inverter:
         {
-            "batteryRatedChargePowerW": "22000.0",
-            "batteryRatedCapabilityWh": "45200.0",
-            "backupCutOffSOC%": "15.0",
+            "antiReflux": "on",
+            "batteryRatedChargePowerW": "13200.0",
+            "batteryRatedCapabilityWh": "27120.0",
+            "backupCutOffSOC%": "16.0",
             "inverterMaxAbsorptionPowerW": "12000.0",
             "peakShavingStatus": "off",
             "stormWatchStatus": "off",
-            "batteryRatedDischargePowerW": "24000.0",
+            "batteryRatedDischargePowerW": "14400.0",
             "inverterMaxActivePowerW": "12000.0",
-            "dischargeCutOffSOC%": "5.0",
+            "dischargeCutOffSOC%": "0.0",
             "chargeCutOffSOC%": "100.0",
             "peakShavingCutOffSOC%": "0.0",
-            "inverterMaxApprentPowerVar": "12000.0",
-            "gridMaxBackfeedPowerW": "5000.0"
+            "gridMaxBackfeedPowerW": "3680.0",
+            "inverterMaxApprentPowerVar": "12000.0"
         }
 
         Args:
@@ -1956,11 +1968,19 @@ class SigenergyAPI(ComponentBase):
             ("batteryRatedChargePowerW", "ratedChargePower"),
             ("batteryRatedDischargePowerW", "ratedDischargePower"),
             ("inverterMaxActivePowerW", "ratedActivePower"),
-            ("gridMaxBackfeedPowerW", "gridMaxBackfeedPower"),
         ):
             val = _safe_float(value_dict.get(mqtt_field, None))
             if val:
                 self.systems[system_id][sys_key] = val / 1000.0
+
+        # Export limiting - merged field by field, since a message may carry only what changed. Unlike the
+        # rated powers above a 0 W backfeed is kept, as with antiReflux on it means zero export.
+        anti_reflux = value_dict.get("antiReflux", None)
+        if isinstance(anti_reflux, str) and anti_reflux.strip():
+            self.grid_export.setdefault(system_id, {})["antiReflux"] = anti_reflux.strip().lower()
+        backfeed_w = _safe_float(value_dict.get("gridMaxBackfeedPowerW", None), None)
+        if backfeed_w is not None and backfeed_w >= 0:
+            self.grid_export.setdefault(system_id, {})["gridMaxBackfeedPowerW"] = backfeed_w
 
         self.log(
             "SigenergyAPI: MQTT change {}: reserve={}% charge_target={}% export_target={}%".format(
@@ -2401,7 +2421,8 @@ class SigenergyAPI(ComponentBase):
         self.set_arg("battery_power", ["sensor.{}_sigenergy_{}_battery_power".format(self.prefix, s) for s in slugs])
         self.set_arg("battery_rate_max", ["sensor.{}_sigenergy_{}_battery_rate_max".format(self.prefix, s) for s in slugs])
         self.set_arg("inverter_limit", ["sensor.{}_sigenergy_{}_inverter_limit".format(self.prefix, s) for s in slugs])
-        self.set_arg("export_limit", ["sensor.{}_sigenergy_{}_export_limit".format(self.prefix, s) for s in slugs])
+        # An export_limit the user wrote in apps.yaml wins - the sensor reads 99999 until the plant has reported its limit
+        self.set_arg_auto("export_limit", ["sensor.{}_sigenergy_{}_export_limit".format(self.prefix, s) for s in slugs], overwrite=False)
         self.set_arg("pv_power", ["sensor.{}_sigenergy_{}_pv_power".format(self.prefix, s) for s in slugs])
         self.set_arg("grid_power", ["sensor.{}_sigenergy_{}_grid_power".format(self.prefix, s) for s in slugs])
         self.set_arg("load_power", ["sensor.{}_sigenergy_{}_load_power".format(self.prefix, s) for s in slugs])
@@ -3110,6 +3131,8 @@ class SigenergyAPI(ComponentBase):
         reboot during the API's own nightly dip window can't let a lower reading through. The
         rest (energy_flow, daily_summary, onboard_status) is restored too so entities publish
         sensible values immediately rather than "unknown"/0 while the first poll is in flight.
+        grid_export is restored because nothing but an openapi/change message reports it, and
+        those can be days apart - without it the export limit would read 99999 until the next one.
         """
         if not self.storage:
             return
@@ -3129,6 +3152,10 @@ class SigenergyAPI(ComponentBase):
         onboard_status = await self._load_cache("onboard_status")
         if onboard_status is not None:
             self.onboard_status = onboard_status
+
+        grid_export = await self._load_cache("grid_export")
+        if grid_export is not None:
+            self.grid_export = grid_export
 
 
         self.log("SigenergyAPI: Restored cached poll-interval state from storage")
@@ -3278,6 +3305,10 @@ class SigenergyAPI(ComponentBase):
         # every minute and the cache does not need rewriting that often.
         if first or seconds % SIGENERGY_POLL_INTERVAL == 0:
             await self._save_cache("onboard_status", self.onboard_status)
+            # Rewritten every poll, not just when a change message arrives, because the cache expires
+            # after a day and the plant may go longer than that without reporting its export limit again
+            if self.grid_export:
+                await self._save_cache("grid_export", self.grid_export)
 
         # Fetch controls from HA on first run only
         if first:
