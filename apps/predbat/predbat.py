@@ -551,6 +551,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.discharge_rate_now = 0
         self.car_charging_hold = False
         self.car_charging_manual_soc = []
+        self.car_charging_manual_soc_energy = []
+        # When Predbat last wrote each car's manual SoC, until Home Assistant reports it - see car_manual_soc_track()
+        self.car_manual_soc_written = {}
         self.car_charging_threshold = 99
         self.car_charging_energy = {}
         self.car_charging_energy_warned = False
@@ -1161,8 +1164,19 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
     def update_car_manual_soc(self):
         """
         Write the predicted next car SoC back to the manual car SoC tracker for cars using car_charging_manual_soc
+
+        A car with a car_charging_energy sensor is skipped: car_manual_soc_track() adds the energy it
+        actually took instead, and adding the plan's prediction as well would count it twice.
+
+        So is a car whose plugged-in sensor (car_charging_plugged, else car_charging_planned) now reads unplugged. Writing would make the value
+        newer than the unplug, and car_manual_soc_track() would then not reset it on the next cycle.
         """
         for car_n in range(self.num_cars):
+            if car_n < len(self.car_charging_manual_soc_energy) and self.car_charging_manual_soc_energy[car_n]:
+                continue
+            plug_arg = self.car_plug_arg(car_n)
+            if plug_arg and self.car_plugged_in_now(car_n, plug_arg) is False:
+                continue
             if car_n < len(self.car_charging_manual_soc) and self.car_charging_manual_soc[car_n]:
                 car_postfix = "" if car_n == 0 else "_" + str(car_n)
                 self.log("Car {} charging Manual SoC current is {} next is {}".format(car_n, self.car_charging_soc[car_n], self.car_charging_soc_next[car_n]))

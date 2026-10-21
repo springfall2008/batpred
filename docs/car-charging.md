@@ -209,6 +209,10 @@ If you have a [different type of EV charger](devices.md) you will need to config
 The template `apps.yaml` comes with a set of pre-defined sensor values that should match most EV chargers.
 Customise for your car charger sensor if it sets sensor values that are not in the list.
 
+- **car_charging_plugged** - Optional, a Home Assistant sensor that says only whether the car is plugged in, whether or not it still wants charge. It is matched against **car_charging_planned_response** in the same way.
+It is used to reset the [manual car SoC](#predbat-led-charging) when the car is unplugged. Set it if your **car_charging_planned** sensor also turns off when a charge finishes with the car still plugged in;
+otherwise **car_charging_planned** is used instead. As with **car_charging_planned**, use a list with one entry per car if you have more than one.
+
 - **car_charging_now** - Optional, can be set to a Home Assistant sensor that tells Predbat the car is charging right now (e.g. from your car charger integration).
 This can be an on/off sensor, matched against **car_charging_now_response**, or - for chargers that have no "charging" sensor - a charging power sensor in W or kW, where 200W or more counts as charging (e.g. `sensor.wallbox_portal_charging_power` for a Wallbox).<BR>
 While it reports the car charging, Predbat holds the house battery for the car ("Hold for car") so the battery does not discharge into it, unless **switch.predbat_car_charging_from_battery** is On.
@@ -443,7 +447,7 @@ Keep your Ohme login and password in `secrets.yaml` rather than in `apps.yaml` -
 There are two separate automatic settings, so you can have Predbat plan for the car without involving Octopus Intelligent at all:
 
 **ohme_automatic** registers the Ohme charger with Predbat as a car. Predbat wires `num_cars`, `car_charging_planned` (from `binary_sensor.predbat_ohme_connected`, on whenever a car is
-plugged in and still wants charge), `car_charging_now` (from `sensor.predbat_ohme_power_watts`, so the car counts as charging from 200W), `car_charging_soc` (from
+plugged in and still wants charge), `car_charging_plugged` (from `binary_sensor.predbat_ohme_plugged`, on whenever a car is plugged in, including after its charge has finished), `car_charging_now` (from `sensor.predbat_ohme_power_watts`, so the car counts as charging from 200W), `car_charging_soc` (from
 `sensor.predbat_ohme_battery_percent`) and `car_charging_energy` (see [Ohme charge energy](#ohme-charge-energy) below).
 If you have already set `car_charging_now` in `apps.yaml` - to your car's own charging sensor, say - Predbat keeps yours.
 The car's battery size and target charge level are left to your existing `car_charging_battery_size` and `car_charging_limit` settings, as Ohme cannot report them.
@@ -876,12 +880,20 @@ Here Predbat plans and can initiate the car charging based upon the upcoming low
 - Check (and if necessary add) the sensor response value from the sensor configured in **car_charging_planned** that is returned when the car is 'plugged in and ready to charge' is in the list of **car_charging_planned_response** values
 configured in `apps.yaml`
 
-- If your car does not have a state of charge (SoC) sensor you can set **switch.predbat_car_charging_manual_soc** (for car 0) to On to have Predbat create **input_number.predbat_car_charging_manual_soc_kwh** which will hold the car's SoC in kWh.<BR>
+- If your car does not have a state of charge (SoC) sensor (**car_charging_soc** is not set in `apps.yaml` for that car) Predbat uses **input_number.predbat_car_charging_manual_soc_kwh** (for car 0) to hold the car's SoC in kWh instead.
+If you do have a car SoC sensor, Predbat shows its reading (in kWh) in **input_number.predbat_car_charging_manual_soc_kwh** and changing it there has no effect.
+To use the manual SoC instead of your sensor, turn on **switch.predbat_car_charging_manual_soc** first - the value then starts from the sensor's last reading and is yours to change.<BR>
 For multiple cars, use **switch.predbat_car_charging_manual_soc_1/2/3** and **input_number.predbat_car_charging_manual_soc_kwh_1/2/3** for cars 1, 2, and 3 respectively.<BR>
-You will need to manually set this to the car's current charge level before charging, Predbat will increment it during charging sessions but will not reset it automatically.<BR>
+You will need to manually set this to the car's current charge level before charging. Predbat then keeps it up to date:
+    - If **car_charging_energy** is set for the car in `apps.yaml` Predbat adds the energy the charger's history shows since the value last changed (less **input_number.predbat_car_charging_loss**).
+    With more than one car, **car_charging_energy** must be a list with the cars' chargers first, in car order. A single sensor is used for car 0 only.
+    - Otherwise Predbat adds the charge it planned for the car during each charging slot.
+    - If **car_charging_plugged** (or failing that **car_charging_planned**) is set for the car in `apps.yaml` the value is reset to 0 when the car has been unplugged since the value last changed, ready to be set again when it is next plugged in.
+    A value you enter while the car is unplugged is kept. If your **car_charging_planned** sensor also turns off when charging finishes with the car still plugged in, set **car_charging_plugged** to a sensor that does not, or the value will be reset then too.
+    - Both work from when the value last changed in Home Assistant, so charging or unplugging while Predbat is restarting is still counted.<BR>
 NB: **input_number.predbat_car_charging_manual_soc_kwh** must be set to the current kWh value of your car battery NOT a percentage SoC figure
 otherwise, Predbat won't know how much energy there currently is in the battery.<BR>
-NB2: If you have **car_charging_soc** set and working for your car SoC sensor in `apps.yaml`, **switch.predbat_car_charging_manual_soc** must be set to Off as otherwise the car SoC sensor will be ignored
+NB2: If you have **car_charging_soc** set and working for your car SoC sensor in `apps.yaml`, leave **switch.predbat_car_charging_manual_soc** Off as otherwise the car SoC sensor will be ignored
 
 - Ensure **switch.predbat_octopus_intelligent_charging** in Home Assistant is set to Off
 

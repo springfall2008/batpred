@@ -1873,6 +1873,178 @@ class Fetch:
             return None
         return planned_entity_id
 
+    def car_arg_configured(self, arg, car_n):
+        """
+        Whether apps.yaml sets arg for car car_n.
+
+        A list gives each car its own entry, while a single value is taken as car 0's. An entry whose
+        regular expression matched nothing is left as None, or as its unresolved re: pattern before
+        the final auto_config() pass, and neither counts.
+        """
+        value = self.get_arg(arg, None, indirect=False)
+        if isinstance(value, list):
+            value = value[car_n] if car_n < len(value) else None
+        elif car_n > 0:
+            value = None
+        if isinstance(value, str):
+            return bool(value) and not value.startswith("re:")
+        return value is not None
+
+    def car_manual_soc_config(self):
+        """
+        Work out which cars have their SoC tracked manually, and which of those from a charger energy sensor.
+
+        A car with no car_charging_soc sensor is always tracked manually - otherwise its SoC is taken as
+        zero every cycle and it is always planned from empty. The car_charging_manual_soc switch forces
+        manual tracking for a car that does have a sensor.
+        """
+        self.car_charging_manual_soc = [False for c in range(max(self.num_cars, 1))]
+        self.car_charging_manual_soc_energy = [False for c in range(max(self.num_cars, 1))]
+        for car_n in range(self.num_cars):
+            car_postfix = "" if car_n == 0 else "_" + str(car_n)
+            self.car_charging_manual_soc[car_n] = self.get_arg("car_charging_manual_soc" + car_postfix, False) or not self.car_arg_configured("car_charging_soc", car_n)
+            self.car_charging_manual_soc_energy[car_n] = self.car_charging_manual_soc[car_n] and self.car_arg_configured("car_charging_energy", car_n)
+
+    def entity_last_changed(self, entity_id):
+        """
+        When entity_id's state last changed in Home Assistant, or None if that is not known.
+        """
+        if not entity_id or "$" in entity_id:
+            # An attribute's changes do not move last_changed
+            return None
+        item = self.get_state_wrapper(entity_id=entity_id, raw=True)
+        last_changed = item.get("last_changed", None) if isinstance(item, dict) else None
+        if isinstance(last_changed, str):
+            try:
+                last_changed = str2time(last_changed)
+            except (ValueError, TypeError):
+                return None
+        if not isinstance(last_changed, datetime) or last_changed.tzinfo is None:
+            return None
+        return last_changed
+
+    def car_manual_soc_energy_history(self, car_n, minutes):
+        """
+        The car's charger energy history covering at least the last minutes, as a cumulative kWh series
+        indexed by minutes ago, or None when there is none.
+
+        The car energy already loaded for the load forecast is reused when it is this car's one sensor;
+        otherwise the car's own entry of car_charging_energy is fetched.
+        """
+        entities = self.get_arg("car_charging_energy", None, indirect=False)
+        if not isinstance(entities, list):
+            entities = [entities]
+        if len(entities) == 1 and car_n == 0 and self.car_charging_energy:
+            return self.car_charging_energy
+        if car_n >= len(entities):
+            return None
+        days = min(self.max_days_previous, minutes // (24 * 60) + 1)
+        return self.minute_data_import_export(days, self.now_utc, entities[car_n], scale=self.car_charging_energy_scale, required_unit="kWh") or None
+
+    def car_manual_soc_energy_since(self, car_n, since):
+        """
+        kWh the car's charger energy sensor recorded between since and now, or None when it has no history.
+
+        The history's cumulative series already counts on through the sensor resetting at midnight or at
+        the start of a session. Before the history starts it reads zero, which is right - no energy was
+        recorded then - but past its end it has no value, so a time older than that is taken as its start.
+        """
+        minutes = int((self.now_utc - since).total_seconds() / 60)
+        if minutes <= 0:
+            return 0.0
+        history = self.car_manual_soc_energy_history(car_n, minutes)
+        if not history:
+            return None
+        oldest = len(history) - 1 if isinstance(history, MinuteArray) else max(history.keys())
+        return max(history.get(0, 0.0) - history.get(min(minutes, oldest), 0.0), 0.0)
+
+    def car_plug_arg(self, car_n):
+        """
+        The apps.yaml setting that says whether the car is plugged in, or None when neither is set.
+
+        car_charging_plugged when it is set for the car. Otherwise car_charging_planned, which many chargers
+        report as plugged in - but which some, such as Ohme, also turn off when a charge finishes.
+        """
+        for arg in ("car_charging_plugged", "car_charging_planned"):
+            if self.car_arg_configured(arg, car_n):
+                return arg
+        return None
+
+    def car_manual_soc_unplugged_since(self, car_n, since, arg):
+        """
+        Whether the car's plugged-in sensor arg now reads unplugged and changed to that after since.
+
+        Unavailable or unknown is no evidence either way, so a sensor dropping out never resets the car.
+        """
+        if self.car_plugged_in_now(car_n, arg) is not False:
+            return False
+        entity_id = self.get_arg(arg, None, index=car_n, indirect=False)
+        if not isinstance(entity_id, str) or "." not in entity_id:
+            return False
+        changed = self.entity_last_changed(entity_id)
+        return changed is not None and changed > since
+
+    def car_manual_soc_track(self):
+        """
+        Update the manual SoC of each manually tracked car for what has happened since it last changed.
+
+        That time is when the car's manual SoC kWh entity last changed in Home Assistant, whether Predbat
+        moved it or the user typed in a value, so nothing has to be kept across a restart. Predbat also
+        remembers its own last write, as Home Assistant reports the new time a moment after the write.
+
+        - Energy the car_charging_energy sensor recorded since then is added, less charging losses.
+        - A car whose plugged-in sensor (car_charging_plugged, else car_charging_planned) has changed to
+          unplugged since then goes back to zero.
+          A value entered while it is unplugged is newer than that change, so it is kept.
+
+        With neither time known - the entity is new - counting starts from now.
+        """
+        for car_n in range(self.num_cars):
+            if car_n >= len(self.car_charging_manual_soc) or not self.car_charging_manual_soc[car_n]:
+                continue
+            car_postfix = "" if car_n == 0 else "_" + str(car_n)
+            name = "car_charging_manual_soc_kwh" + car_postfix
+            soc = self.get_arg(name, 0.0)
+            soc_new = soc
+
+            times = [self.entity_last_changed(self.config_index.get(name, {}).get("entity")), self.car_manual_soc_written.get(car_n)]
+            times = [stamp for stamp in times if stamp is not None]
+            if not times:
+                self.car_manual_soc_written[car_n] = self.now_utc
+                continue
+            since = max(times)
+
+            if car_n < len(self.car_charging_manual_soc_energy) and self.car_charging_manual_soc_energy[car_n]:
+                energy_added = self.car_manual_soc_energy_since(car_n, since)
+                if energy_added:
+                    battery_size = self.car_charging_battery_size[car_n] if car_n < len(self.car_charging_battery_size) else soc_new + energy_added
+                    soc_new = min(soc_new + energy_added * self.car_charging_loss, battery_size)
+                    self.log("Car {} manual SoC {} kWh plus {} kWh charged since {} is {} kWh".format(car_n, dp3(soc), dp3(energy_added), since.strftime(TIME_FORMAT), dp3(soc_new)))
+
+            plug_arg = self.car_plug_arg(car_n)
+            if plug_arg and self.car_manual_soc_unplugged_since(car_n, since, plug_arg):
+                self.log("Car {} has been unplugged, resetting its manual SoC from {} kWh to 0".format(car_n, dp3(soc_new)))
+                soc_new = 0.0
+
+            if dp3(soc_new) != dp3(soc):
+                self.expose_config(name, dp3(soc_new))
+                self.car_manual_soc_written[car_n] = self.now_utc
+            if car_n < len(self.car_charging_soc):
+                self.car_charging_soc[car_n] = dp3(soc_new)
+
+    def car_manual_soc_mirror(self):
+        """
+        Show a car's sensor SoC in its manual SoC kWh entity when the car is not tracked manually.
+
+        The entity is shown for every car, so this makes it plain that the plan is using the sensor and
+        that changing the entity does nothing. Turning the switch on then starts from the car's real level.
+        """
+        for car_n in range(min(self.num_cars, len(self.car_charging_soc))):
+            if car_n < len(self.car_charging_manual_soc) and self.car_charging_manual_soc[car_n]:
+                continue
+            car_postfix = "" if car_n == 0 else "_" + str(car_n)
+            self.expose_config("car_charging_manual_soc_kwh" + car_postfix, dp3(self.car_charging_soc[car_n]))
+
     def fetch_sensor_data_cars(self, save=True):
         """
         Fetch car specific data such as Octopus intelligent slots and vehicle data if we can get it, and calculate current SoC and limits based on that
@@ -1883,6 +2055,11 @@ class Fetch:
 
         # Work out current car SoC and limit
         self.car_charging_loss = 1 - float(self.get_arg("car_charging_loss"))
+
+        # Move the manual car SoC on for what happened since the last cycle. Live plan only: it keeps
+        # readings across cycles, which compare.py's re-runs would otherwise count a second time
+        if save:
+            self.car_manual_soc_track()
 
         # Initialise car_charging_soc BEFORE the IOG processing loop so that load_octopus_slots can access it.
         # Values will be recalculated per-car after car_charging_battery_size is updated from Octopus sensor data.
@@ -2102,6 +2279,10 @@ class Fetch:
         if self.num_cars:
             car_charging_limit_percent = [dp1(limit / size * 100) if size else 0 for limit, size in zip(self.car_charging_limit, self.car_charging_battery_size)]
             self.log("Cars: SoC: {}kWh, Charge limit {}% ({}kWh), plan time {}, battery size {}kWh".format(self.car_charging_soc, car_charging_limit_percent, self.car_charging_limit, self.car_charging_plan_time, self.car_charging_battery_size))
+
+        # Live plan only, as for car_manual_soc_track() - a compare.py re-run must not publish anything
+        if save:
+            self.car_manual_soc_mirror()
 
     def fetch_pv_forecast(self):
         """
@@ -3244,6 +3425,23 @@ class Fetch:
         except ValueError:
             return text in self.car_charging_now_response
 
+    def car_plugged_in_now(self, car_n, arg="car_charging_planned"):
+        """
+        Read the car's plugged-in sensor arg: True plugged in, False unplugged, or None when it is
+        unavailable or unknown. Matched against car_charging_planned_response.
+
+        Reads the sensor afresh, so it can be used after fetch_sensor_data_cars() has replaced
+        car_charging_planned with the Octopus dispatch state.
+        """
+        planned = self.get_arg(arg, "no", index=car_n)
+        if isinstance(planned, bool):
+            return planned
+        if isinstance(planned, str):
+            if planned.lower() in ("unavailable", "unknown"):
+                return None
+            return planned.lower() in self.car_charging_planned_response
+        return False
+
     def get_car_charging_planned(self):
         """
         Get the car attributes
@@ -3265,16 +3463,8 @@ class Fetch:
 
         # Car charging planned sensor
         for car_n in range(self.num_cars):
-            # Get car N planned status
-            planned = self.get_arg("car_charging_planned", "no", index=car_n)
-            if isinstance(planned, str):
-                if planned.lower() in self.car_charging_planned_response:
-                    planned = True
-                else:
-                    planned = False
-            elif not isinstance(planned, bool):
-                planned = False
-            self.car_charging_planned[car_n] = planned
+            # Get car N planned status - unavailable or unknown counts as not plugged in
+            self.car_charging_planned[car_n] = bool(self.car_plugged_in_now(car_n))
 
             # Car is charging now sensor - an on/off sensor, or a charging power sensor read in watts
             self.car_charging_now[car_n] = bool(self.car_charging_now_value(self.get_arg("car_charging_now", "no", index=car_n, required_unit="W")))
@@ -4113,10 +4303,7 @@ class Fetch:
         if not self.car_energy_reported_load:
             # If car energy is not reported as load then we should not attempt to remove car energy from the load data.
             self.car_charging_hold = False
-        self.car_charging_manual_soc = [False for c in range(max(self.num_cars, 1))]
-        for car_n in range(self.num_cars):
-            car_postfix = "" if car_n == 0 else "_" + str(car_n)
-            self.car_charging_manual_soc[car_n] = self.get_arg("car_charging_manual_soc" + car_postfix, False)
+        self.car_manual_soc_config()
         self.car_charging_threshold = float(self.get_arg("car_charging_threshold")) / 60.0
         self.car_charging_energy_scale = self.get_arg("car_charging_energy_scale")
 

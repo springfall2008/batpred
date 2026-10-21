@@ -302,6 +302,7 @@ def test_ohme(my_predbat=None):
         ("run_wiring_retry", _test_ohme_run_wiring_retried_after_failed_poll, "OhmeAPI run still wires the slots after a failed poll"),
         ("run_release_retry", _test_ohme_run_release_retried_after_failure, "OhmeAPI run retries a failed charger hand-back"),
         ("connected_sensor", _test_ohme_connected_sensor, "connected binary sensor tracks plug state"),
+        ("plugged_sensor", _test_ohme_plugged_sensor, "plugged binary sensor stays on after a finished charge"),
         ("control_enable", _test_ohme_control_enable_rules, "ohme_control enable rules"),
         ("control_windows", _test_ohme_control_window_parsing, "control window parsing"),
         ("control_midnight", _test_ohme_control_window_year_rollover, "control windows across new year"),
@@ -2970,6 +2971,32 @@ def _test_ohme_connected_sensor(my_predbat=None):
     return 0
 
 
+def _test_ohme_plugged_sensor(my_predbat=None):
+    """Test the plugged binary sensor is on whenever the cable is in, including once a charge has finished"""
+    print("**** Running test_ohme_plugged_sensor ****")
+
+    for mode, session, expected in [
+        ("SMART_CHARGE", {"mode": "SMART_CHARGE", "power": {"watt": 7200}}, "on"),  # charging
+        ("SMART_CHARGE", {"mode": "SMART_CHARGE", "power": {"watt": 0}}, "on"),  # plugged in
+        ("PENDING_APPROVAL", {"mode": "PENDING_APPROVAL"}, "on"),
+        ("STOPPED", {"mode": "STOPPED"}, "on"),  # paused
+        ("FINISHED_CHARGE", {"mode": "FINISHED_CHARGE"}, "on"),  # finished, but still plugged in
+        ("DISCONNECTED", {"mode": "DISCONNECTED"}, "off"),  # unplugged
+    ]:
+        api = MockOhmeAPI()
+        api.client._charge_session = dict(session, appliedRule={"targetPercent": 80, "targetTime": 25200})
+        api.client._next_session = {"targetPercent": 80, "targetTime": 25200}
+        api.client._last_rule = {"targetPercent": 80}
+        api.client._cars = []
+        run_async(api.publish_data())
+
+        state = api.dashboard_items["binary_sensor.predbat_ohme_plugged"]["state"]
+        assert state == expected, f"Expected {mode} to publish plugged={expected}, got {state}"
+
+    print("PASS: plugged binary sensor tracked the cable, not the charge")
+    return 0
+
+
 def _test_ohme_energy_today_uses_configured_timezone(my_predbat=None):
     """Test the daily total follows Predbat's configured timezone, not the host clock"""
     print("**** Running test_ohme_energy_today_uses_configured_timezone ****")
@@ -3017,6 +3044,7 @@ def _test_ohme_auto_config_wires_car_charging_energy(my_predbat=None):
     # The rest of the car registration happens too
     assert api.args.get("num_cars") == 1, f"Expected num_cars 1, got {api.args.get('num_cars')}"
     assert api.args.get("car_charging_planned") == ["binary_sensor.predbat_ohme_connected"], f"Expected connected sensor, got {api.args.get('car_charging_planned')}"
+    assert api.args.get("car_charging_plugged") == ["binary_sensor.predbat_ohme_plugged"], f"Expected plugged sensor, got {api.args.get('car_charging_plugged')}"
     assert api.args.get("car_charging_soc") == ["sensor.predbat_ohme_battery_percent"], f"Expected battery percent sensor, got {api.args.get('car_charging_soc')}"
     assert api.args.get("car_charging_now") == [POWER_WATTS_ENTITY], f"Expected the power sensor, got {api.args.get('car_charging_now')}"
 
