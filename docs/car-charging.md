@@ -891,9 +891,11 @@ If you do have a car SoC sensor and leave the switch off, Predbat shows its read
 turning the switch on then starts the manual SoC from the sensor's last reading.<BR>
 For multiple cars, use **switch.predbat_car_charging_manual_soc_1/2/3** and **input_number.predbat_car_charging_manual_soc_kwh_1/2/3** for cars 1, 2, and 3 respectively.<BR>
 Set the value to the car's current charge level before charging. Predbat then keeps it up to date:
-    - If **car_charging_energy** is set for the car in `apps.yaml` Predbat adds the energy the charger's history shows (less **input_number.predbat_car_charging_loss**).
+    - If **car_charging_energy** is set for the car in `apps.yaml` Predbat adds the energy the charger's history shows (less **input_number.predbat_car_charging_loss**),
+    but no more than the car could have taken at **car_charging_rate** (plus 10%), so a glitch in the charger's energy counter cannot fill the car.
     With more than one car, **car_charging_energy** must be a list with the cars' chargers first, in car order. A single sensor is used for car 0 only.
-    - Otherwise Predbat adds the charge it planned for the car during each charging slot.
+    - Otherwise Predbat adds the charge it planned for the car during each charging slot - unless **car_charging_now** is set and reports that the car is not charging.
+    - The plan never uses more than the car's battery size or less than zero, whatever value is entered.
     - If **car_charging_plugged** (or failing that **car_charging_planned**) is set to a sensor for the car in `apps.yaml` the value is reset to 0 when the sensor goes from plugged in to unplugged
     and stays unplugged for 10 minutes, ready to be set again when the car is next plugged in. The wait means a charger that briefly reads unplugged while it reconnects does not reset it. A sensor that becomes unavailable does not reset it, and a value you enter while the car is unplugged is kept.
     If your **car_charging_planned** sensor also turns off when charging finishes with the car still plugged in, set **car_charging_plugged** to a sensor that does not, or the value will be reset then too.

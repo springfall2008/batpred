@@ -1168,8 +1168,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         A car with a car_charging_energy sensor is skipped: car_manual_soc_track() adds the energy it
         actually took instead, and adding the plan's prediction as well would count it twice.
 
-        So is a car whose plugged-in sensor (car_charging_plugged, else car_charging_planned) now reads unplugged: it
-        is not charging, so there is nothing to add.
+        So is a car whose plugged-in sensor (car_charging_plugged, else car_charging_planned) now reads unplugged, or whose
+        car_charging_now sensor reads not charging: it is not charging, so there is nothing to add. A car_charging_now
+        sensor that is unavailable or unknown is no reading, and the plan's prediction is written as before.
 
         What is written goes into the car's tracking record too, so the next cycle does not take it for a value
         the user entered.
@@ -1179,6 +1180,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 continue
             plug_arg = self.car_plug_arg(car_n)
             if plug_arg and self.car_plugged_in_now(car_n, plug_arg) is False:
+                continue
+            if car_n < len(self.car_charging_manual_soc) and self.car_charging_manual_soc[car_n] and self.get_car_charging_now_tristate(car_n) is False:
+                # The car_charging_now sensor says the car is not charging, whatever the plan predicted
+                self.log("Car {} charging Manual SoC held at {} as car_charging_now reports it is not charging".format(car_n, self.car_charging_soc[car_n]))
                 continue
             if car_n < len(self.car_charging_manual_soc) and self.car_charging_manual_soc[car_n]:
                 car_postfix = "" if car_n == 0 else "_" + str(car_n)

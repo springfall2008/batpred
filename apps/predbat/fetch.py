@@ -36,6 +36,8 @@ from const import (
     CAR_CHARGING_NOW_POWER_W,
     CAR_MANUAL_SOC_LATE_MINUTES,
     CAR_MANUAL_SOC_UNPLUG_MINUTES,
+    CAR_MANUAL_SOC_RATE_MARGIN,
+    CAR_MANUAL_SOC_ENERGY_SLACK,
     CLOUD_WINDOW_MINUTES,
     CLOUD_ARRAY_MARGIN,
     PV_ARRAY_KWP_UNKNOWN,
@@ -1952,6 +1954,38 @@ class Fetch:
         oldest = len(history) - 1 if isinstance(history, MinuteArray) else max(history.keys())
         return max(history.get(0, 0.0) - history.get(min(minutes, oldest), 0.0), 0.0)
 
+    def car_manual_soc_energy_cap(self, car_n, since, energy_added):
+        """
+        Limit energy_added to what the car could have taken since then, at car_charging_rate with a 10% margin.
+
+        A charger energy counter can glitch - drop to zero and come back, which the history counts as a new session -
+        or jump. The battery size bounds the result anyway; this keeps one bad reading from filling the car.
+        """
+        rate = self.car_charging_rate[car_n] if car_n < len(self.car_charging_rate) else 0
+        if not rate:
+            return energy_added
+        minutes = max((self.now_utc - since).total_seconds() / 60, 0)
+        energy_max = rate * minutes / 60 * CAR_MANUAL_SOC_RATE_MARGIN + CAR_MANUAL_SOC_ENERGY_SLACK
+        if energy_added > energy_max:
+            self.log("Info: Car {} charger energy {} kWh since {} is more than it could take at {} kW, counting {} kWh".format(car_n, dp3(energy_added), since.strftime(TIME_FORMAT), rate, dp3(energy_max)))
+            return energy_max
+        return energy_added
+
+    def car_manual_soc_kwh(self, car_n):
+        """
+        The manual SoC of car_n in kWh as the plan uses it: kept within zero and the car's battery size, so a value typed in
+        for the wrong car - or in percent - cannot plan around a car that is fuller than it can be.
+        """
+        car_postfix = "" if car_n == 0 else "_" + str(car_n)
+        try:
+            soc = float(self.get_arg("car_charging_manual_soc_kwh" + car_postfix, 0.0))
+        except (ValueError, TypeError):
+            soc = 0.0
+        battery_size = self.car_charging_battery_size[car_n] if car_n < len(self.car_charging_battery_size) else None
+        if battery_size:
+            soc = min(soc, battery_size)
+        return dp3(max(soc, 0.0))
+
     def car_plug_arg(self, car_n):
         """
         The apps.yaml setting whose sensor says whether the car is plugged in, or None when neither names one.
@@ -1978,7 +2012,7 @@ class Fetch:
         - A value that is not the one in the record was entered by the user. It is kept, and counting starts
           again from now, so no energy is added on top of it.
         - Otherwise the energy the car_charging_energy sensor recorded since the record's time is added, less
-          charging losses.
+          charging losses - but no more than the car could have taken at car_charging_rate (car_manual_soc_energy_cap()).
         - A car whose plugged-in sensor has gone from plugged in to unplugged, and stayed unplugged for
           CAR_MANUAL_SOC_UNPLUG_MINUTES, goes back to zero - a charger reconnecting can read unplugged for a few minutes.
           Unavailable or unknown is no reading, so a sensor dropping out never resets the car, and a value entered while
@@ -2018,6 +2052,7 @@ class Fetch:
                 if car_n < len(self.car_charging_manual_soc_energy) and self.car_charging_manual_soc_energy[car_n]:
                     energy_added = self.car_manual_soc_energy_since(car_n, since)
                     if energy_added:
+                        energy_added = self.car_manual_soc_energy_cap(car_n, since, energy_added)
                         battery_size = self.car_charging_battery_size[car_n] if car_n < len(self.car_charging_battery_size) else soc_new + energy_added
                         soc_new = min(soc_new + energy_added * self.car_charging_loss, battery_size)
                         self.log("Car {} manual SoC {} kWh plus {} kWh charged since {} is {} kWh".format(car_n, dp3(soc), dp3(energy_added), since.strftime(TIME_FORMAT), dp3(soc_new)))
@@ -2145,8 +2180,7 @@ class Fetch:
         self.car_charging_soc_next = [None for car_n in range(self.num_cars)]
         for car_n in range(self.num_cars):
             if car_n < len(self.car_charging_manual_soc) and self.car_charging_manual_soc[car_n]:
-                car_postfix = "" if car_n == 0 else "_" + str(car_n)
-                self.car_charging_soc[car_n] = self.get_arg("car_charging_manual_soc_kwh" + car_postfix, 0.0)
+                self.car_charging_soc[car_n] = self.car_manual_soc_kwh(car_n)
             else:
                 self.car_charging_soc[car_n] = (self.get_arg("car_charging_soc", 0.0, index=car_n) * self.car_charging_battery_size[car_n]) / 100.0
 
@@ -2252,6 +2286,9 @@ class Fetch:
                     # Recalculate car SoC now that battery size has been updated from Octopus data
                     if car_n < len(self.car_charging_manual_soc) and not self.car_charging_manual_soc[car_n]:
                         self.car_charging_soc[car_n] = (self.get_arg("car_charging_soc", 0.0, index=car_n) * self.car_charging_battery_size[car_n]) / 100.0
+                    elif car_n < len(self.car_charging_manual_soc):
+                        # Clamped again to Octopus's battery size, which can be larger than the configured one
+                        self.car_charging_soc[car_n] = self.car_manual_soc_kwh(car_n)
                 if rate:
                     # Octopus's figure only ever raises the configured rate, never lowers it. Where Octopus's catalogue
                     # gives the charger more than one power, the component passes on the lowest (catalogue_value(), #5438)

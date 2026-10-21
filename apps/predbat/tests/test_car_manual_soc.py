@@ -29,6 +29,8 @@ ENERGY_SENSOR = "sensor.car_manual_soc_test_energy"
 PLUGGED_SENSOR = "binary_sensor.car_manual_soc_test_plugged"
 PLANNED_SENSOR = "binary_sensor.car_manual_soc_test_planned"
 SOC_SENSOR = "sensor.car_manual_soc_test_soc"
+NOW_SENSOR = "binary_sensor.car_manual_soc_test_charging"
+IOG_SENSOR = "binary_sensor.car_manual_soc_test_iog_slot"
 
 STATE_FIELDS = (
     "num_cars",
@@ -43,8 +45,10 @@ STATE_FIELDS = (
     "car_charging_battery_size",
     "car_charging_planned",
     "car_charging_energy_scale",
+    "car_charging_rate",
+    "car_charging_now",
 )
-SAVED_ARGS = ("car_charging_soc", "car_charging_planned", "car_charging_plugged", "car_charging_energy")
+SAVED_ARGS = ("car_charging_soc", "car_charging_planned", "car_charging_plugged", "car_charging_energy", "car_charging_now")
 SAVED_CONFIG = ("car_charging_manual_soc", "car_charging_manual_soc_kwh", "car_charging_manual_soc_1", "car_charging_manual_soc_kwh_1")
 
 
@@ -130,6 +134,8 @@ def _one_car(my_predbat, args, kwh=None):
     my_predbat.car_charging_energy_scale = 1.0
     my_predbat.car_charging_battery_size = [60.0]
     my_predbat.car_charging_limit = [60.0]
+    my_predbat.car_charging_rate = [7.4]
+    my_predbat.car_charging_now = [False]
     my_predbat.car_charging_soc = [0.0]
     # Car 0's one energy sensor reads the history already loaded for the load forecast - none charged so far
     my_predbat.car_charging_energy = _history([])
@@ -232,10 +238,10 @@ def _run_energy(my_predbat):
     my_predbat.car_manual_soc_track()
     failed |= _check("t11 kept", abs(_manual_kwh(my_predbat) - 20.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
     print("Test 11b: ... and counted on from when it was entered")
-    my_predbat.car_charging_energy = _history([(180, 1.0), (20, 1.0), (5, 1.0), (1, 1.5)])
+    my_predbat.car_charging_energy = _history([(180, 1.0), (20, 1.0), (5, 1.0), (1, 0.3)])
     _since(my_predbat, 3)
     my_predbat.car_manual_soc_track()
-    failed |= _check("t11b counted on", abs(_manual_kwh(my_predbat) - 21.5) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+    failed |= _check("t11b counted on", abs(_manual_kwh(my_predbat) - 20.3) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
 
     print("Test 12: a time older than the history counts the whole history")
     my_predbat.car_charging_energy = _history([(180, 1.0), (20, 1.0), (5, 1.0)])
@@ -291,6 +297,7 @@ def _run_energy(my_predbat):
     my_predbat.args["car_charging_energy"] = ["sensor.charger_0", ENERGY_SENSOR]
     my_predbat.args["car_charging_planned"] = [PLANNED_SENSOR, PLANNED_SENSOR]
     my_predbat.car_charging_battery_size = [60.0, 60.0]
+    my_predbat.car_charging_rate = [7.4, 7.4]
     my_predbat.car_charging_soc = [0.0, 0.0]
     my_predbat.car_manual_soc_config()
     my_predbat.expose_config("car_charging_manual_soc_kwh", 20.0)
@@ -423,6 +430,91 @@ def _run_unplug(my_predbat):
     failed |= _check("t26 still plugged", abs(_manual_kwh(my_predbat) - 30.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
     _unplug(my_predbat)
     failed |= _check("t26 reset", abs(_manual_kwh(my_predbat)) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+    return failed
+
+
+def _run_guards(my_predbat):
+    """
+    What keeps the manual SoC believable: a clamp on read, car_charging_now holding the plan's write-back, and a cap
+    on the charger energy counted.
+    """
+    failed = False
+    dummy = my_predbat.ha_interface.dummy_items
+
+    print("Test 40: charger energy is capped at what the car could take at car_charging_rate - a counter glitch cannot fill it")
+    _one_car(my_predbat, {"car_charging_energy": ENERGY_SENSOR, "car_charging_planned": PLUGGED_SENSOR}, kwh=10.0)
+    _plug(my_predbat, "on")
+    my_predbat.car_manual_soc_track()
+    # A counter dropping to zero and coming back reads as 8 kWh charged in the last 3 minutes
+    my_predbat.car_charging_energy = _history([(3, 8.0)])
+    _since(my_predbat, 5)
+    my_predbat.car_manual_soc_track()
+    expected = 10.0 + 7.4 * 5 / 60 * 1.1 + 0.1
+    failed |= _check("t40 capped", abs(_manual_kwh(my_predbat) - expected) < 0.002, "kwh {} expected {}".format(_manual_kwh(my_predbat), expected))
+
+    print("Test 41: energy within the rate is counted in full")
+    my_predbat.car_charging_energy = _history([(10, 1.0), (40, 2.0)])
+    _since(my_predbat, 60)
+    before = _manual_kwh(my_predbat)
+    my_predbat.car_manual_soc_track()
+    failed |= _check("t41 full", abs(_manual_kwh(my_predbat) - (before + 3.0)) < 0.002, "kwh {} before {}".format(_manual_kwh(my_predbat), before))
+
+    print("Test 42: the manual SoC is read within zero and the battery size")
+    _one_car(my_predbat, {"car_charging_energy": ENERGY_SENSOR, "car_charging_planned": PLUGGED_SENSOR}, kwh=100.0)
+    my_predbat.args.pop("octopus_intelligent_slot", None)
+    my_predbat.fetch_sensor_data_cars(save=False)
+    failed |= _check("t42 clamped", abs(my_predbat.car_charging_soc[0] - 60.0) < 0.001, "soc {}".format(my_predbat.car_charging_soc))
+    failed |= _check("t42 entity kept", abs(_manual_kwh(my_predbat) - 100.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+    my_predbat.expose_config("car_charging_manual_soc_kwh", -5.0)
+    my_predbat.fetch_sensor_data_cars(save=False)
+    failed |= _check("t42 not negative", abs(my_predbat.car_charging_soc[0]) < 0.001, "soc {}".format(my_predbat.car_charging_soc))
+
+    print("Test 43: ... clamped again to an Octopus Intelligent battery size larger than the configured one")
+    saved_slot = my_predbat.args.get("octopus_intelligent_slot", None)
+    my_predbat.args["octopus_intelligent_slot"] = IOG_SENSOR
+    dummy[IOG_SENSOR] = {"state": "off", "vehicle_battery_size_in_kwh": 75.0, "completed_dispatches": [], "planned_dispatches": []}
+    try:
+        my_predbat.expose_config("car_charging_manual_soc_kwh", 70.0)
+        my_predbat.fetch_sensor_data_cars(save=False)
+        soc_70 = my_predbat.car_charging_soc[0]
+        my_predbat.car_charging_battery_size = [60.0]
+        my_predbat.expose_config("car_charging_manual_soc_kwh", 100.0)
+        my_predbat.fetch_sensor_data_cars(save=False)
+        soc_100 = my_predbat.car_charging_soc[0]
+    finally:
+        dummy.pop(IOG_SENSOR, None)
+        if saved_slot is None:
+            my_predbat.args.pop("octopus_intelligent_slot", None)
+        else:
+            my_predbat.args["octopus_intelligent_slot"] = saved_slot
+    failed |= _check("t43 within Octopus size", abs(soc_70 - 70.0) < 0.001, "soc {}".format(soc_70))
+    failed |= _check("t43 capped at Octopus size", abs(soc_100 - 75.0) < 0.001, "soc {}".format(soc_100))
+
+    print("Test 44: car_charging_now reading not charging holds the plan's write-back")
+    _one_car(my_predbat, {"car_charging_now": NOW_SENSOR}, kwh=20.0)
+    my_predbat.expose_config("car_charging_manual_soc", True)
+    my_predbat.car_manual_soc_config()
+    dummy[NOW_SENSOR] = {"state": "off"}
+    my_predbat.car_charging_now = [False]
+    my_predbat.car_charging_soc = [20.0]
+    my_predbat.car_charging_soc_next = [25.0]
+    my_predbat.update_car_manual_soc()
+    failed |= _check("t44 held", abs(_manual_kwh(my_predbat) - 20.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+
+    print("Test 45: ... charging lets it through")
+    dummy[NOW_SENSOR] = {"state": "on"}
+    my_predbat.car_charging_now = [True]
+    my_predbat.update_car_manual_soc()
+    failed |= _check("t45 written", abs(_manual_kwh(my_predbat) - 25.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+
+    print("Test 46: ... and unavailable is no reading, so the plan's prediction is written")
+    dummy[NOW_SENSOR] = {"state": "unavailable"}
+    my_predbat.car_charging_now = [False]
+    my_predbat.car_charging_soc = [25.0]
+    my_predbat.car_charging_soc_next = [30.0]
+    my_predbat.update_car_manual_soc()
+    failed |= _check("t46 written", abs(_manual_kwh(my_predbat) - 30.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+    my_predbat.expose_config("car_charging_manual_soc", False)
     return failed
 
 
@@ -576,7 +668,7 @@ def run_car_manual_soc_tests(my_predbat):
     saved_config = {name: my_predbat.get_arg(name, None) for name in SAVED_CONFIG}
     dummy = my_predbat.ha_interface.dummy_items
     tracked = tuple(my_predbat.car_manual_soc_entity(car_n) for car_n in range(2))
-    saved_dummy = {entity: copy.deepcopy(dummy.get(entity)) for entity in (ENERGY_SENSOR, PLUGGED_SENSOR, PLANNED_SENSOR, SOC_SENSOR) + tracked}
+    saved_dummy = {entity: copy.deepcopy(dummy.get(entity)) for entity in (ENERGY_SENSOR, PLUGGED_SENSOR, PLANNED_SENSOR, SOC_SENSOR, NOW_SENSOR, IOG_SENSOR) + tracked}
 
     failed = False
     try:
@@ -585,6 +677,7 @@ def run_car_manual_soc_tests(my_predbat):
         failed |= _run_write_back(my_predbat)
         failed |= _run_unplug(my_predbat)
         failed |= _run_restart(my_predbat)
+        failed |= _run_guards(my_predbat)
         failed |= _run_fetch(my_predbat)
     finally:
         for arg in SAVED_ARGS + ("octopus_intelligent_slot",):
