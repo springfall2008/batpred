@@ -6238,6 +6238,8 @@ class TestEvControl:
         """No telemetry, stale telemetry or an offline charger: the state is unknown, so nothing is sent."""
         gw = self._make_gateway()
         self._apply(gw)
+        # Startup, before the hub has ever reported a charger: silent
+        assert not [c for c in gw.log.call_args_list if "cannot see charger" in str(c)]
         self._set_charger(gw, session_active=True, status="Charging")
         gw._last_ev_status_time -= 600
         self._apply(gw)
@@ -6290,6 +6292,7 @@ class TestEvControl:
         assert self._actions(gw) == ["RemoteStopTransaction"] * 3
         gw.base.record_status.assert_called_once()
         assert "stop" in gw.base.record_status.call_args.args[0]
+        assert gw.base.record_status.call_args.kwargs["had_errors"] is True
 
     def test_startup_charging_outside_window_sends_stop(self):
         """The first reconcile after startup stops a charger already charging outside any window."""
@@ -6350,8 +6353,8 @@ class TestEvControl:
         assert self._actions(gw).count("RemoteStartTransaction") == 3
         warnings = [c for c in gw.log.call_args_list if "giving up" in str(c)]
         assert len(warnings) == 1
-        gw.base.record_status.assert_called_once()
-        assert gw.base.record_status.call_args.kwargs["had_errors"] is True
+        # No car plugged in for a window is normal: logged, but never an error status
+        gw.base.record_status.assert_not_called()
 
         # The window ends and the next one starts: the attempts are reset
         gw._ev_windows = []

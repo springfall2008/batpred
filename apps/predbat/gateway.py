@@ -672,10 +672,10 @@ class GatewayMQTT(ComponentBase):
         - otherwise nothing is sent
 
         Each direction is tried at most ``_EV_COMMAND_ATTEMPTS`` times, ``_EV_COMMAND_RETRY_SECONDS``
-        apart, until the window state next changes; then a warning is logged and recorded in the
-        Predbat status once. An attempt only counts once it was actually published. When the charger's
-        state is unknown (no fresh EV telemetry, or the charger offline) nothing is sent and a warning is
-        logged once per window state. Only the lowest charge point id is controlled - the same single
+        apart, until the window state next changes; then a warning is logged once, and for a stop
+        also recorded in the Predbat status as an error (a refused start is normal with no car plugged in). An attempt only counts once it was actually published. When the charger's
+        state is unknown (no fresh EV telemetry, or the charger offline) nothing is sent and, once the
+        hub has reported EV chargers at least once, a warning is logged once per window state. Only the lowest charge point id is controlled - the same single
         charger auto-config registers as the car.
         """
         if not self._configured_ev_chargers:
@@ -690,7 +690,8 @@ class GatewayMQTT(ComponentBase):
         cp_id = min(self._configured_ev_chargers)
         ev = self._ev_charger_status(cp_id)
         if ev is None:
-            if not self._ev_unknown_warned:
+            # Silent until the first EV status has arrived: at startup the hub simply has not reported yet
+            if self._last_ev_status is not None and not self._ev_unknown_warned:
                 self.log(f"Warn: GatewayMQTT: EVC control cannot see charger '{cp_id}' (offline, or no EV telemetry in the last {_TELEMETRY_STALE_THRESHOLD}s) - not starting or stopping it")
                 self._ev_unknown_warned = True
             return
@@ -706,8 +707,10 @@ class GatewayMQTT(ComponentBase):
             if attempts == _EV_COMMAND_ATTEMPTS:
                 message = f"Warn: GatewayMQTT: EVC {direction} for '{cp_id}' not taken by the charger after {attempts} attempts (status {ev.status or 'unknown'}), giving up until the plan changes"
                 self.log(message)
+                # A start that does not take is normal - nobody plugged a car in for the window. A session
+                # that will not stop is a fault: the charger keeps drawing outside the plan
                 base = getattr(self, "base", None)
-                if getattr(base, "record_status", None):
+                if direction == "stop" and getattr(base, "record_status", None):
                     base.record_status(message, had_errors=True)
                 self._ev_attempts[direction] += 1  # warn once
             return
