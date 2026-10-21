@@ -251,6 +251,53 @@ HANCHU_CAPACITY_FIELD = "bmsDesignCap"
 # discovery catalogue as an account id.
 HANCHU_STATION_FIELD = "stationId"
 
+# HARDWARE (batpred#5664): getDeviceStatus carries the model as a code, which the Hanchu web
+# console's own pcsEnMap turns into a name - devModel 4 is a HESS-HY-S-5.0K, confirmed on that unit.
+# The device-list entry carries no model at all ({"devType", "sn"} only).
+HANCHU_MODEL_FIELD = "devModel"
+
+# devModel -> (model, battery charge/discharge limit W, AC rating W), so battery_rate_max and
+# inverter_limit come from the unit rather than from a power setting the menu shares across models
+# (batpred#5664). Names from the console's pcsEnMap; ratings from the Hanchu user manuals, both as
+# reported on batpred#5664. The codes are not in size order - 30-32 were added later - so this is a
+# lookup, never an ordinal. A battery limit of None is one the manual does not state (the 48 V,
+# current-limited S-6K-S and S-12K-S): battery_rate_max then falls back to the menu and held values,
+# as it does for a code missing here altogether (the HC-HY-SL-*-G2 range the menu also lists).
+HANCHU_MODELS = {
+    1: ("HESS-HY-S-3.0K", 5000, 3000),
+    2: ("HESS-HY-S-3.68K", 5000, 3680),
+    3: ("HESS-HY-S-4.0K", 5000, 4000),
+    4: ("HESS-HY-S-5.0K", 5000, 5000),
+    5: ("HESS-HY-S-6.0K", 5000, 6000),
+    6: ("HESS-HY-T-05K", 5000, 5000),
+    7: ("HESS-HY-T-06K", 6000, 6000),
+    8: ("HESS-HY-T-08K", 8000, 8000),
+    9: ("HESS-HY-T-10K", 10000, 10000),
+    10: ("HESS-HY-T-12K", 12000, 12000),
+    11: ("HESS-HY-T-4K-M", 4000, 4000),
+    12: ("HESS-HY-T-5K-M", 5000, 5000),
+    13: ("HESS-HY-T-6K-M", 6000, 6000),
+    14: ("HESS-HY-T-8K-M", 8000, 8000),
+    15: ("HESS-HY-T-10K-M", 10000, 10000),
+    16: ("HESS-HY-T-12K-M", 12000, 12000),
+    17: ("HESS-HY-T-10K-M4", 10000, 10000),
+    18: ("HESS-HY-T-12K-M4", 12000, 12000),
+    19: ("HESS-HY-T-15K-M4", 15000, 15000),
+    20: ("HESS-HY-T-20K-M4", 20000, 20000),
+    21: ("CESS-HY-25K", 25000, 25000),
+    22: ("CESS-HY-30K", 30000, 30000),
+    23: ("CESS-HY-36K", 36000, 36000),
+    24: ("CESS-HY-40K", 40000, 40000),
+    25: ("CESS-HY-50K", 50000, 50000),
+    26: ("CESS-HY-40K-P", 40000, 40000),
+    27: ("CESS-HY-50K-P", 50000, 50000),
+    28: ("HESS-HY-S-6K-S", None, 6000),
+    29: ("HESS-HY-S-12K-S", None, 12000),
+    30: ("HESS-HY-S-7.0K", 7000, 7000),
+    31: ("HESS-HY-S-8.0K", 8000, 8000),
+    32: ("HESS-HY-S-10.0K", 10000, 10000),
+}
+
 # --- Daily energy: getDeviceStatistics --------------------------------------------------------
 # Predbat sensor leaf -> getDeviceStatistics field. All OBSERVED in UPTON sensor.py
 # STATISTICS_SENSORS; GUOXIA sensor.py carries the same six names, so all six are CORROBORATED.

@@ -870,12 +870,12 @@ def test_hanchu_hold_inside_a_charge_window_stops_charging_only_at_the_target():
 
 
 def test_hanchu_freeze_export_passes_the_zero_charge_rate_through_without_a_slot():
-    """Freeze export (charge rate 0, no window running) adds no slot: the battery must stay free to cover the house.
+    """A zero charge rate with no window running adds no slot: the battery must stay free to cover the house.
 
-    Predbat's freeze export exports surplus solar while the battery still covers the house load. Hardware
-    (batpred#5305): a discharge slot at zero power stopped the battery covering the house, so it is the
-    wrong tool. Outside a slot the inverter is in self-use, which covers the house; whether a zero charge
-    rate there stops the battery absorbing solar is still to be live-tested in sunshine.
+    Predbat no longer plans Freeze Export here (support_discharge_freeze is False - hardware, batpred#5665:
+    CHG_PWR_LMT only limits grid charging, so solar fills the battery regardless), but a zero charge rate
+    set by hand still arrives. Hardware (batpred#5305): a discharge slot at zero power stopped the battery
+    covering the house, so the rate is passed through to self-use rather than turned into a slot.
     """
     failed = False
     client = ready()
@@ -990,6 +990,56 @@ def test_hanchu_settings_changed_on_the_device_are_re_sent():
     assert not failed, "test_hanchu_settings_changed_on_the_device_are_re_sent"
 
 
+def test_hanchu_hold_caps_the_grid_charge_limit_at_the_soc():
+    """During a hold the grid-charge limit is never above the SoC, so a 0 W write that did not land cannot grid charge (batpred#5667).
+
+    A hold added outside a charge window used to carry the NEXT window's target, up to 100, beside a charge
+    slot whose only protection was CHG_PWR_LMT=0. The cap goes in the same iotSet, so it costs no call.
+    """
+    failed = False
+    client = ready()
+    client.set_mock_clock(19 * 60 + 47)
+    later = {"enable": True, "soc": 100, "power": 3000, "start": "23:30:00", "end": "23:59:00"}
+    client.device_values[SN] = {"soc": 63.4}
+    payload = client.build_write_payload(SN, schedule(charge=later, export={"power": 0}))
+    if payload.get(HANCHU_KEY_GRID_CHARGE_SOC) != 63:
+        print(f"ERROR: a hold at 63.4% should cap the grid-charge limit at 63, not the later window's 100: {payload.get(HANCHU_KEY_GRID_CHARGE_SOC)}")
+        failed = True
+    # Solar raising the SoC during the hold does not change the limit already written, so it sends nothing new.
+    client.applied_payload[SN] = dict(payload)
+    client.device_values[SN] = {"soc": 70.0}
+    if client.build_write_payload(SN, schedule(charge=later, export={"power": 0})).get(HANCHU_KEY_GRID_CHARGE_SOC) != 63:
+        print("ERROR: a written limit still at or below the SoC should be kept, not re-sent at every percent")
+        failed = True
+    # A SoC that has fallen below the written limit brings it down with it.
+    client.device_values[SN] = {"soc": 60.0}
+    if client.build_write_payload(SN, schedule(charge=later, export={"power": 0})).get(HANCHU_KEY_GRID_CHARGE_SOC) != 60:
+        print("ERROR: a SoC below the written limit should lower it")
+        failed = True
+    # Below the device's 20% floor it is 20, without the clamp warning a plan's own target would earn.
+    client.applied_payload.pop(SN, None)
+    client.device_values[SN] = {"soc": 12.0}
+    if client.build_write_payload(SN, schedule(charge=later, export={"power": 0})).get(HANCHU_KEY_GRID_CHARGE_SOC) != 20:
+        print("ERROR: a hold below 20% should write the device's 20% floor")
+        failed = True
+    if logged(client, "cannot be set to"):
+        print(f"ERROR: the hold's own cap should not be reported as a clamped plan: {client.log_messages}")
+        failed = True
+    # Once the hold ends, the window's real target is written again.
+    client.device_values[SN] = {"soc": 63.4}
+    if client.build_write_payload(SN, schedule(charge=later)).get(HANCHU_KEY_GRID_CHARGE_SOC) != 100:
+        print("ERROR: with no hold the grid-charge limit should carry the window's target")
+        failed = True
+    # A hold inside a charge window whose target is met already writes that target, which is below the SoC.
+    client.set_mock_clock(19 * 60 + 30)
+    window = {"enable": True, "soc": 50, "power": 3000, "start": "19:00:00", "end": "21:00:00"}
+    client.device_values[SN] = {"soc": 60.0}
+    if client.build_write_payload(SN, schedule(charge=window, export={"power": 0})).get(HANCHU_KEY_GRID_CHARGE_SOC) != 50:
+        print("ERROR: a met in-window target should still be written as it is")
+        failed = True
+    assert not failed, "test_hanchu_hold_caps_the_grid_charge_limit_at_the_soc"
+
+
 def run_hanchu_control_tests(my_predbat):
     """Run all Hanchu control-logic tests."""
     failed = False
@@ -1028,6 +1078,7 @@ def run_hanchu_control_tests(my_predbat):
         ("no_rate_signal", test_hanchu_no_rate_signal_adds_no_slot),
         ("hold_without_room", test_hanchu_hold_with_no_room_for_a_slot_keeps_the_charge_rate),
         ("device_drift", test_hanchu_settings_changed_on_the_device_are_re_sent),
+        ("hold_grid_cap", test_hanchu_hold_caps_the_grid_charge_limit_at_the_soc),
     ]:
         try:
             if fn():
