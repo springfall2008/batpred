@@ -642,9 +642,11 @@ class HanchuAPI(ComponentBase):
     def _apply_model(self, sn, code):
         """Record a device's devModel and its name, saying once what the ratings table makes of it.
 
-        Kept in device_detail, which the static cache saves, so a restart has the ratings before the
-        first status poll. A code the table does not know is kept too: it says why the menu and held
-        values are still in use, and it is what a user would report to have the model added.
+        Kept in device_detail, which reaches the static cache at the next static refresh (up to
+        HANCHU_TTL_STATIC later), so a restart before then has no model until its first status poll -
+        which runs in the same cycle, before anything is published. A code the table does not know is
+        kept too: it says why the menu and held values are still in use, and it is what a user would
+        report to have the model added.
         """
         if code is None or str(code).strip() == "":
             return
