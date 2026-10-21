@@ -575,6 +575,8 @@ def test_hanchu_default_power_limit_is_warned_once():
     client._token = "tok"
     client._token_time = time.time()
     client.device_list = ["HC240100001"]
+    # A status poll has answered, without a devModel, so no model rating stands in for the menu.
+    client.device_values["HC240100001"] = {"soc": 50.0}
     # MENU_SAMPLE carries a charge power bound but an unparseable discharge one.
     for _ in range(2):
         with patched_session([(200, envelope(data=MENU_SAMPLE["data"])), (200, envelope(data={}))]):
@@ -641,6 +643,8 @@ def test_hanchu_failed_menu_warns_the_default_power_is_in_use():
     client._token = "tok"
     client._token_time = time.time()
     client.device_list = ["HC240100001"]
+    # A status poll has answered, without a devModel, so no model rating stands in for the menu.
+    client.device_values["HC240100001"] = {"soc": 50.0}
     for _ in range(2):
         with patched_session([(200, envelope(code=500, msg="busy")), (200, envelope(data={}))]):
             run_async_local(client.refresh_config())
@@ -1132,6 +1136,124 @@ def test_hanchu_api_trace_is_off_unless_configured():
     assert not failed, "test_hanchu_api_trace_is_off_unless_configured"
 
 
+def test_hanchu_model_code_sets_battery_rate_max_and_inverter_limit():
+    """devModel picks the unit's ratings from HANCHU_MODELS, so they no longer depend on held settings (batpred#5664).
+
+    The menu's 0-5000 W power item is shared by 3-10 kW models, and the held limits are whatever they
+    were last set to, so a HESS-HY-S-3.0K came out at a 5000 W inverter_limit and a 10 kW unit holding
+    5000 W at 5000 W for both.
+    """
+    failed = False
+    sn = "HC240100001"
+    menu = {"CHG_PWR_LMT": (0, 5000), "DSCHG_PWR_LMT": (0, 5000)}
+    # (devModel as the API sends it, held settings, battery_rate_max, inverter_limit, power ceiling)
+    cases = [
+        # S-3.0K: battery 5000 W but AC only 3000 W - the menu's 5000 W overstated the inverter.
+        (1, {"CHG_PWR_LMT": "5000", "DSCHG_PWR_LMT": "5000"}, 5000.0, 3000.0, 5000),
+        # S-6.0K holding a 6000 W charge limit: the battery is still 5000 W; the held value stays writable.
+        ("5", {"CHG_PWR_LMT": "6000", "DSCHG_PWR_LMT": "4000"}, 5000.0, 6000.0, 6000),
+        # S-10.0K holding 5000 W: the table raises both, and so does the clamp ceiling.
+        (32, {"CHG_PWR_LMT": "5000", "DSCHG_PWR_LMT": "5000"}, 10000.0, 10000.0, 10000),
+        # S-6K-S: no stated battery limit, so battery_rate_max falls back to the menu; AC rating 6000.
+        (28, {"CHG_PWR_LMT": "5000", "DSCHG_PWR_LMT": "5000"}, 5000.0, 6000.0, 5000),
+    ]
+    for code, held, rate_max, limit, ceiling in cases:
+        client = MockHanchu()
+        client.device_ranges[sn] = dict(menu)
+        client.device_settings[sn] = dict(held)
+        client._apply_status_payload(sn, dict(STATUS_SAMPLE, devModel=code))
+        if client.battery_rate_max(sn) != rate_max or client.inverter_limit(sn) != limit:
+            print(f"ERROR: devModel {code}: battery_rate_max {client.battery_rate_max(sn)} inverter_limit {client.inverter_limit(sn)}, expected {rate_max} / {limit}")
+            failed = True
+        ranges = client.ranges_for(sn)
+        if ranges["CHG_PWR_LMT"][1] < ceiling:
+            print(f"ERROR: devModel {code}: charge power ceiling {ranges['CHG_PWR_LMT']}, expected at least {ceiling}")
+            failed = True
+        if code == 32 and ranges["DSCHG_PWR_LMT"] != (0, 10000):
+            print(f"ERROR: a 10 kW unit should accept a 10000 W discharge: {ranges['DSCHG_PWR_LMT']}")
+            failed = True
+    # The name is recorded and said once.
+    client = MockHanchu()
+    for _ in range(2):
+        client._apply_status_payload(sn, dict(STATUS_SAMPLE, devModel=4))
+    if client.device_detail[sn].get("model") != "HESS-HY-S-5.0K":
+        print(f"ERROR: model {client.device_detail[sn].get('model')}, expected HESS-HY-S-5.0K")
+        failed = True
+    said = [message for message in client.log_messages if "is a HESS-HY-S-5.0K" in message]
+    if len(said) != 1 or "5000 W" not in said[0]:
+        print(f"ERROR: the model should be logged once with its ratings: {said}")
+        failed = True
+    # The user's overrides still win over the table.
+    client.battery_rate_max_override = 3600.0
+    client.inverter_limit_override = 3680.0
+    if client.battery_rate_max(sn) != 3600.0 or client.inverter_limit(sn) != 3680.0:
+        print(f"ERROR: overrides should beat the model table: {client.battery_rate_max(sn)} / {client.inverter_limit(sn)}")
+        failed = True
+    assert not failed, "test_hanchu_model_code_sets_battery_rate_max_and_inverter_limit"
+
+
+def test_hanchu_unknown_model_code_falls_back_to_the_menu():
+    """A devModel the table does not know keeps the menu and held-value derivation, and asks for a report."""
+    failed = False
+    sn = "HC240100001"
+    client = MockHanchu()
+    client.device_ranges[sn] = {"CHG_PWR_LMT": (0, 5000), "DSCHG_PWR_LMT": (0, 5000)}
+    client.device_settings[sn] = {"CHG_PWR_LMT": "5000", "DSCHG_PWR_LMT": "6000"}
+    client._apply_status_payload(sn, dict(STATUS_SAMPLE, devModel=99))
+    if client.battery_rate_max(sn) != 5000.0 or client.inverter_limit(sn) != 6000.0:
+        print(f"ERROR: an unknown model should fall back to the menu and held values: {client.battery_rate_max(sn)} / {client.inverter_limit(sn)}")
+        failed = True
+    if client.device_detail[sn].get("model_code") != 99 or "model" in client.device_detail[sn]:
+        print(f"ERROR: the unknown code should be kept without a name: {client.device_detail[sn]}")
+        failed = True
+    if not logged(client, "devModel 99, which Predbat has no ratings for"):
+        print(f"ERROR: an unknown model should be reported: {client.log_messages}")
+        failed = True
+    # A payload with no devModel at all leaves things as they were.
+    bare = MockHanchu()
+    bare._apply_status_payload(sn, STATUS_SAMPLE)
+    if "model_code" in bare.device_detail.get(sn, {}) or bare.model_rating(sn) != (None, None):
+        print(f"ERROR: no devModel should record no model: {bare.device_detail.get(sn)}")
+        failed = True
+    assert not failed, "test_hanchu_unknown_model_code_falls_back_to_the_menu"
+
+
+def test_hanchu_default_power_warning_waits_for_the_model():
+    """The menu is read before the first status poll, so the default-power warning waits for the model (batpred#5664).
+
+    A model in the table supplies both ratings, so its menu lacking power bounds is not worth a warning;
+    an unknown one is warned about straight after the status poll that showed it.
+    """
+    failed = False
+    for code, expect_warning in ((4, False), (99, True), (None, True)):
+        client = ready_client()
+        sn = "HC240100001"
+        with patched_session([(200, envelope(code=500, msg="busy")), (200, envelope(data={}))]):
+            run_async_local(client.refresh_config())
+        if logged(client, "did not report its power limits"):
+            print(f"ERROR: devModel {code}: warned before the status poll could name the model")
+            failed = True
+        status = dict(STATUS_SAMPLE) if code is None else dict(STATUS_SAMPLE, devModel=code)
+        with patched_session([(200, envelope(data=status))]):
+            run_async_local(client.refresh_power())
+        warnings = [message for message in client.log_messages if "did not report its power limits" in message]
+        if len(warnings) != (1 if expect_warning else 0):
+            print(f"ERROR: devModel {code}: expected {1 if expect_warning else 0} default-power warning after the status poll, got {warnings}")
+            failed = True
+        # Later polls do not repeat it either way.
+        with patched_session([(200, envelope(code=500, msg="busy")), (200, envelope(data={}))]):
+            run_async_local(client.refresh_config())
+        with patched_session([(200, envelope(data=status))]):
+            run_async_local(client.refresh_power())
+        if len([message for message in client.log_messages if "did not report its power limits" in message]) != len(warnings):
+            print(f"ERROR: devModel {code}: the default-power warning was repeated")
+            failed = True
+        if sn in client.default_power_deferred:
+            print(f"ERROR: devModel {code}: the deferral should be cleared once the model is known")
+            failed = True
+    assert not failed, "test_hanchu_default_power_warning_waits_for_the_model"
+
+
 def run_hanchu_api_tests(my_predbat):
     """Run all Hanchu API and auth tests."""
     failed = False
@@ -1172,6 +1294,9 @@ def run_hanchu_api_tests(my_predbat):
         ("http_401_unparseable", test_hanchu_http_401_without_a_json_body_triggers_reauth),
         ("watt_heuristic_scope", test_hanchu_watt_heuristic_applies_only_to_fields_without_a_unit_sibling),
         ("api_trace_default", test_hanchu_api_trace_is_off_unless_configured),
+        ("model_ratings", test_hanchu_model_code_sets_battery_rate_max_and_inverter_limit),
+        ("model_unknown", test_hanchu_unknown_model_code_falls_back_to_the_menu),
+        ("model_default_warning", test_hanchu_default_power_warning_waits_for_the_model),
     ]:
         try:
             if fn():

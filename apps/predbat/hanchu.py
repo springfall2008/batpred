@@ -100,6 +100,8 @@ from hanchu_const import (
     HANCHU_MENU_SECTION,
     HANCHU_MENU_SIGNAL,
     HANCHU_MENU_TYPE,
+    HANCHU_MODEL_FIELD,
+    HANCHU_MODELS,
     HANCHU_POWER_STEP,
     HANCHU_RANGES,
     HANCHU_READBACK_SETTLE,
@@ -140,12 +142,13 @@ from hanchu_const import (
 # completeness test proves nothing.
 #
 # support_feedin_first is False because there is no feed-in-first work mode among the four this API
-# exposes. charge_control_immediate is False because everything goes through the timed slot table -
+# exposes. support_discharge_freeze is False because CHG_PWR_LMT only limits charging from the grid,
+# so a zero charge rate cannot stop solar filling the battery (batpred#5665). charge_control_immediate is False because everything goes through the timed slot table -
 # the one immediate primitive this API has (fastChargeDischarge) is duration-based and would lapse
 # behind Predbat's back, so it is deliberately unused.
 HANCHU_CAPABILITIES = {
     "support_charge_freeze": True,
-    "support_discharge_freeze": True,
+    "support_discharge_freeze": False,
     "support_feedin_first": False,
     "can_span_midnight": False,
     "charge_discharge_with_rate": False,
@@ -199,6 +202,8 @@ class HanchuAPI(ComponentBase):
         self.api_debug = bool(api_debug)
         # Devices already warned that the menu gave no power bounds, so the warning is said once.
         self.warned_default_power = set()
+        # Devices whose default-power warning waits on the first status poll - see _warn_if_default_power().
+        self.default_power_deferred = set()
         # Consecutive rejected settings writes per serial, and whether the user has been told.
         self.write_failures = {}
         self.write_failure_notified = set()
@@ -630,8 +635,43 @@ class HanchuAPI(ComponentBase):
         generator = payload.get(HANCHU_GENERATOR_FIELD)
         if generator is not None:
             detail["has_generator"] = str(generator).strip().lower() in ("true", "1")
+        self._apply_model(sn, payload.get(HANCHU_MODEL_FIELD))
         self._apply_device_status(sn, payload.get(HANCHU_DEVICE_STATUS_FIELD))
         return True
+
+    def _apply_model(self, sn, code):
+        """Record a device's devModel and its name, saying once what the ratings table makes of it.
+
+        Kept in device_detail, which the static cache saves, so a restart has the ratings before the
+        first status poll. A code the table does not know is kept too: it says why the menu and held
+        values are still in use, and it is what a user would report to have the model added.
+        """
+        if code is None or str(code).strip() == "":
+            return
+        number = int(self._as_float(code, -1))
+        detail = self.device_detail.setdefault(sn, {})
+        detail["model_code"] = number
+        model = HANCHU_MODELS.get(number)
+        if model:
+            detail["model"] = model[0]
+        else:
+            detail.pop("model", None)
+        if (sn, "model", number) in self._slot_notes_logged:
+            return
+        self._slot_notes_logged.add((sn, "model", number))
+        if not model:
+            self.log("Info: Hanchu {} reports devModel {}, which Predbat has no ratings for, so its power limits are taken from the settings menu and the values it holds - please report the model".format(sn, code))
+            return
+        name, battery, ac = model
+        battery_text = "{} W".format(battery) if battery else "not known (taken from the settings menu)"
+        self.log("Info: Hanchu {} is a {} (devModel {}): battery limit {}, AC rating {} W".format(sn, name, number, battery_text, ac))
+
+    def model_rating(self, sn):
+        """Return (battery limit W, AC rating W) for a device's model, either one None when not known. See HANCHU_MODELS."""
+        model = HANCHU_MODELS.get(self.device_detail.get(sn, {}).get("model_code"))
+        if not model:
+            return None, None
+        return model[1], model[2]
 
     def _apply_device_status(self, sn, status):
         """Record the datalogger's devStatus, saying so once when it goes offline and once when it returns.
@@ -658,6 +698,8 @@ class HanchuAPI(ComponentBase):
             ok, data = await self._post("device_status", body={"sn": sn})
             if ok and self._apply_status_payload(sn, data):
                 got_any = True
+                if sn in self.default_power_deferred:
+                    self._warn_if_default_power(sn, self.device_ranges.get(sn) or {})
             else:
                 self.log("Warn: Hanchu {} returned no usable live telemetry".format(sn))
             if self.api_delay:
@@ -788,14 +830,22 @@ class HanchuAPI(ComponentBase):
         The highest value seen is used, not the value held now: Predbat overwrites these keys itself,
         with 0 for a hold or a rate inside the menu's range, so the next read would otherwise drop the
         ceiling back to the menu's and the raise would undo itself (batpred#5672).
+
+        Where the model's battery limit is known (HANCHU_MODELS) it raises both ceilings too, so a
+        10 kW unit holding 5000 W can still be asked for 10000 W (batpred#5664). Nothing here lowers
+        a ceiling: a value the device accepts is never refused on the table's word.
         """
         merged = dict(HANCHU_RANGES)
         merged.update(self.device_ranges.get(sn) or {})
         settings = self.device_settings.get(sn) or {}
         ceiling = self.power_ceiling.get(sn) or {}
+        battery_limit = self.model_rating(sn)[0] or 0
         for key in (HANCHU_KEY_CHARGE_POWER, HANCHU_KEY_DISCHARGE_POWER):
             held = max(self._as_float(settings.get(key), 0.0), self._as_float(ceiling.get(key), 0.0))
             low, high = merged[key]
+            if battery_limit > high:
+                high = battery_limit
+                merged[key] = (low, high)
             if held > high:
                 merged[key] = (low, int(held))
                 if (sn, "held", key) not in self._clamp_logged:
@@ -840,12 +890,24 @@ class HanchuAPI(ComponentBase):
     def _warn_if_default_power(self, sn, ranges):
         """Warn once when no power bounds are held for a device, so the 5 kW default applies.
 
-        Hanchu units come in 3.68, 5, 6 and 10 kW, so the default is wrong for most of them. Called
-        after every menu attempt, failed ones included - a failed menu leaves the default in force
-        just as surely as one that answered without bounds. Said once per device per session.
+        Hanchu units run from 3 kW to 50 kW AC: the 5000 W default matches the battery limit of the
+        single-phase 3.0-6.0K, but not their AC ratings or any larger unit. Called after every menu
+        attempt, failed ones included - a failed menu leaves the default in force just as surely as
+        one that answered without bounds. Said once per device per session.
+
+        Not said for a model whose battery limit and AC rating are both in HANCHU_MODELS, since then
+        neither comes from the menu. The config tier runs before the first status poll, which is what
+        reports the model, so a device whose model has not been heard yet is not warned about on a
+        guess: refresh_power() asks again straight after that poll.
         """
         missing = [key for key in (HANCHU_KEY_CHARGE_POWER, HANCHU_KEY_DISCHARGE_POWER) if key not in ranges]
         if not missing or sn in self.warned_default_power:
+            return
+        if "model_code" not in self.device_detail.get(sn, {}) and sn not in self.device_values:
+            self.default_power_deferred.add(sn)
+            return
+        self.default_power_deferred.discard(sn)
+        if None not in self.model_rating(sn):
             return
         self.warned_default_power.add(sn)
         self.log(
@@ -896,27 +958,36 @@ class HanchuAPI(ComponentBase):
     def battery_rate_max(self, sn):
         """Return the battery charge/discharge power limit in watts.
 
-        Taken from the CHARGE POWER key's upper bound - the menu's, or a higher value the device
-        holds (see ranges_for) - the only power ceiling this API exposes. Leaving battery_rate_max unmapped is NOT neutral:
-        inverter.py then uses a hard-coded 2600 W silently on every plan, and makes it the
-        governing term in the charge rate calculation, so an absent value is worse than this one.
-        The user's override wins where they know the pack's real limit.
+        The model's battery limit from HANCHU_MODELS where it is known (batpred#5664). Otherwise the
+        CHARGE POWER key's upper bound - the menu's, or a higher value the device holds (see
+        ranges_for) - which depends on what the limits were last set to rather than on the unit.
+        Leaving battery_rate_max unmapped is NOT neutral: inverter.py then uses a hard-coded 2600 W
+        silently on every plan, and makes it the governing term in the charge rate calculation, so an
+        absent value is worse than this one. The user's override wins where they know the pack's real limit.
         """
         if self.battery_rate_max_override > 0:
             return self.battery_rate_max_override
+        battery_limit = self.model_rating(sn)[0]
+        if battery_limit:
+            return float(battery_limit)
         return float(self.ranges_for(sn).get(HANCHU_KEY_CHARGE_POWER, (0, 0))[1])
 
     def inverter_limit(self, sn):
         """Return the inverter's nominal AC power in watts.
 
-        The API reports no inverter rating, so the discharge power ceiling stands in for it: it is
-        the largest AC figure the device will accept, raised to a higher value the device holds (see
-        ranges_for). HARDWARE (batpred#5305): on a HESS-HY-S-6.0K that gives the nameplate 6000 W.
-        Deliberately the DISCHARGE bound rather than the charge one, because that is the direction
-        the inverter's AC rating actually limits. The user's override wins.
+        The model's AC rating from HANCHU_MODELS where it is known (batpred#5664): on a
+        HESS-HY-S-3.0K that is 3000 W, below the 5000 W the menu and the battery accept. Otherwise
+        the discharge power ceiling stands in for it: the largest AC figure the device will accept,
+        raised to a higher value the device holds (see ranges_for) - HARDWARE (batpred#5305): on a
+        HESS-HY-S-6.0K that gives the nameplate 6000 W. Deliberately the DISCHARGE bound rather than
+        the charge one, because that is the direction the inverter's AC rating actually limits. The
+        user's override wins.
         """
         if self.inverter_limit_override > 0:
             return self.inverter_limit_override
+        ac_rating = self.model_rating(sn)[1]
+        if ac_rating:
+            return float(ac_rating)
         return float(self.ranges_for(sn).get(HANCHU_KEY_DISCHARGE_POWER, (0, 0))[1])
 
     def reserve_max(self, devices=None):
@@ -1150,9 +1221,8 @@ class HanchuAPI(ComponentBase):
         Deliberately NOT reported:
         - export_limit: the API reports no export power limit, and the discharge power bound is the
           inverter rating rather than the grid connection's cap (automatic_config() warns).
-        - a model name or firmware version: the plain-JSON surface carries neither. The device list
-          entry may well have more fields, but no reference integration reads any of them, so
-          inventing names for them would be a guess.
+        - a firmware version: the plain-JSON surface carries none. The model name is reported, as
+          info.model, only where getDeviceStatus's devModel is one HANCHU_MODELS names.
         - the work mode: it changes, and refresh_discovery() compares whole reports, so a changing
           value would re-file the report every time it moved.
         - an AC-coupled verdict. bypMeterSwitch does distinguish the two (HANCHU_AC_COUPLED_FIELD),
@@ -1187,6 +1257,7 @@ class HanchuAPI(ComponentBase):
             ratings["inverter_reserve_max"] = self.reserve_max()
 
             account_ids = {"station": detail["station_id"]} if detail.get("station_id") else {}
+            info = {"model": detail["model"]} if detail.get("model") else {}
 
             inverters.append(
                 inverter_record(
@@ -1197,6 +1268,7 @@ class HanchuAPI(ComponentBase):
                     capabilities=dict(HANCHU_CAPABILITIES),
                     hardware_ids={"serial": sn},
                     account_ids=account_ids,
+                    info=info,
                     ratings=ratings,
                     entities=self._discovery_entities(sn),
                 )
@@ -1523,8 +1595,12 @@ class HanchuAPI(ComponentBase):
         payload[HANCHU_KEY_DISCHARGE_POWER] = self._clamp(sn, HANCHU_KEY_DISCHARGE_POWER, export.get("power", 0), ranges)
 
         # The charge target goes in the grid-charge limit, clamped to 20-100 on this hardware, so a
-        # plan asking for less cannot be expressed - _clamp says so once per device.
-        payload[HANCHU_KEY_GRID_CHARGE_SOC] = self._clamp(sn, HANCHU_KEY_GRID_CHARGE_SOC, charge.get("soc", 0), ranges)
+        # plan asking for less cannot be expressed - _clamp says so once per device. During a hold it
+        # is capped at the current SoC as a backstop - see _hold_grid_target().
+        grid_target = charge.get("soc", 0)
+        if signal == "hold" and soc is not None:
+            grid_target = self._hold_grid_target(sn, grid_target, soc, ranges)
+        payload[HANCHU_KEY_GRID_CHARGE_SOC] = self._clamp(sn, HANCHU_KEY_GRID_CHARGE_SOC, grid_target, ranges)
 
         # The discharge floor is device-wide, so it carries the export target while an export
         # window is actually running and the reserve at every other moment - the same shape every
@@ -1547,6 +1623,27 @@ class HanchuAPI(ComponentBase):
             payload[HANCHU_KEY_WORK_MODE] = self.slot_work_mode(sn)
         return payload
 
+    def _hold_grid_target(self, sn, target, soc, ranges):
+        """Return the grid-charge limit to write during a hold: the charge target, but never above the current SoC.
+
+        The hold slot is a charge slot at zero power, so if that zero did not take - a refused key,
+        or the interval before a failed write is resent - the slot would charge from the grid into
+        the plan's target, which for a hold added outside a charge window is a FUTURE window's and can
+        be 100. With the limit at the SoC there is nothing for it to charge to. It adds no API call,
+        being part of the same iotSet, and the normal branch writes the real target back once the
+        hold ends (batpred#5667). It only limits charging from the grid, so solar still charges.
+
+        The limit already written is kept while it is still at or below the SoC, so solar raising
+        the SoC during a hold does not send a new write at every percent - each one is a slow cloud
+        call that can collide with the next (error 300004).
+        """
+        low = ranges.get(HANCHU_KEY_GRID_CHARGE_SOC, HANCHU_RANGES[HANCHU_KEY_GRID_CHARGE_SOC])[0]
+        cap = min(self._as_float(target, 0), max(int(self._as_float(soc, 0)), low))
+        written = (self.applied_payload.get(sn) or {}).get(HANCHU_KEY_GRID_CHARGE_SOC)
+        if written is not None and low <= self._as_float(written, -1) <= cap:
+            return int(self._as_float(written))
+        return int(cap)
+
     def _rate_signal(self, sn, charge, export):
         """Read a hold out of Predbat's rates, returning (signal, direction of the slot to add).
 
@@ -1556,11 +1653,14 @@ class HanchuAPI(ComponentBase):
         anything outside a slot - the battery kept feeding the house at a zero discharge rate - but a
         charge slot at zero power held it. So a hold becomes a charge slot at zero power.
 
-        Freeze-export (a zero charge rate) adds no slot. Predbat's freeze-export exports surplus solar
-        while the battery still covers the house, and HARDWARE (batpred#5305) showed a discharge slot
-        at zero power stopping the battery covering the house - so no slot fits. The zero charge rate
-        is passed through to self-use; whether it stops the battery absorbing solar there is still to
-        be live-tested. If it does not, "Maximum Charge SOC" held at the current SoC would, from 50% up.
+        Freeze-export (a zero charge rate) adds no slot, and Predbat no longer asks for one: INVERTER_DEF
+        sets support_discharge_freeze False. Predbat's freeze-export exports surplus solar while the
+        battery still covers the house; HARDWARE (batpred#5305) showed a discharge slot at zero power
+        stopping the battery covering the house, so no slot fits, and HARDWARE (batpred#5665, an
+        AC-coupled HESS-HY-S-5.0K) showed CHG_PWR_LMT only limiting charging from the grid, so a zero
+        charge rate leaves solar filling the battery. "Maximum Charge SOC" held at the current SoC would
+        stop it, but only from 50% up and only with a guaranteed restore, which this component lacks.
+        A zero charge rate that still arrives (set by hand) is passed through as it is.
 
         Returns (None, None) for an export that is running (it owns the battery), for both rates
         zero or both set (no signal - an unset schedule reads as zeros), and for a charge window that

@@ -134,7 +134,8 @@ def test_hanchu_inverter_def_complete():
         "soc_units": "%",
         "time_button_press": True,
         "support_charge_freeze": True,
-        "support_discharge_freeze": True,
+        # CHG_PWR_LMT only limits grid charging, so a zero charge rate cannot freeze export (batpred#5665).
+        "support_discharge_freeze": False,
         # Wrap-around behaviour is undocumented for the slot pairs, so Predbat splits.
         "can_span_midnight": False,
         "charge_discharge_with_rate": False,
