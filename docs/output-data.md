@@ -269,6 +269,8 @@ If you toggle this switch in Home Assistant it will force Predbat to perform an 
 
 - **predbat.status** - Gives the current status & errors and logs any changes that Predbat makes to your inverter.
 The different Predbat status values and their meanings are detailed in [what does Predbat do](what-does-predbat-do.md#predbat-status).
+When a warning is reported during a plan update, the update ends by adding the state it carried out after the warning in square brackets, e.g. `Warn: ... [Exporting]`, so the status still starts with `Warn:` or `Error:`.
+An update that stopped before carrying anything out shows the warning or error on its own.
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/e24914b8-93d9-4217-812a-ac25a569a52c)
 
@@ -278,6 +280,10 @@ predbat.status additionally has the following attributes that are automatically 
 - **Debug** - A set of arrays containing Predbat's planned charging and discharging time windows and battery limits (in kWh)
 - **Version** - version of Predbat that's running
 - **Error** - binary value true or false depending upon whether Predbat is in an error status or nor
+- **Run state** (`run_state`) - the status the last plan update carried out, such as `Exporting` or `Demand, Hold for car`, without any warning or error text.
+It stays the same while a warning is shown, and when an update stops before carrying anything out, as the inverter is still following the last one.
+It is empty after a restart until the first update completes.
+Use it in an automation that follows Predbat's status, e.g. `state_attr('predbat.status', 'run_state')`, rather than parsing the status text.
 
 ## Sensor data
 
