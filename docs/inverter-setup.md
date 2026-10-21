@@ -49,7 +49,7 @@ Once you get everything working please share the configuration as a GitHub issue
    | [Growatt with Solar Assistant](#growatt-with-solar-assistant) | [Solar Assistant](https://solar-assistant.io/help/home-assistant/setup) | [spa.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt_spa.yaml) or [sph.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt_sph.yaml) |
    | [Hanchu iESS](#hanchu-iess) | [hanchu-ess-ha](https://github.com/upton68/hanchu-ess-ha) | [hanchu_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/hanchu_cloud.yaml) |
    | [Huawei](#huawei) | [Huawei Solar](https://github.com/wlcrs/huawei_solar) | [huawei.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/huawei.yaml) |
-   | [Indevolt Battery](#indevolt-battery) | [Indevolt](https://www.home-assistant.io/integrations/kostal_plenticorehttps://www.home-assistant.io/integrations/indevolt/) | [indevolt.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/indevolt.yaml) |
+   | [Indevolt Battery](#indevolt-battery) | [Indevolt](https://www.home-assistant.io/integrations/indevolt/) | [indevolt.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/indevolt.yaml) |
    | [Kostal Plenticore](#kostal-plenticore) | [Kostal Plenticore](https://www.home-assistant.io/integrations/kostal_plenticore) | [kostal.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/kostal.yaml) |
    | [LuxPower](#luxpower) | [LuxPython](https://github.com/guybw/LuxPython_DEV) | [luxpower.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/luxpower.yaml) |
    | [SigEnergy](#sigenergy-sigenstor) | [SigEnergy](https://github.com/TypQxQ/Sigenergy-Local-Modbus) | [sigenergy_sigenstor.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sigenergy_sigenstor.yaml) |
@@ -959,7 +959,7 @@ First, create four template sensors to convert Indevolt sensors into the formats
 template:
   - sensor:
       # SoC in kWh - the integration reports a percentage
-      - name: "Home Battery State of Charge kWh"
+      - name: "Indevolt SoC kWh"
         unique_id: indevolt_soc_kwh
         unit_of_measurement: "kWh"
         state_class: measurement

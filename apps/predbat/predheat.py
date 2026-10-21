@@ -520,7 +520,7 @@ class PredHeat:
         self.set_state(
             self.prefix + ".cost_today", state=dp2(day_cost), attributes={"results": day_cost_time, "friendly_name": "Cost so far today", "state_class": "measurement", "unit_of_measurement": self.base.currency_symbols[1], "icon": self.base.currency_icon}
         )
-        self.log("Predheat: Todays energy {} kWh, import {} kWh, cost {} {}".format(dp2(day_energy), dp2(day_cost), dp2(day_cost_import), self.base.currency_symbols[1]))
+        self.log("Predheat: Todays energy {} kWh, cost {} {}".format(dp2(day_energy), dp2(day_cost), self.base.currency_symbols[1]))
         return day_cost
 
     def update_pred(self, scheduled):

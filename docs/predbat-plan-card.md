@@ -77,7 +77,7 @@ The Predbat slots are therefore aligned to Octopus Agile slots or rate change ti
 The slot length defaults to being 30 minutes long, but can be changed by setting **[plan_interval_minutes](energy-rates.md#plan-interval)** in `apps.yaml`.
 
 - **Import** - The import rate for that time slot in currency minor unit (pence, cents, etc).<BR>
-The rate will be coloured Blue if the price is zero negative,
+The rate will be coloured Blue if the price is zero or negative,
 Green if the rate is less than the import rate threshold,
 Red if the rate is more than 1.5 times the import rate threshold,
 and Yellow if the rate is between 1 and 1.5 times the import rate threshold.<BR>
