@@ -101,6 +101,7 @@ from hanchu_const import (
     HANCHU_MENU_TYPE,
     HANCHU_POWER_STEP,
     HANCHU_RANGES,
+    HANCHU_READBACK_SETTLE,
     HANCHU_REFRESH_MIN_INTERVAL,
     HANCHU_RETRIES,
     HANCHU_SECONDS_PER_DAY,
@@ -155,11 +156,10 @@ HANCHU_CAPABILITIES = {
 class HanchuAPI(ComponentBase):
     """Hanchu ESS cloud component."""
 
-    # Trace every request and response while this integration beds in. There is no vendor
-    # specification and nobody on the project has Hanchu hardware, so a tester's log is the only
-    # evidence available for everything hanchu_const.py marks INFERRED. Flip to False once the
-    # inferred items have been confirmed.
-    api_debug = True
+    # Trace every request and response. Off unless hanchu_api_debug is set: on, it writes up to 2000
+    # characters per device on every poll, which buries real warnings (batpred#5672). A tester proving
+    # what hanchu_const.py marks INFERRED turns it on, and the command-line harness has it on by default.
+    api_debug = False
 
     def initialize(
         self,
@@ -174,6 +174,7 @@ class HanchuAPI(ComponentBase):
         inverter_limit=None,
         api_delay=1,
         min_write_interval=60,
+        api_debug=False,
         **kwargs,
     ):
         """Initialise the Hanchu component from its resolved config args.
@@ -194,6 +195,7 @@ class HanchuAPI(ComponentBase):
         self.inverter_sn_filter = inverter_sn if isinstance(inverter_sn, list) else ([inverter_sn] if inverter_sn else [])
         self.battery_rate_max_override = float(battery_rate_max) if battery_rate_max else 0.0
         self.inverter_limit_override = float(inverter_limit) if inverter_limit else 0.0
+        self.api_debug = bool(api_debug)
         # Devices already warned that the menu gave no power bounds, so the warning is said once.
         self.warned_default_power = set()
         # Consecutive rejected settings writes per serial, and whether the user has been told.
@@ -215,6 +217,9 @@ class HanchuAPI(ComponentBase):
         # built-in defaults - a 3.6 kW unit and a 5 kW unit do not share a charge power ceiling.
         self.device_settings = {}
         self.device_ranges = {}
+        # The highest charge and discharge power limit each device has been seen holding, per serial
+        # and key. See ranges_for() for why this, and not the value held now, raises the menu's ceiling.
+        self.power_ceiling = {}
         self.local_schedule = {}
         # The last payload the device ACCEPTED, per serial. Serves three purposes: change
         # detection (so an unchanged plan sends nothing), the pacing baseline, and the state a
@@ -342,7 +347,16 @@ class HanchuAPI(ComponentBase):
                 session = self._http_session(timeout)
                 async with session.post(url, headers=self._headers(), json=body if body is not None else {}) as response:
                     status = response.status
-                    payload = await response.json(content_type=None) if status in (200, HANCHU_CODE_UNAUTHORISED) else None
+                    payload = None
+                    if status == 200:
+                        payload = await response.json(content_type=None)
+                    elif status == HANCHU_CODE_UNAUTHORISED:
+                        # The status alone says the session has expired. The body may be empty or an
+                        # HTML error page, and failing to parse it must not stop the re-auth below.
+                        try:
+                            payload = await response.json(content_type=None)
+                        except ValueError:
+                            payload = None
             # Deliberately broad: the docstring promises this never raises, so every caller can fail
             # closed. A narrower tuple let a bare OSError from the socket layer escape run().
             except Exception as error:
@@ -362,17 +376,18 @@ class HanchuAPI(ComponentBase):
                 continue
 
             self.debug_api("response", path, payload if isinstance(payload, dict) else {"data": payload})
-            if not isinstance(payload, dict):
-                self.log("Warn: Hanchu {} returned a non-object body".format(path))
-                return False, None
-
-            code = payload.get("code")
-            # An expired token shows up either as the HTTP status or as code 401 inside a 200.
+            code = payload.get("code") if isinstance(payload, dict) else None
+            # An expired token shows up either as the HTTP status or as code 401 inside a 200. Checked
+            # before the body's shape, because a 401 status needs no body to be acted on.
             if (status == HANCHU_CODE_UNAUTHORISED or code == HANCHU_CODE_UNAUTHORISED) and not anonymous and not auth_retried:
                 auth_retried = True
                 self.log("Info: Hanchu {} reported an expired session, re-authenticating".format(path))
                 if await self.reauthenticate():
                     continue
+                return False, None
+
+            if not isinstance(payload, dict):
+                self.log("Warn: Hanchu {} returned a non-object body".format(path))
                 return False, None
 
             if payload.get("success") or (code == HANCHU_CODE_OK and endpoint_key in HANCHU_SUCCESS_BY_CODE_ENDPOINTS):
@@ -583,7 +598,14 @@ class HanchuAPI(ComponentBase):
             if leaf == "soc":
                 values[leaf] = round(self._as_float(raw) * HANCHU_SOC_SCALE, 1)
                 continue
-            watts = scale_to_watts(raw, payload.get(HANCHU_TELEMETRY_UNIT_FIELD.get(leaf)))
+            # The below-10-means-kW heuristic is only for a field with no unit sibling at all (loadPwr).
+            # One that has a sibling but arrived without it is read as watts: small grid and battery
+            # readings are routine, and an idle 3 W battery must not become 3000 W (batpred#5672).
+            unit_field = HANCHU_TELEMETRY_UNIT_FIELD.get(leaf)
+            if unit_field is None:
+                watts = scale_to_watts(raw)
+            else:
+                watts = scale_to_watts(raw, payload.get(unit_field), threshold=0)
             if watts is None:
                 continue
             values[leaf] = -watts if leaf in HANCHU_TELEMETRY_NEGATE else watts
@@ -755,16 +777,20 @@ class HanchuAPI(ComponentBase):
         else. Built per call rather than cached as a merged dict so a later menu poll cannot leave
         a stale entry behind.
 
-        A power limit's ceiling is raised to any higher value the device already holds. HARDWARE
+        A power limit's ceiling is raised to any higher value the device has been seen holding. HARDWARE
         (batpred#5305): the menu's 0-5000 W power range is one entry shared by 2-10 kW models, and a
         HESS-HY-S-6.0K (nameplate 6000 W) holds DSCHG_PWR_LMT 6000 - a value the device holds is one
         it accepts, and taking the menu's word would cap every discharge below the inverter's rating.
+        The highest value seen is used, not the value held now: Predbat overwrites these keys itself,
+        with 0 for a hold or a rate inside the menu's range, so the next read would otherwise drop the
+        ceiling back to the menu's and the raise would undo itself (batpred#5672).
         """
         merged = dict(HANCHU_RANGES)
         merged.update(self.device_ranges.get(sn) or {})
         settings = self.device_settings.get(sn) or {}
+        ceiling = self.power_ceiling.get(sn) or {}
         for key in (HANCHU_KEY_CHARGE_POWER, HANCHU_KEY_DISCHARGE_POWER):
-            held = self._as_float(settings.get(key), 0.0)
+            held = max(self._as_float(settings.get(key), 0.0), self._as_float(ceiling.get(key), 0.0))
             low, high = merged[key]
             if held > high:
                 merged[key] = (low, int(held))
@@ -772,6 +798,40 @@ class HanchuAPI(ComponentBase):
                     self._clamp_logged.add((sn, "held", key))
                     self.log("Info: Hanchu {} holds {} {:.0f} W, above the menu's {} W maximum (a range the menu shares across models), so {:.0f} W is used as its limit".format(sn, key, held, high, held))
         return merged
+
+    def _note_power_ceiling(self, sn, settings):
+        """Remember the highest charge and discharge power limit a device has been seen holding. See ranges_for()."""
+        ceiling = self.power_ceiling.setdefault(sn, {})
+        for key in (HANCHU_KEY_CHARGE_POWER, HANCHU_KEY_DISCHARGE_POWER):
+            held = int(self._as_float((settings or {}).get(key), 0.0))
+            if held > int(self._as_float(ceiling.get(key), 0.0)):
+                ceiling[key] = held
+
+    def _note_external_change(self, sn, observed, read_started):
+        """Forget the applied payload when the device no longer holds it, so the next tick sends it again.
+
+        Change detection compares a new payload only with the last one Predbat sent, so without this a
+        slot or work mode changed in the Hanchu app, a device reset, or a write the cloud acknowledged
+        but never delivered would leave the inverter on the wrong settings until the plan itself
+        changed - the silent drift of batpred#5157 (batpred#5672).
+
+        Only keys the read-back carries are compared, as numbers, since iotGet returns "3" or 70.0
+        where the write sent 3 or 70. A read that a write may have overtaken is not judged: one that
+        began less than HANCHU_READBACK_SETTLE seconds after the last write, or before it.
+        HARDWARE (batpred#5305): an accepted write reads back within 1-2 s.
+        """
+        applied = self.applied_payload.get(sn)
+        if not applied or not isinstance(observed, dict):
+            return
+        last = self.last_write_time.get(sn)
+        if last is not None and last > read_started - HANCHU_READBACK_SETTLE:
+            return
+        differing = settings_mismatches({key: value for key, value in applied.items() if observed.get(key) is not None}, observed)
+        if not differing:
+            return
+        detail = ", ".join("{}={} (Predbat wrote {})".format(key, got, value) for key, value, got in differing)
+        self.log("Warn: Hanchu {} settings no longer match what Predbat wrote: {}. The Hanchu app or a device reset may have changed them, so they will be sent again".format(sn, detail))
+        self.applied_payload.pop(sn, None)
 
     def _warn_if_default_power(self, sn, ranges):
         """Warn once when no power bounds are held for a device, so the 5 kW default applies.
@@ -811,9 +871,12 @@ class HanchuAPI(ComponentBase):
             self._warn_if_default_power(sn, self.device_ranges.get(sn) or {})
             if self.api_delay:
                 await asyncio.sleep(self.api_delay)
+            read_started = time.time()
             ok, data = await self._post("iot_get", body={"sn": sn, "devType": HANCHU_DEV_TYPE_DTU, "keys": list(HANCHU_CONTROL_KEYS)})
             if ok and isinstance(data, dict):
                 self.device_settings[sn] = dict(data)
+                self._note_power_ceiling(sn, data)
+                self._note_external_change(sn, data, read_started)
                 got_any = True
             if self.api_delay:
                 await asyncio.sleep(self.api_delay)
@@ -1414,9 +1477,20 @@ class HanchuAPI(ComponentBase):
         signal, extra_direction = self._rate_signal(sn, charge, export)
         soc = self.device_values.get(sn, {}).get("soc")
 
+        pairs = {"charge": self._slot_pairs(sn, "charge", charge), "export": self._slot_pairs(sn, "export", export)}
+        if extra_direction:
+            # The hold slot goes in slot 3, which Predbat's own window never uses.
+            other = "export" if extra_direction == "charge" else "charge"
+            extra = self._extra_slot(sn, pairs[extra_direction][:2] + pairs[other])
+            if extra:
+                pairs[extra_direction][2] = extra
+            else:
+                signal = None
+
         # Power. Rate 0 is how Predbat expresses freeze, and 0 is inside the accepted range, so it
         # survives the clamp and is passed straight through. A hold zeroes the charge rate as well,
-        # because it is carried by a charge slot at zero power.
+        # because it is carried by a charge slot at zero power - decided after the slot, so a hold
+        # with no room for one leaves the plan's charge rate alone (batpred#5672).
         charge_power = 0 if signal == "hold" else charge.get("power", 0)
         payload[HANCHU_KEY_CHARGE_POWER] = self._clamp(sn, HANCHU_KEY_CHARGE_POWER, charge_power, ranges)
         payload[HANCHU_KEY_DISCHARGE_POWER] = self._clamp(sn, HANCHU_KEY_DISCHARGE_POWER, export.get("power", 0), ranges)
@@ -1433,15 +1507,6 @@ class HanchuAPI(ComponentBase):
             floor = min(self._as_float(floor, 0), int(self._as_float(soc, 0)))
         payload[HANCHU_KEY_DISCHARGE_SOC] = self._clamp(sn, HANCHU_KEY_DISCHARGE_SOC, floor, ranges)
 
-        pairs = {"charge": self._slot_pairs(sn, "charge", charge), "export": self._slot_pairs(sn, "export", export)}
-        if extra_direction:
-            # The hold slot goes in slot 3, which Predbat's own window never uses.
-            other = "export" if extra_direction == "charge" else "charge"
-            extra = self._extra_slot(sn, pairs[extra_direction][:2] + pairs[other])
-            if extra:
-                pairs[extra_direction][2] = extra
-            else:
-                signal = None
         for direction, start_key, end_key in (("charge", HANCHU_KEY_CHARGE_START, HANCHU_KEY_CHARGE_END), ("export", HANCHU_KEY_DISCHARGE_START, HANCHU_KEY_DISCHARGE_END)):
             for index, (start, end) in enumerate(pairs[direction], start=1):
                 payload[start_key.format(index)] = start
@@ -1617,7 +1682,9 @@ class HanchuAPI(ComponentBase):
         if not payload:
             return True
         if not force and self.payloads_equal(self.applied_payload.get(sn), payload):
-            self.log("Info: Hanchu {} settings unchanged, nothing sent".format(sn))
+            # Every tick lands here, so it is only said while the API trace is on.
+            if self.api_debug:
+                self.log("Debug: Hanchu {} settings unchanged, nothing sent".format(sn))
             return True
         if not self._write_allowed(sn, force=force):
             self.log("Info: Hanchu {} change is held by hanchu_min_write_interval ({}s) and will be applied on the next eligible cycle".format(sn, self.min_write_interval))
@@ -1763,6 +1830,7 @@ class HanchuAPI(ComponentBase):
             {
                 "device_ranges": {sn: list(ranges.items()) for sn, ranges in self.device_ranges.items()},
                 "device_settings": self.device_settings,
+                "power_ceiling": self.power_ceiling,
                 "slot_model": self.slot_model,
                 "slot_work_modes": self.slot_work_modes,
             },
@@ -1802,6 +1870,10 @@ class HanchuAPI(ComponentBase):
         # so clamp_range sees exactly what the live path gives it.
         self.device_ranges = {sn: {key: tuple(bounds) for key, bounds in (pairs or [])} for sn, pairs in (config.get("device_ranges") or {}).items()}
         self.device_settings = dict(config.get("device_settings") or {})
+        self.power_ceiling = {sn: dict(keys or {}) for sn, keys in (config.get("power_ceiling") or {}).items()}
+        # A cache saved before power_ceiling existed still holds the last read, which seeds it.
+        for sn, settings in self.device_settings.items():
+            self._note_power_ceiling(sn, settings)
         self.slot_model = dict(config.get("slot_model") or {})
         self.slot_work_modes = {sn: list(modes or []) for sn, modes in (config.get("slot_work_modes") or {}).items()}
         control = await self.load_cache(HANCHU_CACHE_CONTROL)

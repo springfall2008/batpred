@@ -52,6 +52,7 @@ def test_hanchu_component_registered():
         ("inverter_limit", "hanchu_inverter_limit", None),
         ("api_delay", "hanchu_api_delay", 1),
         ("min_write_interval", "hanchu_min_write_interval", 60),
+        ("api_debug", "hanchu_api_debug", False),
     ]:
         info = entry["args"].get(arg)
         if not info:
@@ -161,6 +162,7 @@ def test_hanchu_apps_schema_keys():
         "hanchu_inverter_limit": "float",
         "hanchu_api_delay": "float",
         "hanchu_min_write_interval": "integer",
+        "hanchu_api_debug": "boolean",
     }
     for key, kind in expected.items():
         entry = APPS_SCHEMA.get(key)

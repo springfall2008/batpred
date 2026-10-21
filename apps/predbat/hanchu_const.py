@@ -448,6 +448,11 @@ HANCHU_WRITE_RETRY_DELAY = 5
 # reconcile loop runs about once a minute, so this still means at most one attempt per cycle.
 HANCHU_FAILED_WRITE_INTERVAL = 30
 
+# A control read-back is compared with what Predbat last wrote only when the read began at least
+# this long after that write, so a read the write may have overtaken is not taken for a change made
+# on the device. HARDWARE (batpred#5305): an accepted write reads back within 1-2 s; a minute is margin.
+HANCHU_READBACK_SETTLE = 60
+
 # HARDWARE (batpred#5305): after this many consecutive rejected writes the user is notified,
 # because the inverter may no longer match the plan and may need stepping in on by hand.
 HANCHU_WRITE_FAILURE_NOTIFY = 3
@@ -501,7 +506,9 @@ def split_window_seconds(start, end):
 
     INVERTER_DEF sets can_span_midnight False, so Predbat itself avoids asking for a wrap-around,
     but it still expresses "until midnight" as an end hour of 24 or more. The second pair carries
-    whatever runs past midnight and is (0, 0) - disabled - when nothing does.
+    whatever runs past midnight and is (0, 0) - disabled - when nothing does. An end of exactly
+    24:00:00 is clamped to 23:59 like hhmmss_to_seconds(), because 86400 is outside the slot range
+    and one out-of-range key fails the whole batched iotSet (batpred#5672).
 
     Returns ((start1, end1), (start2, end2)).
     """
@@ -512,7 +519,7 @@ def split_window_seconds(start, end):
         end_seconds = int(parts[0]) * 3600 + (int(parts[1]) * 60 if len(parts) > 1 else 0)
     except (TypeError, ValueError):
         end_seconds = start_seconds
-    if end_seconds <= HANCHU_SECONDS_PER_DAY:
+    if end_seconds < HANCHU_SECONDS_PER_DAY:
         return (start_seconds, end_seconds), (HANCHU_SLOT_DISABLED, HANCHU_SLOT_DISABLED)
     return (start_seconds, HANCHU_SECONDS_PER_DAY - 60), (HANCHU_SLOT_DISABLED, end_seconds - HANCHU_SECONDS_PER_DAY)
 

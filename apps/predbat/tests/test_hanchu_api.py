@@ -236,6 +236,8 @@ def test_hanchu_password_is_never_logged():
     """The trace masks the password and the account e-mail, and nothing else in the envelope."""
     failed = False
     client = MockHanchu(account="owner@example.com", password="super-secret-password")
+    # The trace is opt-in (hanchu_api_debug); this test is about what it masks when it is on.
+    client.api_debug = True
     with patched_session([(200, envelope(data="tok-abc123"))]):
         run_async_local(client.fetch_token())
     joined = "\n".join(client.log_messages)
@@ -989,6 +991,147 @@ def test_hanchu_retry_delay_default():
     assert not failed, "test_hanchu_retry_delay_default"
 
 
+def test_hanchu_power_ceiling_survives_predbat_overwriting_the_held_value():
+    """The raised power ceiling is the highest value ever seen held, not the value held now (batpred#5672).
+
+    Predbat overwrites DSCHG_PWR_LMT itself - with 0 for a hold, or a rate inside the menu's 0-5000 W.
+    Taking the ceiling from the value held now meant the next config read put it straight back to 5000,
+    so the 6 kW raise was lost after Predbat's first write and every later plan was derated.
+    """
+    failed = False
+    client = ready_client()
+    sn = "HC240100001"
+    menu = {"energy": {"items": [[{"itemCodeSignal": "CHG_PWR_LMT", "minVal": "0", "maxVal": "5000"}, {"itemCodeSignal": "DSCHG_PWR_LMT", "minVal": "0", "maxVal": "5000"}]]}}
+    with patched_session([(200, envelope(data=menu)), (200, envelope(data={"CHG_PWR_LMT": "5000", "DSCHG_PWR_LMT": "6000"}))]):
+        run_async_local(client.refresh_config())
+    if client.inverter_limit(sn) != 6000.0:
+        print(f"ERROR: the first read should raise inverter_limit to 6000: {client.inverter_limit(sn)}")
+        failed = True
+    # Predbat has since written a hold, so the device now reads 0 for both.
+    with patched_session([(200, envelope(data=menu)), (200, envelope(data={"CHG_PWR_LMT": "0", "DSCHG_PWR_LMT": "0"}))]):
+        run_async_local(client.refresh_config())
+    if client.ranges_for(sn).get("DSCHG_PWR_LMT") != (0, 6000) or client.inverter_limit(sn) != 6000.0:
+        print(f"ERROR: Predbat's own write undid the raise: {client.ranges_for(sn).get('DSCHG_PWR_LMT')} / {client.inverter_limit(sn)}")
+        failed = True
+    # The ceiling is persisted with the config cache and restored, so a restart does not lose it either.
+    saved = {}
+
+    async def save_cache(name, data):
+        """Stand in for the Storage component's save."""
+        saved[name] = data
+
+    async def load_cache(name):
+        """Stand in for the Storage component's load."""
+        return saved.get(name, {})
+
+    client.save_cache = save_cache
+    run_async_local(client.save_config())
+    restarted = MockHanchu()
+    restarted.load_cache = load_cache
+    run_async_local(restarted.restore_state())
+    if restarted.ranges_for(sn).get("DSCHG_PWR_LMT") != (0, 6000):
+        print(f"ERROR: the ceiling did not survive a restart: {restarted.ranges_for(sn).get('DSCHG_PWR_LMT')}")
+        failed = True
+    # A cache written before the ceiling existed is seeded from the settings it does hold.
+    older = MockHanchu()
+
+    async def load_old_cache(name):
+        """A config cache from before power_ceiling was saved."""
+        return {"config": {"device_settings": {sn: {"DSCHG_PWR_LMT": "6000"}}}}.get(name, {})
+
+    older.load_cache = load_old_cache
+    run_async_local(older.restore_state())
+    older.device_settings[sn] = {"DSCHG_PWR_LMT": "0"}
+    if older.ranges_for(sn).get("DSCHG_PWR_LMT") != (0, 6000):
+        print(f"ERROR: an older cache's held 6000 was not kept as the ceiling: {older.ranges_for(sn).get('DSCHG_PWR_LMT')}")
+        failed = True
+    assert not failed, "test_hanchu_power_ceiling_survives_predbat_overwriting_the_held_value"
+
+
+def unparseable_response(status, error=None):
+    """Build a mock response whose body is empty (json() gives None) or, with error, fails to parse."""
+    response = create_aiohttp_mock_response(status=status)
+
+    async def _json(*args, **kwargs):
+        """Return None for an empty body, or raise the parse error given."""
+        if error is not None:
+            raise error
+        return None
+
+    response.json = _json
+    return response
+
+
+def test_hanchu_http_401_without_a_json_body_triggers_reauth():
+    """An HTTP 401 re-authenticates whatever its body holds (batpred#5672).
+
+    The body was parsed before the status was looked at: an empty 401 body was refused as a non-object
+    and an HTML one raised and was retried as a transport failure, so neither ever re-authenticated and
+    every call failed until the proactive refresh, which can be weeks away.
+    """
+    failed = False
+    for label, error in (("empty", None), ("html", ValueError("Expecting value: line 1 column 1 (char 0)"))):
+        client = MockHanchu()
+        client._token = "tok-old"
+        client._token_time = time.time()
+        responses = [unparseable_response(401, error), mock_json_response(200, envelope(data="tok-new")), mock_json_response(200, envelope(data=DEVICE_LIST_SAMPLE))]
+        with patch("aiohttp.ClientSession", return_value=create_aiohttp_mock_session(responses)) as session_cls:
+            ok, data = run_async_local(client._post("device_list"))
+        if not ok or data != DEVICE_LIST_SAMPLE:
+            print(f"ERROR: a 401 with an {label} body did not re-authenticate and retry: ok={ok} data={data!r}")
+            failed = True
+        if session_cls.return_value.post.call_count != 3:
+            print(f"ERROR: a 401 with an {label} body made {session_cls.return_value.post.call_count} requests, expected 3 (call, re-auth, retry)")
+            failed = True
+        if session_cls.return_value.post.call_args.kwargs["headers"].get("access-token") != "tok-new":
+            print(f"ERROR: the retry after an {label} 401 did not carry the new token")
+            failed = True
+    assert not failed, "test_hanchu_http_401_without_a_json_body_triggers_reauth"
+
+
+def test_hanchu_watt_heuristic_applies_only_to_fields_without_a_unit_sibling():
+    """A small grid or battery reading whose unit is missing is watts, not kW (batpred#5672).
+
+    The below-10-means-kW heuristic is for loadPwr, which has no unit sibling at all. Applied to every
+    power field, a balanced 6 W grid reading or an idle 3 W battery became 6000 W or 3000 W.
+    """
+    failed = False
+    client = MockHanchu()
+    client._apply_status_payload("HC240100001", {"batSoc": 0.5, "batP": 3, "meterPPwr": 6, "pvTtPwr": 0, "loadPwr": 0.9})
+    values = client.device_values.get("HC240100001", {})
+    for leaf, expect in (("battery_power", -3.0), ("grid_power", -6.0), ("load_power", 900.0)):
+        if values.get(leaf) != expect:
+            print(f"ERROR: {leaf} = {values.get(leaf)}, expected {expect}")
+            failed = True
+    assert not failed, "test_hanchu_watt_heuristic_applies_only_to_fields_without_a_unit_sibling"
+
+
+def test_hanchu_api_trace_is_off_unless_configured():
+    """The request/response trace is opt-in through hanchu_api_debug (batpred#5672).
+
+    Hard-coded on, it logged up to 2000 characters per device on every poll - thousands of long lines a
+    day burying real warnings.
+    """
+    failed = False
+    client = HanchuAPI.__new__(HanchuAPI)
+    client.log = lambda message: None
+    client.initialize(account="a@b.c", password="p")
+    if client.api_debug:
+        print("ERROR: the API trace should default to off")
+        failed = True
+    client.initialize(account="a@b.c", password="p", api_debug=True)
+    if not client.api_debug:
+        print("ERROR: hanchu_api_debug true should turn the trace on")
+        failed = True
+    traced = MockHanchu()
+    traced.log_messages.clear()
+    traced.debug_api("request", "/x", {"a": 1})
+    if traced.log_messages:
+        print(f"ERROR: the trace logged with api_debug off: {traced.log_messages}")
+        failed = True
+    assert not failed, "test_hanchu_api_trace_is_off_unless_configured"
+
+
 def run_hanchu_api_tests(my_predbat):
     """Run all Hanchu API and auth tests."""
     failed = False
@@ -1025,6 +1168,10 @@ def run_hanchu_api_tests(my_predbat):
         ("transport_failure", test_hanchu_transport_failure_is_retried_then_reported),
         ("no_credentials", test_hanchu_run_refuses_to_start_without_credentials),
         ("retry_delay_default", test_hanchu_retry_delay_default),
+        ("power_ceiling_kept", test_hanchu_power_ceiling_survives_predbat_overwriting_the_held_value),
+        ("http_401_unparseable", test_hanchu_http_401_without_a_json_body_triggers_reauth),
+        ("watt_heuristic_scope", test_hanchu_watt_heuristic_applies_only_to_fields_without_a_unit_sibling),
+        ("api_trace_default", test_hanchu_api_trace_is_off_unless_configured),
     ]:
         try:
             if fn():
