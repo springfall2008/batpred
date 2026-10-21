@@ -1768,6 +1768,15 @@ class SigenergyAPI(ComponentBase):
                 power += _safe_float(attr.get("ratedActivePower", 0))
         return power
 
+    def _get_export_limit_w(self, system_id):
+        """Return the grid export limit in W, or 99999 (no limit) when the system has not reported one.
+
+        The limit is the grid max backfeed power, which only arrives in an ``openapi/change`` MQTT
+        message (see _handle_mqtt_change). A reported 0 is skipped there, so it also reads as no limit.
+        """
+        backfeed_kw = _safe_float(self.systems.get(system_id, {}).get("gridMaxBackfeedPower", 0))
+        return round(backfeed_kw * 1000) if backfeed_kw > 0 else 99999
+
     # -----------------------------------------------------------------------
     # MQTT message handlers
     # -----------------------------------------------------------------------
@@ -2288,6 +2297,18 @@ class SigenergyAPI(ComponentBase):
             app="sigenergy",
         )
 
+        # --- Export limit (W) ---
+        self.dashboard_item(
+            "sensor.{}_sigenergy_{}_export_limit".format(self.prefix, slug),
+            state=self._get_export_limit_w(system_id),
+            attributes={
+                "friendly_name": "Sigenergy {} Export Limit".format(system_name),
+                "unit_of_measurement": "W",
+                "device_class": "power",
+            },
+            app="sigenergy",
+        )
+
         # --- Operational mode (string) ---
         # flow_status (from MQTT) is preferred as it's the freshest, but fall back to the
         # REST-sourced current_mode (fetch_current_mode) so this doesn't read "Unknown" before
@@ -2380,6 +2401,7 @@ class SigenergyAPI(ComponentBase):
         self.set_arg("battery_power", ["sensor.{}_sigenergy_{}_battery_power".format(self.prefix, s) for s in slugs])
         self.set_arg("battery_rate_max", ["sensor.{}_sigenergy_{}_battery_rate_max".format(self.prefix, s) for s in slugs])
         self.set_arg("inverter_limit", ["sensor.{}_sigenergy_{}_inverter_limit".format(self.prefix, s) for s in slugs])
+        self.set_arg("export_limit", ["sensor.{}_sigenergy_{}_export_limit".format(self.prefix, s) for s in slugs])
         self.set_arg("pv_power", ["sensor.{}_sigenergy_{}_pv_power".format(self.prefix, s) for s in slugs])
         self.set_arg("grid_power", ["sensor.{}_sigenergy_{}_grid_power".format(self.prefix, s) for s in slugs])
         self.set_arg("load_power", ["sensor.{}_sigenergy_{}_load_power".format(self.prefix, s) for s in slugs])

@@ -504,6 +504,47 @@ def test_sigenergy_automatic_config(my_predbat):
     assert api.set_args.get("load_today") == ["sensor.predbat_sigenergy_sig001_load_lifetime", "sensor.predbat_sigenergy_sig002_load_lifetime"], "load_today wired to lifetime totals"
     assert api.set_args.get("import_today") == ["sensor.predbat_sigenergy_sig001_grid_import_lifetime", "sensor.predbat_sigenergy_sig002_grid_import_lifetime"], "import_today wired to lifetime totals"
     assert api.set_args.get("export_today") == ["sensor.predbat_sigenergy_sig001_grid_export_lifetime", "sensor.predbat_sigenergy_sig002_grid_export_lifetime"], "export_today wired to lifetime totals"
+    assert api.set_args.get("export_limit") == ["sensor.predbat_sigenergy_sig001_export_limit", "sensor.predbat_sigenergy_sig002_export_limit"], "export_limit wired to the grid backfeed limit sensors"
+
+    return failed
+
+
+def test_sigenergy_publish_export_limit(my_predbat):
+    """The grid backfeed limit from an MQTT change message is published as the export limit sensor in W."""
+    failed = False
+    api = MockSigenergyAPI()
+
+    system_id = "SIG12345"
+    slug = api._system_slug(system_id)
+    api.systems[system_id] = {"systemName": "My Site"}
+    api.devices[system_id] = [{"deviceType": "Inverter", "attrMap": {"ratedActivePower": 12.0}}]
+
+    api._handle_mqtt_change(system_id, {"inverterMaxActivePowerW": "12000.0", "gridMaxBackfeedPowerW": "5000.0"})
+    run_async(api.publish_system_entities(system_id))
+
+    key = "sensor.predbat_sigenergy_{}_export_limit".format(slug)
+    assert key in api.dashboard_items, "Export limit entity published"
+    assert api.dashboard_items[key]["state"] == 5000, "Backfeed limit 5kW published as 5000W, got {}".format(api.dashboard_items[key]["state"])
+    assert api.dashboard_items[key]["attributes"].get("unit_of_measurement") == "W", "Export limit is in W so get_arg(required_unit='W') accepts it"
+
+    return failed
+
+
+def test_sigenergy_publish_export_limit_unknown(my_predbat):
+    """With no backfeed limit reported yet the export limit sensor reads 99999 W, i.e. no limit beyond the inverter's own."""
+    failed = False
+    api = MockSigenergyAPI()
+
+    system_id = "SIG12345"
+    slug = api._system_slug(system_id)
+    api.systems[system_id] = {"systemName": "My Site"}
+    api.devices[system_id] = [{"deviceType": "Inverter", "attrMap": {"ratedActivePower": 12.0}}]
+
+    run_async(api.publish_system_entities(system_id))
+
+    key = "sensor.predbat_sigenergy_{}_export_limit".format(slug)
+    assert key in api.dashboard_items, "Export limit entity published"
+    assert api.dashboard_items[key]["state"] == 99999, "Unknown backfeed limit published as 99999W, got {}".format(api.dashboard_items[key]["state"])
 
     return failed
 
@@ -4294,6 +4335,8 @@ def run_sigenergy_tests(my_predbat):
         ("publish_system_entities_operational_mode_fallback", test_sigenergy_publish_system_entities_operational_mode_fallback),
         ("publish_system_entities_operational_mode_invalid_value", test_sigenergy_publish_system_entities_operational_mode_invalid_value),
         ("automatic_config", test_sigenergy_automatic_config),
+        ("publish_export_limit", test_sigenergy_publish_export_limit),
+        ("publish_export_limit_unknown", test_sigenergy_publish_export_limit_unknown),
         ("fetch_controls", test_sigenergy_fetch_controls),
         ("publish_controls", test_sigenergy_publish_controls),
         ("parse_entity_system", test_sigenergy_parse_entity_system),
