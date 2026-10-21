@@ -17,8 +17,8 @@ Manual car SoC tracking (car_charging_manual_soc).
 - A manual SoC car is reset to zero when its plugged-in sensor goes from plugged in to unplugged.
 - A value the user enters is a fresh starting point.
 
-Each car's record is saved through the storage component, so a restart picks up where it left off. No entity's
-last_changed is used.
+Each car's record is published as sensor.predbat_car_manual_soc_tracked[_N], which a restart reads back, so tracking
+picks up where it left off. No entity's last_changed is used.
 """
 import copy
 from datetime import timedelta
@@ -33,7 +33,6 @@ STATE_FIELDS = (
     "car_charging_manual_soc",
     "car_charging_manual_soc_energy",
     "car_manual_soc_state",
-    "car_manual_soc_loaded",
     "car_charging_energy",
     "car_charging_soc",
     "car_charging_soc_next",
@@ -42,55 +41,9 @@ STATE_FIELDS = (
     "car_charging_battery_size",
     "car_charging_planned",
     "car_charging_energy_scale",
-    "components",
 )
 SAVED_ARGS = ("car_charging_soc", "car_charging_planned", "car_charging_plugged", "car_charging_energy")
 SAVED_CONFIG = ("car_charging_manual_soc", "car_charging_manual_soc_kwh", "car_charging_manual_soc_1", "car_charging_manual_soc_kwh_1")
-
-
-class FakeStorage:
-    """
-    An in-memory storage component.
-    """
-
-    def __init__(self):
-        """
-        Start empty.
-        """
-        self.data = {}
-        self.saves = 0
-
-    async def load(self, module, filename):
-        """
-        Return a copy of what was saved, or None.
-        """
-        return copy.deepcopy(self.data.get((module, filename)))
-
-    async def save(self, module, filename, data, format="yaml", expiry=None, indent=None):
-        """
-        Keep a copy of data.
-        """
-        self.data[(module, filename)] = copy.deepcopy(data)
-        self.saves += 1
-        return True
-
-
-class FakeComponents:
-    """
-    A component registry holding only a storage component, or nothing.
-    """
-
-    def __init__(self, storage):
-        """
-        Hold storage, which may be None.
-        """
-        self.storage = storage
-
-    def get_component(self, name):
-        """
-        The storage component when asked for it.
-        """
-        return self.storage if name == "storage" else None
 
 
 def _check(name, condition, detail=""):
@@ -135,18 +88,18 @@ def _plug(my_predbat, state, entity=PLUGGED_SENSOR):
     my_predbat.ha_interface.dummy_items[entity] = {"state": state}
 
 
-def _restart(my_predbat, storage):
+def _restart(my_predbat, keep_sensor=True):
     """
-    Forget everything held in memory, as a restart does, with storage (or None) as the storage component.
+    Forget everything held in memory, as a restart does - keeping car 0's tracking sensor, or losing it too.
     """
     my_predbat.car_manual_soc_state = {}
-    my_predbat.car_manual_soc_loaded = False
-    my_predbat.components = FakeComponents(storage)
+    if not keep_sensor:
+        my_predbat.ha_interface.dummy_items.pop(my_predbat.car_manual_soc_entity(0), None)
 
 
-def _one_car(my_predbat, args, kwh=None, storage=None):
+def _one_car(my_predbat, args, kwh=None):
     """
-    A single car, with apps.yaml holding only the given car args, fresh records and storage.
+    A single car, with apps.yaml holding only the given car args and no tracking record or sensor.
     """
     for arg in SAVED_ARGS:
         my_predbat.args.pop(arg, None)
@@ -159,7 +112,7 @@ def _one_car(my_predbat, args, kwh=None, storage=None):
     my_predbat.car_charging_soc = [0.0]
     # Car 0's one energy sensor reads the history already loaded for the load forecast - none charged so far
     my_predbat.car_charging_energy = _history([])
-    _restart(my_predbat, storage if storage is not None else FakeStorage())
+    _restart(my_predbat, keep_sensor=False)
     my_predbat.expose_config("car_charging_manual_soc", False)
     my_predbat.car_manual_soc_config()
     if kwh is not None:
@@ -432,59 +385,81 @@ def _run_unplug(my_predbat):
 
 def _run_restart(my_predbat):
     """
-    The records are saved through the storage component, so a restart neither loses nor double counts.
+    The record is published as a sensor, which a restart reads back, so a restart neither loses nor double counts.
     """
     failed = False
     args = {"car_charging_energy": ENERGY_SENSOR, "car_charging_planned": PLUGGED_SENSOR}
-    storage = FakeStorage()
+    sensor = my_predbat.car_manual_soc_entity(0)
+    dummy = my_predbat.ha_interface.dummy_items
 
-    print("Test 27: energy charged while Predbat was down is counted after a restart")
-    _one_car(my_predbat, args, kwh=10.0, storage=storage)
-    _plug(my_predbat, "on")
-    my_predbat.car_charging_energy = _history([])
-    my_predbat.car_manual_soc_track()
-    _since(my_predbat, 120)
-    my_predbat.expose_config("car_charging_manual_soc_kwh", 10.5)
-    my_predbat.car_manual_soc_track()
-    _since(my_predbat, 120)
-    # Saved records only change when the SoC or plug does - move the saved time back as if two hours had passed
-    storage.data[("predbat", "car_manual_soc")]["0"]["since"] = my_predbat.car_manual_soc_state[0]["since"]
-    _restart(my_predbat, storage)
-    my_predbat.car_charging_energy = _history([(90, 3.0), (30, 3.0)])
-    my_predbat.car_manual_soc_track()
-    failed |= _check("t27 counted", abs(_manual_kwh(my_predbat) - 16.5) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
-
-    print("Test 28: ... and not again after a second restart")
-    _restart(my_predbat, storage)
-    my_predbat.car_manual_soc_track()
-    failed |= _check("t28 not twice", abs(_manual_kwh(my_predbat) - 16.5) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
-
-    print("Test 29: an unplug while Predbat was down resets it after the restart")
-    _restart(my_predbat, storage)
-    _plug(my_predbat, "off")
-    my_predbat.car_manual_soc_track()
-    failed |= _check("t29 reset", abs(_manual_kwh(my_predbat)) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
-
-    print("Test 30: without storage a restart counts from now")
+    print("Test 27: the record is published as the car's tracking sensor")
     _one_car(my_predbat, args, kwh=10.0)
     _plug(my_predbat, "on")
-    my_predbat.car_charging_energy = _history([])
+    my_predbat.car_manual_soc_track()
+    my_predbat.expose_config("car_charging_manual_soc_kwh", 10.5)
+    my_predbat.car_manual_soc_track()
+    published = dummy.get(sensor, {})
+    record = my_predbat.car_manual_soc_state[0]
+    failed |= _check("t27 state", published.get("state") == 10.5, "sensor {}".format(published))
+    failed |= _check("t27 since", published.get("since") == record["since"], "sensor {} record {}".format(published, record))
+    failed |= _check("t27 plugged", published.get("plugged") is True, "sensor {}".format(published))
+
+    print("Test 28: energy charged while Predbat was down is counted after a restart")
+    # Two hours pass - the sensor holds the time counting got to, as it would after a real outage
+    dummy[sensor]["since"] = (my_predbat.now_utc - timedelta(minutes=120)).isoformat()
+    _restart(my_predbat)
+    my_predbat.car_charging_energy = _history([(90, 3.0), (30, 3.0)])
+    my_predbat.car_manual_soc_track()
+    failed |= _check("t28 counted", abs(_manual_kwh(my_predbat) - 16.5) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+
+    print("Test 29: ... and not again after a second restart")
+    _restart(my_predbat)
+    my_predbat.car_manual_soc_track()
+    failed |= _check("t29 not twice", abs(_manual_kwh(my_predbat) - 16.5) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+
+    print("Test 30: a value entered while Predbat was down is taken as an edit")
+    _restart(my_predbat)
+    my_predbat.expose_config("car_charging_manual_soc_kwh", 30.0)
+    dummy[sensor]["since"] = (my_predbat.now_utc - timedelta(minutes=120)).isoformat()
+    my_predbat.car_manual_soc_track()
+    failed |= _check("t30 edit kept", abs(_manual_kwh(my_predbat) - 30.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+
+    print("Test 31: an unplug while Predbat was down resets it after the restart")
+    _restart(my_predbat)
+    _plug(my_predbat, "off")
+    my_predbat.car_manual_soc_track()
+    failed |= _check("t31 reset", abs(_manual_kwh(my_predbat)) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+
+    print("Test 32: with no sensor to read back a restart counts from now")
+    _one_car(my_predbat, args, kwh=10.0)
+    _plug(my_predbat, "on")
     my_predbat.car_manual_soc_track()
     _since(my_predbat, 120)
-    _restart(my_predbat, None)
+    _restart(my_predbat, keep_sensor=False)
     my_predbat.car_charging_energy = _history([(90, 3.0)])
     my_predbat.car_manual_soc_track()
-    failed |= _check("t30 from now", abs(_manual_kwh(my_predbat) - 10.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+    failed |= _check("t32 from now", abs(_manual_kwh(my_predbat) - 10.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
 
-    print("Test 31: a cycle where nothing changes does not save")
-    storage = FakeStorage()
-    _one_car(my_predbat, args, kwh=10.0, storage=storage)
+    print("Test 33: a sensor that cannot be read is no record")
+    _one_car(my_predbat, args, kwh=10.0)
+    dummy[sensor] = {"state": "unavailable", "since": (my_predbat.now_utc - timedelta(minutes=120)).isoformat(), "plugged": True}
+    my_predbat.car_charging_energy = _history([(90, 3.0)])
+    my_predbat.car_manual_soc_track()
+    failed |= _check("t33 from now", abs(_manual_kwh(my_predbat) - 10.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+
+    print("Test 34: a cycle where nothing changes publishes nothing")
+    _one_car(my_predbat, args, kwh=10.0)
     my_predbat.car_charging_energy = _history([])
-    my_predbat.car_manual_soc_track()
-    saves = storage.saves
-    _since(my_predbat, 120)
-    my_predbat.car_manual_soc_track()
-    failed |= _check("t31 no save", storage.saves == saves, "saves {} then {}".format(saves, storage.saves))
+    published = []
+    my_predbat.car_manual_soc_publish = lambda car_n: published.append(car_n)
+    try:
+        my_predbat.car_manual_soc_track()
+        first = len(published)
+        _since(my_predbat, 120)
+        my_predbat.car_manual_soc_track()
+    finally:
+        del my_predbat.car_manual_soc_publish
+    failed |= _check("t34 published once", first == 1 and len(published) == 1, "published {}".format(published))
     return failed
 
 
@@ -501,43 +476,43 @@ def _run_fetch(my_predbat):
     my_predbat.car_manual_soc_track()
     _since(my_predbat, 60)
 
-    print("Test 32: a compare.py re-run (save=False) reads the manual SoC without moving it")
+    print("Test 35: a compare.py re-run (save=False) reads the manual SoC without moving it")
     my_predbat.fetch_sensor_data_cars(save=False)
-    failed |= _check("t32 kwh", abs(_manual_kwh(my_predbat) - 10.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
-    failed |= _check("t32 soc", abs(my_predbat.car_charging_soc[0] - 10.0) < 0.001, "soc {}".format(my_predbat.car_charging_soc))
+    failed |= _check("t35 kwh", abs(_manual_kwh(my_predbat) - 10.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+    failed |= _check("t35 soc", abs(my_predbat.car_charging_soc[0] - 10.0) < 0.001, "soc {}".format(my_predbat.car_charging_soc))
 
-    print("Test 33: the live fetch adds the energy and plans from the result")
+    print("Test 36: the live fetch adds the energy and plans from the result")
     my_predbat.fetch_sensor_data_cars(save=True)
     # fetch_sensor_data_cars() takes the charging loss from config
     expected = 10.0 + 2.0 * (1 - float(my_predbat.get_arg("car_charging_loss")))
-    failed |= _check("t33 kwh", abs(_manual_kwh(my_predbat) - expected) < 0.001, "kwh {} expected {}".format(_manual_kwh(my_predbat), expected))
-    failed |= _check("t33 soc", abs(my_predbat.car_charging_soc[0] - expected) < 0.001, "soc {} expected {}".format(my_predbat.car_charging_soc, expected))
+    failed |= _check("t36 kwh", abs(_manual_kwh(my_predbat) - expected) < 0.001, "kwh {} expected {}".format(_manual_kwh(my_predbat), expected))
+    failed |= _check("t36 soc", abs(my_predbat.car_charging_soc[0] - expected) < 0.001, "soc {} expected {}".format(my_predbat.car_charging_soc, expected))
 
-    print("Test 34: a car with no sensors is planned from empty and never written back - no climb to full")
+    print("Test 37: a car with no sensors is planned from empty and never written back - no climb to full")
     _one_car(my_predbat, {}, kwh=0.0)
     my_predbat.fetch_sensor_data_cars(save=True)
-    failed |= _check("t34 soc", abs(my_predbat.car_charging_soc[0]) < 0.001, "soc {}".format(my_predbat.car_charging_soc))
+    failed |= _check("t37 soc", abs(my_predbat.car_charging_soc[0]) < 0.001, "soc {}".format(my_predbat.car_charging_soc))
     my_predbat.car_charging_soc_next = [7.0]
     my_predbat.update_car_manual_soc()
     my_predbat.fetch_sensor_data_cars(save=True)
-    failed |= _check("t34 no climb", abs(my_predbat.car_charging_soc[0]) < 0.001, "soc {}".format(my_predbat.car_charging_soc))
+    failed |= _check("t37 no climb", abs(my_predbat.car_charging_soc[0]) < 0.001, "soc {}".format(my_predbat.car_charging_soc))
 
-    print("Test 35: a car read from its SoC sensor shows the sensor's level in the manual kWh entity")
+    print("Test 38: a car read from its SoC sensor shows the sensor's level in the manual kWh entity")
     _one_car(my_predbat, {"car_charging_soc": SOC_SENSOR}, kwh=5.0)
     dummy[SOC_SENSOR] = 50.0
     my_predbat.fetch_sensor_data_cars(save=False)
-    failed |= _check("t35 compare run publishes nothing", abs(_manual_kwh(my_predbat) - 5.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+    failed |= _check("t38 compare run publishes nothing", abs(_manual_kwh(my_predbat) - 5.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
     my_predbat.fetch_sensor_data_cars(save=True)
-    failed |= _check("t35 mirrored", abs(_manual_kwh(my_predbat) - 30.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
-    failed |= _check("t35 soc", abs(my_predbat.car_charging_soc[0] - 30.0) < 0.001, "soc {}".format(my_predbat.car_charging_soc))
+    failed |= _check("t38 mirrored", abs(_manual_kwh(my_predbat) - 30.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+    failed |= _check("t38 soc", abs(my_predbat.car_charging_soc[0] - 30.0) < 0.001, "soc {}".format(my_predbat.car_charging_soc))
 
-    print("Test 36: with the switch forcing manual SoC the sensor is ignored and the kWh value kept")
+    print("Test 39: with the switch forcing manual SoC the sensor is ignored and the kWh value kept")
     my_predbat.expose_config("car_charging_manual_soc", True)
     my_predbat.car_manual_soc_config()
     my_predbat.expose_config("car_charging_manual_soc_kwh", 12.0)
     my_predbat.fetch_sensor_data_cars(save=True)
-    failed |= _check("t36 kept", abs(_manual_kwh(my_predbat) - 12.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
-    failed |= _check("t36 soc", abs(my_predbat.car_charging_soc[0] - 12.0) < 0.001, "soc {}".format(my_predbat.car_charging_soc))
+    failed |= _check("t39 kept", abs(_manual_kwh(my_predbat) - 12.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+    failed |= _check("t39 soc", abs(my_predbat.car_charging_soc[0] - 12.0) < 0.001, "soc {}".format(my_predbat.car_charging_soc))
     my_predbat.expose_config("car_charging_manual_soc", False)
     return failed
 
@@ -547,11 +522,12 @@ def run_car_manual_soc_tests(my_predbat):
     Run the manual car SoC tests, restoring the shared fixture afterwards.
     """
     print("**** Running car_manual_soc tests ****")
-    saved = {field: getattr(my_predbat, field, None) if field == "components" else copy.deepcopy(getattr(my_predbat, field, None)) for field in STATE_FIELDS}
+    saved = {field: copy.deepcopy(getattr(my_predbat, field, None)) for field in STATE_FIELDS}
     saved_args = {arg: copy.deepcopy(my_predbat.args[arg]) for arg in SAVED_ARGS + ("octopus_intelligent_slot",) if arg in my_predbat.args}
     saved_config = {name: my_predbat.get_arg(name, None) for name in SAVED_CONFIG}
     dummy = my_predbat.ha_interface.dummy_items
-    saved_dummy = {entity: copy.deepcopy(dummy.get(entity)) for entity in (ENERGY_SENSOR, PLUGGED_SENSOR, PLANNED_SENSOR, SOC_SENSOR)}
+    tracked = tuple(my_predbat.car_manual_soc_entity(car_n) for car_n in range(2))
+    saved_dummy = {entity: copy.deepcopy(dummy.get(entity)) for entity in (ENERGY_SENSOR, PLUGGED_SENSOR, PLANNED_SENSOR, SOC_SENSOR) + tracked}
 
     failed = False
     try:

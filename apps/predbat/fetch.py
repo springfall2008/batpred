@@ -1968,10 +1968,11 @@ class Fetch:
         """
         Update the manual SoC of each manually tracked car for what has happened since the last cycle.
 
-        Each car has a record in car_manual_soc_state, saved through the storage component so a restart picks
-        up where it left off: the value Predbat last saw or wrote, the time charger energy has been counted up
-        to, and the plugged-in sensor's last reading. The entities' own change times are not used - Home
-        Assistant only moves them when the state changes, while Predbat's own database moves them on every write.
+        Each car has a record in car_manual_soc_state: the value Predbat last saw or wrote, the time charger energy
+        has been counted up to, and the plugged-in sensor's last reading. It is published as
+        sensor.predbat_car_manual_soc_tracked[_N] (see car_manual_soc_publish()), which a restart reads back, so
+        tracking picks up where it left off. The entities' own change times are not used - Home Assistant only
+        moves them when the state changes, while Predbat's own database moves them on every write.
 
         - A value that is not the one in the record was entered by the user. It is kept, and counting starts
           again from now, so no energy is added on top of it.
@@ -1981,10 +1982,8 @@ class Fetch:
           unknown is no reading, so a sensor dropping out never resets the car, and a value entered while it is
           unplugged is kept.
 
-        A car with no record - new, or with no storage across a restart - starts counting from now.
+        A car with no record - new, or with no sensor to read back after a restart - starts counting from now.
         """
-        self.car_manual_soc_restore()
-        save = False
         for car_n in range(self.num_cars):
             if car_n >= len(self.car_charging_manual_soc) or not self.car_charging_manual_soc[car_n]:
                 continue
@@ -1996,6 +1995,8 @@ class Fetch:
             plugged = self.car_plugged_in_now(car_n, plug_arg) if plug_arg else None
 
             record = self.car_manual_soc_state.get(car_n)
+            if record is None:
+                record = self.car_manual_soc_read(car_n)
             since = None
             if isinstance(record, dict):
                 try:
@@ -2032,15 +2033,14 @@ class Fetch:
             if plugged is None and record is not None:
                 plugged = record.get("plugged")
             record_new = {"soc": soc_new, "since": since.isoformat(), "plugged": plugged}
-            # Saved when the SoC or the plug changes. A time that only moved on is kept in memory: it moved with nothing
-            # charged, or with the SoC already at the battery size, so after a restart the saved, older time gives the same SoC
-            if record is None or record.get("soc") != soc_new or record.get("plugged") != plugged:
-                save = True
+            # Published when the SoC or the plug changes. A time that only moved on is kept in memory: it moved with nothing
+            # charged, or with the SoC already at the battery size, so after a restart the published, older time gives the same SoC
+            publish = record is None or record.get("soc") != soc_new or record.get("plugged") != plugged
             self.car_manual_soc_state[car_n] = record_new
+            if publish:
+                self.car_manual_soc_publish(car_n)
             if car_n < len(self.car_charging_soc):
                 self.car_charging_soc[car_n] = soc_new
-        if save:
-            self.car_manual_soc_save()
 
     def car_manual_soc_written(self, car_n, soc):
         """
@@ -2050,7 +2050,45 @@ class Fetch:
         record = self.car_manual_soc_state.get(car_n)
         if isinstance(record, dict) and record.get("soc") != soc:
             record["soc"] = soc
-            self.car_manual_soc_save()
+            self.car_manual_soc_publish(car_n)
+
+    def car_manual_soc_entity(self, car_n):
+        """
+        The sensor car_n's tracking record is published as.
+        """
+        return "sensor." + self.prefix + "_car_manual_soc_tracked" + ("" if car_n == 0 else "_" + str(car_n))
+
+    def car_manual_soc_publish(self, car_n):
+        """
+        Publish car_n's tracking record: the SoC as the state, with the time energy is counted from and the last plug reading as attributes.
+        """
+        record = self.car_manual_soc_state.get(car_n, {})
+        self.dashboard_item(
+            self.car_manual_soc_entity(car_n),
+            state=record.get("soc"),
+            attributes={
+                "since": record.get("since"),
+                "plugged": record.get("plugged"),
+                "friendly_name": "Car {} manual SoC tracked".format(car_n),
+                "unit_of_measurement": "kWh",
+                "icon": "mdi:ev-station",
+            },
+        )
+
+    def car_manual_soc_read(self, car_n):
+        """
+        Read car_n's tracking record back from its sensor, as after a restart, or None when there is none to read.
+        """
+        entity_id = self.car_manual_soc_entity(car_n)
+        try:
+            soc = float(self.get_state_wrapper(entity_id=entity_id, default=None))
+        except (ValueError, TypeError):
+            return None
+        since = self.get_state_wrapper(entity_id=entity_id, attribute="since", default=None)
+        plugged = self.get_state_wrapper(entity_id=entity_id, attribute="plugged", default=None)
+        if not isinstance(since, str):
+            return None
+        return {"soc": dp3(soc), "since": since, "plugged": plugged if isinstance(plugged, bool) else None}
 
     def car_manual_soc_mirror(self):
         """

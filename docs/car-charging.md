@@ -897,7 +897,8 @@ Set the value to the car's current charge level before charging. Predbat then ke
     ready to be set again when the car is next plugged in. A sensor that becomes unavailable does not reset it, and a value you enter while the car is unplugged is kept.
     If your **car_charging_planned** sensor also turns off when charging finishes with the car still plugged in, set **car_charging_plugged** to a sensor that does not, or the value will be reset then too.
     - A value you enter is the new starting point: energy is counted from when you entered it.
-    - Predbat saves where it has got to in its cache, so charging or unplugging while Predbat is restarting is still counted.<BR>
+    - Predbat publishes where it has got to as **sensor.predbat_car_manual_soc_tracked** (`_1`, `_2`... for further cars): the tracked kWh, with the time energy is counted from (`since`) and the last plugged-in reading (`plugged`) as attributes.
+    It reads this back when it restarts, so charging or unplugging while Predbat is restarting is still counted.<BR>
 NB: **input_number.predbat_car_charging_manual_soc_kwh** must be set to the current kWh value of your car battery NOT a percentage SoC figure
 otherwise, Predbat won't know how much energy there currently is in the battery.<BR>
 NB2: If you have **car_charging_soc** set and working for your car SoC sensor in `apps.yaml`, leave **switch.predbat_car_charging_manual_soc** Off as otherwise the car SoC sensor will be ignored

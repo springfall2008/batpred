@@ -66,7 +66,6 @@ else:
     print("Running in compiled mode; skipping local file checks and auto-update.")
 
 from const import (
-    CAR_MANUAL_SOC_STORE_DAYS,
     COMPONENT_ERROR_STATUS_PREFIX,
     COMPONENT_ERROR_STATUS_SUFFIX,
     REPEAT_FULL_LOG_SECONDS,
@@ -553,9 +552,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.car_charging_hold = False
         self.car_charging_manual_soc = []
         self.car_charging_manual_soc_energy = []
-        # Each manually tracked car's record, saved through the storage component - see car_manual_soc_track()
+        # Each manually tracked car's record, also published as a sensor so a restart can read it back - see car_manual_soc_track()
         self.car_manual_soc_state = {}
-        self.car_manual_soc_loaded = False
         self.car_charging_threshold = 99
         self.car_charging_energy = {}
         self.car_charging_energy_warned = False
@@ -919,44 +917,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.log("Saved plan to storage")
         except Exception as e:
             self.log("Warning: Failed to save plan: {}".format(e))
-
-    def car_manual_soc_restore(self):
-        """
-        Load the manually tracked cars' records saved by car_manual_soc_save(), once after startup.
-
-        Without a storage component, or with nothing saved, the records start empty and each car counts from now.
-        """
-        if self.car_manual_soc_loaded:
-            return
-        self.car_manual_soc_loaded = True
-        storage = self.components.get_component("storage") if self.components else None
-        if not storage:
-            return
-        try:
-            data = run_async(storage.load("predbat", "car_manual_soc"))
-        except Exception as e:
-            self.log("Warn: Failed to load the manual car SoC records: {}".format(e))
-            return
-        if isinstance(data, dict):
-            for car_n, record in data.items():
-                try:
-                    self.car_manual_soc_state[int(car_n)] = record
-                except (ValueError, TypeError):
-                    pass
-
-    def car_manual_soc_save(self):
-        """
-        Save the manually tracked cars' records through the storage component, so a restart picks up where they left off.
-        """
-        storage = self.components.get_component("storage") if self.components else None
-        if not storage:
-            return
-        try:
-            # Real wall-clock time, as for save_plan()
-            expiry = datetime.now(timezone.utc) + timedelta(days=CAR_MANUAL_SOC_STORE_DAYS)
-            run_async(storage.save("predbat", "car_manual_soc", {str(car_n): record for car_n, record in self.car_manual_soc_state.items()}, format="json", expiry=expiry))
-        except Exception as e:
-            self.log("Warn: Failed to save the manual car SoC records: {}".format(e))
 
     def load_plan(self):
         """Restore a previously saved plan from storage if it is recent enough."""
