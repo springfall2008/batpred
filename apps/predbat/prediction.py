@@ -201,6 +201,7 @@ class Prediction(PredictionBatch):
             self.rate_import = base.rate_import
             self.rate_export = base.rate_export
             self.io_adjusted = base.io_adjusted
+            self.io_confirmed_credit = base.io_confirmed_credit
             # The tariff's own highest import rate, without event rewards - the floor for a dispatch that goes away
             tariff_max = getattr(base, "rate_import_tariff_max", None)
             self.rate_max = tariff_max if tariff_max is not None else base.rate_max
@@ -570,6 +571,7 @@ class Prediction(PredictionBatch):
         rate_import = self.rate_import
         rate_export = self.rate_export
         io_adjusted = self.io_adjusted
+        io_confirmed_credit = self.io_confirmed_credit
 
         # Data structures creating during the prediction
         predict_soc = {}
@@ -751,6 +753,7 @@ class Prediction(PredictionBatch):
             minute_absolute = minute + self.minutes_now
             prev_soc = soc
             reserve_expected = reserve
+            force_charging = False
             import_rate = rate_import.get(minute_absolute, 0)
             dispatch_rate = import_rate
             dispatch_gone = io_adjusted.get(minute_absolute, 0) and pv_scenario == PV_SCENARIO_PV10 and minute > 30
@@ -1174,6 +1177,7 @@ class Prediction(PredictionBatch):
                 else:
                     battery_draw = -max(min(charge_rate_now_curve_step, max(charge_limit_n - soc, pv_now)), 0, -battery_to_max)
                 battery_state = "f+"
+                force_charging = True
                 first_charge = min(first_charge, minute)
 
                 if inverter_hybrid:
@@ -1363,6 +1367,11 @@ class Prediction(PredictionBatch):
             if battery_draw > 0:
                 soc = max(soc - battery_draw / battery_loss_discharge, reserve_expected)
             else:
+                if force_charging and io_confirmed_credit:
+                    # Bird in hand: score only credit for what a charge window stores in a confirmed dispatch run
+                    credit = io_confirmed_credit.get(minute_absolute, 0)
+                    if credit:
+                        metric_keep -= min(-battery_draw * battery_loss, soc_max - soc) * credit
                 soc = min(soc - battery_draw * battery_loss, soc_max)
 
             # Iboost finally count

@@ -33,6 +33,7 @@ armhf
 armv
 ASHP
 asn
+astimezone
 asyncio
 atfork
 atleast
@@ -166,6 +167,7 @@ dlimit
 dlopen
 dnoregion
 docstrings
+dschg
 dstamp
 dstart
 dtype
@@ -275,6 +277,8 @@ gridconsumptionpower
 Groq
 growatt
 growattsph
+guoxia
+guoxiatech
 GWMQTT
 HACS
 hadashboard
@@ -308,6 +312,7 @@ idag
 idef
 idetails
 idxs
+iess
 iflux
 importlimit
 inday
@@ -482,6 +487,8 @@ oversizing
 overvoltage
 ownerapi
 pac
+packettypes
+paho
 parseable
 pbat
 pbgw
@@ -525,6 +532,7 @@ pseudonymised
 pseudonymises
 psum
 pthread
+puback
 pvbat
 pvenergytotal
 pvlib
@@ -549,6 +557,7 @@ rarr
 reactivepower
 readback
 readbacks
+reasoncodes
 recp
 redownload
 Referer
@@ -609,6 +618,7 @@ slugified
 slugifies
 slugify
 slugifying
+smartflex
 snakeviz
 snprintf
 socb
@@ -644,6 +654,7 @@ Stromligning
 strptime
 strtod
 Strømligning
+suback
 subclassing
 submessage
 substep
@@ -758,6 +769,7 @@ xlabel
 xlim
 xload
 xrtkq
+xtest
 xticks
 xxabcdefyy
 yaxis

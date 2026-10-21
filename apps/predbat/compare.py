@@ -102,6 +102,7 @@ COMPARE_PLAN_STATE = (
     "plan_last_updated_minutes",
     "rate_best_cost_threshold_charge",
     "rate_best_cost_threshold_export",
+    "io_confirmed_tiebreak",
     "clipping_amplification",
     "clipping_auto_amp",
     "clipping_auto_end_offset",
@@ -142,6 +143,8 @@ COMPARE_RESTORED_STATE = (
         "export_today_now",
         "octopus_intelligent_charging",
         "soc_kw",
+        # Rebuilt by each tariff's fetch, which the live plan's Prediction must not inherit
+        "io_confirmed_credit",
         "clipping_allocated_today",
         "clipping_allocated_today_date",
     )
