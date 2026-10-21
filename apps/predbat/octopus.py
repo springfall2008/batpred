@@ -1482,7 +1482,7 @@ class OctopusAPI(ComponentBase):
                     {"start": start, "end": end, "octopoints_per_kwh": reward, "rewarded_octopoints": event.get("rewardGivenInOctoPoints", None), "id": event_id, "code": event_code.get(event_id, None), "event_type": event_type.get(event_id, None)}
                 )
 
-        saving_attributes = {"friendly_name": "Octopus Intelligent Saving Sessions", "icon": "mdi:currency-usd", "joined_events": return_joined_events, "available_events": return_available_events}
+        saving_attributes = {"friendly_name": "Octopus Intelligent Saving Sessions", "icon": "mdi:currency-gbp", "joined_events": return_joined_events, "available_events": return_available_events}
 
         # Check if currently in an active saving session
         # Handle both old API keys (start/end) and new API keys (startAt/endAt)
@@ -1507,7 +1507,7 @@ class OctopusAPI(ComponentBase):
             code = event.get("code", None)
             if code:
                 possible_codes.append(code)
-        self.dashboard_item(self.get_entity_name("select", "saving_session_join"), "", attributes={"options": possible_codes, "friendly_name": "Join Octopus Saving Session Event", "icon": "mdi:currency-usd"}, app="octopus")
+        self.dashboard_item(self.get_entity_name("select", "saving_session_join"), "", attributes={"options": possible_codes, "friendly_name": "Join Octopus Saving Session Event", "icon": "mdi:currency-gbp"}, app="octopus")
 
         # Publish free electricity events from flexibility API
         free_electric_events = []

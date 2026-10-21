@@ -78,7 +78,7 @@ from const import (
     INVERTER_QUICK_UPDATE_SECONDS,
     DEBUG_ENABLE_MAX_HOURS,
 )
-from config import APPS_SCHEMA, CONFIG_ITEMS, apply_currency_icon
+from config import APPS_SCHEMA, CONFIG_ITEMS, apply_currency_icon, currency_icon
 import debug_history
 from utils import (
     strptime_aware,
@@ -345,10 +345,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.stop_thread = False
 
         # Forecast.solar API request metrics for monitoring
-        
+
         # get currency_symbols from apps.yaml, default to £p, then set the icons on money entities based on the major currency symbol
         self.currency_symbols = self.args.get("currency_symbols", "£p")
         apply_currency_icon(self.CONFIG_ITEMS, self.currency_symbols[0])
+        self.currency_icon = currency_icon(self.currency_symbols[0])
 
         self.watch_list = []
         self.restart_active = False

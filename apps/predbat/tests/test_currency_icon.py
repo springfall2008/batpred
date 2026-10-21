@@ -55,7 +55,7 @@ def test_currency_icon_lookup(my_predbat):
 
 def test_apply_currency_icon(my_predbat):
     """
-    Only items that carry the placeholder icon AND are priced in the minor currency unit have their icon updated
+    Only items that carry the placeholder icon AND are priced in the minor currency unit have the icon updated
     """
     print("**** test_apply_currency_icon ****")
 
@@ -71,9 +71,9 @@ def test_apply_currency_icon(my_predbat):
     apply_currency_icon(items, "€")
     by_name = {item["name"]: item for item in items}
 
-    assert by_name["minor"]["icon"] == "mdi:currency-eur", "p item should have their icon updated, got {}".format(by_name["minor"]["icon"])
-    assert by_name["minor_per_kwh"]["icon"] == "mdi:currency-eur", "p/kWh item should have their icon updated, got {}".format(by_name["minor_per_kwh"]["icon"])
-    print("✓ p and p/kWh items have their icons updated")
+    assert by_name["minor"]["icon"] == "mdi:currency-eur", "p item should have icon updated, got {}".format(by_name["minor"]["icon"])
+    assert by_name["minor_per_kwh"]["icon"] == "mdi:currency-eur", "p/kWh item should have icon updated, got {}".format(by_name["minor_per_kwh"]["icon"])
+    print("✓ p and p/kWh items have had icons updated")
 
     assert by_name["energy_kwh"]["icon"] == CURRENCY_ICON_PLACEHOLDER, "kWh item must keep its icon, got {}".format(by_name["energy_kwh"]["icon"])
     assert by_name["duration"]["icon"] == CURRENCY_ICON_PLACEHOLDER, "minutes item must keep its icon, got {}".format(by_name["duration"]["icon"])
@@ -109,12 +109,12 @@ def test_apply_currency_icon_real_config(my_predbat):
     for before_icon, after in zip(original_icons, items):
         eligible = before_icon == CURRENCY_ICON_PLACEHOLDER and after.get("unit") in CURRENCY_ITEM_UNITS
         if eligible:
-            assert after["icon"] == "mdi:currency-eur", "{} should have their icon updated, got {}".format(after["name"], after["icon"])
+            assert after["icon"] == "mdi:currency-eur", "{} should have icon updated, got {}".format(after["name"], after["icon"])
             changed += 1
         else:
             assert after.get("icon") == before_icon, "{} icon should be unchanged, got {}".format(after["name"], after.get("icon"))
     assert changed > 0, "No currency items found in CONFIG_ITEMS - placeholder or unit guard out of date?"
-    print("✓ {} currency items had their icon updated, all other item icons unchanged".format(changed))
+    print("✓ {} currency items icons updated, all other item icons unchanged".format(changed))
 
     assert [item.get("icon") for item in CONFIG_ITEMS] == original_icons, "Module-level CONFIG_ITEMS must not be modified"
     print("✓ Module-level CONFIG_ITEMS is not modified")
@@ -129,10 +129,13 @@ def test_currency_icon_reaches_ha(my_predbat):
     """
     print("**** test_currency_icon_reaches_ha ****")
 
-    name = "metric_min_improvement"
+    # Use an item with no enable condition: expert_mode items are not published when expert mode is off
+    name = "manual_import_value"
     item = my_predbat.config_index.get(name)
     assert item is not None, "{} config item not found".format(name)
-    entity = "input_number.predbat_" + name
+    assert item.get("unit") in CURRENCY_ITEM_UNITS, "{} is no longer a currency item (unit {})".format(name, item.get("unit"))
+    assert my_predbat.user_config_item_enabled(item), "{} must be enabled for this test".format(name)
+    entity = item.get("entity") or "input_number.predbat_" + name
 
     saved_icon = item.get("icon")
     saved_value = item.get("value", item.get("default"))
@@ -145,12 +148,27 @@ def test_currency_icon_reaches_ha(my_predbat):
         my_predbat.expose_config(name, item.get("default"), force_ha=True)
         state = my_predbat.ha_interface.dummy_items.get(entity)
         assert isinstance(state, dict), "Expected a dict for {} in dummy_items, got {!r}".format(entity, state)
-        icon = state.get("attributes", {}).get("icon")
-        assert icon == "mdi:currency-eur", "HA entity icon should be mdi:currency-eur, got {!r}".format(icon)
-        print("✓ expose_config writes the updated icon value to the HA entity")
+        icon = state.get("icon")
+        assert icon == "mdi:currency-eur", "HA entity icon should be mdi:currency-eur, got {!r}; stored state was {!r}".format(icon, state)
+        print("✓ expose_config writes the updated icon to the HA entity")
     finally:
         item["icon"] = saved_icon
         my_predbat.expose_config(name, saved_value, force_ha=True)
 
     print("✓ Test passed: currency icon reaches the HA entity")
+    return False
+
+
+def test_predbat_currency_icon_attribute(my_predbat):
+    """
+    Check the instance-level icon used by the output/plan dashboard writes follows the primary currency symbol
+    """
+    print("**** test_predbat_currency_icon_attribute ****")
+
+    assert hasattr(my_predbat, "currency_icon"), "my_predbat.currency_icon not set - is it assigned in reset()?"
+    expected = currency_icon(my_predbat.currency_symbols[0])
+    assert my_predbat.currency_icon == expected, "currency_icon should be {} for symbol {!r}, got {}".format(expected, my_predbat.currency_symbols[0], my_predbat.currency_icon)
+    print("✓ my_predbat.currency_icon matches the primary currency symbol ({})".format(expected))
+
+    print("✓ Test passed: currency_icon attribute is set from currency_symbols")
     return False

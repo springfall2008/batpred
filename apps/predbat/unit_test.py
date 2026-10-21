@@ -723,7 +723,6 @@ def main():
         ("currency_icon_apply", test_apply_currency_icon, "Currency icon apply/unit guard tests", False),
         ("currency_icon_config", test_apply_currency_icon_real_config, "Currency icon real CONFIG_ITEMS tests", False),
         ("currency_icon_ha", test_currency_icon_reaches_ha, "Currency icon reaches HA entity tests", False),
-
         ("validate_config", test_validate_config, "APPS_SCHEMA validator tests (string types, sensor boolean states)", False),
         ("get_arg_missing_index", test_get_arg_missing_index_uses_default_quietly, "get_arg missing (out-of-range index) vs malformed numeric coercion tests", False),
         ("validate_config_retry", test_validate_config_retry, "Config validation retry-after-failure tests (#4379)", False),

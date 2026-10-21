@@ -171,7 +171,7 @@ pred_bat:
   - input_number.indevolt_charge_rate     # helper 5, range 0 - <MAX_POWER_W>
   discharge_rate:
   - input_number.indevolt_discharge_rate  # helper 6, range 0 - <MAX_POWER_W>
-  
+
   # Same story for charge_limit: has_target_soc is true, so Predbat needs
   # somewhere to write the target SoC even though the real target goes as a
   # parameter to indevolt.charge. Without it every run ends with "No

@@ -314,7 +314,8 @@ You must define two currency_symbol entries, your main currency e.g. £, € or 
     - 'p'
 ```
 
-Note that the currency icon on 'money' entities that Predbat outputs (e.g. 'predbat.cost_today') is automatically set to the correct icon using the main currency symbol, but MDI icons don't exist for every currency, including Danish, Norwegian and Swedish Crown.  For unmatched currencies Predbat will use a cash icon instead.
+Note that the currency icon on 'money' input_number controls and output entities that Predbat creates (e.g. 'input_number.predbat_metric_min_improvement_plan' and 'predbat.cost_today') are automatically set to the correct icon using the main currency symbol.
+Unfortunately MDI icons don't exist for every currency, including Danish, Norwegian and Swedish Crown.  For unmatched currencies Predbat will use a cash icon instead.
 
 ### template
 
