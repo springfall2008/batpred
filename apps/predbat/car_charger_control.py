@@ -199,8 +199,8 @@ class CarChargerControl:
         """Has another charger component (Ohme) claimed car 0's Intelligent car wiring.
 
         The claim is for car 0 alone, the car that component wires. Since #5443 it covers only the
-        ready time and charge limit: the Ohme supplies the planned slots, and the Octopus component
-        goes on wiring its own dispatch sensors into octopus_intelligent_slot, one per device. So a
+        ready time and charge limit: the Octopus component goes on wiring its own dispatch sensors
+        into octopus_intelligent_slot, one per device, and they supply the car slots. So a
         second car has a sensor of its own and is judged on what that sensor says.
         """
         owner = getattr(self.base, "car_slot_owner", None)

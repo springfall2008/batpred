@@ -582,7 +582,7 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         slot_source = self.octopus_dispatch_sensor() if slot_mode == SLOT_MODE_INTELLIGENT else None
         if slot_mode == SLOT_MODE_INTELLIGENT and (slot_source != self.slot_source or self.slot_mode_applied != SLOT_MODE_INTELLIGENT):
             if slot_source:
-                self.log("Info: Ohme API: Taking the planned car slots from Ohme and the completed dispatches from {}".format(slot_source))
+                self.log("Info: Ohme API: Taking the car slots from {}, and the ready time and charge limit from Ohme".format(slot_source))
             else:
                 self.log("Info: Ohme API: No Octopus dispatch sensor is set in octopus_intelligent_slot, so the completed car slots come from Ohme too - they are only kept until the car is unplugged")
         self.slot_source = slot_source
@@ -591,12 +591,12 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         """
         The sensor holding Octopus's own record of the car's dispatches, or None when there is not one.
 
-        Ohme knows the charge that is planned sooner and better than Octopus reports it, but only for
-        the session in progress: unplug the car and every slot it charged in is gone, and with them
-        the off-peak rate those minutes were billed at (#5413). Octopus keeps its completed dispatches,
-        so where octopus_intelligent_slot already points at a sensor of Octopus's - wired by the
-        Octopus component, or set in apps.yaml to the Octopus Energy integration's - that sensor is
-        left as the record of what has been dispatched and Ohme supplies the plan beside it.
+        Where octopus_intelligent_slot already points at a sensor of Octopus's - wired by the Octopus
+        component, or set in apps.yaml to the Octopus Energy integration's - that sensor supplies the
+        car slots, planned and completed, and Ohme only the ready time and charge limit (see
+        wire_planned_slots()). Without one, Ohme's session slots are all there is, though they only
+        last the session: unplug the car and every slot it charged in is gone, and with them the
+        off-peak rate those minutes were billed at (#5413).
 
         An Ohme sensor is not such a record, whether ours or the Ohme integration's. Nor is an
         unmatched regex from the apps.yaml default, still its literal "re:" string at this point.
@@ -768,28 +768,34 @@ class OhmeAPI(ComponentBase, CarChargerControl):
 
     def clear_planned_slots(self):
         """
-        Take the planned slot arg, and the ready time and charge limit wired with it, back off the Ohme entities.
+        Take the ready time and charge limit wire_planned_slots() made back off the Ohme entities, and any planned slot arg still on them.
 
         For leaving the wiring wire_planned_slots() made, where octopus_intelligent_slot was never
-        Ohme's and so clear_car_slots() finds nothing to do. Anything since pointed elsewhere is left.
+        Ohme's and so clear_car_slots() finds nothing to do. Anything since pointed elsewhere is left,
+        and Octopus's sensor is only cleared when it has no more dispatches to give, and Ohme's wiring
+        was still beside it.
         """
+        ours = False
         existing = self.get_arg("octopus_intelligent_planned_slot", default=None, indirect=False)
         if isinstance(existing, list) and len(existing) == 1:
             existing = existing[0]
-        if existing != SLOT_ACTIVE_ENTITY:
-            return
-        self.set_arg("octopus_intelligent_planned_slot", [])
-        slot = self.get_arg("octopus_intelligent_slot", default=None, indirect=False)
-        if isinstance(slot, list) and len(slot) == 1:
-            slot = slot[0]
-        if self.dispatch_sensor_spent(slot):
-            self.set_arg("octopus_intelligent_slot", [])
+        if existing == SLOT_ACTIVE_ENTITY:
+            self.set_arg("octopus_intelligent_planned_slot", [])
+            ours = True
         for arg in ("octopus_ready_time", "octopus_charge_limit"):
             current = self.get_arg(arg, default=None, indirect=False)
             if isinstance(current, list) and len(current) == 1:
                 current = current[0]
             if current == CAR_DISCOVERY_ENTITY_SPEC[arg]["entity_id"]:
                 self.set_arg(arg, [])
+                ours = True
+        if not ours:
+            return
+        slot = self.get_arg("octopus_intelligent_slot", default=None, indirect=False)
+        if isinstance(slot, list) and len(slot) == 1:
+            slot = slot[0]
+        if self.dispatch_sensor_spent(slot):
+            self.set_arg("octopus_intelligent_slot", [])
 
     def wire_car_slots(self):
         """
@@ -803,12 +809,20 @@ class OhmeAPI(ComponentBase, CarChargerControl):
 
     def wire_planned_slots(self):
         """
-        Point the planned slot arg at the Ohme slots, leaving octopus_intelligent_slot on Octopus's sensor.
+        Leave the car slots to Octopus's sensor in octopus_intelligent_slot, wiring only the ready time and charge limit to Ohme.
 
-        The ready time and charge limit are Ohme's either way: they are set on the charger, which is
-        what Octopus is scheduling.
+        Octopus's sensor carries the planned dispatches as well as the completed ones. Ohme's session
+        slots used to be read as the plan beside it, but on Intelligent they are a relayed copy of the
+        same dispatches: minutes behind, sometimes stale for hours, sometimes missing one Octopus still
+        has, and with no source - so a boost started from the Ohme app was priced as an off-peak
+        dispatch, where Octopus lists it as BOOST. What Ohme did have first, the half hour charged on
+        plug-in and the plan through Octopus's re-plans, the Octopus side now covers itself (see
+        OctopusAPI.planned_dispatches_for_state() and Octopus.octopus_charging_unlisted()).
+
+        The ready time and charge limit are Ohme's: they are set on the charger, which is what Octopus
+        is scheduling.
         """
-        self.set_arg("octopus_intelligent_planned_slot", [SLOT_ACTIVE_ENTITY])
+        self.set_arg("octopus_intelligent_planned_slot", [])
         self.set_arg("octopus_ready_time", CAR_DISCOVERY_ENTITY_SPEC["octopus_ready_time"]["entity_id"])
         self.set_arg("octopus_charge_limit", CAR_DISCOVERY_ENTITY_SPEC["octopus_charge_limit"]["entity_id"])
 

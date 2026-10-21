@@ -2468,7 +2468,7 @@ def _test_ohme_run_iog_device_changes(my_predbat=None):
     assert _ohme_run_poll(api, seconds=360) == [False], "Expected plain dispatches from the Ohme"
     assert api.slot_mode == "octopus_intelligent" and api.base.car_slot_owner == "ohme", f"Expected Ohme to claim the slots, got {api.slot_mode} owner {api.base.car_slot_owner}"
     assert api.args["octopus_intelligent_slot"] == [OCTOPUS_DISPATCH_ENTITY], f"Expected Octopus's sensor kept for the completed dispatches, got {api.args}"
-    assert api.args["octopus_intelligent_planned_slot"] == ["binary_sensor.predbat_ohme_slot_active"], f"Expected the planned slots from Ohme, got {api.args}"
+    assert api.args["octopus_intelligent_planned_slot"] == [], f"Expected the planned slots left to Octopus's sensor, got {api.args}"
     assert api.args["octopus_ready_time"] == "select.predbat_ohme_target_time", f"Expected the Ohme ready time, got {api.args}"
 
     # Smart charging suspended on it: no dispatches from anyone, so the Ohme schedule is the plan at the
@@ -2682,7 +2682,7 @@ def _test_ohme_iog_planned_slots_beside_octopus(my_predbat=None):
 
     assert api.base.car_slot_owner == "ohme", f"Expected ohme to claim the ready time and charge limit, got {api.base.car_slot_owner}"
     assert api.args["octopus_intelligent_slot"] == [OCTOPUS_DISPATCH_ENTITY], f"Expected Octopus's sensor left as the completed record, got {api.args['octopus_intelligent_slot']}"
-    assert api.args["octopus_intelligent_planned_slot"] == ["binary_sensor.predbat_ohme_slot_active"], f"Expected the planned slots from Ohme, got {api.args.get('octopus_intelligent_planned_slot')}"
+    assert api.args["octopus_intelligent_planned_slot"] == [], f"Expected the planned slots left to Octopus's sensor, got {api.args.get('octopus_intelligent_planned_slot')}"
     assert api.args["octopus_ready_time"] == "select.predbat_ohme_target_time", f"Expected the Ohme ready time, got {api.args['octopus_ready_time']}"
     assert api.args["octopus_charge_limit"] == "number.predbat_ohme_target_percent", f"Expected the Ohme charge limit, got {api.args['octopus_charge_limit']}"
 
@@ -2709,14 +2709,14 @@ def _test_ohme_run_iog_dispatch_sensor_followed(my_predbat=None):
     assert _ohme_run_poll(api, first=True) == [False], "Expected plain dispatches on Intelligent"
     assert api.slot_mode == "octopus_intelligent" and api.slot_source == OCTOPUS_DISPATCH_ENTITY, f"Expected the Octopus sensor found, got {api.slot_mode} {api.slot_source}"
     assert api.args["octopus_intelligent_slot"] == [OCTOPUS_DISPATCH_ENTITY], f"Expected Octopus's sensor kept, got {api.args}"
-    assert api.args["octopus_intelligent_planned_slot"] == [ohme_entity], f"Expected the planned slots from Ohme, got {api.args}"
-    assert any("completed dispatches from {}".format(OCTOPUS_DISPATCH_ENTITY) in msg for msg in api.log_messages), f"Expected the split to be logged, got {api.log_messages}"
+    assert api.args["octopus_intelligent_planned_slot"] == [], f"Expected the planned slots left to Octopus's sensor, got {api.args}"
+    assert any("car slots from {}".format(OCTOPUS_DISPATCH_ENTITY) in msg for msg in api.log_messages), f"Expected the split to be logged, got {api.log_messages}"
 
     # Nothing moving is not re-wired or logged again
     api.args["octopus_ready_time"] = "select.changed_by_hand"
     _ohme_run_poll(api, seconds=120)
     assert api.args["octopus_ready_time"] == "select.changed_by_hand", f"Expected no re-wire with nothing changed, got {api.args}"
-    assert not any("completed dispatches from" in msg for msg in api.log_messages), f"Expected nothing logged with nothing changed, got {api.log_messages}"
+    assert not any("car slots from" in msg for msg in api.log_messages), f"Expected nothing logged with nothing changed, got {api.log_messages}"
 
     # Octopus clears its sensor: Ohme's slots are all there is, so they supply the completed ones too
     api.args["octopus_intelligent_slot"] = []
@@ -2731,7 +2731,7 @@ def _test_ohme_run_iog_dispatch_sensor_followed(my_predbat=None):
     _ohme_run_poll(api, seconds=360)
     assert api.slot_source == OCTOPUS_DISPATCH_ENTITY, f"Expected the Octopus sensor found again, got {api.slot_source}"
     assert api.args["octopus_intelligent_slot"] == [OCTOPUS_DISPATCH_ENTITY], f"Expected Octopus's sensor kept, got {api.args}"
-    assert api.args["octopus_intelligent_planned_slot"] == [ohme_entity], f"Expected the planned slots from Ohme, got {api.args}"
+    assert api.args["octopus_intelligent_planned_slot"] == [], f"Expected the planned slots left to Octopus's sensor, got {api.args}"
 
     # ohme_control stays ignored throughout: Octopus schedules the charge whichever sensor is read
     api = _ohme_api_with_octopus(IOG_TARIFF, {"dev1": IOG_DEVICE_OHME})
@@ -2758,7 +2758,7 @@ def _test_ohme_run_leaving_intelligent_clears_planned(my_predbat=None):
         api.ohme_control = control
         api.args["octopus_intelligent_slot"] = [OCTOPUS_DISPATCH_ENTITY]
         _ohme_run_poll(api, first=True)
-        assert api.args["octopus_intelligent_planned_slot"] == [ohme_entity], f"Expected the planned slots from Ohme, got {api.args}"
+        assert api.args["octopus_intelligent_planned_slot"] == [], f"Expected the planned slots left to Octopus's sensor, got {api.args}"
         return api
 
     # Off the Intelligent tariff: the Octopus sensor has no more dispatches, so Ohme's schedule is the plan
@@ -2807,7 +2807,7 @@ def _test_ohme_run_leaving_intelligent_clears_planned(my_predbat=None):
         api.args["octopus_intelligent_slot"] = [OCTOPUS_DISPATCH_ENTITY, second_entity]
         _ohme_run_poll(api, first=True)
         assert api.slot_source == OCTOPUS_DISPATCH_ENTITY, f"Expected the first Octopus sensor found, got {api.slot_source}"
-        assert api.args["octopus_intelligent_planned_slot"] == [ohme_entity], f"Expected the planned slots from Ohme, got {api.args}"
+        assert api.args["octopus_intelligent_planned_slot"] == [], f"Expected the planned slots left to Octopus's sensor, got {api.args}"
         return api
 
     api = start_two_cars()

@@ -559,7 +559,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         # whenever the tariff or intelligent device set moves - without a claim it silently takes the
         # args back off Ohme part way through a run. None means nobody has claimed them. The claim
         # does not cover octopus_intelligent_slot: Octopus goes on wiring its dispatch sensor there
-        # as the record of completed dispatches, and Ohme adds octopus_intelligent_planned_slot (#5413).
+        # as the source of the car slots, planned and completed (#5413).
         self.car_slot_owner = None
         self.octopus_intelligent_charging = False
         self.octopus_intelligent_ignore_unplugged = False
