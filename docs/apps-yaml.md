@@ -304,7 +304,7 @@ timezone: Europe/London
 
 ### currency_symbols
 
-Sets your symbols to use in the Predbat plan, logs and dashboards.
+Sets your symbols to use in the Predbat plan, logs, dashboards and entities.
 
 You must define two currency_symbol entries, your main currency e.g. £, € or $, and your minor currency (1/100th unit) e.g. p or c.
 
@@ -314,7 +314,7 @@ You must define two currency_symbol entries, your main currency e.g. £, € or 
     - 'p'
 ```
 
-Note that the currency icon on 'money' entities that Predbat outputs (e.g. 'predbat.cost_today') is hard-coded to the dollar symbol, it is not automatically configured to match your configured currency_symbols.
+Note that the currency icon on 'money' entities that Predbat outputs (e.g. 'predbat.cost_today') is automatically set to the correct icon using the main currency symbol, but MDI icons don't exist for every currency, including Danish, Norwegian and Swedish Crown.  For unmatched currencies Predbat will use a cash icon instead.
 
 ### template
 
