@@ -81,6 +81,7 @@ from const import (
     CAR_MANUAL_SOC_ENERGY_MARGIN_KWH,
     CAR_MANUAL_SOC_COUNTER_HOLD_MINUTES,
     CAR_MANUAL_SOC_MAX_GAP_MINUTES,
+    CAR_MANUAL_SOC_GLITCH_MINUTES,
 )
 from config import APPS_SCHEMA, CONFIG_ITEMS
 import debug_history
@@ -1183,9 +1184,14 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         value and adds nothing. A rise is clamped (not discarded) to what the car could have taken at
         car_charging_rate: an energy budget that refills at that rate between readings, up to
         CAR_MANUAL_SOC_MAX_GAP_MINUTES' worth, and is spent by each rise - so a counter with coarse steps
-        or slow updates, whose rises lag and then catch up, is counted in full. The exception is a rise straight
-        after a drop back to about the value before it (500 -> 0 -> 500): that is a glitch recovering, and
-        only what it shows above the pre-drop value counts.
+        or slow updates, whose rises lag and then catch up, is counted in full.
+
+        A drop may be a glitch (an integration reload: 500 -> 0 -> 500, or in steps 500 -> 250 -> 0 -> 500
+        or 500 -> 0 -> 250 -> 500), so for CAR_MANUAL_SOC_GLITCH_MINUTES after the latest drop the highest
+        value before the drops is remembered and rises below it are not counted and leave the baseline at
+        the low value. A rise back to about that value is the glitch recovering: only what it shows above
+        it counts. Once the window passes without that, the drop was a real reset (a new session) and the
+        rise from the low value is counted as normal, within the budget.
         """
         if self.num_cars != 1:
             return False, None
@@ -1206,7 +1212,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.car_charging_manual_energy_last.pop(car_n, None)
             return False, None
         if state is None:
-            self.car_charging_manual_energy_last[car_n] = {"value": energy_now, "read": now, "budget": CAR_MANUAL_SOC_ENERGY_MARGIN_KWH, "pre_drop": None}
+            self.car_charging_manual_energy_last[car_n] = {"value": energy_now, "read": now, "budget": CAR_MANUAL_SOC_ENERGY_MARGIN_KWH, "pre_drop": None, "drop_time": None}
             return True, 0.0
         # Refill the budget for the time since the last good reading: the most the car could have taken
         rate_kw = self.car_charging_rate[car_n] if car_n < len(self.car_charging_rate) else 0.0
@@ -1219,14 +1225,21 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             return True, 0.0
         if delta < 0:
             self.log("Info: Car {} charging energy counter dropped from {} to {} kWh, treating it as a reset".format(car_n, dp3(state["value"]), dp3(energy_now)))
-            state.update({"value": energy_now, "pre_drop": state["value"]})
+            # Keep the highest value seen before consecutive drops, so a glitch in steps is still recognised
+            pre_drop = state["value"] if state["pre_drop"] is None else max(state["pre_drop"], state["value"])
+            state.update({"value": energy_now, "pre_drop": pre_drop, "drop_time": now})
             return True, 0.0
         pre_drop = state["pre_drop"]
-        state.update({"value": energy_now, "pre_drop": None})
-        if pre_drop is not None and energy_now >= pre_drop - CAR_MANUAL_SOC_ENERGY_MARGIN_KWH:
-            # Back up to (about) where it was before the drop: a glitch recovering, not new energy
-            self.log("Info: Car {} charging energy counter recovered from a drop to {} kWh (was {} kWh), not counting the jump back".format(car_n, dp3(energy_now), dp3(pre_drop)))
-            delta = max(energy_now - pre_drop, 0.0)
+        if pre_drop is not None:
+            if energy_now >= pre_drop - CAR_MANUAL_SOC_ENERGY_MARGIN_KWH:
+                # Back up to (about) where it was before the drop: a glitch recovering, not new energy
+                self.log("Info: Car {} charging energy counter recovered from a drop to {} kWh (was {} kWh), not counting the jump back".format(car_n, dp3(energy_now), dp3(pre_drop)))
+                delta = max(energy_now - pre_drop, 0.0)
+            elif (now - state["drop_time"]).total_seconds() <= CAR_MANUAL_SOC_GLITCH_MINUTES * 60:
+                # Still below the pre-drop value inside the window: maybe a glitch part way back - wait and see
+                return True, 0.0
+            # else the window passed: the drop was a real reset, count the rise from the low value
+        state.update({"value": energy_now, "pre_drop": None, "drop_time": None})
         if delta > state["budget"]:
             self.log("Info: Car {} charging energy counter rose by {} kWh, more than the {} kW charger can deliver - counting {} kWh".format(car_n, dp3(delta), rate_kw, dp3(state["budget"])))
             delta = state["budget"]
@@ -1237,12 +1250,13 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         """
         Advance the manual car SoC tracker for cars using car_charging_manual_soc.
 
-        A measured source wins over the plan: with a car_charging_energy counter the SoC advances by the
-        energy actually delivered (less car_charging_loss), and holds while the counter briefly cannot be
-        read (see car_manual_soc_measured_energy()). Without a usable counter, a car_charging_now sensor
-        reporting the car is not charging holds it; only otherwise (no sensor, or it is charging, unknown
-        or unavailable) is the plan's predicted next SoC written back, which advances the SoC whether or
-        not the charger delivers anything.
+        A measured source wins over the plan. A car_charging_now sensor reporting the car is not charging
+        holds the SoC (an energy counter is then not read, keeping its baseline). Otherwise, with a
+        car_charging_energy counter the SoC advances by the energy actually delivered (less
+        car_charging_loss), and holds while the counter briefly cannot be read (see
+        car_manual_soc_measured_energy()). Only with neither (no sensor, or it is charging, unknown or
+        unavailable, and no usable counter) is the plan's predicted next SoC written back, which advances
+        the SoC whether or not the charger delivers anything.
 
         A value that differs from the last one written here was edited by the user, so the energy measured
         since the last write-back is not added on top of the edit (the counter keeps its new baseline).
@@ -1252,12 +1266,18 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 car_postfix = "" if car_n == 0 else "_" + str(car_n)
                 soc_now = self.car_charging_soc[car_n]
                 self.log("Car {} charging Manual SoC current is {} next is {}".format(car_n, soc_now, self.car_charging_soc_next[car_n]))
-                counter_configured, measured_kwh = self.car_manual_soc_measured_energy(car_n)
                 charging_now = None
                 if is_entity_id(self.get_arg("car_charging_now", None, indirect=False, index=car_n)):
-                    charging_now = self.get_car_charging_now_tristate(car_n)
+                    # Read live as a tri-state: unknown/unavailable is None (no information), not "not charging"
+                    charging_now = self.car_charging_now_value(self.get_arg("car_charging_now", None, index=car_n, required_unit="W"))
                 soc_written = self.car_charging_manual_soc_written.get(car_n)
-                if counter_configured:
+                # Explicitly not charging leaves any energy counter unread so its baseline is kept - energy a
+                # lagging car_charging_now sensor hid is picked up by the next reading, within the budget
+                counter_configured, measured_kwh = (False, None) if charging_now is False else self.car_manual_soc_measured_energy(car_n)
+                if charging_now is False:
+                    soc_next = soc_now
+                    self.log("Car {} charging Manual SoC held at {} - car is not charging".format(car_n, dp3(soc_next)))
+                elif counter_configured:
                     if measured_kwh is None:
                         self.log("Car {} charging Manual SoC held at {} - charging energy counter is unavailable".format(car_n, dp3(soc_now)))
                         continue
@@ -1269,9 +1289,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                         measured_kwh = 0.0
                     soc_next = max(0.0, min(soc_now + measured_kwh * self.car_charging_loss, self.car_charging_battery_size[car_n]))
                     self.log("Car {} charging Manual SoC advanced by measured energy {} kWh to {}".format(car_n, dp3(measured_kwh), dp3(soc_next)))
-                elif charging_now is False:
-                    soc_next = soc_now
-                    self.log("Car {} charging Manual SoC held at {} - car is not charging".format(car_n, dp3(soc_next)))
                 elif self.car_charging_soc_next[car_n] is not None:
                     soc_next = self.car_charging_soc_next[car_n]
                     # The modelled car SoC can run past the real charge limit when the prediction's fill

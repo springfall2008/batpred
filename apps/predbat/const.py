@@ -121,6 +121,9 @@ CAR_MANUAL_SOC_ENERGY_MARGIN_KWH = 0.1
 CAR_MANUAL_SOC_COUNTER_HOLD_MINUTES = 60
 # The budget above holds at most this many minutes of charging at car_charging_rate, bounding it after a long idle spell
 CAR_MANUAL_SOC_MAX_GAP_MINUTES = 60
+# After a car_charging_energy counter drops, rises below its value before the drop are held back this long in case the
+# drop was a glitch (an integration reload) that is about to recover, rather than a new session
+CAR_MANUAL_SOC_GLITCH_MINUTES = 15
 CAR_CHARGING_LIMIT_UNCAPPED = 9999.0  # Model-facing car charge limit (kWh) that makes predict()'s fill clamp inert - larger than any real car battery (#4967)
 DEBUG_ENABLE_MAX_HOURS = 2  # Auto-disable switch.predbat_debug_enable after this long left on, to bound the raw per-cycle debug.yaml disk writes it triggers (and the C++ kernel bypass it forces) if left on by accident - the rotating debug-history buffer covers longer-term history at a coarser interval instead
 # How far ahead a manual override may be placed. The two horizons differ on purpose: a manual

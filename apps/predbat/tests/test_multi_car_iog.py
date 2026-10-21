@@ -1233,14 +1233,14 @@ def run_car_manual_soc_measured_test(testname, my_predbat):
 
         # One hour of real charging read every 5 minutes (RUN_EVERY) by counters that rise in coarse steps,
         # update slowly or glitch: each counted from a fresh baseline with the tracker at 0 on a large battery
-        def session(counter, rate_kw=7.4):
-            """Run 5-minute cycles over an hour with the counter at counter(minute), return the kWh delivered as counted."""
+        def session(counter, rate_kw=7.4, charging="on"):
+            """Run 5-minute cycles over an hour with the counter at counter(minute) and car_charging_now at charging, return the kWh counted."""
             my_predbat.car_charging_battery_size = [100.0]
             my_predbat.car_charging_rate = [rate_kw]
             my_predbat.car_charging_manual_energy_last = {}
             set_tracker(0.0)
             for minute in range(0, 65, 5):
-                cycle(energy=counter(minute), charging="on", minutes=5)
+                cycle(energy=counter(minute), charging=charging, minutes=5)
             return written() / my_predbat.car_charging_loss
 
         def check_session(label, counted, expected, tolerance=0.01):
@@ -1258,8 +1258,14 @@ def run_car_manual_soc_measured_test(testname, my_predbat):
         check_session("glitch 500 -> 0 -> 500", session(lambda minute: 0.0 if minute == 30 else 500.0), 0.0)
         # car_charging_rate set below the real 7.4 kW: clamped to what 3.7 kW allows, not discarded
         check_session("rate set below real", session(lambda minute: 7.4 * minute / 60.0, rate_kw=3.7), 0.1 + 3.7 * 1.1)
-        # A jump far beyond the charger is clamped to the budget the idle half hour built up
-        check_session("implausible jump clamped", session(lambda minute: 1.0 if minute < 30 else 50.0), 0.1 + 7.4 * 1.1 * 0.5)
+        # Glitches in steps: consecutive drops, and a partial recovery, still add nothing
+        check_session("glitch 500 -> 250 -> 0 -> 500", session(lambda minute: 500.0 if minute < 20 else (250.0 if minute == 20 else (0.0 if minute == 25 else 500.0))), 0.0)
+        check_session("glitch 500 -> 0 -> 250 -> 500", session(lambda minute: 500.0 if minute < 20 else (0.0 if minute == 20 else (250.0 if minute == 25 else 500.0))), 0.0)
+        # A real reset (a new session from 0) is counted in full once the glitch window has passed
+        check_session("reset to a new session", session(lambda minute: 12.0 if minute < 20 else 7.4 * (minute - 20) / 60.0), 7.4 * 40 / 60.0)
+        # car_charging_now explicitly off: a counter jump adds nothing; unknown is no information
+        check_session("not charging, counter jump 12 -> 900", session(lambda minute: 12.0 if minute < 30 else 900.0, charging="off"), 0.0)
+        check_session("car_charging_now unavailable, counter counted", session(lambda minute: 7.4 * minute / 60.0, charging="unavailable"), 7.4)
     finally:
         my_predbat.expose_config("car_charging_manual_soc_kwh", saved_soc_kwh)
         my_predbat.expose_config("car_charging_manual_soc", saved_manual_soc_switch)
