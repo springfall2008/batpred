@@ -212,6 +212,7 @@ GATEWAY_ATTRIBUTE_TABLE = {
     # EV charger (OCPP) — device-level entities, present when a charge point is connected
     "ev_online": {"friendly_name": "EV Charger Online", "icon": "mdi:ev-station", "device_class": "connectivity"},
     "ev_connected": {"friendly_name": "EV Car Connected", "icon": "mdi:car-electric", "device_class": "plug"},
+    "ev_plugged": {"friendly_name": "EV Car Plugged In", "icon": "mdi:ev-plug-type2", "device_class": "plug"},
     "ev_session_active": {"friendly_name": "EV Charging Active", "icon": "mdi:ev-station", "device_class": "battery_charging"},
     "ev_charging": {"friendly_name": "EV Drawing Power", "icon": "mdi:ev-station", "device_class": "battery_charging"},
     "ev_status": {"friendly_name": "EV Charger Status", "icon": "mdi:ev-station"},
@@ -1575,6 +1576,9 @@ class GatewayMQTT(ComponentBase):
             self.dashboard_item(f"binary_sensor.{pfx}_online", ev.connected, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_online", {}), app="gateway")
             ev_car_connected = ev.connected and ev.status in {"Preparing", "Charging", "SuspendedEV", "SuspendedEVSE", "Finishing"}
             self.dashboard_item(f"binary_sensor.{pfx}_connected", ev_car_connected, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_connected", {}), app="gateway")
+            # Whether a car is plugged in, for car_charging_plugged. Unlike _connected it does not read "no" while the
+            # charger itself is offline - that says nothing about the cable - so a charger dropping out is not an unplug
+            self.dashboard_item(f"binary_sensor.{pfx}_plugged", ev_car_connected if ev.connected else "unavailable", attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_plugged", {}), app="gateway")
             # Live-session fields are only meaningful while the charger is connected.
             # The gateway now reports known-but-offline chargers instead of omitting
             # them, and older firmware can leave session_active/power/energy at their
@@ -2264,6 +2268,8 @@ class GatewayMQTT(ComponentBase):
         # "Planned" derives from the connected binary sensor and "now" from the charging sensor (the car
         # drawing power); many OCPP cars do not report SoC, so the manual-SoC path tracks it from the session energy.
         self.set_arg("car_charging_planned", [f"binary_sensor.{pfx}_connected"])
+        # The cable alone, for the manual SoC's reset on unplug - unavailable while the charger is offline, not "no"
+        self.set_arg("car_charging_plugged", [f"binary_sensor.{pfx}_plugged"])
         # Holds the battery for the car while it draws power; it never adds a charging slot, so it cannot
         # keep a session going through gateway_evc_control's window start/stop
         self.set_arg("car_charging_now", [f"binary_sensor.{pfx}_charging"])

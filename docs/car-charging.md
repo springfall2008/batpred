@@ -593,7 +593,8 @@ When Predbat is connected to a GivEnergy Gateway that has an OCPP EV charger att
 Entities are named after the charger, using the last 6 characters of its OCPP charge point id (lower-cased) — for example a charge point id ending `3XB749` gives `sensor.predbat_gateway_ev_3xb749_power`.
 The id is used whether one charger or several are attached, so a charger keeps the same entity ids for its whole life. Below, `<id>` stands for that suffix; a charger that has not yet reported an id falls back to a bare `ev`.
 
-- `binary_sensor.predbat_gateway_ev_<id>_connected` - a charge point is connected
+- `binary_sensor.predbat_gateway_ev_<id>_connected` - a car is connected to the charge point (off while the charger is offline)
+- `binary_sensor.predbat_gateway_ev_<id>_plugged` - a car is plugged in; unavailable while the charger is offline, as the charger cannot then say
 - `sensor.predbat_gateway_ev_<id>_status` - OCPP status (e.g. `Available`, `Charging`)
 - `sensor.predbat_gateway_ev_<id>_power` - live charge power (W)
 - `sensor.predbat_gateway_ev_<id>_session_energy` - energy delivered this session (kWh)
@@ -611,7 +612,7 @@ To have Predbat plan for the gateway charger as a car, enable it in `apps.yaml`:
 
 When enabled, Predbat registers the charger as a car and maps the EV entities above onto the standard `car_charging_*` settings, so the normal [Predbat-led car charging](#predbat-led-charging) planning applies.
 The charge rate tracks the `sensor.predbat_gateway_ev_<id>_charge_rate` capability sensor. The car's battery size and target charge level are taken from your existing `car_charging_battery_size` and `car_charging_limit` settings (the charger cannot report them).
-`car_charging_soc` is only mapped when the charger reports the car's own SoC. Otherwise the car's SoC is tracked in **input_number.predbat_car_charging_manual_soc_kwh** from the session energy and the connected sensor
+`car_charging_soc` is only mapped when the charger reports the car's own SoC. Otherwise the car's SoC is tracked in **input_number.predbat_car_charging_manual_soc_kwh** from the session energy and the plugged-in sensor (`car_charging_plugged`)
 (see [manual car SoC](#predbat-led-charging)), so you can set it to the car's real level when you plug in.
 
 To also have Predbat send the plan to the charger (so the EVC charges according to Predbat's schedule), add a second flag:
@@ -893,11 +894,11 @@ Set the value to the car's current charge level before charging. Predbat then ke
     - If **car_charging_energy** is set for the car in `apps.yaml` Predbat adds the energy the charger's history shows (less **input_number.predbat_car_charging_loss**).
     With more than one car, **car_charging_energy** must be a list with the cars' chargers first, in car order. A single sensor is used for car 0 only.
     - Otherwise Predbat adds the charge it planned for the car during each charging slot.
-    - If **car_charging_plugged** (or failing that **car_charging_planned**) is set to a sensor for the car in `apps.yaml` the value is reset to 0 when the sensor goes from plugged in to unplugged,
-    ready to be set again when the car is next plugged in. A sensor that becomes unavailable does not reset it, and a value you enter while the car is unplugged is kept.
+    - If **car_charging_plugged** (or failing that **car_charging_planned**) is set to a sensor for the car in `apps.yaml` the value is reset to 0 when the sensor goes from plugged in to unplugged
+    and stays unplugged for 10 minutes, ready to be set again when the car is next plugged in. The wait means a charger that briefly reads unplugged while it reconnects does not reset it. A sensor that becomes unavailable does not reset it, and a value you enter while the car is unplugged is kept.
     If your **car_charging_planned** sensor also turns off when charging finishes with the car still plugged in, set **car_charging_plugged** to a sensor that does not, or the value will be reset then too.
     - A value you enter is the new starting point: energy is counted from when you entered it.
-    - Predbat publishes where it has got to as **sensor.predbat_car_manual_soc_tracked** (`_1`, `_2`... for further cars): the tracked kWh, with the time energy is counted from (`since`) and the last plugged-in reading (`plugged`) as attributes.
+    - Predbat publishes where it has got to as **sensor.predbat_car_manual_soc_tracked** (`_1`, `_2`... for further cars): the tracked kWh, with the time energy is counted from (`since`), the last plugged-in reading (`plugged`) and when a pending unplug was first seen (`unplugged_since`) as attributes.
     It reads this back when it restarts, so charging or unplugging while Predbat is restarting is still counted.<BR>
 NB: **input_number.predbat_car_charging_manual_soc_kwh** must be set to the current kWh value of your car battery NOT a percentage SoC figure
 otherwise, Predbat won't know how much energy there currently is in the battery.<BR>

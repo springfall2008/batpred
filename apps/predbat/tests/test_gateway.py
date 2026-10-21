@@ -5590,6 +5590,7 @@ class TestEvTelemetry:
         base = "predbat_gateway_ev_3xb749"
         assert gw._dashboard_calls[f"binary_sensor.{base}_online"][0] is True
         assert gw._dashboard_calls[f"binary_sensor.{base}_connected"][0] is True  # status="Charging" → car connected
+        assert gw._dashboard_calls[f"binary_sensor.{base}_plugged"][0] is True
         assert gw._dashboard_calls[f"binary_sensor.{base}_session_active"][0] is True
         assert gw._dashboard_calls[f"sensor.{base}_status"][0] == "Charging"
         assert gw._dashboard_calls[f"sensor.{base}_power"][0] == 7200
@@ -5668,6 +5669,8 @@ class TestEvTelemetry:
         base = "predbat_gateway_ev_3xb749"
         assert gw._dashboard_calls[f"binary_sensor.{base}_online"][0] is False
         assert gw._dashboard_calls[f"binary_sensor.{base}_connected"][0] is False
+        # Whether a car is plugged in is not known while the charger is offline - not an unplug
+        assert gw._dashboard_calls[f"binary_sensor.{base}_plugged"][0] == "unavailable"
         # Stale live-session values must be suppressed, not republished
         assert gw._dashboard_calls[f"binary_sensor.{base}_session_active"][0] is False
         assert gw._dashboard_calls[f"binary_sensor.{base}_charging"][0] is False
@@ -5808,9 +5811,9 @@ class TestEvAutoConfig:
         gw._register_ev_car(self._status_with_ev(soc_percent=0))
 
         assert "car_charging_soc" not in gw._args
-        # What the manual SoC is tracked from: the session energy, and the connected sensor for the reset on unplug
+        # What the manual SoC is tracked from: the session energy, and the plugged-in sensor for the reset on unplug
         assert gw._args["car_charging_energy"] == "sensor.predbat_gateway_ev_cp1_session_energy"
-        assert gw._args["car_charging_planned"] == ["binary_sensor.predbat_gateway_ev_cp1_connected"]
+        assert gw._args["car_charging_plugged"] == ["binary_sensor.predbat_gateway_ev_cp1_plugged"]
         assert gw._ev_registered_without_soc == frozenset({"CP1"})
 
     def test_soc_sensor_when_charger_reports_soc(self):
@@ -5860,6 +5863,7 @@ class TestEvAutoConfig:
 
         assert gw._args["num_cars"] == 1
         assert gw._args["car_charging_planned"] == ["binary_sensor.predbat_gateway_ev_cp1_connected"]
+        assert gw._args["car_charging_plugged"] == ["binary_sensor.predbat_gateway_ev_cp1_plugged"]
         assert gw._args["car_charging_now"] == ["binary_sensor.predbat_gateway_ev_cp1_charging"]
         assert gw._args["car_charging_soc"] == ["sensor.predbat_gateway_ev_cp1_soc"]
         # car_charging_rate is a UI config item — set via expose_config, not set_arg

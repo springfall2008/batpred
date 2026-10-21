@@ -35,6 +35,7 @@ from const import (
     CAR_CHARGING_LIMIT_UNCAPPED,
     CAR_CHARGING_NOW_POWER_W,
     CAR_MANUAL_SOC_LATE_MINUTES,
+    CAR_MANUAL_SOC_UNPLUG_MINUTES,
     CLOUD_WINDOW_MINUTES,
     CLOUD_ARRAY_MARGIN,
     PV_ARRAY_KWP_UNKNOWN,
@@ -1978,9 +1979,10 @@ class Fetch:
           again from now, so no energy is added on top of it.
         - Otherwise the energy the car_charging_energy sensor recorded since the record's time is added, less
           charging losses.
-        - A car whose plugged-in sensor has gone from plugged in to unplugged goes back to zero. Unavailable or
-          unknown is no reading, so a sensor dropping out never resets the car, and a value entered while it is
-          unplugged is kept.
+        - A car whose plugged-in sensor has gone from plugged in to unplugged, and stayed unplugged for
+          CAR_MANUAL_SOC_UNPLUG_MINUTES, goes back to zero - a charger reconnecting can read unplugged for a few minutes.
+          Unavailable or unknown is no reading, so a sensor dropping out never resets the car, and a value entered while
+          it is unplugged is kept.
 
         A car with no record - new, or with no sensor to read back after a restart - starts counting from now.
         """
@@ -1998,6 +2000,7 @@ class Fetch:
             if record is None:
                 record = self.car_manual_soc_read(car_n)
             since = None
+            unplugged_since = None
             if isinstance(record, dict):
                 try:
                     since = datetime.fromisoformat(record.get("since"))
@@ -2023,19 +2026,33 @@ class Fetch:
                         # Kept back a little, for energy the history records late - but not so far that every cycle reads days of it
                         since = max(since, self.now_utc - timedelta(minutes=CAR_MANUAL_SOC_LATE_MINUTES))
                 if record.get("plugged") is True and plugged is False:
-                    self.log("Car {} has been unplugged, resetting its manual SoC from {} kWh to 0".format(car_n, dp3(soc_new)))
-                    soc_new = 0.0
-                    since = self.now_utc
+                    # An unplug only counts once it has lasted: a charger reconnecting can read unplugged for a few minutes
+                    unplugged_since = record.get("unplugged_since") or self.now_utc.isoformat()
+                    try:
+                        unplugged_minutes = (self.now_utc - datetime.fromisoformat(unplugged_since)).total_seconds() / 60
+                    except (ValueError, TypeError):
+                        unplugged_since, unplugged_minutes = self.now_utc.isoformat(), 0
+                    if unplugged_minutes >= CAR_MANUAL_SOC_UNPLUG_MINUTES:
+                        self.log("Car {} has been unplugged, resetting its manual SoC from {} kWh to 0".format(car_n, dp3(soc_new)))
+                        soc_new = 0.0
+                        since = self.now_utc
+                        unplugged_since = None
+                    else:
+                        # Still plugged in, until the unplug has lasted
+                        plugged = True
+                elif plugged is None:
+                    # No reading, so whatever was pending stays pending
+                    unplugged_since = record.get("unplugged_since")
 
             soc_new = dp3(soc_new)
             if soc_new != soc:
                 self.expose_config(name, soc_new)
             if plugged is None and record is not None:
                 plugged = record.get("plugged")
-            record_new = {"soc": soc_new, "since": since.isoformat(), "plugged": plugged}
+            record_new = {"soc": soc_new, "since": since.isoformat(), "plugged": plugged, "unplugged_since": unplugged_since}
             # Published when the SoC or the plug changes. A time that only moved on is kept in memory: it moved with nothing
             # charged, or with the SoC already at the battery size, so after a restart the published, older time gives the same SoC
-            publish = record is None or record.get("soc") != soc_new or record.get("plugged") != plugged
+            publish = record is None or record.get("soc") != soc_new or record.get("plugged") != plugged or record.get("unplugged_since") != unplugged_since
             self.car_manual_soc_state[car_n] = record_new
             if publish:
                 self.car_manual_soc_publish(car_n)
@@ -2060,7 +2077,8 @@ class Fetch:
 
     def car_manual_soc_publish(self, car_n):
         """
-        Publish car_n's tracking record: the SoC as the state, with the time energy is counted from and the last plug reading as attributes.
+        Publish car_n's tracking record: the SoC as the state, with the time energy is counted from, the last plug reading and
+        when a pending unplug was first read as attributes.
         """
         record = self.car_manual_soc_state.get(car_n, {})
         self.dashboard_item(
@@ -2069,6 +2087,7 @@ class Fetch:
             attributes={
                 "since": record.get("since"),
                 "plugged": record.get("plugged"),
+                "unplugged_since": record.get("unplugged_since"),
                 "friendly_name": "Car {} manual SoC tracked".format(car_n),
                 "unit_of_measurement": "kWh",
                 "icon": "mdi:ev-station",
@@ -2086,9 +2105,10 @@ class Fetch:
             return None
         since = self.get_state_wrapper(entity_id=entity_id, attribute="since", default=None)
         plugged = self.get_state_wrapper(entity_id=entity_id, attribute="plugged", default=None)
+        unplugged_since = self.get_state_wrapper(entity_id=entity_id, attribute="unplugged_since", default=None)
         if not isinstance(since, str):
             return None
-        return {"soc": dp3(soc), "since": since, "plugged": plugged if isinstance(plugged, bool) else None}
+        return {"soc": dp3(soc), "since": since, "plugged": plugged if isinstance(plugged, bool) else None, "unplugged_since": unplugged_since if isinstance(unplugged_since, str) and unplugged_since else None}
 
     def car_manual_soc_mirror(self):
         """

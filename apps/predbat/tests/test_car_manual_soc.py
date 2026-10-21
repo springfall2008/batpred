@@ -23,6 +23,8 @@ picks up where it left off. No entity's last_changed is used.
 import copy
 from datetime import timedelta
 
+from const import CAR_MANUAL_SOC_UNPLUG_MINUTES
+
 ENERGY_SENSOR = "sensor.car_manual_soc_test_energy"
 PLUGGED_SENSOR = "binary_sensor.car_manual_soc_test_plugged"
 PLANNED_SENSOR = "binary_sensor.car_manual_soc_test_planned"
@@ -79,6 +81,25 @@ def _since(my_predbat, minutes_ago, car_n=0):
     Move car_n's record back so it counts from minutes_ago, as if that many minutes had passed since the last cycle.
     """
     my_predbat.car_manual_soc_state[car_n]["since"] = (my_predbat.now_utc - timedelta(minutes=minutes_ago)).isoformat()
+
+
+def _unplug(my_predbat, entity=PLUGGED_SENSOR, car_n=0):
+    """
+    Read the car as unplugged, then again once the unplug has lasted long enough to count.
+    """
+    _plug(my_predbat, "off", entity)
+    my_predbat.car_manual_soc_track()
+    _age_unplug(my_predbat, car_n)
+    my_predbat.car_manual_soc_track()
+
+
+def _age_unplug(my_predbat, car_n=0):
+    """
+    Move car_n's pending unplug back so it has lasted CAR_MANUAL_SOC_UNPLUG_MINUTES.
+    """
+    record = my_predbat.car_manual_soc_state.get(car_n, {})
+    if record.get("unplugged_since"):
+        record["unplugged_since"] = (my_predbat.now_utc - timedelta(minutes=CAR_MANUAL_SOC_UNPLUG_MINUTES)).isoformat()
 
 
 def _plug(my_predbat, state, entity=PLUGGED_SENSOR):
@@ -318,8 +339,7 @@ def _run_write_back(my_predbat):
     failed |= _check("t18 recorded", my_predbat.car_manual_soc_state[0]["soc"] == 35.0, "record {}".format(my_predbat.car_manual_soc_state))
 
     print("Test 19: ... so an unplug on the next cycle still resets it")
-    _plug(my_predbat, "off", PLANNED_SENSOR)
-    my_predbat.car_manual_soc_track()
+    _unplug(my_predbat, PLANNED_SENSOR)
     failed |= _check("t19 reset", abs(_manual_kwh(my_predbat)) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
 
     print("Test 20: the write-back skips an unplugged car")
@@ -351,11 +371,35 @@ def _run_unplug(my_predbat):
     failed |= _check("t22 unavailable", abs(_manual_kwh(my_predbat) - 30.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
     failed |= _check("t22 plugged kept", my_predbat.car_manual_soc_state[0]["plugged"] is True, "record {}".format(my_predbat.car_manual_soc_state))
 
-    print("Test 23: plugged in to unplugged resets to zero")
+    print("Test 23a: an unplug is only pending at first - a charger reconnecting can read unplugged for a few minutes")
     _plug(my_predbat, "off")
     my_predbat.car_manual_soc_track()
-    failed |= _check("t23 reset", abs(_manual_kwh(my_predbat)) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
-    failed |= _check("t23 soc", abs(my_predbat.car_charging_soc[0]) < 0.001, "soc {}".format(my_predbat.car_charging_soc))
+    failed |= _check("t23a pending", abs(_manual_kwh(my_predbat) - 30.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+    failed |= _check("t23a recorded", my_predbat.car_manual_soc_state[0]["unplugged_since"] == my_predbat.now_utc.isoformat(), "record {}".format(my_predbat.car_manual_soc_state))
+    failed |= _check("t23a still plugged", my_predbat.car_manual_soc_state[0]["plugged"] is True, "record {}".format(my_predbat.car_manual_soc_state))
+
+    print("Test 23b: plugged in again before it has lasted - nothing is reset and the pending unplug is dropped")
+    my_predbat.car_manual_soc_state[0]["unplugged_since"] = (my_predbat.now_utc - timedelta(minutes=CAR_MANUAL_SOC_UNPLUG_MINUTES - 1)).isoformat()
+    _plug(my_predbat, "on")
+    my_predbat.car_manual_soc_track()
+    failed |= _check("t23b kept", abs(_manual_kwh(my_predbat) - 30.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+    failed |= _check("t23b dropped", my_predbat.car_manual_soc_state[0]["unplugged_since"] is None, "record {}".format(my_predbat.car_manual_soc_state))
+
+    print("Test 23c: an unavailable reading while an unplug is pending leaves it pending")
+    _plug(my_predbat, "off")
+    my_predbat.car_manual_soc_track()
+    pending = my_predbat.car_manual_soc_state[0]["unplugged_since"]
+    _plug(my_predbat, "unavailable")
+    my_predbat.car_manual_soc_track()
+    failed |= _check("t23c pending kept", pending is not None and my_predbat.car_manual_soc_state[0]["unplugged_since"] == pending, "record {}".format(my_predbat.car_manual_soc_state))
+
+    print("Test 23d: an unplug that has lasted resets to zero")
+    _plug(my_predbat, "off")
+    _age_unplug(my_predbat)
+    my_predbat.car_manual_soc_track()
+    failed |= _check("t23d reset", abs(_manual_kwh(my_predbat)) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+    failed |= _check("t23d soc", abs(my_predbat.car_charging_soc[0]) < 0.001, "soc {}".format(my_predbat.car_charging_soc))
+    failed |= _check("t23d settled", my_predbat.car_manual_soc_state[0]["plugged"] is False and my_predbat.car_manual_soc_state[0]["unplugged_since"] is None, "record {}".format(my_predbat.car_manual_soc_state))
 
     print("Test 24: a value entered while unplugged is kept")
     my_predbat.expose_config("car_charging_manual_soc_kwh", 25.0)
@@ -377,8 +421,7 @@ def _run_unplug(my_predbat):
     _plug(my_predbat, "off", PLANNED_SENSOR)
     my_predbat.car_manual_soc_track()
     failed |= _check("t26 still plugged", abs(_manual_kwh(my_predbat) - 30.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
-    _plug(my_predbat, "off")
-    my_predbat.car_manual_soc_track()
+    _unplug(my_predbat)
     failed |= _check("t26 reset", abs(_manual_kwh(my_predbat)) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
     return failed
 
@@ -424,11 +467,17 @@ def _run_restart(my_predbat):
     my_predbat.car_manual_soc_track()
     failed |= _check("t30 edit kept", abs(_manual_kwh(my_predbat) - 30.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
 
-    print("Test 31: an unplug while Predbat was down resets it after the restart")
+    print("Test 31: an unplug while Predbat was down resets it after the restart, once it has lasted")
     _restart(my_predbat)
     _plug(my_predbat, "off")
     my_predbat.car_manual_soc_track()
-    failed |= _check("t31 reset", abs(_manual_kwh(my_predbat)) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+    failed |= _check("t31 pending", abs(_manual_kwh(my_predbat) - 30.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+    failed |= _check("t31 published", dummy[sensor].get("unplugged_since") == my_predbat.now_utc.isoformat(), "sensor {}".format(dummy[sensor]))
+    print("Test 31b: ... and a pending unplug is read back after another restart")
+    dummy[sensor]["unplugged_since"] = (my_predbat.now_utc - timedelta(minutes=CAR_MANUAL_SOC_UNPLUG_MINUTES)).isoformat()
+    _restart(my_predbat)
+    my_predbat.car_manual_soc_track()
+    failed |= _check("t31b reset", abs(_manual_kwh(my_predbat)) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
 
     print("Test 32: with no sensor to read back a restart counts from now")
     _one_car(my_predbat, args, kwh=10.0)
