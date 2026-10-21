@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 
 from const import CAR_CHARGING_LIMIT_UNCAPPED
 from prediction import Prediction
+from utils import dp3
 from tests.test_infra import reset_rates
 
 
@@ -1211,20 +1212,11 @@ def run_car_manual_soc_measured_test(testname, my_predbat):
         cycle(energy=4.5, charging="on")
         check("energy after glitch", 7.25)
 
-        # A rise the 7.4 kW charger could not deliver in 10 minutes becomes the new baseline, adding nothing
-        cycle(energy=50.0, charging="on")
-        check("implausible energy jump", 7.25)
-        cycle(energy=50.5, charging="on")
-        check("energy after implausible jump", 7.7)
-        # ... while the same rise over a long enough gap is plausible
-        cycle(energy=51.5, charging="on", minutes=30)
-        check("plausible rise over 30 minutes", 8.6)
-
         # User edits the tracker mid-session: the energy since the last write-back is not added on top
         my_predbat.expose_config("car_charging_manual_soc_kwh", 3.0)
-        cycle(energy=52.5, charging="on")
+        cycle(energy=5.5, charging="on")
         check("user edit re-baselines", 3.0)
-        cycle(energy=53.5, charging="on")
+        cycle(energy=6.5, charging="on")
         check("energy after user edit", 3.9)
 
         # A counter unreadable for longer than the hold falls back to the plan rather than freezing the
@@ -1238,6 +1230,36 @@ def run_car_manual_soc_measured_test(testname, my_predbat):
         set_tracker(9.9)
         cycle(energy=61.0, charging="on")
         check("energy capped at battery size", 10.0)
+
+        # One hour of real charging read every 5 minutes (RUN_EVERY) by counters that rise in coarse steps,
+        # update slowly or glitch: each counted from a fresh baseline with the tracker at 0 on a large battery
+        def session(counter, rate_kw=7.4):
+            """Run 5-minute cycles over an hour with the counter at counter(minute), return the kWh delivered as counted."""
+            my_predbat.car_charging_battery_size = [100.0]
+            my_predbat.car_charging_rate = [rate_kw]
+            my_predbat.car_charging_manual_energy_last = {}
+            set_tracker(0.0)
+            for minute in range(0, 65, 5):
+                cycle(energy=counter(minute), charging="on", minutes=5)
+            return written() / my_predbat.car_charging_loss
+
+        def check_session(label, counted, expected, tolerance=0.01):
+            """Record a failure when a session counted other than the expected kWh."""
+            nonlocal failed
+            if abs(counted - expected) > tolerance:
+                print("ERROR: {}: should count {} kWh, counted {}".format(label, expected, dp3(counted)))
+                failed = True
+
+        # 1 kWh resolution: rises of 1 kWh 5 minutes apart exceed 5 minutes at 7.4 kW but are all counted
+        check_session("1 kWh resolution counter", session(lambda minute: float(int(7.4 * minute / 60.0))), 7.0)
+        # Cloud counter updating every 10 minutes
+        check_session("10-minute update counter", session(lambda minute: 7.4 * (minute // 10 * 10) / 60.0), 7.4)
+        # Integration reload glitch 500 -> 0 -> 500 mid-session with 5-minute cycles still adds nothing
+        check_session("glitch 500 -> 0 -> 500", session(lambda minute: 0.0 if minute == 30 else 500.0), 0.0)
+        # car_charging_rate set below the real 7.4 kW: clamped to what 3.7 kW allows, not discarded
+        check_session("rate set below real", session(lambda minute: 7.4 * minute / 60.0, rate_kw=3.7), 0.1 + 3.7 * 1.1)
+        # A jump far beyond the charger is clamped to the budget the idle half hour built up
+        check_session("implausible jump clamped", session(lambda minute: 1.0 if minute < 30 else 50.0), 0.1 + 7.4 * 1.1 * 0.5)
     finally:
         my_predbat.expose_config("car_charging_manual_soc_kwh", saved_soc_kwh)
         my_predbat.expose_config("car_charging_manual_soc", saved_manual_soc_switch)
