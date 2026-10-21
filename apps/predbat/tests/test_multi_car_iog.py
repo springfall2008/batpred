@@ -1079,17 +1079,31 @@ def run_update_car_manual_soc_cap_test(testname, my_predbat):
 
 def run_car_manual_soc_measured_test(testname, my_predbat):
     """
-    The manual car SoC tracker must follow measurement, not the plan: it is clamped to the car's battery
-    when read, advances by the energy the car_charging_energy session counter shows was delivered (less
-    car_charging_loss, surviving a counter reset), stays put while car_charging_now says the car is not
-    charging, and only falls back to the plan's predicted SoC when neither source is configured.
+    The manual car SoC tracker must follow measurement, not the plan: it advances by the energy the
+    car_charging_energy session counter shows was delivered (less car_charging_loss), holds while that
+    counter is unavailable, ignores counter resets/glitches and rises the charger could not have
+    delivered, does not add energy on top of a user edit, stays put while car_charging_now says the car
+    is not charging, and only falls back to the plan's predicted SoC when no measurement says otherwise.
     """
     failed = False
     print("**** Running Test: multi_car_iog {} ****".format(testname))
 
     energy_entity = "sensor.test_manual_soc_session_energy"
     now_entity = "binary_sensor.test_manual_soc_charging"
-    attrs = ["num_cars", "car_charging_manual_soc", "car_charging_soc", "car_charging_soc_next", "car_charging_limit", "car_charging_battery_size", "car_charging_now", "car_charging_loss", "car_charging_manual_energy_last"]
+    attrs = [
+        "num_cars",
+        "car_charging_manual_soc",
+        "car_charging_soc",
+        "car_charging_soc_next",
+        "car_charging_limit",
+        "car_charging_battery_size",
+        "car_charging_rate",
+        "car_charging_now",
+        "car_charging_loss",
+        "car_charging_manual_energy_last",
+        "car_charging_manual_soc_written",
+        "now_utc",
+    ]
     saved = {attr: copy.deepcopy(getattr(my_predbat, attr)) for attr in attrs}
     arg_keys = ["car_charging_energy", "car_charging_now", "car_charging_energy_scale"]
     saved_args = {key: copy.deepcopy(my_predbat.args[key]) for key in arg_keys if key in my_predbat.args}
@@ -1107,10 +1121,22 @@ def run_car_manual_soc_measured_test(testname, my_predbat):
             print("ERROR: {}: manual SoC should be {}, got {}".format(label, expected, written()))
             failed = True
 
-    def cycle(soc_kwh, energy=None, charging=False):
-        """One scheduled write-back with the tracker at soc_kwh, the counter at energy and the car charging or not."""
-        my_predbat.car_charging_soc = [soc_kwh]
-        my_predbat.car_charging_now = [charging]
+    def set_tracker(soc_kwh):
+        """Set the tracker as a user would, and forget what Predbat last wrote so it is not seen as an edit."""
+        my_predbat.expose_config("car_charging_manual_soc_kwh", soc_kwh)
+        my_predbat.car_charging_manual_soc_written = {}
+
+    def cycle(energy=None, charging=None, minutes=10):
+        """
+        One scheduled cycle, `minutes` after the last: the tracker is read as fetch does, the counter shows
+        `energy` (a number, or a state string such as "unavailable") and car_charging_now shows `charging`
+        ("on", "off", "unavailable"), then the write-back runs.
+        """
+        my_predbat.now_utc = my_predbat.now_utc + timedelta(minutes=minutes)
+        my_predbat.car_charging_soc = [my_predbat.car_manual_soc_kwh(0)]
+        if charging is not None:
+            my_predbat.ha_interface.set_state(now_entity, charging)
+            my_predbat.car_charging_now = [charging == "on"]
         if energy is not None:
             my_predbat.ha_interface.set_state(energy_entity, str(energy), attributes={"unit_of_measurement": "kWh"})
         my_predbat.update_car_manual_soc()
@@ -1121,9 +1147,11 @@ def run_car_manual_soc_measured_test(testname, my_predbat):
         my_predbat.expose_config("car_charging_manual_soc", True)
         my_predbat.car_charging_battery_size = [10.0]
         my_predbat.car_charging_limit = [8.0]
+        my_predbat.car_charging_rate = [7.4]  # 10 minutes can deliver at most 7.4 / 6 x 1.1 + 0.1 = 1.457 kWh
         my_predbat.car_charging_loss = 0.9  # 10% loss
         my_predbat.car_charging_manual_energy_last = {}
-        my_predbat.car_charging_soc_next = [6.0]  # the plan always predicts +1 kWh from 5.0
+        my_predbat.car_charging_soc_next = [6.0]  # the plan always predicts 6.0 kWh next
+        my_predbat.now_utc = datetime(2026, 10, 21, 12, 0, tzinfo=timezone.utc)
         for key in arg_keys:
             my_predbat.args.pop(key, None)
 
@@ -1138,31 +1166,189 @@ def run_car_manual_soc_measured_test(testname, my_predbat):
             failed = True
 
         # No measured source configured: unchanged plan-based behaviour
-        cycle(5.0)
+        set_tracker(5.0)
+        cycle()
         check("no measured source", 6.0)
 
-        # car_charging_now sensor only: not charging means no advance, charging falls back to the plan
+        # car_charging_now sensor only: not charging holds, charging falls back to the plan, and so does
+        # unknown/unavailable - no information is not "not charging"
         my_predbat.args["car_charging_now"] = [now_entity]
-        cycle(5.0, charging=False)
+        set_tracker(5.0)
+        cycle(charging="off")
         check("car_charging_now off", 5.0)
-        cycle(5.0, charging=True)
+        cycle(charging="on")
         check("car_charging_now on, no energy counter", 6.0)
+        set_tracker(5.0)
+        cycle(charging="unavailable")
+        check("car_charging_now unavailable, no energy counter", 6.0)
 
         # Energy counter: first reading is only the baseline, then the delivered delta (x efficiency)
         my_predbat.args["car_charging_energy"] = energy_entity
-        cycle(5.0, energy=2.0, charging=True)
+        set_tracker(5.0)
+        cycle(energy=2.0, charging="on")
         check("energy baseline", 5.0)
-        cycle(5.0, energy=3.0, charging=True)
+        cycle(energy=3.0, charging="on")
         check("energy delta 1.0 kWh", 5.9)
         # The charger delivers nothing although the plan says charge - no drift
-        cycle(5.9, energy=3.0, charging=True)
+        cycle(energy=3.0, charging="on")
         check("energy counter flat", 5.9)
-        # New session: counter drops to 0.5 - everything since the reset is new energy, never negative
-        cycle(5.9, energy=0.5, charging=True)
-        check("energy counter reset", 6.35)
+
+        # Counter unavailable for a cycle: hold (never the plan's 6.0), keep the baseline, and count the
+        # energy delivered across the gap exactly once when it comes back
+        cycle(energy="unavailable", charging="on")
+        check("energy counter unavailable holds", 5.9)
+        cycle(energy=4.0, charging="on")
+        check("energy across the dropout counted once", 6.8)
+        # A counter configured wins over car_charging_now: unavailable charging-now changes nothing
+        cycle(energy=4.0, charging="unavailable")
+        check("energy counter with car_charging_now unavailable", 6.8)
+
+        # Integration reload glitch 4.0 -> 0 -> 4.0: neither the drop nor the jump back adds energy
+        cycle(energy=0.0, charging="on")
+        check("energy counter glitch to 0", 6.8)
+        cycle(energy=4.0, charging="on")
+        check("energy counter back from glitch", 6.8)
+        cycle(energy=4.5, charging="on")
+        check("energy after glitch", 7.25)
+
+        # A rise the 7.4 kW charger could not deliver in 10 minutes becomes the new baseline, adding nothing
+        cycle(energy=50.0, charging="on")
+        check("implausible energy jump", 7.25)
+        cycle(energy=50.5, charging="on")
+        check("energy after implausible jump", 7.7)
+        # ... while the same rise over a long enough gap is plausible
+        cycle(energy=51.5, charging="on", minutes=30)
+        check("plausible rise over 30 minutes", 8.6)
+
+        # User edits the tracker mid-session: the energy since the last write-back is not added on top
+        my_predbat.expose_config("car_charging_manual_soc_kwh", 3.0)
+        cycle(energy=52.5, charging="on")
+        check("user edit re-baselines", 3.0)
+        cycle(energy=53.5, charging="on")
+        check("energy after user edit", 3.9)
+
+        # A counter unreadable for longer than the hold falls back to the plan rather than freezing the
+        # SoC, and coming back only starts a new baseline - the outage's energy is not added on top
+        cycle(energy="unavailable", charging="on", minutes=70)
+        check("long counter outage falls back to the plan", 6.0)
+        cycle(energy=60.0, charging="on")
+        check("counter back after long outage re-baselines", 6.0)
+
         # Measured energy can never push the tracker past the battery
-        cycle(9.9, energy=10.5, charging=True)
+        set_tracker(9.9)
+        cycle(energy=61.0, charging="on")
         check("energy capped at battery size", 10.0)
+    finally:
+        my_predbat.expose_config("car_charging_manual_soc_kwh", saved_soc_kwh)
+        my_predbat.expose_config("car_charging_manual_soc", saved_manual_soc_switch)
+        for key in arg_keys:
+            my_predbat.args.pop(key, None)
+        my_predbat.args.update(saved_args)
+        for attr, value in saved.items():
+            setattr(my_predbat, attr, value)
+
+    if failed:
+        print("Test: {} FAILED".format(testname))
+    else:
+        print("Test: {} PASSED".format(testname))
+
+    return failed
+
+
+def run_car_manual_soc_fetch_clamp_test(testname, my_predbat):
+    """
+    fetch_sensor_data_cars() must clamp the manual car SoC it reads to the car's battery - and to the
+    final one: an IOG car's battery size is replaced by Octopus's vehicle_battery_size_in_kwh partway
+    through the fetch, so a tracker within the real battery must not be cut to the configured size.
+    """
+    failed = False
+    print("**** Running Test: multi_car_iog {} ****".format(testname))
+
+    snapshot_attrs = [
+        "num_cars",
+        "car_charging_planned",
+        "car_charging_now",
+        "car_charging_plan_smart",
+        "car_charging_plan_max_price",
+        "car_charging_plan_time",
+        "car_charging_battery_size",
+        "car_charging_limit",
+        "car_charging_limit_model",
+        "car_charging_rate",
+        "car_charging_slots",
+        "car_charging_exclusive",
+        "car_charging_manual_soc",
+        "car_charging_soc",
+        "car_charging_soc_next",
+        "car_charging_loss",
+        "octopus_intelligent_charging",
+        "octopus_intelligent_ignore_unplugged",
+        "octopus_intelligent_consider_full",
+        "octopus_slots",
+        "now_utc",
+        "midnight_utc",
+        "minutes_now",
+    ]
+    saved = {attr: copy.deepcopy(getattr(my_predbat, attr)) for attr in snapshot_attrs if hasattr(my_predbat, attr)}
+    arg_keys = ["car_charging_loss", "car_charging_limit", "octopus_intelligent_slot"]
+    saved_args = {key: copy.deepcopy(my_predbat.args[key]) for key in arg_keys if key in my_predbat.args}
+    saved_manual_soc_switch = my_predbat.get_arg("car_charging_manual_soc", default=False)
+    saved_soc_kwh = my_predbat.get_arg("car_charging_manual_soc_kwh", 0.0)
+    iog_entity = "binary_sensor.octopus_energy_intelligent_dispatching_manual_soc"
+
+    def fetch_soc(soc_kwh, iog):
+        """Run the real fetch with the tracker at soc_kwh and a configured 10 kWh battery, with or without IOG."""
+        my_predbat.car_charging_battery_size = [10.0]
+        my_predbat.car_charging_slots = [[]]
+        my_predbat.octopus_slots = [[]]
+        my_predbat.expose_config("car_charging_manual_soc_kwh", soc_kwh)
+        if iog:
+            my_predbat.args["octopus_intelligent_slot"] = [iog_entity]
+        else:
+            my_predbat.args.pop("octopus_intelligent_slot", None)
+        my_predbat.fetch_sensor_data_cars(save=False)
+        return my_predbat.car_charging_soc[0]
+
+    try:
+        my_predbat.num_cars = 1
+        my_predbat.car_charging_planned = [False]
+        my_predbat.car_charging_now = [False]
+        my_predbat.car_charging_plan_smart = [False]
+        my_predbat.car_charging_plan_max_price = [0]
+        my_predbat.car_charging_plan_time = ["07:00:00"]
+        my_predbat.car_charging_limit = [8.0]
+        my_predbat.car_charging_rate = [7.4]
+        my_predbat.car_charging_exclusive = [False]
+        my_predbat.car_charging_manual_soc = [True]
+        my_predbat.expose_config("car_charging_manual_soc", True)
+        my_predbat.octopus_intelligent_charging = True
+        my_predbat.octopus_intelligent_ignore_unplugged = False
+        my_predbat.octopus_intelligent_consider_full = False
+        pin_test_clock(my_predbat)
+        my_predbat.args["car_charging_loss"] = 0.0
+        my_predbat.args["car_charging_limit"] = [80.0]
+        my_predbat.ha_interface.set_state(
+            iog_entity,
+            "off",
+            attributes={"completed_dispatches": [], "planned_dispatches": [], "vehicle_battery_size_in_kwh": 75.0, "charge_point_power_in_kw": 7.4},
+        )
+
+        soc = fetch_soc(100.0, iog=False)
+        if abs(soc - 10.0) > 0.001:
+            print("ERROR: fetch should clamp a 100 kWh manual SoC to the 10 kWh battery, got {}".format(soc))
+            failed = True
+        soc = fetch_soc(-3.0, iog=False)
+        if abs(soc) > 0.001:
+            print("ERROR: fetch should clamp a negative manual SoC to 0, got {}".format(soc))
+            failed = True
+        soc = fetch_soc(60.0, iog=True)
+        if abs(soc - 60.0) > 0.001:
+            print("ERROR: fetch should clamp the manual SoC to the 75 kWh IOG battery, not the configured 10 kWh - expected 60.0, got {}".format(soc))
+            failed = True
+        soc = fetch_soc(100.0, iog=True)
+        if abs(soc - 75.0) > 0.001:
+            print("ERROR: fetch should clamp a 100 kWh manual SoC to the 75 kWh IOG battery, got {}".format(soc))
+            failed = True
     finally:
         my_predbat.expose_config("car_charging_manual_soc_kwh", saved_soc_kwh)
         my_predbat.expose_config("car_charging_manual_soc", saved_manual_soc_switch)
@@ -1194,6 +1380,7 @@ def run_multi_car_iog_tests(my_predbat):
     failed |= run_iog_consider_full_predict_test("multi_car_iog_consider_full_predict_4967", my_predbat)
     failed |= run_update_car_manual_soc_cap_test("multi_car_iog_manual_soc_cap_4967", my_predbat)
     failed |= run_car_manual_soc_measured_test("car_manual_soc_measured", my_predbat)
+    failed |= run_car_manual_soc_fetch_clamp_test("car_manual_soc_fetch_clamp", my_predbat)
     failed |= run_charger_schedule_plan_test("charger_schedule_is_the_car_plan_5399", my_predbat)
     failed |= run_planned_slot_sensor_test("planned_slot_sensor_5413", my_predbat)
     return failed

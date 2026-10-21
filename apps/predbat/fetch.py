@@ -1879,7 +1879,10 @@ class Fetch:
         that can hold anything, e.g. 100 kWh entered for a 10 kWh car.
         """
         car_postfix = "" if car_n == 0 else "_" + str(car_n)
-        soc_kwh = self.get_arg("car_charging_manual_soc_kwh" + car_postfix, 0.0)
+        try:
+            soc_kwh = float(self.get_arg("car_charging_manual_soc_kwh" + car_postfix, 0.0))
+        except (ValueError, TypeError):
+            soc_kwh = 0.0
         return max(0.0, min(soc_kwh, self.car_charging_battery_size[car_n]))
 
     def fetch_sensor_data_cars(self, save=True):
@@ -2003,7 +2006,10 @@ class Fetch:
                 if size:
                     self.car_charging_battery_size[car_n] = size
                     # Recalculate car SoC now that battery size has been updated from Octopus data
-                    if car_n < len(self.car_charging_manual_soc) and not self.car_charging_manual_soc[car_n]:
+                    if car_n < len(self.car_charging_manual_soc) and self.car_charging_manual_soc[car_n]:
+                        # The manual SoC was clamped to the configured size above - clamp it again to the real one
+                        self.car_charging_soc[car_n] = self.car_manual_soc_kwh(car_n)
+                    else:
                         self.car_charging_soc[car_n] = (self.get_arg("car_charging_soc", 0.0, index=car_n) * self.car_charging_battery_size[car_n]) / 100.0
                 if rate:
                     # Octopus's figure only ever raises the configured rate, never lowers it. Where Octopus's catalogue

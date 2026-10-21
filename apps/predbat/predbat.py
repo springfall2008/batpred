@@ -77,6 +77,9 @@ from const import (
     CONFIG_REFRESH_PERIOD,
     INVERTER_QUICK_UPDATE_SECONDS,
     DEBUG_ENABLE_MAX_HOURS,
+    CAR_MANUAL_SOC_RATE_MARGIN,
+    CAR_MANUAL_SOC_ENERGY_MARGIN_KWH,
+    CAR_MANUAL_SOC_COUNTER_HOLD_MINUTES,
 )
 from config import APPS_SCHEMA, CONFIG_ITEMS
 import debug_history
@@ -552,6 +555,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.car_charging_hold = False
         self.car_charging_manual_soc = []
         self.car_charging_manual_energy_last = {}
+        self.car_charging_manual_soc_written = {}
         self.car_charging_threshold = 99
         self.car_charging_energy = {}
         self.car_charging_energy_warned = False
@@ -1161,52 +1165,92 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
     def car_manual_soc_measured_energy(self, car_n):
         """
-        Energy in kWh delivered to car_n since the last call, read from the car_charging_energy session counter.
+        Energy in kWh delivered to car_n since the last good reading of the car_charging_energy session counter.
 
-        Returns None when there is no usable counter for this car: car_charging_energy is a single total
-        across all cars, so it is only attributed to a car when there is exactly one. The first reading
-        only sets the baseline, and a counter that drops is a new session, so everything it shows since
-        the reset is new energy - the result is never negative.
+        Returns (configured, kwh). configured is False when there is no usable counter for this car:
+        car_charging_energy is a single total across all cars, so it is only attributed to a car when
+        there is exactly one. A counter that cannot be read (e.g. unavailable) gives (True, None) while
+        there is a baseline from a good reading less than CAR_MANUAL_SOC_COUNTER_HOLD_MINUTES old - the
+        baseline is kept, so the energy delivered across the gap is counted once by the next good reading.
+        With no baseline, or once the outage is longer than that, the baseline is dropped and it is
+        (False, None), so a counter that is missing or broken does not freeze the SoC for good; the next
+        good reading starts a new baseline.
+
+        The baseline (reading and time) is in memory only. The first reading after a start only sets it,
+        so energy between the last write-back before a restart and the first one after it is not counted.
+        A counter that drops (a new session, or an integration reload glitching to 0) starts a new baseline at
+        the new value and adds nothing, and so does a rise larger than the car could take at
+        car_charging_rate since the last good reading - the result is never negative or implausible.
         """
         if self.num_cars != 1:
-            return None
+            return False, None
         entity_id = self.get_arg("car_charging_energy", None, indirect=False)
         if isinstance(entity_id, list) and len(entity_id) == 1:
             entity_id = entity_id[0]
         if not is_entity_id(entity_id):
-            return None
+            return False, None
         try:
             energy_now = float(self.resolve_arg("car_charging_energy", entity_id, default=None, required_unit="kWh")) * self.get_arg("car_charging_energy_scale", 1.0)
         except (ValueError, TypeError):
-            return None
-        energy_last = self.car_charging_manual_energy_last.get(car_n)
-        self.car_charging_manual_energy_last[car_n] = energy_now
+            energy_now = None
+        now = self.now_utc
+        energy_last, time_last = self.car_charging_manual_energy_last.get(car_n, (None, None))
+        if energy_now is None:
+            if energy_last is not None and (now - time_last).total_seconds() <= CAR_MANUAL_SOC_COUNTER_HOLD_MINUTES * 60:
+                return True, None
+            self.car_charging_manual_energy_last.pop(car_n, None)
+            return False, None
+        self.car_charging_manual_energy_last[car_n] = (energy_now, now)
         if energy_last is None:
-            return 0.0
-        if energy_now < energy_last:
-            return energy_now
-        return energy_now - energy_last
+            return True, 0.0
+        delta = energy_now - energy_last
+        if delta < 0:
+            self.log("Info: Car {} charging energy counter dropped from {} to {} kWh, treating it as a reset".format(car_n, dp3(energy_last), dp3(energy_now)))
+            return True, 0.0
+        elapsed_hours = max((now - time_last).total_seconds() / 3600.0, 0.0)
+        rate_kw = self.car_charging_rate[car_n] if car_n < len(self.car_charging_rate) else 0.0
+        max_kwh = rate_kw * elapsed_hours * CAR_MANUAL_SOC_RATE_MARGIN + CAR_MANUAL_SOC_ENERGY_MARGIN_KWH
+        if delta > max_kwh:
+            self.log("Info: Car {} charging energy counter jumped by {} kWh in {} minutes, more than the {} kW charger can deliver - ignoring it".format(car_n, dp3(delta), int(elapsed_hours * 60), rate_kw))
+            return True, 0.0
+        return True, delta
 
     def update_car_manual_soc(self):
         """
         Advance the manual car SoC tracker for cars using car_charging_manual_soc.
 
         A measured source wins over the plan: with a car_charging_energy counter the SoC advances by the
-        energy actually delivered (less car_charging_loss), and with a car_charging_now sensor reporting
-        the car is not charging it does not advance at all. Only with neither is the plan's predicted
-        next SoC written back, which advances the SoC whether or not the charger delivers anything.
+        energy actually delivered (less car_charging_loss), and holds while the counter briefly cannot be
+        read (see car_manual_soc_measured_energy()). Without a usable counter, a car_charging_now sensor
+        reporting the car is not charging holds it; only otherwise (no sensor, or it is charging, unknown
+        or unavailable) is the plan's predicted next SoC written back, which advances the SoC whether or
+        not the charger delivers anything.
+
+        A value that differs from the last one written here was edited by the user, so the energy measured
+        since the last write-back is not added on top of the edit (the counter keeps its new baseline).
         """
         for car_n in range(self.num_cars):
             if car_n < len(self.car_charging_manual_soc) and self.car_charging_manual_soc[car_n]:
                 car_postfix = "" if car_n == 0 else "_" + str(car_n)
-                self.log("Car {} charging Manual SoC current is {} next is {}".format(car_n, self.car_charging_soc[car_n], self.car_charging_soc_next[car_n]))
-                measured_kwh = self.car_manual_soc_measured_energy(car_n)
-                charging_now_sensor = is_entity_id(self.get_arg("car_charging_now", None, indirect=False, index=car_n))
-                if measured_kwh is not None or (charging_now_sensor and not self.car_charging_now[car_n]):
-                    soc_next = self.car_charging_soc[car_n] + (measured_kwh or 0.0) * self.car_charging_loss
-                    soc_next = max(0.0, min(soc_next, self.car_charging_battery_size[car_n]))
-                    self.log("Car {} charging Manual SoC advanced by measured energy {} kWh to {}".format(car_n, dp3(measured_kwh or 0.0), dp3(soc_next)))
-                    self.expose_config("car_charging_manual_soc_kwh" + car_postfix, dp3(soc_next))
+                soc_now = self.car_charging_soc[car_n]
+                self.log("Car {} charging Manual SoC current is {} next is {}".format(car_n, soc_now, self.car_charging_soc_next[car_n]))
+                counter_configured, measured_kwh = self.car_manual_soc_measured_energy(car_n)
+                charging_now = None
+                if is_entity_id(self.get_arg("car_charging_now", None, indirect=False, index=car_n)):
+                    charging_now = self.get_car_charging_now_tristate(car_n)
+                soc_written = self.car_charging_manual_soc_written.get(car_n)
+                if counter_configured:
+                    if measured_kwh is None:
+                        self.log("Car {} charging Manual SoC held at {} - charging energy counter is unavailable".format(car_n, dp3(soc_now)))
+                        continue
+                    if soc_written is not None and abs(soc_now - soc_written) > 0.01:
+                        self.log("Car {} charging Manual SoC was changed from {} to {}, not adding {} kWh measured before the change".format(car_n, dp3(soc_written), dp3(soc_now), dp3(measured_kwh)))
+                        measured_kwh = 0.0
+                    soc_next = max(0.0, min(soc_now + measured_kwh * self.car_charging_loss, self.car_charging_battery_size[car_n]))
+                    self.log("Car {} charging Manual SoC advanced by measured energy {} kWh to {}".format(car_n, dp3(measured_kwh), dp3(soc_next)))
+                elif charging_now is False:
+                    soc_next = soc_now
+                    self.log("Car {} charging Manual SoC held at {} - car is not charging".format(car_n, dp3(soc_next)))
                 elif self.car_charging_soc_next[car_n] is not None:
                     soc_next = self.car_charging_soc_next[car_n]
                     # The modelled car SoC can run past the real charge limit when the prediction's fill
@@ -1214,7 +1258,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                     # SoC stands in for a measurement, so keep it within the real per-car limit
                     if car_n < len(self.car_charging_limit):
                         soc_next = min(soc_next, self.car_charging_limit[car_n])
-                    self.expose_config("car_charging_manual_soc_kwh" + car_postfix, dp3(soc_next))
+                else:
+                    continue
+                self.car_charging_manual_soc_written[car_n] = dp3(soc_next)
+                self.expose_config("car_charging_manual_soc_kwh" + car_postfix, dp3(soc_next))
 
     def run_comparison(self, status=None, status_extra=""):
         """
