@@ -283,6 +283,7 @@ class GatewayMQTT(ComponentBase):
     _pv_only_serials = ()
     _inverter_slot_serials = ()
     _slots_without_capacity = frozenset()
+    _ev_registered_without_soc = frozenset()
     _last_ratings = {}  # replaced, never changed in place
     _assumed_ratings = frozenset()
     _reserve_before_zero = {}  # replaced, never changed in place
@@ -423,6 +424,7 @@ class GatewayMQTT(ComponentBase):
         self._discovery_save_retry_at = 0
         self._unavailable_inverters = ((), ())
         self._configured_ev_chargers = frozenset()  # EV charge point ids registered at the last auto-config
+        self._ev_registered_without_soc = frozenset()  # Of those, the one registered as the car while it reported no SoC
         self._last_published_plan = None
         self._pending_plan = None
         self._ev_windows: list = []  # parsed (start_dt, end_dt) charge windows from HA plan attribute
@@ -1655,6 +1657,11 @@ class GatewayMQTT(ComponentBase):
         if new_chargers:
             self.log(f"Info: GatewayMQTT: new EV charger(s) discovered {sorted(new_chargers)} — re-running auto-config")
             return True
+        # And when the car's charger, registered while it reported no SoC, starts to - so its SoC sensor is wired in
+        now_soc = sorted(ev.charge_point_id for ev in status.ev_chargers if ev.charge_point_id in self._ev_registered_without_soc and ev.soc_percent)
+        if now_soc:
+            self.log(f"Info: GatewayMQTT: EV charger(s) {now_soc} now report the car's SoC — re-running auto-config")
+            return True
         return False
 
     def _usable_serials(self, status):
@@ -2255,12 +2262,17 @@ class GatewayMQTT(ComponentBase):
         # car_charging_battery_size / car_charging_limit settings — the charger cannot
         # report them, so overwriting them here would only swap one default for another.
         # "Planned" derives from the connected binary sensor and "now" from the charging sensor (the car
-        # drawing power); many OCPP cars do not report SoC, so the manual-SoC path supplies a starting value.
+        # drawing power); many OCPP cars do not report SoC, so the manual-SoC path tracks it from the session energy.
         self.set_arg("car_charging_planned", [f"binary_sensor.{pfx}_connected"])
         # Holds the battery for the car while it draws power; it never adds a charging slot, so it cannot
         # keep a session going through gateway_evc_control's window start/stop
         self.set_arg("car_charging_now", [f"binary_sensor.{pfx}_charging"])
-        self.set_arg("car_charging_soc", [f"sensor.{pfx}_soc"])
+        # The SoC sensor only when the charger reports the car's SoC. Otherwise sensor.{pfx}_soc is an estimate from
+        # the session energy, which starts from 0% every session, so the car is left without one: with the energy and
+        # connected sensors it is then tracked as a manual SoC car, which the user can set to its real level
+        if ev.soc_percent:
+            self.set_arg("car_charging_soc", [f"sensor.{pfx}_soc"])
+        self._ev_registered_without_soc = frozenset() if ev.soc_percent or not ev.charge_point_id else frozenset([ev.charge_point_id])
         self.set_arg("car_charging_energy", f"sensor.{pfx}_session_energy")
         # Live charge power - display only, for the web power flow diagram
         self.set_arg("car_charging_power", f"sensor.{pfx}_power")

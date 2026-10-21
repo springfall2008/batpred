@@ -5789,14 +5789,37 @@ class TestEvAutoConfig:
         gw.get_arg = fake_get_arg
         return gw
 
-    def _status_with_ev(self, charge_point_id="CP1", max_current_a=32, voltage_v=240):
+    def _status_with_ev(self, charge_point_id="CP1", max_current_a=32, voltage_v=240, soc_percent=55):
         status = pb.GatewayStatus()
         ev = status.ev_chargers.add()
         ev.connected = True
         ev.charge_point_id = charge_point_id
         ev.max_current_a = max_current_a
         ev.voltage_v = voltage_v
+        ev.soc_percent = soc_percent
         return status
+
+    def test_no_soc_sensor_when_charger_reports_none(self):
+        """A charger that reports no SoC leaves car_charging_soc unset, so the car is tracked as a manual SoC car.
+
+        sensor.<pfx>_soc is then only an estimate from the session energy, which starts from 0% every session.
+        """
+        gw = self._make_gateway(ev_enable=True, num_cars=0)
+        gw._register_ev_car(self._status_with_ev(soc_percent=0))
+
+        assert "car_charging_soc" not in gw._args
+        # What the manual SoC is tracked from: the session energy, and the connected sensor for the reset on unplug
+        assert gw._args["car_charging_energy"] == "sensor.predbat_gateway_ev_cp1_session_energy"
+        assert gw._args["car_charging_planned"] == ["binary_sensor.predbat_gateway_ev_cp1_connected"]
+        assert gw._ev_registered_without_soc == frozenset({"CP1"})
+
+    def test_soc_sensor_when_charger_reports_soc(self):
+        """A charger that reports the car's SoC has its SoC sensor wired in, and nothing waits for it."""
+        gw = self._make_gateway(ev_enable=True, num_cars=0)
+        gw._register_ev_car(self._status_with_ev(soc_percent=40))
+
+        assert gw._args["car_charging_soc"] == ["sensor.predbat_gateway_ev_cp1_soc"]
+        assert gw._ev_registered_without_soc == frozenset()
 
     def test_registers_connected_charger_not_a_stale_slot(self):
         """A disconnected charger in slot 0 must not be registered over a connected one.
@@ -5988,6 +6011,16 @@ class TestEvNeedsReconfigure:
         """No EV charger present does not trigger a re-run on its own."""
         gw = self._make_gateway()
         assert gw._needs_reconfigure(self._status()) is False
+
+    def test_charger_starting_to_report_soc_triggers_reconfigure(self):
+        """The car's charger, registered while it reported no SoC, re-runs auto-config once it reports one."""
+        gw = self._make_gateway()
+        gw._configured_ev_chargers = frozenset({"CP30000003"})
+        gw._ev_registered_without_soc = frozenset({"CP30000003"})
+        status = self._status(charge_point_id="CP30000003")
+        assert gw._needs_reconfigure(status) is False
+        status.ev_chargers[0].soc_percent = 62
+        assert gw._needs_reconfigure(status) is True
 
 
 class TestEvControl:

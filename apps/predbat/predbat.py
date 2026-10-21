@@ -66,6 +66,7 @@ else:
     print("Running in compiled mode; skipping local file checks and auto-update.")
 
 from const import (
+    CAR_MANUAL_SOC_STORE_DAYS,
     COMPONENT_ERROR_STATUS_PREFIX,
     COMPONENT_ERROR_STATUS_SUFFIX,
     REPEAT_FULL_LOG_SECONDS,
@@ -552,8 +553,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.car_charging_hold = False
         self.car_charging_manual_soc = []
         self.car_charging_manual_soc_energy = []
-        # When Predbat last wrote each car's manual SoC, until Home Assistant reports it - see car_manual_soc_track()
-        self.car_manual_soc_written = {}
+        # Each manually tracked car's record, saved through the storage component - see car_manual_soc_track()
+        self.car_manual_soc_state = {}
+        self.car_manual_soc_loaded = False
         self.car_charging_threshold = 99
         self.car_charging_energy = {}
         self.car_charging_energy_warned = False
@@ -918,6 +920,44 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         except Exception as e:
             self.log("Warning: Failed to save plan: {}".format(e))
 
+    def car_manual_soc_restore(self):
+        """
+        Load the manually tracked cars' records saved by car_manual_soc_save(), once after startup.
+
+        Without a storage component, or with nothing saved, the records start empty and each car counts from now.
+        """
+        if self.car_manual_soc_loaded:
+            return
+        self.car_manual_soc_loaded = True
+        storage = self.components.get_component("storage") if self.components else None
+        if not storage:
+            return
+        try:
+            data = run_async(storage.load("predbat", "car_manual_soc"))
+        except Exception as e:
+            self.log("Warn: Failed to load the manual car SoC records: {}".format(e))
+            return
+        if isinstance(data, dict):
+            for car_n, record in data.items():
+                try:
+                    self.car_manual_soc_state[int(car_n)] = record
+                except (ValueError, TypeError):
+                    pass
+
+    def car_manual_soc_save(self):
+        """
+        Save the manually tracked cars' records through the storage component, so a restart picks up where they left off.
+        """
+        storage = self.components.get_component("storage") if self.components else None
+        if not storage:
+            return
+        try:
+            # Real wall-clock time, as for save_plan()
+            expiry = datetime.now(timezone.utc) + timedelta(days=CAR_MANUAL_SOC_STORE_DAYS)
+            run_async(storage.save("predbat", "car_manual_soc", {str(car_n): record for car_n, record in self.car_manual_soc_state.items()}, format="json", expiry=expiry))
+        except Exception as e:
+            self.log("Warn: Failed to save the manual car SoC records: {}".format(e))
+
     def load_plan(self):
         """Restore a previously saved plan from storage if it is recent enough."""
         storage = self.components.get_component("storage") if self.components else None
@@ -1168,8 +1208,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         A car with a car_charging_energy sensor is skipped: car_manual_soc_track() adds the energy it
         actually took instead, and adding the plan's prediction as well would count it twice.
 
-        So is a car whose plugged-in sensor (car_charging_plugged, else car_charging_planned) now reads unplugged. Writing would make the value
-        newer than the unplug, and car_manual_soc_track() would then not reset it on the next cycle.
+        So is a car whose plugged-in sensor (car_charging_plugged, else car_charging_planned) now reads unplugged: it
+        is not charging, so there is nothing to add.
+
+        What is written goes into the car's tracking record too, so the next cycle does not take it for a value
+        the user entered.
         """
         for car_n in range(self.num_cars):
             if car_n < len(self.car_charging_manual_soc_energy) and self.car_charging_manual_soc_energy[car_n]:
@@ -1188,6 +1231,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                     if car_n < len(self.car_charging_limit):
                         soc_next = min(soc_next, self.car_charging_limit[car_n])
                     self.expose_config("car_charging_manual_soc_kwh" + car_postfix, dp3(soc_next))
+                    self.car_manual_soc_written(car_n, dp3(soc_next))
 
     def run_comparison(self, status=None, status_extra=""):
         """

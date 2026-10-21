@@ -611,6 +611,8 @@ To have Predbat plan for the gateway charger as a car, enable it in `apps.yaml`:
 
 When enabled, Predbat registers the charger as a car and maps the EV entities above onto the standard `car_charging_*` settings, so the normal [Predbat-led car charging](#predbat-led-charging) planning applies.
 The charge rate tracks the `sensor.predbat_gateway_ev_<id>_charge_rate` capability sensor. The car's battery size and target charge level are taken from your existing `car_charging_battery_size` and `car_charging_limit` settings (the charger cannot report them).
+`car_charging_soc` is only mapped when the charger reports the car's own SoC. Otherwise the car's SoC is tracked in **input_number.predbat_car_charging_manual_soc_kwh** from the session energy and the connected sensor
+(see [manual car SoC](#predbat-led-charging)), so you can set it to the car's real level when you plug in.
 
 To also have Predbat send the plan to the charger (so the EVC charges according to Predbat's schedule), add a second flag:
 
@@ -880,17 +882,22 @@ Here Predbat plans and can initiate the car charging based upon the upcoming low
 - Check (and if necessary add) the sensor response value from the sensor configured in **car_charging_planned** that is returned when the car is 'plugged in and ready to charge' is in the list of **car_charging_planned_response** values
 configured in `apps.yaml`
 
-- If your car does not have a state of charge (SoC) sensor (**car_charging_soc** is not set in `apps.yaml` for that car) Predbat uses **input_number.predbat_car_charging_manual_soc_kwh** (for car 0) to hold the car's SoC in kWh instead.
-If you do have a car SoC sensor, Predbat shows its reading (in kWh) in **input_number.predbat_car_charging_manual_soc_kwh** and changing it there has no effect.
-To use the manual SoC instead of your sensor, turn on **switch.predbat_car_charging_manual_soc** first - the value then starts from the sensor's last reading and is yours to change.<BR>
+- If your car does not have a state of charge (SoC) sensor (**car_charging_soc** is not set in `apps.yaml` for that car) but its charger has an energy sensor (**car_charging_energy**)
+and a plugged-in sensor (**car_charging_plugged**, or failing that **car_charging_planned**), Predbat tracks the car's SoC in kWh in **input_number.predbat_car_charging_manual_soc_kwh** (for car 0) itself.
+Without both sensors the car is planned from empty each time, as Predbat would have no way to tell when the car stops charging or is unplugged.<BR>
+To track the SoC in any other case - a car with no sensors at all, or one whose SoC sensor you would rather not use - turn on **switch.predbat_car_charging_manual_soc** (for car 0).
+If you do have a car SoC sensor and leave the switch off, Predbat shows its reading (in kWh) in **input_number.predbat_car_charging_manual_soc_kwh** and changing it there has no effect;
+turning the switch on then starts the manual SoC from the sensor's last reading.<BR>
 For multiple cars, use **switch.predbat_car_charging_manual_soc_1/2/3** and **input_number.predbat_car_charging_manual_soc_kwh_1/2/3** for cars 1, 2, and 3 respectively.<BR>
-You will need to manually set this to the car's current charge level before charging. Predbat then keeps it up to date:
-    - If **car_charging_energy** is set for the car in `apps.yaml` Predbat adds the energy the charger's history shows since the value last changed (less **input_number.predbat_car_charging_loss**).
+Set the value to the car's current charge level before charging. Predbat then keeps it up to date:
+    - If **car_charging_energy** is set for the car in `apps.yaml` Predbat adds the energy the charger's history shows (less **input_number.predbat_car_charging_loss**).
     With more than one car, **car_charging_energy** must be a list with the cars' chargers first, in car order. A single sensor is used for car 0 only.
     - Otherwise Predbat adds the charge it planned for the car during each charging slot.
-    - If **car_charging_plugged** (or failing that **car_charging_planned**) is set for the car in `apps.yaml` the value is reset to 0 when the car has been unplugged since the value last changed, ready to be set again when it is next plugged in.
-    A value you enter while the car is unplugged is kept. If your **car_charging_planned** sensor also turns off when charging finishes with the car still plugged in, set **car_charging_plugged** to a sensor that does not, or the value will be reset then too.
-    - Both work from when the value last changed in Home Assistant, so charging or unplugging while Predbat is restarting is still counted.<BR>
+    - If **car_charging_plugged** (or failing that **car_charging_planned**) is set to a sensor for the car in `apps.yaml` the value is reset to 0 when the sensor goes from plugged in to unplugged,
+    ready to be set again when the car is next plugged in. A sensor that becomes unavailable does not reset it, and a value you enter while the car is unplugged is kept.
+    If your **car_charging_planned** sensor also turns off when charging finishes with the car still plugged in, set **car_charging_plugged** to a sensor that does not, or the value will be reset then too.
+    - A value you enter is the new starting point: energy is counted from when you entered it.
+    - Predbat saves where it has got to in its cache, so charging or unplugging while Predbat is restarting is still counted.<BR>
 NB: **input_number.predbat_car_charging_manual_soc_kwh** must be set to the current kWh value of your car battery NOT a percentage SoC figure
 otherwise, Predbat won't know how much energy there currently is in the battery.<BR>
 NB2: If you have **car_charging_soc** set and working for your car SoC sensor in `apps.yaml`, leave **switch.predbat_car_charging_manual_soc** Off as otherwise the car SoC sensor will be ignored
