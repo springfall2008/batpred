@@ -833,9 +833,12 @@ class HanchuAPI(ComponentBase):
         with 0 for a hold or a rate inside the menu's range, so the next read would otherwise drop the
         ceiling back to the menu's and the raise would undo itself (batpred#5672).
 
-        Where the model's battery limit is known (HANCHU_MODELS) it raises both ceilings too, so a
-        10 kW unit holding 5000 W can still be asked for 10000 W (batpred#5664). Nothing here lowers
-        a ceiling: a value the device accepts is never refused on the table's word.
+        The model's rating (HANCHU_MODELS) never raises a ceiling. It sets battery_rate_max and
+        inverter_limit, but nothing yet shows the cloud accepts a power limit above the menu's maximum
+        that the device has not itself been seen holding, and a refused key would turn every write into
+        a partial accept that is resent each cycle. So a 10 kW unit whose menu says 0-5000 is written
+        at most 5000 W until it is seen holding more (a limit set by an installer, say), and that gap
+        is said once per key - only once a settings read has shown what the device holds.
         """
         merged = dict(HANCHU_RANGES)
         merged.update(self.device_ranges.get(sn) or {})
@@ -845,14 +848,15 @@ class HanchuAPI(ComponentBase):
         for key in (HANCHU_KEY_CHARGE_POWER, HANCHU_KEY_DISCHARGE_POWER):
             held = max(self._as_float(settings.get(key), 0.0), self._as_float(ceiling.get(key), 0.0))
             low, high = merged[key]
-            if battery_limit > high:
-                high = battery_limit
-                merged[key] = (low, high)
             if held > high:
                 merged[key] = (low, int(held))
                 if (sn, "held", key) not in self._clamp_logged:
                     self._clamp_logged.add((sn, "held", key))
                     self.log("Info: Hanchu {} holds {} {:.0f} W, above the menu's {} W maximum (a range the menu shares across models), so {:.0f} W is used as its limit".format(sn, key, held, high, held))
+            writable = merged[key][1]
+            if battery_limit > writable and sn in self.device_settings and (sn, "rating", key) not in self._clamp_logged:
+                self._clamp_logged.add((sn, "rating", key))
+                self.log("Info: Hanchu {} is rated {} W but {} is only known to accept up to {} W, so Predbat writes no more than that. If the inverter is ever seen holding a higher limit, Predbat will use it".format(sn, battery_limit, key, writable))
         return merged
 
     def _note_power_ceiling(self, sn, settings):

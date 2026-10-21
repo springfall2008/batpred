@@ -1146,14 +1146,15 @@ def test_hanchu_model_code_sets_battery_rate_max_and_inverter_limit():
     failed = False
     sn = "HC240100001"
     menu = {"CHG_PWR_LMT": (0, 5000), "DSCHG_PWR_LMT": (0, 5000)}
-    # (devModel as the API sends it, held settings, battery_rate_max, inverter_limit, power ceiling)
+    # (devModel as the API sends it, held settings, battery_rate_max, inverter_limit, writable power ceiling)
     cases = [
         # S-3.0K: battery 5000 W but AC only 3000 W - the menu's 5000 W overstated the inverter.
         (1, {"CHG_PWR_LMT": "5000", "DSCHG_PWR_LMT": "5000"}, 5000.0, 3000.0, 5000),
         # S-6.0K holding a 6000 W charge limit: the battery is still 5000 W; the held value stays writable.
         ("5", {"CHG_PWR_LMT": "6000", "DSCHG_PWR_LMT": "4000"}, 5000.0, 6000.0, 6000),
-        # S-10.0K holding 5000 W: the table raises both, and so does the clamp ceiling.
-        (32, {"CHG_PWR_LMT": "5000", "DSCHG_PWR_LMT": "5000"}, 10000.0, 10000.0, 10000),
+        # S-10.0K holding 5000 W: the table raises both ratings, but not what Predbat writes - nothing
+        # shows the cloud accepts a limit above the menu's that the device has not been seen holding.
+        (32, {"CHG_PWR_LMT": "5000", "DSCHG_PWR_LMT": "5000"}, 10000.0, 10000.0, 5000),
         # S-6K-S: no stated battery limit, so battery_rate_max falls back to the menu; AC rating 6000.
         (28, {"CHG_PWR_LMT": "5000", "DSCHG_PWR_LMT": "5000"}, 5000.0, 6000.0, 5000),
     ]
@@ -1166,11 +1167,8 @@ def test_hanchu_model_code_sets_battery_rate_max_and_inverter_limit():
             print(f"ERROR: devModel {code}: battery_rate_max {client.battery_rate_max(sn)} inverter_limit {client.inverter_limit(sn)}, expected {rate_max} / {limit}")
             failed = True
         ranges = client.ranges_for(sn)
-        if ranges["CHG_PWR_LMT"][1] < ceiling:
-            print(f"ERROR: devModel {code}: charge power ceiling {ranges['CHG_PWR_LMT']}, expected at least {ceiling}")
-            failed = True
-        if code == 32 and ranges["DSCHG_PWR_LMT"] != (0, 10000):
-            print(f"ERROR: a 10 kW unit should accept a 10000 W discharge: {ranges['DSCHG_PWR_LMT']}")
+        if ranges["CHG_PWR_LMT"][1] != ceiling:
+            print(f"ERROR: devModel {code}: charge power ceiling {ranges['CHG_PWR_LMT']}, expected {ceiling}")
             failed = True
     # The name is recorded and said once.
     client = MockHanchu()
@@ -1254,6 +1252,51 @@ def test_hanchu_default_power_warning_waits_for_the_model():
     assert not failed, "test_hanchu_default_power_warning_waits_for_the_model"
 
 
+def test_hanchu_model_rating_never_raises_what_is_written():
+    """A rating above what the device is known to accept is planned with but never written (batpred#5664 review).
+
+    The menu's 0-5000 W item may well be enforced by the cloud, and a refused CHG_PWR_LMT turns every
+    write into a partial accept that is resent each cycle. So the writes stay within the menu and the
+    values the device has been seen holding, the gap is said once, and a held value lifts it.
+    """
+    failed = False
+    sn = "HC240100001"
+    client = MockHanchu()
+    client.device_ranges[sn] = {"CHG_PWR_LMT": (0, 5000), "DSCHG_PWR_LMT": (0, 5000)}
+    client._apply_status_payload(sn, dict(STATUS_SAMPLE, devModel=32))
+    # Before any settings read the gap is not reported - the device may yet be holding more.
+    client.ranges_for(sn)
+    if logged(client, "is only known to accept"):
+        print("ERROR: the rating gap should wait for a settings read")
+        failed = True
+    client.device_settings[sn] = {"CHG_PWR_LMT": "5000", "DSCHG_PWR_LMT": "5000"}
+    plan = {
+        "reserve": 10,
+        "charge": {"enable": True, "soc": 90, "power": 10000, "start": "01:00:00", "end": "02:00:00"},
+        "export": {"enable": False, "soc": 0, "power": 10000, "start": "00:00:00", "end": "00:00:00"},
+    }
+    payload = client.build_write_payload(sn, plan)
+    if payload.get("CHG_PWR_LMT") != 5000 or payload.get("DSCHG_PWR_LMT") != 5000:
+        print(f"ERROR: a 10 kW plan should be written at the 5000 W the device is known to accept: {payload.get('CHG_PWR_LMT')} / {payload.get('DSCHG_PWR_LMT')}")
+        failed = True
+    if client.battery_rate_max(sn) != 10000.0:
+        print(f"ERROR: the plan should still be modelled at the model's 10000 W: {client.battery_rate_max(sn)}")
+        failed = True
+    gap = [message for message in client.log_messages if "is only known to accept" in message]
+    client.ranges_for(sn)
+    if len(gap) != 2 or len([message for message in client.log_messages if "is only known to accept" in message]) != 2:
+        print(f"ERROR: the gap should be said once for each power key: {gap}")
+        failed = True
+    # A device seen holding a higher limit has shown it accepts it, so that becomes writable.
+    client.device_settings[sn] = {"CHG_PWR_LMT": "10000", "DSCHG_PWR_LMT": "8000"}
+    client._note_power_ceiling(sn, client.device_settings[sn])
+    payload = client.build_write_payload(sn, dict(plan, export=dict(plan["export"], enable=True, start="03:00:00", end="04:00:00")))
+    if payload.get("CHG_PWR_LMT") != 10000 or payload.get("DSCHG_PWR_LMT") != 8000:
+        print(f"ERROR: held limits should become writable: {payload.get('CHG_PWR_LMT')} / {payload.get('DSCHG_PWR_LMT')}")
+        failed = True
+    assert not failed, "test_hanchu_model_rating_never_raises_what_is_written"
+
+
 def run_hanchu_api_tests(my_predbat):
     """Run all Hanchu API and auth tests."""
     failed = False
@@ -1296,6 +1339,7 @@ def run_hanchu_api_tests(my_predbat):
         ("api_trace_default", test_hanchu_api_trace_is_off_unless_configured),
         ("model_ratings", test_hanchu_model_code_sets_battery_rate_max_and_inverter_limit),
         ("model_unknown", test_hanchu_unknown_model_code_falls_back_to_the_menu),
+        ("model_rating_not_written", test_hanchu_model_rating_never_raises_what_is_written),
         ("model_default_warning", test_hanchu_default_power_warning_waits_for_the_model),
     ]:
         try:
