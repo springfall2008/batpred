@@ -6016,6 +6016,10 @@ class TestEvControl:
         gw._mqtt_connected = True
         gw._last_status = None
         gw._last_telemetry_time = 0
+        gw._last_ev_status = None
+        gw._last_ev_status_time = 0
+        gw._ev_unknown_warned = False
+        gw.base = MagicMock()
         gw.published = []
 
         async def fake_publish_raw(topic, payload, **kwargs):
@@ -6030,8 +6034,8 @@ class TestEvControl:
         """Give the gateway fresh telemetry for one charger in the given state."""
         import time
 
-        gw._last_status = pb.GatewayStatus(ev_chargers=[pb.EvCharger(charge_point_id=cp_id, connected=connected, session_active=session_active, status=status)])
-        gw._last_telemetry_time = time.time()
+        gw._last_ev_status = pb.GatewayStatus(ev_chargers=[pb.EvCharger(charge_point_id=cp_id, connected=connected, session_active=session_active, status=status)])
+        gw._last_ev_status_time = time.time()
 
     @staticmethod
     def _in_window(gw):
@@ -6205,24 +6209,60 @@ class TestEvControl:
         self._apply(gw)
         assert gw.published == []
 
-    def test_apply_no_start_without_car(self):
-        """Inside a window with no car plugged in there is nothing to start."""
+    def test_apply_no_start_when_charger_unusable(self):
+        """Inside a window a Faulted or Unavailable charger is not sent a start."""
         gw = self._make_gateway()
         self._in_window(gw)
+        for status in ("Faulted", "Unavailable"):
+            self._set_charger(gw, session_active=False, status=status)
+            self._apply(gw)
+        assert gw.published == []
+
+    def test_second_window_starts_although_hub_reads_available(self):
+        """Stopped at the end of window 1, the car stays plugged in but the hub reads "Available": window 2 still starts."""
+        gw = self._make_gateway()
+        self._in_window(gw)
+        self._set_charger(gw, session_active=True, status="Charging")
+        self._apply(gw)
+        gw._ev_windows = []  # window 1 ends
+        self._apply(gw)
+        assert self._actions(gw) == ["RemoteStopTransaction"]
+        # The hub sets "Available" on StopTransaction and the charger sends no new StatusNotification
         self._set_charger(gw, session_active=False, status="Available")
         self._apply(gw)
-        assert gw.published == []
+        self._in_window(gw)  # window 2 begins
+        self._apply(gw)
+        assert self._actions(gw) == ["RemoteStopTransaction", "SetChargingProfile", "RemoteStartTransaction"]
 
     def test_apply_no_command_without_fresh_telemetry(self):
         """No telemetry, stale telemetry or an offline charger: the state is unknown, so nothing is sent."""
         gw = self._make_gateway()
         self._apply(gw)
         self._set_charger(gw, session_active=True, status="Charging")
-        gw._last_telemetry_time -= 600
+        gw._last_ev_status_time -= 600
         self._apply(gw)
         self._set_charger(gw, session_active=True, status="Charging", connected=False)
         self._apply(gw)
         assert gw.published == []
+        # Warned once for this window state, not every minute
+        warnings = [c for c in gw.log.call_args_list if "cannot see charger" in str(c)]
+        assert len(warnings) == 1
+        self._in_window(gw)  # window state changes: warned again
+        self._apply(gw)
+        warnings = [c for c in gw.log.call_args_list if "cannot see charger" in str(c)]
+        assert len(warnings) == 2
+
+    def test_ev_freshness_from_status_without_inverters(self):
+        """A /status carrying EV chargers but no inverters still refreshes what EVC control sees."""
+        gw = self._make_gateway()
+        gw._debug = False
+        gw.gateway_inverter_serial = None
+        gw._discovery = {}
+        status = pb.GatewayStatus(ev_chargers=[pb.EvCharger(charge_point_id="CP10000001", connected=True, session_active=True, status="Charging")])
+        gw._process_telemetry(status.SerializeToString())
+        assert gw._last_telemetry_time == 0  # no inverters: not counted as the hub being alive
+        self._apply(gw)
+        assert self._actions(gw) == ["RemoteStopTransaction"]
 
     def test_restart_mid_window_then_window_ends_sends_stop(self):
         """A restart forgets everything; when the window it started in ends, the active session is still stopped."""
@@ -6234,6 +6274,22 @@ class TestEvControl:
         gw._ev_windows = []  # window ends
         self._apply(gw)
         assert self._actions(gw) == ["RemoteStopTransaction"]
+
+    def test_refused_stop_is_capped_and_recorded(self):
+        """A charger that keeps its session after three stops gets no more, and the failure reaches the status."""
+        from unittest.mock import patch
+        import gateway as gateway_mod
+
+        gw = self._make_gateway()
+        clock = [1_000_000.0]
+        with patch.object(gateway_mod.time, "time", side_effect=lambda: clock[0]):
+            for _ in range(20):
+                self._set_charger(gw, session_active=True, status="Charging")
+                self._apply(gw)
+                clock[0] += 60
+        assert self._actions(gw) == ["RemoteStopTransaction"] * 3
+        gw.base.record_status.assert_called_once()
+        assert "stop" in gw.base.record_status.call_args.args[0]
 
     def test_startup_charging_outside_window_sends_stop(self):
         """The first reconcile after startup stops a charger already charging outside any window."""
@@ -6259,16 +6315,24 @@ class TestEvControl:
         assert gw._ev_attempts["stop"] == 1
 
     def test_publish_failure_is_not_an_attempt(self):
-        """A publish that raises is reported as not sent."""
+        """A start whose publish raises is not counted or backed off: the next minute sends it."""
         gw = self._make_gateway()
-        self._set_charger(gw, session_active=True, status="Charging")
+        self._in_window(gw)
+        self._set_charger(gw, session_active=False, status="Preparing")
+        working_publish = gw._publish_raw
 
         async def failing_publish(topic, payload, **kwargs):
             raise RuntimeError("broker gone")
 
         gw._publish_raw = failing_publish
         self._apply(gw)
-        assert gw._ev_attempts == {"start": 0, "stop": 0}
+        assert gw._ev_attempts["start"] == 0
+        assert gw._ev_last_attempt == 0.0
+
+        gw._publish_raw = working_publish
+        self._apply(gw)
+        assert self._actions(gw) == ["SetChargingProfile", "RemoteStartTransaction"]
+        assert gw._ev_attempts["start"] == 1
 
     def test_refused_start_retries_are_spaced_and_capped(self):
         """A charger that never starts gets at most three starts, two minutes apart, then one warning."""
@@ -6286,6 +6350,8 @@ class TestEvControl:
         assert self._actions(gw).count("RemoteStartTransaction") == 3
         warnings = [c for c in gw.log.call_args_list if "giving up" in str(c)]
         assert len(warnings) == 1
+        gw.base.record_status.assert_called_once()
+        assert gw.base.record_status.call_args.kwargs["had_errors"] is True
 
         # The window ends and the next one starts: the attempts are reset
         gw._ev_windows = []

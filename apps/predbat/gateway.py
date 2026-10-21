@@ -75,6 +75,12 @@ _EV_COMMAND_RETRY_SECONDS = 120
 # OCPP StatusNotification values meaning a car is plugged in
 _EV_CAR_CONNECTED_STATUSES = frozenset({"Preparing", "Charging", "SuspendedEV", "SuspendedEVSE", "Finishing"})
 
+# Charger states in which a start cannot work. Any other status is tried: the hub's status string
+# cannot be trusted to show a plugged-in car - it reads "Available" after every StopTransaction until
+# the charger next sends a StatusNotification, so a car left plugged in between two windows looks
+# unplugged. The attempt cap bounds the cost when no car is there.
+_EV_START_BLOCKED_STATUSES = frozenset({"Unavailable", "Faulted", "Offline"})
+
 # A slot window staged by a select write is shown in place of the Hub's schedule until the
 # schedule write switch sends it. One nobody sends (a manual edit with no press) is dropped
 # after this long, so the selects show the Hub's own schedule again (seconds).
@@ -403,6 +409,8 @@ class GatewayMQTT(ComponentBase):
         self._loop = None
         self._gateway_online = False
         self._last_telemetry_time = 0
+        self._last_ev_status = None  # the last /status that carried EV chargers, for EVC control
+        self._last_ev_status_time = 0  # time.time() it arrived - also refreshed when it has no inverters
         self._last_plan_data = None
         self._last_plan_publish_time = 0
         # Entries and timezone of the last built plan, kept so the periodic re-publish
@@ -438,6 +446,7 @@ class GatewayMQTT(ComponentBase):
         self._ev_desired = None  # planned-window state at the last reconcile; a change resets the attempts
         self._ev_attempts = {"start": 0, "stop": 0}  # commands published per direction since that change
         self._ev_last_attempt = 0.0  # time.time() of the last published start/stop
+        self._ev_unknown_warned = False  # warned that the charger state is unknown in this window state
         self._ev_max_current: dict = {}  # charge_point_id → last known max_current_a from telemetry
         self._suffix_to_serial = {}  # maps entity suffix (last 6 chars of serial) -> full serial string
         # Incrementing counter included in every published command, seeded from the clock so
@@ -637,12 +646,12 @@ class GatewayMQTT(ComponentBase):
     def _ev_charger_status(self, cp_id):
         """Return the latest telemetry for charge point ``cp_id``, or None when it is not usable.
 
-        Not usable means no telemetry yet, telemetry older than ``_TELEMETRY_STALE_THRESHOLD``, or the
+        Not usable means no EV telemetry yet, EV telemetry older than ``_TELEMETRY_STALE_THRESHOLD``, or the
         charger not connected to the hub - its session fields are then stale and it cannot take a command.
         """
-        if self._last_status is None or not self._last_telemetry_time or time.time() - self._last_telemetry_time >= _TELEMETRY_STALE_THRESHOLD:
+        if self._last_ev_status is None or time.time() - self._last_ev_status_time >= _TELEMETRY_STALE_THRESHOLD:
             return None
-        ev = next((c for c in self._last_status.ev_chargers if c.charge_point_id == cp_id), None)
+        ev = next((c for c in self._last_ev_status.ev_chargers if c.charge_point_id == cp_id), None)
         if ev is None or not ev.connected:
             return None
         return ev
@@ -654,17 +663,20 @@ class GatewayMQTT(ComponentBase):
         remembered command, so a restart, a lost publish or a charger that refused a command all heal
         on a later cycle:
 
-        - inside a window, with a car plugged in and no session: SetChargingProfile at the charger's
-          max current, then RemoteStartTransaction
+        - inside a window with no session, unless the charger is Unavailable/Faulted/Offline:
+          SetChargingProfile at the charger's max current, then RemoteStartTransaction. The status is
+          not used to look for a plugged-in car, as the hub's reads "Available" after every stop
         - outside every window with a session active: RemoteStopTransaction. Telemetry does not say who
           started a session, so this stops any session outside the plan, including one started by hand
           or by the charger's own schedule, while gateway_evc_control is on
         - otherwise nothing is sent
 
         Each direction is tried at most ``_EV_COMMAND_ATTEMPTS`` times, ``_EV_COMMAND_RETRY_SECONDS``
-        apart, until the window state next changes; then a single warning is logged. An attempt only
-        counts once it was actually published. Only the lowest charge point id is controlled - the
-        same single charger auto-config registers as the car.
+        apart, until the window state next changes; then a warning is logged and recorded in the
+        Predbat status once. An attempt only counts once it was actually published. When the charger's
+        state is unknown (no fresh EV telemetry, or the charger offline) nothing is sent and a warning is
+        logged once per window state. Only the lowest charge point id is controlled - the same single
+        charger auto-config registers as the car.
         """
         if not self._configured_ev_chargers:
             return
@@ -673,13 +685,16 @@ class GatewayMQTT(ComponentBase):
             self._ev_desired = should_charge
             self._ev_attempts = {"start": 0, "stop": 0}
             self._ev_last_attempt = 0.0
+            self._ev_unknown_warned = False
         # min() gives a deterministic choice when multiple chargers are present
         cp_id = min(self._configured_ev_chargers)
         ev = self._ev_charger_status(cp_id)
         if ev is None:
+            if not self._ev_unknown_warned:
+                self.log(f"Warn: GatewayMQTT: EVC control cannot see charger '{cp_id}' (offline, or no EV telemetry in the last {_TELEMETRY_STALE_THRESHOLD}s) - not starting or stopping it")
+                self._ev_unknown_warned = True
             return
-        car_connected = ev.status in _EV_CAR_CONNECTED_STATUSES if ev.status else ev.session_active
-        if should_charge and not ev.session_active and car_connected:
+        if should_charge and not ev.session_active and ev.status not in _EV_START_BLOCKED_STATUSES:
             direction = "start"
         elif not should_charge and ev.session_active:
             direction = "stop"
@@ -689,7 +704,11 @@ class GatewayMQTT(ComponentBase):
         attempts = self._ev_attempts[direction]
         if attempts >= _EV_COMMAND_ATTEMPTS:
             if attempts == _EV_COMMAND_ATTEMPTS:
-                self.log(f"Warn: GatewayMQTT: EVC {direction} for '{cp_id}' not taken by the charger after {attempts} attempts (status {ev.status or 'unknown'}), giving up until the plan changes")
+                message = f"Warn: GatewayMQTT: EVC {direction} for '{cp_id}' not taken by the charger after {attempts} attempts (status {ev.status or 'unknown'}), giving up until the plan changes"
+                self.log(message)
+                base = getattr(self, "base", None)
+                if getattr(base, "record_status", None):
+                    base.record_status(message, had_errors=True)
                 self._ev_attempts[direction] += 1  # warn once
             return
         if time.time() - self._ev_last_attempt < _EV_COMMAND_RETRY_SECONDS:
@@ -1038,6 +1057,12 @@ class GatewayMQTT(ComponentBase):
             self.update_success_timestamp()
             self.api_started = True
             return
+
+        # EVC control reads the chargers from here: a status with no inverters still carries them,
+        # and is returned from below before it can refresh _last_status
+        if status.ev_chargers:
+            self._last_ev_status = status
+            self._last_ev_status_time = time.time()
 
         if len(status.inverters) == 0:
             if not (self.gateway_inverter_serial and self._discovery):
