@@ -10,7 +10,9 @@
 
 import predbat  # noqa: F401  (import first - avoids circular import: config.py does `from predbat import THIS_VERSION`)
 import asyncio
+import threading
 import time
+from unittest.mock import patch
 from hanchu_const import (
     HANCHU_KEY_CHARGE_END,
     HANCHU_KEY_CHARGE_POWER,
@@ -902,6 +904,122 @@ def test_hanchu_no_rate_signal_adds_no_slot():
     assert not failed, "test_hanchu_no_rate_signal_adds_no_slot"
 
 
+def _start_owner_loop():
+    """Start an event loop on its own thread, as ComponentBase runs the component, and return (loop, thread)."""
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, name="hanchu-owner-loop", daemon=True)
+    thread.start()
+    return loop, thread
+
+
+def _stop_owner_loop(loop, thread):
+    """Stop and close a loop started by _start_owner_loop()."""
+    loop.call_soon_threadsafe(loop.stop)
+    thread.join(5)
+    loop.close()
+
+
+def test_hanchu_write_button_from_another_loop_writes_on_the_component_loop():
+    """A write-button press that arrives on another event loop is written on the component's own loop.
+
+    Predbat presses the button from its plan thread through ha.py's run_async(), which runs the event on
+    a throwaway loop. The HTTP session and the write lock belong to the component's loop, so writing from
+    the throwaway one failed with "Timeout context manager should be used inside a task", and the change
+    only reached the device on the component's next tick, about a minute later.
+    """
+    failed = False
+    client = ready()
+    button = client._control_name("switch", SN, "battery_schedule_charge_write")
+    seen = []
+
+    async def recording_apply(sn, force=False):
+        """Stand in for apply_schedule, noting which loop it ran on."""
+        seen.append(asyncio.get_running_loop())
+        return True
+
+    client.apply_schedule = recording_apply
+    owner, thread = _start_owner_loop()
+    try:
+        client._loop = owner
+        # From the plan thread's throwaway loop: handed over to the component's loop.
+        run_async_local(client._handle_control_event(button, "turn_on"))
+        if seen != [owner]:
+            print(f"ERROR: the write should run on the component's loop, ran on {seen}")
+            failed = True
+        if SN not in client.control_active:
+            print("ERROR: the press should still mark the device as controlled")
+            failed = True
+        # From the component's own loop: run in place, not handed to itself.
+        seen.clear()
+        asyncio.run_coroutine_threadsafe(client._handle_control_event(button, "turn_on"), owner).result(5)
+        if seen != [owner]:
+            print(f"ERROR: on its own loop the write should run in place: {seen}")
+            failed = True
+    finally:
+        _stop_owner_loop(owner, thread)
+    # With the component's loop gone the write runs where it was asked for, as before.
+    seen.clear()
+    run_async_local(client._handle_control_event(button, "turn_on"))
+    if len(seen) != 1 or seen[0] is owner:
+        print(f"ERROR: with the component loop closed the write should run on the caller's loop: {seen}")
+        failed = True
+    assert not failed, "test_hanchu_write_button_from_another_loop_writes_on_the_component_loop"
+
+
+def test_hanchu_handed_over_write_gives_up_waiting_after_the_timeout():
+    """A write handed to the component's loop is not waited on forever, so a stuck loop cannot hang the plan thread - and is not cancelled either."""
+    failed = False
+    client = ready()
+    button = client._control_name("switch", SN, "battery_schedule_charge_write")
+
+    finished = threading.Event()
+
+    async def slow_apply(sn, force=False):
+        """Stand in for an apply_schedule that is still waiting on the cloud."""
+        await asyncio.sleep(0.3)
+        finished.set()
+        return True
+
+    client.apply_schedule = slow_apply
+    owner, thread = _start_owner_loop()
+    try:
+        client._loop = owner
+        with patch("hanchu.HANCHU_LOOP_HANDOVER_TIMEOUT", 0.05):
+            started = time.time()
+            run_async_local(client._handle_control_event(button, "turn_on"))
+            waited = time.time() - started
+        if waited > 1:
+            print(f"ERROR: the caller should stop waiting after the timeout, waited {waited:.2f}s")
+            failed = True
+        if not logged(client, "still running on the component's loop"):
+            print(f"ERROR: giving up should be logged: {client.log_messages}")
+            failed = True
+        # Giving up waiting must not cancel the write itself: it carries on to completion.
+        if not finished.wait(3):
+            print("ERROR: the write was cancelled when the caller stopped waiting for it")
+            failed = True
+    finally:
+        _stop_owner_loop(owner, thread)
+    assert not failed, "test_hanchu_handed_over_write_gives_up_waiting_after_the_timeout"
+
+
+def test_hanchu_run_records_the_component_loop():
+    """run() records the loop it runs on, so events arriving elsewhere know where to hand writes."""
+    failed = False
+    client = MockHanchu(account="", password="")
+
+    async def tick():
+        """Run one tick and return the loop it ran on."""
+        await client.run(0, True)
+        return asyncio.get_running_loop()
+
+    loop = run_async_local(tick())
+    if client._loop is not loop:
+        print(f"ERROR: run() should record its own loop: {client._loop} != {loop}")
+        failed = True
+    assert not failed, "test_hanchu_run_records_the_component_loop"
+
+
 def run_hanchu_control_tests(my_predbat):
     """Run all Hanchu control-logic tests."""
     failed = False
@@ -938,6 +1056,9 @@ def run_hanchu_control_tests(my_predbat):
         ("hold_in_window", test_hanchu_hold_inside_a_charge_window_stops_charging_only_at_the_target),
         ("freeze_export_no_slot", test_hanchu_freeze_export_passes_the_zero_charge_rate_through_without_a_slot),
         ("no_rate_signal", test_hanchu_no_rate_signal_adds_no_slot),
+        ("event_loop_handover", test_hanchu_write_button_from_another_loop_writes_on_the_component_loop),
+        ("event_loop_handover_timeout", test_hanchu_handed_over_write_gives_up_waiting_after_the_timeout),
+        ("run_records_loop", test_hanchu_run_records_the_component_loop),
     ]:
         try:
             if fn():
