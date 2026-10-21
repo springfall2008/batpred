@@ -324,8 +324,14 @@ def test_hanchu_unchanged_payload_sends_nothing():
     if not ok:
         print("ERROR: 'already matches' must report True - the device does match the plan")
         failed = True
-    if not logged(client, "unchanged"):
-        print("ERROR: the skipped write was not explained")
+    # Said on every tick, so it is only said while the API trace is on (batpred#5672).
+    if logged(client, "unchanged"):
+        print("ERROR: the skipped write was logged with the API trace off")
+        failed = True
+    client.api_debug = True
+    run_async_local(client.apply_schedule(SN))
+    if not logged(client, "Debug: Hanchu {} settings unchanged".format(SN)):
+        print("ERROR: with the API trace on, the skipped write should be explained at debug level")
         failed = True
     assert not failed, "test_hanchu_unchanged_payload_sends_nothing"
 
@@ -1020,6 +1026,88 @@ def test_hanchu_run_records_the_component_loop():
     assert not failed, "test_hanchu_run_records_the_component_loop"
 
 
+def test_hanchu_hold_with_no_room_for_a_slot_keeps_the_charge_rate():
+    """A hold that cannot be placed does not zero the charge rate (batpred#5672).
+
+    The rate was zeroed for the hold before _extra_slot() was asked for room, so when there was none the
+    hold was dropped but CHG_PWR_LMT=0 was still written, leaving every enabled charge slot at 0 W.
+    """
+    failed = False
+    client = ready()
+    client.device_values[SN] = {"soc": 60.0}
+    # 19:47: the hold slot would start at 19:30, but Predbat's own charge window still covers 19:30.
+    client.set_mock_clock(19 * 60 + 47)
+    payload = client.build_write_payload(SN, schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "19:30:00", "end": "19:45:00"}, export={"power": 0}))
+    if 3 in enabled_slots(payload, HANCHU_KEY_CHARGE_START, HANCHU_KEY_CHARGE_END):
+        print(f"ERROR: there is no room for a hold slot, so none should be written: {payload}")
+        failed = True
+    if payload.get(HANCHU_KEY_CHARGE_POWER) != 3000:
+        print(f"ERROR: with no hold slot the charge rate should stay at the plan's 3000: {payload.get(HANCHU_KEY_CHARGE_POWER)}")
+        failed = True
+    assert not failed, "test_hanchu_hold_with_no_room_for_a_slot_keeps_the_charge_rate"
+
+
+def test_hanchu_settings_changed_on_the_device_are_re_sent():
+    """A read-back that no longer matches what Predbat wrote forgets the applied payload, so it is sent again (batpred#5672).
+
+    Change detection compared a new payload only with the last one sent, so a slot edited in the Hanchu
+    app, a device reset or a write that never landed left the inverter on the wrong settings until the
+    plan itself changed - the same silent drift as batpred#5157.
+    """
+    failed = False
+    client = ready()
+    client.control_active.add(SN)
+    client.local_schedule[SN] = schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "04:00:00"})
+    with patched_session([(200, envelope(data={}))]):
+        run_async_local(client.apply_schedule(SN))
+    applied = dict(client.applied_payload[SN])
+    client.last_write_time[SN] = time.time() - 3600
+    menu = {"energy": {"items": []}}
+
+    # The device still holds the write, read back as strings and floats the way iotGet returns them.
+    same = {key: str(value) for key, value in applied.items()}
+    same[HANCHU_KEY_DISCHARGE_SOC] = "{:.2f}".format(applied[HANCHU_KEY_DISCHARGE_SOC])
+    with patched_session([(200, envelope(data=menu)), (200, envelope(data=same))]):
+        run_async_local(client.refresh_config())
+    if client.applied_payload.get(SN) != applied or logged(client, "no longer match"):
+        print(f"ERROR: an unchanged read-back was treated as drift: {client.applied_payload.get(SN)}")
+        failed = True
+
+    # A key the read-back does not carry is not evidence of a change.
+    partial = {key: value for key, value in same.items() if key != HANCHU_KEY_WORK_MODE}
+    with patched_session([(200, envelope(data=menu)), (200, envelope(data=partial))]):
+        run_async_local(client.refresh_config())
+    if client.applied_payload.get(SN) != applied:
+        print("ERROR: a key missing from the read-back was treated as drift")
+        failed = True
+
+    # The user moves slot 1 in the Hanchu app.
+    edited = dict(same, **{HANCHU_KEY_CHARGE_START.format(1): "7200"})
+    with patched_session([(200, envelope(data=menu)), (200, envelope(data=edited))]):
+        run_async_local(client.refresh_config())
+    if SN in client.applied_payload:
+        print("ERROR: drift on the device should forget the applied payload")
+        failed = True
+    if not logged(client, HANCHU_KEY_CHARGE_START.format(1)):
+        print("ERROR: the drift warning should name the key that changed")
+        failed = True
+    with patched_session([(200, envelope(data={}))]) as session_cls:
+        run_async_local(client._reconcile_control(SN))
+    if session_cls.return_value.post.call_count != 1 or client.applied_payload.get(SN) != applied:
+        print(f"ERROR: the next reconcile should re-send the plan: {session_cls.return_value.post.call_count} call(s)")
+        failed = True
+
+    # A read that a write may have overtaken is not judged: the write landed after the read began.
+    client.log_messages.clear()
+    client.last_write_time[SN] = time.time() + 5
+    with patched_session([(200, envelope(data=menu)), (200, envelope(data=edited))]):
+        run_async_local(client.refresh_config())
+    if client.applied_payload.get(SN) != applied or logged(client, "no longer match"):
+        print("ERROR: a read overtaken by a write was judged as drift")
+        failed = True
+    assert not failed, "test_hanchu_settings_changed_on_the_device_are_re_sent"
+
+
 def run_hanchu_control_tests(my_predbat):
     """Run all Hanchu control-logic tests."""
     failed = False
@@ -1059,6 +1147,8 @@ def run_hanchu_control_tests(my_predbat):
         ("event_loop_handover", test_hanchu_write_button_from_another_loop_writes_on_the_component_loop),
         ("event_loop_handover_timeout", test_hanchu_handed_over_write_gives_up_waiting_after_the_timeout),
         ("run_records_loop", test_hanchu_run_records_the_component_loop),
+        ("hold_without_room", test_hanchu_hold_with_no_room_for_a_slot_keeps_the_charge_rate),
+        ("device_drift", test_hanchu_settings_changed_on_the_device_are_re_sent),
     ]:
         try:
             if fn():

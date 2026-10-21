@@ -2880,6 +2880,7 @@ APPS_SCHEMA = {
     "hanchu_inverter_limit": {"type": "float"},
     "hanchu_api_delay": {"type": "float"},
     "hanchu_min_write_interval": {"type": "integer"},
+    "hanchu_api_debug": {"type": "boolean"},
     "alphaess_app_id": {"type": "string", "empty": False},
     "alphaess_app_secret": {"type": "string", "empty": False},
     "alphaess_inverter_sn": {"type": "string|string_list", "empty": False},
