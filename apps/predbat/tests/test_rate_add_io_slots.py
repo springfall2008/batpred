@@ -404,12 +404,14 @@ def run_rate_add_io_slots_cases(my_predbat):
     slot_end = slot_start + timedelta(minutes=1, seconds=16)  # 13:38:27 (fully within the same 5-min and 30-min slot)
     slots = [{"start": slot_start.strftime(TIME_FORMAT), "end": slot_end.strftime(TIME_FORMAT), "charge_in_kwh": 0.16, "source": "smart-charge", "location": "AT_HOME"}]
 
-    expected_rates = {}
-    # 13:30-14:00 slot (minutes 810-839) - should be cheap because IOG slot touches it
-    for minute in range(810, 840):
-        expected_rates[minute] = 4.0
-
-    failed |= run_rate_add_io_slots_test("test14_tiny_overlap_issue3328", my_predbat, slots, True, 12, expected_rates)
+    # The dispatch is under OCTOPUS_SLOT_MIN_MINUTES, so it only makes 13:30-14:00 (minutes 810-839) cheap
+    # once dynamic load has seen the car charging in that half hour - until then the half hour keeps its rate
+    saved_periods = my_predbat.dynamic_load_car_confirmed_periods
+    my_predbat.dynamic_load_car_confirmed_periods = {}
+    failed |= run_rate_add_io_slots_test("test14_tiny_overlap_issue3328_unconfirmed", my_predbat, slots, True, 12, {minute: 10.0 for minute in range(810, 840)})
+    my_predbat.dynamic_load_car_confirmed_periods = {0: {midnight_utc + timedelta(minutes=840)}}
+    failed |= run_rate_add_io_slots_test("test14_tiny_overlap_issue3328", my_predbat, slots, True, 12, {minute: 4.0 for minute in range(810, 840)})
+    my_predbat.dynamic_load_car_confirmed_periods = saved_periods
 
     # Test 15: Midday-to-midday cap boundary
     # 14 slots starting at 22:00 today (minute 1320) and crossing midnight into the early hours of tomorrow.
@@ -628,6 +630,63 @@ def run_rate_add_io_slots_cases(my_predbat):
     failed |= run_rate_add_io_slots_flag_tests(my_predbat, midnight_utc, TIME_FORMAT)
     failed |= run_rate_add_io_slots_log_test(my_predbat, midnight_utc, TIME_FORMAT)
     failed |= run_cap_minutes_tests(my_predbat, midnight_utc, TIME_FORMAT)
+    failed |= run_rate_add_io_short_slot_tests(my_predbat, midnight_utc, TIME_FORMAT)
+    return failed
+
+
+def run_rate_add_io_short_case(testname, my_predbat, slots, octopus_slot_max, confirmed, expected_rates):
+    """
+    Run rate_add_io_slots over a 10p day with car half hours confirmed charging as given
+    ({car_n: [end minute of each confirmed half hour]}) and check the rates.
+    """
+    my_predbat.dynamic_load_car_confirmed_periods = {car_n: {my_predbat.midnight_utc + timedelta(minutes=end) for end in ends} for car_n, ends in confirmed.items()}
+    return run_rate_add_io_slots_test(testname, my_predbat, slots, True, octopus_slot_max, expected_rates)
+
+
+def run_rate_add_io_short_slot_tests(my_predbat, midnight_utc, time_format):
+    """
+    A dispatch shorter than OCTOPUS_SLOT_MIN_MINUTES (Octopus now issues one-minute ones) is not given the
+    low rate, nor any of the daily cap, unless dynamic load saw the car charging in its half hour.
+    """
+    failed = False
+
+    def dispatch(start_minute, end_minute):
+        """A raw AT_HOME smart-charge dispatch from start_minute to end_minute past midnight."""
+        start = midnight_utc + timedelta(minutes=start_minute)
+        end = midnight_utc + timedelta(minutes=end_minute)
+        return {"start": start.strftime(time_format), "end": end.strftime(time_format), "charge_in_kwh": 0.1, "source": "smart-charge", "location": "AT_HOME"}
+
+    expensive_1400 = {minute: 10.0 for minute in range(840, 870)}
+    cheap_1400 = {minute: 4.0 for minute in range(840, 870)}
+    saved_periods = my_predbat.dynamic_load_car_confirmed_periods
+    saved_billing = my_predbat.args.get("intelligent_dispatch_billing")
+    try:
+        print("\n**** Short dispatches: unconfirmed one-minute dispatches are not low rate ****")
+        # 14:13-14:14, still to come at 10:00
+        failed |= run_rate_add_io_short_case("short_future_unconfirmed", my_predbat, [dispatch(853, 854)], 12, {}, expensive_1400)
+        failed |= run_rate_add_io_short_case("short_exactly_minimum", my_predbat, [dispatch(853, 858)], 12, {}, cheap_1400)
+        failed |= run_rate_add_io_short_case("short_future_confirmed", my_predbat, [dispatch(853, 854)], 12, {0: [870]}, cheap_1400)
+        # Seen charging in a different half hour, or a different car seen charging: not this dispatch
+        failed |= run_rate_add_io_short_case("short_other_half_hour_confirmed", my_predbat, [dispatch(853, 854)], 12, {0: [900]}, expensive_1400)
+        failed |= run_rate_add_io_short_case("short_other_car_confirmed", my_predbat, [dispatch(853, 854)], 12, {1: [870]}, expensive_1400)
+        # 08:13-08:14, already over: the completed-dispatch exemption does not override the short test
+        failed |= run_rate_add_io_short_case("short_completed_unconfirmed", my_predbat, [dispatch(493, 494)], 12, {}, {minute: 10.0 for minute in range(480, 510)})
+        failed |= run_rate_add_io_short_case("short_completed_confirmed", my_predbat, [dispatch(493, 494)], 12, {0: [510]}, {minute: 4.0 for minute in range(480, 510)})
+        # An unconfirmed short dispatch spends none of the cap: with one slot (30 minutes) a day, 15:00-15:29
+        # leaves a minute for 16:00-16:05 - which the blip would otherwise have taken
+        expected = dict(expensive_1400)
+        expected.update({minute: 4.0 for minute in range(900, 930)})
+        expected.update({minute: 4.0 for minute in range(960, 990)})
+        failed |= run_rate_add_io_short_case("short_does_not_spend_cap", my_predbat, [dispatch(853, 854), dispatch(900, 929), dispatch(960, 965)], 1, {}, expected)
+        # Under the window billing rule the whole planned window is billed off-peak, car charging or not
+        my_predbat.args["intelligent_dispatch_billing"] = "window"
+        failed |= run_rate_add_io_short_case("short_window_billing", my_predbat, [dispatch(853, 854)], 12, {}, cheap_1400)
+    finally:
+        my_predbat.dynamic_load_car_confirmed_periods = saved_periods
+        if saved_billing is None:
+            my_predbat.args.pop("intelligent_dispatch_billing", None)
+        else:
+            my_predbat.args["intelligent_dispatch_billing"] = saved_billing
     return failed
 
 
