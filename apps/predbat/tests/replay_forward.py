@@ -278,12 +278,14 @@ def parse_log(path):
     kept = []
     pending = {}
     for run in runs:
-        # Rates, cars and dispatches are logged only when they change, so a change logged by a dropped run still holds for the runs after it
+        # Rates, cars and dispatches are logged only when they change, so a change logged by a dropped run still holds for the
+        # runs after it. A logged empty value is a change too - "Octopus slots changed ... to []" is the dispatches withdrawn
         for store in ("rates", "sessions", "dispatch", "cars", "inverter", "octopus_slots"):
-            pending[store] = run.get(store) or pending.get(store)
+            if run.get(store) is not None:
+                pending[store] = run[store]
         if run.get("soc"):
             for store in ("rates", "sessions", "dispatch", "cars", "inverter", "octopus_slots"):
-                if pending.get(store) and not run.get(store):
+                if pending.get(store) is not None and run.get(store) is None:
                     run[store] = pending[store]
             pending = {}
             kept.append(run)
@@ -777,11 +779,20 @@ def version_change(runs):
     return None
 
 
+def yaml_stand_in(now_utc, yaml_today):
+    """The run the yaml's own moment stands for, before the first logged one.
+
+    It carries the yaml's day counters where it has all four, so the first gap's consumption reaches the histories as
+    every later gap's does; with any of them missing it has none, and the first gap only ages the histories.
+    """
+    today = yaml_today if yaml_today and None not in yaml_today else None
+    return {"today": today, "force": None, "time": now_utc.isoformat(sep=" ")}
+
+
 def replay_runs(my_predbat, runs, until_minutes, plan_day, yaml_today, simulate, quiet):
     """Step through the runs, re-planning where the log did, and return the comparison rows."""
     sim_soc = my_predbat.soc_kw
-    # The yaml's own moment stands in for the run before the first one
-    prev = {"today": None, "force": None, "time": my_predbat.now_utc.isoformat(sep=" ")}
+    prev = yaml_stand_in(my_predbat.now_utc, yaml_today)
     rows = []
     # A faithful replay needs the code that wrote the log, so past a version change it can only be expected to
     # match loosely. Carry on, but mark every row from the change onwards so results can be judged separately.
@@ -849,9 +860,6 @@ def replay_runs(my_predbat, runs, until_minutes, plan_day, yaml_today, simulate,
             rescan_rate_stats(my_predbat)
             rescan_rate_windows(my_predbat, verbose=False)
             rebuild_load_pv_models(my_predbat)
-            pv_step = my_predbat.pv_forecast_minute_step
-            load_step = my_predbat.load_minutes_step
-            my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step)
             if run.get("invalid"):
                 # The live run found its plan invalid, so it adopted the new plan without comparing it to the old
                 my_predbat.plan_valid = False
