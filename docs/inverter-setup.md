@@ -50,6 +50,7 @@ Once you get everything working please share the configuration as a GitHub issue
    | [Hanchu ESS Cloud](#hanchu-ess-cloud) | Predbat | [hanchu.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/hanchu.yaml) |
    | [Hanchu iESS](#hanchu-iess) | [hanchu-ess-ha](https://github.com/upton68/hanchu-ess-ha) | [hanchu_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/hanchu_cloud.yaml) |
    | [Huawei](#huawei) | [Huawei Solar](https://github.com/wlcrs/huawei_solar) | [huawei.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/huawei.yaml) |
+   | [Indra V2H / V2G](#indra-v2h--v2g) | [ha-indrav2h](https://github.com/creatingwake/ha-indrav2h) | [indra_v2h.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/indra_v2h.yaml) |
    | [Kostal Plenticore](#kostal-plenticore) | [Kostal Plenticore](https://www.home-assistant.io/integrations/kostal_plenticore) | [kostal.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/kostal.yaml) |
    | [LuxPower](#luxpower) | [LuxPython](https://github.com/guybw/LuxPython_DEV) | [luxpower.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/luxpower.yaml) |
    | [SigEnergy](#sigenergy-sigenstor) | [SigEnergy](https://github.com/TypQxQ/Sigenergy-Local-Modbus) | [sigenergy_sigenstor.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sigenergy_sigenstor.yaml) |
@@ -983,6 +984,38 @@ Start in Monitor or Read Only mode and test all Huawei service calls manually be
 A more complete working example, including Home Assistant package sensors, EV charging and Manual API automations, is available here:
 
 <https://github.com/JohanAlvedal/Predbat-setup>
+
+## Indra V2H / V2G
+
+The Indra V2H is a bi-directional EV charger: the car plugged into it is the home battery. Predbat drives it through the [ha-indrav2h](https://github.com/creatingwake/ha-indrav2h) integration by changing one control, `select.indra_v2h_operating_mode`.
+No helpers, scripts or automations are needed.
+
+- Install the ha-indrav2h integration (copy `custom_components/indrav2h` into your Home Assistant config folder and restart) and log in with your Indra account.
+ Check that `select.indra_v2h_operating_mode` and the `sensor.indra_v2h_*` entities appear.
+- Copy the template [indra_v2h.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/indra_v2h.yaml) over your `apps.yaml`.
+- The Indra has no daily energy totals or solar data, so set **load_today**, **import_today**, **export_today**, **pv_today** and **pv_power** to your own energy meter and solar inverter sensors.
+- Set **soc_max** to the usable size of the car battery in kWh (allow for battery degradation on older cars).
+- Set **inverter_limit**, **inverter_limit_charge**, **inverter_limit_discharge** and **battery_rate_max** to your Indra's rating in watts.
+- Set **battery_min_soc** to the lowest car SoC % you want Predbat to discharge to, so you always have some range for driving.
+- Delete the `template: True` line and restart Predbat.
+
+Predbat maps each of its actions to one Indra operating mode:
+
+| Predbat action | Indra mode | What happens |
+| -------------- | ---------- | ------------ |
+| Charge | `CHARGE` | The car charges from the grid at full rate |
+| Freeze charge / hold | `EXPORT_MATCH` | The car does not discharge; surplus solar still goes into the car |
+| Demand (normal running) | `LOAD_MATCH` | The car discharges to cover the house load |
+| Force export | `DISCHARGE` | The car discharges at full rate and exports to the grid |
+
+### Indra notes
+
+- The Indra has no target SoC, reserve or charge rate controls. Predbat starts and stops charging itself, and holds the car at its target SoC with the freeze charge service.
+- `sensor.indra_v2h_house_load` is the Indra's grid CT reading (positive for import, negative for export), so it is used as **grid_power** with **grid_power_invert** set.
+ `sensor.indra_v2h_power_to_ev` is positive when charging the car, so **battery_power_invert** is set.
+- When the car is unplugged the Indra sensors go `unavailable` and Predbat will log warnings. If you drive the car during the day, consider an automation that turns on `switch.predbat_set_read_only` while the car is unplugged and off again a minute after it is plugged back in, so Predbat does not plan on a stale SoC.
+- The integration uses the Indra cloud API, so a mode change can take a minute or so to show on the charger.
+- If you have a second EV on a separate charger, configure it in the car charging section as normal. Do not add the car on the Indra there; it is already the home battery.
 
 ## Kostal Plenticore
 
