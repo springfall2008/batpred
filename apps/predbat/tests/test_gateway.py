@@ -6194,9 +6194,33 @@ def _ev_set_window(gw, inside):
         gw._ev_windows = [(now + dt_mod.timedelta(hours=2), now + dt_mod.timedelta(hours=3))]
 
 
-def _ev_set_telemetry(gw, car_connected, session_active, cp_id="CP10000001"):
+def _ev_set_telemetry(gw, car_connected, session_active, cp_id="CP10000001", online=True, has_status=True):
     """Record a charger telemetry report as _inject_ev_entities would, stamped just after any send."""
-    gw._ev_telemetry[cp_id] = {"car_connected": car_connected, "session_active": session_active, "time": max(time.time(), gw._ev_last_send_time + 0.001)}
+    gw._ev_telemetry[cp_id] = {
+        "online": online,
+        "has_status": has_status,
+        "car_connected": car_connected,
+        "session_active": session_active,
+        "time": max(time.time(), gw._ev_last_send_time + 0.001),
+    }
+
+
+class _FakeStatusBase:
+    """Stands in for PredBat's status path: record_status shows the message and sets had_errors only when asked."""
+
+    def __init__(self):
+        """Start with no status shown and no errors."""
+        from unittest.mock import MagicMock
+
+        self.status_state = None
+        self.had_errors = False
+        self.record_status = MagicMock(side_effect=self._record_status)
+
+    def _record_status(self, message, debug="", had_errors=False, notify=False, extra=""):
+        """Mirror output.py's record_status: the message becomes the shown status; had_errors latches the error flag."""
+        self.status_state = message
+        if had_errors:
+            self.had_errors = True
 
 
 def _ev_cycle(gw):
@@ -6208,12 +6232,9 @@ class TestEvCommandConfirm:
     """EV start/stop rides the shared command topic and is confirmed from telemetry, with bounded re-sends."""
 
     def _gateway(self, **kwargs):
-        """A TestEvControl gateway with captured publishes and a MagicMock base for record_status."""
-        from unittest.mock import MagicMock
-
+        """A TestEvControl gateway with captured publishes and a fake status base for record_status."""
         gw, published = _ev_gateway_with_capture(TestEvControl(), **kwargs)
-        gw.base = MagicMock()
-        gw.base.had_errors = False
+        gw.base = _FakeStatusBase()
         return gw, published
 
     def test_payload_shape_and_topic(self):
@@ -6280,7 +6301,7 @@ class TestEvCommandConfirm:
         _ev_set_telemetry(gw, car_connected=True, session_active=False)
         _ev_cycle(gw)
         # A report that claims an active session but predates the send
-        gw._ev_telemetry["CP10000001"] = {"car_connected": True, "session_active": True, "time": gw._ev_last_send_time - 1}
+        gw._ev_telemetry["CP10000001"] = {"online": True, "has_status": True, "car_connected": True, "session_active": True, "time": gw._ev_last_send_time - 1}
         _ev_cycle(gw)
         assert gw._ev_confirmed is False
 
@@ -6303,23 +6324,84 @@ class TestEvCommandConfirm:
         assert kwargs.get("had_errors") is False
         assert gw.base.had_errors is False
 
-    def test_latch_clears_at_next_window(self):
-        """A latched start gets a fresh budget when the next window begins."""
+    def test_latch_holds_while_planner_moves_window_end(self):
+        """The planner moving the in-progress window's end on every replan does not refill the budget (B1)."""
+        import datetime as dt_mod
+
+        gw, published = self._gateway()
+        now = dt_mod.datetime.now(gw.local_tz)
+        start = now - dt_mod.timedelta(minutes=30)
+        end = now + dt_mod.timedelta(minutes=60)
+        for cycle in range(60):
+            if cycle % 5 == 0:  # a replan every 5 cycles slides the shortened window's end by 5 minutes
+                end = end + dt_mod.timedelta(minutes=5)
+            gw._ev_windows = [(start, end)]
+            _ev_set_telemetry(gw, car_connected=True, session_active=False)
+            _ev_cycle(gw)
+
+        starts = [p for _, p in published if p["action"] == "RemoteStartTransaction"]
+        assert len(starts) == 3
+        assert gw._ev_latched is True
+        gw.base.record_status.assert_called_once()
+        assert gw.base.record_status.call_args.kwargs.get("had_errors") is False
+
+    def test_latch_holds_when_window_start_moves(self):
+        """A replan that moves the start of a window we are already inside keeps the latch."""
         import datetime as dt_mod
 
         gw, published = self._gateway()
         _ev_set_window(gw, inside=True)
-        _ev_set_telemetry(gw, car_connected=True, session_active=False)
         for _ in range(8):
-            _ev_cycle(gw)
             _ev_set_telemetry(gw, car_connected=True, session_active=False)
+            _ev_cycle(gw)
         assert gw._ev_latched is True
         sent = len(published)
 
         now = dt_mod.datetime.now(gw.local_tz)
-        gw._ev_windows = [(now - dt_mod.timedelta(minutes=1), now + dt_mod.timedelta(hours=2))]  # a different window
+        gw._ev_windows = [(now - dt_mod.timedelta(minutes=1), now + dt_mod.timedelta(hours=2))]  # same in-progress window, replanned
+        _ev_set_telemetry(gw, car_connected=True, session_active=False)
+        _ev_cycle(gw)
+        assert gw._ev_latched is True
+        assert len(published) == sent
+
+    def test_latch_clears_when_window_ends_and_next_begins(self):
+        """A latched start gets a fresh budget once the window has ended and the next one begins."""
+        gw, published = self._gateway()
+        _ev_set_window(gw, inside=True)
+        for _ in range(8):
+            _ev_set_telemetry(gw, car_connected=True, session_active=False)
+            _ev_cycle(gw)
+        assert gw._ev_latched is True
+
+        _ev_set_window(gw, inside=False)  # the window ends: the start latch is dropped, nothing to stop
+        _ev_set_telemetry(gw, car_connected=True, session_active=False)
         _ev_cycle(gw)
         assert gw._ev_latched is False
+        sent = len(published)
+
+        _ev_set_window(gw, inside=True)  # the next window
+        _ev_set_telemetry(gw, car_connected=True, session_active=False)
+        _ev_cycle(gw)
+        assert len(published) == sent + 2
+        assert gw._ev_attempts == 1
+
+    def test_latch_clears_when_car_unplugged(self):
+        """Unplugging clears the latch, and a plug-in in the same window starts afresh."""
+        gw, published = self._gateway()
+        _ev_set_window(gw, inside=True)
+        for _ in range(8):
+            _ev_set_telemetry(gw, car_connected=True, session_active=False)
+            _ev_cycle(gw)
+        assert gw._ev_latched is True
+        sent = len(published)
+
+        _ev_set_telemetry(gw, car_connected=False, session_active=False)
+        _ev_cycle(gw)
+        assert gw._ev_latched is False
+        assert len(published) == sent
+
+        _ev_set_telemetry(gw, car_connected=True, session_active=False)
+        _ev_cycle(gw)
         assert len(published) == sent + 2
 
     def test_latch_clears_on_charger_config_change(self):
@@ -6338,28 +6420,118 @@ class TestEvCommandConfirm:
         assert len(published) == sent + 2  # a fresh budget: the start is sent again straight away
         assert gw._ev_attempts == 1
 
-    def test_nothing_sent_with_control_off(self):
-        """With gateway_evc_control off, run() never reaches the EV control path."""
-        from unittest.mock import AsyncMock, MagicMock
-
-        gw, published = self._gateway(evc_control=False)
+    def test_latch_warning_reasserted_after_main_loop_overwrites_it(self):
+        """While latched, the warning is written again once the main loop has replaced the status (N1)."""
+        gw, published = self._gateway()
         _ev_set_window(gw, inside=True)
-        _ev_set_telemetry(gw, car_connected=True, session_active=False)
+        for _ in range(8):
+            _ev_set_telemetry(gw, car_connected=True, session_active=False)
+            _ev_cycle(gw)
+        assert gw.base.record_status.call_count == 1
+        warning = gw.base.status_state
+
+        _ev_cycle(gw)  # still showing: not written again
+        assert gw.base.record_status.call_count == 1
+        gw.base.status_state = "Idle"  # the main loop's next status write
+        _ev_cycle(gw)
+        assert gw.base.record_status.call_count == 2
+        assert gw.base.status_state == warning
+        assert gw.base.had_errors is False
+
+    def _run_housekeeping(self, gw):
+        """Drive the real run() housekeeping path once (not the first call) with its other steps stubbed."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        gw.gateway_device_id = "pbgw_test"
+        gw.mqtt_host = "mqtt.test.local"
+        gw.gateway_display_only = False
+        gw._mqtt_task = None
+        gw._pending_plan = None
+        gw._mqtt_connected = True
         gw._auto_configured = True
-        gw._refresh_ev_windows = MagicMock()
-        gw._apply_ev_charging_state = AsyncMock()
+        gw.get_state_wrapper = lambda entity, attribute=None: gw._planned_attr if attribute == "planned" else "on"
+        for name in ("_check_read_only_state", "_check_inverter_resets", "_check_rate_caps", "_publish_predbat_data", "_check_token_refresh", "_republish_plan_if_stale"):
+            setattr(gw, name, AsyncMock())
+        gw.update_success_timestamp = MagicMock()
+        with patch("gateway.HAS_AIOMQTT", True):
+            assert asyncio.run(gw.run(60, False)) is True
+        assert not any("housekeeping error" in str(call) for call in gw.log.call_args_list)
 
-        # The gate as written in run(): EV control only when gateway_evc_control and auto-configured
-        if gw.gateway_evc_control and gw._auto_configured:
-            gw._refresh_ev_windows()
-            asyncio.run(gw._apply_ev_charging_state())
+    def _planned_now(self, gw):
+        """A planned-attribute window, as output.py writes it, containing now."""
+        import datetime as dt_mod
 
-        gw._apply_ev_charging_state.assert_not_awaited()
+        now = dt_mod.datetime.now(gw.local_tz)
+        fmt = "%m-%d %H:%M:%S"
+        return [{"start": (now - dt_mod.timedelta(minutes=5)).strftime(fmt), "end": (now + dt_mod.timedelta(hours=1)).strftime(fmt), "kwh": 5.0, "average": 20.0, "cost": 1.0}]
+
+    def test_nothing_sent_with_control_off(self):
+        """The real run() sends no EV command with gateway_evc_control off, and does with it on."""
+        gw, published = self._gateway(evc_control=False)
+        gw._planned_attr = self._planned_now(gw)
+        _ev_set_telemetry(gw, car_connected=True, session_active=False)
+        self._run_housekeeping(gw)
         assert published == []
-        import inspect
-        from gateway import GatewayMQTT
 
-        assert "if self.gateway_evc_control and self._auto_configured:" in inspect.getsource(GatewayMQTT.run)
+        gw, published = self._gateway(evc_control=True)
+        gw._planned_attr = self._planned_now(gw)
+        _ev_set_telemetry(gw, car_connected=True, session_active=False)
+        self._run_housekeeping(gw)
+        assert [p["action"] for _, p in published] == ["SetChargingProfile", "RemoteStartTransaction"]
+
+    def test_offline_charger_does_not_confirm_stop(self):
+        """At window end with the charger offline nothing is confirmed or spent; the stop goes once it is back (N2)."""
+        gw, published = self._gateway()
+        gw._ev_windows = []
+        gw._ev_charging_active = True  # a window PredBat drove has just ended
+        for _ in range(6):
+            _ev_set_telemetry(gw, car_connected=False, session_active=False, online=False)
+            _ev_cycle(gw)
+        assert published == []
+        assert gw._ev_confirmed is False
+        assert gw._ev_attempts == 0
+
+        _ev_set_telemetry(gw, car_connected=True, session_active=True)  # back online, still charging
+        _ev_cycle(gw)
+        assert [p["action"] for _, p in published] == ["RemoteStopTransaction"]
+
+    def test_offline_after_stop_send_does_not_confirm(self):
+        """A charger dropping offline after a stop is sent does not count as the stop taking."""
+        gw, published = self._gateway()
+        gw._ev_windows = []
+        gw._ev_charging_active = True
+        _ev_set_telemetry(gw, car_connected=True, session_active=True)
+        _ev_cycle(gw)
+        assert len(published) == 1
+        for _ in range(5):
+            _ev_set_telemetry(gw, car_connected=False, session_active=False, online=False)
+            _ev_cycle(gw)
+        assert gw._ev_confirmed is False
+        assert gw._ev_attempts == 1  # nothing burned while offline
+
+        _ev_set_telemetry(gw, car_connected=True, session_active=True)
+        _ev_cycle(gw)
+        _ev_set_telemetry(gw, car_connected=True, session_active=True)
+        _ev_cycle(gw)
+        assert len([p for _, p in published if p["action"] == "RemoteStopTransaction"]) == 2
+
+    def test_charger_without_status_sends_once_per_transition(self):
+        """A charger reporting no OCPP status gets one send per transition, no retry and no latch (N3)."""
+        gw, published = self._gateway()
+        _ev_set_window(gw, inside=True)
+        for _ in range(10):
+            _ev_set_telemetry(gw, car_connected=False, session_active=False, has_status=False)
+            _ev_cycle(gw)
+        assert [p["action"] for _, p in published] == ["SetChargingProfile", "RemoteStartTransaction"]
+        assert gw._ev_latched is False
+        gw.base.record_status.assert_not_called()
+
+        _ev_set_window(gw, inside=False)
+        for _ in range(10):
+            _ev_set_telemetry(gw, car_connected=False, session_active=True, has_status=False)
+            _ev_cycle(gw)
+        assert [p["action"] for _, p in published][2:] == ["RemoteStopTransaction"]
+        gw.base.record_status.assert_not_called()
 
     def test_nothing_sent_when_unplugged(self):
         """A start is never sent without a car plugged in, and is sent once one is."""
@@ -6425,6 +6597,13 @@ class TestEvCommandConfirm:
         gw._inject_ev_entities(tel._status_with_ev(charge_point_id="CPX", session_active=False, status="Available"))
         assert gw._ev_telemetry["CPX"]["car_connected"] is False
         assert gw._ev_telemetry["CPX"]["session_active"] is False
+        assert gw._ev_telemetry["CPX"]["online"] is True
+        assert gw._ev_telemetry["CPX"]["has_status"] is True
+        gw._inject_ev_entities(tel._status_with_ev(charge_point_id="CPX", connected=False, session_active=True, status="Charging"))
+        assert gw._ev_telemetry["CPX"]["online"] is False
+        assert gw._ev_telemetry["CPX"]["session_active"] is False  # forced idle while offline
+        gw._inject_ev_entities(tel._status_with_ev(charge_point_id="CPX", session_active=True, status=""))
+        assert gw._ev_telemetry["CPX"]["has_status"] is False
 
 
 class TestRateAnchors(unittest.TestCase):

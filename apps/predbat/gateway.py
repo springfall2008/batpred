@@ -57,8 +57,8 @@ _PLAN_REPUBLISH_INTERVAL = 5 * 60
 _TELEMETRY_STALE_THRESHOLD = 120
 
 # EV start/stop confirmation: a command not seen in telemetry within this many run() cycles is
-# sent again, up to _EV_MAX_ATTEMPTS sends per window, after which control latches until the
-# next window (or a change in the configured chargers).
+# sent again, up to _EV_MAX_ATTEMPTS sends, after which control latches until the desired state
+# changes, the car is unplugged or the configured chargers change.
 _EV_CONFIRM_CYCLES = 2
 _EV_MAX_ATTEMPTS = 3
 
@@ -325,7 +325,7 @@ class GatewayMQTT(ComponentBase):
             gateway_evc_control: When True (requires gateway_evc_automatic), check once per minute whether
                 the current time falls inside a planned car-charging window and send RemoteStartTransaction
                 plus SetChargingProfile on window entry, or RemoteStopTransaction on window exit. Each
-                command is confirmed from the charger's telemetry and re-sent (at most 3 times per window).
+                command is confirmed from the charger's telemetry and re-sent (at most 3 sends).
             gateway_shared_ct: When True (the default), several inverters are taken to share one grid CT
                 clamp, so each reports the same grid and load. Only the first inverter's grid and load
                 readings are then used, so the house's grid and load are not counted once per inverter.
@@ -434,7 +434,7 @@ class GatewayMQTT(ComponentBase):
         self._ev_windows: list = []  # parsed (start_dt, end_dt) charge windows from HA plan attribute
         self._ev_charging_active: bool = False  # desired state (window on/off); the real state comes from telemetry
         self._ev_max_current: dict = {}  # charge_point_id → last known max_current_a from telemetry
-        self._ev_telemetry: dict = {}  # charge_point_id → {"car_connected", "session_active", "time"} from the last telemetry
+        self._ev_telemetry: dict = {}  # charge_point_id → {"online", "has_status", "car_connected", "session_active", "time"} from the last telemetry
         self._reset_ev_control_state()
         self._suffix_to_serial = {}  # maps entity suffix (last 6 chars of serial) -> full serial string
         # Incrementing counter included in every published command, seeded from the clock so
@@ -634,90 +634,114 @@ class GatewayMQTT(ComponentBase):
     def _reset_ev_control_state(self):
         """Clear the EV start/stop confirmation state (attempts, latch, outstanding command).
 
-        ``_ev_confirmed`` starts True so nothing is outstanding until the window state first changes.
+        ``_ev_confirmed`` starts True so nothing is outstanding until the desired state first changes.
         """
-        self._ev_window_key = None  # (start, end) of the window the current attempts belong to; None outside a window
         self._ev_confirmed = True  # telemetry has shown the desired state since it last changed
-        self._ev_attempts = 0  # sends of the current desired state in this window
+        self._ev_latched = False  # attempts exhausted: stop sending until the budget is reset
+        self._ev_latch_message = ""  # the warning shown on the status while latched
+        self._ev_latch_chargers = None  # configured chargers when the latch was set
+        self._reset_ev_budget()
+
+    def _reset_ev_budget(self):
+        """Give the current desired state a fresh attempt budget and clear any latch."""
+        self._ev_attempts = 0  # sends of the current desired state
         self._ev_cycles_since_send = 0  # run() cycles since the last send without confirmation
         self._ev_last_send_time = 0.0  # time.time() of the last send; confirmation needs telemetry newer than this
-        self._ev_latched = False  # attempts exhausted: stop sending until the next window or a charger change
-        self._ev_latch_chargers = None  # configured chargers when the latch was set
+        self._ev_latched = False
 
-    def _current_ev_window(self):
-        """Return the (start, end) planned window containing now, or None when outside every window."""
-        now = datetime.datetime.now(self.local_tz)
-        return next(((start, end) for start, end in self._ev_windows if start <= now < end), None)
+    def _report_ev_latch(self):
+        """Show the latch warning on the status, re-asserting it once the main loop has replaced it.
 
-    def _ev_actual_state(self, cp_id):
-        """Return the charger's telemetry for cp_id as (car_connected, session_active, received_at), or None if never seen."""
-        state = self._ev_telemetry.get(cp_id)
-        if not state:
-            return None
-        return state["car_connected"], state["session_active"], state["time"]
+        It is recorded without had_errors, so the main loop's next status write replaces it rather
+        than keeping it as the run's warning; writing it again each cycle it is missing keeps it
+        visible for as long as the latch holds.
+        """
+        base = getattr(self, "base", None)
+        record_status = getattr(base, "record_status", None)
+        if record_status and getattr(base, "status_state", None) != self._ev_latch_message:
+            record_status(self._ev_latch_message, had_errors=False)
 
     async def _apply_ev_charging_state(self):
         """Drive the charger towards the desired start/stop state and confirm it from telemetry.
 
         Called every run() cycle (once per minute). ``_ev_charging_active`` is the *desired* state:
-        True inside a planned car window. A change of desired state (or of window) starts a fresh
-        attempt budget. Start sends SetChargingProfile (max current) then RemoteStartTransaction;
-        stop sends RemoteStopTransaction. Both go to the hub's shared command topic, targeted at
-        ``min(configured chargers)``.
+        True inside a planned car window. Start sends SetChargingProfile (max current) then
+        RemoteStartTransaction; stop sends RemoteStopTransaction. Both go to the hub's shared command
+        topic, targeted at ``min(configured chargers)``.
 
-        The command is confirmed only by telemetry received after it was sent showing
-        ``session_active`` equal to the desired state. Unconfirmed after _EV_CONFIRM_CYCLES cycles it is
-        sent again, up to _EV_MAX_ATTEMPTS sends; then control latches with a warning on the status
-        (not an error) until the next window or a change in the configured chargers.
+        A command is confirmed only by telemetry received after it was sent showing ``session_active``
+        equal to the desired state. Unconfirmed after _EV_CONFIRM_CYCLES cycles it is sent again, up to
+        _EV_MAX_ATTEMPTS sends; then control latches with a warning on the status (not an error).
 
-        A stop is only ever sent after PredBat wanted the car charging (a transition out of a window),
-        so a session the user started outside a window is never stopped. A start is never sent unless
-        telemetry shows a car plugged in.
+        The attempt budget (and latch) resets only on a real boundary: the desired state changing
+        (a window starting after a gap, or ending), the car being unplugged, or the configured chargers
+        changing. The planner moves the in-progress window's end on every replan while the car gains no
+        charge, so the window's own boundaries must not refill the budget.
+
+        A charger reported offline is unknown: nothing is confirmed, sent or counted until it is back.
+        A charger that reports no OCPP status cannot show plug state, so it gets the previous behaviour:
+        one send per transition with no confirmation or retry. A stop is only ever sent after PredBat
+        wanted the car charging, so a session the user started outside a window is never stopped, and a
+        start is never sent unless telemetry shows a car plugged in.
         """
         if not self._configured_ev_chargers:
             return
         # min() gives a deterministic choice when multiple chargers are present (v1: one charger per home)
         cp_id = min(self._configured_ev_chargers)
-        window = self._current_ev_window()
-        should_charge = window is not None
+        should_charge = self._should_ev_charge_now()
 
         if self._ev_latched and self._ev_latch_chargers != self._configured_ev_chargers:
             self.log("Info: GatewayMQTT: EVC charger configuration changed, clearing the start/stop latch")
-            self._ev_latched = False
-            self._ev_attempts = 0  # a fresh attempt budget, as at a new window
-            self._ev_cycles_since_send = 0
+            self._reset_ev_budget()
 
-        if should_charge != self._ev_charging_active or window != self._ev_window_key:
-            transition = should_charge != self._ev_charging_active
+        if should_charge != self._ev_charging_active:
             self._ev_charging_active = should_charge
-            self._ev_window_key = window
-            self._ev_attempts = 0
-            self._ev_cycles_since_send = 0
-            self._ev_latched = False
-            # Only a change of desired state needs confirming; a new adjacent window that keeps
-            # charging re-checks too, so a start that never took gets a fresh budget.
-            if transition or should_charge:
-                self._ev_confirmed = False
+            self._ev_confirmed = False
+            self._reset_ev_budget()
 
-        if self._ev_confirmed or self._ev_latched:
+        state = self._ev_telemetry.get(cp_id)
+        online = bool(state and state["online"])
+        has_status = bool(state and state["has_status"])
+
+        if should_charge and online and has_status and not state["car_connected"]:
+            # Unplugged: never start without a car, and a plug-in starts afresh (budget, latch, outstanding start).
+            if self._ev_attempts or self._ev_latched or self._ev_confirmed:
+                self.log(f"Info: GatewayMQTT: EVC no car plugged in to '{cp_id}', waiting for one before starting")
+            self._ev_confirmed = False
+            self._reset_ev_budget()
             return
 
-        actual = self._ev_actual_state(cp_id)
-        car_connected = actual[0] if actual else None
-        session_active = actual[1] if actual else None
-        received_at = actual[2] if actual else 0
+        if self._ev_confirmed:
+            return
+        if self._ev_latched:
+            self._report_ev_latch()
+            return
 
-        # Confirmed: telemetry shows the desired state. After a send it must be telemetry received
-        # since that send, so a stale pre-send report cannot confirm it; before any send it must be fresh.
-        fresh = received_at > self._ev_last_send_time if self._ev_attempts else (time.time() - received_at) < _TELEMETRY_STALE_THRESHOLD
-        if actual is not None and fresh and bool(session_active) == should_charge:
-            if self._ev_attempts:
-                self.log(f"Info: GatewayMQTT: EVC {'start' if should_charge else 'stop'} confirmed by telemetry for '{cp_id}' after {self._ev_attempts} attempt(s)")
+        if state is not None and not online:
+            # The hub cannot reach the charger, and its session fields are forced idle while offline: unknown.
+            return
+
+        if state is not None and not has_status:
+            # No OCPP status: plug state is unknowable, so send once per transition as before and do not retry.
+            if not self._ev_attempts:
+                await self._send_ev_action(cp_id, should_charge)
             self._ev_confirmed = True
             return
 
-        if should_charge and not car_connected:
-            # Never send a start without a car plugged in; wait (without spending attempts) for one.
+        if state is not None:
+            # Confirmed: after a send, only telemetry received since that send counts, so a stale report
+            # cannot confirm it; before any send it must be fresh.
+            if self._ev_attempts:
+                fresh = state["time"] > self._ev_last_send_time
+            else:
+                fresh = (time.time() - state["time"]) < _TELEMETRY_STALE_THRESHOLD
+            if fresh and state["session_active"] == should_charge:
+                if self._ev_attempts:
+                    self.log(f"Info: GatewayMQTT: EVC {'start' if should_charge else 'stop'} confirmed by telemetry for '{cp_id}' after {self._ev_attempts} attempt(s)")
+                self._ev_confirmed = True
+                return
+        elif should_charge:
+            # No telemetry for the charger yet: plug state unknown, so no start.
             return
 
         if self._ev_attempts:
@@ -728,18 +752,26 @@ class GatewayMQTT(ComponentBase):
                 self._ev_latched = True
                 self._ev_latch_chargers = self._configured_ev_chargers
                 action = "start" if should_charge else "stop"
-                message = f"Warn: GatewayMQTT: EV charger '{cp_id}' did not {action} after {self._ev_attempts} attempts, giving up until the next car charging window"
-                self.log(message)
-                record_status = getattr(getattr(self, "base", None), "record_status", None)
-                if record_status:
-                    record_status(message, had_errors=False)
+                until = "the car is unplugged or the window ends" if should_charge else "the next car charging window"
+                self._ev_latch_message = f"Warn: GatewayMQTT: EV charger '{cp_id}' did not {action} after {self._ev_attempts} attempts, giving up until {until}"
+                self.log(self._ev_latch_message)
+                self._report_ev_latch()
                 return
             self.log(f"Info: GatewayMQTT: EVC {'start' if should_charge else 'stop'} not confirmed after {self._ev_cycles_since_send} cycle(s), re-sending (attempt {self._ev_attempts + 1}/{_EV_MAX_ATTEMPTS})")
 
+        await self._send_ev_action(cp_id, should_charge)
+
+    async def _send_ev_action(self, cp_id, start):
+        """Send one start (charging profile + RemoteStartTransaction) or stop attempt to the charger.
+
+        Args:
+            cp_id: OCPP charge point id to target.
+            start: True to start charging, False to stop.
+        """
         self._ev_attempts += 1
         self._ev_cycles_since_send = 0
         self._ev_last_send_time = time.time()
-        if should_charge:
+        if start:
             current_a = self._ev_max_current.get(cp_id, 32)
             self.log(f"Info: GatewayMQTT: EVC start charging — current_a={current_a} for '{cp_id}' (attempt {self._ev_attempts})")
             await self._send_ev_command({"action": "SetChargingProfile", "current_a": int(current_a)}, charge_point_id=cp_id)
@@ -1698,8 +1730,16 @@ class GatewayMQTT(ComponentBase):
             else:
                 ev_charging = bool(session_active and power_w > 0)
             if ev.charge_point_id:
-                # What _apply_ev_charging_state confirms its start/stop commands against
-                self._ev_telemetry[ev.charge_point_id] = {"car_connected": ev_car_connected, "session_active": bool(session_active), "time": time.time()}
+                # What _apply_ev_charging_state confirms its start/stop commands against. online is the
+                # charger's link to the hub (its session fields are forced idle while it is down), and
+                # has_status whether it reports an OCPP status at all (without one plug state is unknown).
+                self._ev_telemetry[ev.charge_point_id] = {
+                    "online": bool(ev.connected),
+                    "has_status": bool(ev.status),
+                    "car_connected": bool(ev_car_connected),
+                    "session_active": bool(session_active),
+                    "time": time.time(),
+                }
             self.dashboard_item(f"binary_sensor.{pfx}_session_active", session_active, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_session_active", {}), app="gateway")
             self.dashboard_item(f"binary_sensor.{pfx}_charging", ev_charging, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_charging", {}), app="gateway")
             if ev.status:
