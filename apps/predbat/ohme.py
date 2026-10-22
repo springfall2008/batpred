@@ -239,9 +239,11 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         self.charger_control_setup("Ohme API", "charger", control=self.ohme_control, switch_prefix="ohme", control_setting="ohme_control")
         # Whether the car is on Octopus Intelligent as last decided, None until the first decision
         self.octopus_intelligent = None
-        # Octopus Intelligent is driving a device that is not this charger - the car itself, say - so
-        # Octopus schedules the charge and its own dispatches are the plan, see octopus_intelligent_wanted()
+        # Octopus Intelligent is driving a live device and wires the car slots to it itself - the car, another
+        # charger or this Ohme - so its own dispatches are the plan, see octopus_intelligent_wanted()
         self.octopus_other_device = False
+        # That device is this Ohme: Octopus starts and stops this very charger, so Predbat never drives it
+        self.octopus_drives_ohme = False
         # How the car slot args are wired to the session slots, None when they are not - see update_slot_mode()
         self.slot_mode = None
         # The mode the args were last wired for. Kept apart from slot_mode so that a wiring change
@@ -466,12 +468,20 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         Ohme is only the socket, so Ohme's session has nothing to do with what Octopus bills as
         off-peak. The slots are then left to the Octopus component, and octopus_other_device is set
         so nothing of Ohme's stands in for them - see charger_slots_wanted() and update_slot_mode().
+
+        The same holds where the device is this Ohme. Octopus's dispatch sensor then carries the car
+        slots, ready time and charge limit just the same, and Ohme's session slots are only a relayed
+        copy of those dispatches - minutes late, at times stale or missing one, and with no source, so
+        a boost started from the Ohme app was priced as an off-peak dispatch. octopus_drives_ohme is set
+        as well, so Predbat never drives a charger Octopus is driving.
         """
         if self.ohme_automatic_octopus_intelligent is not None:
             self.octopus_other_device = False
+            self.octopus_drives_ohme = False
             return bool(self.ohme_automatic_octopus_intelligent)
         if not self.ohme_automatic:
             self.octopus_other_device = False
+            self.octopus_drives_ohme = False
             return False
 
         # OctopusAPI has already detected this by the time we first run - it sits earlier in
@@ -485,6 +495,7 @@ class OhmeAPI(ComponentBase, CarChargerControl):
             return bool(self.octopus_intelligent)
         if not octopus.is_intelligent_go_tariff(tariff_code):
             self.octopus_other_device = False
+            self.octopus_drives_ohme = False
             return False
 
         # The devices Octopus Intelligent is live on. OctopusAPI keeps the last known set through a
@@ -493,12 +504,10 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         # which is also why OctopusAPI.automatic_config() leaves it out of its own car slot wiring
         devices = list((octopus.get_intelligent_devices() or {}).values())
         active = [device for device in devices if not device.get("suspended")]
-        self.octopus_other_device = False
-        if any(self.is_ohme_charger(device) for device in active):
-            return True
+        self.octopus_drives_ohme = any(self.is_ohme_charger(device) for device in active)
+        self.octopus_other_device = bool(active)
         if active:
-            # Octopus is driving something else, and wires the car slots to its dispatches itself
-            self.octopus_other_device = True
+            # Octopus is driving the Ohme or something else, and wires the car slots to its dispatches itself
             return False
         if devices:
             # Every device is suspended, so Octopus is scheduling nothing and there are no dispatches
@@ -528,19 +537,22 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         been published the new way.
         """
         was_other_device = self.octopus_other_device
+        was_drives_ohme = self.octopus_drives_ohme
         octopus_intelligent = self.octopus_intelligent_wanted()
         # While Octopus drives the car, Predbat drives the charger only when asked to follow the car's
         # dispatches - or when Intelligent charging is off in Predbat, which then plans the car itself
         follows_car = bool(self.get_arg("octopus_intelligent_charger_follows_car", False)) or not self.get_arg("octopus_intelligent_charging", True)
-        octopus_changed = octopus_intelligent != self.octopus_intelligent or self.octopus_other_device != was_other_device
+        octopus_changed = octopus_intelligent != self.octopus_intelligent or self.octopus_other_device != was_other_device or self.octopus_drives_ohme != was_drives_ohme
         # The switch only matters while Octopus drives the car, so a change elsewhere is not a decision to remake
-        follows_changed = follows_car != self.follows_car and self.octopus_other_device
+        follows_changed = follows_car != self.follows_car and self.octopus_other_device and not self.octopus_drives_ohme
         self.follows_car = follows_car
         if octopus_changed or follows_changed:
             if not octopus_changed:
                 self.log("Info: Ohme API: Octopus Intelligent drives the car, and Predbat {} the charger".format("now drives" if follows_car else "no longer drives"))
             elif octopus_intelligent:
                 self.log("Info: Ohme API: Octopus Intelligent is in use, taking the car slots from Ohme")
+            elif self.octopus_drives_ohme:
+                self.log("Info: Ohme API: Octopus Intelligent drives this Ohme - leaving the car slots, ready time and charge limit to Octopus")
             elif self.octopus_other_device:
                 self.log("Info: Ohme API: Octopus Intelligent is driving another device, not this charger - leaving the car slots to Octopus")
             elif self.octopus_intelligent is not None:
@@ -548,15 +560,16 @@ class OhmeAPI(ComponentBase, CarChargerControl):
             self.octopus_intelligent = octopus_intelligent
             # Predbat-led control is ruled out wherever Octopus schedules the charge, whichever device
             # it does that through, so it follows the same change - unless Octopus drives the car and
-            # the user has asked for the charger to be driven to the car's dispatches
-            self.enable_control(octopus_intelligent or (self.octopus_other_device and not follows_car))
+            # the user has asked for the charger to be driven to the car's dispatches. Never while
+            # Octopus drives this Ohme itself: the two would fight over the one charger
+            self.enable_control(octopus_intelligent or self.octopus_drives_ohme or (self.octopus_other_device and not follows_car))
 
         # Predbat has stood down but is still holding the charger: hand it back. Checked on every
         # poll rather than only on the change, as charger_control_release() forgets the charger last -
         # a hand-back that failed part way is tried again until the charger really is released
         if not self.charger_control_active and self.charger_control_state:
             try:
-                if octopus_intelligent:
+                if octopus_intelligent or self.octopus_drives_ohme:
                     # Octopus drives this charger: hand it over without starting a charge outside a dispatch
                     self.log("Info: Ohme API: Octopus Intelligent now schedules the charge, handing the charger to Octopus")
                     await self.charger_control_hand_over_all()
@@ -582,7 +595,7 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         slot_source = self.octopus_dispatch_sensor() if slot_mode == SLOT_MODE_INTELLIGENT else None
         if slot_mode == SLOT_MODE_INTELLIGENT and (slot_source != self.slot_source or self.slot_mode_applied != SLOT_MODE_INTELLIGENT):
             if slot_source:
-                self.log("Info: Ohme API: Taking the car slots from {}, and the ready time and charge limit from Ohme".format(slot_source))
+                self.log("Info: Ohme API: Taking the planned car slots from Ohme and the completed dispatches from {}".format(slot_source))
             else:
                 self.log("Info: Ohme API: No Octopus dispatch sensor is set in octopus_intelligent_slot, so the completed car slots come from Ohme too - they are only kept until the car is unplugged")
         self.slot_source = slot_source
@@ -591,12 +604,12 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         """
         The sensor holding Octopus's own record of the car's dispatches, or None when there is not one.
 
-        Where octopus_intelligent_slot already points at a sensor of Octopus's - wired by the Octopus
-        component, or set in apps.yaml to the Octopus Energy integration's - that sensor supplies the
-        car slots, planned and completed, and Ohme only the ready time and charge limit (see
-        wire_planned_slots()). Without one, Ohme's session slots are all there is, though they only
-        last the session: unplug the car and every slot it charged in is gone, and with them the
-        off-peak rate those minutes were billed at (#5413).
+        Ohme knows the charge that is planned sooner and better than Octopus reports it, but only for
+        the session in progress: unplug the car and every slot it charged in is gone, and with them
+        the off-peak rate those minutes were billed at (#5413). Octopus keeps its completed dispatches,
+        so where octopus_intelligent_slot already points at a sensor of Octopus's - wired by the
+        Octopus component, or set in apps.yaml to the Octopus Energy integration's - that sensor is
+        left as the record of what has been dispatched and Ohme supplies the plan beside it.
 
         An Ohme sensor is not such a record, whether ours or the Ohme integration's. Nor is an
         unmatched regex from the apps.yaml default, still its literal "re:" string at this point.
@@ -768,34 +781,28 @@ class OhmeAPI(ComponentBase, CarChargerControl):
 
     def clear_planned_slots(self):
         """
-        Take the ready time and charge limit wire_planned_slots() made back off the Ohme entities, and any planned slot arg still on them.
+        Take the planned slot arg, and the ready time and charge limit wired with it, back off the Ohme entities.
 
         For leaving the wiring wire_planned_slots() made, where octopus_intelligent_slot was never
-        Ohme's and so clear_car_slots() finds nothing to do. Anything since pointed elsewhere is left,
-        and Octopus's sensor is only cleared when it has no more dispatches to give, and Ohme's wiring
-        was still beside it.
+        Ohme's and so clear_car_slots() finds nothing to do. Anything since pointed elsewhere is left.
         """
-        ours = False
         existing = self.get_arg("octopus_intelligent_planned_slot", default=None, indirect=False)
         if isinstance(existing, list) and len(existing) == 1:
             existing = existing[0]
-        if existing == SLOT_ACTIVE_ENTITY:
-            self.set_arg("octopus_intelligent_planned_slot", [])
-            ours = True
+        if existing != SLOT_ACTIVE_ENTITY:
+            return
+        self.set_arg("octopus_intelligent_planned_slot", [])
+        slot = self.get_arg("octopus_intelligent_slot", default=None, indirect=False)
+        if isinstance(slot, list) and len(slot) == 1:
+            slot = slot[0]
+        if self.dispatch_sensor_spent(slot):
+            self.set_arg("octopus_intelligent_slot", [])
         for arg in ("octopus_ready_time", "octopus_charge_limit"):
             current = self.get_arg(arg, default=None, indirect=False)
             if isinstance(current, list) and len(current) == 1:
                 current = current[0]
             if current == CAR_DISCOVERY_ENTITY_SPEC[arg]["entity_id"]:
                 self.set_arg(arg, [])
-                ours = True
-        if not ours:
-            return
-        slot = self.get_arg("octopus_intelligent_slot", default=None, indirect=False)
-        if isinstance(slot, list) and len(slot) == 1:
-            slot = slot[0]
-        if self.dispatch_sensor_spent(slot):
-            self.set_arg("octopus_intelligent_slot", [])
 
     def wire_car_slots(self):
         """
@@ -809,20 +816,12 @@ class OhmeAPI(ComponentBase, CarChargerControl):
 
     def wire_planned_slots(self):
         """
-        Leave the car slots to Octopus's sensor in octopus_intelligent_slot, wiring only the ready time and charge limit to Ohme.
+        Point the planned slot arg at the Ohme slots, leaving octopus_intelligent_slot on Octopus's sensor.
 
-        Octopus's sensor carries the planned dispatches as well as the completed ones. Ohme's session
-        slots used to be read as the plan beside it, but on Intelligent they are a relayed copy of the
-        same dispatches: minutes behind, sometimes stale for hours, sometimes missing one Octopus still
-        has, and with no source - so a boost started from the Ohme app was priced as an off-peak
-        dispatch, where Octopus lists it as BOOST. What Ohme did have first, the half hour charged on
-        plug-in and the plan through Octopus's re-plans, the Octopus side now covers itself (see
-        OctopusAPI.planned_dispatches_for_state() and Octopus.octopus_charging_unlisted()).
-
-        The ready time and charge limit are Ohme's: they are set on the charger, which is what Octopus
-        is scheduling.
+        The ready time and charge limit are Ohme's either way: they are set on the charger, which is
+        what Octopus is scheduling.
         """
-        self.set_arg("octopus_intelligent_planned_slot", [])
+        self.set_arg("octopus_intelligent_planned_slot", [SLOT_ACTIVE_ENTITY])
         self.set_arg("octopus_ready_time", CAR_DISCOVERY_ENTITY_SPEC["octopus_ready_time"]["entity_id"])
         self.set_arg("octopus_charge_limit", CAR_DISCOVERY_ENTITY_SPEC["octopus_charge_limit"]["entity_id"])
 
