@@ -238,6 +238,8 @@ pred_bat:
   teslemetry_key: !secret teslemetry_key  # Teslemetry token (if using Teslemetry)
   ohme_login: !secret ohme_login  # Ohme account e-mail (if using Ohme direct)
   ohme_password: !secret ohme_password  # Ohme account password (if using Ohme direct)
+  wallbox_username: !secret wallbox_username  # Wallbox account e-mail (if using Wallbox direct)
+  wallbox_password: !secret wallbox_password  # Wallbox account password (if using Wallbox direct)
 ```
 
 If a credential-like value (matching a key name containing `_key`, `password`, `secret` or `token`) is found written directly in `apps.yaml` instead of via `!secret`, Predbat logs a warning and lists the affected item(s) on the [web interface](web-interface.md) apps.yaml page. This is a warning rather than a validation error - the configuration still works, but moving the value into `secrets.yaml` keeps it out of `apps.yaml`, which is more likely to end up shared, backed up or attached to a bug report.
@@ -520,7 +522,27 @@ back home). This is what makes holiday mode act from the moment you switch it on
 for holiday history to accumulate.
 
 Buckets with no recorded data (zero) are ignored entirely so gaps in the history do not drag the estimate
-down. As with Load ML, this replaces the normal days_previous averaging; if [Load ML](load-ml.md) is enabled
+down.
+
+On a new install, some times of day won't have been recorded on any previous day yet - for example the hours
+before Predbat was installed part-way through yesterday, or every hour when it was installed today. For those
+times Predbat uses today's load instead, so you don't have to wait for a full day of history:
+
+- If that time of day has already passed today, today's load at that time is used. This is how tonight's
+  forecast picks up this morning's overnight load.
+- Otherwise, once at least an hour has been recorded, the average of all the load recorded so far is used.
+  The first hours after an install may not be typical of the whole day, but this is a better guess than base
+  load and it improves every cycle.
+- With less than an hour recorded, the [base load](#base-load) is used.
+- The hours earlier today before Predbat was installed also stay at base load. That way the
+  [in-day adjustment](customisation.md#battery-margins-and-metrics-options) isn't thrown off by comparing a forecast for those hours against
+  load that was never recorded.
+
+As with every other sample, the base load is applied as a minimum and holiday mode is matched or scaled. Today
+is only used while no previous day has data for that time of day, so once a full day is recorded the forecast
+works exactly as described above.
+
+As with Load ML, this replaces the normal days_previous averaging; if [Load ML](load-ml.md) is enabled
 it takes precedence over `days_previous_auto`.
 
 Because the holiday matching above already accounts for [holiday mode](customisation.md#holiday-mode) when
@@ -613,6 +635,28 @@ See also **ge_cloud_automatic_split_ct** which takes priority over this setting 
 Use this to override automatic shared-CT detection if Predbat incorrectly identifies your system as sharing a CT clamp (e.g. when duplicate meter serials are reported by the cloud API but the inverters actually have separate CT clamps).
 This setting takes priority over **ge_cloud_automatic_shared_ct** if both are set.
 
+- **gateway_display_only** - Optional, defaults to false. Set to `true` to send prices, costs and the plan timeline to a paired Hub while another integration controls the battery.
+The Hub does not need a discovered inverter. This mode does not configure inverter or EV charger entities, change the selected inverter integration, or publish commands or executable schedules.
+Keep the Hub in enforced standby (including passive mode on supported firmware) before enabling this option or handing control to another integration. The option only prevents this Predbat component from sending writes; it cannot stop an old schedule or autonomous fallback already running on the Hub.
+The existing firmware still needs a local inverter connection for live power flow and battery readings; cloud-fed live readings and pairing without inverter discovery are separate changes.
+This is a display option, not automatic backup switching.
+
+- **gateway_shared_ct** - Optional, defaults to true. The equivalent of **ge_cloud_automatic_shared_ct** for inverters controlled through the Predbat Gateway.
+When `true`, Predbat treats multiple inverters as sharing a single physical CT clamp for grid and load measurement,
+so only the first inverter's grid and load power readings are used (the rest are zeroed out), preventing double-counting of grid import/export and house load.
+The import, export and load energy for the day are likewise taken from the first inverter only.
+Battery and solar readings are unaffected and are still taken from, and added up across, each inverter.
+This is the usual arrangement for two or more inverters with no EMS or Gateway coordinating them. The Predbat Gateway cannot detect how the CT clamps are fitted, so
+set this to `false` if each of your inverters has its own CT clamp measuring a separate supply; Predbat then adds up the grid and load power, and the import, export and load energy, of every inverter.
+It has no effect with a single inverter.
+
+- **gateway_integrate_power** - Optional, defaults to false. When set to `true`, Predbat works out today's import, export and house load itself from the power readings, rather than using the Predbat Gateway's energy counters.
+Use this where the Gateway's daily import, export or load figures are wrong for your inverters. GivEnergy AC-coupled inverters sharing a single CT clamp are one known case, and there you would set this together with **gateway_shared_ct**.
+Grid power is split into import and export and each is added up over the day, the battery power of every inverter is added up as charge and discharge in the same way, and the house load is then
+solar + import - export + battery discharge - battery charge. Solar still comes from the Gateway's **pv_today** counters, added up across the inverters.
+With **gateway_shared_ct** the grid power of the first inverter is used; without it the grid power of every inverter is added together.
+These figures return to zero at midnight and also restart from zero if Predbat is restarted during the day.
+
 - **ge_cloud_automatic_split_pv** - Optional, defaults to false. When set to `true`, Predbat will also include any standalone PV-only inverters (e.g. a GivEnergy AC-coupled PV inverter with no battery attached) in **pv_today** and **pv_power**, in addition to the battery inverters.
 Use this if you have a separate PV-only inverter alongside your battery inverter(s) and want its solar generation included in Predbat's totals. Leave this off (the default) if your battery inverters already report all of your solar generation, to avoid duplicating or including unwanted readings.
 
@@ -628,7 +672,7 @@ See [Components - GivEnergy Cloud Direct](components.md#ev-chargers-gecloud) for
 - **ge_cloud_evc_control** - Optional, defaults to false. When set to `true`, Predbat starts and stops your GivEnergy EV charger from its
 car charging plan, in the same way it can drive a myenergi Zappi or an Ohme charger. Charger N follows car N. Needs **ge_cloud_automatic_evc**,
 since it is that setting which maps each charger to a car.
-A `switch.predbat_gecloud_evc_control` entity appears when this is set, on by default, so you can hand the charger back without editing
+A `switch.predbat_gecloud_evc_control` entity appears when control is on, on by default, so you can hand the charger back without editing
 `apps.yaml`; releasing sends a start command if Predbat had stopped the charger, so a car is never left unable to charge.
 Read only mode releases the chargers in the same way.
 See [Components - Charger control](components.md#charger-control-gecloud) for the details.
@@ -707,7 +751,10 @@ When SolaX Cloud is configured, Predbat creates the following entities for each 
 - `sensor.predbat_solax_{plant_id}_battery_max_power` - Battery maximum power (W)
 - `sensor.predbat_solax_{plant_id}_inverter_max_power` - Inverter maximum power (W)
 - `sensor.predbat_solax_{plant_id}_pv_capacity` - PV array capacity (kWp)
-- `sensor.predbat_solax_{plant_id}_total_yield` - Total PV generation (kWh)
+- `sensor.predbat_solax_{plant_id}_pv_power` - Current PV power (W), summed over the plant's inverters and used for **pv_power**
+- `sensor.predbat_solax_{plant_id}_grid_power` - Current grid power (W), summed over the plant's inverters and used for **grid_power**
+- `sensor.predbat_solax_{plant_id}_pv_yield` - Total PV generation (kWh), summed from the plant's inverters and used for **pv_today**. It reads 0 on a plant whose inverters have no PV inputs, such as a lone AC-coupled battery inverter; PV on a separate inverter that SolaX does not measure is not seen, so set **pv_today** from another source if you have one
+- `sensor.predbat_solax_{plant_id}_total_yield` - Total yield as reported by SolaX for the plant (kWh); on a plant with an AC-coupled battery inverter this includes battery discharge
 - `sensor.predbat_solax_{plant_id}_total_charged` - Total battery charged (kWh)
 - `sensor.predbat_solax_{plant_id}_total_discharged` - Total battery discharged (kWh)
 - `sensor.predbat_solax_{plant_id}_total_imported` - Total grid import (kWh)
@@ -951,7 +998,7 @@ Keep your Sunsynk login in `secrets.yaml` rather than in `apps.yaml` - see [Stor
 - `sunsynk_password` - Your Sunsynk Connect account password
 - `sunsynk_region` - The API region your account is registered in: `'sunsynk'` (default, `api.sunsynk.net`) or `'inteless'` (`pv.inteless.com`)
 - `sunsynk_auth_method` - The login flow: `'password'` (default, RSA-encrypted login), `'password_legacy'` (the pre-2025 plaintext login, opt-in for regions that still serve it) or `'oauth'` (Predbat.com injects and refreshes the token)
-- `sunsynk_inverter_sn` - Optional, restrict Predbat to specific inverter serial number(s) - a single string or a list. Default is all inverters found on the account
+- `sunsynk_inverter_sn` - Optional, restrict Predbat to specific inverter serial number(s) - a single string or a list. Default is all inverters found on the account. For parallel inverters sharing one battery, list the master only - its slaves are included automatically and the group is controlled as one inverter
 - `sunsynk_automatic` - Set to `true` to automatically configure Predbat entities (recommended, default: `false`)
 - `sunsynk_automatic_ignore_pv` - Optional, defaults to `false`. When `automatic` is enabled, set to `true` to prevent Sunsynk Cloud from overwriting the `pv_power` config
 - `sunsynk_control_enable` - Allow Predbat to write charge/export schedules to the inverter (default: `true`, set to `false` for monitoring only)
@@ -1129,10 +1176,6 @@ If you don't have any PV panels, comment or delete this line out of `apps.yaml`.
 
 **Note:**: these '_today' entity names must all be *energy* sensors recording electricity measured over a time period, NOT *power* sensors which measure instantaneous power.  They must increase during the day and not have any gaps or reduce in value (other than at midnight).
 
-The **load_power_fill_enable** feature helps to improve the accuracy of historical load data by using instantaneous power readings to fill gaps and smooth
-out load_today sensors that update infrequently (e.g., sensors that increment in kWh units may only update every hour). This preprocessing happens before
-the main load data analysis and can significantly improve prediction accuracy, especially for systems with coarse-grained energy sensors.
-
 See the [Workarounds](#workarounds) section below for configuration settings for scaling these if required.
 
 If you have multiple inverters then you may find that the **load_today** figures are incorrect as the inverters share the house load between them.
@@ -1235,6 +1278,28 @@ the lowest day's historical load will be discarded.
 
 - **load_filter_threshold** - Sets the number of minutes of zero load data to be considered a gap (that's filled with average data), the default is 30.
 To disable, set it to 1440.
+
+- **load_power_fill_enable** (default true) helps to improve the accuracy of historical load data by using instantaneous power readings to fill gaps and smooth
+out load_today sensors that update infrequently (e.g., sensors that increment in kWh units may only update every hour). This preprocessing happens before
+the main load data analysis and can significantly improve prediction accuracy, especially for systems with coarse-grained energy sensors. Set to 'false' to turn this feature off.
+
+- **load_history_fill_enable** (default true) fills the days before your load_today sensor's history starts from the history of Predbat's own `predbat.load_energy_h0`
+sensor, which records today's load every cycle and keeps its name when your load sensor changes. This helps when you switch load_today to a different sensor (for example
+after changing inverter), where the new sensor has no history for the days before the switch. Where load_today has no history for at least a day back from the oldest day
+Predbat looks at, that stretch is filled with the load predbat.load_energy_h0 recorded at the time, and those days are counted as available history again. Stretches inside
+load_today's own history where it did not move are not filled this way, because predbat.load_energy_h0 was recorded from the same sensor then; they are left for
+load_power_fill_enable and the average gap filling above. How far back this can reach depends on how long Home Assistant keeps history (10 days by default).
+Set to 'false' to turn this feature off.
+
+e.g.
+
+```yaml
+  load_filter_threshold: 60
+  load_power_fill_enable: false
+  load_history_fill_enable: false
+```
+
+See [Load filtering warning in FAQ's](faq.md#i-see-repeated-log-messages-warn-found-1-periods-of-zero-load-with-power-data-filling-using-power-integration).
 
 ## iBoost energy
 
@@ -1618,6 +1683,12 @@ discharge_update_button:
   - button.solis_discharge
 ```
 
+The Predbat Gateway (Hub) sets this up itself: automatic configuration binds **schedule_write_button** to `switch.predbat_gateway_<serial>_schedule_write`.
+A change to a charge or export slot start or end time, and an enable switched alongside it, is held by the Gateway and shown straight away on its select or switch, but not sent to the inverter until the schedule write switch is turned on.
+The Gateway then sends the complete window in one command, followed by the enable, and the switch returns to off.
+If the inverter refuses the window, the selects go back to showing the inverter's own schedule and Predbat writes the window again on its next update.
+If you change a slot time by hand, turn the schedule write switch on afterwards; a change that is never written goes back to the inverter's schedule after 10 minutes.
+
 *TIP:* Some older GivEnergy inverters such as the Gen 1 hybrid and AC3 inverter that have had firmware upgrades to introduce battery pause functionality do not have sufficient memory on the inverter to provide control of battery pause start and end times.
 GivTCP does not recognise this and so still provides the select.givtcp_xxxx_battery_pause_start_time_slot and end_time_slot controls, but they do not work.<BR>
 Predbat can report an error trying to set them, or they revert back to 00:00:00 after being changed by Predbat and there will also be errors setting these controls reported in the GivTCP log.<BR>
@@ -1957,7 +2028,11 @@ source changes. Do not judge the accuracy of the new source until the settling p
 
 [Open-Meteo](https://open-meteo.com/) is a free, open-source weather API that provides solar irradiance forecasts with no API key required.
 Predbat fetches the Global Tilted Irradiance (GTI) for each array and converts it to a power estimate using a PVWatts cell-temperature model.
-Ensemble members are used to derive a PV10 pessimistic estimate alongside the central PV50.
+Ensemble members are used to derive the PV10 pessimistic and PV90 optimistic estimates alongside the central PV50.
+For each hour Predbat takes the ensemble's 10th and 90th percentiles as a ratio of the ensemble's own median, and applies those ratios to the PV50,
+so the gap either side of PV50 is wider when the weather models disagree and narrower when they agree.
+When PV calibration is on, PV10 and PV90 are scaled by the same calibration as the PV50.
+If the ensemble data cannot be downloaded, PV10 and PV90 are created from the worst and best of your recent days instead.
 
 You can define one or more rooftop arrays by providing a list; they will be summed automatically.
 
@@ -2073,20 +2148,29 @@ Details of configuring `apps.yaml` for EV charging are described in [Configure a
 - **car_charging_power** - Live power drawn by your EV charger, used for display only
 - **octopus_intelligent_slot** - Octopus Energy integration 'intelligent dispatching' sensor that indicates
 whether you are within an Octopus Energy "smart charge" slot
+- **octopus_intelligent_planned_slot** - Optional second sensor to take the planned charging slots from, leaving **octopus_intelligent_slot** to supply the completed ones
+(see [car charging documentation](car-charging.md#taking-planned-slots-from-another-sensor))
 - **octopus_ready_time** - Octopus Energy integration sensor for when the car charging will be completed by
 - **octopus_charge_limit** - Octopus Energy integration sensor for car charging limit
 - **octopus_slot_low_rate** - Whether Octopus Intelligent Slots reported will be at the lowest rate if at home
-- **octopus_slot_max** - Maximum number of 30-minute cheap rate slots per 24-hour period
+- **octopus_slot_max** - Maximum cheap rate dispatch time per 24-hour period, set in 30-minute slots (12 is 6 hours). It is counted in the minutes of each dispatch, so a 10-minute dispatch uses 10 minutes of it
+- **intelligent_dispatch_billing** - `auto` (default), `octopus` or `window`: whether a planned dispatch half hour is billed cheap only when the car charges in it (`octopus`) or whenever the dispatch was in force (`window`, E.ON Next Drive Smart). `auto` picks `window` for the Kraken component on `kraken_provider: eon`
+(see [car charging documentation](car-charging.md))
 - **car_charging_planned** - Indicates when your EV is plugged in and planned to charge during low-rate slots.
 - **car_charging_planned_response** - Values for the car_charging_planned sensor that indicate that the car is plugged in and will charge in the next low rate slot.
 - **car_charging_now** - Sensor to indicate when the EV is charging, used to hold the house battery for the car. Either an on/off sensor or a charging power sensor (W or kW, 200W or more counts as charging)
-- **car_charging_now_response** - Responses for car_charging_now to indicate that the car is charging
+- **car_charging_now_response** - Responses for car_charging_now to indicate that the car is charging (default `yes`, `on`, `enable`, `true` and `charging`). The sensor state must match one of them, ignoring case
 - **car_charging_battery_size** - Car battery size in kWh
 - **car_charging_limit** - Percentage limit the car is set to charge to
 - **car_charging_soc** - Car's current charge level expressed as a percentage
 - **ohme_login** - Ohme EV charger account login
 - **ohme_password** - Password for above Ohme account
 - **ohme_automatic_octopus_intelligent** - Controls whether Predbat talks directly to the above Ohme account
+- **wallbox_username** - Wallbox EV charger account email address
+- **wallbox_password** - Password for the above Wallbox account
+- **wallbox_automatic** - Register the Wallbox chargers with Predbat as cars (default `True`)
+- **wallbox_control** - Let Predbat pause and resume the Wallbox chargers from its own car charging plan (default `False`)
+- **wallbox_poll_seconds** - How often to poll the Wallbox cloud in seconds (default `120`)
 
 ## myenergi Integration
 
@@ -2116,11 +2200,11 @@ no hub, use the serial of the device acting as one, which is the Zappi or Eddi t
 - **myenergi_token_hash** - OAuth refresh token hash, used to refresh `myenergi_key` automatically - at least one of `myenergi_key` or `myenergi_token_hash` is required when `myenergi_auth_method` is `oauth`
 - **myenergi_token_expires_at** - OAuth access token expiry, used to trigger a refresh
 - **myenergi_automatic** - Set to `false` to stop Predbat wiring the device sensors into **car_charging_energy**, **car_charging_planned** and **iboost_energy_today** automatically (default: `true`)
-- **myenergi_automatic_zappi** - Set to `false` to wire only the Eddi half of the automatic configuration, leaving your Zappis out of **car_charging_energy**, **car_charging_planned** and **car_charging_power** (default: `true`). This is what to use if you have an Eddi but charge your car with a different make of charger - turning **myenergi_automatic** off instead would drop the **iboost_energy_today** wiring too
+- **myenergi_automatic_zappi** - Set to `false` to wire only the Eddi half of the automatic configuration, leaving your Zappis out of **car_charging_energy**, **car_charging_planned**, **car_charging_power** and **car_charging_now** (default: `true`). This is what to use if you have an Eddi but charge your car with a different make of charger - turning **myenergi_automatic** off instead would drop the **iboost_energy_today** wiring too
 - **myenergi_automatic_eddi** - Set to `false` to wire only the Zappi half of the automatic configuration, leaving your Eddi out of **iboost_energy_today** (default: `true`). This is what to use if your hot water diversion is handled elsewhere but you still want your Zappis wired as cars
 - **myenergi_enable_controls** - Set to `false` for monitor-only operation (default: `true`)
 - **myenergi_poll_seconds** - Poll interval in seconds, rounded to the nearest whole multiple of 60, minimum 60 and maximum 1800 (default: `60`)
-- **myenergi_zappi_control** - Set to `true` to let Predbat drive your Zappi from its car charging plan: Fast inside a planned charging window, Stopped outside one (default: `false`). Needs **myenergi_automatic**, **myenergi_automatic_zappi** and **myenergi_enable_controls**, since it is automatic configuration that maps each Zappi to a car. A `switch.predbat_myenergi_zappi_control` entity appears when this is set, on by default, so you can hand the Zappi back without editing apps.yaml; releasing restores the mode the Zappi had before Predbat took over, or Eco+ when nothing was saved. Note the manual boost switch will refuse while control is on, as myenergi only accepts a boost in Eco or Eco+.
+- **myenergi_zappi_control** - Lets Predbat drive your Zappi from its car charging plan: Fast inside a planned charging window, Stopped outside one (default: `false`). Leave it off to keep Eco/Eco+ solar diversion between charging windows. Needs **myenergi_automatic**, **myenergi_automatic_zappi** and **myenergi_enable_controls**, since it is automatic configuration that maps each Zappi to a car. A `switch.predbat_myenergi_zappi_control` entity appears when control is on, on by default, so you can hand the Zappi back without editing apps.yaml; releasing restores the mode the Zappi had before Predbat took over, or Eco+ when nothing was saved. Note the manual boost switch will refuse while control is on, as myenergi only accepts a boost in Eco or Eco+.
 
 The component only starts when at least one of `myenergi_api_key`, `myenergi_key` or `myenergi_token_hash` is set. That test is a plain any-of and does not look at `myenergi_auth_method`, so a credential belonging to the transport you did not select still starts the component — it then logs which setting is missing rather than failing silently.
 
@@ -2530,7 +2614,7 @@ Note that the charge/discharge curves *only* affect the accuracy of the charging
 Predbat will still instruct the inverter to charge/discharge at full rate regardless of the charging curve so not having these curves only has an impact on plan accuracy.
 
 If you know the battery charge or discharge curves (e.g. manufacturer info or your own testing) then you can manually configure this in `apps.yaml`,
-or Predbat can calculate the curves based on historical inverter charging/discharging data in Home Assistant.
+or Predbat can calculate the curves based on historical inverter charging/discharging data in Home Assistant. Note the battery curves cannot be calculated if Predbat is in Read Only mode.
 
 If the battery has not recently been fully charged or fully discharged *at a charge/discharge rate that is at least 95% of your maximum charge/discharge rate* then Predbat will not be able to calculate the curves and you'll get a warning in the logfile.
 For some inverters you may not be able to practically charge/discharge at full rates so you'll keep getting the curve warning every time Predbat starts. Simply create dummy curves to stop this warning, e.g:

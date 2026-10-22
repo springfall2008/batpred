@@ -319,6 +319,15 @@ pred_bat:
   # it explicitly to True/False to override that decision
   #ohme_automatic_octopus_intelligent: True
 
+  # Wallbox EV charger cloud direct integration
+  #wallbox_username: !secret wallbox_username
+  #wallbox_password: !secret wallbox_password
+  # Register the Wallbox chargers with Predbat as cars (on by default)
+  #wallbox_automatic: True
+  # Let Predbat pause and resume the chargers according to its own car charging plan.
+  # Requires wallbox_automatic
+  #wallbox_control: True
+
   # car_charging_energy defines a daily incrementing sensor which measures the charge added to your car and resets to zero at midnight
   # is used for car_charging_hold feature to filter out car charging from the previous load data
   # Automatically set to detect Wallbox and Zappi, if it doesn't match manually enter your sensor name

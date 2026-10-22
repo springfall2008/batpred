@@ -100,6 +100,13 @@ def _clean_number(value):
     return None
 
 
+def _clean_percent(value):
+    """A percentage above 0 and up to 100, or None. Bools are refused, unlike _clean_number."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value if 0 < value <= 100 else None
+
+
 def _clean_token(value):
     """A vocabulary token (lower case, no spaces), or None."""
     return value if isinstance(value, str) and VOCAB_RE.match(value) else None
@@ -159,6 +166,7 @@ DESCRIPTOR_FIELD_CLEANERS = {
     "min": _clean_number,
     "max": _clean_number,
     "step": _clean_number,
+    "step_percent_of_capacity": _clean_percent,
     "precision": _clean_number,
     "options": _clean_option_list,
     "format": _clean_string,
@@ -1319,6 +1327,12 @@ def inverter_definition(record, write_and_poll_sleep, base=None):
     else:
         gaps.append("output_charge_control")
         not_applicable_field("current_dp")
+    # charge_rate's step stands for both rates - an inverter holding them coarsely holds both alike. Most
+    # inverters have no such step, so its absence is not a gap: base's value stands, else none
+    if rate is not None and rate.get("step_percent_of_capacity"):
+        definition["rate_step_percent_of_capacity"] = rate["step_percent_of_capacity"]
+    else:
+        definition.setdefault("rate_step_percent_of_capacity", 0)
 
     definition["time_button_press"] = _bound_entity(entities, "schedule_write_button", access="rw") is not None
 

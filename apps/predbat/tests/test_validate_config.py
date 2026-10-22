@@ -150,6 +150,12 @@ def test_validate_config(my_predbat):
     _run(my_predbat, {"log_count": 2}, expect_clean=["log_count"])
     _run(my_predbat, {"log_count": 100}, expect_clean=["log_count"])
 
+    print("  [ML retrain interval] whole hours within 1-48 pass; invalid values fail")
+    for hours in (1, 2, 24, 48):
+        _run(my_predbat, {"load_ml_retrain_interval_hours": hours}, expect_clean=["load_ml_retrain_interval_hours"])
+    for hours in (-1, 0, 49, 2.5, "daily"):
+        _run(my_predbat, {"load_ml_retrain_interval_hours": hours}, expect_errors=["load_ml_retrain_interval_hours"])
+
     # ==========================================================================
     # INTEGER_LIST type  (days_previous: {"type": "integer_list"})
     # ==========================================================================
