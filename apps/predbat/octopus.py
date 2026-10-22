@@ -4367,8 +4367,14 @@ class Octopus:
         Kept as a held half hour rather than a car slot, so it prices the half hour in progress and
         no later: a slot from car_charging_now would turn on a charger Predbat drives and keep the
         charge going (see execute_plan()'s "Hold for car").
+
+        A car with no octopus_intelligent_slot entry of its own is never read: fetch_sensor_data_cars() only
+        records the planned dispatches of a car that has one, and a single entity would otherwise resolve to
+        car 0's sensor at any index - with a warning from get_arg() every cycle and 15 second poll.
         """
         if car_n >= len(self.car_charging_now) or not self.car_charging_now[car_n]:
+            return False
+        if car_n not in self.octopus_slots_planned:
             return False
         entity_id = self.get_arg("octopus_intelligent_slot", None, index=car_n, indirect=False)
         if not entity_id or not isinstance(entity_id, str) or entity_id.startswith("re:"):

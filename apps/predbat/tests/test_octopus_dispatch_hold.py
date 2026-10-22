@@ -323,6 +323,25 @@ def _run(my_predbat):
     _cycle(my_predbat, 1085, cancelled=True)
     failed |= _check("t17 nothing recorded", not my_predbat.octopus_slots_held.get(0), "held {}".format(my_predbat.octopus_slots_held))
 
+    for slot_config in ([DISPATCH_SENSOR], DISPATCH_SENSOR):
+        print("Test 18: a second car charging with no slot sensor of its own ({}) holds nothing, and logs nothing".format(type(slot_config).__name__))
+        # Only car 0 is on the Intelligent tariff: car 1 must neither read car 0's dispatch sensor, which a single
+        # entity resolves to at any index, nor warn every cycle and 15 second poll that it has no entry of its own
+        _reset(my_predbat)
+        my_predbat.num_cars = 2
+        my_predbat.args["octopus_intelligent_slot"] = slot_config
+        _device_state(my_predbat, "SMART_CONTROL_IN_PROGRESS")
+        my_predbat.car_charging_now = [False, True]
+        logged = []
+        original_log = my_predbat.log
+        my_predbat.log = lambda msg, *args, **kwargs: logged.append(msg)
+        try:
+            _cycle(my_predbat, 1085)
+        finally:
+            my_predbat.log = original_log
+        failed |= _check("t18 nothing held for car 1 ({})".format(type(slot_config).__name__), not my_predbat.octopus_slots_held.get(1), "held {}".format(my_predbat.octopus_slots_held))
+        failed |= _check("t18 no warning ({})".format(type(slot_config).__name__), not [msg for msg in logged if "octopus_intelligent_slot" in msg], "logged {}".format(logged))
+
     return failed
 
 
