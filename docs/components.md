@@ -1371,6 +1371,7 @@ Supports real-time monitoring (SOC, power flows, operational mode) and full char
 - The Sigenergy Developer Portal application must have **VPP Mode** enabled or charge/discharge commands will be rejected
 - On first startup Sigenergy sends an **onboarding approval email** — you must click the approval link before live MQTT data starts flowing
 - MQTT certificates (CA, client cert, client key) are required for TLS-authenticated connections to the broker
+- With `automatic: true` Predbat models your grid export limit from `sensor.predbat_sigenergy_<system>_export_limit`: the plant's grid max backfeed power while export limiting (`antiReflux`) is on, including 0 W for zero export, and 99999 W (no limit) while it is off. Sigenergy only reports these when the plant's configuration changes, so the last reported values are cached across restarts; a plant that has never reported reads 99999 W and exports are capped by the inverter limit alone. An `export_limit` you set yourself in `apps.yaml` is kept rather than replaced
 
 #### Configuration Options (sigenergy)
 

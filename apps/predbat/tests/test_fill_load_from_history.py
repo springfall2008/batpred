@@ -9,6 +9,7 @@ import os
 # Add the apps/predbat directory to the path
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
+import math
 from datetime import datetime, timedelta, timezone
 from fetch import Fetch
 from utils import MinuteArray
@@ -135,43 +136,44 @@ def test_older_days_backfilled_after_sensor_change():
     assert age == 3, "age should extend to load_energy_h0's 3 days of history, got {}".format(age)
 
 
-def test_cutover_and_back_gap_filled():
-    """A stretch where load_today stopped counting (cut over to another sensor and back) is filled from load_energy_h0"""
-    fetch = TestFetch(history=h0_history(lambda m: 3.0 if 600 <= m < 900 else 1.0, 4))
+def test_flat_inside_history_not_filled():
+    """
+    A flat stretch inside load_today's own history is not filled, however much load_energy_h0 rose over it.
+    load_energy_h0 was published from this same sensor there, so a rise is either a counter step a cycle late or
+    an earlier fill read back - here 10kW the house never drew, as v9.4.1's runaway published (#5652)
+    """
+    fetch = TestFetch(history=h0_history(lambda m: 10.0 if 600 <= m < 900 else 1.0, 4))
     load = load_today_minutes(lambda m: 1.0, SIZE, flat=[(600, 900)])
 
     result, age = fetch.fill_load_from_history(load, 4)
 
-    # The gap spans midnight, where load_energy_h0 resets and loses its last 5 minute sample (0.25kWh at 3kW)
-    gap = energy(result, 600, 900)
-    assert 14.7 <= gap <= 15.05, "gap should hold ~15kWh (300 minutes at 3kW) from load_energy_h0, got {}".format(gap)
-    # Data either side keeps load_today's own increments
-    assert abs(energy(result, 0, 600) - 10.0) < 0.001, "newer data should be unchanged, got {}".format(energy(result, 0, 600))
-    assert abs(energy(result, 900, 1500) - 10.0) < 0.001, "older data should be unchanged, got {}".format(energy(result, 900, 1500))
+    assert fetch.history_requests == [], "history should not be fetched for a flat inside load_today's history, got {}".format(fetch.history_requests)
+    assert energy(result, 600, 900) == 0, "the flat stretch should stay flat for the later fillers, got {}".format(energy(result, 600, 900))
     assert age == 4
 
 
 def test_gap_left_alone_when_h0_also_flat():
-    """When load_energy_h0 recorded nothing either (Predbat saw the same dead sensor) the gap stays flat for the later fillers"""
-    fetch = TestFetch(history=h0_history(lambda m: 0.0 if 600 <= m < 900 else 1.0, 4))
-    load = load_today_minutes(lambda m: 1.0, SIZE, flat=[(600, 900)])
+    """When load_energy_h0 recorded nothing before load_today started either, the days stay flat for the later fillers"""
+    fetch = TestFetch(history=h0_history(lambda m: 0.0 if m >= 24 * 60 else 1.0, 4))
+    load = load_today_minutes(lambda m: 1.0, 24 * 60)
 
-    result, age = fetch.fill_load_from_history(load, 4)
+    result, age = fetch.fill_load_from_history(load, 1)
 
-    assert energy(result, 600, 900) == 0, "gap should stay flat, got {}".format(energy(result, 600, 900))
-    assert abs(energy(result, 0, 600) - 10.0) < 0.001
-    assert age == 4
+    assert energy(result, 24 * 60, 3 * 24 * 60) == 0, "days before load_today should stay flat, got {}".format(energy(result, 24 * 60, 3 * 24 * 60))
+    assert abs(energy(result, 0, 24 * 60) - 24.0) < 0.001
+    assert age == 1, "age should not extend over days load_energy_h0 did not measure, got {}".format(age)
 
 
 def test_sensor_switch_reset_adds_no_energy():
     """load_energy_h0 restarting from zero mid-day (the switch day) is a reset, not consumption, and not a negative step"""
     fetch = TestFetch(history=h0_history(lambda m: 1.0, 4, switch_minute_ago=750))
-    load = load_today_minutes(lambda m: 1.0, SIZE, flat=[(600, 900)])
+    load = load_today_minutes(lambda m: 1.0, 600)
 
-    result, _age = fetch.fill_load_from_history(load, 4)
+    result, _age = fetch.fill_load_from_history(load, 0)
 
-    gap = energy(result, 600, 900)
-    assert 4.5 <= gap <= 5.05, "gap should hold ~5kWh at 1kW minus at most the reset sample, got {}".format(gap)
+    # 900 minutes at 1kW, less at most the samples lost at the switch and at midnight
+    gap = energy(result, 600, 1500)
+    assert 14.8 <= gap <= 15.05, "stretch should hold ~15kWh at 1kW minus at most the reset samples, got {}".format(gap)
     for minute in range(0, 1500):
         assert result[minute] >= result[minute + 1], "data must keep incrementing, minute {} {} < {}".format(minute, result[minute], result[minute + 1])
 
@@ -179,22 +181,23 @@ def test_sensor_switch_reset_adds_no_energy():
 def test_forecast_source_records_ignored():
     """Records published while Predbat ran on load_forecast alone are forecasts, not measurements, and are skipped"""
     fetch = TestFetch(history=h0_history(lambda m: 2.0, 4, source="load_forecast"))
-    load = load_today_minutes(lambda m: 1.0, SIZE, flat=[(600, 900)])
+    load = load_today_minutes(lambda m: 1.0, 24 * 60)
 
-    result, _age = fetch.fill_load_from_history(load, 4)
+    result, _age = fetch.fill_load_from_history(load, 1)
 
-    assert energy(result, 600, 900) == 0, "forecast records must not fill gaps, got {}".format(energy(result, 600, 900))
+    assert energy(result, 24 * 60, 3 * 24 * 60) == 0, "forecast records must not fill, got {}".format(energy(result, 24 * 60, 3 * 24 * 60))
 
 
 def test_measured_source_records_used():
     """Records tagged as measured from load_today are used"""
     fetch = TestFetch(history=h0_history(lambda m: 2.0, 4, source="load_today"))
-    load = load_today_minutes(lambda m: 1.0, SIZE, flat=[(600, 900)])
+    load = load_today_minutes(lambda m: 1.0, 24 * 60)
 
-    result, _age = fetch.fill_load_from_history(load, 4)
+    result, _age = fetch.fill_load_from_history(load, 1)
 
     # Less at most the 5 minute sample lost at the midnight reset
-    assert 9.8 <= energy(result, 600, 900) <= 10.05, "gap should hold ~10kWh, got {}".format(energy(result, 600, 900))
+    got = energy(result, 24 * 60, 2 * 24 * 60)
+    assert 47.8 <= got <= 48.05, "day 2 should hold ~48kWh, got {}".format(got)
 
 
 def test_empty_load_today_built_from_h0():
@@ -231,31 +234,35 @@ def test_disabled_by_config():
     assert energy(result, 24 * 60, 2 * 24 * 60) == 0
 
 
-def test_short_flat_below_threshold_ignored():
-    """Flat stretches shorter than load_filter_threshold are normal sensor resolution, not gaps"""
+def test_short_flat_at_window_start_ignored():
+    """
+    A history that only lists changes can open hours into the window on a quiet night. Under a day of flat at
+    the oldest end is not a missing sensor, and load_energy_h0 there came from this same sensor
+    """
     fetch = TestFetch(history=h0_history(lambda m: 3.0, 4))
-    load = load_today_minutes(lambda m: 1.0, SIZE, flat=[(600, 620)])
+    load = load_today_minutes(lambda m: 1.0, SIZE - 600)
 
-    result, _age = fetch.fill_load_from_history(load, 4)
+    result, age = fetch.fill_load_from_history(load, 3)
 
-    assert fetch.history_requests == [], "a 20 minute flat is below the 30 minute threshold, history should not be fetched"
-    assert energy(result, 600, 620) == 0
+    assert fetch.history_requests == [], "10 hours of flat at the window start should not fetch history, got {}".format(fetch.history_requests)
+    assert energy(result, SIZE - 600, SIZE - 1) == 0
+    assert age == 3
 
 
 def test_fetch_load_today_backfills_before_today_so_far():
     """
-    fetch_load_today() backfills before working out today's load so far, so a cut over earlier today still
-    counts the energy load_energy_h0 recorded while load_today was not counting
+    fetch_load_today() backfills before working out today's load so far, so a sensor changed earlier today
+    still counts the energy load_energy_h0 recorded before it started
     """
-    fetch = TestFetch(history=h0_history(lambda m: 3.0 if 120 <= m < 420 else 1.0, 4))
+    fetch = TestFetch(history=h0_history(lambda m: 3.0 if m >= 300 else 1.0, 4))
     fetch.minutes_now = 12 * 60
-    load = load_today_minutes(lambda m: 1.0, 24 * 60, flat=[(120, 420)])
-    fetch.minute_data_load = lambda now_utc, entity_name, max_days_previous, **kwargs: (load, 1)
+    load = load_today_minutes(lambda m: 1.0, 300)
+    fetch.minute_data_load = lambda now_utc, entity_name, max_days_previous, **kwargs: (load, 0)
 
     fetch.fetch_load_today()
 
-    # 7 hours at 1kW from load_today plus 5 hours at 3kW from load_energy_h0
-    assert abs(fetch.load_minutes_now - 22.0) < 0.05, "today so far should be ~22kWh, got {}".format(fetch.load_minutes_now)
+    # 5 hours at 1kW from the new load_today plus the 7 hours before it at 3kW from load_energy_h0
+    assert abs(fetch.load_minutes_now - 26.0) < 0.05, "today so far should be ~26kWh, got {}".format(fetch.load_minutes_now)
     assert fetch.load_minutes_age == 4, "age should extend to load_energy_h0's 4 days, got {}".format(fetch.load_minutes_age)
     assert abs(fetch.load_last_period - 1.0) < 0.01, "last period should be 1kW, got {}".format(fetch.load_last_period)
 
@@ -295,19 +302,20 @@ def test_forecast_interval_not_bridged():
     what was consumed in between is unknown, so it is left for the later fillers rather than interpolated
     """
     fetch = TestFetch(history=h0_history(lambda m: 1.0, 4, source=lambda m: "load_forecast" if 200 <= m < 500 else "load_today"))
-    load = load_today_minutes(lambda m: 1.0, SIZE, flat=[(200, 500)])
+    load = load_today_minutes(lambda m: 1.0, 200)
 
-    result, _age = fetch.fill_load_from_history(load, 4)
+    result, _age = fetch.fill_load_from_history(load, 0)
 
     assert energy(result, 200, 500) == 0, "the forecast-only stretch should stay unfilled, got {}".format(energy(result, 200, 500))
+    assert abs(energy(result, 500, 700) - 200 / 60.0) < 0.05, "measured records before it should still fill, got {}".format(energy(result, 500, 700))
 
 
 def test_missing_records_not_bridged():
     """A stretch longer than load_filter_threshold with no load_energy_h0 records (Predbat not running) is unknown, not interpolated"""
     fetch = TestFetch(history=h0_history(lambda m: 1.0, 4, missing=(205, 500)))
-    load = load_today_minutes(lambda m: 1.0, SIZE, flat=[(200, 500)])
+    load = load_today_minutes(lambda m: 1.0, 200)
 
-    result, _age = fetch.fill_load_from_history(load, 4)
+    result, _age = fetch.fill_load_from_history(load, 0)
 
     assert energy(result, 200, 500) == 0, "the stretch with no records should stay unfilled, got {}".format(energy(result, 200, 500))
 
@@ -315,9 +323,9 @@ def test_missing_records_not_bridged():
 def test_short_record_gaps_still_bridged():
     """Records a few cycles apart (Home Assistant only records changes) are still joined up"""
     fetch = TestFetch(history=h0_history(lambda m: 1.0, 4, step=15))
-    load = load_today_minutes(lambda m: 1.0, SIZE, flat=[(200, 500)])
+    load = load_today_minutes(lambda m: 1.0, 200)
 
-    result, _age = fetch.fill_load_from_history(load, 4)
+    result, _age = fetch.fill_load_from_history(load, 0)
 
     assert abs(energy(result, 200, 500) - 5.0) < 0.05, "gap should hold ~5kWh, got {}".format(energy(result, 200, 500))
 
@@ -343,6 +351,47 @@ def test_stalled_sensor_does_not_feed_back():
     assert max(seen) - min(seen) < 0.01, "today's load should hold still while the sensor reports nothing, got {}".format(seen)
 
 
+def test_coarse_counter_does_not_run_away():
+    """
+    A Solis-style load counter in whole kWh refreshed hourly sits flat past load_filter_threshold most of the
+    time. Run fetch_load_today() every 15 minutes for a day, republishing load_energy_h0 every 5 minutes from
+    the result with the state only, as a history backend that drops attributes keeps it. Today's load must
+    track the counter, not climb by the fill's own output as v9.4.1's did, to 139kWh in a day (#5652)
+    """
+    power_kw = 0.3
+    midnight = NOW_UTC.replace(hour=0)
+
+    def counter(when):
+        """The counter's whole kWh as of the last hourly refresh, since midnight"""
+        refreshed = when.replace(minute=0, second=0)
+        return math.floor(power_kw * (refreshed - midnight).total_seconds() / 3600)
+
+    def load_today_at(now):
+        """load_today minute data at now: the counter today, a steady 0.3kW before midnight"""
+        data = {}
+        for minute in range(SIZE):
+            when = now - timedelta(minutes=minute)
+            data[minute] = 1000.0 + counter(when) if when >= midnight else 1000.0 - power_kw * (midnight - when).total_seconds() / 3600
+        return MinuteArray(data, SIZE)
+
+    history = [[]]
+    fetch = TestFetch(history=history)
+    worst = 0.0
+    for cycle in range(0, 24 * 12, 3):
+        now = midnight + timedelta(minutes=5 * cycle)
+        fetch.now_utc = now
+        fetch.minutes_now = 5 * cycle
+        load = load_today_at(now)
+        fetch.minute_data_load = lambda now_utc, entity_name, max_days_previous, **kwargs: (load, 4)
+        fetch.fetch_load_today()
+        worst = max(worst, fetch.load_minutes_now - counter(now))
+        for offset in range(3):
+            published = now + timedelta(minutes=5 * offset)
+            history[0].append({"state": str(round(fetch.load_minutes_now, 3)), "last_updated": published.isoformat(), "attributes": {}})
+
+    assert worst < 0.01, "today's load should equal the counter, but ran up to {}kWh above it".format(round(worst, 2))
+
+
 def run_all_tests(my_predbat=None):
     """Run all tests"""
     print("\n" + "=" * 60)
@@ -352,7 +401,7 @@ def run_all_tests(my_predbat=None):
     try:
         test_no_gaps_does_not_fetch_history()
         test_older_days_backfilled_after_sensor_change()
-        test_cutover_and_back_gap_filled()
+        test_flat_inside_history_not_filled()
         test_gap_left_alone_when_h0_also_flat()
         test_sensor_switch_reset_adds_no_energy()
         test_forecast_source_records_ignored()
@@ -360,12 +409,13 @@ def run_all_tests(my_predbat=None):
         test_empty_load_today_built_from_h0()
         test_no_history_leaves_data_alone()
         test_disabled_by_config()
-        test_short_flat_below_threshold_ignored()
+        test_short_flat_at_window_start_ignored()
         test_fetch_load_today_backfills_before_today_so_far()
         test_forecast_interval_not_bridged()
         test_missing_records_not_bridged()
         test_short_record_gaps_still_bridged()
         test_stalled_sensor_does_not_feed_back()
+        test_coarse_counter_does_not_run_away()
         if my_predbat is not None:
             test_load_energy_h0_published_unscaled_with_source(my_predbat)
 
