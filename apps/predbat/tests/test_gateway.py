@@ -6825,6 +6825,47 @@ class TestEvScheduleControl:
         assert published2 == []
         assert gw2._ev_sched_grows == 1  # the day's count survives too
 
+    def test_since_survives_a_restart(self):
+        """When the window came into place is stored with it: a restart neither narrows early nor delays narrowing."""
+        storage = _FakeEvScheduleStorage()
+        gw, published = self._gateway(self._at(21, 18), [(self._at(22, 1), self._at(22, 5))], storage=storage)
+        self._cycle(gw)
+        assert storage.saved[("gateway", "ev_schedule_pbgw_test")]["since"].startswith("2026-10-21T18:00")
+
+        # Restarted before the window has run: a narrower plan still waits
+        gw2, published2 = self._gateway(self._at(21, 20), [(self._at(22, 2), self._at(22, 5))], storage=storage)
+        self._cycle(gw2)
+        assert published2 == []
+        # Restarted after its 05:00 end: the narrowing is written at once
+        gw3, published3 = self._gateway(self._at(22, 6), [(self._at(23, 2), self._at(23, 5))], storage=storage)
+        self._cycle(gw3)
+        assert [(p["start_min"], p["end_min"]) for p in self._windows(published3)] == [(120, 300)]
+
+    def test_stored_window_without_since_counts_as_having_run(self):
+        """A stored window with no since (an older file) may narrow as soon as now is outside it."""
+        storage = _FakeEvScheduleStorage()
+        storage.saved[("gateway", "ev_schedule_pbgw_test")] = {"window": {"charge_point_id": "CP10000001", "start_min": 60, "end_min": 300, "current_a": 32}, "writes_date": None, "grows": 0, "shrinks": 0}
+        gw, published = self._gateway(self._at(21, 18), [(self._at(22, 2), self._at(22, 5))], storage=storage)
+        self._cycle(gw)
+        assert [(p["start_min"], p["end_min"]) for p in self._windows(published)] == [(120, 300)]
+
+    def test_refused_subscription_logged_once_per_process(self):
+        """The refused-subscription Info line is not repeated after each token refresh."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        gw, published = self._gateway(self._at(21, 18))
+        client = MagicMock()
+        client.subscribe = AsyncMock(return_value=(0x87,))
+        gw._mqtt_client = client
+        gw.mqtt_token_expires_at = 0
+        asyncio.run(gw._subscribe_ev_schedule(client))
+        for _ in range(3):
+            gw._apply_refresh_response({"success": True, "access_token": "new"})
+            asyncio.run(gw._retry_ev_schedule_subscribe())
+        assert client.subscribe.call_count == 4  # still tried after each refresh
+        notes = [c for c in gw.log.call_args_list if "Cannot subscribe to the hub's EV charge window" in str(c.args[0])]
+        assert len(notes) == 1
+
     def test_daily_write_caps_then_a_warning(self):
         """Up to 8 widening and 2 narrowing writes a local day; past either the window is kept with a Warn status."""
         gw, published = self._gateway(self._at(21, 12), [])

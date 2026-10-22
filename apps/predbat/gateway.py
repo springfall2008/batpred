@@ -915,7 +915,7 @@ class GatewayMQTT(ComponentBase):
         self._ev_sched_subscribed = False  # the broker granted the ev/schedule subscription on this connection
         self._ev_sched_sub_disabled = False  # the broker dropped the connection after the subscribe: never try again
         self._ev_sched_sub_at = None  # _monotonic() when ev/schedule was last subscribed
-        self._ev_sched_sub_logged = False  # the refused-subscription note has been logged
+        self._ev_sched_sub_logged = False  # the refused-subscription note has been logged (once per process)
         self._ev_sched_retry_subscribe = False  # a token refresh asks for the subscription to be tried again
 
     def _ev_schedule_filename(self):
@@ -949,6 +949,14 @@ class GatewayMQTT(ComponentBase):
                     if not self._ev_schedule_valid(window):
                         window = None
                 self._ev_sched = window
+                if window is not None:
+                    # When it came into place; unknown (an older file, or unreadable) counts as having run, so it can narrow
+                    since = None
+                    try:
+                        since = datetime.datetime.fromisoformat(str(saved["since"])).astimezone(self.local_tz) if saved.get("since") else None
+                    except (TypeError, ValueError):
+                        since = None
+                    self._ev_sched_since = (window, since)
                 self._ev_sched_writes_date = str(saved["writes_date"]) if saved.get("writes_date") else None
                 self._ev_sched_grows = max(int(saved.get("grows") or 0), 0)
                 self._ev_sched_shrinks = max(int(saved.get("shrinks") or 0), 0)
@@ -961,7 +969,9 @@ class GatewayMQTT(ComponentBase):
         storage = self.storage
         if storage is None:
             return
-        data = {"window": self._ev_sched, "writes_date": self._ev_sched_writes_date, "grows": self._ev_sched_grows, "shrinks": self._ev_sched_shrinks}
+        since = self._ev_sched_since
+        since = since[1].isoformat() if since and since[1] is not None and self._ev_schedule_same(since[0], self._ev_sched) else None
+        data = {"window": self._ev_sched, "since": since, "writes_date": self._ev_sched_writes_date, "grows": self._ev_sched_grows, "shrinks": self._ev_sched_shrinks}
         try:
             saved = await storage.save(GATEWAY_STORAGE_MODULE, self._ev_schedule_filename(), data, format="json")
         except Exception as e:
@@ -1066,7 +1076,6 @@ class GatewayMQTT(ComponentBase):
         """
         self._ev_sched_sub_disabled = False
         self._ev_sched_sub_drops = 0
-        self._ev_sched_sub_logged = False
         self._ev_sched_retry_subscribe = True
 
     async def _retry_ev_schedule_subscribe(self):
