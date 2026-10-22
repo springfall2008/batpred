@@ -1182,13 +1182,14 @@ class Output:
         near the top of the battery is not low power - only the requested rate decides that.
 
         The maximum is the one the prediction engine uses at the start of the slot: a hybrid inverter
-        whose DC charge rate is above its AC one can take the PV above the AC rate on top of it.
+        whose DC charge rate is above its AC one can take the PV above the AC rate on top of it. When the
+        window starts part-way through the row, the slot starts at the window's first prediction step.
         """
         window = self.charge_window_best[charge_window_n]
         # A row can start before its charge window does; start from the first prediction step
         # inside the window, as the engine does, so pre-window minutes don't count as charge time
         window_relative_start = -(-(window["start"] - self.minutes_now) // PREDICT_STEP) * PREDICT_STEP
-        if window_relative_start > minute_relative_start:
+        if minute_relative_start < window_relative_start < self.forecast_minutes:
             minute_relative_start = window_relative_start
             minute_start = minute_relative_start + self.minutes_now
         soc = self.predict_soc_best.get(minute_relative_start, self.soc_kw)

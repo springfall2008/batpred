@@ -517,7 +517,9 @@ def run_test_plan_why_reason(my_predbat):
     print("Test Chrg low power times a window that starts mid-row from the window start")
     my_predbat.charge_window_best = [{"start": minutes_now + 15, "end": minutes_now + 60, "average": 10.0}]
     my_predbat.predict_soc_best = _flat_soc(my_predbat, 2.0)
-    # 0.7 hours at full rate: fits in the 60 minutes from the row start, not in the 45 from the window start
+    # 42 minutes at full rate, with the 10 minute low power margin: fits in the 50 minutes left from the
+    # row start (so it would throttle), not in the 35 left from the window start (so it needs full rate)
+    my_predbat.charge_low_power_margin = 10
     my_predbat.charge_limit_best = [2.0 + 0.7 * max_rate_kw]
     _, raw_plan = render()
     row = _get_row(raw_plan, minutes_now)
