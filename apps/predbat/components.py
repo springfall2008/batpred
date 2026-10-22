@@ -498,6 +498,9 @@ COMPONENT_LIST = {
             "inverter_limit": {"required": False, "config": "hanchu_inverter_limit"},
             "api_delay": {"required": False, "default": 1.0, "config": "hanchu_api_delay"},
             "min_write_interval": {"required": False, "default": 60, "config": "hanchu_min_write_interval"},
+            # Logs every API request and response. Off by default: on, it writes thousands of long
+            # lines a day per device. For a tester proving what hanchu_const.py marks INFERRED.
+            "api_debug": {"required": False, "default": True, "config": "hanchu_api_debug"},
         },
         # Gate activation on having an account. Without this the component would start for every
         # instance, since all individual args are optional.
