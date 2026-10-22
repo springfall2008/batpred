@@ -113,7 +113,8 @@ CHARGING_STATUS_IDS = (193, 194, 195)
 UNPLUGGED_STATUS_IDS = (0, 161, 162, 163, 165, 209)
 PAUSED_STATUS_IDS = (178, 182)
 # Positively no car plugged in - Ready, and Locked with no car - for binary_sensor.<prefix>_plugged. Disconnected (0, 163) is
-# left out: it is also what a charger that reported nothing reads as, which says nothing about the cable
+# left out: it is what a charger that reported nothing reads as, and on a live Pulsar Plus status 0 is the charger dropping
+# off Wallbox's cloud - seen for 2-14 minutes mid-charge and for over two hours with no car - so it says nothing about the cable
 EMPTY_STATUS_IDS = (161, 162, 165, 209)
 
 # config_data.operation_mode when an OCPP backend, not the Wallbox cloud, runs the charger
