@@ -2402,7 +2402,10 @@ INVERTER_DEF = {
         "write_and_poll_sleep": 2,
         "has_time_window": False,
         "support_charge_freeze": True,
-        "support_discharge_freeze": True,
+        # CHG_PWR_LMT only limits charging from the grid, so a zero charge rate leaves solar filling
+        # the battery and Freeze Export cannot be carried out (batpred#5665). "Maximum Charge SOC" could
+        # do it, but only from 50% up and only with a restore the component does not have.
+        "support_discharge_freeze": False,
         "has_idle_time": False,
         # Wrap-around behaviour is undocumented for the TCT_/TDT_ slot pairs - as is everything
         # else about this API - so Predbat splits the window and slot 2 carries the remainder
@@ -2887,6 +2890,7 @@ APPS_SCHEMA = {
     "hanchu_inverter_limit": {"type": "float"},
     "hanchu_api_delay": {"type": "float"},
     "hanchu_min_write_interval": {"type": "integer"},
+    "hanchu_api_debug": {"type": "boolean"},
     "alphaess_app_id": {"type": "string", "empty": False},
     "alphaess_app_secret": {"type": "string", "empty": False},
     "alphaess_inverter_sn": {"type": "string|string_list", "empty": False},
