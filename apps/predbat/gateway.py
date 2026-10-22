@@ -61,6 +61,8 @@ _TELEMETRY_STALE_THRESHOLD = 120
 # changes, the car is unplugged or the configured chargers change.
 _EV_CONFIRM_CYCLES = 2
 _EV_MAX_ATTEMPTS = 3
+# Hard cap on start sends per charging window, however often a flapping plug status re-arms the budget
+_EV_MAX_STARTS_PER_WINDOW = 6
 
 # How long an identical control command waits for the hub's ack (or, after an ack,
 # for telemetry to catch up) before it may be published again (seconds). Covers the
@@ -640,7 +642,13 @@ class GatewayMQTT(ComponentBase):
         self._ev_latched = False  # attempts exhausted: stop sending until the budget is reset
         self._ev_latch_message = ""  # the warning shown on the status while latched
         self._ev_latch_chargers = None  # configured chargers when the latch was set
+        self._reset_ev_window()
         self._reset_ev_budget()
+
+    def _reset_ev_window(self):
+        """Clear the per-window counters, at each change of desired state."""
+        self._ev_window_starts = 0  # start sends in this window, capped at _EV_MAX_STARTS_PER_WINDOW
+        self._ev_unplugged_start_sent = False  # the one start sent while the plug read unplugged this window
 
     def _reset_ev_budget(self):
         """Give the current desired state a fresh attempt budget and clear any latch."""
@@ -654,12 +662,19 @@ class GatewayMQTT(ComponentBase):
 
         It is recorded without had_errors, so the main loop's next status write replaces it rather
         than keeping it as the run's warning; writing it again each cycle it is missing keeps it
-        visible for as long as the latch holds.
+        visible for as long as the latch holds. It never replaces a real error: nothing is written
+        while the run has had_errors set or the status shows an error.
         """
         base = getattr(self, "base", None)
         record_status = getattr(base, "record_status", None)
-        if record_status and getattr(base, "status_state", None) != self._ev_latch_message:
-            record_status(self._ev_latch_message, had_errors=False)
+        if not record_status:
+            return
+        shown = getattr(base, "status_state", None)
+        if shown == self._ev_latch_message or getattr(base, "had_errors", False) is True:
+            return
+        if isinstance(shown, str) and shown.startswith("Error"):
+            return
+        record_status(self._ev_latch_message, had_errors=False)
 
     async def _apply_ev_charging_state(self):
         """Drive the charger towards the desired start/stop state and confirm it from telemetry.
@@ -681,8 +696,14 @@ class GatewayMQTT(ComponentBase):
         A charger reported offline is unknown: nothing is confirmed, sent or counted until it is back.
         A charger that reports no OCPP status cannot show plug state, so it gets the previous behaviour:
         one send per transition with no confirmation or retry. A stop is only ever sent after PredBat
-        wanted the car charging, so a session the user started outside a window is never stopped, and a
-        start is never sent unless telemetry shows a car plugged in.
+        wanted the car charging, so a session the user started outside a window is never stopped.
+
+        A plug reading "unplugged" is not trusted to hold the start: hub firmware up to 1.0.39 writes
+        "Available" on every charger reconnect and on StopTransaction with the car still plugged in. So
+        while it reads unplugged one start is sent per window (the previous behaviour), with no retry or
+        latch; confirmation, retries and the latch apply while it reads plugged. Every start send in a
+        window counts towards a hard cap of _EV_MAX_STARTS_PER_WINDOW, so a flapping plug status that
+        keeps re-arming the budget cannot keep sending.
         """
         if not self._configured_ev_chargers:
             return
@@ -697,6 +718,7 @@ class GatewayMQTT(ComponentBase):
         if should_charge != self._ev_charging_active:
             self._ev_charging_active = should_charge
             self._ev_confirmed = False
+            self._reset_ev_window()
             self._reset_ev_budget()
 
         state = self._ev_telemetry.get(cp_id)
@@ -704,11 +726,15 @@ class GatewayMQTT(ComponentBase):
         has_status = bool(state and state["has_status"])
 
         if should_charge and online and has_status and not state["car_connected"]:
-            # Unplugged: never start without a car, and a plug-in starts afresh (budget, latch, outstanding start).
-            if self._ev_attempts or self._ev_latched or self._ev_confirmed:
-                self.log(f"Info: GatewayMQTT: EVC no car plugged in to '{cp_id}', waiting for one before starting")
+            # Reads unplugged, which older hub firmware also reports for a plugged car after a reconnect:
+            # one start per window regardless, no retry or latch; a plugged reading then starts afresh.
             self._ev_confirmed = False
             self._reset_ev_budget()
+            if not self._ev_unplugged_start_sent and self._ev_window_starts < _EV_MAX_STARTS_PER_WINDOW:
+                self._ev_unplugged_start_sent = True
+                self.log(f"Info: GatewayMQTT: EVC '{cp_id}' reports no car plugged in, sending one start anyway as the plug status may be stale")
+                await self._send_ev_action(cp_id, True)
+                self._reset_ev_budget()  # this one-off send is not part of the confirm/retry budget
             return
 
         if self._ev_confirmed:
@@ -759,6 +785,14 @@ class GatewayMQTT(ComponentBase):
                 return
             self.log(f"Info: GatewayMQTT: EVC {'start' if should_charge else 'stop'} not confirmed after {self._ev_cycles_since_send} cycle(s), re-sending (attempt {self._ev_attempts + 1}/{_EV_MAX_ATTEMPTS})")
 
+        if should_charge and self._ev_window_starts >= _EV_MAX_STARTS_PER_WINDOW:
+            self._ev_latched = True
+            self._ev_latch_chargers = self._configured_ev_chargers
+            self._ev_latch_message = f"Warn: GatewayMQTT: EV charger '{cp_id}' did not start after {self._ev_window_starts} start commands in this window, giving up until the window ends"
+            self.log(self._ev_latch_message)
+            self._report_ev_latch()
+            return
+
         await self._send_ev_action(cp_id, should_charge)
 
     async def _send_ev_action(self, cp_id, start):
@@ -772,6 +806,7 @@ class GatewayMQTT(ComponentBase):
         self._ev_cycles_since_send = 0
         self._ev_last_send_time = time.time()
         if start:
+            self._ev_window_starts += 1
             current_a = self._ev_max_current.get(cp_id, 32)
             self.log(f"Info: GatewayMQTT: EVC start charging — current_a={current_a} for '{cp_id}' (attempt {self._ev_attempts})")
             await self._send_ev_command({"action": "SetChargingProfile", "current_a": int(current_a)}, charge_point_id=cp_id)

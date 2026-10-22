@@ -616,7 +616,14 @@ To also have Predbat send the plan to the charger (so the EVC charges according 
 ```
 
 When `gateway_evc_control` is enabled, Predbat checks once per minute whether the current time falls inside one of the planned car-charging windows (from `binary_sensor.predbat_car_charging_slot`). On each state transition it sends OCPP commands to the EVC via MQTT — `SetChargingProfile` (at the configured max current) followed by `RemoteStartTransaction` to begin a session, or `RemoteStopTransaction` to end one. This means the charger responds within a minute of a window boundary rather than relying on a schedule that must be reprogrammed each time the plan changes.
-Predbat checks the charger's reported session state to confirm each start or stop took effect, and sends it again if it has not after two minutes, up to three times in all. If the charger still does not respond, Predbat shows a warning on `predbat.status` and stops retrying until the window ends, the car is unplugged, or the charger setup changes; a replan that only moves the current window's times does not restart the retries. A start is only sent while a car is plugged in, nothing is sent or confirmed while the charger is offline from the gateway, and a charger that reports no OCPP status gets a single start or stop per window boundary with no retries.
+Predbat checks the charger's reported session state to confirm each start or stop took effect, and sends it again if it has not after two minutes, up to three times in all. If the charger still does not respond, Predbat shows a warning on `predbat.status` and stops retrying until the window ends, the car is unplugged, or the charger setup changes; a replan that only moves the current window's times does not restart the retries. The warning never replaces an error already shown on `predbat.status`.
+
+Some cases are handled more simply:
+
+- While the charger reports no car plugged in (`Available`), Predbat still sends one start per window without retrying, because some gateway firmware reports `Available` after a reconnect even with the car plugged in.
+- No more than six start commands are sent in one window, however often the plug status changes.
+- A charger that reports no OCPP status gets a single start or stop at each window boundary with no retries. Newer gateway firmware also reports no status for a charger that has just reconnected and not yet reported one, so a window that begins in that gap gets this simpler behaviour.
+- Nothing is sent or confirmed while the charger is offline from the gateway. A charger that stays offline for a whole window is not started and no warning is shown; its online state is on the charger's `online` sensor.
 
 `car_charging_now` is wired to the charger's charging sensor, which is on while the car is drawing power (OCPP status `Charging`), so Predbat holds the house battery for the car while it charges. A car that stays connected once it is full or paused (`SuspendedEV`) does not hold the battery. It never adds a charging slot, so it cannot hold a session open against the window boundaries `gateway_evc_control` enforces.
 

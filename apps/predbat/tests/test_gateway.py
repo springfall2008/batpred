@@ -6398,11 +6398,15 @@ class TestEvCommandConfirm:
         _ev_set_telemetry(gw, car_connected=False, session_active=False)
         _ev_cycle(gw)
         assert gw._ev_latched is False
-        assert len(published) == sent
+        assert len(published) == sent + 2  # the one start per window sent while the plug reads unplugged
+        _ev_set_telemetry(gw, car_connected=False, session_active=False)
+        _ev_cycle(gw)
+        assert len(published) == sent + 2  # only one
 
         _ev_set_telemetry(gw, car_connected=True, session_active=False)
         _ev_cycle(gw)
-        assert len(published) == sent + 2
+        assert len(published) == sent + 4  # plugged again: a fresh confirm/retry budget
+        assert gw._ev_attempts == 1
 
     def test_latch_clears_on_charger_config_change(self):
         """A change in the configured chargers clears the latch."""
@@ -6533,20 +6537,79 @@ class TestEvCommandConfirm:
         assert [p["action"] for _, p in published][2:] == ["RemoteStopTransaction"]
         gw.base.record_status.assert_not_called()
 
-    def test_nothing_sent_when_unplugged(self):
-        """A start is never sent without a car plugged in, and is sent once one is."""
+    def test_one_start_while_unplugged(self):
+        """While the plug reads unplugged one start is sent per window (no retry, no latch); plugging in starts afresh."""
         gw, published = self._gateway()
         _ev_set_window(gw, inside=True)
-        _ev_set_telemetry(gw, car_connected=False, session_active=False)
         for _ in range(5):
-            _ev_cycle(gw)
             _ev_set_telemetry(gw, car_connected=False, session_active=False)
-        assert published == []
+            _ev_cycle(gw)
+        assert [p["action"] for _, p in published] == ["SetChargingProfile", "RemoteStartTransaction"]
         assert gw._ev_attempts == 0
+        gw.base.record_status.assert_not_called()
 
         _ev_set_telemetry(gw, car_connected=True, session_active=False)
         _ev_cycle(gw)
-        assert [p["action"] for _, p in published] == ["SetChargingProfile", "RemoteStartTransaction"]
+        assert [p["action"] for _, p in published][2:] == ["SetChargingProfile", "RemoteStartTransaction"]
+        assert gw._ev_attempts == 1
+
+    def test_stale_available_status_still_gets_one_start(self):
+        """Hub firmware 1.0.39 reports "Available" after a reconnect with the car still plugged in: exactly one start, no warning (R2-B1)."""
+        gw, published = self._gateway()
+        _ev_set_window(gw, inside=True)
+        for _ in range(60):  # the whole window reads Available
+            _ev_set_telemetry(gw, car_connected=False, session_active=False)
+            _ev_cycle(gw)
+        starts = [p for _, p in published if p["action"] == "RemoteStartTransaction"]
+        assert len(starts) == 1
+        assert starts[0]["charge_point_id"] == "CP10000001"
+        gw.base.record_status.assert_not_called()
+
+        _ev_set_window(gw, inside=False)  # window ends; the next one gets its own single start
+        _ev_set_telemetry(gw, car_connected=False, session_active=False)
+        _ev_cycle(gw)
+        _ev_set_window(gw, inside=True)
+        _ev_set_telemetry(gw, car_connected=False, session_active=False)
+        _ev_cycle(gw)
+        assert len([p for _, p in published if p["action"] == "RemoteStartTransaction"]) == 2
+
+    def test_flapping_plug_status_hard_caps_starts(self):
+        """A plug status flapping between plugged and unplugged cannot exceed the per-window start cap (R2-N2)."""
+        from gateway import _EV_MAX_STARTS_PER_WINDOW
+
+        gw, published = self._gateway()
+        _ev_set_window(gw, inside=True)
+        for cycle in range(60):
+            _ev_set_telemetry(gw, car_connected=(cycle % 8) != 7, session_active=False)
+            _ev_cycle(gw)
+        starts = [p for _, p in published if p["action"] == "RemoteStartTransaction"]
+        assert len(starts) == _EV_MAX_STARTS_PER_WINDOW == 6
+        assert gw.base.status_state.startswith("Warn:")
+        assert gw.base.had_errors is False
+
+    def test_latch_warning_never_replaces_a_real_error(self):
+        """While latched, the warning is not written over a real error or while the run has had_errors (R2-N1)."""
+        gw, published = self._gateway()
+        _ev_set_window(gw, inside=True)
+        gw.base.status_state = "Error: some real main-loop error"
+        for _ in range(8):
+            _ev_set_telemetry(gw, car_connected=True, session_active=False)
+            _ev_cycle(gw)
+        assert gw._ev_latched is True
+        gw.base.record_status.assert_not_called()  # the error stays shown
+        assert gw.base.status_state == "Error: some real main-loop error"
+
+        gw.base.status_state = "Warn: Inverter is in read-only mode [Idle]"  # a real warning recorded with had_errors
+        gw.base.had_errors = True
+        for _ in range(5):
+            _ev_cycle(gw)
+        gw.base.record_status.assert_not_called()
+
+        gw.base.had_errors = False  # the next clean run
+        gw.base.status_state = "Idle"
+        _ev_cycle(gw)
+        gw.base.record_status.assert_called_once()
+        assert gw.base.record_status.call_args.kwargs.get("had_errors") is False
 
     def test_nothing_sent_without_telemetry(self):
         """No telemetry at all means plug state is unknown, so no start is sent."""
