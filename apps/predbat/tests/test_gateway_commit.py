@@ -669,6 +669,9 @@ class TestGatewayCommit:
         for active in self._patches[1:]:
             active.stop()  # real ack waits on the gateway's own loop
         self._patches = self._patches[:1]
+        # ...but polled faster than the real 0.5s, so the commit sees the ack without the test sitting out a whole tick
+        poll_patch = patch("gateway._COMMIT_POLL_SECONDS", 0.01)
+        poll_patch.start()
         loop = asyncio.new_event_loop()
         thread = threading.Thread(target=loop.run_forever, daemon=True)
         thread.start()
@@ -695,3 +698,4 @@ class TestGatewayCommit:
             loop.call_soon_threadsafe(loop.stop)
             thread.join(timeout=2)
             loop.close()
+            poll_patch.stop()
