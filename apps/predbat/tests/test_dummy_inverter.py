@@ -59,6 +59,10 @@ def test_export_shares_the_inverter_limit():
     failed += check(close(flows["battery"], 0.0) and close(flows["clipped"], 1.0), "PV above the limit leaves nothing for the battery and clips: {}".format(flows))
     soc, flows = simulate_minute(lossless(), controls, 2.0, 0.0, 0.4, 600)
     failed += check(close(flows["battery"], 0.0), "the export should stop at its target SoC: {}".format(flows))
+    # Over the export limit the battery is cut back before any PV is clipped: 2 kW PV + 3 kW battery against a 3 kW
+    # limit with 0.4 kW of load leaves the battery 1.4 kW and clips nothing
+    soc, flows = simulate_minute(lossless(export_limit=3000), controls, 8.0, 2.0, 0.4, 600)
+    failed += check(close(flows["battery"], 1.4) and close(flows["clipped"], 0.0) and close(flows["grid"], -3.0), "the export limit should cut the battery before PV: {}".format(flows))
     controls["export"]["rate"] = 0
     soc, flows = simulate_minute(lossless(), controls, 8.0, 3.0, 0.4, 600)
     failed += check(close(flows["battery"], 0.0) and close(flows["grid"], -2.6), "a zero-rate export window freezes the battery and exports PV: {}".format(flows))
@@ -115,6 +119,33 @@ def test_component():
     return failed
 
 
+def test_local_time_windows():
+    """Windows Predbat programs are local wall-clock times, so in BST an 18:00-19:00 export runs at 17:00-18:00 UTC."""
+    import pytz
+    from datetime import datetime
+
+    london = pytz.timezone("Europe/London")
+
+    def export_between(local_start, local_end):
+        """kWh a fresh dummy exports between two local times on a June day, with an 18:00-19:00 local export window."""
+        base = MockBase(local_tz=london)
+        dummy = DummyInverter(base, config={"battery_size": 20, "soc_initial": 80, "load": 0, "pv_peak": 0})
+        dummy.update_control("switch.predbat_dummy_export_enable", "turn_on")
+        dummy.update_control("select.predbat_dummy_export_start_time", "18:00:00")
+        dummy.update_control("select.predbat_dummy_export_end_time", "19:00:00")
+        dummy.update_control("number.predbat_dummy_export_target_soc", "0")
+        start, end = (int(london.localize(datetime(2026, 6, 21, *hour_minute)).timestamp() // 60) for hour_minute in (local_start, local_end))
+        dummy.step(start)
+        dummy.step(end)
+        return dummy.totals["export"]
+
+    full = export_between((18, 0), (19, 0))
+    half = export_between((17, 30), (18, 30))
+    failed = check(full > 1.0, "the whole local window should export: {}".format(full))
+    failed += check(close(half, full / 2, 0.05), "17:30-18:30 local overlaps the 18:00-19:00 window by half: {} of {}".format(half, full))
+    return failed
+
+
 def test_inverter_def_matches():
     """INVERTER_DEF["DUMMY"] carries the capabilities the model implements."""
     row = INVERTER_DEF.get("DUMMY", {})
@@ -134,4 +165,5 @@ def run_dummy_inverter_tests(my_predbat):
     failed += test_in_window()
     failed += test_component()
     failed += test_inverter_def_matches()
+    failed += test_local_time_windows()
     return failed

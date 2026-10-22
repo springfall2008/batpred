@@ -164,7 +164,8 @@ def simulate_minute(params, controls, soc_kwh, pv_kw, load_kw, minute_of_day):
     battery_ac = battery_discharge * params["inverter_loss"]
     grid_charge_ac = grid_to_battery / params["inverter_loss"]
 
-    # Grid balances the rest: + import, - export. Export is capped; PV takes the cut, then the battery
+    # Grid balances the rest: + import, - export. Export is capped: the battery's discharge is cut first, as its energy
+    # can be used later, and only then is PV clipped
     grid = load_kw + grid_charge_ac - pv_ac - battery_ac
     if grid < -export_limit:
         excess = -export_limit - grid
@@ -239,14 +240,24 @@ class DummyInverter(ComponentBase):
             return max(float(forecast[minute_of_day]) * 60.0, 0.0) * self.params["pv_scaling"]
         return clear_sky_pv(self.params, minute_of_day) * self.params["pv_scaling"]
 
+    def local_offset_minutes(self, minutes_absolute):
+        """How many minutes the local clock is ahead of UTC at minutes_absolute (UTC epoch minutes)."""
+        return int(datetime.fromtimestamp(minutes_absolute * 60, self.local_tz).utcoffset().total_seconds() // 60)
+
     def step(self, minutes_absolute):
-        """Simulate from the last simulated minute up to minutes_absolute (minutes since an arbitrary epoch)."""
+        """Simulate from the last simulated minute up to minutes_absolute (UTC epoch minutes).
+
+        The clock steps in UTC so a clock change never repeats or skips simulated time, but every timed behaviour - the
+        programmed windows Predbat writes, the load profile, the sun and the PV forecast - is local wall-clock time, so
+        each minute is placed in the local day.
+        """
         if self.last_minute is None:
             self.last_minute = minutes_absolute
             return
         minutes = min(max(minutes_absolute - self.last_minute, 0), MAX_CATCH_UP_MINUTES)
+        local_offset = self.local_offset_minutes(minutes_absolute)
         for offset in range(minutes):
-            minute_of_day = (minutes_absolute - minutes + offset) % (24 * 60)
+            minute_of_day = (minutes_absolute - minutes + offset + local_offset) % (24 * 60)
             pv_kw = self.pv_now(minute_of_day)
             load_kw = load_at(self.params, minute_of_day)
             self.soc_kwh, self.flows = simulate_minute(self.params, self.controls, self.soc_kwh, pv_kw, load_kw, minute_of_day)
@@ -393,7 +404,8 @@ class DummyInverter(ComponentBase):
         self.log("DummyInverter: automatic_config complete")
 
     def minutes_absolute(self):
-        """Whole minutes since the epoch for the current time, so the simulation can step across midnight."""
+        """Whole UTC minutes since the epoch for the current time, so the simulation can step across midnight; step()
+        places them in the local day."""
         return int(self.now_utc.timestamp() // 60)
 
     async def run(self, seconds, first):
