@@ -1,5 +1,8 @@
 # Predbat
 
+> Experimental [joint EV/home-battery planning](docs/joint-site-planning.md)
+> is opt-in and shadow-only. It never replaces the executable native plan.
+
 ![image](https://github.com/springfall2008/batpred/actions/workflows/code-quality.yml/badge.svg)
 ![image](https://github.com/springfall2008/batpred/actions/workflows/publish-docs.yml/badge.svg)
 ![image](https://github.com/springfall2008/batpred/actions/workflows/pages/pages-build-deployment/badge.svg)

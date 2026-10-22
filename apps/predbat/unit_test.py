@@ -14,6 +14,7 @@ import sys
 import glob
 import argparse
 import random
+import unittest
 from datetime import timedelta
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -52,6 +53,29 @@ from tests.test_new_install_detection import test_new_install_detection
 from tests.test_config_json_format import test_config_json_format
 from tests.test_history_attribute import test_history_attribute
 from tests.test_inverter import run_inverter_tests
+from tests import test_joint_site_core
+from tests.test_joint_site_native import run_joint_site_native_tests
+from tests.test_joint_site_limited import run_joint_site_limited_tests
+from tests.test_joint_site_apply import run_joint_site_apply_tests
+from tests.test_joint_site_entrypoints import run_joint_site_entrypoint_tests
+from tests.test_joint_site_capabilities import run_joint_site_capabilities_tests
+from tests.test_joint_site_template import run_joint_site_template_tests
+from tests.test_joint_site_combined import run_joint_site_combined_tests
+from tests.test_joint_site_preview import run_joint_site_preview_tests
+from tests.test_joint_site_preview_integration import run_joint_site_preview_integration_tests
+from tests.test_joint_site_single_table import run_joint_site_single_table_tests
+from tests.test_joint_site_targets import run_joint_site_targets_tests
+from tests.test_joint_site_economic import run_joint_site_economic_tests
+from tests.test_joint_site_partial import run_joint_site_partial_tests
+from tests.test_joint_site_grid_support import run_joint_site_grid_support_tests
+from tests.test_prediction_grid_support import run_prediction_grid_support_tests
+from tests.test_joint_site_actual import run_joint_site_actual_tests
+from tests.test_joint_site_session import run_joint_site_session_tests
+from tests.test_joint_site_recurring import run_joint_site_recurring_tests
+from tests.test_joint_site_arrival import run_joint_site_arrival_tests
+from tests.test_joint_site_priority import run_joint_site_priority_tests
+from tests.test_joint_site_partial_apply import run_joint_site_partial_apply_tests
+from tests.test_joint_site_applied_view import run_joint_site_applied_view_tests
 from tests.test_basic_rates import test_basic_rates
 from tests.test_clock import run_clock_tests
 from tests.test_rate_export_max_forward_calc import test_rate_export_max_forward_calc
@@ -435,6 +459,42 @@ def run_window_cache_tests_isolated(my_predbat):
     return run_window_cache_tests(create_predbat())
 
 
+def run_joint_site_native_tests_isolated(my_predbat):
+    """Keep synthetic joint forecasts out of the shared suite state."""
+    return run_joint_site_native_tests(create_predbat())
+
+
+def run_joint_site_apply_tests_isolated(my_predbat):
+    """Run opt-in execution checks without contaminating shared native fixtures."""
+    return run_joint_site_apply_tests(create_predbat())
+
+
+def run_joint_site_entrypoint_tests_isolated(my_predbat):
+    """Check actual publication/execution hooks with a fresh native fixture."""
+    return run_joint_site_entrypoint_tests(create_predbat())
+
+
+def run_joint_site_core_tests(my_predbat):
+    """Run the pure scheduler's independent unittest suite."""
+    suite = unittest.defaultTestLoader.loadTestsFromModule(test_joint_site_core)
+    return not unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful()
+
+
+def run_joint_site_grid_support_tests_isolated(my_predbat):
+    """Keep shadow support settings and entity fixtures out of unrelated native tests."""
+    return run_joint_site_grid_support_tests(create_predbat())
+
+
+def run_prediction_grid_support_tests_isolated(my_predbat):
+    """Validate optional replay physics without contaminating the shared suite state."""
+    return run_prediction_grid_support_tests(create_predbat())
+
+
+def run_joint_site_actual_tests_isolated(my_predbat):
+    """Exercise actual joint dispatch without leaving session fixtures in other tests."""
+    return run_joint_site_actual_tests(create_predbat())
+
+
 def create_predbat():
     my_predbat = PredBat()
     my_predbat.states = {}
@@ -480,6 +540,29 @@ def main():
         ("kernel_parity", run_kernel_parity_tests, "C++ prediction kernel vs Python engine parity tests", False),
         ("prediction_batch", run_prediction_batch_tests, "Batched prediction fan-out tests", False),
         ("inverter", run_inverter_tests, "Inverter tests", False),
+        ("joint_site_core", run_joint_site_core_tests, "Joint site pure solver", False),
+        ("joint_site_native", run_joint_site_native_tests_isolated, "Joint site native shadow adapter", False),
+        ("joint_site_limited", run_joint_site_limited_tests, "Limited battery discharge and native step replay", False),
+        ("joint_site_apply", run_joint_site_apply_tests_isolated, "Joint site gated native execution", False),
+        ("joint_site_entrypoints", run_joint_site_entrypoint_tests_isolated, "Joint site actual native entry points", False),
+        ("joint_site_capabilities", run_joint_site_capabilities_tests, "Joint solver capability subsets", False),
+        ("joint_site_template", run_joint_site_template_tests, "Verified shared-template joint dispatch", False),
+        ("joint_site_combined", run_joint_site_combined_tests, "Three-PR integration through the real template", False),
+        ("joint_site_preview", run_joint_site_preview_tests, "Read-only joint replay presentation", False),
+        ("joint_site_preview_integration", run_joint_site_preview_integration_tests, "Joint preview actual replay and web routes", False),
+        ("joint_site_single_table", run_joint_site_single_table_tests, "Joint candidate in the existing read-only web table", False),
+        ("joint_site_targets", run_joint_site_targets_tests, "Real replay-derived charge ceilings and rejection reasons", False),
+        ("joint_site_economic", run_joint_site_economic_tests, "Bounded economic search diversity and exact short-horizon comparison", False),
+        ("joint_site_partial", run_joint_site_partial_tests, "Truthful paired-safe partial EV shadow plan with unchanged requested target", False),
+        ("joint_site_grid_support", run_joint_site_grid_support_tests_isolated, "Opt-in grid charge support without actuator authority", False),
+        ("prediction_grid_support", run_prediction_grid_support_tests_isolated, "Independent charge-request grid support replay", False),
+        ("joint_site_actual", run_joint_site_actual_tests_isolated, "Confirmed sessions and exact native charge ceilings", False),
+        ("joint_site_session", run_joint_site_session_tests, "Native domestic handback and durable session evidence", False),
+        ("joint_site_recurring", run_joint_site_recurring_tests, "Standing EV policy and durable sensor-derived sessions", False),
+        ("joint_site_arrival", run_joint_site_arrival_tests, "Absent EV demand in the native model without execution authority", False),
+        ("joint_site_priority", run_joint_site_priority_tests, "HA charging priority dropdown and immediate plan invalidation", False),
+        ("joint_site_partial_apply", run_joint_site_partial_apply_tests, "Authorised partial targets through paired replay and dispatch", False),
+        ("joint_site_applied_view", run_joint_site_applied_view_tests, "Truthful applied plan and execution receipt presentation", False),
         ("execute", run_execute_tests, "Execute tests", False),
         ("multi_inverter_status", test_multi_inverter_status, "Multi-inverter headline status resolution tests (#4446)", False),
         ("load_car_energy", test_load_car_energy_warns_when_configured_entity_has_no_data, "car_charging_energy configured-but-empty warning tests (#4458 follow-up)", False),
