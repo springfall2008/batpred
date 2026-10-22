@@ -307,6 +307,31 @@ def test_dispatch_minutes_logged_on_change(my_predbat):
     return 0
 
 
+def test_replay_lines_past_minutes(my_predbat):
+    """A session or dispatch already under way is logged with negative offsets from now, as it is after a restart or
+    at the daily re-log while an event's minutes are still marked."""
+    my_predbat.minutes_now = 17 * 60 + 30
+    my_predbat.replay_rate_sessions_signature = None
+    my_predbat.rate_import_saving_minutes = set(range(17 * 60, 18 * 60))
+    my_predbat.rate_import_pre_saving = {minute: 7.62 for minute in range(0, 24 * 60)}
+    my_predbat.rate_export_saving_minutes = set()
+    my_predbat.rate_export_pre_saving = {}
+    lines = capture(my_predbat, my_predbat.log_replay_rate_sessions)
+    expected = "Replay input: rate sessions changed, from 17:30 import [[-30, 7.62]] 30 export [] 0"
+    if lines != [expected]:
+        print("ERROR: a session under way should be logged with a negative offset:\n  got      {}\n  expected {}".format(lines, expected))
+        return 1
+    my_predbat.minutes_now = 22 * 60 + 30
+    my_predbat.replay_dispatch_signature = None
+    my_predbat.io_adjusted = {minute: True for minute in range(22 * 60, 23 * 60)}
+    lines = capture(my_predbat, my_predbat.log_replay_dispatch_minutes)
+    expected = "Replay input: dispatch minutes changed, from 22:30 [[-30, 60]]"
+    if lines != [expected]:
+        print("ERROR: a dispatch under way should be logged with a negative offset:\n  got      {}\n  expected {}".format(lines, expected))
+        return 1
+    return 0
+
+
 def test_unchanged_inputs_logged_each_new_day(my_predbat):
     """Inputs keyed from midnight are logged again on a new day even when they match yesterday's, as a fixed tariff does.
 
@@ -535,6 +560,7 @@ def run_log_replay_inputs_tests(my_predbat):
         failed += test_rates_logged_on_change(my_predbat)
         failed += test_rate_sessions_logged_on_change(my_predbat)
         failed += test_dispatch_minutes_logged_on_change(my_predbat)
+        failed += test_replay_lines_past_minutes(my_predbat)
         failed += test_unchanged_inputs_logged_each_new_day(my_predbat)
         failed += test_state_logged(my_predbat)
         failed += test_cars_logged_on_change(my_predbat)
