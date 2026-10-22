@@ -28,7 +28,7 @@ import requests
 import traceback
 import threading
 import time
-from utils import str2time
+from utils import str2time, strptime_aware
 from const import TIME_FORMAT_HA, TIMEOUT, TIME_FORMAT_HA_TZ
 from component_base import ComponentBase
 
@@ -858,16 +858,16 @@ class HAInterface(ComponentBase):
                 # Instead of appending to a local mirror_updates list, call the database manager to schedule the update
                 if last_changed:
                     try:
-                        last_changed = datetime.strptime(last_changed, TIME_FORMAT_HA_TZ)
+                        last_changed = strptime_aware(last_changed, TIME_FORMAT_HA_TZ)
                     except (ValueError, TypeError):
                         # Try fallback format without microseconds
                         try:
-                            last_changed = datetime.strptime(last_changed, "%Y-%m-%dT%H:%M:%S%z")
+                            last_changed = strptime_aware(last_changed, "%Y-%m-%dT%H:%M:%S%z")
                         except (ValueError, TypeError) as e:
                             self.log("Warn: Failed to parse last_changed time {} for entity {} : {}".format(last_changed, entity_id, e))
-                            last_changed = datetime.now()
+                            last_changed = datetime.now(timezone.utc)
                 else:
-                    last_changed = datetime.now()
+                    last_changed = datetime.now(timezone.utc)
 
                 self.db_manager.set_state_db(entity_id, state, attributes, timestamp=last_changed)
 

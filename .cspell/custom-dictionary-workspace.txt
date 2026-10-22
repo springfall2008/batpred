@@ -33,6 +33,7 @@ armhf
 armv
 ASHP
 asn
+astimezone
 asyncio
 atfork
 atleast
@@ -165,6 +166,7 @@ dlimit
 dlopen
 dnoregion
 docstrings
+dschg
 dstamp
 dstart
 dtype
@@ -202,6 +204,7 @@ enph
 enphase
 enphaseenergy
 Enpower
+entityfilter
 entrez
 epod
 epvtoday
@@ -273,6 +276,8 @@ gridconsumptionpower
 Groq
 growatt
 growattsph
+guoxia
+guoxiatech
 GWMQTT
 HACS
 hadashboard
@@ -306,6 +311,7 @@ idag
 idef
 idetails
 idxs
+iess
 iflux
 importlimit
 inday
@@ -360,6 +366,7 @@ libyaml
 LIFEPO
 linebreak
 linestyle
+Liskov
 loadml
 loadmlpower
 loadspower
@@ -478,6 +485,8 @@ oversizing
 overvoltage
 ownerapi
 pac
+packettypes
+paho
 parseable
 pbat
 pbgw
@@ -521,6 +530,7 @@ pseudonymised
 pseudonymises
 psum
 pthread
+puback
 pvbat
 pvenergytotal
 pvlib
@@ -545,6 +555,7 @@ rarr
 reactivepower
 readback
 readbacks
+reasoncodes
 recp
 redownload
 Referer
@@ -605,6 +616,7 @@ slugified
 slugifies
 slugify
 slugifying
+smartflex
 snakeviz
 snprintf
 socb
@@ -640,6 +652,7 @@ Stromligning
 strptime
 strtod
 Strømligning
+suback
 subclassing
 submessage
 substep
@@ -690,6 +703,7 @@ Trefor
 treforsiphone
 treforsouthwell
 triggerable
+trydan
 tunables
 twinx
 typecode
@@ -706,6 +720,7 @@ undriven
 unencodable
 unfetchable
 unflushed
+unhashable
 unindexed
 unnormalised
 unparseable
@@ -752,6 +767,7 @@ xlabel
 xlim
 xload
 xrtkq
+xtest
 xticks
 xxabcdefyy
 yaxis

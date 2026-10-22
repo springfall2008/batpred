@@ -244,7 +244,7 @@ def test_tier_expiry_uses_the_seeded_clock():
     """Tier clocks are seeded from storage age, so cadence survives a restart."""
     failed = False
     s = StoredSunsynk(ages={SUNSYNK_CACHE_STATIC: 10.0})
-    s.storage.files[SUNSYNK_CACHE_STATIC] = {"device_list": ["INV1"]}
+    s.storage.files[SUNSYNK_CACHE_STATIC] = {"device_list": ["INV1"], "device_roles": {}}
     run_async_local(s.restore_state())
     # 10 minutes old against an 8-hour TTL: not expired, so no re-poll on startup.
     if s.tier_expired("static", SUNSYNK_TTL_STATIC):
