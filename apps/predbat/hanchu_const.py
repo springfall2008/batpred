@@ -251,6 +251,53 @@ HANCHU_CAPACITY_FIELD = "bmsDesignCap"
 # discovery catalogue as an account id.
 HANCHU_STATION_FIELD = "stationId"
 
+# HARDWARE (batpred#5664): getDeviceStatus carries the model as a code, which the Hanchu web
+# console's own pcsEnMap turns into a name - devModel 4 is a HESS-HY-S-5.0K, confirmed on that unit.
+# The device-list entry carries no model at all ({"devType", "sn"} only).
+HANCHU_MODEL_FIELD = "devModel"
+
+# devModel -> (model, battery charge/discharge limit W, AC rating W), so battery_rate_max and
+# inverter_limit come from the unit rather than from a power setting the menu shares across models
+# (batpred#5664). Names from the console's pcsEnMap; ratings from the Hanchu user manuals, both as
+# reported on batpred#5664. The codes are not in size order - 30-32 were added later - so this is a
+# lookup, never an ordinal. A battery limit of None is one the manual does not state (the 48 V,
+# current-limited S-6K-S and S-12K-S): battery_rate_max then falls back to the menu and held values,
+# as it does for a code missing here altogether (the HC-HY-SL-*-G2 range the menu also lists).
+HANCHU_MODELS = {
+    1: ("HESS-HY-S-3.0K", 5000, 3000),
+    2: ("HESS-HY-S-3.68K", 5000, 3680),
+    3: ("HESS-HY-S-4.0K", 5000, 4000),
+    4: ("HESS-HY-S-5.0K", 5000, 5000),
+    5: ("HESS-HY-S-6.0K", 5000, 6000),
+    6: ("HESS-HY-T-05K", 5000, 5000),
+    7: ("HESS-HY-T-06K", 6000, 6000),
+    8: ("HESS-HY-T-08K", 8000, 8000),
+    9: ("HESS-HY-T-10K", 10000, 10000),
+    10: ("HESS-HY-T-12K", 12000, 12000),
+    11: ("HESS-HY-T-4K-M", 4000, 4000),
+    12: ("HESS-HY-T-5K-M", 5000, 5000),
+    13: ("HESS-HY-T-6K-M", 6000, 6000),
+    14: ("HESS-HY-T-8K-M", 8000, 8000),
+    15: ("HESS-HY-T-10K-M", 10000, 10000),
+    16: ("HESS-HY-T-12K-M", 12000, 12000),
+    17: ("HESS-HY-T-10K-M4", 10000, 10000),
+    18: ("HESS-HY-T-12K-M4", 12000, 12000),
+    19: ("HESS-HY-T-15K-M4", 15000, 15000),
+    20: ("HESS-HY-T-20K-M4", 20000, 20000),
+    21: ("CESS-HY-25K", 25000, 25000),
+    22: ("CESS-HY-30K", 30000, 30000),
+    23: ("CESS-HY-36K", 36000, 36000),
+    24: ("CESS-HY-40K", 40000, 40000),
+    25: ("CESS-HY-50K", 50000, 50000),
+    26: ("CESS-HY-40K-P", 40000, 40000),
+    27: ("CESS-HY-50K-P", 50000, 50000),
+    28: ("HESS-HY-S-6K-S", None, 6000),
+    29: ("HESS-HY-S-12K-S", None, 12000),
+    30: ("HESS-HY-S-7.0K", 7000, 7000),
+    31: ("HESS-HY-S-8.0K", 8000, 8000),
+    32: ("HESS-HY-S-10.0K", 10000, 10000),
+}
+
 # --- Daily energy: getDeviceStatistics --------------------------------------------------------
 # Predbat sensor leaf -> getDeviceStatistics field. All OBSERVED in UPTON sensor.py
 # STATISTICS_SENSORS; GUOXIA sensor.py carries the same six names, so all six are CORROBORATED.
@@ -443,10 +490,28 @@ HANCHU_MIN_WRITE_INTERVAL = 60
 # giving up and leaving the staged changes intact for the user to retry.
 HANCHU_WRITE_RETRY_DELAY = 5
 
+# Seconds a write-button press that arrived on another event loop waits for the write it handed to
+# the component's own loop (see HanchuAPI._on_component_loop). Long enough to wait out an ordinary
+# slow cloud write, while a stuck loop cannot hold Predbat's plan thread indefinitely. It is NOT a
+# bound on a write: retries (HANCHU_RETRIES x HANCHU_TIMEOUT plus back-off), the inline retry after
+# HANCHU_WRITE_RETRY_DELAY, a re-login or a reconcile write already holding write_lock can all run
+# longer. That is fine, because giving up only stops the waiting - the write carries on and is
+# recorded in applied_payload when it completes.
+HANCHU_LOOP_HANDOVER_TIMEOUT = 120
+
+# Seconds between checks, while waiting for a handed-over write, that the component's loop is still
+# running - so a write the loop will now never run is given up at once rather than after the timeout.
+HANCHU_LOOP_HANDOVER_POLL = 1
+
 # A write that FAILED is retried on the next cycle rather than held for the full pacing interval:
 # a rejected shorten leaves the inverter running past the plan, so waiting costs real energy. The
 # reconcile loop runs about once a minute, so this still means at most one attempt per cycle.
 HANCHU_FAILED_WRITE_INTERVAL = 30
+
+# A control read-back is compared with what Predbat last wrote only when the read began at least
+# this long after that write, so a read the write may have overtaken is not taken for a change made
+# on the device. HARDWARE (batpred#5305): an accepted write reads back within 1-2 s; a minute is margin.
+HANCHU_READBACK_SETTLE = 60
 
 # HARDWARE (batpred#5305): after this many consecutive rejected writes the user is notified,
 # because the inverter may no longer match the plan and may need stepping in on by hand.
@@ -501,7 +566,9 @@ def split_window_seconds(start, end):
 
     INVERTER_DEF sets can_span_midnight False, so Predbat itself avoids asking for a wrap-around,
     but it still expresses "until midnight" as an end hour of 24 or more. The second pair carries
-    whatever runs past midnight and is (0, 0) - disabled - when nothing does.
+    whatever runs past midnight and is (0, 0) - disabled - when nothing does. An end of exactly
+    24:00:00 is clamped to 23:59 like hhmmss_to_seconds(), because 86400 is outside the slot range
+    and one out-of-range key fails the whole batched iotSet (batpred#5672).
 
     Returns ((start1, end1), (start2, end2)).
     """
@@ -512,7 +579,7 @@ def split_window_seconds(start, end):
         end_seconds = int(parts[0]) * 3600 + (int(parts[1]) * 60 if len(parts) > 1 else 0)
     except (TypeError, ValueError):
         end_seconds = start_seconds
-    if end_seconds <= HANCHU_SECONDS_PER_DAY:
+    if end_seconds < HANCHU_SECONDS_PER_DAY:
         return (start_seconds, end_seconds), (HANCHU_SLOT_DISABLED, HANCHU_SLOT_DISABLED)
     return (start_seconds, HANCHU_SECONDS_PER_DAY - 60), (HANCHU_SLOT_DISABLED, end_seconds - HANCHU_SECONDS_PER_DAY)
 
