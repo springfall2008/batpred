@@ -15,7 +15,7 @@ IPC queue for database operations. Ensures thread-safe access to SQLite
 from multiple async contexts.
 """
 
-from datetime import timedelta, datetime, timezone
+from datetime import datetime, timezone
 import asyncio
 import time
 import traceback
@@ -176,8 +176,10 @@ class DatabaseManager(ComponentBase):
         else:
             now_utc = self.now_utc_exact
 
-        # Convert time to GMT+0
-        now_utc = now_utc.replace(tzinfo=None) - timedelta(hours=now_utc.utcoffset().seconds // 3600)
+        # Convert time to GMT+0, refusing a naive stamp rather than guessing it is host-local time
+        if now_utc.utcoffset() is None:
+            raise ValueError("set_state_db needs a timezone-aware timestamp, got {}".format(now_utc))
+        now_utc = now_utc.astimezone(timezone.utc).replace(tzinfo=None)
         self.send_via_ipc("set_state", {"entity_id": entity_id, "state": state, "attributes": attributes, "timestamp": now_utc})
 
         item = {"last_changed": now_utc.strftime(TIME_FORMAT_DB), "state": state, "attributes": attributes}
