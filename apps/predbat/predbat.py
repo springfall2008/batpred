@@ -35,7 +35,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v9.4.2"
+THIS_VERSION = "v9.4.5"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
 from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, DEFAULT_PREDBAT_REPOSITORY
@@ -81,6 +81,7 @@ from const import (
 from config import APPS_SCHEMA, CONFIG_ITEMS
 import debug_history
 from utils import (
+    strptime_aware,
     RepeatLogGate,
     minutes_since_yesterday,
     minutes_since_midnight,
@@ -510,6 +511,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.car_charging_power = 0
         self.car_charging_power_configured = False
         self.io_adjusted = {}
+        # Bird-in-hand credit for a confirmed dispatch run and whether one is in force (io_confirmed_credit_update)
+        self.io_confirmed_credit = {}
+        self.io_confirmed_active = False
+        # One replan may take a same-cost plan once a run becomes boosted (should_replace_plan)
+        self.io_confirmed_tiebreak = False
         # Repeated Intelligent slot lists are logged briefly between full logs (rate_add_io_slots)
         self.io_slot_log_gate = RepeatLogGate(REPEAT_FULL_LOG_SECONDS)
         self.current_charge_limit = 0.0
@@ -580,6 +586,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.dynamic_load_car_warned_dynamic_off = False
         self.dynamic_load_car_run = {}
         self.dynamic_load_car_confirmed = {}
+        self.dynamic_load_car_confirmed_periods = {}
         self.dynamic_load_car_saved = {}
         self.dynamic_load_car_sensors = {}
         self.dynamic_load_car_effective = {}
@@ -2337,7 +2344,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         config_refresh_stamp = None
         if config_refresh:
             try:
-                config_refresh_stamp = datetime.strptime(config_refresh, TIME_FORMAT)
+                config_refresh_stamp = strptime_aware(config_refresh, TIME_FORMAT)
             except (ValueError, TypeError):
                 config_refresh_stamp = None
 
