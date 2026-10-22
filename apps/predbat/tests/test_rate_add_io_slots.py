@@ -952,6 +952,13 @@ def run_shared_cap_tests(my_predbat, midnight_utc, time_format):
         failed |= run_shared_cap_case("shared_cap_short_unconfirmed", my_predbat, car_slots, 1, expected_rates, [[(810, 840, 4)], [(793, 794, 7.0)]])
         my_predbat.dynamic_load_car_confirmed_periods = {}
 
+        # The same one-minute dispatch held as running (octopus_held_dispatches()) is exempt from the short test,
+        # so it is cheap and its minute comes out of the 30-minute cap before car 0's half hour
+        print("\n**** Shared cap: another car's short held dispatch uses its minute ****")
+        car_slots = [[dispatch((13, 30), (14, 0))], [dict(dispatch((13, 13), (13, 14), 0.1), held=True)]]
+        expected_rates = rates_for((780, 810, 4.0), (810, 840, 4.0))
+        failed |= run_shared_cap_case("shared_cap_short_held", my_predbat, car_slots, 1, expected_rates, [[(810, 839, 4), (839, 840, 10)], [(793, 794, 4)]])
+
         # A second car with no dispatches leaves the first exactly as it is on its own
         print("\n**** Shared cap: a second car with no dispatches changes nothing ****")
         car_slots = [[dispatch((13, 0), (13, 40)), dispatch((14, 0), (14, 40))], []]
