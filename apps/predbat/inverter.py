@@ -46,7 +46,7 @@ from const import (
     EXPORT_LIMIT_DEFAULT_W,
 )
 from control_ledger import generation_from_state, OWNED, UNOWNED
-from utils import calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3, dp4, is_entity_id, time_string_to_stamp, minute_data, minute_data_state, window2minutes, pack_export_limit
+from utils import calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3, dp4, is_entity_id, time_string_to_stamp, minute_data, minute_data_state, window2minutes, pack_export_limit, strptime_aware
 
 TIME_FORMAT_HMS = "%H:%M:%S"
 
@@ -3913,7 +3913,7 @@ class Inverter:
             self.sleep(self.inv_write_and_poll_sleep)
             state = self.base.get_state_wrapper(entity_id, refresh=True)
             try:
-                time_pressed = datetime.strptime(state, TIME_FORMAT_SECONDS)
+                time_pressed = strptime_aware(state, TIME_FORMAT_SECONDS)
             except Exception as e:
                 self.base.log(f"Inverter {self.id} Error parsing timestamp for {entity_id}: {e}")
                 continue

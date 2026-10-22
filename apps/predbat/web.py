@@ -75,6 +75,7 @@ from web_helper import (
 )
 
 from utils import (
+    strptime_aware,
     calc_percent_limit,
     str2time,
     dp0,
@@ -3475,8 +3476,6 @@ chart.render();
 
             # Sort timestamps and calculate deltas to get energy per interval
             if load_ml_forecast_energy:
-                from datetime import datetime
-
                 sorted_timestamps = sorted(load_ml_forecast_energy.keys())
                 prev_energy = 0
                 prev_timestamp = None
@@ -3487,8 +3486,8 @@ chart.render();
                     # Calculate actual interval in hours between this and previous timestamp
                     if prev_timestamp:
                         # Parse timestamps and calculate difference in hours
-                        curr_dt = datetime.strptime(timestamp, TIME_FORMAT)
-                        prev_dt = datetime.strptime(prev_timestamp, TIME_FORMAT)
+                        curr_dt = strptime_aware(timestamp, TIME_FORMAT)
+                        prev_dt = strptime_aware(prev_timestamp, TIME_FORMAT)
                         interval_hours = (curr_dt - prev_dt).total_seconds() / 3600.0
                         load_ml_forecast_power[timestamp] = dp4(energy_delta / interval_hours)
 

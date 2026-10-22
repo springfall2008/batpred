@@ -24,7 +24,7 @@ import pytz
 from datetime import datetime, timedelta, timezone
 
 from const import TIME_FORMAT, TIME_FORMAT_SOLCAST
-from utils import dp2, dp4, history_attribute_to_minute_data, minute_data, history_attribute, prune_today, str2time
+from utils import dp2, dp4, history_attribute_to_minute_data, minute_data, history_attribute, prune_today, str2time, strptime_aware
 from predbat_metrics import record_api_call, metrics
 from component_base import ComponentBase
 from solar_model import convert_azimuth, gti_hourly_to_period_kwh, pvwatts_cell_temperature  # noqa: F401 - re-exported for tests/test_open_meteo.py parity checks
@@ -535,7 +535,7 @@ class SolarAPI(ComponentBase):
             period_start_stamp = None
             forecast_watt_data = {}
             for period_end in watts:
-                period_end_stamp = datetime.strptime(period_end, TIME_FORMAT)
+                period_end_stamp = strptime_aware(period_end, TIME_FORMAT)
                 pv50 = watts[period_end]  # efficiency already baked into kwp in the URL
                 if period_start_stamp:
                     if period_end_stamp - period_start_stamp > timedelta(minutes=60):
@@ -569,7 +569,7 @@ class SolarAPI(ComponentBase):
 
         # Prune old data from the cache
         for key_txt in self.forecast_solar_data:
-            key = datetime.strptime(key_txt, TIME_FORMAT)
+            key = strptime_aware(key_txt, TIME_FORMAT)
             if key >= self.midnight_utc:
                 new_data[key_txt] = self.forecast_solar_data[key_txt]
         self.forecast_solar_data = new_data
@@ -581,7 +581,7 @@ class SolarAPI(ComponentBase):
         # Fetch the final cached data as timestamps
         period_data = {}
         for key_txt in self.forecast_solar_data:
-            key = datetime.strptime(key_txt, TIME_FORMAT)
+            key = strptime_aware(key_txt, TIME_FORMAT)
             period_data[key] = self.forecast_solar_data[key_txt]
 
         # Sort data and return
@@ -662,7 +662,7 @@ class SolarAPI(ComponentBase):
                     for forecast in forecasts:
                         period_end = forecast.get("period_end", None)
                         if period_end:
-                            period_end_stamp = datetime.strptime(period_end, TIME_FORMAT_SOLCAST)
+                            period_end_stamp = strptime_aware(period_end, TIME_FORMAT_SOLCAST)
                             period_end_stamp.replace(tzinfo=pytz.utc)
                             period_period = forecast.get("period", "PT30M")
                             period_minutes = int(period_period[2:-1])
@@ -686,7 +686,7 @@ class SolarAPI(ComponentBase):
 
         # Prune old data from the cache
         for key_txt in self.solcast_data:
-            key = datetime.strptime(key_txt, TIME_FORMAT)
+            key = strptime_aware(key_txt, TIME_FORMAT)
             if key >= self.midnight_utc:
                 new_data[key_txt] = self.solcast_data[key_txt]
         self.solcast_data = new_data
@@ -698,7 +698,7 @@ class SolarAPI(ComponentBase):
         # Fetch the final cached data as timestamps
         period_data = {}
         for key_txt in self.solcast_data:
-            key = datetime.strptime(key_txt, TIME_FORMAT)
+            key = strptime_aware(key_txt, TIME_FORMAT)
             period_data[key] = self.solcast_data[key_txt]
 
         # Sort data and return
@@ -950,7 +950,7 @@ class SolarAPI(ComponentBase):
             if "period_start" not in entry:
                 continue
             try:
-                this_point = datetime.strptime(entry["period_start"], TIME_FORMAT)
+                this_point = strptime_aware(entry["period_start"], TIME_FORMAT)
             except (ValueError, TypeError):
                 continue
 
@@ -1570,7 +1570,7 @@ class SolarAPI(ComponentBase):
         for entry in pv_forecast_data:
             period_start = entry.get("period_start", "")
             if period_start:
-                minutes_since_midnight = (datetime.strptime(period_start, TIME_FORMAT) - self.midnight_utc).total_seconds() / 60
+                minutes_since_midnight = (strptime_aware(period_start, TIME_FORMAT) - self.midnight_utc).total_seconds() / 60
                 slot = int(minutes_since_midnight / self.plan_interval_minutes) * self.plan_interval_minutes
 
                 # Sum all plan-interval slots that fall within this forecast entry's period.
@@ -1816,8 +1816,8 @@ class SolarAPI(ComponentBase):
             period = 30  # Default period in minutes
             if len(pv_forecast_data) >= 2:
                 try:
-                    t0 = datetime.strptime(pv_forecast_data[0]["period_start"], TIME_FORMAT)
-                    t1 = datetime.strptime(pv_forecast_data[1]["period_start"], TIME_FORMAT)
+                    t0 = strptime_aware(pv_forecast_data[0]["period_start"], TIME_FORMAT)
+                    t1 = strptime_aware(pv_forecast_data[1]["period_start"], TIME_FORMAT)
                     detected_period = int(abs((t1 - t0).total_seconds() / 60))
                     # Sanity-check: only accept periods in the plausible range for forecast data.
                     # Values outside 5–60 minutes (e.g. 1440 if the first two entries span a day
