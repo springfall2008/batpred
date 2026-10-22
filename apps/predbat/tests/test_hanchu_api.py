@@ -941,13 +941,17 @@ def test_hanchu_transport_failure_is_retried_then_reported():
     client = MockHanchu()
     client._token = "tok"
     client._token_time = time.time()
-    with patch("aiohttp.ClientSession", return_value=create_aiohttp_mock_session(exception=OSError("connection reset"))) as session_cls:
+    # The back-off is recorded rather than slept: the real 2s + 4s made this the slowest test in its suite
+    with patch("aiohttp.ClientSession", return_value=create_aiohttp_mock_session(exception=OSError("connection reset"))) as session_cls, patch("hanchu.asyncio.sleep", new=AsyncMock()) as backoff:
         ok, data = run_async_local(client._post("device_list"))
     if ok or data is not None:
         print(f"ERROR: a transport failure should fail closed: ok={ok} data={data!r}")
         failed = True
     if session_cls.return_value.post.call_count != 3:
         print(f"ERROR: expected 3 transport attempts, got {session_cls.return_value.post.call_count}")
+        failed = True
+    if [call.args[0] for call in backoff.await_args_list] != [2, 4]:
+        print(f"ERROR: expected a 2s then 4s back-off between attempts, got {[call.args for call in backoff.await_args_list]}")
         failed = True
     if not logged(client, "transport failure"):
         print("ERROR: the transport failure was not logged")
