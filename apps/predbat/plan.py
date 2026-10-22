@@ -693,6 +693,12 @@ class Plan:
                 if seen_minute is not None:
                     period_end = self.midnight_utc + timedelta(minutes=round_out_to_period(int(seen_minute), int(seen_minute) + 1)[1])
                     self.dynamic_load_car_confirmed[car_n] = max(self.dynamic_load_car_confirmed.get(car_n, period_end), period_end)
+                    # Every confirmed half hour too, not only the latest: a dispatch too short to trust is only cheap
+                    # in one (dispatch_too_short()), and must stay so once a later half hour is confirmed as well
+                    periods = self.dynamic_load_car_confirmed_periods.setdefault(car_n, set())
+                    periods.add(period_end)
+                    oldest = self.midnight_utc - timedelta(days=2)
+                    periods.difference_update([period for period in periods if period < oldest])
             return False
         if not_charging:
             since = self.dynamic_load_car_since.setdefault(car_n, timed_at) if record else self.dynamic_load_car_since.get(car_n)
@@ -710,7 +716,9 @@ class Plan:
         - confirmed: the end of the half hour the car was last seen charging in (dynamic_load_car_strip_from()),
           while that half hour is still to come;
         - run: the dispatch the car is in, with the earliest start seen for it - the start band is timed from it;
-        - cancelled: the decision so far, which stands while there is no evidence either way.
+        - cancelled: the decision so far, which stands while there is no evidence either way;
+        - periods: every half hour the car was confirmed charging in (dynamic_load_car_confirmed_periods), as a
+          dispatch too short to trust stays cheap in one after it is over - today's cost is priced from them.
 
         All times are absolute, as minutes since midnight_utc mean something else after midnight. The "not
         charging since" clock is deliberately not kept: a restart is a stretch with no evidence, after which
@@ -721,14 +729,16 @@ class Plan:
         """
         now_minute = self.dynamic_load_car_minute(self.now_utc_real)
         confirmed_cars = {car_n: confirmed for car_n, confirmed in self.dynamic_load_car_confirmed.items() if self.dynamic_load_car_minutes_of(confirmed) > now_minute}
+        period_cars = {car_n: periods for car_n, periods in self.dynamic_load_car_confirmed_periods.items() if periods}
         cars = {}
-        for car_n in sorted(set(confirmed_cars) | set(self.dynamic_load_car_run)):
+        for car_n in sorted(set(confirmed_cars) | set(self.dynamic_load_car_run) | set(period_cars)):
             confirmed = confirmed_cars.get(car_n)
             run = self.dynamic_load_car_run.get(car_n)
             cars[str(car_n)] = {
                 "confirmed": confirmed.isoformat() if confirmed else None,
                 "run": {key: (self.midnight_utc + timedelta(minutes=run[key])).isoformat() for key in ("start", "end")} if run else None,
                 "cancelled": bool(self.dynamic_load_car_cancelled.get(car_n, False)),
+                "periods": [period.isoformat() for period in sorted(period_cars.get(car_n, []))],
             }
         return cars
 
@@ -772,7 +782,8 @@ class Plan:
 
         Only what is still current is taken: a confirmed half hour that has not ended yet, and the run and
         decision of a dispatch that has not ended yet. Anything older belongs to a dispatch the car has since
-        left, where the running check would have dropped it too.
+        left, where the running check would have dropped it too. The confirmed half hours of the last two days
+        are taken whole, as the running check keeps them that long.
         """
         storage = self.components.get_component("storage") if self.components else None
         if not storage or self.midnight_utc is None:
@@ -797,15 +808,19 @@ class Plan:
                 run = {name: self.dynamic_load_car_minutes_of(datetime.fromisoformat(car["run"][name])) for name in ("start", "end")} if car.get("run") else None
                 confirmed_current = confirmed is not None and self.dynamic_load_car_minutes_of(confirmed) > now_minute
                 run_current = run is not None and run["end"] > now_minute
+                oldest = self.midnight_utc - timedelta(days=2)
+                periods = {period for period in (datetime.fromisoformat(value) for value in car.get("periods") or []) if period >= oldest}
             except (ValueError, TypeError, KeyError, AttributeError):
                 continue
+            if periods:
+                self.dynamic_load_car_confirmed_periods.setdefault(car_n, set()).update(periods)
             if confirmed_current:
                 self.dynamic_load_car_confirmed[car_n] = confirmed
             if run_current:
                 # Whole minutes stay ints, as the slots they are compared with are
                 self.dynamic_load_car_run[car_n] = {name: int(value) if value == int(value) else value for name, value in run.items()}
                 self.dynamic_load_car_cancelled[car_n] = bool(car.get("cancelled", False))
-            if confirmed_current or run_current:
+            if confirmed_current or run_current or periods:
                 restored.append(car_n)
         if restored:
             self.log("Octopus Intelligent: restored the dispatch state of car(s) {} from storage".format(restored))
@@ -947,6 +962,9 @@ class Plan:
                 due = True
         # The poll starts the grace clock and confirms half hours too
         self.dynamic_load_car_save()
+        # ...and holds the half hour a dispatch is running in: one too short for any 5 minute cycle to see
+        # running, once confirmed, is otherwise at the day rate until Octopus lists it as completed (#5520)
+        self.octopus_held_update(now)
 
         if due:
             self.log("Octopus Intelligent: car charging state changed, will re-plan")

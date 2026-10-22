@@ -16,7 +16,7 @@ import threading
 import time
 import uuid
 import traceback
-from utils import calc_percent_limit, export_mode_of, export_target_of, export_power_of, parse_car_plan_windows, in_car_plan_window
+from utils import calc_percent_limit, export_mode_of, export_target_of, export_power_of, parse_car_plan_windows, in_car_plan_window, strptime_aware
 from const import EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, MINUTE_WATT
 import pytz as _pytz
 
@@ -2305,7 +2305,7 @@ class GatewayMQTT(ComponentBase):
                 slot_idx = 0
                 for row in rows:
                     try:
-                        row_time = datetime.datetime.strptime(row.get("time", ""), "%Y-%m-%dT%H:%M:%S%z")
+                        row_time = strptime_aware(row.get("time", ""), "%Y-%m-%dT%H:%M:%S%z")
                     except (ValueError, TypeError):
                         continue
 
