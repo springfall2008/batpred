@@ -1360,6 +1360,7 @@ Supports real-time monitoring (SOC, power flows, operational mode) and full char
 - The Sigenergy Developer Portal application must have **VPP Mode** enabled or charge/discharge commands will be rejected
 - On first startup Sigenergy sends an **onboarding approval email** — you must click the approval link before live MQTT data starts flowing
 - MQTT certificates (CA, client cert, client key) are required for TLS-authenticated connections to the broker
+- With `automatic: true` Predbat models your grid export limit from `sensor.predbat_sigenergy_<system>_export_limit`: the plant's grid max backfeed power while export limiting (`antiReflux`) is on, including 0 W for zero export, and 99999 W (no limit) while it is off. Sigenergy only reports these when the plant's configuration changes, so the last reported values are cached across restarts; a plant that has never reported reads 99999 W and exports are capped by the inverter limit alone. An `export_limit` you set yourself in `apps.yaml` is kept rather than replaced
 
 #### Configuration Options (sigenergy)
 
@@ -1484,6 +1485,7 @@ Integrates with Sunsynk (DEYE-family) hybrid inverters via the Sunsynk Connect c
 - There is a single whole-object settings endpoint, so every write is a read-modify-write of the entire settings object rather than a partial update. Predbat re-reads the settings immediately before every write to keep the race window as small as possible, and logs when a field it does not own has changed since the last read
 - Using the Sunsynk phone app while Predbat is running can overwrite Predbat's settings, and vice versa - there is one whole-object write endpoint, so the last writer wins
 - A write reaching the cloud does not mean the inverter has applied it: the dongle collects new settings on its next poll, typically one to five minutes later. Predbat tolerates a few cycles of divergence before warning
+- **Parallel inverters (master + slaves on one shared battery)** are detected from the Sunsynk inverter list and modelled as **one** Predbat inverter, driven through the master. Predbat writes only to the master (it passes its settings on to the slaves), takes the battery SoC, capacity and limits from the master once, reads battery power for the whole bank from the master's battery-management link, and adds up the grid, PV and load power and daily energy of every unit in the group. Configuring just the master's serial in `sunsynk_inverter_sn` is enough - its slaves are polled automatically. Each slave's own readings are still published as `sensor.predbat_sunsynk_<serial>_*` for diagnosis, but nothing is bound to them. A slave that reports its own battery-management link is treated as a separate inverter with its own battery
 
 #### Configuration Options (sunsynk)
 
@@ -1697,6 +1699,8 @@ On first run the component queries your account for active meter point agreement
 - The component automatically sets `metric_octopus_import` and `metric_standing_charge` in Predbat, and will also set `metric_octopus_export` **when an export tariff is discovered** — no manual `apps.yaml` edits are needed for those settings once the relevant tariffs have been detected and the component is running
 - E.ON Next customers who have solar export may have their import and export on **separate account numbers** — in this case the component will attempt to discover the export account automatically via an address-matching strategy, or you can provide `export_account_id` explicitly
 - For OSS (self-hosted) installations you need to supply credentials — either an API key (`api_key` auth method) or email/password (`email` auth method). SaaS/cloud-managed installations use OAuth and have credentials managed automatically. If you can't find a way to generate a separate API key for your provider, use the `email` auth method with the same email/password you use to sign into your normal EDF or E.ON Next online account — no separate key is required for that method
+- **E.ON Next customers currently need an API key.** E.ON Next stopped accepting email/password sign-in for the Kraken API in October 2026 (see [#5580](https://github.com/springfall2008/batpred/issues/5580)) and its website does not offer an API key. Generate one with the [Kraken API key generator](web-interface.md#kraken-api-key) in the Predbat web interface (**Advanced → Kraken API Key**), then set `kraken_auth_method: api_key` and `kraken_key`
+- If the login is rejected, `sensor.predbat_kraken_<account>_account_status` turns to `error`, `binary_sensor.predbat_components_healthy` turns off and `predbat.status` reports the Kraken component error with the reason. Cached rates and dispatches carry on being published meanwhile; the `dispatches_fetched_at` attribute on the `intelligent_dispatch` sensor shows how old the dispatches are. Fix the credentials, then restart Predbat or the Kraken component
 - For accounts with a SmartFlex-managed EV device, an `intelligent_dispatch` binary sensor is published per device (see [Published entities](#published-entities-kraken)) and automatically wired into `octopus_intelligent_slot`, exactly like Octopus Intelligent Go — no manual `apps.yaml` configuration is needed for this. Make sure **switch.predbat_octopus_intelligent_charging** (see [car charging docs](car-charging.md)) is turned On so Predbat actually uses the dispatch slots for planning
 
 #### Configuration Options (kraken)
@@ -1733,7 +1737,16 @@ kraken_password: YOUR_REAL_PASSWORD
   kraken_key: !secret kraken_key
 ```
 
-**E.ON Next — email/password authentication:**
+**E.ON Next — API key authentication (recommended):**
+
+```yaml
+  kraken_provider: eon
+  kraken_account_id: A-12345678
+  kraken_auth_method: api_key
+  kraken_key: !secret kraken_key
+```
+
+**E.ON Next — email/password authentication (being phased out by E.ON Next):**
 
 ```yaml
   kraken_provider: eon
@@ -1749,9 +1762,8 @@ kraken_password: YOUR_REAL_PASSWORD
   kraken_provider: eon
   kraken_account_id: A-12345678        # import account
   kraken_export_account_id: A-87654321 # export account (different number)
-  kraken_auth_method: email
-  kraken_email: myemail@example.com
-  kraken_password: !secret kraken_password
+  kraken_auth_method: api_key
+  kraken_key: !secret kraken_key
 ```
 
 #### How to find your account number (kraken)
@@ -1764,14 +1776,17 @@ All entities use the pattern `sensor.predbat_kraken_{account_id}_{suffix}` (acco
 
 | Entity | Description |
 | ------ | ----------- |
-| `sensor.predbat_kraken_a_12345678_account_status` | Connection status: `discovering`, `connected`, or `error` |
+| `sensor.predbat_kraken_a_12345678_account_status` | Connection status: `discovering`, `connected`, or `error` (login rejected); `requests_total` / `failures_total` attributes count API calls since start |
 | `sensor.predbat_kraken_a_12345678_tariff_code` | Active import tariff code (e.g. `E-1R-FLEX-22-11-25-A`) |
 | `sensor.predbat_kraken_a_12345678_import_rates` | Import rate periods — consumed by Predbat automatically |
 | `sensor.predbat_kraken_a_12345678_import_standing` | Daily standing charge in £/day |
 | `sensor.predbat_kraken_a_12345678_export_rates` | Export rate periods — only present when an export tariff is found |
-| `binary_sensor.predbat_kraken_a_12345678_intelligent_dispatch[_N]` | On when a SmartFlex dispatch slot is active for device `N` — only present for accounts with a SmartFlex-managed EV device |
+| `binary_sensor.predbat_kraken_a_12345678_intelligent_dispatch[_N]` | On when a SmartFlex dispatch slot is active for device `N` — only present for accounts with a SmartFlex-managed EV device. The `dispatches_fetched_at` attribute is when the dispatches were last fetched successfully |
 
 Predbat is automatically configured to use these energy rates once Kraken is enabled.
+
+The `rates` attribute of the import and export rates sensors holds only the rate periods Predbat can use: those within N + 1 days either side of today's midnight, plus one spare day ahead, where N is `forecast_hours` (at least 24) rounded up to whole days - so at most 3 days back and 4 days ahead with the default 48 hours (fewer when the provider has not returned that many).
+Older periods are left out, so a long fixed contract does not grow the attribute past Home Assistant's 16 KB recorder limit. The sensor's state is the number of periods in that attribute.
 
 ---
 

@@ -50,7 +50,8 @@
 // ABI 7: export limits are packed as PkExportLimit structs (array-of-structs) rather than those
 // three arrays. Same three fields, but one buffer and one stride, with the (99.0, 100.0) gap gone
 // because mode is explicit (GH#4914).
-#define PK_ABI_VERSION 7
+// ABI 8: io_credit, the bird-in-hand credit per step (prediction.py io_confirmed_credit), follows io_flag.
+#define PK_ABI_VERSION 8
 // Parity 14: the explicit (mode, target, power) fields replace the packed double throughout the hot
 // loop (see the ABI 6 note); the floor a target exports to now reads the target field, matching
 // prediction.py.
@@ -61,7 +62,9 @@
 // across cars, which counted the first car once per car (GH#5313).
 // Parity 17: a dispatch assumed gone pays the greater of rate_max (now the tariff's own highest import
 // rate, without saving session or Axle rewards) and the slot's own rate (#5163).
-#define PK_PARITY_REVISION 17
+// Parity 18: energy a charge window stores in a confirmed Intelligent dispatch run (io_credit) earns a score
+// only credit off metric_keep.
+#define PK_PARITY_REVISION 18
 #define PK_MAX_CARS 8
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
 #define PK_EXPORT_MODE_TARGET 0 // const.py EXPORT_MODE_TARGET
@@ -190,6 +193,7 @@ struct PkContext {
     const double *temp_charge_cap;    // temperature rate cap base (soc_max*adjust/60) per step, charge curve
     const double *temp_discharge_cap; // temperature rate cap base per step, discharge curve
     const int32_t *io_flag;           // io_adjusted flag per step
+    const double *io_credit;          // bird-in-hand credit, pence per kWh stored, per step
     const double *charge_curve;       // 101 entries, raw charge power curve multiplier by SoC percent
     const double *discharge_curve;    // 101 entries, raw discharge power curve multiplier by SoC percent
     const double *carbon;             // carbon intensity per step
@@ -400,6 +404,7 @@ struct ContextStore {
     std::vector<double> pv, load, pv10, load10, pv90, load90;
     std::vector<double> temp_charge_cap, temp_discharge_cap;
     std::vector<int32_t> io_flag;
+    std::vector<double> io_credit;
     std::vector<double> charge_curve, discharge_curve;
     std::vector<double> carbon, gas_rate, iboost_plan_load;
     std::vector<double> car_load_flat, car_rate_flat;
@@ -598,6 +603,7 @@ int64_t pk_context_create(const PkContext *in)
     store->temp_charge_cap.assign(in->temp_charge_cap, in->temp_charge_cap + n);
     store->temp_discharge_cap.assign(in->temp_discharge_cap, in->temp_discharge_cap + n);
     store->io_flag.assign(in->io_flag, in->io_flag + n);
+    store->io_credit.assign(in->io_credit, in->io_credit + n);
     store->charge_curve.assign(in->charge_curve, in->charge_curve + 101);
     store->discharge_curve.assign(in->discharge_curve, in->discharge_curve + 101);
     store->carbon.assign(in->carbon, in->carbon + n);
@@ -622,6 +628,7 @@ int64_t pk_context_create(const PkContext *in)
     store->ctx.temp_charge_cap = store->temp_charge_cap.data();
     store->ctx.temp_discharge_cap = store->temp_discharge_cap.data();
     store->ctx.io_flag = store->io_flag.data();
+    store->ctx.io_credit = store->io_credit.data();
     store->ctx.charge_curve = store->charge_curve.data();
     store->ctx.discharge_curve = store->discharge_curve.data();
     store->ctx.carbon = store->carbon.data();
@@ -770,6 +777,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         const int32_t minute = k * step;
         const int32_t minute_absolute = minute + c->minutes_now;
         double reserve_expected = reserve;
+        bool force_charging = false;
 
         // Rates - prediction.py:577-580
         double import_rate = c->rate_import[k];
@@ -1122,6 +1130,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             charge_rate_now_curve_step = charge_rate_now_curve * step;
 
             battery_draw = -std::max({std::min(charge_rate_now_curve_step, std::max(charge_limit_n - soc, pv_now)), 0.0, -battery_to_max});
+            force_charging = true;
 
             if (inverter_hybrid) {
                 pv_dc = std::min(std::fabs(battery_draw), pv_now);
@@ -1295,6 +1304,10 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         if (battery_draw > 0) {
             soc = std::max(soc - battery_draw / battery_loss_discharge, reserve_expected);
         } else {
+            // Bird in hand: score only credit for what a charge window stores in a confirmed dispatch run - prediction.py
+            if (force_charging && c->io_credit[k] != 0.0) {
+                metric_keep -= std::min(-battery_draw * battery_loss, soc_max - soc) * c->io_credit[k];
+            }
             soc = std::min(soc - battery_draw * battery_loss, soc_max);
         }
 

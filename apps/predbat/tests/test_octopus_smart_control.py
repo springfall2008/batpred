@@ -217,7 +217,7 @@ def run_octopus_smart_control_tests(my_predbat):
         # Octopus is not dispatching it, so it is car load at the normal rate, not an off-peak slot
         kept = [slot for slot in my_predbat.octopus_slots[0] if slot.get("charge_in_kwh") == 7.0]
         failed |= _check("t10c re-tagged as charger schedule", kept and kept[0].get("source") == DISPATCH_SOURCE_CHARGER_SCHEDULE, "slots {}".format(my_predbat.octopus_slots[0]))
-        failed |= _check("t10c not off-peak", not my_predbat.dispatch_billed_off_peak(kept[0].get("source"), "AT_HOME", my_predbat.minutes_now + 120) if kept else False, "")
+        failed |= _check("t10c not off-peak", not my_predbat.dispatch_billed_off_peak(0, kept[0].get("source"), "AT_HOME", my_predbat.minutes_now + 60, my_predbat.minutes_now + 120) if kept else False, "")
         failed |= _check("t10c sensor state untouched", items[CUSTOM_SENSOR]["planned_dispatches"][0]["source"] == "smart-charge", "")
         items[SWITCH] = "on"
         kwh = _slots(my_predbat)

@@ -46,9 +46,14 @@ from const import (
     EXPORT_LIMIT_DEFAULT_W,
 )
 from control_ledger import generation_from_state, OWNED, UNOWNED
-from utils import calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3, dp4, is_entity_id, time_string_to_stamp, minute_data, minute_data_state, window2minutes, pack_export_limit
+from utils import calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3, dp4, is_entity_id, time_string_to_stamp, minute_data, minute_data_state, window2minutes, pack_export_limit, strptime_aware
 
 TIME_FORMAT_HMS = "%H:%M:%S"
+
+# Largest SoC jump (percentage points) between consecutive readings that the charge curve learner
+# accepts as genuine. Wide enough for inverters that report SoC in 5% steps; a larger jump is a
+# glitch (e.g. a stray 0% reading) and would otherwise stamp one sample across a huge SoC range.
+CHARGE_CURVE_MAX_SOC_STEP = 10
 
 # Sentinel for "this side has committed nothing yet", distinct from any real commit key a caller
 # might use - including None, which adjust_charge_window() can legitimately produce for an unset
@@ -325,7 +330,17 @@ class Inverter:
         Create a missing inverter argument which will be assigned to a dummy entity
         """
         if (arg not in self.base.args) or (not isinstance(self.base.args[arg], list)):
-            self.base.args[arg] = [default, default, default, default]
+            # Padded with None rather than the default, for the same reason as the short-list branch
+            # below: the caller overwrites [self.id] with its dummy entity straight afterwards, so a
+            # bare default left in another inverter's slot reads back as "configured" there too - and
+            # rate_controls() then takes a sibling's default number for a bound entity (#5359)
+            single_value = self.base.args.get(arg)
+            self.base.args[arg] = [default if i == self.id else None for i in range(4)]
+            if self.id > 0 and single_value is not None:
+                # A single apps.yaml value is inverter 0's (see user_configured_entity()), so another
+                # inverter making its dummy must not throw it away - inverter 0 would lose its own
+                # entity and read and write the default in its place
+                self.base.args[arg][0] = single_value
         elif len(self.base.args[arg]) <= self.id:
             # A list that stops short of this inverter is just as missing for it as no list at all,
             # and every caller assigns into [self.id] straight afterwards - so a short one raised
@@ -357,7 +372,7 @@ class Inverter:
             # slot may by now hold the dummy an earlier refresh wrote there
             raw = raw[self.id] if self.id < len(raw) else None
         elif self.id > 0:
-            # A single value is inverter 0's, as create_missing_arg() has always treated it
+            # A single value is inverter 0's, which create_missing_arg() keeps in slot 0
             raw = None
         # Judged on what apps.yaml itself says, not just that it said something: a placeholder such as
         # Sofar's '00:00:00' is set, but the live slot holds Predbat's own dummy from the first cycle on
@@ -1493,6 +1508,9 @@ class Inverter:
                                 if (discharge and (this_soc > data_point)) or (not discharge and (this_soc < data_point)):
                                     if total_power == 0:
                                         # No power data, so skip this data point
+                                        break
+                                    if target_minute not in soc_kwh or abs(previous_point - data_point) > CHARGE_CURVE_MAX_SOC_STEP or abs(data_point - this_soc) > CHARGE_CURVE_MAX_SOC_STEP:
+                                        # Missing or implausible SoC reading at either end of the step, skip this sample (#5259)
                                         break
                                     if discharge:
                                         this_soc -= 1
@@ -3871,7 +3889,7 @@ class Inverter:
             self.sleep(self.inv_write_and_poll_sleep)
             state = self.base.get_state_wrapper(entity_id, refresh=True)
             try:
-                time_pressed = datetime.strptime(state, TIME_FORMAT_SECONDS)
+                time_pressed = strptime_aware(state, TIME_FORMAT_SECONDS)
             except Exception as e:
                 self.base.log(f"Inverter {self.id} Error parsing timestamp for {entity_id}: {e}")
                 continue

@@ -8690,6 +8690,105 @@ border-color: #555;
 body.dark-mode .dark-mode-toggle button:hover {
 background-color: #666;
 }
+
+/* Advanced sub-menu. The popup is a sibling of the menu bar, not a child, and is position: fixed and
+   placed under its toggle by positionMenuDropdown(): the bar scrolls horizontally and is itself fixed,
+   and WebKit clips a fixed child of such an element, so inside it the popup opened invisibly on iOS. */
+.menu-dropdown {
+display: flex;
+flex-shrink: 0;
+}
+
+.menu-dropdown-toggle {
+background: none;
+border: none;
+color: #333;
+padding: 14px 16px;
+font-size: 16px;
+font-family: inherit;
+cursor: pointer;
+white-space: nowrap;
+}
+
+.menu-dropdown-toggle:hover {
+background-color: #f0f0f0;
+color: #4CAF50;
+}
+
+.menu-dropdown-toggle.active {
+background-color: #4CAF50;
+color: white;
+}
+
+.menu-dropdown-content {
+display: none;
+position: fixed;
+flex-direction: column;
+min-width: 180px;
+background-color: #ffffff;
+border: 1px solid #ddd;
+box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+z-index: 1001;
+}
+
+.menu-dropdown-content.open {
+display: flex;
+}
+
+.menu-dropdown-content a {
+color: #333;
+padding: 14px 16px;
+text-decoration: none;
+font-size: 16px;
+display: flex;
+align-items: center;
+white-space: nowrap;
+}
+
+.menu-dropdown-content a:hover {
+background-color: #f0f0f0;
+color: #4CAF50;
+}
+
+.menu-dropdown-content a.active {
+background-color: #4CAF50;
+color: white;
+}
+
+body.dark-mode .menu-dropdown-content a {
+color: white;
+}
+
+body.dark-mode .menu-dropdown-content a:hover {
+background-color: #2c652f;
+color: white;
+}
+
+body.dark-mode .menu-dropdown-content a.active {
+background-color: #4CAF50;
+color: white;
+}
+
+/* !important because the shared dark-mode rule paints every button red with !important */
+body.dark-mode .menu-dropdown-toggle {
+background-color: transparent !important;
+color: white !important;
+}
+
+body.dark-mode .menu-dropdown-toggle:hover {
+background-color: #2c652f !important;
+color: white !important;
+}
+
+body.dark-mode .menu-dropdown-toggle.active {
+background-color: #4CAF50 !important;
+color: white !important;
+}
+
+body.dark-mode .menu-dropdown-content {
+background-color: #1e1e1e;
+border-color: #333;
+}
 </style>
 
 <script>
@@ -8706,10 +8805,57 @@ function storeActiveMenuItem(path) {
 localStorage.setItem('activeMenuItem', path);
 }
 
+// Open or close a menu-bar sub-menu (its popup is a sibling of the bar, see the CSS)
+function toggleMenuDropdown(event, contentId) {
+event.stopPropagation();
+const content = document.getElementById(contentId);
+if (!content) {
+    return;
+}
+const opening = !content.classList.contains('open');
+closeMenuDropdowns();
+if (opening) {
+    content.classList.add('open');
+    positionMenuDropdowns();
+}
+}
+
+// Place each open popup under its toggle
+function positionMenuDropdowns() {
+document.querySelectorAll('.menu-dropdown-content.open').forEach(content => {
+    const toggle = document.querySelector('.menu-dropdown-toggle[data-menu="' + content.id + '"]');
+    if (!toggle) {
+        return;
+    }
+    const rect = toggle.getBoundingClientRect();
+    content.style.top = rect.bottom + 'px';
+    content.style.left = Math.max(0, Math.min(rect.left, window.innerWidth - content.offsetWidth)) + 'px';
+});
+}
+
+function closeMenuDropdowns() {
+document.querySelectorAll('.menu-dropdown-content.open').forEach(content => content.classList.remove('open'));
+}
+
+// A click anywhere else closes an open sub-menu. Scrolling the bar or resizing only moves it: on a
+// phone a tap right after a swipe, or the address bar hiding, fires those events just after it opens.
+document.addEventListener('click', function(event) {
+if (!event.target.closest('.menu-dropdown, .menu-dropdown-content')) {
+    closeMenuDropdowns();
+}
+});
+window.addEventListener('resize', positionMenuDropdowns);
+document.addEventListener('DOMContentLoaded', function() {
+const menuBar = document.querySelector('.menu-bar');
+if (menuBar) {
+    menuBar.addEventListener('scroll', positionMenuDropdowns);
+}
+});
+
 // Function to set the active menu item
 function setActiveMenuItem() {
 // Get all menu links
-const menuLinks = document.querySelectorAll('.menu-bar a');
+const menuLinks = document.querySelectorAll('.menu-bar a, .menu-dropdown-content a');
 
 // Get current page path from window location
 let currentPath = window.location.pathname;
@@ -8801,8 +8947,14 @@ if (!activeFound && menuLinks.length > 0) {
     storeActiveMenuItem(new URL(defaultLink.href).pathname);
 }
 
-// Scroll active item into view
-const activeItem = document.querySelector('.menu-bar a.active');
+// A page inside a sub-menu lights up the sub-menu's toggle too - its own link is hidden until opened
+document.querySelectorAll('.menu-dropdown-toggle[data-menu]').forEach(toggle => {
+    const content = document.getElementById(toggle.dataset.menu);
+    toggle.classList.toggle('active', !!(content && content.querySelector('a.active')));
+});
+
+// Scroll active item into view (a sub-menu page has no link in the bar, so its lit toggle stands in)
+const activeItem = document.querySelector('.menu-bar a.active, .menu-bar .menu-dropdown-toggle.active');
 if (activeItem) {
     // Scroll with a slight offset to make it more visible
     const menuBar = document.querySelector('.menu-bar');
@@ -8860,7 +9012,7 @@ setActiveMenuItem();
 startStatusUpdates();
 
 // For each menu item, add click handler to set it as active
-const menuLinks = document.querySelectorAll('.menu-bar a');
+const menuLinks = document.querySelectorAll('.menu-bar a, .menu-dropdown-content a');
 menuLinks.forEach(link => {
     link.addEventListener('click', function(e) {
         // Don't override external links (like Docs)
@@ -8894,7 +9046,7 @@ applyDarkMode();
 window.addEventListener('resize', function() {
 // Don't reload the page, just make sure the active menu item is visible
 setTimeout(function() {
-    const activeItem = document.querySelector('.menu-bar a.active');
+    const activeItem = document.querySelector('.menu-bar a.active, .menu-bar .menu-dropdown-toggle.active');
     if (activeItem) {
         const menuBar = document.querySelector('.menu-bar');
         const activeItemLeft = activeItem.offsetLeft;
@@ -8925,24 +9077,23 @@ setTimeout(function() {
     </div>
 </div>
 <a href='./dash'>Dash</a>
+<a href='./metrics_dashboard'>Metrics</a>
 <a href='./plan'>Plan</a>
-<a href='./entity'>Entities</a>
 <a href='./charts'>Charts</a>
+<a href='./entity'>Entities</a>
 <a href='./compare'>Compare</a>
 <a href='./annual'>WhatIf</a>
 """
         + ("<a href='./chat'>Chat</a>\n" if chat_enabled else "")
         + """<a href='./log'>Log</a>
-<a href='./config'>Config</a>
-<a href='./apps'>Apps"""
+<div class="menu-dropdown">
+<button class="menu-dropdown-toggle" type="button" data-menu="settings-menu" onclick="toggleMenuDropdown(event, 'settings-menu')">Settings"""
         + config_warning
-        + """</a>
-<a href='./components'>Components</a>
-<a href='./discovery'>Discovery</a>
-<a href='./apps_editor'>Editor</a>
-<a href='./browse'>Browse</a>
-<a href='./internals'>Internals</a>
-<a href='./metrics_dashboard'>Metrics</a>
+        + """ &#9662;</button>
+</div>
+<div class="menu-dropdown">
+<button class="menu-dropdown-toggle" type="button" data-menu="advanced-menu" onclick="toggleMenuDropdown(event, 'advanced-menu')">Advanced &#9662;</button>
+</div>
 <a href='https://springfall2008.github.io/batpred/'>Docs</a>
 <div class="dark-mode-toggle">
     """
@@ -8950,6 +9101,21 @@ setTimeout(function() {
         + """
     <button onclick="toggleDarkMode()">Toggle Dark Mode</button>
 </div>
+</div>
+<!-- Sub-menu popups sit outside .menu-bar on purpose: WebKit clips a position: fixed child of the fixed, scrolling bar -->
+<div class="menu-dropdown-content" id="settings-menu">
+<a href='./apps'>Apps"""
+        + config_warning
+        + """</a>
+<a href='./config'>Config</a>
+<a href='./components'>Components</a>
+<a href='./apps_editor'>Editor</a>
+</div>
+<div class="menu-dropdown-content" id="advanced-menu">
+<a href='./discovery'>Discovery</a>
+<a href='./browse'>Browse</a>
+<a href='./internals'>Internals</a>
+<a href='./kraken_key'>Kraken API Key</a>
 </div>
 """
     )
@@ -9188,6 +9354,205 @@ body.dark-mode .download-button:hover {
 }
 </style>
     """
+
+
+def get_kraken_key_page_html():
+    """
+    Return the body of the Kraken API key generator page: a short how-to, the token form and its script.
+
+    The script posts to ./api/kraken_key and renders every value with textContent, never innerHTML.
+    """
+    return """
+<style>
+.kraken-key { max-width: 820px; }
+.kraken-key p, .kraken-key label { white-space: normal; } /* the shared header sets p { white-space: nowrap } */
+.kraken-key ol { padding-left: 20px; }
+.kraken-key li { margin-bottom: 4px; }
+.kraken-key textarea { width: 100%; min-height: 90px; font-family: monospace; font-size: 13px; box-sizing: border-box; }
+.kraken-key select, .kraken-key button { font-size: 15px; padding: 6px 12px; margin: 8px 8px 8px 0; }
+.kraken-key code, .kraken-key pre { background-color: #f4f4f4; border-radius: 4px; padding: 2px 4px; }
+.kraken-key pre { padding: 8px; white-space: pre-wrap; word-break: break-all; }
+.kraken-key-note { color: #666; font-size: 14px; }
+.kraken-key-result { margin-top: 16px; padding: 12px; border-radius: 6px; border: 1px solid #ddd; }
+.kraken-key-result:empty { display: none; }
+.kraken-key-warning { border-color: #f0ad4e; background-color: #fff8e6; }
+.kraken-key-error { border-color: #f44336; background-color: #fdecea; }
+.kraken-key-success { border-color: #4CAF50; background-color: #edf7ed; }
+.kraken-key-value { width: 100%; font-family: monospace; font-size: 14px; padding: 6px; box-sizing: border-box; }
+body.dark-mode .kraken-key code, body.dark-mode .kraken-key pre { background-color: #2a2a2a; }
+body.dark-mode .kraken-key-note { color: #aaa; }
+body.dark-mode .kraken-key-result { border-color: #444; }
+body.dark-mode .kraken-key-warning { background-color: #3a2f12; }
+body.dark-mode .kraken-key-error { background-color: #3a1a1a; }
+body.dark-mode .kraken-key-success { background-color: #1a3320; }
+body.dark-mode .kraken-key textarea, body.dark-mode .kraken-key-value { background-color: #2a2a2a; color: #e0e0e0; border-color: #555; }
+</style>
+
+<div class="kraken-key">
+<h2>Kraken API key generator</h2>
+<p>Creates an API key for an E.ON Next or EDF account, for <code>kraken_auth_method: api_key</code> in <code>apps.yaml</code>.
+You need the sign-in token your browser sends to Kraken:</p>
+<ol>
+<li>Sign in to your E.ON Next (or EDF) online account in a desktop browser.</li>
+<li>Press <b>F12</b> to open the developer tools and choose the <b>Network</b> tab.</li>
+<li>Refresh the page, type <code>graphql</code> in the filter box and click one of the requests.</li>
+<li>Under <b>Request Headers</b>, copy the value of <b>Authorization</b> (a long string starting <code>eyJ</code>) and paste it below.</li>
+</ol>
+<p class="kraken-key-note">The token expires after a short time, so use it straight away. Predbat sends it only to your supplier's Kraken API and does not keep the token or the key.</p>
+
+<label for="kraken-key-provider">Supplier</label>
+<select id="kraken-key-provider">
+<option value="eon">E.ON Next</option>
+<option value="edf">EDF</option>
+</select>
+<textarea id="kraken-key-token" placeholder="eyJ..." autocomplete="off" spellcheck="false"></textarea>
+<button type="button" id="kraken-key-check" onclick="krakenKeyCheck()">Check account</button>
+
+<div id="kraken-key-result" class="kraken-key-result"></div>
+</div>
+
+<script>
+function krakenKeyEl(tag, text, className) {
+    const el = document.createElement(tag);
+    if (text !== undefined && text !== null) el.textContent = text;
+    if (className) el.className = className;
+    return el;
+}
+
+function krakenKeyResult(kind) {
+    const box = document.getElementById('kraken-key-result');
+    box.className = 'kraken-key-result' + (kind ? ' kraken-key-' + kind : '');
+    box.replaceChildren();
+    return box;
+}
+
+async function krakenKeyPost(action) {
+    const body = {
+        provider: document.getElementById('kraken-key-provider').value,
+        token: document.getElementById('kraken-key-token').value,
+        action: action
+    };
+    try {
+        const response = await fetch('./api/kraken_key', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body),
+            cache: 'no-store'
+        });
+        return await response.json();
+    } catch (e) {
+        return {status: 'error', error: 'Could not reach Predbat: ' + e};
+    }
+}
+
+function krakenKeyBusy(busy) {
+    document.querySelectorAll('.kraken-key button').forEach(b => b.disabled = busy);
+}
+
+async function krakenKeyCheck() {
+    krakenKeyBusy(true);
+    krakenKeyResult().appendChild(krakenKeyEl('p', 'Checking...'));
+    const result = await krakenKeyPost('check');
+    krakenKeyBusy(false);
+    krakenKeyRender(result);
+}
+
+async function krakenKeyGenerate() {
+    krakenKeyBusy(true);
+    krakenKeyResult().appendChild(krakenKeyEl('p', 'Generating...'));
+    const result = await krakenKeyPost('generate');
+    krakenKeyBusy(false);
+    krakenKeyRender(result);
+}
+
+function krakenKeyRender(result) {
+    if (result.status === 'none') {
+        const box = krakenKeyResult();
+        box.appendChild(krakenKeyEl('p', 'This account has no API key yet.'));
+        const button = krakenKeyEl('button', 'Generate key');
+        button.type = 'button';
+        button.onclick = krakenKeyGenerate;
+        box.appendChild(button);
+    } else if (result.status === 'existing') {
+        const box = krakenKeyResult('warning');
+        const p = krakenKeyEl('p', 'This account already has an API key: ');
+        p.appendChild(krakenKeyEl('code', result.masked));
+        box.appendChild(p);
+        box.appendChild(krakenKeyEl('p', 'Kraken never shows an existing key in full, so the only way to get one is to generate a new key. That replaces the old key: anything else using it (another app, or another copy of Predbat) will stop working until you give it the new one.'));
+        krakenKeyConfirmGenerate(box, 'I understand the old key will stop working', 'Generate new key');
+    } else if (result.status === 'unknown') {
+        // Kraken answered without saying whether a key exists, so treat it like an existing key
+        const box = krakenKeyResult('warning');
+        box.appendChild(krakenKeyEl('p', 'Predbat could not tell whether this account already has an API key. If it does, generating a new one replaces it: anything else using the old key (another app, or another copy of Predbat) will stop working until you give it the new one.'));
+        krakenKeyConfirmGenerate(box, 'I understand any existing key will stop working', 'Generate key');
+    } else if (result.status === 'full') {
+        krakenKeyShow(result.key, true, 'This account already has an API key and Kraken returned it in full, so nothing was changed.');
+    } else if (result.status === 'generated') {
+        krakenKeyShow(result.key, result.verified, 'A new API key has been generated.');
+    } else {
+        krakenKeyResult('error').appendChild(krakenKeyEl('p', result.error || 'Something went wrong'));
+    }
+}
+
+// A Generate button that stays disabled until the user ticks a confirmation box
+function krakenKeyConfirmGenerate(box, confirmText, buttonText) {
+    const label = krakenKeyEl('label');
+    const confirm = document.createElement('input');
+    confirm.type = 'checkbox';
+    label.appendChild(confirm);
+    label.appendChild(document.createTextNode(' ' + confirmText));
+    box.appendChild(label);
+    box.appendChild(document.createElement('br'));
+    const button = krakenKeyEl('button', buttonText);
+    button.type = 'button';
+    button.disabled = true;
+    confirm.onchange = () => { button.disabled = !confirm.checked; };
+    button.onclick = krakenKeyGenerate;
+    box.appendChild(button);
+}
+
+function krakenKeyShow(key, verified, heading) {
+    // The token is no longer needed once the key is on screen
+    document.getElementById('kraken-key-token').value = '';
+    const provider = document.getElementById('kraken-key-provider').value;
+    const box = krakenKeyResult(verified ? 'success' : 'warning');
+    box.appendChild(krakenKeyEl('p', heading + ' This is the only time Predbat shows it, so copy it now.'));
+    if (!verified) {
+        box.appendChild(krakenKeyEl('p', 'Signing in with the new key did not work straight away. It may take a minute to become active; if Predbat still cannot sign in with it, generate another - you will need a fresh token from your browser, as this one has been cleared.'));
+    }
+    const input = krakenKeyEl('input', null, 'kraken-key-value');
+    input.type = 'text';
+    input.readOnly = true;
+    input.value = key;
+    box.appendChild(input);
+    const copy = krakenKeyEl('button', 'Copy key');
+    copy.type = 'button';
+    copy.onclick = () => krakenKeyCopy(input, copy);
+    box.appendChild(copy);
+    box.appendChild(krakenKeyEl('p', 'Add to apps.yaml:'));
+    box.appendChild(krakenKeyEl('pre', 'kraken_provider: ' + provider + '\\nkraken_account_id: A-12345678  # your account number, from your bill\\nkraken_auth_method: api_key\\nkraken_key: !secret kraken_key'));
+    box.appendChild(krakenKeyEl('p', 'And to secrets.yaml:'));
+    box.appendChild(krakenKeyEl('pre', 'kraken_key: ' + key));
+}
+
+function krakenKeyCopy(input, button) {
+    const done = () => { button.textContent = 'Copied'; };
+    // Copying can be refused (clipboard permission, an older browser): select the key so the user
+    // can copy it by hand, since it is only shown this once
+    const failed = () => { input.select(); button.textContent = 'Copy failed - press Ctrl+C (Cmd+C on a Mac)'; };
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(input.value).then(done).catch(failed);
+    } else {
+        input.select();
+        try {
+            if (document.execCommand('copy')) { done(); } else { failed(); }
+        } catch (e) {
+            failed();
+        }
+    }
+}
+</script>
+"""
 
 
 def get_internals_css():

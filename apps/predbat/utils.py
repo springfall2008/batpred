@@ -277,10 +277,10 @@ class MinuteArray:
 
 
 # Predbat member variables never included in a debug dump or served over MCP - live object
-# graphs, the HA interface, loaded secrets, the URL caches and log-repeat bookkeeping. Shared with
-# is_debug_excluded_key(). io_slot_log_gate keys its history by tuples, which a dump writes as
-# YAML sequences that cannot be loaded back as dict keys, so a dump carrying it cannot be replayed
-# (#5569) - and a replay has no use for which log lines were already written.
+# graphs, the HA interface, loaded secrets, the URL caches, locks (which can't be serialised) and
+# log-repeat bookkeeping. Shared with is_debug_excluded_key(). io_slot_log_gate keys its history by
+# tuples, which a dump writes as YAML sequences that cannot be loaded back as dict keys, so a dump
+# carrying it cannot be replayed (#5569) - and a replay has no use for which log lines were already written.
 DEBUG_EXCLUDE_LIST = [
     "ha_interface",
     "components",
@@ -301,6 +301,7 @@ DEBUG_EXCLUDE_LIST = [
     "github_url_cache",
     "octopus_url_cache",
     "secrets",
+    "status_lock",
     "io_slot_log_gate",
 ]
 
@@ -916,6 +917,10 @@ def get_now_from_cumulative(data, minutes_now, backwards):
 def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=False, prune_future_days=0, prune_past_days=0, intermediate=False, offset_minutes=0):
     """
     Remove data from before today
+
+    offset_minutes shifts each point forward (a prediction recorded at 10:00 about 11:00 is plotted at
+    11:00), and pruning judges a point by that shifted time, so a prediction made yesterday that lands
+    today is kept.
     """
     results = {}
     last_time = None
@@ -931,10 +936,10 @@ def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=
             for i in range(1, seconds_gap // int(group * 60)):
                 new_time = last_time + timedelta(seconds=i * group * 60) + timedelta(minutes=offset_minutes)
                 results[new_time.isoformat()] = prev_value
-        if not prune or (timekey > (midnight_utc - timedelta(days=prune_past_days))):
+        new_time = timekey + timedelta(minutes=offset_minutes)
+        if not prune or (new_time > (midnight_utc - timedelta(days=prune_past_days))):
             if prune_future and (timekey > (now_utc + timedelta(days=prune_future_days))):
                 continue
-            new_time = timekey + timedelta(minutes=offset_minutes)
             results[new_time.isoformat()] = data[key]
             last_time = timekey
             prev_value = data[key]
@@ -1362,13 +1367,16 @@ def history_attribute_to_minute_data(now_utc, data, backwards=True):
 
 def filter_payment_method(rates, preferred="DIRECT_DEBIT"):
     """
-    Keep one payment method variant when Octopus returns overlapping rows for the same window.
+    Keep one payment method variant when an Octopus or Kraken REST endpoint returns overlapping rows for the same window.
 
     The REST tariff endpoints return a DIRECT_DEBIT row and a NON_DIRECT_DEBIT row covering the
     same validity window. minute_data() writes each row over its range, so whichever row comes last
     in the response wins, and that order is not stable across periods. Rows with no payment_method
     (Agile, day/night) are left untouched, and so is a response that never mentions the preferred
     method, which keeps single-variant tariffs behaving exactly as before.
+
+    The Kraken component (EDF, E.ON) also relies on this to pick its standing charge from the first
+    remaining row, because EDF lists the NON_DIRECT_DEBIT row first (GH#5502).
     """
     if not rates:
         return rates
@@ -1563,7 +1571,10 @@ def minute_data(
             minutes_to = int(timed_to.total_seconds() / 60)
             minutes_delta = (timed_to.total_seconds() - timed.total_seconds()) / 60.0
 
-        if minutes < newest_age:
+        # Backwards history is oldest first, so on a tie (several changes in the same minute) the later item is the
+        # newest and wins. Forward data is left alone: with smoothing the first two items always share a minute
+        # (each item's start is the previous item's time), and a tie there must not change the tail fill.
+        if minutes < newest_age or (backwards and minutes == newest_age):
             newest_age = minutes
             newest_state = state
 
@@ -2054,16 +2065,31 @@ def minutes_to_time(updated, now):
     return minutes
 
 
+def strptime_aware(time_str, time_format):
+    """
+    Parse a time string with a format that ends in a UTC offset (%z), raising ValueError when the
+    string has no offset.
+
+    Up to Python 3.14 strptime raises for a missing %z offset; from 3.15 it returns a naive
+    datetime instead, which then fails later when compared with an aware one. Checking the result
+    keeps the same behaviour on every version.
+    """
+    tdata = datetime.strptime(time_str, time_format)
+    if tdata.tzinfo is None:
+        raise ValueError("time data {!r} has no UTC offset for format {!r}".format(time_str, time_format))
+    return tdata
+
+
 def str2time_strptime(time_str):
     """
     Parse a timezone-aware time string into a datetime using strptime (legacy implementation)
     """
     if "." in time_str:
-        tdata = datetime.strptime(time_str, TIME_FORMAT_SECONDS)
+        tdata = strptime_aware(time_str, TIME_FORMAT_SECONDS)
     elif "T" in time_str:
-        tdata = datetime.strptime(time_str, TIME_FORMAT)
+        tdata = strptime_aware(time_str, TIME_FORMAT)
     else:
-        tdata = datetime.strptime(time_str, TIME_FORMAT_OCTOPUS)
+        tdata = strptime_aware(time_str, TIME_FORMAT_OCTOPUS)
     return tdata
 
 

@@ -49,6 +49,7 @@ STATE_FIELDS = (
     "car_charging_loss",
     "dynamic_load_car_effective",
     "dynamic_load_car_confirmed",
+    "dynamic_load_car_confirmed_periods",
 )
 
 
@@ -103,6 +104,7 @@ def _reset(my_predbat):
     my_predbat.car_charging_loss = 1.0
     my_predbat.dynamic_load_car_effective = {}
     my_predbat.dynamic_load_car_confirmed = {}
+    my_predbat.dynamic_load_car_confirmed_periods = {}
 
 
 def _cycle(my_predbat, minute, planned=None, completed=None, cancelled=False, save=True, seconds=0):
@@ -299,6 +301,16 @@ def _run(my_predbat):
     car_slots = my_predbat.load_octopus_slots(0, my_predbat.octopus_slots[0], True)
     future_kwh = sum(car_slot["kwh"] for car_slot in car_slots if car_slot["end"] > my_predbat.minutes_now)
     failed |= _check("t14 only the 65 minutes left of the slot are car load", abs(future_kwh - 6.5) < 0.01, "kWh {} slots {}".format(future_kwh, car_slots))
+
+    print("Test 15: a held half hour only minutes in is not taken for a short dispatch (OCTOPUS_SLOT_MIN_MINUTES)")
+    _reset(my_predbat)
+    my_predbat.minutes_now = 1115
+    held = dict(_dispatch(my_predbat, 1110, 1112), held=True)
+    held.pop("charge_in_kwh")
+    rates = my_predbat.rate_add_io_slots(0, {minute: RATE_DAY for minute in range(-2 * 24 * 60, 2 * 24 * 60)}, [held])
+    failed |= _check("t15 held two minutes keeps the half hour cheap", _low(rates, 1110, 1140), "rate {}".format(rates[1110]))
+    rates = my_predbat.rate_add_io_slots(0, {minute: RATE_DAY for minute in range(-2 * 24 * 60, 2 * 24 * 60)}, [_dispatch(my_predbat, 1110, 1112)])
+    failed |= _check("t15 the same two minutes as a dispatch are not", _day(rates, 1110, 1140), "rate {}".format(rates[1110]))
 
     return failed
 
