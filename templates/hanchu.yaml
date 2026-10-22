@@ -42,7 +42,7 @@ pred_bat:
   # specification at all: this integration was written by reading open-source Home
   # Assistant integrations, so some of its behaviour is deduced rather than documented,
   # and it has been tested on only a couple of units. Please report what you see -
-  # hanchu_api_debug (below) traces every request and response to the log.
+  # every request and response is traced to the log by default (hanchu_api_debug, below).
   hanchu_account: 'you@example.com'
   hanchu_password: 'xxxx'
 
@@ -91,9 +91,11 @@ pred_bat:
   #hanchu_api_delay: 1
   #hanchu_min_write_interval: 60
 
-  # Optional: log every API request and response, for reporting a problem. Off by default
-  # because it writes thousands of long lines a day.
-  #hanchu_api_debug: False
+  # Every API request and response is logged by default, because that is what is needed
+  # to look into a problem with your inverter. It writes thousands of long lines a day:
+  # once everything is working you can set this to False to quieten the log, and turn it
+  # back on before reporting an issue.
+  #hanchu_api_debug: True
 
   # REQUIRED: the API does not report a grid export limit. If your grid connection is
   # capped below the inverter rating (G98/G99), set it here or Predbat will plan exports

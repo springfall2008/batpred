@@ -57,6 +57,10 @@ class MockHanchu(HanchuAPI):
             work_mode_control=work_mode_control,
             api_delay=0,
             min_write_interval=min_write_interval,
+            # Off here although it defaults on: every scripted request would otherwise fill log_messages with
+            # its trace, which the log assertions in these tests do not want to wade through. A test about the
+            # trace turns it on itself; test_hanchu_api_trace_is_on_unless_turned_off pins the real default.
+            api_debug=False,
         )
         # The write-retry pause is a real 5s wait against a real cloud. Nothing here talks to one,
         # so it is zeroed - a test that wants to prove the retry happens counts the requests, which
@@ -236,7 +240,7 @@ def test_hanchu_password_is_never_logged():
     """The trace masks the password and the account e-mail, and nothing else in the envelope."""
     failed = False
     client = MockHanchu(account="owner@example.com", password="super-secret-password")
-    # The trace is opt-in (hanchu_api_debug); this test is about what it masks when it is on.
+    # MockHanchu turns the trace off for log hygiene; this test is about what it masks when it is on.
     client.api_debug = True
     with patched_session([(200, envelope(data="tok-abc123"))]):
         run_async_local(client.fetch_token())
@@ -1110,22 +1114,22 @@ def test_hanchu_watt_heuristic_applies_only_to_fields_without_a_unit_sibling():
     assert not failed, "test_hanchu_watt_heuristic_applies_only_to_fields_without_a_unit_sibling"
 
 
-def test_hanchu_api_trace_is_off_unless_configured():
-    """The request/response trace is opt-in through hanchu_api_debug (batpred#5672).
+def test_hanchu_api_trace_is_on_unless_turned_off():
+    """The request/response trace is on by default, so a customer's log carries it, and hanchu_api_debug: False turns it off.
 
-    Hard-coded on, it logged up to 2000 characters per device on every poll - thousands of long lines a
-    day burying real warnings.
+    The API is undocumented, so the trace is what a support request needs. It is long - up to 2000
+    characters per device on every poll (batpred#5672) - which is why it can be switched off.
     """
     failed = False
     client = HanchuAPI.__new__(HanchuAPI)
     client.log = lambda message: None
     client.initialize(account="a@b.c", password="p")
-    if client.api_debug:
-        print("ERROR: the API trace should default to off")
-        failed = True
-    client.initialize(account="a@b.c", password="p", api_debug=True)
     if not client.api_debug:
-        print("ERROR: hanchu_api_debug true should turn the trace on")
+        print("ERROR: the API trace should default to on")
+        failed = True
+    client.initialize(account="a@b.c", password="p", api_debug=False)
+    if client.api_debug:
+        print("ERROR: hanchu_api_debug false should turn the trace off")
         failed = True
     traced = MockHanchu()
     traced.log_messages.clear()
@@ -1133,7 +1137,12 @@ def test_hanchu_api_trace_is_off_unless_configured():
     if traced.log_messages:
         print(f"ERROR: the trace logged with api_debug off: {traced.log_messages}")
         failed = True
-    assert not failed, "test_hanchu_api_trace_is_off_unless_configured"
+    traced.api_debug = True
+    traced.debug_api("request", "/x", {"a": 1})
+    if not traced.log_messages:
+        print("ERROR: the trace should log with api_debug on")
+        failed = True
+    assert not failed, "test_hanchu_api_trace_is_on_unless_turned_off"
 
 
 def test_hanchu_model_code_sets_battery_rate_max_and_inverter_limit():
@@ -1372,7 +1381,7 @@ def run_hanchu_api_tests(my_predbat):
         ("power_ceiling_kept", test_hanchu_power_ceiling_survives_predbat_overwriting_the_held_value),
         ("http_401_unparseable", test_hanchu_http_401_without_a_json_body_triggers_reauth),
         ("watt_heuristic_scope", test_hanchu_watt_heuristic_applies_only_to_fields_without_a_unit_sibling),
-        ("api_trace_default", test_hanchu_api_trace_is_off_unless_configured),
+        ("api_trace_default", test_hanchu_api_trace_is_on_unless_turned_off),
         ("model_ratings", test_hanchu_model_code_sets_battery_rate_max_and_inverter_limit),
         ("model_unknown", test_hanchu_unknown_model_code_falls_back_to_the_menu),
         ("model_rating_not_written", test_hanchu_model_rating_never_raises_what_is_written),

@@ -161,10 +161,11 @@ HANCHU_CAPABILITIES = {
 class HanchuAPI(ComponentBase):
     """Hanchu ESS cloud component."""
 
-    # Trace every request and response. Off unless hanchu_api_debug is set: on, it writes up to 2000
-    # characters per device on every poll, which buries real warnings (batpred#5672). A tester proving
-    # what hanchu_const.py marks INFERRED turns it on, and the command-line harness has it on by default.
-    api_debug = False
+    # Trace every request and response. On by default, because this API is undocumented and the trace is
+    # what a customer's log needs to show when something goes wrong. It writes up to 2000 characters per
+    # device on every poll (batpred#5672), so hanchu_api_debug: False quietens the log once things work.
+    # The command-line harness traces too, unless --no-trace.
+    api_debug = True
 
     def initialize(
         self,
@@ -179,7 +180,7 @@ class HanchuAPI(ComponentBase):
         inverter_limit=None,
         api_delay=1,
         min_write_interval=60,
-        api_debug=False,
+        api_debug=True,
         **kwargs,
     ):
         """Initialise the Hanchu component from its resolved config args.
