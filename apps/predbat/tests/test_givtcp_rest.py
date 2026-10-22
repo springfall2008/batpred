@@ -641,6 +641,65 @@ def test_transport_success_paths(my_predbat=None):
     return 1 if failed else 0
 
 
+def test_get_data_rejects_a_200_that_is_not_json(my_predbat=None):
+    """
+    A 200 whose body is not a JSON object is a failed read, not an exception (#2828).
+
+    GivTCP can answer 200 with an empty body while it is still starting up, and a proxy can answer
+    with an error page or a bare value. get_data must return None so read_data retries and then
+    falls back, rather than the error escaping GivTCPComponent.run() and cutting the poll short.
+    """
+    failed = False
+    print("**** Testing a 200 response whose body is not a JSON object ****")
+
+    import json
+    import requests
+    import givtcp_rest
+
+    class _Body:
+        """Stands in for the requests module, answering 200 with a fixed body."""
+
+        status_code = 200
+
+        def __init__(self, text):
+            self.text = text
+
+        def get(self, url, timeout=None):
+            """Return self as the response object."""
+            return self
+
+        def json(self):
+            """Decode the body as requests does, raising its own JSONDecodeError on bad input."""
+            try:
+                return json.loads(self.text)
+            except ValueError as e:
+                raise requests.exceptions.JSONDecodeError(e.msg, e.doc, e.pos)
+
+    original = givtcp_rest.requests
+    try:
+        for text, expect_log in [("", "not JSON"), ("<html>502 Bad Gateway</html>", "502 Bad Gateway"), ("503", "not an object")]:
+            base = _RestBase()
+            client = GivTCPRest(base, InverterRestState(id=0, rest_api="http://givtcp:6345"))
+            givtcp_rest.requests = _Body(text)
+            try:
+                result = client.get_data("http://givtcp:6345/readData")
+            except (ValueError, TypeError) as e:
+                print("ERROR: get_data raised on body {!r}: {}".format(text, e))
+                failed = True
+                continue
+            if result is not None:
+                print("ERROR: get_data returned {!r} for body {!r}".format(result, text))
+                failed = True
+            if not any(expect_log in line for line in base.logs):
+                print("ERROR: get_data did not log {!r} for body {!r}: {}".format(expect_log, text, base.logs))
+                failed = True
+    finally:
+        givtcp_rest.requests = original
+
+    if not failed:
+        print("PASS: a 200 that is not a JSON object is a failed read")
+    return 1 if failed else 0
+
 def run_givtcp_rest_tests(my_predbat):
     """Run every GivTCPRest test, returning a non-zero count on failure."""
     failed = 0
@@ -655,4 +714,5 @@ def run_givtcp_rest_tests(my_predbat):
     failed += test_readers_return_nothing_without_a_snapshot(my_predbat)
     failed += test_reader_edge_cases(my_predbat)
     failed += test_transport_success_paths(my_predbat)
+    failed += test_get_data_rejects_a_200_that_is_not_json(my_predbat)
     return failed
