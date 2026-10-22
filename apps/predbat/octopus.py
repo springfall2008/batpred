@@ -4910,7 +4910,6 @@ async def test_fetch_tariffs(product_code, tariff_code):  # pragma: no cover
         return
 
     # Determine 5-day window: 2 days back from today to 3 days ahead
-    local_tz = mock_base.local_tz
     today_midnight = mock_base.midnight_utc
     window_start = today_midnight - timedelta(days=2)
     window_end = today_midnight + timedelta(days=3)
@@ -4926,8 +4925,6 @@ async def test_fetch_tariffs(product_code, tariff_code):  # pragma: no cover
             start_dt = strptime_aware(entry["start"], TIME_FORMAT)
         except (ValueError, KeyError):
             continue
-        if start_dt.tzinfo is None:
-            start_dt = start_dt.replace(tzinfo=local_tz)
         if start_dt >= window_start and start_dt < window_end:
             window_entries.append(entry)
 
