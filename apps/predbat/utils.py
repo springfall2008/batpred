@@ -277,10 +277,10 @@ class MinuteArray:
 
 
 # Predbat member variables never included in a debug dump or served over MCP - live object
-# graphs, the HA interface, loaded secrets, the URL caches and log-repeat bookkeeping. Shared with
-# is_debug_excluded_key(). io_slot_log_gate keys its history by tuples, which a dump writes as
-# YAML sequences that cannot be loaded back as dict keys, so a dump carrying it cannot be replayed
-# (#5569) - and a replay has no use for which log lines were already written.
+# graphs, the HA interface, loaded secrets, the URL caches, locks (which can't be serialised) and
+# log-repeat bookkeeping. Shared with is_debug_excluded_key(). io_slot_log_gate keys its history by
+# tuples, which a dump writes as YAML sequences that cannot be loaded back as dict keys, so a dump
+# carrying it cannot be replayed (#5569) - and a replay has no use for which log lines were already written.
 DEBUG_EXCLUDE_LIST = [
     "ha_interface",
     "components",
@@ -301,6 +301,7 @@ DEBUG_EXCLUDE_LIST = [
     "github_url_cache",
     "octopus_url_cache",
     "secrets",
+    "status_lock",
     "io_slot_log_gate",
 ]
 
@@ -2064,16 +2065,31 @@ def minutes_to_time(updated, now):
     return minutes
 
 
+def strptime_aware(time_str, time_format):
+    """
+    Parse a time string with a format that ends in a UTC offset (%z), raising ValueError when the
+    string has no offset.
+
+    Up to Python 3.14 strptime raises for a missing %z offset; from 3.15 it returns a naive
+    datetime instead, which then fails later when compared with an aware one. Checking the result
+    keeps the same behaviour on every version.
+    """
+    tdata = datetime.strptime(time_str, time_format)
+    if tdata.tzinfo is None:
+        raise ValueError("time data {!r} has no UTC offset for format {!r}".format(time_str, time_format))
+    return tdata
+
+
 def str2time_strptime(time_str):
     """
     Parse a timezone-aware time string into a datetime using strptime (legacy implementation)
     """
     if "." in time_str:
-        tdata = datetime.strptime(time_str, TIME_FORMAT_SECONDS)
+        tdata = strptime_aware(time_str, TIME_FORMAT_SECONDS)
     elif "T" in time_str:
-        tdata = datetime.strptime(time_str, TIME_FORMAT)
+        tdata = strptime_aware(time_str, TIME_FORMAT)
     else:
-        tdata = datetime.strptime(time_str, TIME_FORMAT_OCTOPUS)
+        tdata = strptime_aware(time_str, TIME_FORMAT_OCTOPUS)
     return tdata
 
 

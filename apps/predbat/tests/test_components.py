@@ -218,6 +218,7 @@ def test_load_error_is_reported_as_a_component_error(my_predbat):
     """
     original_components = my_predbat.components
     original_had_errors = my_predbat.had_errors
+    original_run_state = my_predbat.status_run_state
     base = LoggingMockBase()
     comps = Components(base)
     comps.initialize(only="storage", phase=0)
@@ -237,6 +238,7 @@ def test_load_error_is_reported_as_a_component_error(my_predbat):
     finally:
         my_predbat.components = original_components
         my_predbat.had_errors = original_had_errors
+        my_predbat.status_run_state = original_run_state
     return False
 
 
