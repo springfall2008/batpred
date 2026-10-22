@@ -825,20 +825,24 @@ class HanchuAPI(ComponentBase):
         else. Built per call rather than cached as a merged dict so a later menu poll cannot leave
         a stale entry behind.
 
-        A power limit's ceiling is raised to any higher value the device has been seen holding. HARDWARE
-        (batpred#5305): the menu's 0-5000 W power range is one entry shared by 2-10 kW models, and a
-        HESS-HY-S-6.0K (nameplate 6000 W) holds DSCHG_PWR_LMT 6000 - a value the device holds is one
-        it accepts, and taking the menu's word would cap every discharge below the inverter's rating.
-        The highest value seen is used, not the value held now: Predbat overwrites these keys itself,
-        with 0 for a hold or a rate inside the menu's range, so the next read would otherwise drop the
-        ceiling back to the menu's and the raise would undo itself (batpred#5672).
+        A power limit's ceiling is raised to the highest value the device has been seen holding, because
+        a value it holds is one it accepts. The highest seen rather than the value held now: Predbat
+        overwrites these keys itself, with 0 for a hold or a rate inside the menu's range, so the next
+        read would otherwise drop the ceiling back to the menu's and the raise would undo itself
+        (batpred#5672).
 
-        The model's rating (HANCHU_MODELS) never raises a ceiling. It sets battery_rate_max and
-        inverter_limit, but nothing yet shows the cloud accepts a power limit above the menu's maximum
-        that the device has not itself been seen holding, and a refused key would turn every write into
-        a partial accept that is resent each cycle. So a 10 kW unit whose menu says 0-5000 is written
-        at most 5000 W until it is seen holding more (a limit set by an installer, say), and that gap
-        is said once per key - only once a settings read has shown what the device holds.
+        Where the model is known (HANCHU_MODELS), the ceiling is then capped at its battery limit: a held
+        setting above what the battery can do moves no more power. HARDWARE (batpred#5684): a
+        HESS-HY-S-6.0K holds DSCHG_PWR_LMT 6000 against the menu's 0-5000 W, and still exports at its
+        5000 W battery limit. So the held-value raise only matters for a unit rated above the menu's
+        maximum, or one whose model is not known.
+
+        The model's rating never raises a ceiling. It sets battery_rate_max and inverter_limit, but
+        nothing yet shows the cloud accepts a power limit above the menu's maximum that the device has
+        not itself been seen holding, and a refused key would turn every write into a partial accept
+        that is resent each cycle. So a 10 kW unit whose menu says 0-5000 is written at most 5000 W
+        until it is seen holding more (a limit set by an installer, say), and that gap is said once per
+        key - only once a settings read has shown what the device holds.
         """
         merged = dict(HANCHU_RANGES)
         merged.update(self.device_ranges.get(sn) or {})
@@ -846,17 +850,18 @@ class HanchuAPI(ComponentBase):
         ceiling = self.power_ceiling.get(sn) or {}
         battery_limit = self.model_rating(sn)[0] or 0
         for key in (HANCHU_KEY_CHARGE_POWER, HANCHU_KEY_DISCHARGE_POWER):
-            held = max(self._as_float(settings.get(key), 0.0), self._as_float(ceiling.get(key), 0.0))
-            low, high = merged[key]
-            if held > high:
-                merged[key] = (low, int(held))
-                if (sn, "held", key) not in self._clamp_logged:
-                    self._clamp_logged.add((sn, "held", key))
-                    self.log("Info: Hanchu {} holds {} {:.0f} W, above the menu's {} W maximum (a range the menu shares across models), so {:.0f} W is used as its limit".format(sn, key, held, high, held))
-            writable = merged[key][1]
-            if battery_limit > writable and sn in self.device_settings and (sn, "rating", key) not in self._clamp_logged:
+            held = int(max(self._as_float(settings.get(key), 0.0), self._as_float(ceiling.get(key), 0.0)))
+            low, menu_high = merged[key]
+            high = max(menu_high, held)
+            if battery_limit:
+                high = min(high, battery_limit)
+            merged[key] = (low, high)
+            if high > menu_high and (sn, "held", key) not in self._clamp_logged:
+                self._clamp_logged.add((sn, "held", key))
+                self.log("Info: Hanchu {} holds {} {} W, above the menu's {} W maximum (a range the menu shares across models), so {} W is used as its limit".format(sn, key, held, menu_high, high))
+            if battery_limit > high and sn in self.device_settings and (sn, "rating", key) not in self._clamp_logged:
                 self._clamp_logged.add((sn, "rating", key))
-                self.log("Info: Hanchu {} is rated {} W but {} is only known to accept up to {} W, so Predbat writes no more than that. If the inverter is ever seen holding a higher limit, Predbat will use it".format(sn, battery_limit, key, writable))
+                self.log("Info: Hanchu {} is rated {} W but {} is only known to accept up to {} W, so Predbat writes no more than that. If the inverter is ever seen holding a higher limit, Predbat will use it".format(sn, battery_limit, key, high))
         return merged
 
     def _note_power_ceiling(self, sn, settings):
@@ -983,11 +988,12 @@ class HanchuAPI(ComponentBase):
 
         The model's AC rating from HANCHU_MODELS where it is known (batpred#5664): on a
         HESS-HY-S-3.0K that is 3000 W, below the 5000 W the menu and the battery accept. Otherwise
-        the discharge power ceiling stands in for it: the largest AC figure the device will accept,
-        raised to a higher value the device holds (see ranges_for) - HARDWARE (batpred#5305): on a
-        HESS-HY-S-6.0K that gives the nameplate 6000 W. Deliberately the DISCHARGE bound rather than
-        the charge one, because that is the direction the inverter's AC rating actually limits. The
-        user's override wins.
+        the discharge power ceiling stands in for it: the largest figure the device will accept, raised
+        to a higher value the device holds (see ranges_for). That is a setting, not a rating, so it can
+        be wrong either way - which is why the table exists, and why the warning in
+        _warn_if_default_power() points at hanchu_inverter_limit. Deliberately the DISCHARGE bound
+        rather than the charge one, because that is the direction the inverter's AC rating actually
+        limits. The user's override wins.
         """
         if self.inverter_limit_override > 0:
             return self.inverter_limit_override

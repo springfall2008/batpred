@@ -871,11 +871,11 @@ def test_hanchu_generator_fields_are_read():
 
 
 def test_hanchu_power_limit_follows_a_higher_value_the_device_holds():
-    """The menu's 0-5000 W power range is shared by 2-10 kW models, so a higher value the device already holds wins.
+    """With no known model, a higher value the device already holds raises the menu's shared 0-5000 W power range.
 
-    Hardware (batpred#5305): a HESS-HY-S-6.0K, nameplate 6000 W grid output, holds DSCHG_PWR_LMT 6000
-    while its menu says 0-5000. Taken at the menu's word, inverter_limit came out at 5000 and every
-    discharge would be capped below what the inverter does.
+    A value the device holds is one it accepts, and with no devModel it is the only evidence of what the
+    unit can take. (On a known model the battery limit caps it - see
+    test_hanchu_model_battery_limit_caps_a_higher_held_setting.)
     """
     failed = False
     client = ready_client()
@@ -1150,8 +1150,8 @@ def test_hanchu_model_code_sets_battery_rate_max_and_inverter_limit():
     cases = [
         # S-3.0K: battery 5000 W but AC only 3000 W - the menu's 5000 W overstated the inverter.
         (1, {"CHG_PWR_LMT": "5000", "DSCHG_PWR_LMT": "5000"}, 5000.0, 3000.0, 5000),
-        # S-6.0K holding a 6000 W charge limit: the battery is still 5000 W; the held value stays writable.
-        ("5", {"CHG_PWR_LMT": "6000", "DSCHG_PWR_LMT": "4000"}, 5000.0, 6000.0, 6000),
+        # S-6.0K holding a 6000 W charge limit: the battery is still 5000 W, so 5000 is all that is written.
+        ("5", {"CHG_PWR_LMT": "6000", "DSCHG_PWR_LMT": "4000"}, 5000.0, 6000.0, 5000),
         # S-10.0K holding 5000 W: the table raises both ratings, but not what Predbat writes - nothing
         # shows the cloud accepts a limit above the menu's that the device has not been seen holding.
         (32, {"CHG_PWR_LMT": "5000", "DSCHG_PWR_LMT": "5000"}, 10000.0, 10000.0, 5000),
@@ -1297,6 +1297,42 @@ def test_hanchu_model_rating_never_raises_what_is_written():
     assert not failed, "test_hanchu_model_rating_never_raises_what_is_written"
 
 
+def test_hanchu_model_battery_limit_caps_a_higher_held_setting():
+    """On a known model a held power setting above its battery limit is capped at that limit (batpred#5684).
+
+    Hardware: a HESS-HY-S-6.0K holds DSCHG_PWR_LMT 6000 against the menu's 0-5000 W and still exports
+    at its 5000 W battery limit, so advertising or writing 6000 promised power the battery cannot give.
+    """
+    failed = False
+    sn = "HC240100001"
+    client = MockHanchu()
+    client.device_ranges[sn] = {"CHG_PWR_LMT": (0, 5000), "DSCHG_PWR_LMT": (0, 5000)}
+    client.device_settings[sn] = {"CHG_PWR_LMT": "5000", "DSCHG_PWR_LMT": "6000"}
+    client._note_power_ceiling(sn, client.device_settings[sn])
+    client._apply_status_payload(sn, dict(STATUS_SAMPLE, devModel=5))
+    ranges = client.ranges_for(sn)
+    if ranges["DSCHG_PWR_LMT"] != (0, 5000) or ranges["CHG_PWR_LMT"] != (0, 5000):
+        print(f"ERROR: the 6.0K's limits should be capped at its 5000 W battery: {ranges['CHG_PWR_LMT']} / {ranges['DSCHG_PWR_LMT']}")
+        failed = True
+    if client.battery_rate_max(sn) != 5000.0 or client.inverter_limit(sn) != 6000.0:
+        print(f"ERROR: the ratings should stay battery 5000 / AC 6000: {client.battery_rate_max(sn)} / {client.inverter_limit(sn)}")
+        failed = True
+    if logged(client, "above the menu") or logged(client, "is only known to accept"):
+        print(f"ERROR: a capped held value is neither a raise nor a gap worth logging: {client.log_messages}")
+        failed = True
+    # A larger model seen holding above the menu keeps that, up to its own battery limit.
+    big = MockHanchu()
+    big.device_ranges[sn] = {"CHG_PWR_LMT": (0, 5000), "DSCHG_PWR_LMT": (0, 5000)}
+    big.device_settings[sn] = {"CHG_PWR_LMT": "12000", "DSCHG_PWR_LMT": "7000"}
+    big._note_power_ceiling(sn, big.device_settings[sn])
+    big._apply_status_payload(sn, dict(STATUS_SAMPLE, devModel=32))
+    ranges = big.ranges_for(sn)
+    if ranges["CHG_PWR_LMT"] != (0, 10000) or ranges["DSCHG_PWR_LMT"] != (0, 7000):
+        print(f"ERROR: a 10 kW unit should write up to min(held, 10000): {ranges['CHG_PWR_LMT']} / {ranges['DSCHG_PWR_LMT']}")
+        failed = True
+    assert not failed, "test_hanchu_model_battery_limit_caps_a_higher_held_setting"
+
+
 def run_hanchu_api_tests(my_predbat):
     """Run all Hanchu API and auth tests."""
     failed = False
@@ -1340,6 +1376,7 @@ def run_hanchu_api_tests(my_predbat):
         ("model_ratings", test_hanchu_model_code_sets_battery_rate_max_and_inverter_limit),
         ("model_unknown", test_hanchu_unknown_model_code_falls_back_to_the_menu),
         ("model_rating_not_written", test_hanchu_model_rating_never_raises_what_is_written),
+        ("model_battery_cap", test_hanchu_model_battery_limit_caps_a_higher_held_setting),
         ("model_default_warning", test_hanchu_default_power_warning_waits_for_the_model),
     ]:
         try:
