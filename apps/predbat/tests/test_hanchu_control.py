@@ -1009,6 +1009,98 @@ def test_hanchu_handed_over_write_gives_up_waiting_after_the_timeout():
     assert not failed, "test_hanchu_handed_over_write_gives_up_waiting_after_the_timeout"
 
 
+def test_hanchu_handed_over_write_cancelled_by_a_stopping_component_is_logged():
+    """A handed-over write that the component's loop cancels as it stops is logged, not raised (#5684 review).
+
+    Stopping or restarting the component ends its asyncio.run(), which cancels the write still in
+    flight. That CancelledError used to escape the hand-over, killing run_async()'s thread with a
+    traceback instead of saying what happened.
+    """
+    failed = False
+    client = ready()
+    button = client._control_name("switch", SN, "battery_schedule_charge_write")
+    started = threading.Event()
+
+    async def endless_apply(sn, force=False):
+        """Stand in for an apply_schedule still waiting on the cloud when the component stops."""
+        started.set()
+        await asyncio.sleep(30)
+        return True
+
+    def cancel_owner_tasks():
+        """Cancel every task on the owner loop, as asyncio.run's shutdown does."""
+        started.wait(5)
+        owner.call_soon_threadsafe(lambda: [task.cancel() for task in asyncio.all_tasks(owner)])
+
+    client.apply_schedule = endless_apply
+    owner, thread = _start_owner_loop()
+    try:
+        client._loop = owner
+        threading.Thread(target=cancel_owner_tasks, daemon=True).start()
+        result = run_async_local(client._handle_control_event(button, "turn_on"))
+        if result is not None:
+            print(f"ERROR: the press should complete normally: {result}")
+            failed = True
+        if not logged(client, "cancelled on the component's loop"):
+            print(f"ERROR: the cancelled write should be logged: {client.log_messages}")
+            failed = True
+    except BaseException as error:
+        print(f"ERROR: the cancellation escaped the hand-over: {type(error).__name__}")
+        failed = True
+    finally:
+        _stop_owner_loop(owner, thread)
+    assert not failed, "test_hanchu_handed_over_write_cancelled_by_a_stopping_component_is_logged"
+
+
+def test_hanchu_handed_over_write_stops_waiting_when_the_component_loop_stops():
+    """A write handed over just as the component's loop stops is given up at once, not after the full timeout (#5684 review).
+
+    The loop can stop between the is_running() check and running the handed-over callback. The write
+    then never starts, so waiting HANCHU_LOOP_HANDOVER_TIMEOUT for it only holds the caller.
+    """
+    failed = False
+    client = ready()
+    button = client._control_name("switch", SN, "battery_schedule_charge_write")
+    ran = []
+
+    async def recording_apply(sn, force=False):
+        """Stand in for apply_schedule; it must never run here."""
+        ran.append(True)
+        return True
+
+    client.apply_schedule = recording_apply
+    owner, thread = _start_owner_loop()
+    release = threading.Event()
+
+    def busy_then_stop():
+        """Hold the loop busy until the hand-over is queued, then stop it before the queued write runs."""
+        release.wait(5)
+        owner.stop()
+
+    owner.call_soon_threadsafe(busy_then_stop)
+    threading.Timer(0.2, release.set).start()
+    try:
+        client._loop = owner
+        with patch("hanchu.HANCHU_LOOP_HANDOVER_TIMEOUT", 30):
+            started = time.time()
+            run_async_local(client._handle_control_event(button, "turn_on"))
+            waited = time.time() - started
+        if waited > 5:
+            print(f"ERROR: the caller should stop waiting once the loop has stopped, waited {waited:.1f}s")
+            failed = True
+        if ran:
+            print("ERROR: the write should not have run on a stopped loop")
+            failed = True
+        if not logged(client, "component's loop stopped before the write ran"):
+            print(f"ERROR: giving up should be logged: {client.log_messages}")
+            failed = True
+    finally:
+        thread.join(5)
+        if not owner.is_closed():
+            owner.close()
+    assert not failed, "test_hanchu_handed_over_write_stops_waiting_when_the_component_loop_stops"
+
+
 def test_hanchu_run_records_the_component_loop():
     """run() records the loop it runs on, so events arriving elsewhere know where to hand writes."""
     failed = False
@@ -1197,6 +1289,8 @@ def run_hanchu_control_tests(my_predbat):
         ("event_loop_handover", test_hanchu_write_button_from_another_loop_writes_on_the_component_loop),
         ("event_loop_handover_timeout", test_hanchu_handed_over_write_gives_up_waiting_after_the_timeout),
         ("run_records_loop", test_hanchu_run_records_the_component_loop),
+        ("event_loop_handover_cancelled", test_hanchu_handed_over_write_cancelled_by_a_stopping_component_is_logged),
+        ("event_loop_handover_stopped", test_hanchu_handed_over_write_stops_waiting_when_the_component_loop_stops),
         ("hold_without_room", test_hanchu_hold_with_no_room_for_a_slot_keeps_the_charge_rate),
         ("device_drift", test_hanchu_settings_changed_on_the_device_are_re_sent),
         ("hold_grid_cap", test_hanchu_hold_caps_the_grid_charge_limit_at_the_soc),

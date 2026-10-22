@@ -87,6 +87,7 @@ from hanchu_const import (
     HANCHU_KEY_DISCHARGE_START,
     HANCHU_KEY_GRID_CHARGE_SOC,
     HANCHU_KEY_WORK_MODE,
+    HANCHU_LOOP_HANDOVER_POLL,
     HANCHU_LOOP_HANDOVER_TIMEOUT,
     HANCHU_MENU_ARRAY_SLOT_TYPES,
     HANCHU_MENU_CODE,
@@ -1475,16 +1476,34 @@ class HanchuAPI(ComponentBase):
         Runs coro in place when already on the component's loop, or when that loop is not running
         (not started yet, or stopped), as before. A handed-over write is waited for for at most
         HANCHU_LOOP_HANDOVER_TIMEOUT seconds; it is shielded, so giving up the wait does not cancel it.
+
+        Stopping or restarting the component ends that loop under a waiting caller, two ways. Its
+        asyncio.run() cancels the write in flight, which is logged and returns False here rather than
+        escaping as a CancelledError - a cancellation of the caller itself is still re-raised. Or the
+        loop stops before the handed-over write starts, which would then never run, so the wait is
+        taken in short steps and abandoned as soon as the loop is no longer running.
         """
         loop = self._loop
         if loop is None or loop is asyncio.get_running_loop() or loop.is_closed() or not loop.is_running():
             return await coro
         future = asyncio.wrap_future(asyncio.run_coroutine_threadsafe(coro, loop))
-        try:
-            return await asyncio.wait_for(asyncio.shield(future), timeout=HANCHU_LOOP_HANDOVER_TIMEOUT)
-        except asyncio.TimeoutError:
-            self.log("Warn: Hanchu write is still running on the component's loop after {}s; Predbat will stop waiting for it".format(HANCHU_LOOP_HANDOVER_TIMEOUT))
-            return False
+        deadline = time.monotonic() + HANCHU_LOOP_HANDOVER_TIMEOUT
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self.log("Warn: Hanchu write is still running on the component's loop after {}s; Predbat will stop waiting for it".format(HANCHU_LOOP_HANDOVER_TIMEOUT))
+                return False
+            try:
+                return await asyncio.wait_for(asyncio.shield(future), timeout=min(HANCHU_LOOP_HANDOVER_POLL, remaining))
+            except asyncio.TimeoutError:
+                if loop.is_closed() or not loop.is_running():
+                    self.log("Info: Hanchu component's loop stopped before the write ran; it will be sent when the component next runs")
+                    return False
+            except asyncio.CancelledError:
+                if not future.cancelled():
+                    raise
+                self.log("Info: Hanchu write was cancelled on the component's loop as the component stopped; it will be sent when the component next runs")
+                return False
 
     # ------------------------------------------------------------------
     # Payload building

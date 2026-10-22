@@ -491,11 +491,17 @@ HANCHU_MIN_WRITE_INTERVAL = 60
 HANCHU_WRITE_RETRY_DELAY = 5
 
 # Seconds a write-button press that arrived on another event loop waits for the write it handed to
-# the component's own loop (see HanchuAPI._on_component_loop). Above one write's worst case - three
-# 15 s attempts with their back-off, an inline retry after HANCHU_WRITE_RETRY_DELAY and a re-login -
-# so a slow cloud is waited out, while a stuck loop cannot hold Predbat's plan thread indefinitely.
-# Giving up only stops the waiting: the write carries on.
+# the component's own loop (see HanchuAPI._on_component_loop). Long enough to wait out an ordinary
+# slow cloud write, while a stuck loop cannot hold Predbat's plan thread indefinitely. It is NOT a
+# bound on a write: retries (HANCHU_RETRIES x HANCHU_TIMEOUT plus back-off), the inline retry after
+# HANCHU_WRITE_RETRY_DELAY, a re-login or a reconcile write already holding write_lock can all run
+# longer. That is fine, because giving up only stops the waiting - the write carries on and is
+# recorded in applied_payload when it completes.
 HANCHU_LOOP_HANDOVER_TIMEOUT = 120
+
+# Seconds between checks, while waiting for a handed-over write, that the component's loop is still
+# running - so a write the loop will now never run is given up at once rather than after the timeout.
+HANCHU_LOOP_HANDOVER_POLL = 1
 
 # A write that FAILED is retried on the next cycle rather than held for the full pacing interval:
 # a rejected shorten leaves the inverter running past the plan, so waiting costs real energy. The
