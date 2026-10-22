@@ -1482,6 +1482,9 @@ class OctopusAPI(ComponentBase):
                     {"start": start, "end": end, "octopoints_per_kwh": reward, "rewarded_octopoints": event.get("rewardGivenInOctoPoints", None), "id": event_id, "code": event_code.get(event_id, None), "event_type": event_type.get(event_id, None)}
                 )
 
+        # Icons remain hard-coded as currency-gbp and have not been auto-generated as per #5683 as the Octopus
+        # integration is only used by UK customers so the extra complexity of passing the icon through to this
+        # component was not justified nor needed.
         saving_attributes = {"friendly_name": "Octopus Intelligent Saving Sessions", "icon": "mdi:currency-gbp", "joined_events": return_joined_events, "available_events": return_available_events}
 
         # Check if currently in an active saving session
@@ -2220,6 +2223,9 @@ class OctopusAPI(ComponentBase):
             if standing_now:
                 standing_now = dp4(standing_now / 100)
 
+            # Icons remain hard-coded as currency-gbp and have not been auto-generated as per #5683 as the Octopus
+            # integration is only used by UK customers so the extra complexity of passing the icon through to this
+            # component was not justified nor needed.
             self.dashboard_item(
                 self.get_entity_name("sensor", tariff + "_rates"),
                 rate_now,
