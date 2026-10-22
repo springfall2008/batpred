@@ -255,8 +255,12 @@ def _legacy_snapshot_filename(snapshot_id):
     return snapshot_filename(snapshot_id)[: -len(".txt")]
 
 
-async def load_all_snapshots(storage):
-    """Return a newest-first list of (filename, yaml_text) for every retained snapshot.
+async def load_all_snapshots(storage, max_num):
+    """Return a newest-first list of (filename, yaml_text) for up to max_num retained snapshots.
+
+    max_num has no default deliberately: debug_history_count now reaches 500 (#5070) and a
+    snapshot is a whole debug dump, so every caller has to say how many it is prepared to hold in
+    memory at once rather than inheriting a cap by accident.
 
     Skips any snapshot whose text failed to load (evicted between listing and loading,
     or a corrupt entry) rather than failing the whole archive for one bad snapshot.
@@ -269,6 +273,8 @@ async def load_all_snapshots(storage):
         text = await load_snapshot(storage, entry["id"])
         if text is not None:
             result.append((snapshot_filename(entry["id"]), text))
+            if len(result) >= max_num:
+                break
     return result
 
 

@@ -12,31 +12,9 @@ import shutil
 import tempfile
 from datetime import datetime, timedelta, timezone
 
-from storage import StorageComponent, StorageLocalFiles
 from utils import pack_export_limit
 from const import EXPORT_MODE_TARGET
-from tests.test_infra import run_async
-
-
-class _MockComponents:
-    """Minimal components mock returning a pre-configured storage component."""
-
-    def __init__(self, storage):
-        """Initialise with a storage instance (may be None to simulate unavailable)."""
-        self._storage = storage
-
-    def get_component(self, name):
-        """Return the mocked storage for 'storage', None for everything else."""
-        if name == "storage":
-            return self._storage
-        return None
-
-
-def _make_storage(predbat, tmpdir):
-    """Create a StorageComponent backed by a real local-file backend in tmpdir."""
-    storage = StorageComponent(predbat)
-    storage.backend = StorageLocalFiles(tmpdir, predbat.log)
-    return storage
+from tests.test_infra import run_async, MockStorageComponents, make_test_storage
 
 
 def test_plan_persistence(my_predbat):
@@ -46,8 +24,8 @@ def test_plan_persistence(my_predbat):
 
     tmpdir = tempfile.mkdtemp()
     try:
-        storage = _make_storage(my_predbat, tmpdir)
-        my_predbat.components = _MockComponents(storage)
+        storage = make_test_storage(my_predbat, tmpdir)
+        my_predbat.components = MockStorageComponents(storage)
 
         # Drive the fixture clock a long way from the real one for the round trip below. Both
         # clocks agreeing is what let the wrong-clock bug hide: an expiry of now_utc + 8h is
@@ -122,7 +100,7 @@ def test_plan_persistence(my_predbat):
         print("  Test 2: load_plan() with no saved plan")
         tmpdir2 = tempfile.mkdtemp()
         try:
-            my_predbat.components = _MockComponents(_make_storage(my_predbat, tmpdir2))
+            my_predbat.components = MockStorageComponents(make_test_storage(my_predbat, tmpdir2))
             my_predbat.plan_valid = False
             my_predbat.load_plan()
             if my_predbat.plan_valid:
@@ -135,8 +113,8 @@ def test_plan_persistence(my_predbat):
         print("  Test 2b: load_plan() ignores non-dict stored plan")
         tmpdir2b = tempfile.mkdtemp()
         try:
-            storage2b = _make_storage(my_predbat, tmpdir2b)
-            my_predbat.components = _MockComponents(storage2b)
+            storage2b = make_test_storage(my_predbat, tmpdir2b)
+            my_predbat.components = MockStorageComponents(storage2b)
             run_async(storage2b.save("predbat", "plan", ["not", "a", "dict"], format="json"))
             my_predbat.plan_valid = False
             try:
@@ -152,7 +130,7 @@ def test_plan_persistence(my_predbat):
 
         # 3. load_plan() with storage component unavailable is a safe no-op
         print("  Test 3: load_plan() with storage unavailable")
-        my_predbat.components = _MockComponents(None)
+        my_predbat.components = MockStorageComponents(None)
         my_predbat.plan_valid = False
         my_predbat.load_plan()
         if my_predbat.plan_valid:
@@ -161,7 +139,7 @@ def test_plan_persistence(my_predbat):
 
         # 4. save_plan() with storage component unavailable is a safe no-op
         print("  Test 4: save_plan() with storage unavailable")
-        my_predbat.components = _MockComponents(None)
+        my_predbat.components = MockStorageComponents(None)
         try:
             my_predbat.save_plan()
         except Exception as e:
@@ -172,8 +150,8 @@ def test_plan_persistence(my_predbat):
         print("  Test 5: load_plan() with expired stored plan")
         tmpdir3 = tempfile.mkdtemp()
         try:
-            storage3 = _make_storage(my_predbat, tmpdir3)
-            my_predbat.components = _MockComponents(storage3)
+            storage3 = make_test_storage(my_predbat, tmpdir3)
+            my_predbat.components = MockStorageComponents(storage3)
 
             # Opposite pin to Test 1: a fixture clock in the future, so building the "already
             # expired" timestamp from now_utc would put it ahead of real time and the plan
@@ -211,8 +189,8 @@ def test_plan_persistence(my_predbat):
         print("  Test 6: GitHub URL cache save/load round-trip")
         tmpdir4 = tempfile.mkdtemp()
         try:
-            storage4 = _make_storage(my_predbat, tmpdir4)
-            my_predbat.components = _MockComponents(storage4)
+            storage4 = make_test_storage(my_predbat, tmpdir4)
+            my_predbat.components = MockStorageComponents(storage4)
             my_predbat.github_url_cache_loaded = False
             my_predbat.github_url_cache = {}
 

@@ -75,7 +75,18 @@ class Prediction(PredictionBatch):
     """
 
     def __init__(
-        self, base=None, pv_forecast_minute_step=None, pv_forecast_minute10_step=None, load_minutes_step=None, load_minutes_step10=None, pv_forecast_minute90_step=None, load_minutes_step90=None, soc_kw=None, soc_max=None, kernel_static_cache=None
+        self,
+        base=None,
+        pv_forecast_minute_step=None,
+        pv_forecast_minute10_step=None,
+        load_minutes_step=None,
+        load_minutes_step10=None,
+        pv_forecast_minute90_step=None,
+        load_minutes_step90=None,
+        soc_kw=None,
+        soc_max=None,
+        kernel_static_cache=None,
+        car_charging_slots=None,
     ):
         """Build a Prediction, optionally copying simulation state from a base PredBat instance.
 
@@ -84,6 +95,9 @@ class Prediction(PredictionBatch):
 
         kernel_static_cache is passed straight through to create_kernel_context, for a caller building
         several Predictions that differ only in their load forecast; see that function for the contract.
+
+        car_charging_slots, when given, replaces base.car_charging_slots - the live plan passes
+        car_charging_slots_model() so a car charging now outside its plan is modelled too.
         """
         if base:
             self.minutes_now = base.minutes_now
@@ -124,7 +138,9 @@ class Prediction(PredictionBatch):
             self.charge_low_power_margin = base.charge_low_power_margin
             self.low_power_pv_threshold_w = base.low_power_pv_threshold_w
             self.set_charge_low_power_solar_full_rate = base.set_charge_low_power_solar_full_rate
-            self.car_charging_slots = base.car_charging_slots
+            # The live plan passes car_charging_slots_model(), which adds a car charging now outside its plan;
+            # anything else - a replay of yesterday, the annual model - takes the car plan as it stands
+            self.car_charging_slots = car_charging_slots if car_charging_slots is not None else base.car_charging_slots
             # Model-facing car charge limit (#4967): fetch raises this above the real limit for cars
             # following an Octopus Intelligent dispatch plan with consider_full off, making the fill
             # clamp in predict() (and in the C++ kernel, whose context is built from this attribute)
@@ -179,7 +195,9 @@ class Prediction(PredictionBatch):
             self.rate_import = base.rate_import
             self.rate_export = base.rate_export
             self.io_adjusted = base.io_adjusted
-            self.rate_max = base.rate_max
+            self.io_confirmed_credit = base.io_confirmed_credit
+            # The tariff's own highest import rate, without event rewards - the floor for a dispatch that goes away
+            self.rate_max = base.rate_import_tariff_max
             self.pv_forecast_minute_step = pv_forecast_minute_step
             self.pv_forecast_minute10_step = pv_forecast_minute10_step
             self.load_minutes_step = load_minutes_step
@@ -539,6 +557,7 @@ class Prediction(PredictionBatch):
         rate_import = self.rate_import
         rate_export = self.rate_export
         io_adjusted = self.io_adjusted
+        io_confirmed_credit = self.io_confirmed_credit
 
         # Data structures creating during the prediction
         predict_soc = {}
@@ -547,6 +566,8 @@ class Prediction(PredictionBatch):
         self.predict_iboost_best = {}
         self.predict_carbon_best = {}
         self.predict_clipped_best = {}
+        # Relative minutes whose step held the battery for a charging car - the plan table's "Hold for car"
+        self.predict_car_hold_best = {}
         self.iboost_running = False
         self.iboost_running_solar = False
         self.iboost_running_full = False
@@ -716,9 +737,13 @@ class Prediction(PredictionBatch):
             minute_absolute = minute + self.minutes_now
             prev_soc = soc
             reserve_expected = reserve
+            force_charging = False
             import_rate = rate_import.get(minute_absolute, 0)
-            if io_adjusted.get(minute_absolute, 0) and pv_scenario == PV_SCENARIO_PV10 and minute > 30:
-                import_rate = self.rate_max  # Assume in worst case that slot goes away and max rate applies
+            dispatch_rate = import_rate
+            dispatch_gone = io_adjusted.get(minute_absolute, 0) and pv_scenario == PV_SCENARIO_PV10 and minute > 30
+            if dispatch_gone:
+                # Worst case the slot goes away: the tariff's highest rate, or the slot's own if an event makes it dearer
+                import_rate = max(self.rate_max, import_rate)
             export_rate = rate_export.get(minute_absolute, 0)
 
             # Alert?
@@ -837,6 +862,8 @@ class Prediction(PredictionBatch):
             car_rate_premium = 0  # Extra cost above import_rate for beyond-cap IOG slots
             car_amount_premium = 0  # Amount of energy in IOG slots that is above import_rate
             car_load_energy_bypass = 0  # Amount of car energy bypassing the CT clamp
+            car_gone_kwh = 0  # Car energy in a dispatch that has gone away, kept off the battery (see below)
+            car_gone_cost = 0  # ...and what it costs at the rate the nominal case pays for it
 
             # Simulate car charging
             if car_enable:
@@ -850,13 +877,26 @@ class Prediction(PredictionBatch):
                         car_load_scale = max(min(car_load_scale, self.car_charging_limit[car_n] - car_soc[car_n]), 0)
                         car_soc[car_n] = car_soc[car_n] + car_load_scale
 
+                        if dispatch_gone:
+                            # Worst case the dispatch has gone away. The car is still charged, at the rate the
+                            # nominal case pays, so the two scenarios stay comparable, but it no longer holds
+                            # the battery and the battery cannot serve it: its energy joins the grid balance
+                            # after the battery has acted, and the rest of the house pays the worst-case rate.
+                            if self.car_energy_reported_load:
+                                car_gone_kwh += car_load_scale / self.car_charging_loss
+                                car_gone_cost += car_load_scale / self.car_charging_loss * max(dispatch_rate, car_rate_slot[car_n])
+                            else:
+                                car_load_energy_bypass += car_load_scale / self.car_charging_loss
+                            continue
+
                         # Work out the premium rate for car charging
                         car_rate_premium = max(car_rate_premium, max(0, car_rate_slot[car_n] - import_rate))
 
                         if self.car_energy_reported_load:
                             # Only add load if the car is reporting it as load, otherwise its outside the CT Clamp
+                            # Each car adds its own energy; car_amount_premium is the running total across cars
                             car_amount_premium += car_load_scale / self.car_charging_loss
-                            load_yesterday += car_amount_premium
+                            load_yesterday += car_load_scale / self.car_charging_loss
                         else:
                             car_load_energy_bypass += car_load_scale / self.car_charging_loss
 
@@ -864,6 +904,8 @@ class Prediction(PredictionBatch):
                         # car_energy_reported_load, which only controls CT-clamp house-load inclusion
                         if (car_load_scale > 0) and (not self.car_charging_from_battery) and set_charge_window:
                             discharge_rate_now = battery_rate_min  # 0
+                            if enable_save_stats:
+                                self.predict_car_hold_best[minute] = True
 
             # Iboost
             iboost_rate_okay = True
@@ -921,7 +963,7 @@ class Prediction(PredictionBatch):
                             iboost_running_solar = True
 
             # Count load
-            load_kwh += load_yesterday
+            load_kwh += load_yesterday + car_gone_kwh
 
             # Set discharge during charge?
             if charge_window_active:
@@ -1096,6 +1138,7 @@ class Prediction(PredictionBatch):
 
                 battery_draw = -max(min(charge_rate_now_curve_step, max(charge_limit_n - soc, pv_now)), 0, -battery_to_max)
                 battery_state = "f+"
+                force_charging = True
                 first_charge = min(first_charge, minute)
 
                 if inverter_hybrid:
@@ -1283,6 +1326,11 @@ class Prediction(PredictionBatch):
             if battery_draw > 0:
                 soc = max(soc - battery_draw / battery_loss_discharge, reserve_expected)
             else:
+                if force_charging and io_confirmed_credit:
+                    # Bird in hand: score only credit for what a charge window stores in a confirmed dispatch run
+                    credit = io_confirmed_credit.get(minute_absolute, 0)
+                    if credit:
+                        metric_keep -= min(-battery_draw * battery_loss, soc_max - soc) * credit
                 soc = min(soc - battery_draw * battery_loss, soc_max)
 
             # Iboost finally count
@@ -1318,6 +1366,9 @@ class Prediction(PredictionBatch):
 
             # Work out left over energy after battery adjustment
             diff = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp)
+            if car_gone_kwh:
+                # The car in a dispatch that has gone away is met by the grid (or PV surplus), never the battery
+                diff += car_gone_kwh
 
             # Metric keep - pretend the battery is empty and you have to import instead of using the battery
             if best_soc_keep > 0 and soc <= best_soc_keep:
@@ -1346,6 +1397,9 @@ class Prediction(PredictionBatch):
                 # but it can't be more than we actually imported from the grid.
                 car_amount_premium = min(diff, car_amount_premium)
                 metric += import_rate * diff + car_rate_premium * car_amount_premium
+                if car_gone_kwh:
+                    # The car's share of the import is paid at its own rate, not the worst-case rate
+                    metric -= min(diff, car_gone_kwh) * (import_rate - car_gone_cost / car_gone_kwh)
                 grid_state = "<"
             else:
                 # Export
@@ -1422,7 +1476,7 @@ class Prediction(PredictionBatch):
                 # to how many raw steps are being summed here.
                 predict_pv_power[stamp] = round((pv_forecast_minute_step[minute] + pv_forecast_minute_step.get(minute + step, 0)) * (60 / (2 * step)), 3)
                 predict_grid_power[stamp] = round(diff * (60 / step), 3)
-                predict_load_power[stamp] = round(load_yesterday * (60 / step), 3)
+                predict_load_power[stamp] = round((load_yesterday + car_gone_kwh) * (60 / step), 3)
                 if carbon_enable:
                     predict_carbon_g[stamp] = round(carbon_g, 3)
 

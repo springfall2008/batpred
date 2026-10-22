@@ -101,12 +101,12 @@ The following `apps.yaml` settings can be overridden using predbat_manual_api:
 
 ## Example solution to over-ride predicted house load
 
-Prior to the addition of **select.predbat_manual_load_adjust** a common feedback was that there was no mechanism in Predbat to alter the predicted house load,
+Prior to the addition of **select.predbat_manual_load_adjust** a common feedback was that Predbat did not have a mechanism to alter the predicted house load,
 for example ignoring the effects of extra washing load in the past, or to take account of planned extra load such as cooking a big Sunday dinner.
 
-The Predbat manual API provides a mechanism to meet this need by setting an export (or import) rates override.
+The Predbat manual API provides a mechanism to meet this need by setting an export (or import) rates override, not changing the actual rate, but scaling the predicted load through an adjustment percentage factor.
 
-Now that you can use the manual load adjust selector to overwrite predicted load this example solution is retained as a worked example of how you can use the manual API to overwrite `apps.yaml` settings.
+Now that you can use the manual load adjust selector to add a positive or negative adjustment to the predicted load, this example solution is retained just as a worked example of how you can use the manual API to overwrite `apps.yaml` settings.
 
 1. Control variables
 

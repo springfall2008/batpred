@@ -32,8 +32,8 @@ from const import PREDICT_STEP, PREDBAT_MAX_CARS, EXPORT_MODE_TARGET, FULL_EXPOR
 from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in_iboost_slot, export_limit_from_stored
 
 # Expected ABI/parity revisions of the shared library (see prediction_kernel.cpp)
-KERNEL_ABI_VERSION = 7
-KERNEL_PARITY_REVISION = 14
+KERNEL_ABI_VERSION = 8
+KERNEL_PARITY_REVISION = 18
 
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
 KERNEL_MAX_CARS = PREDBAT_MAX_CARS
@@ -64,6 +64,7 @@ class PkContext(ctypes.Structure):
         ("temp_charge_cap", ctypes.POINTER(ctypes.c_double)),
         ("temp_discharge_cap", ctypes.POINTER(ctypes.c_double)),
         ("io_flag", ctypes.POINTER(ctypes.c_int32)),
+        ("io_credit", ctypes.POINTER(ctypes.c_double)),
         ("charge_curve", ctypes.POINTER(ctypes.c_double)),
         ("discharge_curve", ctypes.POINTER(ctypes.c_double)),
         ("carbon", ctypes.POINTER(ctypes.c_double)),
@@ -636,6 +637,7 @@ def build_static_context_arrays(pred, n_steps, minutes_now, num_cars):
     alert_keep = []
     alert_keep_max = []
     io_flag = []
+    io_credit = []
     pv = []
     pv10 = []
     pv90 = []
@@ -660,6 +662,7 @@ def build_static_context_arrays(pred, n_steps, minutes_now, num_cars):
         # Negative means no ceiling at this step - 0 is a real request to empty the battery
         alert_keep_max.append(pred.all_active_keep_max.get(minute_absolute, -1))
         io_flag.append(1 if pred.io_adjusted.get(minute_absolute, 0) else 0)
+        io_credit.append(pred.io_confirmed_credit.get(minute_absolute, 0.0))
         pv.append(pred.pv_forecast_minute_step[minute])
         pv10.append(pred.pv_forecast_minute10_step[minute])
         pv90.append(pred.pv_forecast_minute90_step[minute])
@@ -689,7 +692,7 @@ def build_static_context_arrays(pred, n_steps, minutes_now, num_cars):
     charge_curve = [get_curve_value(pred.battery_charge_power_curve, percent, 1.0) for percent in range(101)]
     discharge_curve = [get_curve_value(pred.battery_discharge_power_curve, percent, 1.0) for percent in range(101)]
 
-    return (rate_import, rate_export, alert_keep, alert_keep_max, io_flag, pv, pv10, pv90, temp_charge_cap, temp_discharge_cap, carbon, gas_rate, iboost_plan_load, car_load_flat, car_rate_flat, charge_curve, discharge_curve)
+    return (rate_import, rate_export, alert_keep, alert_keep_max, io_flag, io_credit, pv, pv10, pv90, temp_charge_cap, temp_discharge_cap, carbon, gas_rate, iboost_plan_load, car_load_flat, car_rate_flat, charge_curve, discharge_curve)
 
 
 def create_kernel_context(pred, static_cache=None):
@@ -738,7 +741,7 @@ def create_kernel_context(pred, static_cache=None):
             static = (shape, build_static_context_arrays(pred, n_steps, minutes_now, num_cars))
             if static_cache is not None:
                 static_cache["arrays"] = static
-        (rate_import, rate_export, alert_keep, alert_keep_max, io_flag, pv, pv10, pv90, temp_charge_cap, temp_discharge_cap, carbon, gas_rate, iboost_plan_load, car_load_flat, car_rate_flat, charge_curve, discharge_curve) = static[1]
+        (rate_import, rate_export, alert_keep, alert_keep_max, io_flag, io_credit, pv, pv10, pv90, temp_charge_cap, temp_discharge_cap, carbon, gas_rate, iboost_plan_load, car_load_flat, car_rate_flat, charge_curve, discharge_curve) = static[1]
 
         ctx = PkContext()
         ctx.rate_import = double_array(rate_import)
@@ -754,6 +757,7 @@ def create_kernel_context(pred, static_cache=None):
         ctx.temp_charge_cap = double_array(temp_charge_cap)
         ctx.temp_discharge_cap = double_array(temp_discharge_cap)
         ctx.io_flag = int32_array(io_flag)
+        ctx.io_credit = double_array(io_credit)
         ctx.charge_curve = double_array(charge_curve)
         ctx.discharge_curve = double_array(discharge_curve)
         ctx.carbon = double_array(carbon)
@@ -896,6 +900,7 @@ def reset_kernel_run_state(pred):
     pred.predict_iboost_best = {}
     pred.predict_carbon_best = {}
     pred.predict_clipped_best = {}
+    pred.predict_car_hold_best = {}
     pred.iboost_running = False
     pred.iboost_running_solar = False
     pred.iboost_running_full = False

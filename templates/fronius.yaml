@@ -92,8 +92,6 @@ pred_bat:
     support_discharge_freeze: true
 
   #
-  # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
-  balance_inverters_seconds: 0
 
   # Services to control charging/discharging
   # Each service sets one mode ON and all others OFF for clean state transitions.

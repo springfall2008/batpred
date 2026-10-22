@@ -9,6 +9,77 @@
 # pylint: disable=attribute-defined-outside-init
 
 
+def first_future_option(my_predbat, item):
+    """
+    Pick the first selectable time option from a manual dropdown, preferring a non-today day label
+
+    A today label can parse as a past slot at day boundaries, so one is only used as a fallback.
+    """
+    today_label = my_predbat.now_utc.strftime("%a")
+    fallback = None
+    for option in item.get("options", []):
+        if not option or option == "off" or option.startswith("+") or option.startswith("["):
+            continue
+        if not option.startswith(today_label + " "):
+            return option
+        if fallback is None:
+            fallback = option
+    return fallback
+
+
+def test_off_option_first(my_predbat):
+    """
+    Test that off is the first option in each manual override dropdown (#5105)
+
+    The dropdowns are up to 48 hours long, so off at the end of the list means scrolling
+    through every slot just to cancel the overrides.
+    """
+    failed = 0
+    print("Test manual dropdown off option ordering")
+
+    # One config item per dropdown builder: manual_times(), manual_rates() and api_select_update()
+    for config_item, select in (("manual_charge", my_predbat.manual_select), ("manual_import_rates", my_predbat.manual_select), ("manual_api", my_predbat.api_select)):
+        select(config_item, "off")
+        options = my_predbat.config_index.get(config_item, {}).get("options", [])
+        if not options:
+            print(f"ERROR: T9 No options found for {config_item}")
+            failed = 1
+        elif options[0] != "off":
+            print(f"ERROR: T10 Expected off to be the first option of {config_item}, got {options[0]} from {options[:3]}")
+            failed = 1
+        elif options.count("off") != 1:
+            print(f"ERROR: T11 Expected exactly one off option in {config_item}, got {options.count('off')}")
+            failed = 1
+
+    # Off stays first once a slot is selected, and still cancels the selection
+    charge_item = my_predbat.config_index.get("manual_charge")
+    future_time = first_future_option(my_predbat, charge_item)
+    if not future_time:
+        print("ERROR: T12 No future time options found for manual_charge")
+        return 1
+
+    my_predbat.manual_select("manual_charge", future_time)
+    options = charge_item.get("options", [])
+    if options[0] != "off":
+        print(f"ERROR: T13 Expected off to remain the first option after selecting {future_time}, got {options[0]}")
+        failed = 1
+    if "[" + future_time + "]" not in options:
+        print(f"ERROR: T14 Expected {future_time} to be marked as selected in the options, got {options[:3]}")
+        failed = 1
+
+    my_predbat.manual_select("manual_charge", "off")
+    charge_value = charge_item.get("value", "")
+    if charge_value != "off":
+        print(f"ERROR: T15 Expected off to clear the manual_charge selection, got {charge_value}")
+        failed = 1
+
+    # Clean up
+    my_predbat.manual_select("manual_import_rates", "off")
+    my_predbat.api_select("manual_api", "off")
+
+    return failed
+
+
 def run_test_manual_select(my_predbat):
     """
     Test manual select dropdowns for force charge, export, demand
@@ -32,19 +103,7 @@ def run_test_manual_select(my_predbat):
         return 1
 
     # Find first selectable option, preferring a non-today day label to avoid past-slot parsing at day boundaries
-    future_time_label = None
-    today_label = my_predbat.now_utc.strftime("%a")
-    for option in charge_item["options"]:
-        if option != "off" and not option.startswith("+") and not option.startswith("[") and not option.startswith(today_label + " "):
-            future_time_label = option
-            break
-
-    # Fallback to any selectable option if all options are for today
-    if not future_time_label:
-        for option in charge_item["options"]:
-            if option != "off" and not option.startswith("+") and not option.startswith("["):
-                future_time_label = option
-                break
+    future_time_label = first_future_option(my_predbat, charge_item)
 
     if not future_time_label:
         print("ERROR: T2 No future time options found")
@@ -101,6 +160,8 @@ def run_test_manual_select(my_predbat):
     my_predbat.manual_select("manual_charge", "off")
     my_predbat.manual_select("manual_export", "off")
     my_predbat.manual_select("manual_demand", "off")
+
+    failed |= test_off_option_first(my_predbat)
 
     if failed:
         print("Manual select tests FAILED")

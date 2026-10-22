@@ -200,6 +200,73 @@ def run_test_plan_json_rate_adjust(my_predbat):
         print("ERROR: Expected car_charge_slot_rate to skip a window with no average key, got {}".format(rate))
         failed = True
 
+    # A slot dynamic load cancelled (car in its slot but not charging) plans 0 kWh but is still shown,
+    # with a "?", so the user can see the car plan Predbat has decided not to rely on (#5229)
+    print("Test plan output shows a cancelled car slot with a question mark")
+    my_predbat.car_charging_slots[0] = [{"start": car_minute, "end": car_minute + 30, "kwh": 0, "kwh_cancelled": 3.0, "average": 10.0, "octopus": True}]
+    html_plan, raw_plan = my_predbat.publish_html_plan(pv_step, pv_step, load_step, load_step, my_predbat.end_record, publish=False)
+    car_row = next((row for row in raw_plan["rows"] if row.get("slot_minute") == car_minute), None)
+    if car_row is None:
+        print("ERROR: Could not find row for car minute {} in plan output".format(car_minute))
+        failed = True
+    else:
+        if car_row.get("car_charging") != 0 or car_row.get("car_charging_cancelled") != 3.0:
+            print("ERROR: Expected car_charging 0 and car_charging_cancelled 3.0, got {} and {}".format(car_row.get("car_charging"), car_row.get("car_charging_cancelled")))
+            failed = True
+    if "<td id=car bgcolor=#FFFFCC>3.0?</td>" not in html_plan:
+        print("ERROR: Expected the cancelled car slot cell '3.0?' on #FFFFCC in the HTML plan")
+        failed = True
+    if raw_plan.get("totals", {}).get("car_charging", 0) != 0:
+        print("ERROR: Cancelled kWh must not count towards the planned car total, got {}".format(raw_plan.get("totals", {}).get("car_charging")))
+        failed = True
+
+    # Two cars in the same step, one charging and one cancelled: the cancelled car's "?" must still show
+    # alongside the live kWh, not be dropped because the row has some live car charging (#5229 review)
+    print("Test plan output shows a cancelled car slot next to another car's live charging")
+    saved_num_cars = my_predbat.num_cars
+    my_predbat.num_cars = 2
+    while len(my_predbat.car_charging_slots) < 2:
+        my_predbat.car_charging_slots.append([])
+    my_predbat.car_charging_slots[1] = [{"start": car_minute, "end": car_minute + 30, "kwh": 2.0, "average": 10.0, "octopus": True}]
+    html_plan, raw_plan = my_predbat.publish_html_plan(pv_step, pv_step, load_step, load_step, my_predbat.end_record, publish=False)
+    car_row = next((row for row in raw_plan["rows"] if row.get("slot_minute") == car_minute), None)
+    if car_row is None or car_row.get("car_charging") != 2.0 or car_row.get("car_charging_cancelled") != 3.0:
+        print("ERROR: Expected car_charging 2.0 and car_charging_cancelled 3.0, got {}".format(car_row and (car_row.get("car_charging"), car_row.get("car_charging_cancelled"))))
+        failed = True
+    if ">2.0 +3.0?</td>" not in html_plan:
+        print("ERROR: Expected the car cell to show the live 2.0 and the cancelled +3.0?")
+        failed = True
+    my_predbat.car_charging_slots[1] = []
+    my_predbat.num_cars = saved_num_cars
+
+    # The first row covers now to the end of its plan interval - its kWh and times already start at now, so
+    # its rates must too. Reading the rate at the aligned interval start showed a price the plan no longer
+    # uses, e.g. a cancelled Intelligent dispatch still at 6.90 after the minutes from now went to 30.26.
+    print("Test the first plan row shows the rate from now, not from the start of its half hour")
+    saved_minutes_now = my_predbat.minutes_now
+    saved_rate_import = my_predbat.rate_import
+    saved_rate_export = my_predbat.rate_export
+    saved_car_slots = my_predbat.car_charging_slots[0]
+    try:
+        aligned = (saved_minutes_now // my_predbat.plan_interval_minutes) * my_predbat.plan_interval_minutes
+        my_predbat.minutes_now = aligned + 10
+        my_predbat.car_charging_slots[0] = []
+        my_predbat.rate_import = {minute: (6.9 if minute < aligned + 10 else 30.26) for minute in range(aligned - 60, aligned + 48 * 60)}
+        my_predbat.rate_export = {minute: (5.0 if minute < aligned + 10 else 12.0) for minute in range(aligned - 60, aligned + 48 * 60)}
+        html_plan, raw_plan = my_predbat.publish_html_plan(pv_step, pv_step, load_step, load_step, my_predbat.end_record, publish=False)
+        first = raw_plan["rows"][0] if raw_plan.get("rows") else {}
+        if first.get("import_rate") != 30.26 or first.get("export_rate") != 12.0:
+            print("ERROR: Expected the first row's rates from now (30.26 / 12.0), got {} / {}".format(first.get("import_rate"), first.get("export_rate")))
+            failed = True
+        if first.get("slot_minute") != aligned:
+            print("ERROR: slot_minute must stay the aligned interval start {} for the override system, got {}".format(aligned, first.get("slot_minute")))
+            failed = True
+    finally:
+        my_predbat.minutes_now = saved_minutes_now
+        my_predbat.rate_import = saved_rate_import
+        my_predbat.rate_export = saved_rate_export
+        my_predbat.car_charging_slots[0] = saved_car_slots
+
     # Clean up
     my_predbat.num_cars = 0
     my_predbat.car_charging_slots[0] = []

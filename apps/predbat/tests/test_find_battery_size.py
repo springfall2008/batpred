@@ -904,10 +904,178 @@ def test_battery_scaling_auto_state_survives_restart_after_today_recorded(my_pre
             print("ERROR: battery_scaling {:.3f} does not match expected {:.3f}".format(inv.battery_scaling, expected_scaling))
             failed = True
 
+        published = my_predbat.ha_interface.dummy_items.get(sensor_name, {})
+        if published.get("state") != expected_mean or published.get("history") != recorded_history:
+            print("ERROR: recovered sensor was not republished with its recorded state and history: {}".format(published))
+            failed = True
+
+        # Once present, subsequent cycles must not publish the same result again.
+        def unexpected_update(*_args):
+            """Fail if an existing sensor is republished."""
+            raise AssertionError("sensor republished on next cycle")
+
+        inv.update_soc_max_calculated_sensor = unexpected_update
+        inv.battery_size_tracking()
+
         if not failed:
-            print("SUCCESS: trimmed mean recovered from recorder after restart, battery_scaling_auto still applied")
+            print("SUCCESS: sensor and trimmed mean recovered after restart without repeated publication")
     except Exception as e:
         print("ERROR: test_battery_scaling_auto_state_survives_restart_after_today_recorded raised exception: {}".format(e))
+        import traceback
+
+        traceback.print_exc()
+        failed = True
+    finally:
+        my_predbat.ha_interface.get_history = original_get_history
+
+    my_predbat.battery_scaling_auto = False
+    return failed
+
+
+def test_battery_scaling_auto_none_today_survives_restart(my_predbat):
+    """Republish a missing sensor without replacing today's failed measurement."""
+    print("*** Running test: battery_scaling_auto_none_today_survives_restart ***")
+    failed = False
+    inv = _make_inv_for_scaling(my_predbat, 10.0)
+    my_predbat.battery_scaling_auto = True
+
+    sensor_name = "sensor.{}_soc_max_calculated".format(my_predbat.prefix)
+    today_key = str(my_predbat.now_utc.date())
+    yesterday_key = str(my_predbat.now_utc.date() - timedelta(days=1))
+    recorded_history = {yesterday_key: 9.5, today_key: None}
+    my_predbat.ha_interface.dummy_items.pop(sensor_name, None)
+    original_get_history = my_predbat.ha_interface.get_history
+
+    def fake_get_history(entity_id, now=None, days=30):
+        if entity_id == sensor_name:
+            return [[{"state": "9.5", "attributes": {"history": recorded_history}, "last_changed": my_predbat.now_utc}]]
+        return original_get_history(entity_id, now=now, days=days)
+
+    my_predbat.ha_interface.get_history = fake_get_history
+
+    def unexpected_find(_nc=0):
+        """Fail if today's recorded result is recalculated."""
+        raise AssertionError("battery size recalculated")
+
+    inv.find_battery_size = unexpected_find
+
+    try:
+        inv.battery_size_tracking()
+        published = my_predbat.ha_interface.dummy_items.get(sensor_name, {})
+        if published.get("state") != 9.5 or published.get("history") != recorded_history:
+            print("ERROR: failed measurement was not preserved when the sensor was republished: {}".format(published))
+            failed = True
+
+        def unexpected_update(*_args):
+            """Fail if the restored sensor is republished on the next cycle."""
+            raise AssertionError("sensor republished on next cycle")
+
+        inv.update_soc_max_calculated_sensor = unexpected_update
+        inv.battery_size_tracking()
+
+        if not failed:
+            print("SUCCESS: recovered sensor preserves today's None without recalculating or republishing")
+    except Exception as e:
+        print("ERROR: test_battery_scaling_auto_none_today_survives_restart raised exception: {}".format(e))
+        import traceback
+
+        traceback.print_exc()
+        failed = True
+    finally:
+        my_predbat.ha_interface.get_history = original_get_history
+
+    my_predbat.battery_scaling_auto = False
+    return failed
+
+
+def test_battery_scaling_auto_all_none_survives_restart(my_predbat):
+    """Keep the recovered nominal mean for the first cycle with no valid samples."""
+    print("*** Running test: battery_scaling_auto_all_none_survives_restart ***")
+    failed = False
+    inv = _make_inv_for_scaling(my_predbat, 10.0)
+    inv.battery_scaling = 0.95
+    inv.soc_max = 9.5
+    my_predbat.battery_scaling_auto = True
+
+    sensor_name = "sensor.{}_soc_max_calculated".format(my_predbat.prefix)
+    today_key = str(my_predbat.now_utc.date())
+    recorded_history = {today_key: None}
+    my_predbat.ha_interface.dummy_items.pop(sensor_name, None)
+    original_get_history = my_predbat.ha_interface.get_history
+
+    def fake_get_history(entity_id, now=None, days=30):
+        if entity_id == sensor_name:
+            return [[{"state": "10.0", "attributes": {"history": recorded_history}, "last_changed": my_predbat.now_utc}]]
+        return original_get_history(entity_id, now=now, days=days)
+
+    my_predbat.ha_interface.get_history = fake_get_history
+
+    def unexpected_find(_nc=0):
+        """Fail if today's recorded failure triggers a new calculation."""
+        raise AssertionError("battery size recalculated")
+
+    inv.find_battery_size = unexpected_find
+
+    try:
+        inv.battery_size_tracking()
+        published = my_predbat.ha_interface.dummy_items.get(sensor_name, {})
+        if published.get("state") != 10.0 or published.get("history") != recorded_history:
+            print("ERROR: all-None history was not restored: {}".format(published))
+            failed = True
+        if inv.soc_max != 10.0 or inv.battery_scaling != 1.0:
+            print("ERROR: recovered nominal mean was lost for one cycle: soc_max {}, scaling {}".format(inv.soc_max, inv.battery_scaling))
+            failed = True
+        if not failed:
+            print("SUCCESS: all-None history restored without a one-cycle scaling change")
+    except Exception as e:
+        print("ERROR: test_battery_scaling_auto_all_none_survives_restart raised exception: {}".format(e))
+        import traceback
+
+        traceback.print_exc()
+        failed = True
+    finally:
+        my_predbat.ha_interface.get_history = original_get_history
+
+    my_predbat.battery_scaling_auto = False
+    return failed
+
+
+def test_battery_scaling_auto_invalid_history_survives_restart(my_predbat):
+    """Do not abort inverter refresh when a recovered history entry is malformed."""
+    print("*** Running test: battery_scaling_auto_invalid_history_survives_restart ***")
+    failed = False
+    inv = _make_inv_for_scaling(my_predbat, 10.0)
+    my_predbat.battery_scaling_auto = True
+
+    sensor_name = "sensor.{}_soc_max_calculated".format(my_predbat.prefix)
+    today_key = str(my_predbat.now_utc.date())
+    yesterday_key = str(my_predbat.now_utc.date() - timedelta(days=1))
+    original_get_history = my_predbat.ha_interface.get_history
+
+    def unexpected_find(_nc=0):
+        """Fail if malformed history triggers a new daily calculation."""
+        raise AssertionError("battery size recalculated")
+
+    inv.find_battery_size = unexpected_find
+
+    try:
+        for recorded_history in ({today_key: "9.4"}, {yesterday_key: "9.5", today_key: 9.4}):
+            my_predbat.ha_interface.dummy_items.pop(sensor_name, None)
+
+            def fake_get_history(entity_id, now=None, days=30):
+                if entity_id == sensor_name:
+                    return [[{"state": "9.45", "attributes": {"history": recorded_history}, "last_changed": my_predbat.now_utc}]]
+                return original_get_history(entity_id, now=now, days=days)
+
+            my_predbat.ha_interface.get_history = fake_get_history
+            inv.battery_size_tracking()
+            if sensor_name in my_predbat.ha_interface.dummy_items or inv.soc_max != 9.45:
+                print("ERROR: malformed history unexpectedly published or changed planning: {}".format(recorded_history))
+                failed = True
+        if not failed:
+            print("SUCCESS: malformed recovered measurements do not abort inverter refresh")
+    except Exception as e:
+        print("ERROR: test_battery_scaling_auto_invalid_history_survives_restart raised exception: {}".format(e))
         import traceback
 
         traceback.print_exc()
@@ -1727,6 +1895,18 @@ def run_find_battery_size_tests(my_predbat):
         return failed
 
     failed |= test_battery_scaling_auto_state_survives_restart_after_today_recorded(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_battery_scaling_auto_none_today_survives_restart(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_battery_scaling_auto_all_none_survives_restart(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_battery_scaling_auto_invalid_history_survives_restart(my_predbat)
     if failed:
         return failed
 

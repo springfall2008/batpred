@@ -8,7 +8,8 @@
 
 """Sunsynk Connect cloud API integration for Predbat.
 
-Registers each discovered Sunsynk inverter as a ``SunsynkCloud`` Predbat inverter,
+Registers each discovered Sunsynk inverter as a ``SunsynkCloud`` Predbat inverter - a
+parallel master/slave group as one, driven through its master (see parallel_groups) -
 publishing monitoring sensors and DEYE-style schedule control entities. Predbat drives
 those entities through the generic Inverter class; this module derives the Sunsynk work
 mode internally and applies it by read-modify-write of the System Mode settings group
@@ -21,13 +22,18 @@ The RSA path never downgrades to the plaintext one — see ``fetch_token``.
 
 import argparse
 import asyncio
+import os
 import hashlib
 import json
 import time
+from datetime import datetime
 import aiohttp
+import yaml
 from component_base import ComponentBase
+from coordinator import inverter_record
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
+from tou_schedule import TouScheduleMixin, MINUTES_PER_DAY
 from sunsynk_const import (
     SUNSYNK_REGIONS,
     SUNSYNK_ENDPOINTS,
@@ -46,6 +52,7 @@ from sunsynk_const import (
     SUNSYNK_CHARGE_VOLT_FIELD,
     SUNSYNK_CHARGE_CURRENT_FIELDS,
     SUNSYNK_EXPORT_LIMIT_FIELD,
+    SUNSYNK_IMPORT_LIMIT_FIELD,
     SUNSYNK_RATED_POWER_FIELD,
     SUNSYNK_BATTERY_LOW_CAP_FIELD,
     LIFEPO4_CELL_COUNTS,
@@ -55,6 +62,7 @@ from sunsynk_const import (
     LIFEPO4_NOMINAL_VOLTS_PER_CELL,
     SUNSYNK_WORKMODE,
     SUNSYNK_WORKMODE_FIELD,
+    SUNSYNK_TOU_TEST_SETTLE,
     SUNSYNK_SOLAR_SELL_FIELD,
     SUNSYNK_TOU_ENABLE_FIELD,
     SUNSYNK_SERIAL_FIELD,
@@ -63,7 +71,6 @@ from sunsynk_const import (
     SUNSYNK_DAY_FIELDS,
     TOU_FIELD,
     TOU_SLOT_COUNT,
-    TOU_FILLER_TIMES,
     FREEZE_EXPORT_SOC,
     SUNSYNK_SETTLE_POLLS,
     SUNSYNK_TTL_STATIC,
@@ -74,19 +81,50 @@ from sunsynk_const import (
     SUNSYNK_CACHE_CONFIG,
     SUNSYNK_CACHE_RATINGS,
     SUNSYNK_CACHE_CONTROL,
+    SUNSYNK_CACHE_APPLIED_PAYLOAD,
+    SUNSYNK_CACHE_BATTERY_ENERGY,
+    SUNSYNK_EQUIP_MODE_FIELD,
+    SUNSYNK_PARALLEL_FIELD,
+    SUNSYNK_BMS_CURRENT_FIELD,
+    SUNSYNK_BMS_LINK_FIELDS,
+    SUNSYNK_PARALLEL_SUMMED_POWER,
+    SUNSYNK_PARALLEL_SUMMED_ENERGY,
+    SUNSYNK_PARALLEL_BATTERY_ENERGY,
+    SUNSYNK_BATTERY_INTEGRATE_MAX_GAP,
+    SUNSYNK_SLAVE_STARTUP_RETRIES,
+    SUNSYNK_UNIT_CHARGE_CURRENT_FIELD,
+    SUNSYNK_BMS_LIMIT_MAX_AGE_DAYS,
     SUNSYNK_RESTORE_MAX_CONTROL,
+    SUNSYNK_RESTORE_MAX_CONTROL_ACTIVE,
     encode_setting,
     rsa_encrypt_pkcs1v15,
 )
 
+# The seven INVERTER_DEF behaviour keys (coordinator.CAPABILITY_KEYS) every SunsynkCloud inverter has,
+# matching the SunsynkCloud row in config.py. A literal, never read back from INVERTER_DEF: the discovery
+# completeness test rebuilds the row from the record, and a record copied from the row would prove nothing.
+SUNSYNK_CAPABILITIES = {
+    "support_charge_freeze": True,
+    "support_discharge_freeze": True,
+    # Freeze Export selects Selling First, which runs PV -> load -> grid ahead of the battery
+    "support_feedin_first": True,
+    "can_span_midnight": False,
+    "charge_discharge_with_rate": False,
+    "charge_control_immediate": False,
+    "target_soc_used_for_discharge": True,
+}
 
-class SunsynkAPI(ComponentBase, OAuthMixin):
+
+class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
     """Sunsynk Connect cloud API component."""
 
     # Trace every API request/response while the Sunsynk integration beds in. Nobody on
     # the project has a Sunsynk account, so a tester's log is the only evidence available
     # for the inferred wire format; flip to False once the format is confirmed.
     api_debug = True
+
+    # How many slots the TOU programme holds, read by TouScheduleMixin.build_tou_slots.
+    TOU_SLOTS = TOU_SLOT_COUNT
 
     def initialize(
         self,
@@ -123,14 +161,24 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         self.inverter_sn_filter = inverter_sn if isinstance(inverter_sn, list) else ([inverter_sn] if inverter_sn else [])
         self.battery_nominal_voltage = float(battery_nominal_voltage) if battery_nominal_voltage else 0.0
         self.device_list = []
+        # {sn: {"equip_mode", "plant"}} from the inverter list, for every serial on the account
+        self.device_roles = {}
         self.device_detail = {}
         self.device_values = {}
         self.device_settings = {}
         self.device_energy = {}
         self.device_rated_power = {}
+        # {sn: {"amps", "seen"}} - the highest BMS charge limit seen; the live one tapers as the bank fills
+        self.bms_charge_limit_max = {}
         self.local_schedule = {}
         self.applied_payload = {}
         self.settle_count = {}
+        # {master sn: {"date", "charge", "discharge", "time", "power"}} - a parallel group's battery energy today
+        self.battery_energy = {}
+        # Parallel-group conditions already warned about, so each is logged once
+        self._parallel_warned = set()
+        # First-cycle attempts so far that waited for a parallel slave's battery reading
+        self._slave_startup_waits = 0
         # Serials Predbat has actually been asked to drive, i.e. ones whose write button
         # has been pressed at least once. run() only re-applies a schedule for these, so a
         # startup cycle can never clobber an inverter before there is a plan to apply.
@@ -138,6 +186,12 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         self._tier_refreshed = {}
         self._cache_restored = False
         self._soc_floor_warned = set()
+        # chargeVolt values nominal_pack_voltage() has already warned fit no LiFePO4 stack
+        self._stack_size_warned = set()
+        # {sn: last battery Ah rating seen} - build_discovery() keeps it through a poll that omits it
+        self._discovery_battery_ratings = {}
+        # {sn: sensor-backed settings once reported} - build_discovery() keeps their bindings likewise
+        self._discovery_sensors = {}
         # The most recent body-level API failure message (the `msg` field only - see
         # _request - never a credential), and whether the last discovery attempt actually
         # reached the API. Both exist so the standalone CLI (test_sunsynk_api) can name
@@ -446,6 +500,7 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         """
         serials = []
         seen = set()
+        roles = {}
         self.discovery_ok = False
         for page in range(1, SUNSYNK_MAX_DISCOVERY_PAGES + 1):
             params = {"page": str(page), "limit": str(SUNSYNK_PAGE_SIZE), "type": "-2", "status": "-1"}
@@ -468,6 +523,8 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
                     seen.add(serial)
                     serials.append(serial)
                     new_serials += 1
+                    plant = info.get("plant") if isinstance(info.get("plant"), dict) else {}
+                    roles[serial] = {"equip_mode": str(info.get(SUNSYNK_EQUIP_MODE_FIELD) or ""), "plant": str(plant.get("id") or "")}
             if new_serials == 0:
                 # A page that adds nothing new can never close the gap to `total`, however
                 # large that gap is reported to be - continuing would spin indefinitely.
@@ -477,9 +534,24 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
                 break
         else:
             self.log(f"Warn: Sunsynk device discovery stopped after the {SUNSYNK_MAX_DISCOVERY_PAGES}-page safety cap with {len(serials)} serial(s) found; the account may hold more inverters than were discovered")
+        if self.discovery_ok:
+            # A failed discovery keeps the roles already known, as refresh_static keeps the list.
+            self.device_roles = roles
         if self.inverter_sn_filter:
             wanted = {str(sn).lower() for sn in self.inverter_sn_filter}
-            serials = [sn for sn in serials if sn.lower() in wanted]
+            # A configured master brings its plant's slaves with it: they carry half the site's
+            # grid and PV flows, and the user configured the inverter they see, not the group.
+            wanted_plants = {roles[sn]["plant"] for sn in serials if sn.lower() in wanted and self._role_letter(roles[sn]["equip_mode"]) == "M"}
+            if not any(self._role_letter(role["equip_mode"]) for role in roles.values()):
+                # Roles only reach discovery through the list; without them a slave cannot be told apart here.
+                named_plants = {roles[sn]["plant"] for sn in serials if sn.lower() in wanted and roles[sn]["plant"]}
+                left_out = [sn for sn in serials if sn.lower() not in wanted and roles[sn]["plant"] in named_plants]
+                if left_out:
+                    self._warn_parallel_once(
+                        ("no_roles", tuple(left_out)),
+                        f"Warn: Sunsynk inverter list carries no parallel roles, so {', '.join(left_out)} in the same plant as sunsynk_inverter_sn is not polled; if it is a parallel slave, add its serial to sunsynk_inverter_sn too",
+                    )
+            serials = [sn for sn in serials if sn.lower() in wanted or (self._role_letter(roles[sn]["equip_mode"]) == "S" and roles[sn]["plant"] in wanted_plants)]
         self.device_list = serials
         return serials
 
@@ -514,7 +586,7 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             values[leaf] = int(value) if float(value).is_integer() and leaf in ("soc",) else value
         # Ratings inputs are kept raw on device_values so the derivations below can read them.
         battery = responses.get("battery") or {}
-        for field in (SUNSYNK_CAPACITY_AH_FIELD, SUNSYNK_CHARGE_VOLT_FIELD) + SUNSYNK_CHARGE_CURRENT_FIELDS:
+        for field in (SUNSYNK_CAPACITY_AH_FIELD, SUNSYNK_CHARGE_VOLT_FIELD, SUNSYNK_BMS_CURRENT_FIELD) + SUNSYNK_CHARGE_CURRENT_FIELDS + SUNSYNK_BMS_LINK_FIELDS:
             if field in battery and battery[field] is not None:
                 values[field] = self._as_float(battery[field])
         self.device_values[sn] = values
@@ -540,6 +612,177 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             self.device_settings[sn] = data
         return data
 
+    @staticmethod
+    def _role_letter(equip_mode):
+        """Return "M" or "S" for an inverter-list equipMode such as "M1"/"S2", else ""."""
+        letter = str(equip_mode or "").strip().upper()[:1]
+        return letter if letter in ("M", "S") else ""
+
+    def _unit_role(self, sn):
+        """Return a unit's parallel role, "M", "S" or "" - from the inverter list, else the settings read."""
+        role = self._role_letter(self.device_roles.get(sn, {}).get("equip_mode"))
+        if role:
+            return role
+        settings = self.device_settings.get(sn, {})
+        if str(settings.get(SUNSYNK_PARALLEL_FIELD, "")) == "1":
+            return {"1": "M", "0": "S"}.get(str(settings.get(SUNSYNK_EQUIP_MODE_FIELD, "")), "")
+        return ""
+
+    def _has_bms_link(self, sn):
+        """Return True when the unit reports its own battery-management link (a non-zero bmsVolt or bmsSoc)."""
+        values = self.device_values.get(sn, {})
+        return any(self._as_float(values.get(field)) > 0 for field in SUNSYNK_BMS_LINK_FIELDS)
+
+    def _warn_parallel_once(self, key, message):
+        """Log a parallel-group warning the first time its condition is seen."""
+        if key not in self._parallel_warned:
+            self._parallel_warned.add(key)
+            self.log(message)
+
+    def parallel_groups(self):
+        """Return {master sn: [slave sns]} for the parallel groups among the polled units.
+
+        A slave is paired with the master of its plant. When a plant has more than one master
+        (two standalone inverters, or a standalone beside a group), the one whose settings read
+        says parallel is chosen; if that still leaves more than one, the slave cannot be placed
+        and is left unpaired. A slave with its own BMS link has its own battery, so it is not
+        this topology and stays a separate inverter.
+        """
+        masters = {}
+        slaves = {}
+        for sn in self.device_list:
+            plant = self.device_roles.get(sn, {}).get("plant", "")
+            role = self._unit_role(sn)
+            if role == "M":
+                masters.setdefault(plant, []).append(sn)
+            elif role == "S" and not self._has_bms_link(sn):
+                slaves.setdefault(plant, []).append(sn)
+        groups = {}
+        for plant, members in slaves.items():
+            candidates = masters.get(plant, [])
+            if len(candidates) > 1:
+                candidates = [sn for sn in candidates if str(self.device_settings.get(sn, {}).get(SUNSYNK_PARALLEL_FIELD, "")) == "1"]
+            if len(candidates) == 1:
+                groups.setdefault(candidates[0], []).extend(members)
+        return groups
+
+    @property
+    def inverter_list(self):
+        """The serials Predbat drives as inverters: standalone units and group masters, never a slave.
+
+        A slave that cannot be paired is left out too, with a warning: its battery readings are
+        not its own, and writing to it would fight the master that sets it. With a serial filter,
+        a unit the filter does not name is never driven: it is only polled because a named
+        master pulled in its plant's slaves, and one with its own battery is not in the group.
+        """
+        paired = {sn for members in self.parallel_groups().values() for sn in members}
+        wanted = {str(sn).lower() for sn in self.inverter_sn_filter}
+        driven = []
+        for sn in self.device_list:
+            if sn in paired:
+                continue
+            if self._unit_role(sn) == "S" and not self._has_bms_link(sn):
+                self._warn_parallel_once(("unpaired", sn), f"Warn: Sunsynk parallel slave {sn} could not be paired with its master, so its grid and PV flows are not counted; configure the master's serial too")
+                continue
+            if wanted and sn.lower() not in wanted:
+                self._warn_parallel_once(("unnamed", sn), f"Sunsynk: parallel slave {sn} has its own battery and is not in sunsynk_inverter_sn, so it is monitored but not controlled")
+                continue
+            driven.append(sn)
+        return driven
+
+    def _group_members(self, sn):
+        """Return every serial in sn's parallel group, master first - just [sn] for a standalone unit."""
+        return [sn] + self.parallel_groups().get(sn, [])
+
+    def _sum_members(self, members, source, leaf):
+        """Sum one leaf across members, or return None when any member did not report it."""
+        readings = [source.get(member, {}).get(leaf) for member in members]
+        if any(reading is None for reading in readings):
+            return None
+        return round(sum(readings), 3)
+
+    def group_values(self, sn):
+        """Return the telemetry Predbat sees for inverter sn - for a group master, the whole group's.
+
+        SoC, voltage and temperature are the master's (the slave mirrors them); grid, PV and load
+        are summed, a value one unit did not report being withheld rather than published as the
+        master's share. Battery power is the whole bank from the master's BMS, -bmsCurrent x
+        voltage: the master's own power is only its share, and the slave's is garbage.
+        """
+        values = self.device_values.get(sn, {})
+        members = self._group_members(sn)
+        if len(members) == 1:
+            return values
+        group = {leaf: value for leaf, value in values.items() if leaf in SUNSYNK_TELEMETRY and leaf not in SUNSYNK_PARALLEL_SUMMED_POWER}
+        for leaf in SUNSYNK_PARALLEL_SUMMED_POWER:
+            total = self._sum_members(members, self.device_values, leaf)
+            if total is not None:
+                group[leaf] = total
+        volts = self._as_float(values.get("battery_voltage"))
+        if self._has_bms_link(sn) and values.get(SUNSYNK_BMS_CURRENT_FIELD) is not None and volts > 0:
+            group["battery_power"] = round(-self._as_float(values.get(SUNSYNK_BMS_CURRENT_FIELD)) * volts)
+        else:
+            self._warn_parallel_once(("no_bms", sn), f"Warn: Sunsynk parallel master {sn} reports no bmsCurrent, so battery power is the master's share only")
+        return group
+
+    def group_energy(self, sn):
+        """Return the daily energy counters Predbat sees for inverter sn - for a group master, the whole group's.
+
+        PV, import, export and load are summed across members. The battery's come from integrating
+        the group's battery power (see _integrate_group_battery): every unit's own counters follow
+        that unit's share, and the slave's are garbage.
+        """
+        energy = self.device_energy.get(sn, {})
+        members = self._group_members(sn)
+        if len(members) == 1:
+            return energy
+        group = {}
+        for leaf in SUNSYNK_PARALLEL_SUMMED_ENERGY:
+            total = self._sum_members(members, self.device_energy, leaf)
+            if total is not None:
+                group[leaf] = total
+        state = self.battery_energy.get(sn, {})
+        today = state.get("date") == self.now_utc_exact.date().isoformat()
+        for leaf, key in SUNSYNK_PARALLEL_BATTERY_ENERGY.items():
+            group[leaf] = round(state.get(key, 0.0), 3) if today else 0.0
+        return group
+
+    def _integrate_group_battery(self, sn, power, now):
+        """Add the battery energy since the last reading to group sn's totals for today.
+
+        Trapezoidal, split at a sign change so charge and discharge are kept apart (positive power
+        is discharge). A gap longer than SUNSYNK_BATTERY_INTEGRATE_MAX_GAP is skipped rather than
+        filled with a stale reading. The day restarts at local midnight, keeping only the part
+        of the interval after it.
+        """
+        state = self.battery_energy.get(sn)
+        today = now.date().isoformat()
+        if not state:
+            self.battery_energy[sn] = {"date": today, "charge": 0.0, "discharge": 0.0, "time": now.isoformat(), "power": power}
+            return
+        try:
+            last_time = datetime.fromisoformat(state["time"])
+        except (KeyError, TypeError, ValueError):
+            last_time = None
+        last_power = self._as_float(state.get("power"))
+        hours = (now - last_time).total_seconds() / 3600.0 if last_time else -1
+        if state.get("date") != today:
+            midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            state.update({"date": today, "charge": 0.0, "discharge": 0.0})
+            if 0 < hours <= SUNSYNK_BATTERY_INTEGRATE_MAX_GAP / 60.0:
+                after = (now - midnight).total_seconds() / 3600.0
+                state["discharge" if power > 0 else "charge"] += abs(power) * min(after, hours) / 1000.0
+        elif 0 < hours <= SUNSYNK_BATTERY_INTEGRATE_MAX_GAP / 60.0:
+            if last_power * power >= 0:
+                average = (last_power + power) / 2.0
+                state["discharge" if average > 0 else "charge"] += abs(average) * hours / 1000.0
+            else:
+                crossing = hours * abs(last_power) / (abs(last_power) + abs(power))
+                state["discharge" if last_power > 0 else "charge"] += abs(last_power) / 2.0 * crossing / 1000.0
+                state["discharge" if power > 0 else "charge"] += abs(power) / 2.0 * (hours - crossing) / 1000.0
+        state["time"] = now.isoformat()
+        state["power"] = power
+
     def nominal_pack_voltage(self, charge_volts):
         """Infer the pack's nominal voltage from its BMS charge target.
 
@@ -563,8 +806,11 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         candidates = [(abs(charge_volts / cells - LIFEPO4_CHARGE_VOLTS_TYPICAL), cells) for cells in LIFEPO4_CELL_COUNTS if LIFEPO4_CHARGE_VOLTS_MIN <= charge_volts / cells <= LIFEPO4_CHARGE_VOLTS_MAX]
         if not candidates:
             # A charge target that fits no standard stack is not something to guess at: a
-            # wrong soc_max makes Predbat plan against a battery that does not exist.
-            self.log(f"Warn: Sunsynk cannot infer a LiFePO4 stack size from chargeVolt {charge_volts}; set sunsynk_battery_nominal_voltage in apps.yaml to derive capacity")
+            # wrong soc_max makes Predbat plan against a battery that does not exist. Warned
+            # once per value - this is reached several times a cycle, and chargeVolt rarely moves.
+            if charge_volts not in self._stack_size_warned:
+                self._stack_size_warned.add(charge_volts)
+                self.log(f"Warn: Sunsynk cannot infer a LiFePO4 stack size from chargeVolt {charge_volts}; set sunsynk_battery_nominal_voltage in apps.yaml to derive capacity")
             return 0.0
         return min(candidates)[1] * LIFEPO4_NOMINAL_VOLTS_PER_CELL
 
@@ -584,10 +830,43 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         # maxChargeCurrentLimit 0.0 alongside chargeCurrentLimit 216.0, which derived a rate
         # of 0 and made automatic_config skip battery_rate_max entirely.
         amps = next((amp for amp in (self._as_float(values.get(field)) for field in SUNSYNK_CHARGE_CURRENT_FIELDS) if amp > 0), 0.0)
+        # The live limit tapers as the bank fills (to 0 when full), so the highest seen is the rating.
+        amps = max(amps, self._as_float(self.bms_charge_limit_max.get(sn, {}).get("amps")))
+        # The BMS limit is what the bank will accept, but each inverter has its own battery current
+        # cap (batteryMaxCurrentCharge) and that - summed across a parallel group - is what it
+        # actually charges at; see the constant. Unknown on any member leaves the BMS limit alone.
+        members = self._group_members(sn)
+        unit_caps = [self._as_float(self.device_settings.get(member, {}).get(SUNSYNK_UNIT_CHARGE_CURRENT_FIELD)) for member in members]
+        if all(cap > 0 for cap in unit_caps):
+            amps = min(amps, sum(unit_caps)) if amps > 0 else sum(unit_caps)
         volts = self.nominal_pack_voltage(values.get(SUNSYNK_CHARGE_VOLT_FIELD))
         if amps <= 0 or volts <= 0:
             return 0.0
         return amps * volts
+
+    def _note_bms_charge_limit(self, sn, now):
+        """Keep the highest BMS charge limit sn has reported, returning True when the saved record changed.
+
+        A maximum not seen again for SUNSYNK_BMS_LIMIT_MAX_AGE_DAYS resets to the live value, so a
+        battery swapped for a smaller one is relearned. Seeing the maximum again refreshes it, and
+        counts as a change once a day so the saved copy's age stays roughly true.
+        """
+        values = self.device_values.get(sn, {})
+        live = next((amp for amp in (self._as_float(values.get(field)) for field in SUNSYNK_CHARGE_CURRENT_FIELDS) if amp > 0), 0.0)
+        if live <= 0:
+            return False
+        entry = self.bms_charge_limit_max.get(sn) or {}
+        try:
+            seen = datetime.fromisoformat(entry["seen"])
+        except (KeyError, TypeError, ValueError):
+            seen = None
+        stale = seen is None or (now - seen).total_seconds() > SUNSYNK_BMS_LIMIT_MAX_AGE_DAYS * 86400
+        stored = self._as_float(entry.get("amps"))
+        if not stale and live < stored:
+            return False
+        changed = stale or live != stored or (now - seen).total_seconds() > 86400
+        self.bms_charge_limit_max[sn] = {"amps": live, "seen": now.isoformat()}
+        return changed
 
     def inverter_limit(self, sn):
         """Return the inverter's AC power rating in watts, or 0 when unknown.
@@ -596,8 +875,12 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         pvMaxLimit: despite that setting's "Inverter Power Limiter" label in the app, Sunsynk
         documents it as an EXPORT cap, so the inverter can still deliver its full rating to
         the house. See export_limit.
+
+        A parallel group's is the sum of its members' ratings, and unknown (0) while any member's
+        is, rather than understated.
         """
-        return self.device_rated_power.get(sn, 0.0)
+        ratings = [self.device_rated_power.get(member, 0.0) for member in self._group_members(sn)]
+        return sum(ratings) if all(rating > 0 for rating in ratings) else 0.0
 
     def export_limit(self, sn):
         """Return the maximum export power in watts, or 0 when unknown.
@@ -608,8 +891,16 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
 
         Bounded by the inverter rating too: whatever the setting nominally allows, the
         inverter cannot export more AC than it can produce.
+
+        pvMaxLimit is per unit (a parallel pair with 4600 on each exported 5.76 kW), so a group's
+        is the sum of each member's own capped figure, and unknown (0) while any member's is.
         """
-        limits = [value for value in (self.inverter_limit(sn), self._as_float(self.device_settings.get(sn, {}).get(SUNSYNK_EXPORT_LIMIT_FIELD))) if value > 0]
+        limits = [self._unit_export_limit(member) for member in self._group_members(sn)]
+        return sum(limits) if all(limit > 0 for limit in limits) else 0.0
+
+    def _unit_export_limit(self, sn):
+        """Return one unit's export cap: the lower of its pvMaxLimit and its rating, or 0 when neither is known."""
+        limits = [value for value in (self.device_rated_power.get(sn, 0.0), self._as_float(self.device_settings.get(sn, {}).get(SUNSYNK_EXPORT_LIMIT_FIELD))) if value > 0]
         return min(limits) if limits else 0.0
 
     def battery_reserve_min(self, sn):
@@ -735,43 +1026,6 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         """
         return {"behaviour": "freeze_export", "work_mode": SUNSYNK_WORKMODE["selling_first"], "grid_charge": False, "solar_sell": True, "slot_soc": int(reserve), "power": 0}
 
-    @staticmethod
-    def _to_slot_time(value):
-        """Normalise a schedule time to the HH:MM Sunsynk's slots require.
-
-        The control entities carry HH:MM:SS because that is what Predbat writes (see
-        INVERTER_DEF charge_time_format), so the seconds are dropped here — at the one
-        point a schedule time becomes a slot time.
-        """
-        parts = str(value or "00:00").split(":")
-        if len(parts) < 2:
-            return "00:00"
-        try:
-            return f"{int(parts[0]):02d}:{int(parts[1]):02d}"
-        except ValueError:
-            return "00:00"
-
-    @staticmethod
-    def _hm_to_minutes(hm):
-        """Convert an HH:MM string to minutes since midnight (0 on bad input)."""
-        try:
-            parts = str(hm).split(":")
-            return int(parts[0]) * 60 + int(parts[1])
-        except (ValueError, IndexError):
-            return 0
-
-    def _window_active(self, window, now_minutes):
-        """Return True if an enabled window covers now_minutes, handling a midnight wrap."""
-        if not window.get("enable") or not window.get("start") or not window.get("end"):
-            return False
-        start = self._hm_to_minutes(self._to_slot_time(window["start"]))
-        end = self._hm_to_minutes(self._to_slot_time(window["end"]))
-        if start == end:
-            return False
-        if start < end:
-            return start <= now_minutes < end
-        return now_minutes >= start or now_minutes < end
-
     def _self_use_slot(self, start_time, reserve, self_use_power):
         """Build a self-use slot holding at the reserve SOC.
 
@@ -805,96 +1059,12 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             return self._action_slot(start_time, state)
         return self._self_use_slot(start_time, reserve, self_use_power)
 
-    def build_tou_slots(self, schedule, current_soc, self_use_power):
-        """Build exactly TOU_SLOT_COUNT ordered slots covering 24h from the schedule windows.
-
-        Slots are sequential intervals ("from this start until the next slot's start") and
-        Sunsynk documents that they MUST be set chronologically, so every start is written
-        distinct and ascending. A slot is an interval whatever its grid-charge flag says,
-        which is what lets a filler slot terminate the charge window before it.
-
-        Segment boundaries are collected from a 00:00 baseline plus each enabled window's
-        start (its action) and end (back to the baseline), then padded with fillers and
-        trimmed to the earliest, most imminent TOU_SLOT_COUNT.
-
-        The baseline is DERIVED rather than assumed to be self-use, because "no window is
-        active" is not always demand: a freeze export is exactly that state plus a zero
-        charge rate (see derive_control_state). Every slot the schedule does not otherwise
-        claim - the 00:00 start, each window's end, and the fillers - therefore carries the
-        baseline, so a freeze covers the whole programme instead of being defeated by the
-        first filler that happens to cover the current time.
-
-        That coarseness is deliberate. Predbat never tells this component when a freeze
-        ends - it disables the export window rather than describing it - so there is no
-        boundary to write. Pinning the freeze to "now" instead would move every slot time
-        on every tick and turn the applied-payload change detection into a write per cycle.
-        The programme is rebuilt whenever Predbat's plan changes (run() applies each tick
-        for control_active inverters), so it reverts to self-use as soon as the charge rate
-        comes back.
-        """
-        reserve = int(schedule.get("reserve", 0))
-        baseline = self.derive_control_state({"reserve": reserve, "charge": {"enable": False, "power": int(schedule.get("charge", {}).get("power", 0))}, "export": {"enable": False, "power": int(schedule.get("export", {}).get("power", 0))}}, current_soc)
-        segments = {"00:00": dict(baseline)}
-        for direction in ("charge", "export"):
-            window = schedule.get(direction, {})
-            if not (window.get("enable") and window.get("start") and window.get("end")):
-                continue
-            start_time = self._to_slot_time(window["start"])
-            end_time = self._to_slot_time(window["end"])
-            if start_time == end_time:
-                # Mirrors the guard in _window_active: a zero-length window has no interval
-                # to act over. Compared on the NORMALISED times so "02:00:00" vs "02:00"
-                # is caught too. Without this, an enable event that arrives before the time
-                # fields (both still the "00:00:00" default) would add an action segment at
-                # 00:00 with no matching return-to-self-use segment - an unterminated,
-                # multi-hour full-power grid-charge/export slot even though _active_state
-                # correctly reports the window inactive.
-                continue
-            intent = {"reserve": reserve, "charge": {"enable": False}, "export": {"enable": False}}
-            intent[direction] = {"enable": True, "soc": window.get("soc", 0), "power": window.get("power", 0)}
-            segments[start_time] = self.derive_control_state(intent, current_soc)
-            segments.setdefault(end_time, dict(baseline))
-
-        slots = []
-        for start_time, state in sorted(segments.items(), key=lambda item: item[0]):
-            slots.append(self._slot_for(start_time, state, reserve, self_use_power))
-
-        used = {slot["time"] for slot in slots}
-        for filler in TOU_FILLER_TIMES:
-            if len(slots) >= TOU_SLOT_COUNT:
-                break
-            if filler not in used:
-                slots.append(self._slot_for(filler, baseline, reserve, self_use_power))
-                used.add(filler)
-        return sorted(slots, key=lambda slot: slot["time"])[:TOU_SLOT_COUNT]
-
     def _now_minutes(self):
         """Return minutes since local midnight, for time-aware window selection."""
         try:
             return int(self.minutes_now)
         except (TypeError, ValueError):
             return 0
-
-    def _active_state(self, schedule, current_soc, now_minutes):
-        """Derive the control state for the window active at now_minutes, else idle.
-
-        Sunsynk has a single global work mode, so the top-level mode must follow the
-        window active RIGHT NOW rather than a static export-first precedence: otherwise
-        an export window enabled elsewhere in the day would pin the mode to selling-first
-        and block the charge window's grid charging.
-        """
-        reserve = int(schedule.get("reserve", 0))
-        charge = schedule.get("charge", {})
-        export = schedule.get("export", {})
-        # The charge rate is carried even when no window is active: with both windows shut
-        # a zero rate is Predbat's Freeze Export, and the mode has to follow it rather than
-        # sit in demand (see derive_control_state).
-        intent = {"reserve": reserve, "charge": {"enable": False, "power": int(charge.get("power", 0))}, "export": {"enable": False, "power": int(export.get("power", 0))}}
-        if self._window_active(export, now_minutes):
-            intent["export"] = {"enable": True, "soc": export.get("soc", 0), "power": export.get("power", 0)}
-        elif self._window_active(charge, now_minutes):
-            intent["charge"] = {"enable": True, "soc": charge.get("soc", 0), "power": charge.get("power", 0)}
-        return self.derive_control_state(intent, current_soc)
 
     def _owned_payload(self, sn, schedule, current_soc, now_minutes):
         """Build only the fields Predbat owns, with ZERO network I/O.
@@ -1107,6 +1277,22 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         cry-wolf failure this docstring already warns about above: a perfectly healthy
         inverter warned about forever because encode_setting(key, None) can never match what
         was actually applied.
+
+        Past the settle window, divergence also clears applied_payload[sn], matching
+        alphaess.py's note_external_change (PR #4664, Task 10b): apply_settings only writes
+        when the owned payload differs from applied_payload, so a write the cloud
+        acknowledged but the dongle never actually collected would otherwise be trusted
+        forever and never retried, with no automatic recovery short of a Predbat restart
+        (which rebuilds applied_payload from a fresh read via restore_state). See #5138,
+        where exactly that left an export slot stuck for 55+ minutes because nothing else
+        happened to change Predbat's intended state in that window. Clearing the cache does
+        not write anything by itself - it just stops the next genuine write from being
+        skipped as a no-op.
+
+        TODO(#5140): this settle_count/applied_payload/clear-on-diverge shape is duplicated
+        between here and alphaess.py with no shared abstraction; deye.py, fox.py and
+        teslemetry.py have no equivalent detection at all. Extract into a ComponentBase
+        helper instead of a third copy next time this needs touching.
         """
         applied = self.applied_payload.get(sn)
         if not applied or not settings:
@@ -1121,6 +1307,10 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         self.settle_count[sn] = self.settle_count.get(sn, 0) + 1
         if self.settle_count[sn] > SUNSYNK_SETTLE_POLLS:
             self.log(f"Warn: Sunsynk {sn} has not applied Predbat's settings after {self.settle_count[sn]} settings polls; check the inverter is online in the Sunsynk app")
+            # Clear the recorded intent so the next cycle re-applies rather than deciding
+            # the payload is unchanged and leaving the inverter stuck on whatever it
+            # actually has - see docstring above and #5138.
+            self.applied_payload.pop(sn, None)
 
     def _owned_fields(self):
         """Return every settings key this component writes, so the rest can be watched."""
@@ -1154,10 +1344,14 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         return f"{domain}.{self.prefix}_sunsynk_{sn.lower()}_{leaf}"
 
     async def publish_data(self):
-        """Publish monitoring sensors for each inverter."""
+        """Publish monitoring sensors for each inverter - a group's on its master - and a slave's own readings."""
         units = {"soc": "%", "battery_power": "W", "grid_power": "W", "pv_power": "W", "load_power": "W", "temperature": "°C", "battery_voltage": "V"}
+        driven = self.inverter_list
         for sn in self.device_list:
-            values = self.device_values.get(sn, {})
+            if sn not in driven:
+                self._publish_slave_data(sn, units)
+                continue
+            values = self.group_values(sn)
             for leaf, unit in units.items():
                 if leaf in values:
                     self.dashboard_item(self._sensor_name(sn, leaf), state=values[leaf], attributes={"unit_of_measurement": unit, "friendly_name": f"Sunsynk {sn} {leaf.replace('_', ' ').title()}"}, app="sunsynk")
@@ -1183,13 +1377,32 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
 
             # Daily energy counters feed Predbat's load/import/export history learning.
             # They reset at midnight; minute_data/clean_incrementing_reverse absorb that.
-            for leaf, value in self.device_energy.get(sn, {}).items():
+            for leaf, value in self.group_energy(sn).items():
                 self.dashboard_item(
                     self._sensor_name(sn, leaf),
                     state=value,
                     attributes={"unit_of_measurement": "kWh", "device_class": "energy", "state_class": "measurement", "friendly_name": f"Sunsynk {sn} {leaf.replace('_', ' ').title()}"},
                     app="sunsynk",
                 )
+
+    def _publish_slave_data(self, sn, units):
+        """Publish a parallel slave's own raw readings, marked as such, for diagnosis only.
+
+        Nothing is bound to them: the slave's flows are already in its master's sensors, and its
+        battery readings are not its own. No ratings are published for it either.
+        """
+        master = next((master for master, members in self.parallel_groups().items() if sn in members), None)
+        marker = {"parallel_role": "slave", "parallel_master": master}
+        for leaf, unit in units.items():
+            if leaf in self.device_values.get(sn, {}):
+                self.dashboard_item(self._sensor_name(sn, leaf), state=self.device_values[sn][leaf], attributes={"unit_of_measurement": unit, "friendly_name": f"Sunsynk {sn} (parallel slave) {leaf.replace('_', ' ').title()}", **marker}, app="sunsynk")
+        for leaf, value in self.device_energy.get(sn, {}).items():
+            self.dashboard_item(
+                self._sensor_name(sn, leaf),
+                state=value,
+                attributes={"unit_of_measurement": "kWh", "device_class": "energy", "state_class": "measurement", "friendly_name": f"Sunsynk {sn} (parallel slave) {leaf.replace('_', ' ').title()}", **marker},
+                app="sunsynk",
+            )
 
     async def publish_schedule_settings_ha(self, sn):
         """Publish the charge/export schedule control entities for one inverter."""
@@ -1269,7 +1482,8 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         which would send a control write to the wrong inverter.
         """
         text = str(entity_id).lower()
-        for sn in self.device_list:
+        # Never a parallel slave: it has no control entities, and a write to it would fight its master.
+        for sn in self.inverter_list:
             if f"_sunsynk_{sn.lower()}_" in text:
                 return sn
         return None
@@ -1446,7 +1660,7 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
 
     async def save_static(self):
         """Persist discovery results, which change only when the hardware does."""
-        await self.save_cache(SUNSYNK_CACHE_STATIC, {"device_list": self.device_list, "device_detail": self.device_detail})
+        await self.save_cache(SUNSYNK_CACHE_STATIC, {"device_list": self.device_list, "device_detail": self.device_detail, "device_roles": self.device_roles})
 
     async def save_config(self):
         """Persist the last-read settings object, the baseline for read-modify-write."""
@@ -1454,11 +1668,21 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
 
     async def save_ratings(self):
         """Persist derived ratings so automatic_config can map args at startup."""
-        await self.save_cache(SUNSYNK_CACHE_RATINGS, {"device_rated_power": self.device_rated_power})
+        await self.save_cache(SUNSYNK_CACHE_RATINGS, {"device_rated_power": self.device_rated_power, "bms_charge_limit_max": self.bms_charge_limit_max})
+
+    async def save_battery_energy(self):
+        """Persist parallel groups' battery energy today, so a restart does not zero the day."""
+        await self.save_cache(SUNSYNK_CACHE_BATTERY_ENERGY, {"battery_energy": self.battery_energy})
 
     async def save_control(self):
-        """Persist the applied-payload cache used for write change detection."""
-        await self.save_cache(SUNSYNK_CACHE_CONTROL, {"applied_payload": self.applied_payload})
+        """Persist the payload and ownership caches separately.
+
+        The payload cache is a short-lived write-detection cache; control_active is a separate
+        ownership flag that survives longer so _reconcile_control() can resume automatic
+        re-application after a restart or outage.
+        """
+        await self.save_cache(SUNSYNK_CACHE_APPLIED_PAYLOAD, {"applied_payload": self.applied_payload})
+        await self.save_cache(SUNSYNK_CACHE_CONTROL, {"control_active": sorted(self.control_active)})
 
     async def restore_state(self):
         """Restore cached state at startup and seed each tier's clock from its file age.
@@ -1490,8 +1714,11 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         if static:
             self.device_list = static.get("device_list", []) or []
             self.device_detail = static.get("device_detail", {}) or {}
+            self.device_roles = static.get("device_roles", {}) or {}
             age = await self.age_cache(SUNSYNK_CACHE_STATIC)
-            if age is not None:
+            # A cache written before parallel roles were recorded cannot say which units are
+            # slaves, so it is left stale and discovery re-runs on the first tick.
+            if age is not None and "device_roles" in static:
                 self.mark_refreshed("static", age)
 
         config = await self.load_cache(SUNSYNK_CACHE_CONFIG)
@@ -1504,18 +1731,52 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         ratings = await self.load_cache(SUNSYNK_CACHE_RATINGS)
         if ratings:
             self.device_rated_power = ratings.get("device_rated_power", {}) or {}
+            self.bms_charge_limit_max = ratings.get("bms_charge_limit_max", {}) or {}
 
-        # Bounded: restoring this asserts the inverter still holds what Predbat last wrote.
-        # A redundant write is cheap; a skipped one lets the battery diverge from the plan.
-        control_age = await self.age_cache(SUNSYNK_CACHE_CONTROL)
-        if control_age is not None and control_age <= SUNSYNK_RESTORE_MAX_CONTROL:
-            control = await self.load_cache(SUNSYNK_CACHE_CONTROL)
-            self.applied_payload = control.get("applied_payload", {}) or {}
-        elif control_age is not None:
-            self.log(f"Info: Sunsynk control cache is {control_age:.1f} minutes old (limit {SUNSYNK_RESTORE_MAX_CONTROL}), forcing a rewrite")
+        # Kept whatever its age: each total carries its own date, and a stale day reads as 0.
+        energy = await self.load_cache(SUNSYNK_CACHE_BATTERY_ENERGY)
+        if isinstance(energy.get("battery_energy"), dict):
+            self.battery_energy = energy["battery_energy"]
+
+        await self._restore_control_state()
 
         if not self._restore_had_error:
             self._cache_restored = True
+
+    async def _restore_control_state(self):
+        """Restore the short-lived applied payload and longer-lived control ownership."""
+        payload_age = await self.age_cache(SUNSYNK_CACHE_APPLIED_PAYLOAD)
+        payload = await self.load_cache(SUNSYNK_CACHE_APPLIED_PAYLOAD)
+        applied = payload.get("applied_payload", {})
+
+        control_age = await self.age_cache(SUNSYNK_CACHE_CONTROL)
+        control = await self.load_cache(SUNSYNK_CACHE_CONTROL)
+        stored_active = control.get("control_active")
+
+        # legacy applied_payload was stored in the control cache, so if the payload cache is
+        # missing but the control cache has it, restore it from there.
+        if "applied_payload" not in payload and "applied_payload" in control:
+            legacy_payload = control["applied_payload"]
+            if isinstance(legacy_payload, dict):
+                applied = legacy_payload
+            if payload_age is None:
+                payload_age = control_age
+
+        payload_is_fresh = payload_age is not None and payload_age <= SUNSYNK_RESTORE_MAX_CONTROL
+        self.applied_payload = applied if payload_is_fresh and isinstance(applied, dict) else {}
+        if payload_age is not None and not payload_is_fresh:
+            self.log(f"Info: Sunsynk control payload cache is {payload_age:.1f} minutes old (limit {SUNSYNK_RESTORE_MAX_CONTROL}), forcing a rewrite")
+
+        ownership_is_fresh = control_age is not None and control_age <= SUNSYNK_RESTORE_MAX_CONTROL_ACTIVE
+        if not ownership_is_fresh:
+            self.control_active = set()
+            if control_age is not None:
+                self.log(f"Info: Sunsynk control ownership cache is {control_age:.1f} minutes old (limit {SUNSYNK_RESTORE_MAX_CONTROL_ACTIVE}), requiring a fresh write")
+        elif isinstance(stored_active, list):
+            self.control_active = set(stored_active)
+        elif isinstance(applied, dict):
+            # Legacy caches inferred ownership from payload keys before control_active existed.
+            self.control_active = set(applied)
 
     def tier_expired(self, tier, ttl_minutes):
         """Return True if a tier has never run or is older than its TTL."""
@@ -1529,8 +1790,9 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         self._tier_refreshed[tier] = time.time() - (age_minutes * 60.0)
 
     async def automatic_config(self):
-        """Register every discovered inverter as a SunsynkCloud Predbat inverter."""
-        devices = [sn.lower() for sn in self.device_list]
+        """Register every discovered inverter as a SunsynkCloud Predbat inverter - a parallel group as one, on its master."""
+        driven = self.inverter_list
+        devices = [sn.lower() for sn in driven]
         if not devices:
             self.log("Warn: Sunsynk automatic_config found no inverters")
             return
@@ -1564,20 +1826,20 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         for leaf in SUNSYNK_ENERGY:
             if leaf == "pv_today" and self.automatic_ignore_pv:
                 continue
-            if all(leaf in self.device_energy.get(sn, {}) for sn in self.device_list):
+            if all(leaf in self.group_energy(sn) for sn in driven):
                 self.set_arg_auto(leaf, [self._sensor_name(sn, leaf) for sn in devices])
             else:
                 self.log(f"Warn: Sunsynk not every inverter reports {leaf}, it must be set manually in apps.yaml")
 
-        if all(self.battery_capacity(sn) > 0 for sn in self.device_list):
+        if all(self.battery_capacity(sn) > 0 for sn in driven):
             self.set_arg_auto("soc_max", [self._sensor_name(sn, "battery_capacity") for sn in devices])
         else:
             self.log("Warn: Sunsynk no battery capacity available for every inverter, soc_max must be set manually in apps.yaml")
-        if all(self.battery_rate_max(sn) > 0 for sn in self.device_list):
+        if all(self.battery_rate_max(sn) > 0 for sn in driven):
             self.set_arg_auto("battery_rate_max", [self._sensor_name(sn, "battery_rate_max") for sn in devices])
         else:
             self.log("Warn: Sunsynk no battery charge-current limit available, battery_rate_max must be set manually in apps.yaml")
-        if all(self.inverter_limit(sn) > 0 for sn in self.device_list):
+        if all(self.inverter_limit(sn) > 0 for sn in driven):
             self.set_arg_auto("inverter_limit", [self._sensor_name(sn, "inverter_limit") for sn in devices])
         else:
             self.log("Warn: Sunsynk no ratePower reported, inverter_limit must be set manually in apps.yaml")
@@ -1586,11 +1848,11 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         # despite its "Inverter Power Limiter" label in the app - a G98/G99 site capped at
         # 3.68kW behind a much larger inverter is exactly the case this protects.
         # See SUNSYNK_EXPORT_LIMIT_FIELD.
-        if all(self.export_limit(sn) > 0 for sn in self.device_list):
+        if all(self.export_limit(sn) > 0 for sn in driven):
             self.set_arg_auto("export_limit", [self._sensor_name(sn, "export_limit") for sn in devices])
         else:
             self.log("Warn: Sunsynk no export power limit available, export_limit must be set manually in apps.yaml")
-        if all(self.battery_reserve_min(sn) > 0 for sn in self.device_list):
+        if all(self.battery_reserve_min(sn) > 0 for sn in driven):
             self.set_arg_auto("battery_min_soc", [self._sensor_name(sn, "battery_reserve_min") for sn in devices])
 
         self.set_arg_auto("reserve", [self._control_name("number", sn, "battery_schedule_reserve") for sn in devices])
@@ -1605,6 +1867,179 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         self.set_arg_auto("discharge_rate", [self._control_name("number", sn, "battery_schedule_export_power") for sn in devices])
         self.set_arg_auto("scheduled_discharge_enable", [self._control_name("switch", sn, "battery_schedule_export_enable") for sn in devices])
         self.set_arg_auto("schedule_write_button", [self._control_name("switch", sn, "battery_schedule_charge_write") for sn in devices])
+
+    def _discovery_ratings(self, sn):
+        """The figures one inverter reports about itself, keyed by Predbat setting name in Predbat's units.
+
+        Only figures the device reports go here (spec D14). inverter_limit is the hardware rating
+        (ratePower, W). export_limit and import_limit are the configured grid caps exactly as set -
+        pvMaxLimit and importPower, W - never bounded by the rating: export_limit() is the lower of
+        pvMaxLimit and the rating, which conflates two limits (spec D1), so it is not used here.
+        battery_min_soc is the inverter's own floor (batteryLowCap, %).
+
+        soc_max is deliberately NOT a rating: Sunsynk reports amp-hours, and battery_capacity() turns
+        them into kWh with a pack voltage Predbat infers from chargeVolt or the user sets
+        (sunsynk_battery_nominal_voltage). A derived or user-overridden figure is an entity only (D14),
+        so soc_max appears in entities, bound to the battery_capacity sensor. The Ah the battery
+        endpoint returned is reported as the descriptive battery_capacity_ah. That endpoint is re-read
+        every poll and can omit the field, so the last Ah seen is kept (_discovery_battery_ratings)
+        rather than thinning the report on a partial poll; nothing is reported for an inverter whose
+        battery fields have never been seen.
+
+        A figure that is not known (0) is left out rather than reported as 0.
+        """
+        ratings = {}
+        rated_w = self.inverter_limit(sn)
+        if rated_w > 0:
+            ratings["inverter_limit"] = rated_w
+        settings = self.device_settings.get(sn, {})
+        # pvMaxLimit is per unit, so a parallel group's configured cap is its members' total.
+        export_caps = [self._as_float(self.device_settings.get(member, {}).get(SUNSYNK_EXPORT_LIMIT_FIELD)) for member in self._group_members(sn)]
+        if all(cap > 0 for cap in export_caps):
+            ratings["export_limit"] = sum(export_caps)
+        import_cap = self._as_float(settings.get(SUNSYNK_IMPORT_LIMIT_FIELD))
+        if import_cap > 0:
+            ratings["import_limit"] = import_cap
+        floor = self.battery_reserve_min(sn)
+        if floor > 0:
+            ratings["battery_min_soc"] = floor
+        capacity_ah = self._as_float(self.device_values.get(sn, {}).get(SUNSYNK_CAPACITY_AH_FIELD))
+        if capacity_ah > 0:
+            self._discovery_battery_ratings[sn] = {"battery_capacity_ah": capacity_ah}
+        ratings.update(self._discovery_battery_ratings.get(sn, {}))
+        return ratings
+
+    def _discovery_sensor_bindings(self, sn):
+        """The sensor-backed settings automatic_config() binds only once a value is reported: {setting: (sensor leaf, unit)}.
+
+        automatic_config() binds each of these only when every inverter reports the value, using the
+        accessor named beside it here. A record describes its own device, not the fleet (spec D10), so
+        this is the per-device half of that test: an inverter's record carries its own sensors whatever
+        the other inverters report, and the coordinator applies whatever fleet rule it keeps.
+        automatic_ignore_pv does not remove pv_today either - that is the user's opt-out, which the
+        coordinator applies (D11).
+
+        Once reported, a binding is kept (_discovery_sensors). publish_data() skips a sensor whose value
+        a poll did not bring, so Home Assistant keeps its last state and the binding stays good;
+        dropping it would thin the report on a partial poll and restore it on the next.
+        """
+        seen = self._discovery_sensors.setdefault(sn, set())
+        candidates = {
+            "soc_max": ("battery_capacity", "kWh", self.battery_capacity(sn) > 0),
+            "battery_rate_max": ("battery_rate_max", "W", self.battery_rate_max(sn) > 0),
+            "inverter_limit": ("inverter_limit", "W", self.inverter_limit(sn) > 0),
+            # This sensor's state is export_limit(), the lower of pvMaxLimit and the rating - that is the
+            # binding automatic_config() makes, recorded as it is. The export_limit RATING is the raw
+            # pvMaxLimit (_discovery_ratings, spec D1), so the two can legitimately differ.
+            "export_limit": ("export_limit", "W", self.export_limit(sn) > 0),
+            "battery_min_soc": ("battery_reserve_min", "%", self.battery_reserve_min(sn) > 0),
+        }
+        for leaf in SUNSYNK_ENERGY:
+            candidates[leaf] = (leaf, "kWh", leaf in self.group_energy(sn))
+        bindings = {}
+        for setting, (leaf, unit, reported) in candidates.items():
+            if reported:
+                seen.add(setting)
+            if setting in seen:
+                bindings[setting] = (leaf, unit)
+        return bindings
+
+    def _discovery_entities(self, sn):
+        """Every setting automatic_config() binds for one inverter, as discovery entity descriptors.
+
+        Entity ids come from the same _sensor_name()/_control_name() calls automatic_config() makes, so
+        the two cannot drift; tests/test_sunsynk_config.py checks they agree both ways. Sensors are read
+        (access "r"); the schedule controls, the reserve and the write button are written ("rw"). The
+        schedule selects carry HH:MM:SS, the format publish_schedule_settings_ha() publishes and
+        inverter.py expects of them. No descriptor carries invert: publish_data() already emits
+        Predbat's sign conventions, which is why automatic_config() sets every *_power_invert False,
+        and a missing invert means False.
+
+        pv_power is bound whatever automatic_ignore_pv says: the record describes the device, and the
+        user's opt-out is applied by whoever configures from it (spec D11).
+        """
+
+        def sensor(leaf, unit):
+            """A read-only binding to one of this inverter's published sensors."""
+            return {"entity_id": self._sensor_name(sn, leaf), "access": "r", "unit": unit}
+
+        def control(domain, leaf, **fields):
+            """A binding to one of the schedule control entities Predbat writes."""
+            return {"entity_id": self._control_name(domain, sn, leaf), "access": "rw", "domain": domain, **fields}
+
+        entities = {
+            "soc_percent": sensor("soc", "%"),
+            "battery_power": sensor("battery_power", "W"),
+            "grid_power": sensor("grid_power", "W"),
+            "load_power": sensor("load_power", "W"),
+            "battery_temperature": sensor("temperature", "°C"),
+            "reserve": control("number", "battery_schedule_reserve", unit="%"),
+            "charge_start_time": control("select", "battery_schedule_charge_start_time", format="HH:MM:SS"),
+            "charge_end_time": control("select", "battery_schedule_charge_end_time", format="HH:MM:SS"),
+            "charge_limit": control("number", "battery_schedule_charge_soc", unit="%"),
+            "charge_rate": control("number", "battery_schedule_charge_power", unit="W"),
+            "scheduled_charge_enable": control("switch", "battery_schedule_charge_enable"),
+            "discharge_start_time": control("select", "battery_schedule_export_start_time", format="HH:MM:SS"),
+            "discharge_end_time": control("select", "battery_schedule_export_end_time", format="HH:MM:SS"),
+            "discharge_target_soc": control("number", "battery_schedule_export_soc", unit="%"),
+            "discharge_rate": control("number", "battery_schedule_export_power", unit="W"),
+            "scheduled_discharge_enable": control("switch", "battery_schedule_export_enable"),
+            "schedule_write_button": control("switch", "battery_schedule_charge_write"),
+            "pv_power": sensor("pv_power", "W"),
+        }
+        for setting, (leaf, unit) in self._discovery_sensor_bindings(sn).items():
+            entities[setting] = sensor(leaf, unit)
+        return entities
+
+    def build_discovery(self):
+        """
+        Describe the discovered Sunsynk inverters for the discovery catalogue.
+
+        Reads only state the component already holds - device_list, the telemetry, settings and the
+        rating, capacity and export-limit accessors - so this adds no API calls and cannot change what
+        Sunsynk does. Reporting is independent of self.automatic.
+
+        Discovery applies no device-type filter and automatic_config() registers every serial as
+        "SunsynkCloud" with no further test, binding PV and battery entities for each. Nothing
+        Sunsynk returns tells a PV-only unit from a hybrid, so neither can this: every record
+        carries inverter_type "SunsynkCloud" and functions solar and battery, mirroring
+        automatic_config() as the source of truth. The only units left out are parallel slaves,
+        exactly as automatic_config() leaves them out (see inverter_list).
+
+        Each record carries SUNSYNK_CAPABILITIES, the entities automatic_config() binds for that
+        inverter (_discovery_entities) and its ratings under Predbat's setting names
+        (_discovery_ratings). Together they rebuild the SunsynkCloud INVERTER_DEF row
+        (coordinator.inverter_definition()), which tests/test_sunsynk_config.py proves.
+
+        A parallel group is one record, on its master, listing every member in serials; its slaves
+        get no record of their own, as automatic_config() registers none for them.
+
+        Deliberately not reported: model, firmware and any station ID - none is held. Sunsynk's
+        plant id is used only to pair a group's members.
+
+        Returns None when no inverter has been discovered yet.
+        """
+        if not self.device_list:
+            return None
+
+        inverters = []
+        for sn in self.inverter_list:
+            members = self._group_members(sn)
+            inverters.append(
+                inverter_record(
+                    "sunsynk:{}".format(sn),
+                    inverter_type="SunsynkCloud",
+                    composition="direct",
+                    serials=members if len(members) > 1 else None,
+                    functions=["solar", "battery"],
+                    capabilities=dict(SUNSYNK_CAPABILITIES),
+                    hardware_ids={"serial": sn},
+                    ratings=self._discovery_ratings(sn),
+                    entities=self._discovery_entities(sn),
+                )
+            )
+
+        return {"automatic": self.automatic, "inverters": inverters}
 
     async def refresh_static(self):
         """Re-discover inverters and refresh their static detail. Returns True if discovery worked.
@@ -1671,6 +2106,11 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
                 continue
             if settings:
                 got_any = True
+            if sn not in self.inverter_list:
+                # A parallel slave takes its settings from its master and Predbat never writes
+                # to it, so its changes are the master's echoing through, not someone else's.
+                continue
+            if settings:
                 self.note_external_change(sn, previous, settings)
             # Track whether the inverter has caught up with the last write. Latency of a
             # few minutes is normal; persistent divergence is worth surfacing.
@@ -1690,12 +2130,27 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         to prevent. Mirrors deye.py's refresh_live.
         """
         got_any = False
+        polled = set()
         for sn in self.device_list:
             try:
                 if await self.fetch_device_data(sn):
                     got_any = True
+                    polled.add(sn)
             except Exception as error:
                 self.log(f"Warn: Sunsynk telemetry poll failed for {sn}: {error}")
+        # A parallel group's battery energy is integrated from its BMS power, from fresh readings only.
+        now = self.now_utc_exact
+        integrated = False
+        for master in self.parallel_groups():
+            power = self.group_values(master).get("battery_power")
+            if master in polled and power is not None:
+                self._integrate_group_battery(master, power, now)
+                integrated = True
+        if integrated:
+            await self.save_battery_energy()
+        # Track each unit's highest BMS charge limit; it is saved with the ratings it feeds.
+        if any([self._note_bms_charge_limit(sn, now) for sn in polled]):
+            await self.save_ratings()
         if got_any:
             self.mark_refreshed("live")
         return got_any
@@ -1736,7 +2191,7 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         if self.tier_expired("live", SUNSYNK_TTL_LIVE):
             live_ok = await self.refresh_live()
 
-        for sn in self.device_list:
+        for sn in self.inverter_list:
             # Read the control entities EVERY tick, the first one included. Home Assistant
             # retains them across a Predbat restart, so on a restart they already hold the
             # live plan; seeding local_schedule from _empty_schedule() and publishing that
@@ -1755,6 +2210,14 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
 
         await self.publish_data()
 
+        # Filed right after this cycle's publish and BEFORE `if first and not live_ok:` below:
+        # that branch returns False to defer startup when the first live poll fails, and
+        # automatic_config() follows it, so a report filed any later would never be filed on
+        # exactly the installs whose dump most needs to say what hardware was found. (Sunsynk's
+        # automatic_config() does not raise - the early return is the reason.) refresh_discovery()
+        # owns the compare/retry/guard loop and never raises.
+        self.refresh_discovery()
+
         if first and not live_ok:
             # Startup has not really succeeded without telemetry: automatic_config() runs on
             # the first cycle ALONE, so it would map only the args backed by cached ratings
@@ -1763,6 +2226,19 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             # entire startup path is retried on its backoff until a poll comes back.
             self.log("Warn: Sunsynk first telemetry poll returned nothing, deferring startup; it will be retried after a backoff")
             return False
+
+        if first and self.automatic:
+            # A slave's battery reading decides whether it is grouped or its own inverter, and
+            # automatic_config() runs once, so it waits for every slave - a bounded number of times.
+            unread = [sn for sn in self.device_list if self._unit_role(sn) == "S" and not any(field in self.device_values.get(sn, {}) for field in SUNSYNK_BMS_LINK_FIELDS)]
+            if unread and self._slave_startup_waits < SUNSYNK_SLAVE_STARTUP_RETRIES:
+                self._slave_startup_waits += 1
+                # Clear the live clock, or the retry would find the tier fresh and not poll the slave again.
+                self._tier_refreshed.pop("live", None)
+                self.log(f"Warn: Sunsynk is waiting for parallel slave {', '.join(unread)} to report its battery before configuring (attempt {self._slave_startup_waits} of {SUNSYNK_SLAVE_STARTUP_RETRIES})")
+                return False
+            if unread:
+                self.log(f"Warn: Sunsynk parallel slave {', '.join(unread)} has not reported its battery, so it is treated as sharing its master's; restart Predbat if it has a battery of its own")
 
         if first and self.automatic:
             await self.automatic_config()
@@ -1775,6 +2251,82 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         await self.save_config()
         await self.save_ratings()
         await self.save_control()
+
+
+# apps.yaml key -> the SunsynkAPI keyword it supplies. Only what is needed to authenticate
+# and address one inverter; nothing else in the file is read.
+APPS_YAML_CREDENTIAL_KEYS = {
+    "sunsynk_username": "username",
+    "sunsynk_password": "password",
+    "sunsynk_key": "key",
+    "sunsynk_region": "region",
+    "sunsynk_auth_method": "auth_method",
+    "sunsynk_token_expires_at": "token_expires_at",
+    "sunsynk_token_hash": "token_hash",
+    "sunsynk_inverter_sn": "inverter_sn",
+}
+
+# What OAuthMixin needs to refresh an expired oauth token: the Supabase edge function's URL and
+# key, read from the environment, and the instance id, read from base.args["user_id"].
+APPS_YAML_OAUTH_REFRESH_KEYS = ("supabase_url", "supabase_key", "user_id")
+
+
+def load_apps_yaml_credentials(path):
+    """Read Sunsynk credentials out of a real apps.yaml for the standalone CLI.
+
+    Lets the CLI drive a real account without retyping credentials, and in particular
+    without a password at all: an install using the oauth flow has only a bearer token, and
+    --username/--password cannot express that. Returns a kwargs dict for SunsynkAPI, or
+    raises ValueError with the reason when the file cannot supply a usable account - the
+    caller is a CLI, and a precise refusal beats a half-built client failing at login.
+
+    Only the keys in APPS_YAML_CREDENTIAL_KEYS are read, plus the oauth refresh settings in
+    APPS_YAML_OAUTH_REFRESH_KEYS (returned under "oauth_refresh"), and none of their values are
+    ever printed: the CLI reports the serial and the region, never the token.
+    """
+    try:
+        with open(path, "r") as handle:
+            config = yaml.safe_load(handle) or {}
+    except (OSError, yaml.YAMLError) as error:
+        raise ValueError(f"could not read {path}: {error}")
+    if not isinstance(config, dict):
+        raise ValueError(f"{path} is not a YAML mapping")
+    # A real apps.yaml nests everything under pred_bat; accept a bare mapping too, so a
+    # hand-trimmed file holding just the sunsynk keys works.
+    config = config.get("pred_bat", config) or {}
+    credentials = {name: config[key] for key, name in APPS_YAML_CREDENTIAL_KEYS.items() if config.get(key) not in (None, "")}
+
+    serials = credentials.get("inverter_sn")
+    if not serials:
+        raise ValueError(f"{path} has no sunsynk_inverter_sn, so there is no inverter to address")
+    credentials["inverter_sn"] = [str(serial) for serial in (serials if isinstance(serials, list) else [serials])]
+    if credentials.get("token_expires_at") is not None:
+        # yaml parses an ISO timestamp into a datetime; _parse_expiry wants the string back.
+        credentials["token_expires_at"] = str(credentials["token_expires_at"])
+    refresh = {key: str(config[key]) for key in APPS_YAML_OAUTH_REFRESH_KEYS if config.get(key) not in (None, "")}
+    if refresh:
+        credentials["oauth_refresh"] = refresh
+    if credentials.get("auth_method") == "oauth":
+        if not credentials.get("key"):
+            raise ValueError(f"{path} selects the oauth flow but carries no sunsynk_key token")
+    elif not (credentials.get("username") and credentials.get("password")):
+        raise ValueError(f"{path} has neither an oauth token nor a sunsynk_username/sunsynk_password pair")
+    return credentials
+
+
+def apply_oauth_refresh_settings(mock_base, refresh):
+    """Put apps.yaml's oauth refresh settings where OAuthMixin reads them: the environment and base.args.
+
+    Without them the standalone CLI cannot refresh an expired token - the refresh is skipped with
+    "SUPABASE_URL or SUPABASE_KEY not set" and every API call then fails with HTTP 401.
+    """
+    refresh = refresh or {}
+    if refresh.get("supabase_url"):
+        os.environ["SUPABASE_URL"] = refresh["supabase_url"]
+    if refresh.get("supabase_key"):
+        os.environ["SUPABASE_KEY"] = refresh["supabase_key"]
+    if refresh.get("user_id"):
+        mock_base.args["user_id"] = refresh["user_id"]
 
 
 def _build_sunsynk(mock_base, args):  # pragma: no cover
@@ -1790,20 +2342,150 @@ def _build_sunsynk(mock_base, args):  # pragma: no cover
     _build_deye does, so a serial restricts discovery itself (run() -> refresh_static() ->
     get_device_list()) rather than being trusted unverified after the fact.
     """
+    credentials = dict(getattr(args, "credentials", None) or {})
+    # --serial still wins over the file, so one inverter of a multi-inverter account can be
+    # singled out without editing apps.yaml.
+    if args.serial:
+        credentials["inverter_sn"] = args.serial
+    apply_oauth_refresh_settings(mock_base, credentials.pop("oauth_refresh", None))
+    if credentials.get("auth_method") == "oauth" and not (os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_KEY") and mock_base.args.get("user_id")):
+        print("Warning: the oauth token cannot be refreshed without supabase_url, supabase_key and user_id in apps.yaml - expect HTTP 401 once it expires")
     return SunsynkAPI(
         mock_base,
-        username=args.username,
-        password=args.password,
-        region=args.region,
-        auth_method=args.auth_method,
-        inverter_sn=args.serial,
+        username=credentials.pop("username", args.username),
+        password=credentials.pop("password", args.password),
+        region=credentials.pop("region", args.region),
+        auth_method=credentials.pop("auth_method", args.auth_method),
+        inverter_sn=credentials.pop("inverter_sn", None),
+        key=credentials.pop("key", ""),
+        token_expires_at=credentials.pop("token_expires_at", None),
+        token_hash=credentials.pop("token_hash", ""),
         # The CLI is the verification tool, so control is on - but test_sunsynk_api still
         # asks before it sends anything to a real inverter, and run() only ever calls
         # apply_settings/apply_schedule for a serial already in control_active, which
         # starts empty on every fresh CLI process - so the default path stays read-only.
         control_enable=True,
-        automatic=False,
+        # --automatic runs automatic_config() on the first cycle, as a live install does;
+        # MockBase.set_arg prints every setting it binds with the referenced entity's state.
+        automatic=bool(args.automatic),
     )
+
+
+def _tou_test_window(now_minutes, lead_minutes=240, length_minutes=180):
+    """Return an HH:MM charge window placed clear of the current time.
+
+    The programme --tou-test writes exists only to be read back and removed, so it must
+    never be one the inverter acts on. Starting a few hours ahead and running for a few
+    more keeps the current minute outside it however the window wraps past midnight, so
+    the battery cannot enter the window during the seconds it is live.
+    """
+    start = (now_minutes + lead_minutes) % MINUTES_PER_DAY
+    end = (start + length_minutes) % MINUTES_PER_DAY
+    return f"{start // 60:02d}:{start % 60:02d}", f"{end // 60:02d}:{end % 60:02d}"
+
+
+def _tou_snapshot(settings):
+    """Take the System Mode subset of a settings read - everything a restore needs."""
+    return {key: value for key, value in (settings or {}).items() if key in SUNSYNK_SYSTEM_MODE_FIELDS}
+
+
+def _tou_slot_times(settings):
+    """Return the six slot start times from a settings object, for printing."""
+    return [(settings or {}).get(TOU_FIELD["time"].format(n=n)) for n in range(1, TOU_SLOT_COUNT + 1)]
+
+
+async def _tou_round_trip(client, sn):  # pragma: no cover
+    """Write a padded TOU programme to a real inverter, verify it, then restore the original.
+
+    This is the only thing in the tree that proves the slot builder against real firmware
+    rather than a double. The mocked tests can say what build_tou_slots produces; only this
+    says the inverter stored it.
+
+    The original programme is written to a JSON file BEFORE anything is sent, the restore
+    runs from a finally, and the restore is itself verified by reading back - so a failure
+    anywhere still leaves the inverter as it was found, or names the file that will put it
+    back by hand.
+    """
+    original = await client.fetch_settings(sn)
+    snapshot = _tou_snapshot(original)
+    if len(snapshot) < TOU_SLOT_COUNT:
+        print(f"\nNo System Mode programme read back for {sn} ({len(snapshot)} owned keys), refusing to write.")
+        return False
+    snapshot_path = f"sunsynk_tou_restore_{sn}_{time.strftime('%Y%m%d_%H%M%S')}.json"
+    with open(snapshot_path, "w") as handle:
+        json.dump(snapshot, handle, indent=2, sort_keys=True, default=str)
+    print(f"\n--- {sn} TOU round trip ---")
+    print(f"Current programme: {_tou_slot_times(original)}")
+    print(f"Restore snapshot saved to {os.path.abspath(snapshot_path)}")
+
+    now_minutes = client._now_minutes()
+    start, end = _tou_test_window(now_minutes)
+    schedule = {
+        "reserve": max(client.battery_reserve_min(sn), 10),
+        "charge": {"enable": True, "soc": 95, "power": int(client.battery_rate_max(sn)) or 3000, "start": start, "end": end},
+        "export": {"enable": False, "soc": 0, "power": 0, "start": "00:00:00", "end": "00:00:00"},
+    }
+    self_use_power = int(client.inverter_limit(sn)) or client._existing_slot_power(sn)
+    expected = client.build_tou_slots(schedule, current_soc=50, self_use_power=self_use_power)
+    print(f"Writing charge {start}-{end} (now {now_minutes // 60:02d}:{now_minutes % 60:02d}, deliberately outside the window)")
+    print(f"Expected programme: {[(slot['time'], 'charge' if slot['grid_charge'] else 'self-use') for slot in expected]}")
+    print("  (the slots after the window are padding - they must carry the state they follow, not end it)")
+    try:
+        confirm = input("Send this to the inverter and then restore the original? [y/N] ")
+    except (EOFError, KeyboardInterrupt):
+        print("\nNo input available, nothing sent.")
+        os.remove(snapshot_path)
+        return False
+    if confirm.strip().lower() != "y":
+        print("Nothing sent.")
+        os.remove(snapshot_path)
+        return False
+
+    failed = False
+    try:
+        if not await client.apply_settings(sn, schedule, current_soc=50, force=True):
+            print("FAILED: apply_settings reported no write - the programme did not reach the inverter.")
+            return True
+        # Read back rather than trusting the write's own success: this API accepts an
+        # oversized object and silently discards it, and has been seen to drop individual
+        # fields while persisting the rest (see SUNSYNK_BOOL_FIELDS), so only a read proves
+        # the programme landed.
+        print(f"Written, re-reading in {SUNSYNK_TOU_TEST_SETTLE}s to let the dongle collect it...")
+        await asyncio.sleep(SUNSYNK_TOU_TEST_SETTLE)
+        readback = await client.fetch_settings(sn)
+        if not readback:
+            print("FAILED: could not read the settings back after writing.")
+            return True
+        sent = client.applied_payload.get(sn, {})
+        asserted = [TOU_FIELD[field].format(n=index) for index in range(1, TOU_SLOT_COUNT + 1) for field in ("time", "grid_charge", "sell")]
+        for key in asserted:
+            if str(readback.get(key)) != str(sent.get(key)):
+                print(f"FAILED: {key} read back as {readback.get(key)!r}, wrote {sent.get(key)!r}")
+                failed = True
+        for key, value in sent.items():
+            # Reported, not failed: the inverter may normalise a power or a voltage, and
+            # that is not what this test is about.
+            if key not in asserted and key != SUNSYNK_SERIAL_FIELD and str(readback.get(key)) != str(value):
+                print(f"  note: {key} read back as {readback.get(key)!r}, wrote {value!r}")
+        if not failed:
+            print(f"VERIFIED: the inverter stored {_tou_slot_times(readback)} - the window runs unbroken through its padding.")
+    finally:
+        print("Restoring the original programme...")
+        if await client._post("settings_set", sn=sn, body=snapshot) is None:
+            print(f"RESTORE FAILED - the inverter is still on the test programme. Restore by hand from {os.path.abspath(snapshot_path)}")
+            failed = True
+        else:
+            await asyncio.sleep(SUNSYNK_TOU_TEST_SETTLE)
+            after = await client.fetch_settings(sn)
+            differing = [key for key, value in snapshot.items() if str((after or {}).get(key)) != str(value)]
+            if differing:
+                print(f"RESTORE INCOMPLETE - {len(differing)} field(s) still differ: {differing[:10]}")
+                print(f"  the original is saved at {os.path.abspath(snapshot_path)}")
+                failed = True
+            else:
+                print(f"Restored: {_tou_slot_times(after)}")
+                os.remove(snapshot_path)
+    return failed
 
 
 async def test_sunsynk_api(args):  # pragma: no cover
@@ -1830,13 +2512,17 @@ async def test_sunsynk_api(args):  # pragma: no cover
       - a token but no device_list -> login worked, discovery found nothing (or failed -
         see self.discovery_ok, Fix 3).
       - a device_list but run() still failed -> the first telemetry poll came back empty.
-    These three are exhaustive for the auth methods this CLI exposes (password,
-    password_legacy): check_and_refresh_oauth_token() only ever returns False for the
-    oauth flow, which --auth-method cannot select.
+    These three are exhaustive for the password flows (--auth-method password,
+    password_legacy). --apps-yaml can additionally supply an oauth account, where
+    check_and_refresh_oauth_token() can itself return False - an expired token with no
+    usable refresh reports as the no-access-token case above, which is the right diagnosis:
+    the fix is a fresh sunsynk_key in apps.yaml.
     """
     mock_base = MockBase()
     client = _build_sunsynk(mock_base, args)
-    print(f"Region {args.region} -> {client.base_url} (source={client.source}), auth={args.auth_method}")
+    # client.auth_method, not args.auth_method: --apps-yaml can override it, and reporting
+    # the CLI default while running an oauth account makes a login failure undiagnosable.
+    print(f"Region {client.region} -> {client.base_url} (source={client.source}), auth={client.auth_method}")
 
     print("Calling run() once (read-only: login, discover, poll config/telemetry, publish)...")
     ok = await client.run(seconds=0, first=True)
@@ -1862,7 +2548,13 @@ async def test_sunsynk_api(args):  # pragma: no cover
         return
 
     serials = client.device_list
-    print(f"Inverters: {serials}")
+    driven = client.inverter_list
+    groups = client.parallel_groups()
+    failures = []
+    print(f"Polled: {serials}")
+    print(f"Inverters: {driven}")
+    for master, slaves in groups.items():
+        print(f"Parallel group: master {master}, slave(s) {slaves}")
     for sn in serials:
         print(f"\n--- {sn} detail ---")
         print(json.dumps(client.device_detail.get(sn, {}), indent=2, default=str))
@@ -1871,7 +2563,17 @@ async def test_sunsynk_api(args):  # pragma: no cover
         if args.dump_settings:
             print(f"\n--- {sn} settings ---")
             print(json.dumps(client.device_settings.get(sn, {}), indent=2, default=str))
-        print(f"\nDerived: capacity={client.battery_capacity(sn):.2f} kWh, rate_max={client.battery_rate_max(sn):.0f} W, floor={client.battery_reserve_min(sn)}%")
+        if sn not in driven:
+            # Never written to: a slave takes its settings from its master (GH#5594).
+            master = next((master for master, slaves in groups.items() if sn in slaves), None)
+            print(f"\n{sn} is a parallel slave of {master}: its flows are counted in the master's, and it is never written to")
+            continue
+        if sn in groups:
+            print(f"\n--- {sn} group telemetry (published) ---")
+            print(json.dumps({**client.group_values(sn), **client.group_energy(sn)}, indent=2, default=str))
+        print(
+            f"\nDerived: capacity={client.battery_capacity(sn):.2f} kWh, rate_max={client.battery_rate_max(sn):.0f} W, inverter_limit={client.inverter_limit(sn):.0f} W, export_limit={client.export_limit(sn):.0f} W, floor={client.battery_reserve_min(sn)}%"
+        )
         if args.write_test:
             # A deliberately harmless schedule: a self-use day at the inverter's own floor.
             schedule = {
@@ -1899,7 +2601,12 @@ async def test_sunsynk_api(args):  # pragma: no cover
             if confirm.strip().lower() == "y":
                 await client.apply_settings(sn, schedule, current_soc=50, force=True)
                 print("Written. Re-reading in 60 seconds is the only way to confirm the dongle collected it.")
+        if args.tou_test:
+            if await _tou_round_trip(client, sn):
+                failures.append(sn)
 
+    if failures:
+        print(f"\nTOU round trip FAILED for {failures}")
     await client.final()
     print("Done")
 
@@ -1907,14 +2614,27 @@ async def test_sunsynk_api(args):  # pragma: no cover
 def main():  # pragma: no cover
     """Command-line entry point for Sunsynk diagnostics."""
     parser = argparse.ArgumentParser(description="Sunsynk Cloud API diagnostics")
-    parser.add_argument("--username", required=True, help="Sunsynk Connect account e-mail")
-    parser.add_argument("--password", required=True, help="Sunsynk Connect account password")
+    parser.add_argument("--apps-yaml", default=None, help="Read credentials from a real apps.yaml instead of --username/--password (the only way to use an oauth-token account)")
+    parser.add_argument("--username", default=None, help="Sunsynk Connect account e-mail (not needed with --apps-yaml)")
+    parser.add_argument("--password", default=None, help="Sunsynk Connect account password (not needed with --apps-yaml)")
     parser.add_argument("--region", default="sunsynk", choices=sorted(SUNSYNK_REGIONS), help="API region")
     parser.add_argument("--auth-method", default="password", choices=["password", "password_legacy"], help="Login flow: RSA-encrypted (default) or the pre-2025 plaintext one")
     parser.add_argument("--serial", default=None, help="Restrict to one inverter serial")
+    parser.add_argument("--automatic", action="store_true", help="Run automatic_config() on the first cycle and print the Predbat settings it binds (writes nothing to the inverter)")
     parser.add_argument("--dump-settings", action="store_true", help="Print the full settings object")
     parser.add_argument("--write-test", action="store_true", help="Build a harmless self-use payload and offer to send it")
-    asyncio.run(test_sunsynk_api(parser.parse_args()))
+    parser.add_argument("--tou-test", action="store_true", help="Write a padded TOU programme to the inverter, verify the read-back, then restore the original (asks first)")
+    args = parser.parse_args()
+    args.credentials = None
+    if args.apps_yaml:
+        try:
+            args.credentials = load_apps_yaml_credentials(args.apps_yaml)
+        except ValueError as error:
+            parser.error(str(error))
+        print(f"Credentials loaded from {args.apps_yaml} for inverter(s) {args.credentials['inverter_sn']}")
+    elif not (args.username and args.password):
+        parser.error("--username and --password are required unless --apps-yaml is given")
+    asyncio.run(test_sunsynk_api(args))
 
 
 if __name__ == "__main__":

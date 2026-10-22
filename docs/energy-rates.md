@@ -45,12 +45,14 @@ You should first log into your Octopus account and go to the [Accounts](https://
 
 Then go to the [API Access page](https://octopus.energy/dashboard/new/accounts/personal-details/api-access), click 'regenerate API key' and copy your API key e.g. `sk_live_1as12355...`
 
-Put these both into your `apps.yaml` and you are done.
+Put the account number in `apps.yaml` and the API key in `secrets.yaml`, referenced with `!secret`:
 
 ```yaml
   octopus_api_account: 'XXXXXXXX'
-  octopus_api_key: 'sk_live_yyyyyyyy'
+  octopus_api_key: !secret octopus_api_key
 ```
+
+The API key can read and change your Octopus account, so keep it out of `apps.yaml`, which is more likely to be shared or attached to a bug report - see [Storing secrets](apps-yaml.md#storing-secrets).
 
 ### Octopus Free energy sessions
 
@@ -159,6 +161,14 @@ Like the electricity rates, this is set in the `apps.yaml` template to a regular
   octopus_saving_session: 're:(event.octopus_energy([0-9a-z_]+|)_(saving_session_events?|power_down_events))'
 ```
 
+The Octopus Integration Power Down event:
+
+```yaml
+  event.octopus_energy_xxxxxxxx_octoplus_power_down_events
+```
+
+is disabled by default and will need [to be enabled as described above](#octopus-energy-integration-setup).
+
 Octopus Energy integration v19.0.0 renamed this sensor from `..._octoplus_saving_session_events` to `..._octoplus_power_down_events`. The above pattern matches either name, so existing configurations keep working unchanged.
 The old sensor is retained by the integration until **January 2027**, after which only the Power Down naming will exist. The new sensor ships disabled by default in Home Assistant
 (`entity_registry_enabled_default: False`) - if Predbat's Octopus entity list does not show a Power Down sensor, [enable it in the entity registry first](https://bottlecapdave.github.io/HomeAssistant-OctopusEnergy/faq/#there-are-entities-that-are-disabled-why-are-they-disabled-and-how-do-i-enable-them), otherwise Predbat will keep silently using the old sensor with no visible warning.
@@ -171,6 +181,8 @@ available sessions on your behalf.
 
 If an available saving session overlaps an Axle VPP session (any overlap in time), Predbat will **not** auto-join the saving session, as the two events cannot both be honoured for the same period. The Axle session takes priority.
 
+When auto-join is On, and there are no overlapping events, Predbat will join a saving session as soon as the event appears. In some cases this may not be desirable, for example when signed up to Axle short notice events, where a saving session could be announced before a conflicting Axle event. In such cases Predbat would have already joined the saving session, leading to potentially overlapping events. To resolve this, **octopus_saving_auto_join_lead_hours** can be configured to set how soon Predbat is allowed to join a saving session (default 0 = join immediately). Setting a value of e.g. "3" would mean Predbat will wait until 3 hours before the start of the saving session event before attempting to join, giving the opportunity for short notice events from Axle or other sources to be announced and considered first.
+
 Predbat will also **not** auto-join a session whose reward rate doesn't exceed the **octopus_saving_session_min_octopoints_per_kwh** configuration item in `apps.yaml` (default 0 octopoints/kWh - joins any session with a positive reward). Raise this if you want to also skip low-value sessions you don't consider worth the disruption. The default of 0 additionally works around the Octopus Energy integration currently reporting some non-joinable events (national Power Up/free electricity slots) inside the same data set at 0 p/kWh - see [#4593](https://github.com/springfall2008/batpred/issues/4593).
 
 In the Predbat plan, for joined saving sessions the energy rates for import and export will be overridden by adding the assumed saving rate to your normal rate.
@@ -182,6 +194,8 @@ reduction in this period. E.g. setting to a value of 0.8 would indicate you will
 
 As the saving session import and export rates are very high compared to normal Predbat will plan additional export during the saving session period.
 If necessary, a pre-charge may happen at some point during the day to maintain the battery right level for the session.
+This needs the automatic import threshold (**input_number.predbat_rate_low_threshold** set to 0): a manual threshold is a cap
+Predbat will not charge above, even ahead of a session - see [rate thresholds](customisation.md#battery-margins-and-metrics-options).
 
 Note that Predbat's operational mode **select.predbat_mode** must be set to either 'Control charge'
 or 'Control charge & discharge' for Predbat to be able to manage the battery for the saving session.
@@ -207,6 +221,14 @@ all the free events.
 ```yaml
   octopus_free_session: 're:(event.octopus_energy_([0-9a-z_]+|)_octoplus_(free_electricity_session_events|power_up_events))'
 ```
+
+The Octopus Integration Power Up event:
+
+```yaml
+  event.octopus_energy_xxxxxxxx_octoplus_power_up_events
+```
+
+is disabled by default and will need [to be enabled as described above](#octopus-energy-integration-setup).
 
 Octopus Energy integration v19.0.0 renamed this sensor from `..._octoplus_free_electricity_session_events` to `..._octoplus_power_up_events`. The above pattern matches either name, so existing
 configurations keep working unchanged. The old sensor is retained by the integration until **January 2027**, after which only the Power Up naming will exist.
@@ -279,6 +301,9 @@ The following entries are required for the Kraken component in `apps.yaml`:
 ```
 
 Full details of what to configure are given in the [component documentation](components.md#kraken-energy-kraken)
+
+If you have an EV on a smart-charging tariff with Eon.Next (such as Next Drive Smart), Eon bills every half hour of a planned charging dispatch at the cheap rate whether or not the car charged in it, unlike Octopus Intelligent.
+With `kraken_provider: eon` Predbat prices dispatches that way automatically; see **intelligent_dispatch_billing** in the [car charging documentation](car-charging.md) to change it.
 
 ## Energidataservice Integration
 

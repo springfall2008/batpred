@@ -4,6 +4,18 @@ Provides the Hass class that emulates the AppDaemon interface for standalone
 execution, including YAML configuration loading, secret management, log
 rotation, scheduled callback execution, and file change detection for
 development hot-reload.
+
+Despite the "outside AppDaemon" framing (legacy naming, kept for history), this
+IS the class predbat.PredBat actually inherits from in every currently
+supported install path - the Predbat app/addon and Docker both run this
+standalone-style loader, not a real appdaemon package. The genuinely
+AppDaemon-hosted install method has been retired (docs/install.md); there is
+no appdaemon dependency anywhere in this repo, and no conditional import
+branches to a different hass module. So Hass.log() below - and the write-time
+secret redaction in it (GH#4770) - is not a partial mitigation that misses an
+AppDaemon-hosted population still running elsewhere: there is no such
+population left to miss. Flagging this explicitly because the class/module
+docstrings alone would lead a reviewer to (reasonably) suspect the opposite.
 """
 
 import yaml
@@ -11,6 +23,9 @@ import sys
 import asyncio
 import os
 import subprocess
+
+from log_secrets import LogRedaction
+from utils import redact_log_line
 
 
 def write_git_version_marker():
@@ -169,18 +184,26 @@ if __name__ == "__main__":
     sys.exit(0)
 
 
-class Hass:
+class Hass(LogRedaction):
     """Standalone mode wrapper emulating the AppDaemon interface.
 
     Enables PredBat to run outside Home Assistant/AppDaemon with YAML
     config loading, secret management, log rotation, scheduled callbacks,
     and file change detection for development hot-reload.
+
+    log()'s credential-redaction cache lives in LogRedaction (log_secrets.py) rather
+    than here, so it carries its own state and needs nothing from this __init__
+    (GH#5169).
     """
 
     def log(self, msg, quiet=True):
         """
         Log a message to the logfile
         """
+        # Redacted here, at the point the line is written, not at serve/download time: some users
+        # copy predbat.log directly off a Samba share exposing the addon's config directory,
+        # bypassing every HTTP/MCP endpoint a download-time scrub could sit behind (GH#4770).
+        msg = redact_log_line(str(msg), self._log_secret_pattern())
         message = "{}: {}\n".format(datetime.now(), msg)
         self.logfile.write(message)
         self.logfile.flush()
@@ -260,6 +283,10 @@ class Hass:
         except yaml.YAMLError as exc:
             print(exc)
             sys.exit(1)
+
+        # Both args and secrets have just been populated, so the redaction pattern built from them
+        # (GH#4770) is stale - drop it so the next log() call rebuilds from the loaded config.
+        self._invalidate_log_secret_pattern()
 
     def run_every(self, callback, next_time, run_every, **kwargs):
         """

@@ -1808,11 +1808,13 @@ def test_write_confirmation_timeout(my_predbat):
     agent = _agent_with_fake(my_predbat, _write_call_response(), _text_response("no answer"))
     agent.confirm_writes_enabled = lambda: True
     chat.CONFIRM_TIMEOUT_SECONDS_ORIGINAL = chat.CONFIRM_TIMEOUT_SECONDS
-    chat.CONFIRM_TIMEOUT_SECONDS = 0.5
+    # Short enough not to slow the suite, and polled faster than the real 0.2s so the waiter still loops many times before giving up
+    chat.CONFIRM_TIMEOUT_SECONDS = 0.1
     try:
         cid = asyncio.run(agent.store.create())
         started = time.monotonic()
-        asyncio.run(agent.run_turn(cid, "raise best soc keep"))
+        with _fast_confirm_poll():
+            asyncio.run(agent.run_turn(cid, "raise best soc keep"))
         elapsed = time.monotonic() - started
     finally:
         chat.CONFIRM_TIMEOUT_SECONDS = chat.CONFIRM_TIMEOUT_SECONDS_ORIGINAL
@@ -2876,6 +2878,9 @@ def test_snapshot_formats_times_and_percentages(my_predbat):
 
         now_utc = datetime(2026, 8, 28, 17, 0, 0, tzinfo=tz)
         midnight_utc = datetime(2026, 8, 28, 0, 0, 0, tzinfo=tz)
+        # A real CI version string whose git hash happens to contain "1590" - the raw-minute check below
+        # must not trip over it, as it did on PR #5248's CI run
+        this_version = "v9.2.0 (3315908)"
         soc_kw = 6.76
         soc_max = 9.52
         reserve = 0.381
@@ -2900,8 +2905,11 @@ def test_snapshot_formats_times_and_percentages(my_predbat):
     if "Sat 02:30 to Sat 07:00" not in snapshot:
         print("ERROR: the charge window was not rendered as weekday + clock: {}".format(snapshot))
         failed = True
-    if "1590" in snapshot or "1860" in snapshot:
-        print("ERROR: raw minute counts are still in the snapshot: {}".format(snapshot))
+    # Only the planned-window lines carry these minutes - searching the whole snapshot also matched the git
+    # hash in the version line whenever it happened to contain "1590" or "1860"
+    window_lines = "\n".join(line for line in snapshot.splitlines() if "planned" in line and "window" in line)
+    if not window_lines or "1590" in window_lines or "1860" in window_lines:
+        print("ERROR: raw minute counts are still in the snapshot's planned windows: {}".format(window_lines or snapshot))
         failed = True
 
     # An export window inside today, with its extra minute-valued key also converted.

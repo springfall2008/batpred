@@ -504,6 +504,53 @@ def test_minute_data(my_predbat):
         print(f"ERROR: MWh to kWh conversion test failed - expected 1250.0, got {mwh_to_kwh_result.get(0)}")
         failed = True
 
+    # Tests 27-29: the last two changes fall in the same minute (a sensor flickering 22/23, or two
+    # quick counter updates). Timestamps are truncated to the minute, so both items have the same
+    # age; the newer one (last in the oldest-first history) must be the value carried up to now.
+    print("Test 27: Same-minute changes, newest wins (no smoothing)")
+    history_same_minute = [
+        {"state": "23.0", "last_updated": "2024-10-04T11:00:00+00:00"},
+        {"state": "22.0", "last_updated": "2024-10-04T11:30:46+00:00"},
+        {"state": "23.0", "last_updated": "2024-10-04T11:30:48+00:00"},
+    ]
+    same_minute_result, ignore_io = minute_data(history=history_same_minute, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=True, smoothing=False)
+    same_minute_points = [same_minute_result.get(p) for p in [0, 34, 35]]
+    if same_minute_points != [23.0, 23.0, 23.0]:
+        print("ERROR: Same-minute (no smoothing) test failed - minutes 0, 34, 35 were {} expected [23.0, 23.0, 23.0]".format(same_minute_points))
+        failed = True
+
+    print("Test 28: Same-minute changes, newest wins (smoothing)")
+    same_minute_smooth, ignore_io = minute_data(history=history_same_minute, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=True, smoothing=True)
+    same_minute_smooth_points = [same_minute_smooth.get(p) for p in [0, 34, 35]]
+    if same_minute_smooth_points != [23.0, 23.0, 23.0]:
+        print("ERROR: Same-minute (smoothing) test failed - minutes 0, 34, 35 were {} expected [23.0, 23.0, 23.0]".format(same_minute_smooth_points))
+        failed = True
+
+    print("Test 29: Same-minute counter updates stay monotonic")
+    history_same_minute_inc = [
+        {"state": "10.0", "last_updated": "2024-10-04T11:00:00+00:00"},
+        {"state": "10.1", "last_updated": "2024-10-04T11:30:10+00:00"},
+        {"state": "10.2", "last_updated": "2024-10-04T11:30:50+00:00"},
+    ]
+    same_minute_inc, ignore_io = minute_data(history=history_same_minute_inc, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=True, smoothing=True, clean_increment=True)
+    # Incrementing data comes back as energy since the start of the window
+    same_minute_inc_points = [dp4(same_minute_inc.get(p)) for p in [0, 34, 35]]
+    if same_minute_inc_points != [0.2, 0.2, 0.2]:
+        print("ERROR: Same-minute counter test failed - minutes 0, 34, 35 were {} expected [0.2, 0.2, 0.2]".format(same_minute_inc_points))
+        failed = True
+
+    # Test 30: forward data with smoothing (the load forecast shape). Smoothing starts each item at the previous
+    # item's time, so the first two items always tie on age; the same-minute rule above is for backwards history
+    # only and must not change the value that fills the tail past the last forecast point.
+    print("Test 30: Forward smoothing tail fill unchanged by the same-minute rule")
+    forward_start = datetime(2024, 10, 4, 0, 0, 0, tzinfo=utc)
+    forward_history = [{"energy": index * 0.25, "last_updated": "2024-10-04T{:02d}:{:02d}:00+00:00".format(index // 2, (index % 2) * 30)} for index in range(48)]
+    forward_result, ignore_io = minute_data(forward_history, 2, forward_start, "energy", "last_updated", backwards=False, clean_increment=False, smoothing=True, divide_by=1.0, scale=1.0)
+    forward_points = [dp4(forward_result.get(p)) for p in [0, 30, 1410, 2879]]
+    if forward_points != [0.0, 0.25, 0.0, 0.0]:
+        print("ERROR: Forward smoothing tail test failed - minutes 0, 30, 1410, 2879 were {} expected [0.0, 0.25, 0.0, 0.0]".format(forward_points))
+        failed = True
+
     print("**** minute_data tests completed ****")
     return failed
 
