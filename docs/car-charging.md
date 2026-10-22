@@ -763,6 +763,16 @@ A low 5-minute reading with a live load that is not low, or is unavailable, is i
 A reading that shows the car charging counts straight away, and an "unknown" or "unavailable" sensor is ignored rather than taken as not charging.
 With **car_charging_now**, Predbat checks the sensor every 15 seconds between plan updates, so it reacts within seconds of these times.
 
+**Very short dispatches**
+
+Octopus sometimes issues dispatches only a minute or two long, which the car is unlikely to charge in.
+A dispatch shorter than 5 minutes is never treated as cheap for the house, and does not use up any of the day's low-rate allowance (**octopus_slot_max**), unless Predbat sees the car charging during the half hour it falls in. Then that whole half hour is cheap.
+That check needs **switch.predbat_octopus_intelligent_dynamic** On. In practice it also needs a **car_charging_now** sensor, because only the 15-second check is quick enough to catch a dispatch that short.
+Without one, very short dispatches always stay at the normal rate.
+The car's own plan still includes them, priced at the normal rate.
+This does not apply when **intelligent_dispatch_billing** is `window`, where the supplier bills every dispatch half hour cheap whether or not the car charges.
+This only covers the dispatches Predbat prices itself. If your import rates come from the Octopus Energy integration and the integration has already lowered the rate for a short dispatch, Predbat leaves that rate as it is.
+
 **What happens when the car is not charging**
 
 - That dispatch slot and every later one for the car are cancelled: Predbat no longer holds the battery for the car ("Hold for car"), no longer predicts the car's load, and no longer uses the dispatch's cheap rate for the house battery. The overnight 23:30-05:30 rate stays cheap, as that is part of the tariff.
