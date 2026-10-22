@@ -1170,7 +1170,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
         So is a car whose plugged-in sensor (car_charging_plugged, else car_charging_planned) now reads unplugged, or whose
         car_charging_now sensor reads not charging: it is not charging, so there is nothing to add. A car_charging_now
-        sensor that is unavailable or unknown is no reading, and the plan's prediction is written as before.
+        sensor that is unavailable or unknown is no reading, and the plan's prediction is written as before. Unlike the
+        reset on unplug, a car_charging_planned that turns off when a charge finishes is right here: nothing more is added.
 
         What is written goes into the car's tracking record too, so the next cycle does not take it for a value
         the user entered.
@@ -1178,7 +1179,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         for car_n in range(self.num_cars):
             if car_n < len(self.car_charging_manual_soc_energy) and self.car_charging_manual_soc_energy[car_n]:
                 continue
-            plug_arg = self.car_plug_arg(car_n)
+            plug_arg = self.car_plug_arg(car_n, planned=True)
             if plug_arg and self.car_plugged_in_now(car_n, plug_arg) is False:
                 continue
             if car_n < len(self.car_charging_manual_soc) and self.car_charging_manual_soc[car_n] and self.get_car_charging_now_tristate(car_n) is False:

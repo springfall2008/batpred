@@ -11,10 +11,11 @@
 Manual car SoC tracking (car_charging_manual_soc).
 
 - A car with no car_charging_soc sensor is tracked manually when it has a car_charging_energy sensor and a
-  plugged-in sensor. Without both it is planned from empty as before - tracking it from the plan's prediction
+  car_charging_plugged sensor. Without both it is planned from empty as before - tracking it from the plan's prediction
   would climb to the charge limit and stay there. The switch forces manual tracking for any car.
 - An energy-tracked car's manual SoC rises by the energy the charger's history shows, not the plan's prediction.
-- A manual SoC car is reset to zero when its plugged-in sensor goes from plugged in to unplugged.
+- A manual SoC car is reset to zero when its car_charging_plugged sensor goes from plugged in to unplugged, or, with
+  no such sensor, once it has been idle for CAR_MANUAL_SOC_IDLE_MINUTES.
 - A value the user enters is a fresh starting point.
 
 Each car's record is published as sensor.predbat_car_manual_soc_tracked[_N], which a restart reads back, so tracking
@@ -23,7 +24,7 @@ picks up where it left off. No entity's last_changed is used.
 import copy
 from datetime import timedelta
 
-from const import CAR_MANUAL_SOC_UNPLUG_MINUTES
+from const import CAR_MANUAL_SOC_IDLE_MINUTES, CAR_MANUAL_SOC_UNPLUG_MINUTES
 
 ENERGY_SENSOR = "sensor.car_manual_soc_test_energy"
 PLUGGED_SENSOR = "binary_sensor.car_manual_soc_test_plugged"
@@ -172,24 +173,26 @@ def _run_config(my_predbat):
     print("Test 2: an energy sensor alone, or a plugged-in sensor alone, is not enough")
     result = manual({"car_charging_energy": ENERGY_SENSOR})
     failed |= _check("t2 energy only", result == ([False], [False]), "got {}".format(result))
-    result = manual({"car_charging_planned": PLANNED_SENSOR})
+    result = manual({"car_charging_plugged": PLUGGED_SENSOR})
     failed |= _check("t2 plug only", result == ([False], [False]), "got {}".format(result))
 
-    print("Test 3: no SoC sensor, with energy and plugged-in sensors - manual and energy-tracked")
-    result = manual({"car_charging_energy": ENERGY_SENSOR, "car_charging_planned": PLANNED_SENSOR})
-    failed |= _check("t3 planned", result == ([True], [True]), "got {}".format(result))
+    print("Test 3: no SoC sensor, with energy and car_charging_plugged sensors - manual and energy-tracked")
     result = manual({"car_charging_energy": ENERGY_SENSOR, "car_charging_plugged": PLUGGED_SENSOR})
     failed |= _check("t3 plugged", result == ([True], [True]), "got {}".format(result))
 
+    print("Test 3b: car_charging_planned is not a plugged-in sensor - many chargers turn it off when a charge finishes")
+    result = manual({"car_charging_energy": ENERGY_SENSOR, "car_charging_planned": PLANNED_SENSOR})
+    failed |= _check("t3b planned", result == ([False], [False]), "got {}".format(result))
+
     print("Test 4: a fixed plugged-in value is not a sensor - it can never read unplugged")
-    result = manual({"car_charging_energy": ENERGY_SENSOR, "car_charging_planned": "on"})
+    result = manual({"car_charging_energy": ENERGY_SENSOR, "car_charging_plugged": "on"})
     failed |= _check("t4 literal", result == ([False], [False]), "got {}".format(result))
 
     print("Test 5: a car with a SoC sensor is left on it unless the switch is on")
-    result = manual({"car_charging_soc": SOC_SENSOR, "car_charging_energy": ENERGY_SENSOR, "car_charging_planned": PLANNED_SENSOR})
+    result = manual({"car_charging_soc": SOC_SENSOR, "car_charging_energy": ENERGY_SENSOR, "car_charging_plugged": PLUGGED_SENSOR})
     failed |= _check("t5 sensor", result == ([False], [False]), "got {}".format(result))
     my_predbat.expose_config("car_charging_manual_soc", True)
-    result = manual({"car_charging_soc": SOC_SENSOR, "car_charging_energy": ENERGY_SENSOR, "car_charging_planned": PLANNED_SENSOR})
+    result = manual({"car_charging_soc": SOC_SENSOR, "car_charging_energy": ENERGY_SENSOR, "car_charging_plugged": PLUGGED_SENSOR})
     failed |= _check("t5 switch", result == ([True], [True]), "got {}".format(result))
 
     print("Test 6: the switch still makes a car with no sensors manual, tracked from the plan")
@@ -198,9 +201,9 @@ def _run_config(my_predbat):
     my_predbat.expose_config("car_charging_manual_soc", False)
 
     print("Test 7: per car - a list with no SoC entry for car 1, and an unresolved regular expression")
-    result = manual({"car_charging_soc": [SOC_SENSOR], "car_charging_energy": ["sensor.charger_0", ENERGY_SENSOR], "car_charging_planned": [PLANNED_SENSOR, PLUGGED_SENSOR]}, num_cars=2)
+    result = manual({"car_charging_soc": [SOC_SENSOR], "car_charging_energy": ["sensor.charger_0", ENERGY_SENSOR], "car_charging_plugged": [PLANNED_SENSOR, PLUGGED_SENSOR]}, num_cars=2)
     failed |= _check("t7 short list", result == ([False, True], [False, True]), "got {}".format(result))
-    result = manual({"car_charging_soc": "re:sensor.no_such_car", "car_charging_energy": ENERGY_SENSOR, "car_charging_planned": PLANNED_SENSOR})
+    result = manual({"car_charging_soc": "re:sensor.no_such_car", "car_charging_energy": ENERGY_SENSOR, "car_charging_plugged": PLUGGED_SENSOR})
     failed |= _check("t7 regex", result == ([True], [True]), "got {}".format(result))
     return failed
 
@@ -210,8 +213,8 @@ def _run_energy(my_predbat):
     The manual SoC rises by the energy the charger's history shows since the record's time.
     """
     failed = False
-    _one_car(my_predbat, {"car_charging_energy": ENERGY_SENSOR, "car_charging_planned": PLANNED_SENSOR}, kwh=10.0)
-    _plug(my_predbat, "on", PLANNED_SENSOR)
+    _one_car(my_predbat, {"car_charging_energy": ENERGY_SENSOR, "car_charging_plugged": PLUGGED_SENSOR}, kwh=10.0)
+    _plug(my_predbat, "on")
     # 1 kWh 3 hours ago, then 2 kWh over the last half hour
     my_predbat.car_charging_energy = _history([(180, 1.0), (20, 1.0), (5, 1.0)])
 
@@ -245,7 +248,7 @@ def _run_energy(my_predbat):
 
     print("Test 12: a time older than the history counts the whole history")
     my_predbat.car_charging_energy = _history([(180, 1.0), (20, 1.0), (5, 1.0)])
-    _one_car(my_predbat, {"car_charging_energy": ENERGY_SENSOR, "car_charging_planned": PLANNED_SENSOR}, kwh=20.0)
+    _one_car(my_predbat, {"car_charging_energy": ENERGY_SENSOR, "car_charging_plugged": PLUGGED_SENSOR}, kwh=20.0)
     my_predbat.car_charging_energy = _history([(180, 1.0), (20, 1.0), (5, 1.0)])
     my_predbat.car_manual_soc_track()
     _since(my_predbat, 3 * 24 * 60)
@@ -272,13 +275,22 @@ def _run_energy(my_predbat):
         my_predbat.minute_data_import_export = saved_fetch
     failed |= _check("t14 nothing", abs(_manual_kwh(my_predbat) - 23.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
 
-    print("Test 15: the SoC never passes the battery size")
+    print("Test 15: the value counted is kept past the configured battery size - Octopus can report a larger one later in the cycle - and read clamped")
     my_predbat.expose_config("car_charging_manual_soc_kwh", 59.0)
     my_predbat.car_manual_soc_track()
     my_predbat.car_charging_energy = _history([(5, 5.0)])
     _since(my_predbat, 60)
     my_predbat.car_manual_soc_track()
-    failed |= _check("t15 capped", abs(_manual_kwh(my_predbat) - 60.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+    failed |= _check("t15 kept", abs(_manual_kwh(my_predbat) - 64.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+    failed |= _check("t15 read clamped", abs(my_predbat.car_manual_soc_kwh(0) - 60.0) < 0.001, "kwh {}".format(my_predbat.car_manual_soc_kwh(0)))
+
+    print("Test 15b: a value typed above the configured battery size is kept, and counted on from")
+    my_predbat.expose_config("car_charging_manual_soc_kwh", 70.0)
+    my_predbat.car_manual_soc_track()
+    my_predbat.car_charging_energy = _history([(5, 1.0)])
+    _since(my_predbat, 60)
+    my_predbat.car_manual_soc_track()
+    failed |= _check("t15b counted on", abs(_manual_kwh(my_predbat) - 71.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
 
     print("Test 16: a second car fetches its own charger's history, not the summed one")
     calls = []
@@ -295,7 +307,7 @@ def _run_energy(my_predbat):
     my_predbat.args["num_cars"] = 2
     my_predbat.num_cars = 2
     my_predbat.args["car_charging_energy"] = ["sensor.charger_0", ENERGY_SENSOR]
-    my_predbat.args["car_charging_planned"] = [PLANNED_SENSOR, PLANNED_SENSOR]
+    my_predbat.args["car_charging_plugged"] = [PLUGGED_SENSOR, PLUGGED_SENSOR]
     my_predbat.car_charging_battery_size = [60.0, 60.0]
     my_predbat.car_charging_rate = [7.4, 7.4]
     my_predbat.car_charging_soc = [0.0, 0.0]
@@ -320,7 +332,7 @@ def _run_energy(my_predbat):
     failed |= _check("t16 car 1", abs(car_1_kwh - 9.0) < 0.001, "kwh {}".format(car_1_kwh))
 
     print("Test 17: the end-of-cycle write-back leaves an energy-tracked car alone")
-    _one_car(my_predbat, {"car_charging_energy": ENERGY_SENSOR, "car_charging_planned": PLANNED_SENSOR}, kwh=20.0)
+    _one_car(my_predbat, {"car_charging_energy": ENERGY_SENSOR, "car_charging_plugged": PLUGGED_SENSOR}, kwh=20.0)
     my_predbat.car_charging_soc = [20.0]
     my_predbat.car_charging_soc_next = [35.0]
     my_predbat.update_car_manual_soc()
@@ -334,10 +346,10 @@ def _run_write_back(my_predbat):
     """
     failed = False
     print("Test 18: without an energy sensor the predicted SoC is written back")
-    _one_car(my_predbat, {"car_charging_planned": PLANNED_SENSOR}, kwh=20.0)
+    _one_car(my_predbat, {"car_charging_plugged": PLUGGED_SENSOR}, kwh=20.0)
     my_predbat.expose_config("car_charging_manual_soc", True)
     my_predbat.car_manual_soc_config()
-    _plug(my_predbat, "on", PLANNED_SENSOR)
+    _plug(my_predbat, "on")
     my_predbat.car_manual_soc_track()
     my_predbat.car_charging_soc = [20.0]
     my_predbat.car_charging_soc_next = [35.0]
@@ -346,7 +358,7 @@ def _run_write_back(my_predbat):
     failed |= _check("t18 recorded", my_predbat.car_manual_soc_state[0]["soc"] == 35.0, "record {}".format(my_predbat.car_manual_soc_state))
 
     print("Test 19: ... so an unplug on the next cycle still resets it")
-    _unplug(my_predbat, PLANNED_SENSOR)
+    _unplug(my_predbat)
     failed |= _check("t19 reset", abs(_manual_kwh(my_predbat)) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
 
     print("Test 20: the write-back skips an unplugged car")
@@ -354,6 +366,21 @@ def _run_write_back(my_predbat):
     my_predbat.car_charging_soc_next = [7.0]
     my_predbat.update_car_manual_soc()
     failed |= _check("t20 no write", abs(_manual_kwh(my_predbat)) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+
+    print("Test 20b: a switched-on car with only car_charging_planned is never reset by it turning off - a finished charge is not an unplug")
+    _one_car(my_predbat, {"car_charging_planned": PLANNED_SENSOR}, kwh=30.0)
+    my_predbat.expose_config("car_charging_manual_soc", True)
+    my_predbat.car_manual_soc_config()
+    _plug(my_predbat, "on", PLANNED_SENSOR)
+    my_predbat.car_manual_soc_track()
+    _unplug(my_predbat, PLANNED_SENSOR)
+    failed |= _check("t20b not reset", abs(_manual_kwh(my_predbat) - 30.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+
+    print("Test 20c: ... but car_charging_planned off still skips the write-back, as nothing more is charged")
+    my_predbat.car_charging_soc = [30.0]
+    my_predbat.car_charging_soc_next = [37.0]
+    my_predbat.update_car_manual_soc()
+    failed |= _check("t20c no write", abs(_manual_kwh(my_predbat) - 30.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
     my_predbat.expose_config("car_charging_manual_soc", False)
     return failed
 
@@ -363,7 +390,7 @@ def _run_unplug(my_predbat):
     The manual SoC goes back to zero when the car's plugged-in sensor goes from plugged in to unplugged.
     """
     failed = False
-    args = {"car_charging_energy": ENERGY_SENSOR, "car_charging_planned": PLUGGED_SENSOR}
+    args = {"car_charging_energy": ENERGY_SENSOR, "car_charging_plugged": PLUGGED_SENSOR}
 
     print("Test 21: plugged in keeps the value")
     _one_car(my_predbat, args, kwh=30.0)
@@ -420,7 +447,7 @@ def _run_unplug(my_predbat):
     my_predbat.car_manual_soc_track()
     failed |= _check("t25 first seen", abs(_manual_kwh(my_predbat) - 30.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
 
-    print("Test 26: car_charging_plugged is used before car_charging_planned - a finished charge is not an unplug")
+    print("Test 26: car_charging_plugged is used, not car_charging_planned - a finished charge is not an unplug")
     _one_car(my_predbat, {"car_charging_energy": ENERGY_SENSOR, "car_charging_planned": PLANNED_SENSOR, "car_charging_plugged": PLUGGED_SENSOR}, kwh=30.0)
     _plug(my_predbat, "on", PLANNED_SENSOR)
     _plug(my_predbat, "on")
@@ -442,7 +469,7 @@ def _run_guards(my_predbat):
     dummy = my_predbat.ha_interface.dummy_items
 
     print("Test 40: charger energy is capped at what the car could take at car_charging_rate - a counter glitch cannot fill it")
-    _one_car(my_predbat, {"car_charging_energy": ENERGY_SENSOR, "car_charging_planned": PLUGGED_SENSOR}, kwh=10.0)
+    _one_car(my_predbat, {"car_charging_energy": ENERGY_SENSOR, "car_charging_plugged": PLUGGED_SENSOR}, kwh=10.0)
     _plug(my_predbat, "on")
     my_predbat.car_manual_soc_track()
     # A counter dropping to zero and coming back reads as 8 kWh charged in the last 3 minutes
@@ -460,7 +487,7 @@ def _run_guards(my_predbat):
     failed |= _check("t41 full", abs(_manual_kwh(my_predbat) - (before + 3.0)) < 0.002, "kwh {} before {}".format(_manual_kwh(my_predbat), before))
 
     print("Test 42: the manual SoC is read within zero and the battery size")
-    _one_car(my_predbat, {"car_charging_energy": ENERGY_SENSOR, "car_charging_planned": PLUGGED_SENSOR}, kwh=100.0)
+    _one_car(my_predbat, {"car_charging_energy": ENERGY_SENSOR, "car_charging_plugged": PLUGGED_SENSOR}, kwh=100.0)
     my_predbat.args.pop("octopus_intelligent_slot", None)
     my_predbat.fetch_sensor_data_cars(save=False)
     failed |= _check("t42 clamped", abs(my_predbat.car_charging_soc[0] - 60.0) < 0.001, "soc {}".format(my_predbat.car_charging_soc))
@@ -523,7 +550,7 @@ def _run_restart(my_predbat):
     The record is published as a sensor, which a restart reads back, so a restart neither loses nor double counts.
     """
     failed = False
-    args = {"car_charging_energy": ENERGY_SENSOR, "car_charging_planned": PLUGGED_SENSOR}
+    args = {"car_charging_energy": ENERGY_SENSOR, "car_charging_plugged": PLUGGED_SENSOR}
     sensor = my_predbat.car_manual_soc_entity(0)
     dummy = my_predbat.ha_interface.dummy_items
 
@@ -610,7 +637,7 @@ def _run_fetch(my_predbat):
     """
     failed = False
     dummy = my_predbat.ha_interface.dummy_items
-    _one_car(my_predbat, {"car_charging_energy": ENERGY_SENSOR, "car_charging_planned": PLUGGED_SENSOR}, kwh=10.0)
+    _one_car(my_predbat, {"car_charging_energy": ENERGY_SENSOR, "car_charging_plugged": PLUGGED_SENSOR}, kwh=10.0)
     my_predbat.args.pop("octopus_intelligent_slot", None)
     _plug(my_predbat, "on")
     my_predbat.car_charging_energy = _history([(10, 2.0)])
@@ -658,6 +685,122 @@ def _run_fetch(my_predbat):
     return failed
 
 
+def _active(my_predbat, minutes_ago, car_n=0):
+    """
+    Move car_n's record back so it was last active minutes_ago.
+    """
+    my_predbat.car_manual_soc_state[car_n]["active"] = (my_predbat.now_utc - timedelta(minutes=minutes_ago)).isoformat()
+
+
+def _run_idle(my_predbat):
+    """
+    A car with no car_charging_plugged sensor goes back to zero once it has been idle for CAR_MANUAL_SOC_IDLE_MINUTES.
+    """
+    failed = False
+    dummy = my_predbat.ha_interface.dummy_items
+    sensor = my_predbat.car_manual_soc_entity(0)
+
+    def switched_on(args, kwh):
+        """
+        A single car with the given args and the manual SoC switch on.
+        """
+        _one_car(my_predbat, args, kwh=kwh)
+        my_predbat.expose_config("car_charging_manual_soc", True)
+        my_predbat.car_manual_soc_config()
+        my_predbat.car_manual_soc_track()
+
+    print("Test 47: with no plugged-in sensor, a car idle for just under the time is kept")
+    switched_on({"car_charging_energy": ENERGY_SENSOR}, 30.0)
+    _active(my_predbat, CAR_MANUAL_SOC_IDLE_MINUTES - 1)
+    my_predbat.car_manual_soc_track()
+    failed |= _check("t47 kept", abs(_manual_kwh(my_predbat) - 30.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+
+    print("Test 47b: ... and reset to zero once it has been idle that long")
+    _active(my_predbat, CAR_MANUAL_SOC_IDLE_MINUTES)
+    my_predbat.car_manual_soc_track()
+    failed |= _check("t47b reset", abs(_manual_kwh(my_predbat)) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+    failed |= _check("t47b published", dummy.get(sensor, {}).get("state") == 0.0, "sensor {}".format(dummy.get(sensor)))
+
+    print("Test 48: energy counted makes the car active again")
+    switched_on({"car_charging_energy": ENERGY_SENSOR}, 30.0)
+    _active(my_predbat, CAR_MANUAL_SOC_IDLE_MINUTES + 60)
+    my_predbat.car_charging_energy = _history([(5, 1.0)])
+    _since(my_predbat, 60)
+    my_predbat.car_manual_soc_track()
+    failed |= _check("t48 counted", abs(_manual_kwh(my_predbat) - 31.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+    failed |= _check("t48 active", my_predbat.car_manual_soc_state[0]["active"] == my_predbat.now_utc.isoformat(), "record {}".format(my_predbat.car_manual_soc_state))
+
+    print("Test 49: car_charging_now reading charging keeps the car active")
+    switched_on({"car_charging_energy": ENERGY_SENSOR}, 30.0)
+    _active(my_predbat, CAR_MANUAL_SOC_IDLE_MINUTES + 60)
+    my_predbat.car_charging_now = [True]
+    my_predbat.car_manual_soc_track()
+    my_predbat.car_charging_now = [False]
+    failed |= _check("t49 kept", abs(_manual_kwh(my_predbat) - 30.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+
+    print("Test 50: a value entered makes the car active again")
+    _active(my_predbat, CAR_MANUAL_SOC_IDLE_MINUTES + 60)
+    my_predbat.expose_config("car_charging_manual_soc_kwh", 35.0)
+    my_predbat.car_manual_soc_track()
+    failed |= _check("t50 kept", abs(_manual_kwh(my_predbat) - 35.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+
+    print("Test 51: the plan's write-back makes the car active again")
+    switched_on({}, 20.0)
+    _active(my_predbat, CAR_MANUAL_SOC_IDLE_MINUTES + 60)
+    my_predbat.car_charging_soc = [20.0]
+    my_predbat.car_charging_soc_next = [25.0]
+    my_predbat.update_car_manual_soc()
+    my_predbat.car_manual_soc_track()
+    failed |= _check("t51 kept", abs(_manual_kwh(my_predbat) - 25.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+
+    print("Test 52: a car with a car_charging_plugged sensor is never reset for being idle - its unplug says when")
+    switched_on({"car_charging_energy": ENERGY_SENSOR, "car_charging_plugged": PLUGGED_SENSOR}, 30.0)
+    _plug(my_predbat, "on")
+    my_predbat.car_manual_soc_track()
+    _active(my_predbat, CAR_MANUAL_SOC_IDLE_MINUTES + 60)
+    my_predbat.car_manual_soc_track()
+    failed |= _check("t52 kept", abs(_manual_kwh(my_predbat) - 30.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+
+    print("Test 53: the active time is read back after a restart")
+    switched_on({"car_charging_energy": ENERGY_SENSOR}, 30.0)
+    failed |= _check("t53 published", dummy.get(sensor, {}).get("active") == my_predbat.now_utc.isoformat(), "sensor {}".format(dummy.get(sensor)))
+    dummy[sensor]["active"] = (my_predbat.now_utc - timedelta(minutes=CAR_MANUAL_SOC_IDLE_MINUTES)).isoformat()
+    _restart(my_predbat)
+    my_predbat.car_manual_soc_track()
+    failed |= _check("t53 reset", abs(_manual_kwh(my_predbat)) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+    my_predbat.expose_config("car_charging_manual_soc", False)
+    return failed
+
+
+def _run_mirror(my_predbat):
+    """
+    Only a car with a SoC sensor has it shown in its manual kWh entity - a car that stops being tracked keeps its value.
+    """
+    failed = False
+    args = {"car_charging_energy": ENERGY_SENSOR, "car_charging_plugged": PLUGGED_SENSOR}
+    my_predbat.args.pop("octopus_intelligent_slot", None)
+
+    print("Test 54: a tracked car that stops being tracked, with no SoC sensor, keeps its value")
+    _one_car(my_predbat, args, kwh=30.0)
+    _plug(my_predbat, "on")
+    my_predbat.fetch_sensor_data_cars(save=True)
+    # Its plugged-in sensor's regular expression did not match at startup, say
+    my_predbat.args.pop("car_charging_plugged", None)
+    my_predbat.car_manual_soc_config()
+    my_predbat.fetch_sensor_data_cars(save=True)
+    failed |= _check("t54 not mirrored", abs(_manual_kwh(my_predbat) - 30.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+
+    print("Test 54b: ... and carries on from it once tracked again")
+    my_predbat.args.update(args)
+    my_predbat.car_manual_soc_config()
+    my_predbat.car_charging_energy = _history([(5, 1.0)])
+    _since(my_predbat, 60)
+    my_predbat.fetch_sensor_data_cars(save=True)
+    expected = 30.0 + 1.0 * (1 - float(my_predbat.get_arg("car_charging_loss")))
+    failed |= _check("t54b counted on", abs(_manual_kwh(my_predbat) - expected) < 0.001, "kwh {} expected {}".format(_manual_kwh(my_predbat), expected))
+    return failed
+
+
 def run_car_manual_soc_tests(my_predbat):
     """
     Run the manual car SoC tests, restoring the shared fixture afterwards.
@@ -679,6 +822,8 @@ def run_car_manual_soc_tests(my_predbat):
         failed |= _run_restart(my_predbat)
         failed |= _run_guards(my_predbat)
         failed |= _run_fetch(my_predbat)
+        failed |= _run_idle(my_predbat)
+        failed |= _run_mirror(my_predbat)
     finally:
         for arg in SAVED_ARGS + ("octopus_intelligent_slot",):
             my_predbat.args.pop(arg, None)

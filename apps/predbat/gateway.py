@@ -284,7 +284,7 @@ class GatewayMQTT(ComponentBase):
     _pv_only_serials = ()
     _inverter_slot_serials = ()
     _slots_without_capacity = frozenset()
-    _ev_registered_without_soc = frozenset()
+    _ev_last_soc = {}  # replaced, never changed in place
     _last_ratings = {}  # replaced, never changed in place
     _assumed_ratings = frozenset()
     _reserve_before_zero = {}  # replaced, never changed in place
@@ -425,7 +425,7 @@ class GatewayMQTT(ComponentBase):
         self._discovery_save_retry_at = 0
         self._unavailable_inverters = ((), ())
         self._configured_ev_chargers = frozenset()  # EV charge point ids registered at the last auto-config
-        self._ev_registered_without_soc = frozenset()  # Of those, the one registered as the car while it reported no SoC
+        self._ev_last_soc = {}  # EV charge point id -> the last SoC the charger reported for the car
         self._last_published_plan = None
         self._pending_plan = None
         self._ev_windows: list = []  # parsed (start_dt, end_dt) charge windows from HA plan attribute
@@ -1602,11 +1602,20 @@ class GatewayMQTT(ComponentBase):
             if ev.status:
                 self.dashboard_item(f"sensor.{pfx}_status", ev.status, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_status", {}), app="gateway")
             self.dashboard_item(f"sensor.{pfx}_power", power_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_power", {}), app="gateway")
-            self.dashboard_item(f"sensor.{pfx}_session_energy", round(session_energy_wh / 1000.0, 2), attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_session_energy", {}), app="gateway")
+            # Unavailable while the charger is offline, not 0: car_charging_energy's history would read the drop to 0 and back as
+            # a new session, and count the session's energy again - toward the manual car SoC as well as the load
+            session_energy = round(session_energy_wh / 1000.0, 2) if ev.connected else "unavailable"
+            self.dashboard_item(f"sensor.{pfx}_session_energy", session_energy, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_session_energy", {}), app="gateway")
             if ev.current_limit_a:
                 self.dashboard_item(f"sensor.{pfx}_current_limit", ev.current_limit_a, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_current_limit", {}), app="gateway")
             if ev.soc_percent:
                 ev_soc = ev.soc_percent
+                if self._ev_last_soc.get(ev.charge_point_id) != ev_soc:
+                    self._ev_last_soc = {**self._ev_last_soc, ev.charge_point_id: ev_soc}
+            elif ev.charge_point_id in self._ev_last_soc:
+                # A charger that has reported the car's SoC and stopped, between sessions or while offline: the last
+                # report is a better guess than an estimate from the session energy, which starts from 0% every session
+                ev_soc = self._ev_last_soc[ev.charge_point_id]
             else:
                 # SoC not reported by this charger — estimate from session energy and configured battery size
                 # so the sensor always exists and the optimizer sees progress rather than a stuck 0%.
@@ -1660,11 +1669,6 @@ class GatewayMQTT(ComponentBase):
         new_chargers = frozenset(ev.charge_point_id for ev in status.ev_chargers if ev.charge_point_id) - self._configured_ev_chargers
         if new_chargers:
             self.log(f"Info: GatewayMQTT: new EV charger(s) discovered {sorted(new_chargers)} — re-running auto-config")
-            return True
-        # And when the car's charger, registered while it reported no SoC, starts to - so its SoC sensor is wired in
-        now_soc = sorted(ev.charge_point_id for ev in status.ev_chargers if ev.charge_point_id in self._ev_registered_without_soc and ev.soc_percent)
-        if now_soc:
-            self.log(f"Info: GatewayMQTT: EV charger(s) {now_soc} now report the car's SoC — re-running auto-config")
             return True
         return False
 
@@ -2273,12 +2277,9 @@ class GatewayMQTT(ComponentBase):
         # Holds the battery for the car while it draws power; it never adds a charging slot, so it cannot
         # keep a session going through gateway_evc_control's window start/stop
         self.set_arg("car_charging_now", [f"binary_sensor.{pfx}_charging"])
-        # The SoC sensor only when the charger reports the car's SoC. Otherwise sensor.{pfx}_soc is an estimate from
-        # the session energy, which starts from 0% every session, so the car is left without one: with the energy and
-        # connected sensors it is then tracked as a manual SoC car, which the user can set to its real level
-        if ev.soc_percent:
-            self.set_arg("car_charging_soc", [f"sensor.{pfx}_soc"])
-        self._ev_registered_without_soc = frozenset() if ev.soc_percent or not ev.charge_point_id else frozenset([ev.charge_point_id])
+        # No car_charging_soc: a charger rarely knows the car's SoC, and when it does only during a session, so
+        # sensor.{pfx}_soc is mostly an estimate from the session energy that starts from 0% every session. With the
+        # energy and plugged-in sensors the car is tracked as a manual SoC car instead, which the user can set to its real level
         self.set_arg("car_charging_energy", f"sensor.{pfx}_session_energy")
         # Live charge power - display only, for the web power flow diagram
         self.set_arg("car_charging_power", f"sensor.{pfx}_power")

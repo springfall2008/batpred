@@ -116,6 +116,8 @@ CAR_CHARGING_NOW_POWER_W = 200
 CAR_MANUAL_SOC_LATE_MINUTES = 60
 # A manually tracked car is only reset once its plugged-in sensor has read unplugged for this long - a charger reconnecting can read unplugged for a few minutes
 CAR_MANUAL_SOC_UNPLUG_MINUTES = 10
+# A manually tracked car with no car_charging_plugged sensor is reset once it has been idle - nothing charged, entered or written by the plan - for this long
+CAR_MANUAL_SOC_IDLE_MINUTES = 12 * 60
 # Charger energy counted for a manually tracked car is limited to car_charging_rate times the time elapsed, with this margin, plus a little slack for a coarse counter
 CAR_MANUAL_SOC_RATE_MARGIN = 1.1
 CAR_MANUAL_SOC_ENERGY_SLACK = 0.1
