@@ -423,7 +423,20 @@ class Execute:
             if event is not None:
                 self.log(format_failure(event, self.local_tz))
 
+    def check_inverter_data_freshness(self):
+        """Invalidate the plan before reading or controlling a stale Hub battery."""
+        gateway = self.components.get_component("gateway") if self.components else None
+        error = gateway.inverter_data_error() if gateway else None
+        if error:
+            self.plan_valid = False
+            metrics().plan_valid.set(0)
+            self.record_status(f"Error: {error}; cannot plan or control the battery", had_errors=True)
+            return False
+        return True
+
     def execute_plan(self):
+        if not self.check_inverter_data_freshness():
+            return "Error: Battery inverter data is unavailable", ""
         # Per-inverter detail segments, assembled into the status text after the headline status is
         # resolved - see build_status_extra() for why they can't be concatenated inline.
         status_extra_parts = []
@@ -1294,6 +1307,9 @@ class Execute:
         diagnostics for the life of the process after the first cycle (#5126 review). That log is
         the primary triage evidence for "the plan is wrong" and inverter-write reports.
         """
+        if not self.check_inverter_data_freshness():
+            return False
+
         # Find the inverters
         self.num_inverters = int(self.get_arg("num_inverters", 1))
         self.charge_window = []
