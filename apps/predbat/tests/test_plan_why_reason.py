@@ -511,6 +511,25 @@ def run_test_plan_why_reason(my_predbat):
         failed = True
     pv_step[60] = 0
     my_predbat.low_power_pv_threshold_w = saved_low_power_pv_threshold_w
+
+    # --- Test 4f: a window that starts part-way through the row is timed from its own start, as the
+    # prediction engine does - from the row start it would get extra minutes and look throttled ---
+    print("Test Chrg low power times a window that starts mid-row from the window start")
+    my_predbat.charge_window_best = [{"start": minutes_now + 15, "end": minutes_now + 60, "average": 10.0}]
+    my_predbat.predict_soc_best = _flat_soc(my_predbat, 2.0)
+    # 0.7 hours at full rate: fits in the 60 minutes from the row start, not in the 45 from the window start
+    my_predbat.charge_limit_best = [2.0 + 0.7 * max_rate_kw]
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or _codes(row) != ["charge_low_rate"]:
+        print("ERROR: Chrg mid-row window reasons unexpected: {}".format(row and _codes(row)))
+        failed = True
+    elif "&#x1F40C;" in row["state_html"]:
+        print("ERROR: Chrg mid-row window needs the full rate from its own start, so no snail, got: {}".format(row["state_html"]))
+        failed = True
+    elif row["reasons"][0]["params"]["rate_kw"] != "{:.2f}".format(max_rate_kw):
+        print("ERROR: Chrg mid-row window rate_kw should be the full {}kW, got {}".format(max_rate_kw, row["reasons"][0]["params"]["rate_kw"]))
+        failed = True
     my_predbat.set_charge_low_power = False
 
     # --- Test 4e: hybrid inverter with a DC charge rate above the AC one charges through bright PV at
