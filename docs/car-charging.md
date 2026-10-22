@@ -627,6 +627,26 @@ Some cases are handled more simply:
 
 `car_charging_now` is wired to the charger's charging sensor, which is on while the car is drawing power (OCPP status `Charging`), so Predbat holds the house battery for the car while it charges. A car that stays connected once it is full or paused (`SuspendedEV`) does not hold the battery. It never adds a charging slot, so it cannot hold a session open against the window boundaries `gateway_evc_control` enforces.
 
+### Letting Predbat manage the gateway's charge window
+
+The gateway can also hold one recurring daily charge window for the charger: inside it the charger may charge, and outside it the gateway limits the charger to 0 A, even if the gateway loses its connection. A window set this way (for example from an app's schedule form) caps Predbat's starts: a planned window outside it never charges. To have Predbat keep that window on its own plan, add a third flag:
+
+```yaml
+  gateway_evc_automatic: true
+  gateway_evc_control: true
+  gateway_evc_schedule_control: true
+```
+
+`gateway_evc_schedule_control` only works together with `gateway_evc_control`. While it is on, Predbat:
+
+- Sets the window to cover the car charging planned in the next 24 hours, from the earliest planned start to the latest planned end, rounded outward to whole half hours (01:10-04:50 becomes 01:00-05:00). A window already under way counts from now, and the same window planned again for tomorrow lands on the same daily window rather than stretching it to a whole day. A plan that runs past midnight gives a window that wraps midnight, and 24 hours or more of planned charging gives the whole day. The window's current is the car charge rate in amps (at 230 V), between 6 A and the charger's maximum.
+- Starts and stops the charger inside the window as described above, so gaps between planned windows are still closed. A session that runs inside the window with no charge planned is stopped, at most three times between planned windows.
+- Writes the window only when it changes, and at most **4 times per day**: every write is stored on the gateway and re-sent to the charger. A change that adds time is written straight away, as it lets the car charge; one that only removes time waits until the current window has ended. After the fourth write in a day Predbat keeps the current window until the next day and shows a warning (not an error) on `predbat.status`.
+- Leaves the last window in place when no charge is planned in the next 24 hours, and writes nothing while the charger is offline from the gateway.
+- Remembers the window it last wrote, so a restart does not write it again.
+
+Turning `gateway_evc_schedule_control` off stops Predbat writing the window, but does **not** put back the window that was there before: the gateway keeps the last window Predbat wrote. Set the window you want again yourself, for example from the app that set it originally.
+
 ## Predbat starting and stopping your charger
 
 Predbat can start and stop a GivEnergy EV charger, an Ohme charger or a myenergi Zappi itself, following its own car charging plan. Each charger follows its own car: charger N follows car N.

@@ -771,6 +771,7 @@ COMPONENT_LIST = {
             "gateway_display_only": {"required": False, "config": "gateway_display_only", "default": False},
             "gateway_evc_automatic": {"required": False, "config": "gateway_evc_automatic", "default": False},
             "gateway_evc_control": {"required": False, "config": "gateway_evc_control", "default": False},
+            "gateway_evc_schedule_control": {"required": False, "config": "gateway_evc_schedule_control", "default": False},
             "gateway_shared_ct": {"required": False, "config": "gateway_shared_ct", "default": True},
             "gateway_integrate_power": {"required": False, "config": "gateway_integrate_power", "default": False},
         },

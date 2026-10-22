@@ -6669,6 +6669,286 @@ class TestEvCommandConfirm:
         assert gw._ev_telemetry["CPX"]["has_status"] is False
 
 
+class _FakeEvScheduleStorage:
+    """Storage holding what the gateway saved, shared between gateways to simulate a restart."""
+
+    def __init__(self):
+        """Start empty."""
+        self.saved = {}
+        self.saves = 0
+
+    async def load(self, module, filename):
+        """Return the saved data."""
+        return self.saved.get((module, filename))
+
+    async def save(self, module, filename, data, format="yaml", expiry=None, indent=None):
+        """Keep a JSON round-tripped copy of the data."""
+        self.saves += 1
+        self.saved[(module, filename)] = json.loads(json.dumps(data))
+        return True
+
+
+class TestEvScheduleControl:
+    """gateway_evc_schedule_control keeps the hub's recurring daily charge window on the planned car charging."""
+
+    TZ = pytz.timezone("Europe/London")
+
+    def _at(self, day, hour, minute=0):
+        """A local time on 2026-10-<day> (BST/GMT handled by the zone)."""
+        import datetime as dt_mod
+
+        return self.TZ.localize(dt_mod.datetime(2026, 10, day, hour, minute))
+
+    def _gateway(self, now, windows=(), storage=None, schedule_control=True, max_current=32, rate_kw=None):
+        """A gateway with schedule control, a fixed clock, an online charger and captured publishes."""
+        from unittest.mock import MagicMock
+
+        gw, published = _ev_gateway_with_capture(TestEvControl(), ev_max_current={"CP10000001": max_current})
+        base = _FakeStatusBase()
+        base.components = MagicMock()
+        base.components.get_component.return_value = storage
+        if rate_kw is not None:
+            base.car_charging_rate = [rate_kw]
+        gw.base = base
+        gw.gateway_device_id = "pbgw_test"
+        gw.gateway_evc_schedule_control = schedule_control
+        gw._mqtt_connected = True
+        gw._reset_ev_schedule_state()
+        gw._ev_windows = list(windows)
+        gw._clock = [now]
+        gw._ev_now = lambda: gw._clock[0]
+        _ev_set_telemetry(gw, car_connected=True, session_active=False)
+        return gw, published
+
+    def _cycle(self, gw):
+        """Run one schedule cycle."""
+        asyncio.run(gw._apply_ev_schedule())
+
+    @staticmethod
+    def _windows(published):
+        """The recurring window writes among the published commands."""
+        return [p for _, p in published if p.get("recurring")]
+
+    def test_payload_shape(self):
+        """The window goes to the shared command topic as the hub's recurring SetChargingProfile."""
+        gw, published = self._gateway(self._at(21, 18), [(self._at(22, 1), self._at(22, 5))])
+        self._cycle(gw)
+        assert len(published) == 1
+        topic, payload = published[0]
+        assert topic == "predbat/devices/test/command"
+        assert payload == {"command": "ev", "command_id": payload["command_id"], "action": "SetChargingProfile", "recurring": True, "start_min": 60, "end_min": 300, "current_a": 32, "charge_point_id": "CP10000001"}
+        assert payload["command_id"].startswith("PBAT")
+        assert gw.base.record_status.call_count == 0
+
+    def test_rounds_outward_to_half_hours(self):
+        """01:10-04:50 is written as 01:00-05:00."""
+        gw, published = self._gateway(self._at(21, 18), [(self._at(22, 1, 10), self._at(22, 4, 50))])
+        self._cycle(gw)
+        assert [(p["start_min"], p["end_min"]) for p in self._windows(published)] == [(60, 300)]
+
+    def test_spans_earliest_start_to_latest_end(self):
+        """Two planned windows give one window from the first start to the last end."""
+        gw, published = self._gateway(self._at(21, 18), [(self._at(22, 1), self._at(22, 2)), (self._at(22, 4, 15), self._at(22, 5, 20))])
+        self._cycle(gw)
+        assert [(p["start_min"], p["end_min"]) for p in self._windows(published)] == [(60, 330)]
+
+    def test_wraps_past_midnight(self):
+        """23:15-02:05 is written as 23:00-02:30, an end below the start."""
+        gw, published = self._gateway(self._at(21, 18), [(self._at(21, 23, 15), self._at(22, 2, 5))])
+        self._cycle(gw)
+        assert [(p["start_min"], p["end_min"]) for p in self._windows(published)] == [(1380, 150)]
+
+    def test_span_of_24_hours_or_more_is_the_whole_day(self):
+        """A planned run of 24 h or more, or windows covering every slot of the day, give 0-1440."""
+        gw, published = self._gateway(self._at(21, 18), [(self._at(21, 20), self._at(22, 21))])
+        self._cycle(gw)
+        assert [(p["start_min"], p["end_min"]) for p in self._windows(published)] == [(0, 1440)]
+
+        gw, published = self._gateway(self._at(21, 18), [(self._at(21, 18), self._at(22, 6)), (self._at(22, 6), self._at(22, 18))])
+        self._cycle(gw)
+        assert [(p["start_min"], p["end_min"]) for p in self._windows(published)] == [(0, 1440)]
+
+    def test_window_in_progress_and_tomorrow_stay_one_daily_window(self):
+        """Mid-window, the same window planned again tomorrow is not read as a 24 h span."""
+        now = self._at(22, 3, 10)
+        gw, published = self._gateway(now, [(self._at(22, 0, 30), self._at(22, 5, 30)), (self._at(23, 0, 30), self._at(23, 5, 30))])
+        assert gw._ev_schedule_target(now) == (30, 330)
+
+    def test_current_from_the_car_charge_rate(self):
+        """current_a is the car's charge rate in amps at 230 V, clamped to 6 A and the charger's maximum."""
+        window = [(self._at(22, 1), self._at(22, 5))]
+        for rate_kw, max_current, expected in ((3.6, 32, 16), (1.0, 32, 6), (11.0, 16, 16), (7.4, 32, 32)):
+            gw, published = self._gateway(self._at(21, 18), window, max_current=max_current, rate_kw=rate_kw)
+            self._cycle(gw)
+            assert self._windows(published)[0]["current_a"] == expected, (rate_kw, max_current)
+
+    def test_grow_written_immediately_inside_the_window(self):
+        """Inside the current window, a target that ends later is written at once."""
+        gw, published = self._gateway(self._at(22, 2), [(self._at(22, 1), self._at(22, 5))])
+        self._cycle(gw)
+        assert len(self._windows(published)) == 1
+        gw._ev_windows = [(self._at(22, 1), self._at(22, 6))]
+        self._cycle(gw)
+        # A window already in progress is clipped to now: 02:00-05:00, then grown to 06:00
+        assert [(p["start_min"], p["end_min"]) for p in self._windows(published)] == [(120, 300), (120, 360)]
+
+    def test_shrink_deferred_until_the_window_ends(self):
+        """Inside the current window, a target that only removes time waits until the window has ended."""
+        gw, published = self._gateway(self._at(21, 18), [(self._at(22, 1), self._at(22, 5))])
+        self._cycle(gw)
+        gw._clock[0] = self._at(22, 2)
+        gw._ev_windows = [(self._at(22, 3), self._at(22, 5))]
+        for _ in range(5):
+            self._cycle(gw)
+        assert len(self._windows(published)) == 1  # still 01:00-05:00
+        gw._clock[0] = self._at(22, 5, 1)
+        gw._ev_windows = [(self._at(23, 3), self._at(23, 5))]
+        self._cycle(gw)
+        assert [(p["start_min"], p["end_min"]) for p in self._windows(published)] == [(60, 300), (180, 300)]
+
+    def test_no_rewrite_when_unchanged_including_after_restart(self):
+        """The same target is never written twice, and a restart reads the stored window instead of writing."""
+        storage = _FakeEvScheduleStorage()
+        window = [(self._at(22, 1), self._at(22, 5))]
+        gw, published = self._gateway(self._at(21, 18), window, storage=storage)
+        for _ in range(5):
+            self._cycle(gw)
+        assert len(self._windows(published)) == 1
+        assert storage.saved[("gateway", "ev_schedule_pbgw_test")]["window"]["start_min"] == 60
+
+        gw2, published2 = self._gateway(self._at(21, 19), window, storage=storage)
+        self._cycle(gw2)
+        assert published2 == []
+        assert gw2._ev_sched_writes == 1  # the day's count survives too
+
+    def test_four_writes_a_day_then_a_warning(self):
+        """A fifth change in one local day keeps the current window with a Warn status, had_errors untouched."""
+        gw, published = self._gateway(self._at(21, 12), [])
+        for hour in (1, 2, 3, 4, 5):
+            gw._ev_windows = [(self._at(22, hour), self._at(22, hour + 1))]
+            self._cycle(gw)
+        assert len(self._windows(published)) == 4
+        assert gw._ev_sched["start_min"] == 4 * 60
+        assert gw.base.record_status.call_count == 1
+        message = gw.base.record_status.call_args[0][0]
+        assert message.startswith("Warn:") and "04:00-05:00" in message
+        assert gw.base.record_status.call_args[1] == {"had_errors": False}
+        assert gw.base.had_errors is False
+
+        gw.base.status_state = "Error: something real"
+        self._cycle(gw)
+        assert gw.base.record_status.call_count == 1  # never replaces a real error
+
+        gw._clock[0] = self._at(22, 0, 1)  # the next local day
+        self._cycle(gw)
+        assert len(self._windows(published)) == 5
+        assert gw._ev_sched["start_min"] == 5 * 60
+
+    def test_no_plan_leaves_the_window(self):
+        """With no planned charge in the next 24 h nothing is written, before or after a first write."""
+        gw, published = self._gateway(self._at(21, 18), [])
+        self._cycle(gw)
+        assert published == []
+        gw._ev_windows = [(self._at(22, 1), self._at(22, 5))]
+        self._cycle(gw)
+        gw._ev_windows = [(self._at(23, 20), self._at(23, 21))]  # beyond 24 h
+        self._cycle(gw)
+        assert len(self._windows(published)) == 1
+
+    def test_nothing_written_while_charger_offline_or_hub_disconnected(self):
+        """The hub needs the charger to apply the window to, and the connection to receive it."""
+        window = [(self._at(22, 1), self._at(22, 5))]
+        gw, published = self._gateway(self._at(21, 18), window)
+        _ev_set_telemetry(gw, car_connected=False, session_active=False, online=False)
+        self._cycle(gw)
+        gw._ev_telemetry = {}
+        self._cycle(gw)
+        assert published == []
+        gw, published = self._gateway(self._at(21, 18), window)
+        gw._mqtt_connected = False
+        self._cycle(gw)
+        assert published == []
+        assert gw._ev_sched is None and gw._ev_sched_writes == 0
+
+    def _run_housekeeping(self, gw, planned):
+        """Drive the real run() housekeeping once with the plan attribute given."""
+        gw._planned_attr = planned
+        TestEvCommandConfirm._run_housekeeping(TestEvCommandConfirm(), gw)
+
+    def test_off_never_writes_and_on_writes_before_the_start(self):
+        """Through run(): off sends only start/stop; on writes the window first, then starts."""
+        import datetime as dt_mod
+
+        for schedule_control in (False, True):
+            gw, published = self._gateway(dt_mod.datetime.now(self.TZ), schedule_control=schedule_control)
+            gw._ev_now = lambda: dt_mod.datetime.now(self.TZ)
+            self._run_housekeeping(gw, TestEvCommandConfirm._planned_now(TestEvCommandConfirm(), gw))
+            actions = [("recurring" if p.get("recurring") else p["action"]) for _, p in published]
+            if schedule_control:
+                assert actions == ["recurring", "SetChargingProfile", "RemoteStartTransaction"]
+            else:
+                assert actions == ["SetChargingProfile", "RemoteStartTransaction"]
+
+    def test_requires_gateway_evc_control(self):
+        """With gateway_evc_control off nothing is written, and initialize() warns that it is needed."""
+        import datetime as dt_mod
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+
+        gw, published = self._gateway(dt_mod.datetime.now(self.TZ))
+        gw.gateway_evc_control = False
+        self._run_housekeeping(gw, TestEvCommandConfirm._planned_now(TestEvCommandConfirm(), gw))
+        assert published == []
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.base = MagicMock()
+        gw.args = {}
+        gw.log = MagicMock()
+        gw.initialize(gateway_device_id="pbgw_test", mqtt_host="mqtt.example.com", mqtt_token="tok", gateway_evc_schedule_control=True)
+        assert gw.gateway_evc_schedule_control is True
+        assert any("needs gateway_evc_control" in str(c.args[0]) for c in gw.log.call_args_list)
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.base = MagicMock()
+        gw.args = {}
+        gw.initialize(gateway_device_id="pbgw_test", mqtt_host="mqtt.example.com", mqtt_token="tok", gateway_evc_control=True, gateway_evc_schedule_control="false")
+        assert gw.gateway_evc_schedule_control is False
+
+    def _unplanned(self, schedule_control=True, managed=(60, 300), hour=2):
+        """A gateway with a written window, no planned charge now and a session running at <hour>:00."""
+        gw, published = self._gateway(self._at(22, hour), [], schedule_control=schedule_control)
+        gw._ev_sched = {"charge_point_id": "CP10000001", "start_min": managed[0], "end_min": managed[1], "current_a": 32}
+        _ev_set_telemetry(gw, car_connected=True, session_active=True)
+        return gw, published
+
+    def test_unplanned_session_inside_the_managed_window_is_stopped(self):
+        """With no planned charge, a session inside the window PredBat wrote gets the confirmed stop."""
+        gw, published = self._unplanned()
+        _ev_cycle(gw)
+        assert [p["action"] for _, p in published] == ["RemoteStopTransaction"]
+        _ev_set_telemetry(gw, car_connected=True, session_active=False)
+        _ev_cycle(gw)
+        assert gw._ev_confirmed is True and len(published) == 1
+
+    def test_unplanned_session_left_alone_without_schedule_control_or_outside_the_window(self):
+        """Step 1's rule holds otherwise: a session PredBat did not start is never stopped."""
+        for kwargs in ({"schedule_control": False}, {"hour": 12}):
+            gw, published = self._unplanned(**kwargs)
+            for _ in range(4):
+                _ev_set_telemetry(gw, car_connected=True, session_active=True)
+                _ev_cycle(gw)
+            assert published == [], kwargs
+
+    def test_unplanned_stops_are_bounded(self):
+        """A session restarted after each confirmed stop is stopped at most 3 times between windows."""
+        gw, published = self._unplanned()
+        for _ in range(10):
+            _ev_set_telemetry(gw, car_connected=True, session_active=True)
+            _ev_cycle(gw)
+            _ev_set_telemetry(gw, car_connected=True, session_active=False)
+            _ev_cycle(gw)
+        assert [p["action"] for _, p in published] == ["RemoteStopTransaction"] * 3
+
+
 class TestRateAnchors(unittest.TestCase):
     """extract_rate_anchors() validates and rounds the four rate fields."""
 
@@ -8041,6 +8321,7 @@ def run_gateway_tests(my_predbat=None):
         TestEvNeedsReconfigure,
         TestEvControl,
         TestEvCommandConfirm,
+        TestEvScheduleControl,
         TestSelectEvent,
         TestNumberEvent,
         TestSwitchEvent,
