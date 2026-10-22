@@ -187,6 +187,8 @@ def _scenario(my_predbat, name, battery_soc, losses=LOSSLESS, boosted=True, firm
 
     The car's dispatch decides the credit, but the prediction models the house alone unless model_car is set:
     a modelled car adds its own load and holds the battery while it charges, which is a different evening.
+
+    The optimisation runs on the C++ kernel: on the Python engine these scenarios took over 30 seconds.
     """
     now = my_predbat.minutes_now
     _at(my_predbat, now)
@@ -220,6 +222,7 @@ def _scenario(my_predbat, name, battery_soc, losses=LOSSLESS, boosted=True, firm
         load_scaling=LOAD_SCALING,
         losses=losses,
         prepare=prepare,
+        kernel=True,
     )
     print("     charge limits: {}".format(limits))
     return limits
@@ -288,9 +291,10 @@ def run_prediction_tests(my_predbat):
     windows = [dict(window) for window in my_predbat.charge_window_best]
     credit = copy.deepcopy(my_predbat.io_confirmed_credit)
 
-    def predict(charge_limit, with_credit):
-        """Run the nominal scenario for charge_limit with or without the credit map."""
+    def predict(charge_limit, with_credit, kernel):
+        """Run the nominal scenario for charge_limit with or without the credit map, on the C++ kernel or the Python engine."""
         my_predbat.io_confirmed_credit = credit if with_credit else {}
+        my_predbat.prediction_kernel_enable = kernel
         my_predbat.prediction = Prediction(
             my_predbat,
             my_predbat.pv_forecast_minute_step,
@@ -303,18 +307,20 @@ def run_prediction_tests(my_predbat):
         result = my_predbat.run_prediction(charge_limit, windows, [], [], False, end_record=my_predbat.forecast_minutes)
         return result[0], result[8]
 
-    # Charge the current half hour to full: 30 minutes at 3 kW stores 1.5 kWh, all at the full credit
-    charge_now = [10.0] + [0] * (len(windows) - 1)
-    cost_off, keep_off = predict(charge_now, False)
-    cost_on, keep_on = predict(charge_now, True)
-    failed |= _check("c1 cost unchanged by the credit", cost_on == cost_off, "{} vs {}".format(cost_on, cost_off))
-    failed |= _check("c1 metric_keep lowered by stored kWh x credit", abs((keep_off - keep_on) - 1.5 * IO_CONFIRMED_CREDIT) < 1e-3, "keep {} vs {}".format(keep_on, keep_off))
+    for kernel in (False, True):
+        engine = "kernel" if kernel else "python"
+        # Charge the current half hour to full: 30 minutes at 3 kW stores 1.5 kWh, all at the full credit
+        charge_now = [10.0] + [0] * (len(windows) - 1)
+        cost_off, keep_off = predict(charge_now, False, kernel)
+        cost_on, keep_on = predict(charge_now, True, kernel)
+        failed |= _check("c1 {} cost unchanged by the credit".format(engine), cost_on == cost_off, "{} vs {}".format(cost_on, cost_off))
+        failed |= _check("c1 {} metric_keep lowered by stored kWh x credit".format(engine), abs((keep_off - keep_on) - 1.5 * IO_CONFIRMED_CREDIT) < 1e-3, "keep {} vs {}".format(keep_on, keep_off))
 
-    # Hold at the current charge: nothing stored, nothing credited
-    hold_now = [5.0] + [0] * (len(windows) - 1)
-    cost_off, keep_off = predict(hold_now, False)
-    cost_on, keep_on = predict(hold_now, True)
-    failed |= _check("c2 hold earns no credit", cost_on == cost_off and keep_on == keep_off, "cost {} vs {} keep {} vs {}".format(cost_on, cost_off, keep_on, keep_off))
+        # Hold at the current charge: nothing stored, nothing credited
+        hold_now = [5.0] + [0] * (len(windows) - 1)
+        cost_off, keep_off = predict(hold_now, False, kernel)
+        cost_on, keep_on = predict(hold_now, True, kernel)
+        failed |= _check("c2 {} hold earns no credit".format(engine), cost_on == cost_off and keep_on == keep_off, "cost {} vs {} keep {} vs {}".format(cost_on, cost_off, keep_on, keep_off))
     return failed
 
 

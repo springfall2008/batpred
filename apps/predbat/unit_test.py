@@ -237,6 +237,12 @@ from tests.test_sunsynk_storage import run_sunsynk_storage_tests
 from tests.test_sunsynk_config import run_sunsynk_config_tests
 from tests.test_sunsynk_parallel import run_sunsynk_parallel_tests
 from tests.test_alphaess_const import run_alphaess_const_tests
+from tests.test_hanchu_const import run_hanchu_const_tests
+from tests.test_hanchu_config import run_hanchu_config_tests
+from tests.test_hanchu_api import run_hanchu_api_tests
+from tests.test_hanchu_control import run_hanchu_control_tests
+from tests.test_hanchu_publish import run_hanchu_publish_tests
+from tests.test_hanchu_cli import run_hanchu_cli_tests
 from tests.test_alphaess_api import run_alphaess_api_tests
 from tests.test_alphaess_config import run_alphaess_config_tests
 from tests.test_alphaess_publish import run_alphaess_publish_tests
@@ -667,6 +673,12 @@ def main():
         ("alphaess_publish", run_alphaess_publish_tests, "AlphaESS publish/config tests", False),
         ("alphaess_control", run_alphaess_control_tests, "AlphaESS control-logic tests", False),
         ("alphaess_storage", run_alphaess_storage_tests, "AlphaESS storage tests", False),
+        ("hanchu_const", run_hanchu_const_tests, "Hanchu constants tests", False),
+        ("hanchu_config", run_hanchu_config_tests, "Hanchu config/INVERTER_DEF tests", False),
+        ("hanchu_api", run_hanchu_api_tests, "Hanchu API/auth tests", False),
+        ("hanchu_control", run_hanchu_control_tests, "Hanchu control-logic tests", False),
+        ("hanchu_publish", run_hanchu_publish_tests, "Hanchu publish/config tests", False),
+        ("hanchu_cli", run_hanchu_cli_tests, "Hanchu command-line harness helper tests", False),
         ("enphase_api", run_enphase_api_tests, "Enphase API tests", False),
         ("solcast", run_solcast_tests, "Solcast API tests", False),
         ("open_meteo", run_open_meteo_tests, "Open-Meteo solar forecast provider tests", False),
