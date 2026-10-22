@@ -4019,12 +4019,12 @@ class Octopus:
                 original_span = end_minutes - start_minutes
                 segments = [(start_minutes, end_minutes)]
                 for current_slot in slots_decoded:
-                    if current_slot[7]:
+                    current_start, current_end, _, _, _, _, _, current_held = current_slot
+                    if current_held:
                         # A held half hour has already run and only keeps its rate: it does not trim a slot it
                         # overlaps, which only a charger's own schedule can (#5339), so a running one is still
                         # counted from now rather than keeping all of its energy for what is left of it
                         continue
-                    current_start, current_end = current_slot[0], current_slot[1]
                     remaining = []
                     for seg_start, seg_end in segments:
                         if seg_start < current_end and seg_end > current_start:
@@ -4059,7 +4059,9 @@ class Octopus:
             # gets 2 hours at the low rate and the other 6 at the max rate, not the whole 8
             # hours flipped to max rate the way an all-or-nothing check would (batpred#4624).
             # The budget is counted in the slot's own minutes, not in half hours it touches (#5510);
-            # the slots are already cut clear of each other above, so no minute is counted twice.
+            # the slots are already cut clear of each other above, so no minute is counted twice - except
+            # a held half hour, which is left overlapping what follows it. That is safe while the only slots
+            # it overlaps are a charger's own schedule (#5339), which never take cap minutes.
             # kWh is apportioned to each chunk by its share of the slot's duration - an
             # approximation (real draw isn't perfectly uniform across the slot).
             chunks = [(start_minutes, end_minutes, kwh, self.rate_import.get(start_minutes, self.rate_min_base))]
@@ -4269,7 +4271,9 @@ class Octopus:
                                     self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), dp2(assumed_price), dp2(kwh), location, source, octopus_slot_low_rate
                                 )
                             )
-                elif not held and dispatch_start > -24 * 60 and self.dispatch_too_short(car_n, dispatch_start, dispatch_end):
+                elif source not in OCTOPUS_MANUAL_DISPATCH_SOURCES and source != DISPATCH_SOURCE_CHARGER_SCHEDULE and not held and dispatch_start > -24 * 60 and self.dispatch_too_short(car_n, dispatch_start, dispatch_end):
+                    # Only a dispatch Octopus bills off-peak can be turned down for being short; a charger's own
+                    # schedule or a bump charge never was low rate, so this reason would mislead
                     slot_lines.append(
                         "Octopus: Intelligent slot at {}-{} is under {} minutes and car {} has not been seen charging in it, not treated as low rate".format(
                             self.time_abs_str(dispatch_start), self.time_abs_str(dispatch_end), OCTOPUS_SLOT_MIN_MINUTES, car_n
