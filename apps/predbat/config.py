@@ -2793,6 +2793,11 @@ APPS_SCHEMA = {
     "car_charging_soc": {"type": "sensor", "sensor_type": "float", "entries": "num_cars"},
     "car_charging_limit": {"type": "sensor", "sensor_type": "float", "entries": "num_cars"},
     "car_charging_exclusive": {"type": "boolean_list", "entries": "num_cars"},
+    # The car's own on-board charger limit in kW, per car. Caps the charger-derived car_charging_rate
+    # that charger auto-registration (gateway_evc_automatic) exposes; 0 or unset means unknown.
+    # A list with a number or an entity pointer per car, like car_charging_battery_size. A missing,
+    # unknown or unavailable entity just means no cap, so it is not a validation error.
+    "car_charging_max_rate": {"type": "sensor", "sensor_type": "float|none", "entries": "num_cars", "optional_entries": True, "transient_ok": True},
     "carbon_intensity": {"type": "sensor", "sensor_type": "string"},
     "carbon_postcode": {"type": "string", "empty": False},
     "carbon_automatic": {"type": "boolean"},

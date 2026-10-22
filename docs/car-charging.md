@@ -608,6 +608,19 @@ To have Predbat plan for the gateway charger as a car, enable it in `apps.yaml`:
 When enabled, Predbat registers the charger as a car and maps the EV entities above onto the standard `car_charging_*` settings, so the normal [Predbat-led car charging](#predbat-led-charging) planning applies.
 The charge rate tracks the `sensor.predbat_gateway_ev_<id>_charge_rate` capability sensor. The car's battery size and target charge level are taken from your existing `car_charging_battery_size` and `car_charging_limit` settings (the charger cannot report them).
 
+The charger's capability is only what the charger can deliver. Many cars, particularly plug-in hybrids, have an on-board charger that takes less (for example 3.6 kW on a 7.4 kW charger), and Predbat would then plan too short a charge.
+Set **car_charging_max_rate** to the car's own maximum charge rate in kW, as a list with one entry per car, and Predbat plans the car at whichever is lower, the charger's rate or the car's:
+
+```yaml
+  car_charging_max_rate:
+    - 3.6
+```
+
+Each entry can instead point to a sensor holding the car's rate in kW (for example `- sensor.my_car_max_charge_kw`). Predbat re-reads it every minute, so a change of car takes effect without a restart.
+If it is not set, set to 0, or the sensor is unknown or unavailable, the charger's rate is used.
+As with `car_charging_battery_size`, write it as a list: a number on the same line as the key fails `apps.yaml` validation.
+On Octopus Intelligent, Predbat plans the car at whichever is higher of the charger power Octopus reports and **input_number.predbat_car_charging_rate** (see above), so the Octopus figure can raise the rate back above this cap.
+
 To also have Predbat send the plan to the charger (so the EVC charges according to Predbat's schedule), add a second flag:
 
 ```yaml
