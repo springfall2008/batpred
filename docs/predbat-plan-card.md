@@ -36,8 +36,8 @@ If you get an error 'Custom element doesn't exist: html-template-card' then you'
 
 For every period (slot) that Predbat has planned for (the *forecast_hours* setting in `apps.yaml`), the Predbat plan shows:
 
-- The import rate in pence for that slot
-- The export rate in pence for that slot
+- The import rate in currency minor unit (pence, cents, etc) for that slot
+- The export rate in currency minor unit (pence, cents, etc) for that slot
 - What 'status' Predbat will be in (e.g. Charging, Discharging)
 - Any limit applied (e.g. charging to 70%)
 - Forecast Solar generation (from Solcast)
@@ -76,8 +76,8 @@ Explaining each column in the Predbat plan in more detail:
 The Predbat slots are therefore aligned to Octopus Agile slots or rate change times on any other tariff.
 The slot length defaults to being 30 minutes long, but can be changed by setting **[plan_interval_minutes](energy-rates.md#plan-interval)** in `apps.yaml`.
 
-- **Import** - The import rate for that time slot in pence.<BR>
-The rate will be coloured Blue if the price is zero pence or negative,
+- **Import** - The import rate for that time slot in currency minor unit (pence, cents, etc).<BR>
+The rate will be coloured Blue if the price is zero or negative,
 Green if the rate is less than the import rate threshold,
 Red if the rate is more than 1.5 times the import rate threshold,
 and Yellow if the rate is between 1 and 1.5 times the import rate threshold.<BR>
@@ -85,7 +85,7 @@ See the [Predbat customisation guide](customisation.md#battery-margins-and-metri
 Predbat will consider blue and green-coloured slots as preferred candidates for importing, yellow and red (higher rates) will not.<BR>
 If battery charging is planned by Predbat for a particular slot, the import rate for that slot will be highlighted in bold text.
 
-- **Export** - Similarly, the export rate for that time slot in pence.<BR>
+- **Export** - Similarly, the export rate for that time slot in currency minor unit (pence, cents, etc).<BR>
 The rate will be coloured White if the price is less than the export rate threshold,
 Yellow if it is more than the export rate threshold,
 and pale Red if the rate is more than 1.5 times the export rate threshold.<BR>
@@ -142,7 +142,7 @@ The 'SoC %' can be read in conjunction with the 'Limit %'; the SoC column gives 
 the Limit column the estimated SoC at the end of the slot.<BR>
 If the SoC is 50% or greater it will be coloured Green, 20% or greater, Yellow, and if less than 20%, Orangey-Red.
 
-- **Cost** - The estimated cost in pence for the time slot together with an arrow indicating whether the total cost today is increasing, staying flat or decreasing.<BR>
+- **Cost** - The estimated cost in currency minor unit (pence, cents, etc) for the time slot together with an arrow indicating whether the total cost today is increasing, staying flat or decreasing.<BR>
 If the cost for the slot is 10p or more it will be coloured Orangey-Red, &frac12;p or more it will be coloured Yellow, -&frac12;p or less it will be coloured Green,
 otherwise, it will be coloured White.
 

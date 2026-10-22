@@ -177,7 +177,7 @@ class Marginal:
             self.dashboard_item(
                 "binary_sensor.{}_marginal_rate_now_{}_is_moderate".format(self.prefix, state_name),
                 state="on" if is_moderate else "off",
-                attributes={"cost": state_value, "icon": "mdi:cash-alert", "friendly_name": "{} consumption now is moderate".format(state_name.capitalize())},
+                attributes={"cost": state_value, "icon": "mdi:cash-clock", "friendly_name": "{} consumption now is moderate".format(state_name.capitalize())},
             )
 
         state_value = self.marginal_costs_matrix.get(1, {}).get(first_time_label, 0)
