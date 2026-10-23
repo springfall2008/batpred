@@ -18,12 +18,15 @@ import aiohttp
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tests.test_infra import run_async
+from mock_base import MockBase
 
 from hypervolt import (
     HYPERVOLT_API_URL,
     HYPERVOLT_TOKEN_URL,
     HypervoltApiError,
+    CHARGER_LIST_SECONDS,
     Backoff,
+    HypervoltAPI,
     HypervoltAuthError,
     HypervoltCharger,
     HypervoltRefusedError,
@@ -932,6 +935,263 @@ def test_command_builders():
     print("  ✓ Command builders")
 
 
+class _StubTransport:
+    """In-memory transport: holds HypervoltCharger records by id and records every call."""
+
+    def __init__(self, chargers=None):
+        """Hold the chargers; errors maps a call name to an exception raised once."""
+        now = time.time()
+        if chargers is None:
+            chargers = [HypervoltCharger(V3_ID, name="Driveway", model="Home 3 Pro", api_version=3, release_state="default", charging=True, pilot_status="C", power_w=7200.0, session_id=5, session_energy_kwh=4.5, max_current_a=32, charge_mode="boost", lock_state="unlocked", last_message=now)]
+        self.chargers = {charger.charger_id: charger for charger in chargers}
+        self.listed = list(self.chargers)
+        self.calls = []
+        self.errors = {}
+        self.due = False
+        self.auth_failed = False
+
+    def _record(self, *call):
+        """Record a call, raising the queued error for it if there is one."""
+        self.calls.append(call)
+        error = self.errors.pop(call[0], None)
+        if error:
+            raise error
+
+    def token_due(self):
+        """Whether the token needs renewing, as the test set it."""
+        return self.due
+
+    async def authenticate(self):
+        """Record a sign in."""
+        self._record("authenticate")
+        self.auth_failed = False
+        return "jwt-1"
+
+    async def list_chargers(self):
+        """Return the listed chargers."""
+        self._record("list_chargers")
+        return [{"id": charger_id, "model": "Home 3 Pro"} for charger_id in self.listed]
+
+    async def connect(self, charger_id):
+        """Record a connect."""
+        self._record("connect", charger_id)
+
+    async def reconnect_all(self):
+        """Record a reconnect of every charger."""
+        self._record("reconnect_all")
+
+    async def reconnect(self, charger_id):
+        """Record a reconnect of one charger."""
+        self._record("reconnect", charger_id)
+
+    async def probe(self, charger_id):
+        """Record a probe."""
+        self._record("probe", charger_id)
+
+    async def request(self, charger_id, method, params=None):
+        """Record a command."""
+        self._record("request", charger_id, method, params)
+        return {}
+
+    async def close(self):
+        """Record a close."""
+        self._record("close")
+
+    def count(self, name):
+        """How many calls of this name were made."""
+        return len([call for call in self.calls if call[0] == name])
+
+
+def _make_component(chargers=None, **overrides):
+    """Build a HypervoltAPI against MockBase with a stub transport and a captured log."""
+    args = {"username": "user@example.com", "password": "secret", "automatic": True, "hypervolt_control": False}
+    args.update(overrides)
+    component = HypervoltAPI(MockBase(), **args)
+    component.transport = _StubTransport(chargers)
+    component.first_wait_seconds = 0
+    component.log_messages = []
+    component.log = component.log_messages.append
+    return component
+
+
+def _logged(component, text):
+    """Was a message containing this text logged."""
+    return any(text in message for message in component.log_messages)
+
+
+def test_component_registration():
+    """The component is registered with matching config keys and event filter."""
+    import inspect
+
+    from components import COMPONENT_LIST, load_component_class
+    from config import APPS_SCHEMA
+
+    entry = COMPONENT_LIST["hypervolt"]
+    assert load_component_class(entry) is HypervoltAPI
+    assert entry["name"] == "Hypervolt Charger" and entry["event_filter"] == "predbat_hypervolt_"
+    assert entry["phase"] == 1 and entry["can_restart"] is True
+    assert entry["args"]["username"] == {"required": True, "secret": True, "config": "hypervolt_username"}
+    assert entry["args"]["password"] == {"required": True, "secret": True, "config": "hypervolt_password"}
+    assert entry["args"]["automatic"] == {"required": False, "config": "hypervolt_automatic", "default": True}
+    assert entry["args"]["hypervolt_control"] == {"required": False, "config": "hypervolt_control", "default": False}
+    assert len(entry["args"]) == 4
+    parameters = inspect.signature(HypervoltAPI.initialize).parameters
+    for arg_name in entry["args"]:
+        assert arg_name in parameters, "initialize() has no parameter '{}'".format(arg_name)
+    assert APPS_SCHEMA["hypervolt_username"] == {"type": "string", "empty": False}
+    assert APPS_SCHEMA["hypervolt_password"] == {"type": "string", "empty": False}
+    assert APPS_SCHEMA["hypervolt_automatic"] == {"type": "boolean"}
+    assert APPS_SCHEMA["hypervolt_control"] == {"type": "boolean"}
+    print("  ✓ Component is registered with matching config keys")
+
+
+def test_component_missing_credentials():
+    """Without both credentials there is no transport and run() fails."""
+    component = HypervoltAPI(MockBase(), username=None, password="secret")
+    assert component.transport is None
+    assert run_async(component.run(0, True)) is False
+    print("  ✓ Missing credentials leave the component failed")
+
+
+def test_run_first_signs_in_lists_and_connects():
+    """The first run signs in, lists and connects each charger in id order, and succeeds only with fresh data."""
+    other = str(int("b" * 16, 16))
+    component = _make_component([HypervoltCharger(other, last_message=time.time()), HypervoltCharger(V3_ID, last_message=time.time())])
+    assert run_async(component.run(0, True)) is True
+    calls = component.transport.calls
+    assert calls[0] == ("authenticate",) and calls[1] == ("list_chargers",)
+    assert [call[1] for call in calls if call[0] == "connect"] == sorted([V3_ID, other], key=int)
+    assert component.car_order == sorted([V3_ID, other], key=int)
+
+    stale = _make_component([HypervoltCharger(V3_ID, last_message=0)])
+    assert run_async(stale.run(0, True)) is False
+    assert stale.last_success_timestamp is None
+    print("  ✓ First run signs in, lists and connects")
+
+
+def test_run_refreshes_token():
+    """A token near expiry is renewed and every socket reconnected with it."""
+    component = _make_component()
+    run_async(component.run(0, True))
+    component.transport.due = True
+    run_async(component.run(60, False))
+    assert ("reconnect_all",) in component.transport.calls
+    assert component.transport.count("authenticate") == 2
+    print("  ✓ Token renewed and sockets reconnected")
+
+
+def test_run_probes_then_reconnects_stale():
+    """A quiet charger is probed, a silent one reconnected, a fresh one left alone."""
+    quiet, silent = str(int("b" * 16, 16)), str(int("c" * 16, 16))
+    now = time.time()
+    component = _make_component([HypervoltCharger(V3_ID, last_message=now), HypervoltCharger(quiet, last_message=now - 300), HypervoltCharger(silent, last_message=now - 600)])
+    assert run_async(component.run(0, True)) is True
+    calls = component.transport.calls
+    assert ("probe", quiet) in calls and ("reconnect", silent) in calls
+    assert ("probe", V3_ID) not in calls and ("reconnect", V3_ID) not in calls
+    run_async(component.run(60, False))
+    assert component.transport.count("reconnect") == 1, "A charger just reconnected is given time to answer"
+    print("  ✓ Stale chargers probed then reconnected")
+
+
+def test_run_lists_chargers_every_30_minutes():
+    """The charger list is re-read every 30 minutes and a new charger connected and appended."""
+    component = _make_component()
+    run_async(component.run(0, True))
+    added = str(int("1" * 16, 16))
+    component.transport.chargers[added] = HypervoltCharger(added, last_message=time.time())
+    component.transport.listed.append(added)
+    run_async(component.run(60, False))
+    assert component.transport.count("list_chargers") == 1
+    run_async(component.run(CHARGER_LIST_SECONDS, False))
+    assert component.transport.count("list_chargers") == 2
+    assert ("connect", added) in component.transport.calls
+    assert component.car_order == [V3_ID, added], "A charger added later becomes the next car even with a lower id"
+    print("  ✓ Charger list refreshed every 30 minutes")
+
+
+def test_run_auth_failure_after_start():
+    """A refused sign in after start-up logs an error every run and fails the run."""
+    component = _make_component()
+    run_async(component.run(0, True))
+    for seconds in (60, 120):
+        component.transport.due = True
+        component.transport.errors["authenticate"] = HypervoltAuthError("refused")
+        component.log_messages.clear()
+        assert run_async(component.run(seconds, False)) is False
+        assert len([message for message in component.log_messages if message.startswith("Error: hypervolt:")]) == 1
+    print("  ✓ Auth failure after start-up fails the run")
+
+
+def test_publishes_one_charger():
+    """One charger publishes exactly the spec's entities, with the charger name in each friendly name."""
+    component = _make_component()
+    assert run_async(component.run(0, True)) is True
+    entities = component.base.entities
+    prefix = "predbat_hypervolt_{}".format(V3_ID)
+    names = {name for name in entities if "_hypervolt_" in name}
+    assert names == {
+        "sensor.{}_status".format(prefix), "sensor.{}_power".format(prefix), "sensor.{}_session_energy".format(prefix),
+        "binary_sensor.{}_connected".format(prefix), "binary_sensor.{}_plugged".format(prefix), "binary_sensor.{}_charging".format(prefix),
+        "switch.{}_charging".format(prefix), "number.{}_max_charging_current".format(prefix), "select.{}_charge_mode".format(prefix),
+    }, names
+    status = entities["sensor.{}_status".format(prefix)]
+    assert status["state"] == "charging"
+    for key, value in (("model", "Home 3 Pro"), ("name", "Driveway"), ("api_version", 3), ("release_state", "default"), ("pilot_status", "C"), ("lock_state", "unlocked"), ("stale", False)):
+        assert status["attributes"][key] == value, (key, status["attributes"])
+    assert entities["sensor.{}_power".format(prefix)]["state"] == 7200.0
+    assert entities["sensor.{}_power".format(prefix)]["attributes"]["unit_of_measurement"] == "W"
+    assert entities["sensor.{}_session_energy".format(prefix)]["state"] == 4.5
+    assert entities["sensor.{}_session_energy".format(prefix)]["attributes"]["state_class"] == "total_increasing"
+    assert entities["binary_sensor.{}_connected".format(prefix)]["state"] == "on"
+    assert entities["binary_sensor.{}_plugged".format(prefix)]["state"] == "on"
+    assert entities["binary_sensor.{}_charging".format(prefix)]["state"] == "on"
+    assert entities["switch.{}_charging".format(prefix)]["state"] == "on"
+    number = entities["number.{}_max_charging_current".format(prefix)]
+    assert number["state"] == 32 and number["attributes"]["min"] == 6 and number["attributes"]["max"] == 32 and number["attributes"]["step"] == 1
+    select = entities["select.{}_charge_mode".format(prefix)]
+    assert select["state"] == "boost" and select["attributes"]["options"] == ["boost", "eco", "super_eco"]
+    assert "Driveway" in status["attributes"]["friendly_name"] and "Driveway" in number["attributes"]["friendly_name"]
+    assert "switch.predbat_hypervolt_control" not in entities
+    print("  ✓ One charger publishes the expected entities")
+
+
+def test_publishes_two_chargers():
+    """Each charger gets its own entities, in car order; a released charger's switch is off."""
+    other = str(int("b" * 16, 16))
+    component = _make_component([HypervoltCharger(other, release_state="released", pilot_status="B", last_message=time.time()), HypervoltCharger(V3_ID, release_state="default", pilot_status="A", last_message=time.time())])
+    assert run_async(component.run(0, True)) is True
+    entities = component.base.entities
+    assert entities["switch.predbat_hypervolt_{}_charging".format(other)]["state"] == "off"
+    assert entities["sensor.predbat_hypervolt_{}_status".format(other)]["state"] == "stopped"
+    assert entities["binary_sensor.predbat_hypervolt_{}_connected".format(V3_ID)]["state"] == "off"
+    assert [charger.charger_id for charger in component.ordered_chargers()] == sorted([V3_ID, other], key=int)
+    print("  ✓ Two chargers publish separately")
+
+
+def test_update_success_only_when_fresh():
+    """Success is stamped only while at least one charger is fresh."""
+    component = _make_component()
+    run_async(component.run(0, True))
+    stamped = component.last_success_timestamp
+    assert stamped is not None
+    component.transport.chargers[V3_ID].last_message = time.time() - 10 * 60
+    component.last_success_timestamp = None
+    assert run_async(component.run(60, False)) is False
+    assert component.last_success_timestamp is None
+    assert component.base.entities["sensor.predbat_hypervolt_{}_status".format(V3_ID)]["attributes"]["stale"] is True
+    print("  ✓ Success only with fresh data")
+
+
+def test_final_closes_transport():
+    """final() closes the transport."""
+    component = _make_component()
+    run_async(component.run(0, True))
+    run_async(component.final())
+    assert component.transport.count("close") == 1
+    print("  ✓ final() closes the transport")
+
+
 def test_hypervolt(my_predbat=None):
     """Run every Hypervolt test."""
     print("=" * 70)
@@ -974,5 +1234,16 @@ def test_hypervolt(my_predbat=None):
     test_reconnect_all_uses_new_token()
     test_probe_and_reconnect_one()
     test_command_builders()
+    test_component_registration()
+    test_component_missing_credentials()
+    test_run_first_signs_in_lists_and_connects()
+    test_run_refreshes_token()
+    test_run_probes_then_reconnects_stale()
+    test_run_lists_chargers_every_30_minutes()
+    test_run_auth_failure_after_start()
+    test_publishes_one_charger()
+    test_publishes_two_chargers()
+    test_update_success_only_when_fresh()
+    test_final_closes_transport()
     print("=" * 70)
     return False

@@ -33,6 +33,7 @@ from typing import Callable, Optional
 
 import aiohttp
 
+from component_base import ComponentBase
 from predbat_metrics import record_api_call
 
 HYPERVOLT_TOKEN_URL = "https://kc.prod.hypervolt.co.uk/realms/retail-customers/protocol/openid-connect/token"
@@ -65,6 +66,9 @@ BACKOFF_CAP_SECONDS = 300
 BACKOFF_RESET_MESSAGES = 4
 # aiohttp pings the socket this often so a dead connection is noticed
 WS_HEARTBEAT_SECONDS = 30
+
+# The charger list is re-read this often, to pick up a charger added to the account
+CHARGER_LIST_SECONDS = 30 * 60
 
 # A charger with no message for this long is probed, and at twice this reconnected
 STALE_SECONDS = 240
@@ -99,6 +103,12 @@ class HypervoltRefusedError(HypervoltApiError):
 
 class HypervoltTimeoutError(HypervoltApiError):
     """A command had no reply in time."""
+
+
+def charger_sort_key(charger_id):
+    """Sort key putting numeric charger ids in numeric order, ahead of any that are not numbers."""
+    text = str(charger_id)
+    return (0, int(text), "") if text.isdigit() else (1, 0, text)
 
 
 def _to_float(value):
@@ -725,6 +735,181 @@ class HypervoltTransport:
         for link in list(self.links.values()):
             await self._stop_link(link)
         self.links = {}
+
+
+hypervolt_attribute_table = {
+    "status": {"friendly_name": "Hypervolt Status", "icon": "mdi:information-outline"},
+    "power": {"friendly_name": "Hypervolt Power", "icon": "mdi:lightning-bolt", "unit_of_measurement": "W", "device_class": "power", "state_class": "measurement"},
+    "session_energy": {"friendly_name": "Hypervolt Session Energy", "icon": "mdi:lightning-bolt", "unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total_increasing"},
+    "connected": {"friendly_name": "Hypervolt Car Connected", "icon": "mdi:ev-plug-type2"},
+    "plugged": {"friendly_name": "Hypervolt Car Plugged In", "icon": "mdi:ev-plug-type2"},
+    "charging": {"friendly_name": "Hypervolt Charging", "icon": "mdi:battery-charging"},
+    "charging_switch": {"friendly_name": "Hypervolt Charge", "icon": "mdi:ev-station"},
+    "max_charging_current": {"friendly_name": "Hypervolt Maximum Charging Current", "icon": "mdi:current-ac", "unit_of_measurement": "A", "min": MIN_CURRENT_A, "max": MAX_CURRENT_A, "step": 1},
+    "charge_mode": {"friendly_name": "Hypervolt Charge Mode", "icon": "mdi:solar-power"},
+    "control": {"friendly_name": "Hypervolt Charge Control", "icon": "mdi:ev-station"},
+}
+
+
+class HypervoltAPI(ComponentBase):
+    """Hypervolt component: monitoring, controls and Predbat-led charging for Hypervolt chargers."""
+
+    def initialize(self, username, password, automatic=True, hypervolt_control=False):
+        """Set up component state and the transport."""
+        self.automatic = automatic
+        self.hypervolt_control = bool(hypervolt_control)
+        # Charger ids in car order: entry N is car N. Append-only, so a car never changes number while Predbat runs
+        self.car_order = []
+        self.listed = False
+        self.queued_events = []
+        # Charger id -> when Predbat last reconnected it, so a silent charger is given time to answer
+        self.reconnected_at = {}
+        # Seconds the first run waits for a charger's first message
+        self.first_wait_seconds = 20
+        self.control_active = False
+        self.control_enabled = True
+        self.transport = None
+        if not username or not password:
+            self.log("Error: hypervolt: hypervolt_username and hypervolt_password must both be set")
+            return
+        self.transport = HypervoltTransport(self.log, username, password)
+
+    def entity_prefix(self, charger):
+        """Return the entity name prefix for a charger, e.g. predbat_hypervolt_12345."""
+        return "{}_hypervolt_{}".format(self.prefix, charger.charger_id)
+
+    def update_car_order(self, listed_ids):
+        """Give every listed charger a car number, keeping the numbers already handed out; new chargers are appended in id order."""
+        for charger_id in sorted((str(listed_id) for listed_id in listed_ids), key=charger_sort_key):
+            if charger_id not in self.car_order:
+                self.car_order.append(charger_id)
+
+    def ordered_chargers(self):
+        """The chargers with a state record, in car order."""
+        return [self.transport.chargers[charger_id] for charger_id in self.car_order if charger_id in self.transport.chargers]
+
+    def fresh_chargers(self, now):
+        """The chargers that have sent something within STALE_SECONDS."""
+        return [charger for charger in self.ordered_chargers() if not is_stale(charger, now)]
+
+    async def run(self, seconds, first):
+        """Keep the account signed in and the sockets healthy, then handle controls and publish."""
+        if not self.transport:
+            return False
+        try:
+            if first or self.transport.auth_failed or self.transport.token_due():
+                reconnect = not first
+                await self.transport.authenticate()
+                if reconnect:
+                    # The sync login carries the token, so every socket logs in again with the new one
+                    await self.transport.reconnect_all()
+            await self.refresh_charger_list(seconds, first)
+            if first:
+                await self.wait_for_first_message()
+            await self.check_links(time.time())
+            await self.process_events()
+            await self.publish_data()
+        except HypervoltAuthError as exc:
+            self.log("Error: hypervolt: sign in failed, check hypervolt_username and hypervolt_password: {}".format(exc))
+            return False
+        except HypervoltError as exc:
+            self.log("Warn: hypervolt: {}".format(exc))
+            return False
+        if not self.fresh_chargers(time.time()):
+            if self.car_order:
+                self.log("Warn: hypervolt: no charger has sent anything for {} seconds".format(STALE_SECONDS))
+            return False
+        self.update_success_timestamp()
+        return True
+
+    async def refresh_charger_list(self, seconds, first):
+        """Read the account's chargers on the first run and every CHARGER_LIST_SECONDS, connecting any new one."""
+        if not (first or not self.listed or (seconds % CHARGER_LIST_SECONDS) == 0):
+            return
+        try:
+            chargers = await self.transport.list_chargers()
+        except HypervoltApiError as exc:
+            if first or not self.listed:
+                raise
+            # The sockets carry on regardless: a failed refresh only delays finding a new charger
+            self.log("Warn: hypervolt: could not refresh the charger list: {}".format(exc))
+            return
+        self.listed = True
+        if not chargers and first:
+            self.log("Warn: hypervolt: signed in but no chargers were found on the account")
+        self.update_car_order(charger["id"] for charger in chargers)
+        for charger_id in self.car_order:
+            await self.transport.connect(charger_id)
+
+    async def wait_for_first_message(self):
+        """Give the sockets up to first_wait_seconds to deliver something, so the first run has data to publish."""
+        deadline = time.time() + self.first_wait_seconds
+        while self.car_order and not self.fresh_chargers(time.time()) and time.time() < deadline:
+            await asyncio.sleep(1)
+
+    async def check_links(self, now):
+        """Probe a quiet charger, and reconnect a silent one that has not been reconnected recently."""
+        for charger in self.ordered_chargers():
+            silence = now - charger.last_message
+            if silence > 2 * STALE_SECONDS:
+                if now - self.reconnected_at.get(charger.charger_id, 0) > 2 * STALE_SECONDS:
+                    self.log("Warn: hypervolt: charger {} has sent nothing for {} seconds, reconnecting".format(charger.charger_id, int(silence)))
+                    self.reconnected_at[charger.charger_id] = now
+                    await self.transport.reconnect(charger.charger_id)
+            elif silence > STALE_SECONDS:
+                await self.transport.probe(charger.charger_id)
+
+    async def process_events(self):
+        """Run every queued control. Returns True when at least one ran."""
+        return False
+
+    def charger_attributes(self, charger, key):
+        """A copy of one entity's attributes with the charger's name in the friendly name."""
+        attributes = dict(hypervolt_attribute_table[key])
+        name = charger.name.strip()
+        label = name if "hypervolt" in name.lower() else ("Hypervolt {}".format(name) if name else "Hypervolt")
+        attributes["friendly_name"] = attributes["friendly_name"].replace("Hypervolt", label, 1)
+        return attributes
+
+    async def publish_data(self):
+        """Publish every known charger as Predbat entities."""
+        if self.control_active:
+            # Published only while control could act on it, so the switch is never a lie
+            self.dashboard_item("switch.{}_hypervolt_control".format(self.prefix), state="on" if self.control_enabled else "off", attributes=hypervolt_attribute_table["control"], app="hypervolt")
+        now = time.time()
+        for charger in self.ordered_chargers():
+            prefix = self.entity_prefix(charger)
+            status_attributes = self.charger_attributes(charger, "status")
+            status_attributes.update(
+                {
+                    "model": charger.model,
+                    "name": charger.name,
+                    "firmware_version": charger.firmware_version,
+                    "api_version": charger.api_version,
+                    "release_state": charger.release_state,
+                    "pilot_status": charger.pilot_status,
+                    "lock_state": charger.lock_state,
+                    "features": charger.features,
+                    "stale": is_stale(charger, now),
+                }
+            )
+            mode_attributes = self.charger_attributes(charger, "charge_mode")
+            mode_attributes["options"] = charge_mode_options(charger)
+
+            self.dashboard_item("sensor.{}_status".format(prefix), state=status_text(charger), attributes=status_attributes, app="hypervolt")
+            self.dashboard_item("sensor.{}_power".format(prefix), state=charger.power_w, attributes=self.charger_attributes(charger, "power"), app="hypervolt")
+            self.dashboard_item("sensor.{}_session_energy".format(prefix), state=charger.session_energy_kwh, attributes=self.charger_attributes(charger, "session_energy"), app="hypervolt")
+            self.dashboard_item("binary_sensor.{}_connected".format(prefix), state=connected_state(charger), attributes=self.charger_attributes(charger, "connected"), app="hypervolt")
+            self.dashboard_item("binary_sensor.{}_plugged".format(prefix), state=plugged_state(charger), attributes=self.charger_attributes(charger, "plugged"), app="hypervolt")
+            self.dashboard_item("binary_sensor.{}_charging".format(prefix), state="on" if charger.charging else "off", attributes=self.charger_attributes(charger, "charging"), app="hypervolt")
+            self.dashboard_item("switch.{}_charging".format(prefix), state="on" if charger.release_state == "default" else "off", attributes=self.charger_attributes(charger, "charging_switch"), app="hypervolt")
+            self.dashboard_item("number.{}_max_charging_current".format(prefix), state=charger.max_current_a if charger.max_current_a is not None else "unavailable", attributes=self.charger_attributes(charger, "max_charging_current"), app="hypervolt")
+            self.dashboard_item("select.{}_charge_mode".format(prefix), state=charger.charge_mode or "unavailable", attributes=mode_attributes, app="hypervolt")
+
+    async def final(self):
+        """Close every socket so a restart leaves no reader task behind."""
+        if self.transport:
+            await self.transport.close()
 
 
 def print_charger_table(chargers):  # pragma: no cover
