@@ -122,6 +122,15 @@ PREDBAT_MAX_CARS = 8  # Matches PK_MAX_CARS in prediction_kernel.cpp and the car
 # A car_charging_now sensor that reports a charging power (in W, after unit conversion) rather than
 # on/off counts as charging from this power: above a charger's standby draw, below the smallest charge
 CAR_CHARGING_NOW_POWER_W = 200
+# A manually tracked car with no charge recorded keeps counting from up to this long ago, for energy its charger's history records late
+CAR_MANUAL_SOC_LATE_MINUTES = 60
+# A manually tracked car is only reset once its plugged-in sensor has read unplugged for this long - a charger reconnecting can read unplugged for a few minutes
+CAR_MANUAL_SOC_UNPLUG_MINUTES = 10
+# A manually tracked car with no car_charging_plugged sensor is reset once it has been idle - nothing charged, entered or written by the plan - for this long
+CAR_MANUAL_SOC_IDLE_MINUTES = 12 * 60
+# Charger energy counted for a manually tracked car is limited to car_charging_rate times the time elapsed, with this margin, plus a little slack for a coarse counter
+CAR_MANUAL_SOC_RATE_MARGIN = 1.1
+CAR_MANUAL_SOC_ENERGY_SLACK = 0.1
 CAR_CHARGING_LIMIT_UNCAPPED = 9999.0  # Model-facing car charge limit (kWh) that makes predict()'s fill clamp inert - larger than any real car battery (#4967)
 DEBUG_ENABLE_MAX_HOURS = 2  # Auto-disable switch.predbat_debug_enable after this long left on, to bound the raw per-cycle debug.yaml disk writes it triggers (and the C++ kernel bypass it forces) if left on by accident - the rotating debug-history buffer covers longer-term history at a coarser interval instead
 # How far ahead a manual override may be placed. The two horizons differ on purpose: a manual

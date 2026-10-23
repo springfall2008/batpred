@@ -1114,6 +1114,21 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             self.log("GECloud: Warn: Unrecognised EV charger status '{}', treating it as no car connected - please report it so it can be added".format(status))
         return False
 
+    def evc_car_plugged(self, status):
+        """
+        binary_sensor.<prefix>_evc_car_plugged, for car_charging_plugged: on with a car connected, off only when the
+        status positively says nothing is plugged in, and unavailable otherwise (offline, faulted, a status not known).
+
+        Unlike _evc_car_connected, a charger dropping offline is no reading rather than an unplug, so it does not reset
+        the manual car SoC.
+        """
+        key = evc_status_key(status)
+        if key in EVC_CONNECTED_STATUSES:
+            return "on"
+        if key in EVC_EMPTY_STATUSES:
+            return "off"
+        return "unavailable"
+
     async def publish_evc_device(self, serial, evc_device):
         """Publish the charger's own status, and whether a car is connected.
 
@@ -1133,6 +1148,12 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             "binary_sensor." + entity_name + "_evc_car_connected",
             state="on" if self.evc_car_connected(status) else "off",
             attributes={"friendly_name": "EV Charger Car Connected", "icon": "mdi:ev-plug-type2"},
+            app="gecloud",
+        )
+        self.dashboard_item(
+            "binary_sensor." + entity_name + "_evc_car_plugged",
+            state=self.evc_car_plugged(status),
+            attributes={"friendly_name": "EV Charger Car Plugged In", "icon": "mdi:ev-plug-type2"},
             app="gecloud",
         )
 
@@ -2217,12 +2238,14 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         devices in a different order. car_charging_energy lets car_charging_hold subtract
         the charging precisely instead of falling back to the car_charging_threshold
         heuristic; car_charging_planned tells Predbat when there is actually a car to plan
-        for; car_charging_power is display-only and drives the web power flow diagram. Both go through set_arg_auto so an apps.yaml entry that auto-discovery is
+        for; car_charging_plugged whether the cable is in, for the manual car SoC's reset on
+        unplug (see evc_car_plugged()); car_charging_power is display-only and drives the web power flow diagram. Both go through set_arg_auto so an apps.yaml entry that auto-discovery is
         about to override is logged rather than silently discarded.
         """
         energy_entities = []
         power_entities = []
         connected_entities = []
+        plugged_entities = []
         for uuid in sorted(self.evc_device_list, key=lambda item: str(self.evc_device.get(item, {}).get("serial_number", "") or "")):
             serial = self.evc_device.get(uuid, {}).get("serial_number", None)
             if not serial:
@@ -2235,6 +2258,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             energy_entities.append("sensor." + entity_name + "_evc_energy_active_import_register")
             power_entities.append("sensor." + entity_name + "_evc_power_active_import")
             connected_entities.append("binary_sensor." + entity_name + "_evc_car_connected")
+            plugged_entities.append("binary_sensor." + entity_name + "_evc_car_plugged")
 
         if not energy_entities:
             return
@@ -2249,6 +2273,9 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         self.set_arg_auto("car_charging_energy", energy_entities)
         self.log("GECloud: Setting car_charging_planned to {}".format(connected_entities))
         self.set_arg_auto("car_charging_planned", connected_entities)
+        # The cable alone, for the manual car SoC's reset on unplug - unavailable while the charger is offline
+        self.log("GECloud: Setting car_charging_plugged to {}".format(plugged_entities))
+        self.set_arg_auto("car_charging_plugged", plugged_entities)
         self.log("GECloud: Setting car_charging_power to {}".format(power_entities))
         self.set_arg_auto("car_charging_power", power_entities)
 

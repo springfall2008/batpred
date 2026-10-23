@@ -112,6 +112,10 @@ CHARGING_STATUS_IDS = (193, 194, 195)
 # No car is plugged in: Disconnected, Ready, and Locked with no car
 UNPLUGGED_STATUS_IDS = (0, 161, 162, 163, 165, 209)
 PAUSED_STATUS_IDS = (178, 182)
+# Positively no car plugged in - Ready, and Locked with no car - for binary_sensor.<prefix>_plugged. Disconnected (0, 163) is
+# left out: it is what a charger that reported nothing reads as, and on a live Pulsar Plus status 0 is the charger dropping
+# off Wallbox's cloud - seen for 2-14 minutes mid-charge and for over two hours with no car - so it says nothing about the cable
+EMPTY_STATUS_IDS = (161, 162, 165, 209)
 
 # config_data.operation_mode when an OCPP backend, not the Wallbox cloud, runs the charger
 OPERATION_MODE_OCPP = "ocpp"
@@ -451,11 +455,24 @@ class WallboxTransport:
         return await self._api("PUT", "v4/chargers/{}/eco-smart".format(charger_id), body={"data": {"attributes": attributes, "type": "eco_smart"}}, write=True)
 
 
+def plugged_state(charger):
+    """
+    binary_sensor.<prefix>_plugged for a charger: on with a car connected, off when its status positively says there is
+    none, and unavailable otherwise (Disconnected, an error, updating, or a status not known) - no reading, not an unplug.
+    """
+    if charger.connected:
+        return "on"
+    if charger.status_id in EMPTY_STATUS_IDS:
+        return "off"
+    return "unavailable"
+
+
 wallbox_attribute_table = {
     "status": {"friendly_name": "Wallbox Status", "icon": "mdi:information-outline"},
     "power": {"friendly_name": "Wallbox Power", "icon": "mdi:lightning-bolt", "unit_of_measurement": "W", "device_class": "power", "state_class": "measurement"},
     "session_energy": {"friendly_name": "Wallbox Session Energy", "icon": "mdi:lightning-bolt", "unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total_increasing"},
     "connected": {"friendly_name": "Wallbox Car Connected", "icon": "mdi:ev-plug-type2"},
+    "plugged": {"friendly_name": "Wallbox Car Plugged In", "icon": "mdi:ev-plug-type2"},
     "charging": {"friendly_name": "Wallbox Charging", "icon": "mdi:battery-charging"},
     "charging_switch": {"friendly_name": "Wallbox Charge", "icon": "mdi:ev-station"},
     "locked": {"friendly_name": "Wallbox Locked", "icon": "mdi:lock"},
@@ -536,7 +553,8 @@ class WallboxAPI(ComponentBase):
         car_charging_now takes the power sensors, which count as charging from
         CAR_CHARGING_NOW_POWER_W; a value the user set in apps.yaml is kept. Session
         energy resets with each session, which the shared incrementing-sensor handling
-        already copes with. car_charging_soc is not set: a Type 2 connector cannot
+        already copes with. car_charging_plugged takes the _plugged sensors, for the
+        manual car SoC's reset on unplug (see plugged_state()). car_charging_soc is not set: a Type 2 connector cannot
         report the car's state of charge.
         """
         if not self.car_order:
@@ -544,12 +562,16 @@ class WallboxAPI(ComponentBase):
         prefixes = ["{}_wallbox_{}".format(self.prefix, charger_id) for charger_id in self.car_order]
         energy_entities = ["sensor.{}_session_energy".format(prefix) for prefix in prefixes]
         planned_entities = ["binary_sensor.{}_connected".format(prefix) for prefix in prefixes]
+        plugged_entities = ["binary_sensor.{}_plugged".format(prefix) for prefix in prefixes]
         power_entities = ["sensor.{}_power".format(prefix) for prefix in prefixes]
 
         self.log("Info: wallbox: setting car_charging_energy to {}".format(energy_entities))
         self.set_arg_auto("car_charging_energy", energy_entities)
         self.log("Info: wallbox: setting car_charging_planned to {}".format(planned_entities))
         self.set_arg_auto("car_charging_planned", planned_entities)
+        # The cable alone, for the manual car SoC's reset on unplug - unavailable when the charger reports nothing useful
+        self.log("Info: wallbox: setting car_charging_plugged to {}".format(plugged_entities))
+        self.set_arg_auto("car_charging_plugged", plugged_entities)
         self.log("Info: wallbox: setting car_charging_power and car_charging_now to {}".format(power_entities))
         self.set_arg_auto("car_charging_power", power_entities)
         self.set_arg_auto("car_charging_now", power_entities, overwrite=False)
@@ -694,6 +716,7 @@ class WallboxAPI(ComponentBase):
             self.dashboard_item("sensor.{}_power".format(prefix), state=charger.power_w, attributes=self.charger_attributes(charger, "power"), app="wallbox")
             self.dashboard_item("sensor.{}_session_energy".format(prefix), state=charger.session_energy_kwh, attributes=self.charger_attributes(charger, "session_energy"), app="wallbox")
             self.dashboard_item("binary_sensor.{}_connected".format(prefix), state="on" if charger.connected else "off", attributes=self.charger_attributes(charger, "connected"), app="wallbox")
+            self.dashboard_item("binary_sensor.{}_plugged".format(prefix), state=plugged_state(charger), attributes=self.charger_attributes(charger, "plugged"), app="wallbox")
             self.dashboard_item("binary_sensor.{}_charging".format(prefix), state="on" if charger.charging else "off", attributes=self.charger_attributes(charger, "charging"), app="wallbox")
             self.dashboard_item("switch.{}_charging".format(prefix), state="on" if charger.charging else "off", attributes=self.charger_attributes(charger, "charging_switch"), app="wallbox")
             self.dashboard_item("switch.{}_locked".format(prefix), state="on" if charger.locked else "off", attributes=self.charger_attributes(charger, "locked"), app="wallbox")

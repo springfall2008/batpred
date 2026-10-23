@@ -54,6 +54,7 @@ ohme_attribute_table = {
     "battery_percent": {"friendly_name": "Ohme Battery Percent", "icon": "mdi:battery", "unit_of_measurement": "%", "device_class": "battery"},
     "current_vehicle": {"friendly_name": "Ohme Current Vehicle", "icon": "mdi:car"},
     "connected": {"friendly_name": "Ohme Car Connected", "icon": "mdi:ev-plug-type2"},
+    "plugged": {"friendly_name": "Ohme Car Plugged In", "icon": "mdi:ev-plug-type2"},
     "energy_today": {"friendly_name": "Ohme Charge Energy Today", "icon": "mdi:ev-station", "unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total"},
     "approve_charge": {"friendly_name": "Ohme Approve Charge", "icon": "mdi:check-circle-outline"},
 }
@@ -76,10 +77,11 @@ CONTROL_INTERVAL_SECONDS = 60
 
 # The charger-facing entities for the discovery catalogue's chargers record - see
 # OhmeAPI.build_discovery(). Predbat standard name -> entity descriptor, filtered down to what
-# Home Assistant has actually seen by ComponentBase.discovery_entities(). All three are published
+# Home Assistant has actually seen by ComponentBase.discovery_entities(). All of them are published
 # unconditionally by publish_data(), so once it has run once every one of these exists.
 CHARGER_DISCOVERY_ENTITY_SPEC = {
     "car_charging_planned": {"entity_id": "binary_sensor.predbat_ohme_connected", "domain": "binary_sensor", "access": "r"},
+    "car_charging_plugged": {"entity_id": "binary_sensor.predbat_ohme_plugged", "domain": "binary_sensor", "access": "r"},
     "car_charging_energy": {"entity_id": ENERGY_TODAY_ENTITY, "domain": "sensor", "access": "r"},
     "car_charging_power": {"entity_id": POWER_WATTS_ENTITY, "domain": "sensor", "access": "r"},
 }
@@ -681,6 +683,8 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         if self.get_arg("num_cars", 0) < 1:
             self.set_arg("num_cars", 1)
         self.set_arg("car_charging_planned", ["binary_sensor.predbat_ohme_connected"])
+        # The connected sensor above turns off once a charge finishes, so whether the cable is in is its own sensor
+        self.set_arg("car_charging_plugged", ["binary_sensor.predbat_ohme_plugged"])
         self.set_arg("car_charging_soc", ["sensor.predbat_ohme_battery_percent"])
         # Whether the car is drawing power, which Octopus Intelligent slot confirmation and the battery hold
         # for the car both read - a power sensor counts as charging from CAR_CHARGING_NOW_POWER_W. Bound
@@ -1051,6 +1055,9 @@ class OhmeAPI(ComponentBase, CarChargerControl):
 
         # A car is plugged in and still wants charge - drives car_charging_planned under ohme_automatic
         self.dashboard_item(entity_name_binary_sensor + "_connected", state="on" if self.client.status in CONNECTED_STATUSES else "off", attributes=ohme_attribute_table.get("connected", {}), app="ohme")
+        # A car is plugged in, whether or not it wants charge - drives car_charging_plugged under ohme_automatic
+        plugged = "unknown" if status == "unknown" else ("off" if status == ChargerStatus.UNPLUGGED.value else "on")
+        self.dashboard_item(entity_name_binary_sensor + "_plugged", state=plugged, attributes=ohme_attribute_table.get("plugged", {}), app="ohme")
 
         # Delivered-energy total, suitable for car_charging_energy unlike Ohme's own energy figure
         # Predbat's configured timezone, not the host's - the daily reset and the date this total is
