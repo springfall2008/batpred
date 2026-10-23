@@ -212,6 +212,7 @@ GATEWAY_ATTRIBUTE_TABLE = {
     # EV charger (OCPP) — device-level entities, present when a charge point is connected
     "ev_online": {"friendly_name": "EV Charger Online", "icon": "mdi:ev-station", "device_class": "connectivity"},
     "ev_connected": {"friendly_name": "EV Car Connected", "icon": "mdi:car-electric", "device_class": "plug"},
+    "ev_plugged": {"friendly_name": "EV Car Plugged In", "icon": "mdi:ev-plug-type2", "device_class": "plug"},
     "ev_session_active": {"friendly_name": "EV Charging Active", "icon": "mdi:ev-station", "device_class": "battery_charging"},
     "ev_charging": {"friendly_name": "EV Drawing Power", "icon": "mdi:ev-station", "device_class": "battery_charging"},
     "ev_status": {"friendly_name": "EV Charger Status", "icon": "mdi:ev-station"},
@@ -283,6 +284,7 @@ class GatewayMQTT(ComponentBase):
     _pv_only_serials = ()
     _inverter_slot_serials = ()
     _slots_without_capacity = frozenset()
+    _ev_last_soc = {}  # replaced, never changed in place
     _last_ratings = {}  # replaced, never changed in place
     _assumed_ratings = frozenset()
     _reserve_before_zero = {}  # replaced, never changed in place
@@ -423,6 +425,7 @@ class GatewayMQTT(ComponentBase):
         self._discovery_save_retry_at = 0
         self._unavailable_inverters = ((), ())
         self._configured_ev_chargers = frozenset()  # EV charge point ids registered at the last auto-config
+        self._ev_last_soc = {}  # EV charge point id -> the last SoC the charger reported for the car
         self._last_published_plan = None
         self._pending_plan = None
         self._ev_windows: list = []  # parsed (start_dt, end_dt) charge windows from HA plan attribute
@@ -1573,6 +1576,9 @@ class GatewayMQTT(ComponentBase):
             self.dashboard_item(f"binary_sensor.{pfx}_online", ev.connected, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_online", {}), app="gateway")
             ev_car_connected = ev.connected and ev.status in {"Preparing", "Charging", "SuspendedEV", "SuspendedEVSE", "Finishing"}
             self.dashboard_item(f"binary_sensor.{pfx}_connected", ev_car_connected, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_connected", {}), app="gateway")
+            # Whether a car is plugged in, for car_charging_plugged. Unlike _connected it does not read "no" while the
+            # charger itself is offline - that says nothing about the cable - so a charger dropping out is not an unplug
+            self.dashboard_item(f"binary_sensor.{pfx}_plugged", ev_car_connected if ev.connected else "unavailable", attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_plugged", {}), app="gateway")
             # Live-session fields are only meaningful while the charger is connected.
             # The gateway now reports known-but-offline chargers instead of omitting
             # them, and older firmware can leave session_active/power/energy at their
@@ -1596,11 +1602,20 @@ class GatewayMQTT(ComponentBase):
             if ev.status:
                 self.dashboard_item(f"sensor.{pfx}_status", ev.status, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_status", {}), app="gateway")
             self.dashboard_item(f"sensor.{pfx}_power", power_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_power", {}), app="gateway")
-            self.dashboard_item(f"sensor.{pfx}_session_energy", round(session_energy_wh / 1000.0, 2), attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_session_energy", {}), app="gateway")
+            # Unavailable while the charger is offline, not 0: car_charging_energy's history would read the drop to 0 and back as
+            # a new session, and count the session's energy again - toward the manual car SoC as well as the load
+            session_energy = round(session_energy_wh / 1000.0, 2) if ev.connected else "unavailable"
+            self.dashboard_item(f"sensor.{pfx}_session_energy", session_energy, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_session_energy", {}), app="gateway")
             if ev.current_limit_a:
                 self.dashboard_item(f"sensor.{pfx}_current_limit", ev.current_limit_a, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_current_limit", {}), app="gateway")
             if ev.soc_percent:
                 ev_soc = ev.soc_percent
+                if self._ev_last_soc.get(ev.charge_point_id) != ev_soc:
+                    self._ev_last_soc = {**self._ev_last_soc, ev.charge_point_id: ev_soc}
+            elif ev.charge_point_id in self._ev_last_soc:
+                # A charger that has reported the car's SoC and stopped, between sessions or while offline: the last
+                # report is a better guess than an estimate from the session energy, which starts from 0% every session
+                ev_soc = self._ev_last_soc[ev.charge_point_id]
             else:
                 # SoC not reported by this charger — estimate from session energy and configured battery size
                 # so the sensor always exists and the optimizer sees progress rather than a stuck 0%.
@@ -2255,12 +2270,16 @@ class GatewayMQTT(ComponentBase):
         # car_charging_battery_size / car_charging_limit settings — the charger cannot
         # report them, so overwriting them here would only swap one default for another.
         # "Planned" derives from the connected binary sensor and "now" from the charging sensor (the car
-        # drawing power); many OCPP cars do not report SoC, so the manual-SoC path supplies a starting value.
+        # drawing power); many OCPP cars do not report SoC, so the manual-SoC path tracks it from the session energy.
         self.set_arg("car_charging_planned", [f"binary_sensor.{pfx}_connected"])
+        # The cable alone, for the manual SoC's reset on unplug - unavailable while the charger is offline, not "no"
+        self.set_arg("car_charging_plugged", [f"binary_sensor.{pfx}_plugged"])
         # Holds the battery for the car while it draws power; it never adds a charging slot, so it cannot
         # keep a session going through gateway_evc_control's window start/stop
         self.set_arg("car_charging_now", [f"binary_sensor.{pfx}_charging"])
-        self.set_arg("car_charging_soc", [f"sensor.{pfx}_soc"])
+        # No car_charging_soc: a charger rarely knows the car's SoC, and when it does only during a session, so
+        # sensor.{pfx}_soc is mostly an estimate from the session energy that starts from 0% every session. With the
+        # energy and plugged-in sensors the car is tracked as a manual SoC car instead, which the user can set to its real level
         self.set_arg("car_charging_energy", f"sensor.{pfx}_session_energy")
         # Live charge power - display only, for the web power flow diagram
         self.set_arg("car_charging_power", f"sensor.{pfx}_power")

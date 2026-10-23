@@ -2158,6 +2158,7 @@ whether you are within an Octopus Energy "smart charge" slot
 (see [car charging documentation](car-charging.md))
 - **car_charging_planned** - Indicates when your EV is plugged in and planned to charge during low-rate slots.
 - **car_charging_planned_response** - Values for the car_charging_planned sensor that indicate that the car is plugged in and will charge in the next low rate slot.
+- **car_charging_plugged** - Optional, indicates only whether your EV is plugged in, even after its charge has finished. Used to reset the manual car SoC when the car is unplugged; **car_charging_planned** is not used for this, as many chargers turn it off when a charge finishes.
 - **car_charging_now** - Sensor to indicate when the EV is charging, used to hold the house battery for the car. Either an on/off sensor or a charging power sensor (W or kW, 200W or more counts as charging)
 - **car_charging_now_response** - Responses for car_charging_now to indicate that the car is charging (default `yes`, `on`, `enable`, `true` and `charging`). The sensor state must match one of them, ignoring case
 - **car_charging_battery_size** - Car battery size in kWh
