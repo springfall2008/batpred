@@ -1161,7 +1161,7 @@ class HanchuAPI(ComponentBase):
         # Predbat decides whether it can hold the battery on the reserve against inverter_reserve_max
         # (execute.py, Hold Charging), so left at its default of 100 it would hold at 80% by writing
         # 81 - clamped to 45 - and drain the battery to 45% before re-charging from the grid. One
-        # value, because inverter.py reads it without an index; the lowest device ceiling governs.
+        # value for every inverter (a per-inverter list is also accepted, #5369); the lowest device ceiling governs.
         self.set_arg_auto("inverter_reserve_max", self.reserve_max(devices))
 
         self.set_arg_auto("reserve", [self._control_name("number", sn, "battery_schedule_reserve") for sn in devices])
