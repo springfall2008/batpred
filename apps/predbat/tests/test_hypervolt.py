@@ -34,12 +34,15 @@ from hypervolt import (
     apply_plugncharge,
     apply_session,
     apply_snapshot,
+    charge_mode_command,
     charge_mode_options,
     charger_api_version,
     charger_major_version,
     connected_state,
     is_stale,
+    max_current_command,
     plugged_state,
+    release_command,
     status_text,
 )
 
@@ -917,6 +920,18 @@ def test_probe_and_reconnect_one():
     print("  ✓ Probe and single reconnect")
 
 
+def test_command_builders():
+    """Each control maps to the method and params the integration sends."""
+    assert release_command(True) == ("sync.apply", {"release": False})
+    assert release_command(False) == ("sync.apply", {"release": True})
+    assert max_current_command(16) == ("sync.apply", {"max_current": 16000})
+    assert max_current_command(40) == ("sync.apply", {"max_current": 32000})
+    assert max_current_command(3) == ("sync.apply", {"max_current": 6000})
+    assert charge_mode_command(3, "eco") == ("plugncharge.set", {"mode": "eco"})
+    assert charge_mode_command(2, "eco") == ("sync.apply", {"solar_mode": "eco"})
+    print("  ✓ Command builders")
+
+
 def test_hypervolt(my_predbat=None):
     """Run every Hypervolt test."""
     print("=" * 70)
@@ -958,5 +973,6 @@ def test_hypervolt(my_predbat=None):
     test_promotion_to_api_3()
     test_reconnect_all_uses_new_token()
     test_probe_and_reconnect_one()
+    test_command_builders()
     print("=" * 70)
     return False

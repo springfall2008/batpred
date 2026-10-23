@@ -20,8 +20,10 @@ Predbat's car charging inputs, exposes charge, current and mode controls, and ca
 and start each charger from Predbat's own car charging plan.
 """
 
+import argparse
 import asyncio
 import copy
+import getpass
 import json
 import math
 import random
@@ -50,6 +52,9 @@ TOKEN_MARGIN_SECONDS = 600
 COMMAND_TIMEOUT_SECONDS = 10
 # Request ids remembered for matching replies; older ones are dropped
 MAX_SENT_IDS = 50
+
+MIN_CURRENT_A = 6
+MAX_CURRENT_A = 32
 
 # Websocket reconnect back-off, as the Home Assistant integration uses
 BACKOFF_MIN_SECONDS = 3
@@ -241,6 +246,23 @@ def charge_mode_options(charger):
 def is_stale(charger, now):
     """Has the charger sent nothing for longer than STALE_SECONDS."""
     return now - charger.last_message > STALE_SECONDS
+
+
+def release_command(charge):
+    """The command that lets a charger charge (True) or stops it (False): Hypervolt calls a stop a release."""
+    return "sync.apply", {"release": not charge}
+
+
+def max_current_command(amps):
+    """The command that sets the maximum charging current, clamped to 6-32 A and sent in milliamps."""
+    return "sync.apply", {"max_current": int(min(MAX_CURRENT_A, max(MIN_CURRENT_A, amps))) * 1000}
+
+
+def charge_mode_command(api_version, mode):
+    """The command that sets the charge mode: plugncharge.set on the V3 API, sync.apply solar_mode on the V2 API."""
+    if api_version >= 3:
+        return "plugncharge.set", {"mode": mode}
+    return "sync.apply", {"solar_mode": mode}
 
 
 def charger_major_version(charger_id):
@@ -703,3 +725,83 @@ class HypervoltTransport:
         for link in list(self.links.values()):
             await self._stop_link(link)
         self.links = {}
+
+
+def print_charger_table(chargers):  # pragma: no cover
+    """Print a summary of each charger's state."""
+    print("{:<22} {:<16} {:<13} {:>4} {:>8} {:>9} {:>12} {:>6} {:<10} {:>8}".format("CHARGER", "NAME", "STATUS", "API", "PILOT", "POWER W", "SESSION kWh", "MAX A", "MODE", "RELEASE"))
+    for charger in chargers:
+        print(
+            "{:<22} {:<16} {:<13} {:>4} {:>8} {:>9.0f} {:>12.3f} {:>6} {:<10} {:>8}".format(
+                charger.charger_id, charger.name[:16], status_text(charger), charger.api_version, charger.pilot_status or "-", charger.power_w, charger.session_energy_kwh, charger.max_current_a or "-", charger.charge_mode or "-", charger.release_state or "-"
+            )
+        )
+
+
+async def run_hypervolt_cli(args):  # pragma: no cover
+    """Sign in, connect to every charger, print what arrives, and optionally send one command."""
+    transport = HypervoltTransport(print, args.username, args.password)
+    if args.raw:
+        transport.raw_log = lambda label, message: print("{} {}".format(label, json.dumps(message, sort_keys=True, default=str)))
+    chargers = await transport.list_chargers()
+    if not chargers:
+        print("No chargers found on this account")
+        return
+    print("Chargers: {}".format(", ".join("{} ({})".format(charger["id"], charger.get("model", "?")) for charger in chargers)))
+    for charger in chargers:
+        await transport.connect(charger["id"])
+    try:
+        print("Listening for {}s...".format(args.wait))
+        await asyncio.sleep(args.wait)
+        print("")
+        print_charger_table(transport.chargers.values())
+
+        target = str(args.charger) if args.charger is not None else str(chargers[0]["id"])
+        if target not in transport.chargers:
+            print("\nCharger {} is not on this account".format(target))
+            return
+        command = None
+        if args.start:
+            command = release_command(True)
+        elif args.stop:
+            command = release_command(False)
+        elif args.max_current is not None:
+            command = max_current_command(args.max_current)
+        elif args.mode:
+            command = charge_mode_command(transport.chargers[target].api_version, args.mode)
+        if not command:
+            return
+        print("\nSending {} {} to {}...".format(command[0], json.dumps(command[1]), target))
+        print("Reply: {}".format(json.dumps(await transport.request(target, command[0], command[1]), default=str)))
+        print("Listening for {}s for the change...".format(args.wait))
+        await asyncio.sleep(args.wait)
+        print_charger_table([transport.chargers[target]])
+    finally:
+        await transport.close()
+
+
+def main():  # pragma: no cover
+    """Main function for command line execution."""
+    parser = argparse.ArgumentParser(description="Test the Hypervolt API. Use --raw to capture messages for the test fixtures")
+    parser.add_argument("--username", required=True, help="Hypervolt account email address")
+    parser.add_argument("--password", default=None, help="Hypervolt account password. Leave it out to be asked for it, which keeps it out of your shell history and the process list")
+    parser.add_argument("--raw", action="store_true", help="Print every message sent and received, as JSON, with the token hidden")
+    parser.add_argument("--wait", type=int, default=20, help="Seconds to listen for messages before printing, and again after a command (default 20)")
+    parser.add_argument("--charger", default=None, help="Charger id to control; defaults to the first one")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--start", action="store_true", help="Let the charger charge (release false)")
+    group.add_argument("--stop", action="store_true", help="Stop the charger (release true)")
+    group.add_argument("--max-current", type=int, default=None, help="Set the maximum charging current in amps (6-32)")
+    group.add_argument("--mode", choices=CHARGE_MODES + [CHARGE_MODE_BATTERY_SAFE], default=None, help="Set the charge mode")
+    args = parser.parse_args()
+    if args.password is None:
+        args.password = getpass.getpass("Hypervolt password: ")
+    try:
+        asyncio.run(run_hypervolt_cli(args))
+    except HypervoltError as exc:
+        # A refused command or a failed sign in is an answer, not a crash
+        print("\nHypervolt call failed: {}".format(exc))
+
+
+if __name__ == "__main__":
+    main()
