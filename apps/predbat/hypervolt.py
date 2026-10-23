@@ -766,6 +766,8 @@ class HypervoltAPI(ComponentBase):
         self.reconnected_at = {}
         # Seconds the first run waits for a charger's first message
         self.first_wait_seconds = 20
+        self._auto_configured_order = None
+        self.api_2_noted = set()
         self.control_active = False
         self.control_enabled = True
         self.transport = None
@@ -809,6 +811,10 @@ class HypervoltAPI(ComponentBase):
             await self.check_links(time.time())
             await self.process_events()
             await self.publish_data()
+            if self.automatic and self.car_order and self._auto_configured_order != self.car_order:
+                # Once per car order: at start-up, and again only when a charger is added
+                self.automatic_config()
+                self._auto_configured_order = list(self.car_order)
         except HypervoltAuthError as exc:
             self.log("Error: hypervolt: sign in failed, check hypervolt_username and hypervolt_password: {}".format(exc))
             return False
@@ -821,6 +827,40 @@ class HypervoltAPI(ComponentBase):
             return False
         self.update_success_timestamp()
         return True
+
+    def automatic_config(self):
+        """Wire the charger entities into Predbat's car charging inputs, as per-car lists in car order.
+
+        car_charging_now takes the power sensors, which count as charging from
+        CAR_CHARGING_NOW_POWER_W; a value the user set in apps.yaml is kept. car_charging_soc is
+        not set: the charger cannot know the car's state of charge.
+        """
+        prefixes = ["{}_hypervolt_{}".format(self.prefix, charger_id) for charger_id in self.car_order]
+        energy_entities = ["sensor.{}_session_energy".format(prefix) for prefix in prefixes]
+        planned_entities = ["binary_sensor.{}_connected".format(prefix) for prefix in prefixes]
+        plugged_entities = ["binary_sensor.{}_plugged".format(prefix) for prefix in prefixes]
+        power_entities = ["sensor.{}_power".format(prefix) for prefix in prefixes]
+
+        self.log("Info: hypervolt: setting car_charging_energy to {}".format(energy_entities))
+        self.set_arg_auto("car_charging_energy", energy_entities)
+        self.log("Info: hypervolt: setting car_charging_planned to {}".format(planned_entities))
+        self.set_arg_auto("car_charging_planned", planned_entities)
+        self.log("Info: hypervolt: setting car_charging_plugged to {}".format(plugged_entities))
+        self.set_arg_auto("car_charging_plugged", plugged_entities)
+        self.log("Info: hypervolt: setting car_charging_power and car_charging_now to {}".format(power_entities))
+        self.set_arg_auto("car_charging_power", power_entities)
+        self.set_arg_auto("car_charging_now", power_entities, overwrite=False)
+        try:
+            num_cars = int(self.get_arg("num_cars", 0) or 0)
+        except (TypeError, ValueError):
+            num_cars = 0
+        if num_cars < len(self.car_order):
+            self.log("Info: hypervolt: setting num_cars to {}".format(len(self.car_order)))
+            self.set_arg("num_cars", len(self.car_order))
+        for charger in self.ordered_chargers():
+            if charger.api_version < 3 and charger.charger_id not in self.api_2_noted:
+                self.api_2_noted.add(charger.charger_id)
+                self.log("Info: hypervolt: charger {} uses the V2 API, which only shows a car as connected while it charges; see the Hypervolt section of docs/car-charging.md".format(charger.charger_id))
 
     async def refresh_charger_list(self, seconds, first):
         """Read the account's chargers on the first run and every CHARGER_LIST_SECONDS, connecting any new one."""

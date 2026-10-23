@@ -1277,6 +1277,73 @@ def test_charger_for_entity_requires_whole_id():
     print("  ✓ Entities match whole charger ids")
 
 
+OTHER_ID = str(int("b" * 16, 16))
+
+
+def _two_chargers():
+    """Two fresh V3 chargers, listed in reverse id order."""
+    return [HypervoltCharger(OTHER_ID, api_version=3, last_message=time.time()), HypervoltCharger(V3_ID, api_version=3, last_message=time.time())]
+
+
+def test_automatic_config_two_chargers():
+    """Each argument is a per-car list in charger id order, and num_cars is raised to match."""
+    component = _make_component(_two_chargers())
+    run_async(component.run(0, True))
+    args = component.base.args
+    first, second = sorted([V3_ID, OTHER_ID], key=int)
+    for key, kind, suffix in (("car_charging_energy", "sensor", "session_energy"), ("car_charging_planned", "binary_sensor", "connected"), ("car_charging_plugged", "binary_sensor", "plugged"), ("car_charging_power", "sensor", "power"), ("car_charging_now", "sensor", "power")):
+        assert args[key] == ["{}.predbat_hypervolt_{}_{}".format(kind, first, suffix), "{}.predbat_hypervolt_{}_{}".format(kind, second, suffix)], (key, args[key])
+    assert args["num_cars"] == 2
+    assert "car_charging_soc" not in args
+    print("  ✓ Automatic configuration wires per-car lists")
+
+
+def test_automatic_config_keeps_user_values():
+    """A user's car_charging_now is kept, and a larger num_cars is not reduced."""
+    component = _make_component()
+    component.base.args_from_apps_yaml = {"car_charging_now": ["binary_sensor.my_car_charging"]}
+    component.base.apps_yaml_override_warned = set()
+    component.base.args["car_charging_now"] = ["binary_sensor.my_car_charging"]
+    component.base.args["num_cars"] = 3
+    run_async(component.run(0, True))
+    assert component.base.args["car_charging_now"] == ["binary_sensor.my_car_charging"]
+    assert component.base.args["num_cars"] == 3
+    print("  ✓ User values kept")
+
+
+def test_automatic_config_disabled():
+    """With hypervolt_automatic off nothing is wired."""
+    component = _make_component(automatic=False)
+    run_async(component.run(0, True))
+    assert "car_charging_energy" not in component.base.args and "num_cars" not in component.base.args
+    print("  ✓ Automatic configuration off wires nothing")
+
+
+def test_automatic_config_runs_once_per_order():
+    """A later run does not put a changed value back; a charger added later wires once more."""
+    component = _make_component()
+    run_async(component.run(0, True))
+    component.base.args["car_charging_energy"] = ["sensor.something_else"]
+    run_async(component.run(60, False))
+    assert component.base.args["car_charging_energy"] == ["sensor.something_else"]
+    component.transport.chargers[OTHER_ID] = HypervoltCharger(OTHER_ID, last_message=time.time())
+    component.transport.listed.append(OTHER_ID)
+    run_async(component.run(CHARGER_LIST_SECONDS, False))
+    assert len(component.base.args["car_charging_energy"]) == 2 and component.base.args["num_cars"] == 2
+    print("  ✓ Automatic configuration runs once per car order")
+
+
+def test_automatic_config_api_2_info():
+    """A V2 API charger is wired, with one Info line pointing at the plug-in guidance."""
+    component = _make_component([HypervoltCharger(V2_ID, api_version=2, last_message=time.time())])
+    run_async(component.run(0, True))
+    run_async(component.run(60, False))
+    infos = [message for message in component.log_messages if message.startswith("Info: hypervolt:") and "docs/car-charging.md" in message]
+    assert len(infos) == 1, component.log_messages
+    assert component.base.args["car_charging_planned"] == ["binary_sensor.predbat_hypervolt_{}_connected".format(V2_ID)]
+    print("  ✓ V2 API charger wired with a pointer to the guidance")
+
+
 def test_hypervolt(my_predbat=None):
     """Run every Hypervolt test."""
     print("=" * 70)
@@ -1336,5 +1403,10 @@ def test_hypervolt(my_predbat=None):
     test_select_charge_mode_by_api_version()
     test_control_refused_logged_with_reason()
     test_charger_for_entity_requires_whole_id()
+    test_automatic_config_two_chargers()
+    test_automatic_config_keeps_user_values()
+    test_automatic_config_disabled()
+    test_automatic_config_runs_once_per_order()
+    test_automatic_config_api_2_info()
     print("=" * 70)
     return False
