@@ -1044,8 +1044,6 @@ def run_update_car_manual_soc_cap_test(testname, my_predbat):
     try:
         my_predbat.num_cars = 1
         my_predbat.car_charging_manual_soc = [True]
-        # The car_charging_manual_soc_kwh config item is enable-gated on the car_charging_manual_soc
-        # switch - turn it on so expose_config()/get_arg() actually store and return the value
         my_predbat.expose_config("car_charging_manual_soc", True)
         my_predbat.car_charging_soc = [4.0]
         my_predbat.car_charging_limit = [5.0]

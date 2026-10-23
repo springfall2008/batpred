@@ -19,7 +19,19 @@ import requests
 import re
 from datetime import datetime, timedelta, timezone
 from predbat_metrics import record_api_call
-from const import TIME_FORMAT, TIME_FORMAT_OCTOPUS, DISPATCH_SOURCE_CHARGER_SCHEDULE, REPEAT_FULL_LOG_SECONDS, OCTOPUS_DISPATCH_HOLD_MINUTES, OCTOPUS_DISPATCH_WINDOW_HOLD_MINUTES, DISPATCH_BILLING_CHOICES
+from const import (
+    TIME_FORMAT,
+    TIME_FORMAT_OCTOPUS,
+    DISPATCH_SOURCE_CHARGER_SCHEDULE,
+    DISPATCH_SOURCE_CHARGING_UNLISTED,
+    REPEAT_FULL_LOG_SECONDS,
+    OCTOPUS_DISPATCH_HOLD_MINUTES,
+    OCTOPUS_DISPATCH_WINDOW_HOLD_MINUTES,
+    DISPATCH_BILLING_CHOICES,
+    OCTOPUS_STATE_SMART_CONTROL_IN_PROGRESS,
+    OCTOPUS_STATES_NOT_DISPATCHING,
+    OCTOPUS_PLANNED_EMPTY_HOLD_MINUTES,
+)
 from utils import RepeatLogGate, str2time, minutes_to_time, dp1, dp2, dp4, minute_data, round_out_to_period, filter_payment_method, is_edge_block_body, token_mint_backoff_seconds, TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS, strptime_aware
 from component_base import ComponentBase
 from mock_base import MockBase as SharedMockBase
@@ -706,6 +718,9 @@ class OctopusAPI(ComponentBase):
         self.saving_sessions = {}
         self.saving_sessions_to_join = []
         self.intelligent_devices = {}
+        # Per device, when Octopus first answered an empty planned list while a smart charge was in progress -
+        # the last known plan is kept through those for OCTOPUS_PLANNED_EMPTY_HOLD_MINUTES (see planned_dispatches_for_state())
+        self.intelligent_planned_empty_since = {}
         # (message, make, model) the catalogue gave conflicting values for and that have been logged, so the
         # warning is given once rather than on every device poll (see catalogue_value())
         self.catalogue_ambiguity_logged = set()
@@ -2766,6 +2781,7 @@ class OctopusAPI(ComponentBase):
                                         break
                                 if not found:
                                     completed.append(dispatch)
+                        current_state = self.dispatch_current_state(dispatch_result, IntelligentdeviceID)
                         if not dispatch_result or dispatch_result.get("flexPlannedDispatches") is None:
                             # The dispatch query failed (e.g. rate limited), or Octopus answered it without the planned
                             # dispatches: an error on that field (KT-CT-4340, "Unable to fetch planned dispatches") comes
@@ -2775,17 +2791,11 @@ class OctopusAPI(ComponentBase):
                             # slots and dispatch rates until the next poll, and the change requested a replan without them.
                             # Planned dispatches are never pruned, so drop any that have ended since, and re-trim the one
                             # in progress so the energy delivered since the last poll is not counted again.
-                            now = self.now_utc_exact
-                            planned = []
-                            for cached in self.intelligent_devices.get(IntelligentdeviceID, {}).get("planned_dispatches", []):
-                                cached_end = parse_date_time(cached.get("end"))
-                                if cached_end and cached_end <= now:
-                                    continue
-                                dispatch = dict(cached)
-                                self.trim_started_dispatch(dispatch, now)
-                                planned.append(dispatch)
+                            planned = self.cached_planned_dispatches(IntelligentdeviceID)
                             if planned:
                                 self.log("Warn: OctopusAPI: Dispatch fetch failed for intelligent device {}, reusing the last known planned dispatches".format(IntelligentdeviceID))
+                        else:
+                            planned = self.planned_dispatches_for_state(IntelligentdeviceID, planned, current_state)
 
                         # Sort by start time
                         planned = sorted([x for x in planned if x.get("start")], key=lambda x: parse_date_time(x.get("start")))
@@ -2794,7 +2804,7 @@ class OctopusAPI(ComponentBase):
                         # Prune completed dispatches for results older than 5 days
                         completed = [x for x in completed if x.get("start") and parse_date_time(x.get("start")) > self.now_utc_exact - timedelta(days=5)]
                         # Store results
-                        result = {**intelligent_device, **device_setting_result, "planned_dispatches": planned, "completed_dispatches": completed}
+                        result = {**intelligent_device, **device_setting_result, "current_state": current_state, "planned_dispatches": planned, "completed_dispatches": completed}
                         results[IntelligentdeviceID] = result
             else:
                 # The devices query failed. Returning {} here would be indistinguishable from an
@@ -2802,6 +2812,72 @@ class OctopusAPI(ComponentBase):
                 # cache on every blip - report the failure so it can leave the cache alone.
                 return None
         return results
+
+    def dispatch_current_state(self, dispatch_result, device_id):
+        """
+        The device's currentState from a dispatch query answer, e.g. SMART_CONTROL_IN_PROGRESS.
+
+        A failed query, or an answer without the device, keeps the last known state, as a failed
+        query keeps the last known planned dispatches.
+        """
+        if dispatch_result:
+            for device in dispatch_result.get("devices") or []:
+                if device.get("id") == device_id:
+                    state = (device.get("status") or {}).get("currentState")
+                    if state:
+                        return state
+        return self.intelligent_devices.get(device_id, {}).get("current_state")
+
+    def cached_planned_dispatches(self, device_id):
+        """
+        The device's last known planned dispatches, still to come, for a poll that did not get a usable planned list.
+
+        Planned dispatches are never pruned, so any that have ended since are dropped, and the one in
+        progress is re-trimmed so the energy delivered since the last poll is not counted again. Copies,
+        so the cache itself is left as it was.
+        """
+        now = self.now_utc_exact
+        planned = []
+        for cached in self.intelligent_devices.get(device_id, {}).get("planned_dispatches", []):
+            cached_end = parse_date_time(cached.get("end"))
+            if cached_end and cached_end <= now:
+                continue
+            dispatch = dict(cached)
+            self.trim_started_dispatch(dispatch, now)
+            planned.append(dispatch)
+        return planned
+
+    def planned_dispatches_for_state(self, device_id, planned, state):
+        """
+        The planned dispatches to keep from a dispatch query answer, given the device's currentState.
+
+        Unplugged or out of reach (SMART_CONTROL_NOT_AVAILABLE), or with smart control off, the device
+        is dispatched nothing, yet Octopus can go on listing the plan it had - seen for 12 hours after a
+        car was unplugged, none of it ever completed. Priced as dispatches, that plan has the house
+        charge at peak rate on the strength of slots that never come.
+
+        While a smart charge is in progress Octopus re-plans it, and answers an empty planned list
+        for a few minutes as it does (seen 2 to 8 minutes, a dozen times a night). The session is still
+        running, so the last known plan is kept, for OCTOPUS_PLANNED_EMPTY_HOLD_MINUTES from the first
+        empty answer - long enough to bridge a re-plan, short enough that a plan Octopus really has
+        ended does not linger. In any other state an empty list means there are no dispatches.
+        """
+        if state in OCTOPUS_STATES_NOT_DISPATCHING:
+            self.intelligent_planned_empty_since.pop(device_id, None)
+            if planned and self.intelligent_devices.get(device_id, {}).get("planned_dispatches"):
+                self.log("Info: OctopusAPI: Intelligent device {} is {}, ignoring the planned dispatches Octopus still lists for it".format(device_id, state))
+            return []
+        if planned or state != OCTOPUS_STATE_SMART_CONTROL_IN_PROGRESS:
+            self.intelligent_planned_empty_since.pop(device_id, None)
+            return planned
+        now = self.now_utc_exact
+        empty_since = self.intelligent_planned_empty_since.setdefault(device_id, now)
+        if now - empty_since >= timedelta(minutes=OCTOPUS_PLANNED_EMPTY_HOLD_MINUTES):
+            return []
+        kept = self.cached_planned_dispatches(device_id)
+        if kept and empty_since == now:
+            self.log("Info: OctopusAPI: Intelligent device {} has no planned dispatches while its smart charge is in progress, keeping the last known ones while Octopus re-plans".format(device_id))
+        return kept
 
     def trim_started_dispatch(self, dispatch, now):
         """
@@ -4249,6 +4325,9 @@ class Octopus:
 
         Also called from the 15 second poll with its time as now, judged on that exact clock: a dispatch
         shorter than the 5 minute cycle is never running at one (see dispatch_too_short()).
+
+        A half hour the car is charging in during a smart charge, with no planned dispatch listed for it,
+        is kept as well (see octopus_charging_unlisted()).
         """
         hold_minutes = self.octopus_hold_minutes()
         minute_exact = self.dynamic_load_car_minute(now) if now is not None else None
@@ -4264,9 +4343,43 @@ class Octopus:
                 held.pop(period_start, None)
                 continue
             source = self.octopus_planned_running(car_n, self.octopus_slots_planned.get(car_n, []), minute_exact)
+            if source is None and self.octopus_charging_unlisted(car_n):
+                source = DISPATCH_SOURCE_CHARGING_UNLISTED
             if source is not None:
                 held[period_start] = source
         self.octopus_held_save()
+
+    def octopus_charging_unlisted(self, car_n):
+        """
+        Whether car_n is charging in a smart charge Octopus has not listed a planned dispatch for.
+
+        Octopus starts charging as soon as the car is plugged in, but never lists that first half hour
+        as a planned dispatch - only as a completed one, an hour or so later, billed off-peak. Seen on
+        three of six Ohme instances, where Ohme's own schedule had been standing in for it. Until the
+        completed dispatch arrives the half hour is priced at the day rate, and the plan can export
+        the battery through a charge the house is getting at the dispatch rate.
+
+        The device's currentState comes from the Octopus component's dispatch sensor for the car, so a
+        car wired to any other slot sensor - the Octopus Energy integration's, or a charger's - is never
+        taken as charging unlisted. Only SMART_CONTROL_IN_PROGRESS counts: a boost is BOOSTING and
+        billed at the day rate, and in any other state Octopus is not driving the charge.
+
+        Kept as a held half hour rather than a car slot, so it prices the half hour in progress and
+        no later: a slot from car_charging_now would turn on a charger Predbat drives and keep the
+        charge going (see execute_plan()'s "Hold for car").
+
+        A car with no octopus_intelligent_slot entry of its own is never read: fetch_sensor_data_cars() only
+        records the planned dispatches of a car that has one, and a single entity would otherwise resolve to
+        car 0's sensor at any index - with a warning from get_arg() every cycle and 15 second poll.
+        """
+        if car_n >= len(self.car_charging_now) or not self.car_charging_now[car_n]:
+            return False
+        if car_n not in self.octopus_slots_planned:
+            return False
+        entity_id = self.get_arg("octopus_intelligent_slot", None, index=car_n, indirect=False)
+        if not entity_id or not isinstance(entity_id, str) or entity_id.startswith("re:"):
+            return False
+        return self.get_state_wrapper(entity_id=entity_id, attribute="current_state") == OCTOPUS_STATE_SMART_CONTROL_IN_PROGRESS
 
     def octopus_held_state(self):
         """
@@ -4910,7 +5023,6 @@ async def test_fetch_tariffs(product_code, tariff_code):  # pragma: no cover
         return
 
     # Determine 5-day window: 2 days back from today to 3 days ahead
-    local_tz = mock_base.local_tz
     today_midnight = mock_base.midnight_utc
     window_start = today_midnight - timedelta(days=2)
     window_end = today_midnight + timedelta(days=3)
@@ -4926,8 +5038,6 @@ async def test_fetch_tariffs(product_code, tariff_code):  # pragma: no cover
             start_dt = strptime_aware(entry["start"], TIME_FORMAT)
         except (ValueError, KeyError):
             continue
-        if start_dt.tzinfo is None:
-            start_dt = start_dt.replace(tzinfo=local_tz)
         if start_dt >= window_start and start_dt < window_end:
             window_entries.append(entry)
 

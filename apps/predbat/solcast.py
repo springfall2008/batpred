@@ -20,7 +20,6 @@ import hashlib
 import math
 import random
 import aiohttp
-import pytz
 from datetime import datetime, timedelta, timezone
 
 from const import TIME_FORMAT, TIME_FORMAT_SOLCAST
@@ -663,7 +662,6 @@ class SolarAPI(ComponentBase):
                         period_end = forecast.get("period_end", None)
                         if period_end:
                             period_end_stamp = strptime_aware(period_end, TIME_FORMAT_SOLCAST)
-                            period_end_stamp.replace(tzinfo=pytz.utc)
                             period_period = forecast.get("period", "PT30M")
                             period_minutes = int(period_period[2:-1])
                             period_start_stamp = period_end_stamp - timedelta(minutes=period_minutes)
