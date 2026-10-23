@@ -5,6 +5,7 @@ Unit tests for the Hypervolt EV charger integration
 """
 
 import asyncio
+import datetime
 import json
 import os
 import random
@@ -13,6 +14,7 @@ import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
+import pytz
 
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -1344,6 +1346,266 @@ def test_automatic_config_api_2_info():
     print("  ✓ V2 API charger wired with a pointer to the guidance")
 
 
+CONTROL_TZ = pytz.timezone("Europe/London")
+CONTROL_NOW = CONTROL_TZ.localize(datetime.datetime(2026, 10, 5, 23, 30))
+
+
+def _plan_window(start, end):
+    """Build one planned-window dict in the shape output.py publishes."""
+    return {"start": start.strftime("%m-%d %H:%M:%S"), "end": end.strftime("%m-%d %H:%M:%S")}
+
+
+# CONTROL_NOW is inside this window...
+PLAN_INSIDE = [_plan_window(datetime.datetime(2026, 10, 5, 23, 0), datetime.datetime(2026, 10, 6, 1, 0))]
+# ...and before this one
+PLAN_OUTSIDE = [_plan_window(datetime.datetime(2026, 10, 6, 2, 0), datetime.datetime(2026, 10, 6, 4, 0))]
+
+
+class _Storage:
+    """Minimal in-memory stand-in for the Storage component; saves go into a shared log when one is given."""
+
+    def __init__(self, log=None):
+        """Start empty."""
+        self.data = {}
+        self.log = log
+        self.fail_loads = 0
+
+    async def save(self, module, filename, data, **kwargs):
+        """Store a document."""
+        if self.log is not None:
+            self.log.append(("save", data))
+        self.data[(module, filename)] = data
+
+    async def load(self, module, filename):
+        """Return a stored document, or None; raise while fail_loads is above zero."""
+        if self.fail_loads > 0:
+            self.fail_loads -= 1
+            raise OSError("storage not ready")
+        return self.data.get((module, filename))
+
+
+class _Components:
+    """Stand-in for the component registry, serving only the storage component."""
+
+    def __init__(self, storage):
+        """Hold the storage stand-in to serve."""
+        self.storage = storage
+
+    def get_component(self, name):
+        """Return the storage stand-in, and nothing else."""
+        return self.storage if name == "storage" else None
+
+
+def _charger(charger_id=V3_ID, **fields):
+    """A fresh V3 charger record with the given fields."""
+    fields.setdefault("api_version", 3)
+    fields.setdefault("last_message", time.time())
+    return HypervoltCharger(charger_id, **fields)
+
+
+def _control_component(plans, chargers=None, storage=None, **overrides):
+    """A component with control on, chargers loaded and car plans published; tests call control_tick() with a fixed clock."""
+    overrides.setdefault("hypervolt_control", True)
+    component = _make_component(chargers if chargers is not None else [_charger(release_state="default", pilot_status="B")], **overrides)
+    component.local_tz = CONTROL_TZ
+    component.base.local_tz = CONTROL_TZ
+    if storage is not None:
+        component.base.components = _Components(storage)
+    for car_n, windows in plans.items():
+        postfix = "" if car_n == 0 else "_{}".format(car_n)
+        component.base.set_state_wrapper("binary_sensor.predbat_car_charging_slot" + postfix, "off", {"planned": windows})
+    run_async(component.load_control_state())
+    component.enable_control()
+    component.update_car_order(component.transport.chargers)
+    component.transport.calls = []
+    return component
+
+
+def test_control_needs_automatic():
+    """Control stays off, with a warning, unless automatic configuration is on."""
+    assert _control_component({}).control_active is True
+    without_auto = _control_component({}, automatic=False)
+    assert without_auto.control_active is False and _logged(without_auto, "needs hypervolt_automatic")
+    assert _control_component({}, hypervolt_control=False).control_active is False
+    print("  ✓ Control needs hypervolt_control and hypervolt_automatic")
+
+
+def test_control_starts_inside_window():
+    """A released charger inside its window is let charge, even with no pilot status; not once unplugged."""
+    for pilot in ("B", None):
+        component = _control_component({0: PLAN_INSIDE}, [_charger(release_state="released", pilot_status=pilot)])
+        component.released_by_predbat.add(V3_ID)
+        run_async(component.control_tick(CONTROL_NOW))
+        assert _requests(component) == [(V3_ID, "sync.apply", {"release": False})], pilot
+        assert V3_ID not in component.released_by_predbat
+    component = _control_component({0: PLAN_INSIDE}, [_charger(release_state="released", pilot_status="A")])
+    run_async(component.control_tick(CONTROL_NOW))
+    assert _requests(component) == []
+    print("  ✓ Released charger started inside a window")
+
+
+def test_control_stops_outside_window():
+    """A charging charger outside its window is recorded and saved before it is stopped."""
+    log = []
+    component = _control_component({0: PLAN_OUTSIDE}, [_charger(release_state="default", pilot_status="C", charging=True)], storage=_Storage(log))
+    component.transport.calls = log
+    run_async(component.control_tick(CONTROL_NOW))
+    kinds = [entry[0] for entry in log]
+    assert "save" in kinds and kinds.index("save") < kinds.index("request"), log
+    assert _requests(component) == [(V3_ID, "sync.apply", {"release": True})]
+    saved = [entry[1] for entry in log if entry[0] == "save"][0]
+    assert saved["released"] == [V3_ID]
+    print("  ✓ Charger stopped outside a window, recorded first")
+
+
+def test_control_stops_waiting_car():
+    """A car plugged in but not yet charging is stopped outside a window too."""
+    component = _control_component({0: PLAN_OUTSIDE}, [_charger(release_state="default", pilot_status="B", charging=False)])
+    run_async(component.control_tick(CONTROL_NOW))
+    assert _requests(component) == [(V3_ID, "sync.apply", {"release": True})]
+    print("  ✓ Waiting car stopped outside a window")
+
+
+def test_control_waits_for_pilot_status():
+    """With no pilot status and no charge, nothing is stopped and a recorded charger is not forgotten."""
+    component = _control_component({0: PLAN_OUTSIDE}, [_charger(release_state="default", pilot_status=None)])
+    run_async(component.control_tick(CONTROL_NOW))
+    assert _requests(component) == []
+    component = _control_component({0: PLAN_OUTSIDE}, [_charger(release_state="released", pilot_status=None)])
+    component.released_by_predbat.add(V3_ID)
+    run_async(component.control_tick(CONTROL_NOW))
+    assert _requests(component) == [] and V3_ID in component.released_by_predbat
+    print("  ✓ Waits for the pilot status")
+
+
+def test_control_forgets_unplugged():
+    """A recorded charger that reports unplugged is forgotten and sent nothing."""
+    component = _control_component({0: PLAN_INSIDE}, [_charger(release_state="released", pilot_status="A")])
+    component.released_by_predbat.add(V3_ID)
+    run_async(component.control_tick(CONTROL_NOW))
+    assert _requests(component) == [] and component.released_by_predbat == set()
+    print("  ✓ Unplugged charger forgotten")
+
+
+def test_control_skips_stale_and_unplanned():
+    """A stale charger, and a car with no slot sensor, are left alone."""
+    component = _control_component({0: PLAN_OUTSIDE}, [_charger(release_state="default", pilot_status="C", charging=True, last_message=time.time() - 600)])
+    run_async(component.control_tick(CONTROL_NOW))
+    assert _requests(component) == []
+    component = _control_component({}, [_charger(release_state="default", pilot_status="C", charging=True)])
+    run_async(component.control_tick(CONTROL_NOW))
+    assert _requests(component) == []
+    print("  ✓ Stale and unplanned chargers left alone")
+
+
+def test_control_is_per_car():
+    """The second charger follows car 1's slot sensor."""
+    first, second = sorted([V3_ID, OTHER_ID], key=int)
+    component = _control_component({0: PLAN_INSIDE, 1: PLAN_OUTSIDE}, [_charger(first, release_state="default", pilot_status="C", charging=True), _charger(second, release_state="default", pilot_status="C", charging=True)])
+    run_async(component.control_tick(CONTROL_NOW))
+    assert _requests(component) == [(second, "sync.apply", {"release": True})]
+    print("  ✓ Control is per car")
+
+
+def test_control_one_command_per_run():
+    """One control cycle sends a charger at most one command."""
+    component = _control_component({0: PLAN_OUTSIDE}, [_charger(release_state="default", pilot_status="C", charging=True)])
+    run_async(component.control_tick(CONTROL_NOW))
+    assert len(_requests(component)) == 1
+    print("  ✓ One command per run")
+
+
+def test_control_releases_on_read_only_and_switch_off():
+    """Read-only mode and the switch turned off each release only the chargers Predbat stopped."""
+    for setup in ("read_only", "switch_off"):
+        storage = _Storage()
+        other = _charger(OTHER_ID, release_state="released", pilot_status="B")
+        component = _control_component({0: PLAN_OUTSIDE}, [_charger(release_state="released", pilot_status="B"), other], storage=storage)
+        component.released_by_predbat.add(V3_ID)
+        if setup == "read_only":
+            component.base.set_read_only = True
+        else:
+            component.control_enabled = False
+        run_async(component.control_tick(CONTROL_NOW))
+        assert _requests(component) == [(V3_ID, "sync.apply", {"release": False})], setup
+        assert component.released_by_predbat == set()
+        assert storage.data[("hypervolt", "control_state")]["released"] == []
+    print("  ✓ Release on read-only and switch off")
+
+
+def test_control_state_survives_restart():
+    """A new component with the same storage releases a charger an earlier one stopped, with control now off."""
+    storage = _Storage()
+    first = _control_component({0: PLAN_OUTSIDE}, [_charger(release_state="default", pilot_status="C", charging=True)], storage=storage)
+    run_async(first.control_tick(CONTROL_NOW))
+    assert storage.data[("hypervolt", "control_state")]["released"] == [V3_ID]
+    second = _control_component({0: PLAN_OUTSIDE}, [_charger(release_state="released", pilot_status="B")], storage=storage, hypervolt_control=False)
+    run_async(second.control_tick(CONTROL_NOW))
+    assert _requests(second) == [(V3_ID, "sync.apply", {"release": False})]
+    print("  ✓ Control state survives a restart")
+
+
+def test_control_switch_published_only_when_available():
+    """The control switch is published only while control can act."""
+    component = _control_component({})
+    run_async(component.publish_data())
+    assert component.base.entities["switch.predbat_hypervolt_control"]["state"] == "on"
+    component = _control_component({}, hypervolt_control=False)
+    run_async(component.publish_data())
+    assert "switch.predbat_hypervolt_control" not in component.base.entities
+    print("  ✓ Control switch published only when available")
+
+
+def test_control_switch_state_survives_restart():
+    """Turning the control switch off is saved and loaded by the next component."""
+    storage = _Storage()
+    component = _control_component({}, storage=storage)
+    run_async(component.switch_event_handler("switch.predbat_hypervolt_control", "turn_off"))
+    assert component.control_enabled is False
+    again = _control_component({}, storage=storage)
+    assert again.control_enabled is False
+    print("  ✓ Control switch state survives a restart")
+
+
+def test_control_without_storage_still_works():
+    """Without a Storage component, control still runs."""
+    component = _control_component({0: PLAN_OUTSIDE}, [_charger(release_state="default", pilot_status="C", charging=True)])
+    component.base.components = None
+    run_async(component.control_tick(CONTROL_NOW))
+    assert _requests(component) == [(V3_ID, "sync.apply", {"release": True})]
+    print("  ✓ Control works without storage")
+
+
+def test_control_state_load_is_retried():
+    """A failed read of the saved state is tried again, and merged rather than replacing what is known."""
+    storage = _Storage()
+    storage.data[("hypervolt", "control_state")] = {"control_enabled": False, "released": [OTHER_ID]}
+    storage.fail_loads = 1
+    component = _make_component(hypervolt_control=True)
+    component.base.components = _Components(storage)
+    component.released_by_predbat.add(V3_ID)
+    run_async(component.load_control_state())
+    assert component.control_enabled is True and component.control_state_loaded is False
+    run_async(component.load_control_state())
+    assert component.control_enabled is False and component.released_by_predbat == {V3_ID, OTHER_ID}
+    print("  ✓ Control state load is retried and merged")
+
+
+def test_control_failure_does_not_fail_run():
+    """A refused control command warns once and the run still succeeds."""
+    component = _make_component([_charger(release_state="default", pilot_status="C", charging=True)], hypervolt_control=True)
+    component.local_tz = CONTROL_TZ
+    component.base.local_tz = CONTROL_TZ
+    component.base.set_state_wrapper("binary_sensor.predbat_car_charging_slot", "off", {"planned": PLAN_OUTSIDE})
+    with patch.object(HypervoltAPI, "now_utc_exact", new=CONTROL_NOW, create=True):
+        component.transport.errors["request"] = HypervoltRefusedError("409 busy")
+        assert run_async(component.run(0, True)) is True
+        component.transport.errors["request"] = HypervoltRefusedError("409 busy")
+        assert run_async(component.run(60, False)) is True
+    assert len([message for message in component.log_messages if "409 busy" in message]) == 1
+    print("  ✓ A control failure does not fail the run")
+
+
 def test_hypervolt(my_predbat=None):
     """Run every Hypervolt test."""
     print("=" * 70)
@@ -1408,5 +1670,21 @@ def test_hypervolt(my_predbat=None):
     test_automatic_config_disabled()
     test_automatic_config_runs_once_per_order()
     test_automatic_config_api_2_info()
+    test_control_needs_automatic()
+    test_control_starts_inside_window()
+    test_control_stops_outside_window()
+    test_control_stops_waiting_car()
+    test_control_waits_for_pilot_status()
+    test_control_forgets_unplugged()
+    test_control_skips_stale_and_unplanned()
+    test_control_is_per_car()
+    test_control_one_command_per_run()
+    test_control_releases_on_read_only_and_switch_off()
+    test_control_state_survives_restart()
+    test_control_switch_published_only_when_available()
+    test_control_switch_state_survives_restart()
+    test_control_without_storage_still_works()
+    test_control_state_load_is_retried()
+    test_control_failure_does_not_fail_run()
     print("=" * 70)
     return False
