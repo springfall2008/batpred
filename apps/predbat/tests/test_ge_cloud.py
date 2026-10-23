@@ -6289,27 +6289,35 @@ def _test_publish_evc_device(my_predbat):
         await ge.publish_evc_device("EVC123456", {"serial_number": "EVC123456", "status": "charging"})
         status_entity = "sensor.predbat_gecloud_evc123456_evc_status"
         connected_entity = "binary_sensor.predbat_gecloud_evc123456_evc_car_connected"
+        plugged_entity = "binary_sensor.predbat_gecloud_evc123456_evc_car_plugged"
         assert ge.dashboard_items.get(status_entity, {}).get("state") == "charging", "EVC status should be published raw"
         assert ge.dashboard_items.get(connected_entity, {}).get("state") == "on", "A charging EVC should read as a car connected"
+        assert ge.dashboard_items.get(plugged_entity, {}).get("state") == "on", "A charging EVC should read as a car plugged in"
 
         # Test 2: idle means nothing is plugged in
         await ge.publish_evc_device("EVC123456", {"status": "idle"})
         assert ge.dashboard_items[connected_entity]["state"] == "off", "An idle EVC should read as no car connected"
+        assert ge.dashboard_items[plugged_entity]["state"] == "off", "An idle EVC should read as no car plugged in"
 
         # Test 3: the OCPP session stages count as connected, whatever their casing
         for status in ["Preparing", "SuspendedEV", "SuspendedEVSE", "Finishing", "Charging"]:
             await ge.publish_evc_device("EVC123456", {"status": status})
             assert ge.dashboard_items[connected_entity]["state"] == "on", "{} should read as a car connected".format(status)
+            assert ge.dashboard_items[plugged_entity]["state"] == "on", "{} should read as a car plugged in".format(status)
 
         # Test 4: the disconnected statuses, including a charger that has gone offline
         for status in ["Available", "offline", "Unavailable", "Faulted", "Reserved"]:
             await ge.publish_evc_device("EVC123456", {"status": status})
             assert ge.dashboard_items[connected_entity]["state"] == "off", "{} should read as no car connected".format(status)
+            # Only Available positively says nothing is plugged in - an offline or faulted charger is no reading, not an unplug
+            expected = "off" if status == "Available" else "unavailable"
+            assert ge.dashboard_items[plugged_entity]["state"] == expected, "{} should read {} for the plug, got {}".format(status, expected, ge.dashboard_items[plugged_entity]["state"])
 
         # Test 5: an unrecognised status is safe (no car) but says so once, not every poll
         ge.log_messages = []
         await ge.publish_evc_device("EVC123456", {"status": "not_a_real_status"})
         assert ge.dashboard_items[connected_entity]["state"] == "off", "An unknown status should read as no car connected"
+        assert ge.dashboard_items[plugged_entity]["state"] == "unavailable", "An unknown status is no reading for the plug"
         warnings = [message for message in ge.log_messages if "not_a_real_status" in message]
         assert len(warnings) == 1, "An unknown EVC status should be reported once, got {}".format(len(warnings))
         await ge.publish_evc_device("EVC123456", {"status": "not_a_real_status"})
@@ -6350,6 +6358,10 @@ def _test_async_automatic_config_evc(my_predbat):
             "binary_sensor.predbat_gecloud_evc100_evc_car_connected",
             "binary_sensor.predbat_gecloud_evc200_evc_car_connected",
         ], "car_charging_planned should list both chargers in serial order, got {}".format(ge.config_args.get("car_charging_planned"))
+        assert ge.config_args.get("car_charging_plugged") == [
+            "binary_sensor.predbat_gecloud_evc100_evc_car_plugged",
+            "binary_sensor.predbat_gecloud_evc200_evc_car_plugged",
+        ], "car_charging_plugged should list both chargers in serial order, got {}".format(ge.config_args.get("car_charging_plugged"))
         # Display-only live power, wired in the same serial order so it describes the same chargers
         assert ge.config_args.get("car_charging_power") == [
             "sensor.predbat_gecloud_evc100_evc_power_active_import",

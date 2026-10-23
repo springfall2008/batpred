@@ -5590,6 +5590,7 @@ class TestEvTelemetry:
         base = "predbat_gateway_ev_3xb749"
         assert gw._dashboard_calls[f"binary_sensor.{base}_online"][0] is True
         assert gw._dashboard_calls[f"binary_sensor.{base}_connected"][0] is True  # status="Charging" → car connected
+        assert gw._dashboard_calls[f"binary_sensor.{base}_plugged"][0] is True
         assert gw._dashboard_calls[f"binary_sensor.{base}_session_active"][0] is True
         assert gw._dashboard_calls[f"sensor.{base}_status"][0] == "Charging"
         assert gw._dashboard_calls[f"sensor.{base}_power"][0] == 7200
@@ -5602,6 +5603,28 @@ class TestEvTelemetry:
         assert gw._dashboard_calls[f"sensor.{base}_eco_mode"][0] == "Boost"
         # Derived charge-rate capability in kW: 32 A × 240 V / 1000
         assert approx_equal(gw._dashboard_calls[f"sensor.{base}_charge_rate"][0], 7.68)
+
+    def test_ev_soc_holds_the_last_reported_value(self):
+        """Once the charger has reported the car's SoC, sensor.<pfx>_soc keeps the last report rather than the session estimate.
+
+        A charger reports the SoC only during a session, and the estimate restarts at 0% each session - so a user who wired
+        car_charging_soc to it by hand would see the car planned from empty between sessions.
+        """
+        gw = self._make_gateway(battery_size=100)
+        base = "predbat_gateway_ev_3xb749"
+        # Nothing reported yet - the estimate from 12.4 kWh of a 100 kWh battery
+        gw._inject_ev_entities(self._status_with_ev(soc_percent=0))
+        assert approx_equal(gw._dashboard_calls[f"sensor.{base}_soc"][0], 12.4)
+        gw._inject_ev_entities(self._status_with_ev(soc_percent=62))
+        assert gw._dashboard_calls[f"sensor.{base}_soc"][0] == 62
+        # Session over, or the charger offline - the last report is kept
+        gw._inject_ev_entities(self._status_with_ev(soc_percent=0, session_energy_wh=0))
+        assert gw._dashboard_calls[f"sensor.{base}_soc"][0] == 62
+        gw._inject_ev_entities(self._status_with_ev(soc_percent=0, connected=False))
+        assert gw._dashboard_calls[f"sensor.{base}_soc"][0] == 62
+        # Another charger's report is its own
+        gw._inject_ev_entities(self._status_with_ev(soc_percent=0, charge_point_id="OTHER1"))
+        assert approx_equal(gw._dashboard_calls["sensor.predbat_gateway_ev_other1_soc"][0], 12.4)
 
     def test_ev_charging_follows_the_charger_status(self):
         """binary_sensor.<pfx>_charging - what car_charging_now is wired to - is the car actually drawing power.
@@ -5668,11 +5691,14 @@ class TestEvTelemetry:
         base = "predbat_gateway_ev_3xb749"
         assert gw._dashboard_calls[f"binary_sensor.{base}_online"][0] is False
         assert gw._dashboard_calls[f"binary_sensor.{base}_connected"][0] is False
+        # Whether a car is plugged in is not known while the charger is offline - not an unplug
+        assert gw._dashboard_calls[f"binary_sensor.{base}_plugged"][0] == "unavailable"
         # Stale live-session values must be suppressed, not republished
         assert gw._dashboard_calls[f"binary_sensor.{base}_session_active"][0] is False
         assert gw._dashboard_calls[f"binary_sensor.{base}_charging"][0] is False
         assert gw._dashboard_calls[f"sensor.{base}_power"][0] == 0
-        assert gw._dashboard_calls[f"sensor.{base}_session_energy"][0] == 0
+        # Unavailable rather than 0, so the energy history sees a gap and not a new session that counts the energy again
+        assert gw._dashboard_calls[f"sensor.{base}_session_energy"][0] == "unavailable"
 
     def test_suffix_slugifies_unsafe_charge_point_ids(self):
         """Charge point ids are vendor strings; entity ids must stay legal.
@@ -5789,14 +5815,35 @@ class TestEvAutoConfig:
         gw.get_arg = fake_get_arg
         return gw
 
-    def _status_with_ev(self, charge_point_id="CP1", max_current_a=32, voltage_v=240):
+    def _status_with_ev(self, charge_point_id="CP1", max_current_a=32, voltage_v=240, soc_percent=55):
         status = pb.GatewayStatus()
         ev = status.ev_chargers.add()
         ev.connected = True
         ev.charge_point_id = charge_point_id
         ev.max_current_a = max_current_a
         ev.voltage_v = voltage_v
+        ev.soc_percent = soc_percent
         return status
+
+    def test_no_soc_sensor_when_charger_reports_none(self):
+        """A charger that reports no SoC leaves car_charging_soc unset, so the car is tracked as a manual SoC car.
+
+        sensor.<pfx>_soc is then only an estimate from the session energy, which starts from 0% every session.
+        """
+        gw = self._make_gateway(ev_enable=True, num_cars=0)
+        gw._register_ev_car(self._status_with_ev(soc_percent=0))
+
+        assert "car_charging_soc" not in gw._args
+        # What the manual SoC is tracked from: the session energy, and the plugged-in sensor for the reset on unplug
+        assert gw._args["car_charging_energy"] == "sensor.predbat_gateway_ev_cp1_session_energy"
+        assert gw._args["car_charging_plugged"] == ["binary_sensor.predbat_gateway_ev_cp1_plugged"]
+
+    def test_no_soc_sensor_when_charger_reports_soc(self):
+        """Nor when the charger reports the car's SoC: it only knows it during a session, so the car is tracked manually too."""
+        gw = self._make_gateway(ev_enable=True, num_cars=0)
+        gw._register_ev_car(self._status_with_ev(soc_percent=40))
+
+        assert "car_charging_soc" not in gw._args
 
     def test_registers_connected_charger_not_a_stale_slot(self):
         """A disconnected charger in slot 0 must not be registered over a connected one.
@@ -5837,8 +5884,9 @@ class TestEvAutoConfig:
 
         assert gw._args["num_cars"] == 1
         assert gw._args["car_charging_planned"] == ["binary_sensor.predbat_gateway_ev_cp1_connected"]
+        assert gw._args["car_charging_plugged"] == ["binary_sensor.predbat_gateway_ev_cp1_plugged"]
         assert gw._args["car_charging_now"] == ["binary_sensor.predbat_gateway_ev_cp1_charging"]
-        assert gw._args["car_charging_soc"] == ["sensor.predbat_gateway_ev_cp1_soc"]
+        assert "car_charging_soc" not in gw._args
         # car_charging_rate is a UI config item — set via expose_config, not set_arg
         assert "car_charging_rate" not in gw._args
         gw.base.expose_config.assert_called_once_with("car_charging_rate", 7.68)  # 32A * 240V / 1000
@@ -5988,6 +6036,15 @@ class TestEvNeedsReconfigure:
         """No EV charger present does not trigger a re-run on its own."""
         gw = self._make_gateway()
         assert gw._needs_reconfigure(self._status()) is False
+
+    def test_charger_reporting_soc_does_not_reconfigure(self):
+        """A known charger starting or stopping to report the car's SoC does not re-run auto-config - the SoC is never wired."""
+        gw = self._make_gateway()
+        gw._configured_ev_chargers = frozenset({"CP30000003"})
+        status = self._status(charge_point_id="CP30000003")
+        assert gw._needs_reconfigure(status) is False
+        status.ev_chargers[0].soc_percent = 62
+        assert gw._needs_reconfigure(status) is False
 
 
 class TestEvControl:

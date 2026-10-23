@@ -601,6 +601,21 @@ def run_rate_add_io_slots_cases(my_predbat):
 
     failed |= run_rate_add_io_slots_test("test24_completed_bump_charge_still_excluded", my_predbat, slots, True, 12, expected_rates)
 
+    # Test 24b: A boost running now, as Octopus lists it - a planned dispatch of type BOOST at home - is billed
+    # at the day rate, so the house is not planned to charge in it. The same window with no source, as Ohme's
+    # session slots carried it, was priced off-peak and had the battery charged from the grid at peak rate,
+    # which is why the car slots on Octopus Intelligent now come from Octopus's own sensor.
+    print("\n**** Test 24b: A boost in progress is not off-peak, the same slot with no source is ****")
+    boost_start = midnight_utc + timedelta(minutes=my_predbat.minutes_now - 10)
+    boost_end = boost_start + timedelta(minutes=100)
+    block_start = ((my_predbat.minutes_now - 10) // 30) * 30
+    for source, rate in (("BOOST", 10.0), (None, 4.0)):
+        slot = {"start": boost_start.strftime(TIME_FORMAT), "end": boost_end.strftime(TIME_FORMAT), "charge_in_kwh": 12.7, "location": "AT_HOME"}
+        if source:
+            slot["source"] = source
+        expected_rates = {minute: rate for minute in range(block_start, block_start + 30)}
+        failed |= run_rate_add_io_slots_test("test24b_boost_in_progress_source_{}".format(source), my_predbat, [slot], True, 12, expected_rates)
+
     # Test 25: A completed non-home dispatch consumes the day's low-rate budget, so a later planned
     # AT_HOME slot in the same midday-to-midday period goes over the cap. This is the other half of
     # the #4946 relaxation: once a completed AWAY dispatch is billed off-peak it must also spend a

@@ -33,6 +33,150 @@ def test_octopus_intelligent_devices_wrapper(my_predbat):
     failed += test_catalogue_value_picks_between_conflicting_entries(my_predbat)
     failed += asyncio.run(test_intelligent_devices_ambiguous_catalogue(my_predbat))
     failed += test_ambiguous_charger_plans_at_configured_rate(my_predbat)
+    failed += asyncio.run(test_planned_dispatches_follow_device_state(my_predbat))
+    return failed
+
+
+async def test_planned_dispatches_follow_device_state(my_predbat):
+    """
+    The device's currentState, which the dispatch query already asks for, decides what a planned list means.
+
+    - SMART_CONTROL_NOT_AVAILABLE (car unplugged) and SMART_CONTROL_OFF: Octopus is not dispatching, so any
+      planned dispatches it still lists are dropped. Seen live: a plan of 11.2 kWh kept for ~12 hours after
+      the car was unplugged, every slot of it never completed.
+    - SMART_CONTROL_IN_PROGRESS with an empty planned list: Octopus answers [] for a few minutes while it
+      re-plans a session that is still running (seen 2-8 minutes, up to 12 times a night). The last known
+      planned dispatches are kept, for OCTOPUS_PLANNED_EMPTY_HOLD_MINUTES from the first empty answer.
+    - The state is published with the device, and a failed dispatch query keeps the last known one.
+    """
+    print("**** Running Octopus planned dispatches follow device state tests ****")
+    failed = 0
+    clock = {"now": datetime(2026, 1, 15, 12, 0, 0, tzinfo=timezone.utc)}
+    ref_now = clock["now"]
+
+    class ClockOctopusAPI(OctopusAPI):
+        """OctopusAPI with now_utc_exact read from the test clock."""
+
+        @property
+        def now_utc_exact(self):
+            """Return the test clock time."""
+            return clock["now"]
+
+    def make_api():
+        """A fresh API with the dispatch store mocked."""
+        api = ClockOctopusAPI(my_predbat, key="test-key", account_id="test-account", automatic=False)
+        api.get_intelligent_completed_dispatches = MagicMock(return_value=[])
+        api.get_state_wrapper = MagicMock(return_value=[])
+        return api
+
+    def at(offset_minutes):
+        """A time offset_minutes from ref_now, in the dispatch format."""
+        return (ref_now + timedelta(minutes=offset_minutes)).strftime(DATE_TIME_STR_FORMAT)
+
+    device_data = {
+        "devices": [{"deviceType": "ELECTRIC_VEHICLES", "status": {"current": "LIVE"}, "__typename": "SmartFlexChargePoint", "make": "Ohme", "model": "Home Pro", "id": "device-abc"}],
+    }
+    answer = {"state": "SMART_CONTROL_IN_PROGRESS", "planned": [], "fail": False}
+
+    async def mock_query(query, context, ignore_errors=False, returns_data=True):
+        if "get-intelligent-devices" in context:
+            return device_data
+        elif "get-intelligent-dispatches" in context:
+            if answer["fail"]:
+                return None
+            return {
+                "devices": [{"id": "device-abc", "status": {"currentState": answer["state"]}}],
+                "flexPlannedDispatches": answer["planned"],
+                "completedDispatches": [],
+            }
+        elif "get-intelligent-settings" in context:
+            return {"devices": [{"id": "device-abc", "status": {"isSuspended": False}, "chargingPreferences": {}}]}
+        return None
+
+    async def poll(api):
+        """Poll as async_update_intelligent_devices() does, keeping the result as the next poll's cache."""
+        result = await api.async_get_intelligent_devices("test-account", "device-abc")
+        api.intelligent_devices = result
+        return result["device-abc"]
+
+    planned_answer = [{"start": at(60), "end": at(240), "type": "SMART", "energyAddedKwh": "-11.2"}]
+    planned_kept = [{"start": at(60), "end": at(240), "charge_in_kwh": -11.2, "source": "SMART", "location": None}]
+
+    # Unplugged, or smart control off: whatever Octopus still lists as planned is not going to happen
+    for state in ("SMART_CONTROL_NOT_AVAILABLE", "SMART_CONTROL_OFF"):
+        clock["now"] = ref_now
+        api = make_api()
+        api.async_graphql_query = AsyncMock(side_effect=mock_query)
+        answer.update({"state": state, "planned": planned_answer, "fail": False})
+        device = await poll(api)
+        if device.get("planned_dispatches") != []:
+            print(f"ERROR: Expected no planned dispatches while the device is {state}, got {device.get('planned_dispatches')}")
+            failed += 1
+        elif device.get("current_state") != state:
+            print(f"ERROR: Expected current_state {state} published with the device, got {device.get('current_state')}")
+            failed += 1
+        else:
+            print(f"PASS: Planned dispatches dropped while the device is {state}")
+
+    # A smart charge in progress keeps its plan through an empty answer, for a while
+    clock["now"] = ref_now
+    api = make_api()
+    api.async_graphql_query = AsyncMock(side_effect=mock_query)
+    answer.update({"state": "SMART_CONTROL_IN_PROGRESS", "planned": planned_answer, "fail": False})
+    device = await poll(api)
+    if device.get("planned_dispatches") != planned_kept or device.get("current_state") != "SMART_CONTROL_IN_PROGRESS":
+        print(f"ERROR: Expected the planned dispatch taken while smart control is in progress, got {device}")
+        failed += 1
+
+    answer["planned"] = []
+    for minutes, expect_kept in ((2, True), (8, True), (12, False)):
+        clock["now"] = ref_now + timedelta(minutes=minutes)
+        device = await poll(api)
+        kept = device.get("planned_dispatches") == planned_kept
+        if kept != expect_kept:
+            print(f"ERROR: {minutes} minutes into empty answers while smart control is in progress, expected the plan {'kept' if expect_kept else 'cleared'}, got {device.get('planned_dispatches')}")
+            failed += 1
+        else:
+            print(f"PASS: {minutes} minutes into empty answers while smart control is in progress, the plan is {'kept' if expect_kept else 'cleared'}")
+
+    # A planned list in between starts the hold again from the next empty answer
+    clock["now"] = ref_now + timedelta(minutes=14)
+    answer["planned"] = planned_answer
+    await poll(api)
+    answer["planned"] = []
+    clock["now"] = ref_now + timedelta(minutes=20)
+    device = await poll(api)
+    if device.get("planned_dispatches") != planned_kept:
+        print(f"ERROR: Expected the hold to restart after a planned list, got {device.get('planned_dispatches')}")
+        failed += 1
+    else:
+        print("PASS: A planned list in between restarts the hold")
+
+    # A failed dispatch query keeps the last known state as well as the plan
+    answer["fail"] = True
+    clock["now"] = ref_now + timedelta(minutes=21)
+    device = await poll(api)
+    if device.get("current_state") != "SMART_CONTROL_IN_PROGRESS":
+        print(f"ERROR: Expected the last known state kept through a failed dispatch query, got {device.get('current_state')}")
+        failed += 1
+    else:
+        print("PASS: The last known state is kept through a failed dispatch query")
+
+    # With no smart charge running, an empty answer still means no dispatches
+    clock["now"] = ref_now
+    api = make_api()
+    api.async_graphql_query = AsyncMock(side_effect=mock_query)
+    answer.update({"state": "SMART_CONTROL_IN_PROGRESS", "planned": planned_answer, "fail": False})
+    await poll(api)
+    answer.update({"state": "SMART_CONTROL_CAPABLE", "planned": []})
+    clock["now"] = ref_now + timedelta(minutes=2)
+    device = await poll(api)
+    if device.get("planned_dispatches") != []:
+        print(f"ERROR: Expected an empty answer to clear the plan with no smart charge in progress, got {device.get('planned_dispatches')}")
+        failed += 1
+    else:
+        print("PASS: An empty answer clears the plan when no smart charge is in progress")
+
     return failed
 
 
@@ -888,7 +1032,9 @@ async def test_octopus_intelligent_devices(my_predbat):
     else:
         print("PASS: Planned dispatches returned as null keep the last known ones - ended dropped, running re-trimmed, completed still taken")
 
+    # With no smart charge in progress - an empty list while one is, Octopus re-planning, is Test 16's
     dispatch_answer["flexPlannedDispatches"] = []
+    dispatch_answer["devices"] = [{"id": "device-abc", "status": {"currentState": "SMART_CONTROL_CAPABLE"}}]
     api = make_api()
     api.intelligent_devices = {"device-abc": {"device_id": "device-abc", "suspended": False, "completed_dispatches": [], "planned_dispatches": cached_planned}}
     api.async_graphql_query = AsyncMock(side_effect=mock_query_planned_null)

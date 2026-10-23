@@ -209,6 +209,11 @@ If you have a [different type of EV charger](devices.md) you will need to config
 The template `apps.yaml` comes with a set of pre-defined sensor values that should match most EV chargers.
 Customise for your car charger sensor if it sets sensor values that are not in the list.
 
+- **car_charging_plugged** - Optional, a Home Assistant sensor that says only whether the car is plugged in, whether or not it still wants charge. It is matched against **car_charging_planned_response** in the same way.
+It is used to reset the [manual car SoC](#predbat-led-charging) when the car is unplugged, and a car with no SoC sensor needs it (with **car_charging_energy**) for its SoC to be tracked automatically.
+**car_charging_planned** is not used in its place, as many chargers turn it off when a charge finishes with the car still plugged in. As with **car_charging_planned**, use a list with one entry per car if you have more than one.
+Predbat's own Ohme, myenergi, Wallbox, GivEnergy Cloud EV charger and GivEnergy Gateway components set it for you.
+
 - **car_charging_now** - Optional, can be set to a Home Assistant sensor that tells Predbat the car is charging right now (e.g. from your car charger integration).
 This can be an on/off sensor, matched against **car_charging_now_response**, or - for chargers that have no "charging" sensor - a charging power sensor in W or kW, where 200W or more counts as charging (e.g. `sensor.wallbox_portal_charging_power` for a Wallbox).<BR>
 While it reports the car charging, Predbat holds the house battery for the car ("Hold for car") so the battery does not discharge into it, unless **switch.predbat_car_charging_from_battery** is On.
@@ -443,27 +448,29 @@ Keep your Ohme login and password in `secrets.yaml` rather than in `apps.yaml` -
 There are two separate automatic settings, so you can have Predbat plan for the car without involving Octopus Intelligent at all:
 
 **ohme_automatic** registers the Ohme charger with Predbat as a car. Predbat wires `num_cars`, `car_charging_planned` (from `binary_sensor.predbat_ohme_connected`, on whenever a car is
-plugged in and still wants charge), `car_charging_now` (from `sensor.predbat_ohme_power_watts`, so the car counts as charging from 200W), `car_charging_soc` (from
+plugged in and still wants charge), `car_charging_plugged` (from `binary_sensor.predbat_ohme_plugged`, on whenever a car is plugged in, including after its charge has finished), `car_charging_now` (from `sensor.predbat_ohme_power_watts`, so the car counts as charging from 200W), `car_charging_soc` (from
 `sensor.predbat_ohme_battery_percent`) and `car_charging_energy` (see [Ohme charge energy](#ohme-charge-energy) below).
 If you have already set `car_charging_now` in `apps.yaml` - to your car's own charging sensor, say - Predbat keeps yours.
 The car's battery size and target charge level are left to your existing `car_charging_battery_size` and `car_charging_limit` settings, as Ohme cannot report them.
 
 **ohme_automatic_octopus_intelligent** takes the planned Octopus Intelligent car charging slots, the ready time and the charge limit from Ohme rather than from Octopus Intelligent
 directly, by pointing `octopus_intelligent_planned_slot`, `octopus_ready_time` and `octopus_charge_limit` at the Ohme entities. Left unset it is auto-detected: if `ohme_automatic` is on, the Octopus component reports an Intelligent tariff and
-the device Octopus Intelligent controls is your Ohme charger, Predbat uses the Ohme slots. Set it explicitly to override that either way - `true` forces it on (needed if you have no
+there is no Intelligent device on the account for Octopus to report dispatches for, Predbat uses the Ohme slots. Set it explicitly to override that either way - `true` forces it on (needed if you have no
 Octopus component for Predbat to detect from), `false` forces it off so the slots come from Octopus directly.
 
 Which device Octopus Intelligent controls matters, because that is the device Octopus schedules the charge through:
 
-- **Your Ohme charger** - Ohme's slots are the Octopus dispatches, so Predbat takes the planned slots from Ohme. The slots that have already finished are taken from Octopus,
-  see [Completed slots on Octopus Intelligent](#completed-slots-on-octopus-intelligent) below.
-- **Your car** (a BMW, Mini or Volkswagen linked to Octopus directly, say) or another make of charger - Octopus schedules the charge through that device and the Ohme is just the socket.
-  Predbat leaves the car slots, ready time and charge limit with the Octopus component, and does not use Ohme's schedule at all. The Ohme is still registered as the charger, so its
-  power and energy readings are used. `ohme_control` is ignored here too, as Octopus is already scheduling the charge - unless the car is the Octopus device and you turn on
+- **Your Ohme charger, your car** (a BMW, Mini or Volkswagen linked to Octopus directly, say) **or another make of charger** - Octopus schedules the charge through that device, and the Octopus component
+  reports its dispatches. Predbat leaves the car slots, ready time and charge limit with the Octopus component, and does not use Ohme's schedule at all. Ohme's slots are only a copy
+  of the same dispatches, passed on a few minutes later, and do not say which kind of dispatch each one is - a boost started from the Ohme app would look like a cheap slot.
+  The Ohme is still registered as the charger, so its power and energy readings are used.
+  `ohme_control` is ignored here too, as Octopus is already scheduling the charge - unless the car is the Octopus device and you turn on
   **switch.predbat_octopus_intelligent_charger_follows_car**, which lets `ohme_control` drive the Ohme to the car's dispatches (see [Octopus Intelligent and charger control](#octopus-intelligent-and-charger-control)).
+  Where the Ohme itself is the Octopus device, Predbat never drives it.
 - **Smart charging suspended** on every device in the Octopus app - Octopus is not scheduling anything, so there are no dispatches. Predbat uses Ohme's own schedule at your normal
   tariff rates, as described in [Which car charging plan Predbat shows](#which-car-charging-plan-predbat-shows) below.
 - **No Intelligent device on the account at all** - Predbat takes the slots from Ohme, as Octopus has nothing of its own to offer.
+  See [Completed slots on Octopus Intelligent](#completed-slots-on-octopus-intelligent) below for where the slots already used come from.
 
 Predbat checks this every two minutes, so linking a different device to Octopus Intelligent is picked up without a restart.
 
@@ -503,7 +510,8 @@ With `ohme_automatic` on, the car charging plan in Predbat comes from whoever is
 
 | Setup | Who schedules the car | The car plan in Predbat |
 | ----- | --------------------- | ----------------------- |
-| Octopus Intelligent tariff with the Ohme as the Intelligent device, unless you have set `ohme_automatic_octopus_intelligent: false` - or any setup with it set to `true` | Octopus, through Ohme | Ohme's planned slots and Octopus's completed ones, priced at the Intelligent off-peak rate |
+| Octopus Intelligent tariff with the Ohme as the Intelligent device | Octopus, through Ohme | Octopus's own dispatches, from the Octopus component |
+| Octopus Intelligent tariff with no Intelligent device on the account - or any setup with `ohme_automatic_octopus_intelligent: true` | Octopus, through Ohme | Ohme's planned slots and Octopus's completed ones where there is an Octopus sensor, priced at the Intelligent off-peak rate |
 | Octopus Intelligent tariff with your car (or another charger) as the Intelligent device | Octopus, through that device | Octopus's own dispatches, from the Octopus component |
 | `ohme_control: true` | Predbat | Predbat's own plan, which it carries out on the charger |
 | Neither of the above | Ohme | Ohme's own schedule, priced at your normal tariff rates |
@@ -589,7 +597,8 @@ When Predbat is connected to a GivEnergy Gateway that has an OCPP EV charger att
 Entities are named after the charger, using the last 6 characters of its OCPP charge point id (lower-cased) — for example a charge point id ending `3XB749` gives `sensor.predbat_gateway_ev_3xb749_power`.
 The id is used whether one charger or several are attached, so a charger keeps the same entity ids for its whole life. Below, `<id>` stands for that suffix; a charger that has not yet reported an id falls back to a bare `ev`.
 
-- `binary_sensor.predbat_gateway_ev_<id>_connected` - a charge point is connected
+- `binary_sensor.predbat_gateway_ev_<id>_connected` - a car is connected to the charge point (off while the charger is offline)
+- `binary_sensor.predbat_gateway_ev_<id>_plugged` - a car is plugged in; unavailable while the charger is offline, as the charger cannot then say
 - `sensor.predbat_gateway_ev_<id>_status` - OCPP status (e.g. `Available`, `Charging`)
 - `sensor.predbat_gateway_ev_<id>_power` - live charge power (W)
 - `sensor.predbat_gateway_ev_<id>_session_energy` - energy delivered this session (kWh)
@@ -607,6 +616,9 @@ To have Predbat plan for the gateway charger as a car, enable it in `apps.yaml`:
 
 When enabled, Predbat registers the charger as a car and maps the EV entities above onto the standard `car_charging_*` settings, so the normal [Predbat-led car charging](#predbat-led-charging) planning applies.
 The charge rate tracks the `sensor.predbat_gateway_ev_<id>_charge_rate` capability sensor. The car's battery size and target charge level are taken from your existing `car_charging_battery_size` and `car_charging_limit` settings (the charger cannot report them).
+`car_charging_soc` is not mapped: a charger rarely knows the car's SoC, and when it does only during a session. Instead the car's SoC is tracked in **input_number.predbat_car_charging_manual_soc_kwh** from the session energy and the plugged-in sensor (`car_charging_plugged`)
+(see [manual car SoC](#predbat-led-charging)), so you can set it to the car's real level when you plug in. If you map `car_charging_soc` to `sensor.predbat_gateway_ev_<id>_soc` yourself, it holds the last SoC the charger reported between sessions;
+until the charger has reported one it is an estimate from the session energy. `sensor.predbat_gateway_ev_<id>_session_energy` reads unavailable while the charger is offline.
 
 To also have Predbat send the plan to the charger (so the EVC charges according to Predbat's schedule), add a second flag:
 
@@ -719,6 +731,14 @@ It only applies to Octopus Intelligent charging (**switch.predbat_octopus_intell
 Octopus only confirms a dispatch as completed some time after it has run, typically 15 to 60 minutes later.
 Until then Predbat keeps the dispatch rate on each half hour the dispatch ran in, unless the check above cancelled it, so today's cost does not jump up after each half hour of charging and fall back later.
 A half hour Octopus has still not confirmed after 90 minutes goes back to your normal rate.
+
+With the Octopus component, Predbat also reads what Octopus says the device is doing:
+
+- **Smart charge in progress**: if the car is charging (from **car_charging_now**) in a half hour Octopus has no dispatch listed for, that half hour is kept at the dispatch rate as well.
+  Octopus starts charging as soon as the car is plugged in, but only lists that first half hour once it has completed, an hour or so later.
+  Octopus also answers with no planned dispatches for a few minutes while it re-plans a charge in progress, so Predbat keeps the last plan it had for up to 10 minutes.
+- **Unplugged, or smart control off**: Octopus is not dispatching anything, so Predbat ignores any planned dispatches Octopus still lists.
+- **Boosting**: a boost is billed at the full rate and Octopus lists it as a boost, so it is never treated as cheap.
 
 **Setting it up**
 
@@ -876,12 +896,29 @@ Here Predbat plans and can initiate the car charging based upon the upcoming low
 - Check (and if necessary add) the sensor response value from the sensor configured in **car_charging_planned** that is returned when the car is 'plugged in and ready to charge' is in the list of **car_charging_planned_response** values
 configured in `apps.yaml`
 
-- If your car does not have a state of charge (SoC) sensor you can set **switch.predbat_car_charging_manual_soc** (for car 0) to On to have Predbat create **input_number.predbat_car_charging_manual_soc_kwh** which will hold the car's SoC in kWh.<BR>
+- If your car does not have a state of charge (SoC) sensor (**car_charging_soc** is not set in `apps.yaml` for that car) but its charger has an energy sensor (**car_charging_energy**)
+and a plugged-in sensor (**car_charging_plugged** - **car_charging_planned** is not enough), Predbat tracks the car's SoC in kWh in **input_number.predbat_car_charging_manual_soc_kwh** (for car 0) itself.
+Without both sensors the car is planned from empty each time, as Predbat would have no way to tell when the car stops charging or is unplugged.<BR>
+To track the SoC in any other case - a car with no sensors at all, or one whose SoC sensor you would rather not use - turn on **switch.predbat_car_charging_manual_soc** (for car 0).
+If you do have a car SoC sensor and leave the switch off, Predbat shows its reading (in kWh) in **input_number.predbat_car_charging_manual_soc_kwh** and changing it there has no effect;
+turning the switch on then starts the manual SoC from the sensor's last reading.<BR>
 For multiple cars, use **switch.predbat_car_charging_manual_soc_1/2/3** and **input_number.predbat_car_charging_manual_soc_kwh_1/2/3** for cars 1, 2, and 3 respectively.<BR>
-You will need to manually set this to the car's current charge level before charging, Predbat will increment it during charging sessions but will not reset it automatically.<BR>
+Set the value to the car's current charge level before charging. Predbat then keeps it up to date:
+    - If **car_charging_energy** is set for the car in `apps.yaml` Predbat adds the energy the charger's history shows (less **input_number.predbat_car_charging_loss**),
+    but no more than the car could have taken at **car_charging_rate** (plus 10%), so a glitch in the charger's energy counter cannot fill the car.
+    With more than one car, **car_charging_energy** must be a list with the cars' chargers first, in car order. A single sensor is used for car 0 only.
+    - Otherwise Predbat adds the charge it planned for the car during each charging slot - unless **car_charging_now** is set and reports that the car is not charging.
+    - The plan never uses more than the car's battery size or less than zero, whatever value is entered. The value itself is kept as entered or counted, as the battery size Octopus Intelligent reports can be larger than the configured one.
+    - If **car_charging_plugged** is set to a sensor for the car in `apps.yaml` the value is reset to 0 when the sensor goes from plugged in to unplugged
+    and stays unplugged for 10 minutes, ready to be set again when the car is next plugged in. The wait means a charger that briefly reads unplugged while it reconnects does not reset it. A sensor that becomes unavailable does not reset it, and a value you enter while the car is unplugged is kept.
+    **car_charging_planned** never resets it, as many chargers turn it off when a charge finishes with the car still plugged in.
+    - Without **car_charging_plugged** the value is reset to 0 once the car has been idle for 12 hours - no value entered, no charge counted or planned, and **car_charging_now** (if set) not reporting charging.
+    - A value you enter is the new starting point: energy is counted from when you entered it.
+    - Predbat publishes where it has got to as **sensor.predbat_car_manual_soc_tracked** (`_1`, `_2`... for further cars): the tracked kWh, with the time energy is counted from (`since`), the last plugged-in reading (`plugged`), when a pending unplug was first seen (`unplugged_since`) and when the car was last active (`active`) as attributes.
+    It reads this back when it restarts, so charging or unplugging while Predbat is restarting is still counted.<BR>
 NB: **input_number.predbat_car_charging_manual_soc_kwh** must be set to the current kWh value of your car battery NOT a percentage SoC figure
 otherwise, Predbat won't know how much energy there currently is in the battery.<BR>
-NB2: If you have **car_charging_soc** set and working for your car SoC sensor in `apps.yaml`, **switch.predbat_car_charging_manual_soc** must be set to Off as otherwise the car SoC sensor will be ignored
+NB2: If you have **car_charging_soc** set and working for your car SoC sensor in `apps.yaml`, leave **switch.predbat_car_charging_manual_soc** Off as otherwise the car SoC sensor will be ignored
 
 - Ensure **switch.predbat_octopus_intelligent_charging** in Home Assistant is set to Off
 

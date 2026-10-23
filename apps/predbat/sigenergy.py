@@ -1131,17 +1131,21 @@ class SigenergyAPI(ComponentBase):
     # -----------------------------------------------------------------------
 
     async def set_operating_mode(self, system_id, mode_int):
-        """Set the energy storage operating mode via MQTT (V1 endpoint).
+        """Set the energy storage operating mode via both the MQTT (V1) and the REST endpoint.
 
         Publishes to openapi/instruction/mode with the mode name string from
-        SIGENERGY_MODE_API_NAMES rather than the integer used by the REST endpoint.
+        SIGENERGY_MODE_API_NAMES, then sends PUT /openapi/instruction/settings with the
+        integer mode. The MQTT publish is fire-and-forget (a broker ack only), so on a
+        system that ignores it - observed holding VPP for days in read-only - it fails
+        silently; the REST call returns Sigenergy's verdict. Both are sent and logged
+        separately to learn which one the device honours.
 
         Args:
             system_id: Sigenergy system unique identifier.
             mode_int: Operating mode integer (SIGENERGY_MODE_MSC/FFG/VPP).
 
         Returns:
-            True on success, False on failure.
+            True if either switch was accepted, False if neither was.
         """
         mode_name = SIGENERGY_MODE_API_NAMES.get(mode_int)
         if mode_name is None:
@@ -1156,8 +1160,22 @@ class SigenergyAPI(ComponentBase):
             "systemId": system_id,
             "mode": mode_name,
         }
-        ok = await self._publish_mqtt(SIGENERGY_MQTT_TOPIC_MODE, payload)
-        if not ok:
+        mqtt_ok = await self._publish_mqtt(SIGENERGY_MQTT_TOPIC_MODE, payload)
+        if mqtt_ok:
+            self.log("SigenergyAPI: MQTT operating mode {} ({}) published for system {}".format(mode_name, mode_int, system_id))
+        else:
+            self.log("Warn: SigenergyAPI: MQTT operating mode {} ({}) publish failed for system {}".format(mode_name, mode_int, system_id))
+
+        # One attempt only: this runs every poll while the mode is wrong, so a rate-limit
+        # backoff here would stall the loop. _request logs the HTTP status or code/msg on refusal.
+        rest_result = await self._request("PUT", "/openapi/instruction/settings", json_data={"systemId": system_id, "energyStorageOperationMode": mode_int}, retries=1)
+        rest_ok = rest_result is not None
+        if rest_ok:
+            self.log("SigenergyAPI: REST operating mode {} ({}) accepted for system {}".format(mode_name, mode_int, system_id))
+        else:
+            self.log("Warn: SigenergyAPI: REST operating mode {} ({}) refused for system {}".format(mode_name, mode_int, system_id))
+
+        if not (mqtt_ok or rest_ok):
             self.log("Warn: SigenergyAPI: Failed to set operating mode {} ({}) for system {}".format(mode_name, mode_int, system_id))
             return False
         self.log("SigenergyAPI: Operating mode set to {} ({}) for system {}".format(mode_name, mode_int, system_id))

@@ -8343,7 +8343,10 @@ async def test_with_retry_does_not_retry_settled_codes():
             raise solis_module.SolisAPIError("transient", status_code=500)
         return "ok"
 
-    if await api._with_retry(flaky_operation, max_retry_time=5) != "ok" or transient_attempts["n"] != 2:
+    # The retry delay is shortened so the test asserts that a retry happens without sitting out the real 1s back-off
+    with patch.object(solis_module, "SOLIS_INITIAL_RETRY_DELAY", 0.01):
+        result = await api._with_retry(flaky_operation, max_retry_time=5)
+    if result != "ok" or transient_attempts["n"] != 2:
         print("ERROR: a transient error should still be retried, got {} attempts".format(transient_attempts["n"]))
         failed = True
 

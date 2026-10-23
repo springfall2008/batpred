@@ -57,6 +57,10 @@ class MockHanchu(HanchuAPI):
             work_mode_control=work_mode_control,
             api_delay=0,
             min_write_interval=min_write_interval,
+            # Off here although it defaults on: every scripted request would otherwise fill log_messages with
+            # its trace, which the log assertions in these tests do not want to wade through. A test about the
+            # trace turns it on itself; test_hanchu_api_trace_is_on_unless_turned_off pins the real default.
+            api_debug=False,
         )
         # The write-retry pause is a real 5s wait against a real cloud. Nothing here talks to one,
         # so it is zeroed - a test that wants to prove the retry happens counts the requests, which
@@ -236,6 +240,8 @@ def test_hanchu_password_is_never_logged():
     """The trace masks the password and the account e-mail, and nothing else in the envelope."""
     failed = False
     client = MockHanchu(account="owner@example.com", password="super-secret-password")
+    # MockHanchu turns the trace off for log hygiene; this test is about what it masks when it is on.
+    client.api_debug = True
     with patched_session([(200, envelope(data="tok-abc123"))]):
         run_async_local(client.fetch_token())
     joined = "\n".join(client.log_messages)
@@ -573,6 +579,8 @@ def test_hanchu_default_power_limit_is_warned_once():
     client._token = "tok"
     client._token_time = time.time()
     client.device_list = ["HC240100001"]
+    # A status poll has answered, without a devModel, so no model rating stands in for the menu.
+    client.device_values["HC240100001"] = {"soc": 50.0}
     # MENU_SAMPLE carries a charge power bound but an unparseable discharge one.
     for _ in range(2):
         with patched_session([(200, envelope(data=MENU_SAMPLE["data"])), (200, envelope(data={}))]):
@@ -639,6 +647,8 @@ def test_hanchu_failed_menu_warns_the_default_power_is_in_use():
     client._token = "tok"
     client._token_time = time.time()
     client.device_list = ["HC240100001"]
+    # A status poll has answered, without a devModel, so no model rating stands in for the menu.
+    client.device_values["HC240100001"] = {"soc": 50.0}
     for _ in range(2):
         with patched_session([(200, envelope(code=500, msg="busy")), (200, envelope(data={}))]):
             run_async_local(client.refresh_config())
@@ -865,11 +875,11 @@ def test_hanchu_generator_fields_are_read():
 
 
 def test_hanchu_power_limit_follows_a_higher_value_the_device_holds():
-    """The menu's 0-5000 W power range is shared by 2-10 kW models, so a higher value the device already holds wins.
+    """With no known model, a higher value the device already holds raises the menu's shared 0-5000 W power range.
 
-    Hardware (batpred#5305): a HESS-HY-S-6.0K, nameplate 6000 W grid output, holds DSCHG_PWR_LMT 6000
-    while its menu says 0-5000. Taken at the menu's word, inverter_limit came out at 5000 and every
-    discharge would be capped below what the inverter does.
+    A value the device holds is one it accepts, and with no devModel it is the only evidence of what the
+    unit can take. (On a known model the battery limit caps it - see
+    test_hanchu_model_battery_limit_caps_a_higher_held_setting.)
     """
     failed = False
     client = ready_client()
@@ -941,13 +951,17 @@ def test_hanchu_transport_failure_is_retried_then_reported():
     client = MockHanchu()
     client._token = "tok"
     client._token_time = time.time()
-    with patch("aiohttp.ClientSession", return_value=create_aiohttp_mock_session(exception=OSError("connection reset"))) as session_cls:
+    # The back-off is recorded rather than slept: the real 2s + 4s made this the slowest test in its suite
+    with patch("aiohttp.ClientSession", return_value=create_aiohttp_mock_session(exception=OSError("connection reset"))) as session_cls, patch("hanchu.asyncio.sleep", new=AsyncMock()) as backoff:
         ok, data = run_async_local(client._post("device_list"))
     if ok or data is not None:
         print(f"ERROR: a transport failure should fail closed: ok={ok} data={data!r}")
         failed = True
     if session_cls.return_value.post.call_count != 3:
         print(f"ERROR: expected 3 transport attempts, got {session_cls.return_value.post.call_count}")
+        failed = True
+    if [call.args[0] for call in backoff.await_args_list] != [2, 4]:
+        print(f"ERROR: expected a 2s then 4s back-off between attempts, got {[call.args for call in backoff.await_args_list]}")
         failed = True
     if not logged(client, "transport failure"):
         print("ERROR: the transport failure was not logged")
@@ -989,6 +1003,349 @@ def test_hanchu_retry_delay_default():
     assert not failed, "test_hanchu_retry_delay_default"
 
 
+def test_hanchu_power_ceiling_survives_predbat_overwriting_the_held_value():
+    """The raised power ceiling is the highest value ever seen held, not the value held now (batpred#5672).
+
+    Predbat overwrites DSCHG_PWR_LMT itself - with 0 for a hold, or a rate inside the menu's 0-5000 W.
+    Taking the ceiling from the value held now meant the next config read put it straight back to 5000,
+    so the 6 kW raise was lost after Predbat's first write and every later plan was derated.
+    """
+    failed = False
+    client = ready_client()
+    sn = "HC240100001"
+    menu = {"energy": {"items": [[{"itemCodeSignal": "CHG_PWR_LMT", "minVal": "0", "maxVal": "5000"}, {"itemCodeSignal": "DSCHG_PWR_LMT", "minVal": "0", "maxVal": "5000"}]]}}
+    with patched_session([(200, envelope(data=menu)), (200, envelope(data={"CHG_PWR_LMT": "5000", "DSCHG_PWR_LMT": "6000"}))]):
+        run_async_local(client.refresh_config())
+    if client.inverter_limit(sn) != 6000.0:
+        print(f"ERROR: the first read should raise inverter_limit to 6000: {client.inverter_limit(sn)}")
+        failed = True
+    # Predbat has since written a hold, so the device now reads 0 for both.
+    with patched_session([(200, envelope(data=menu)), (200, envelope(data={"CHG_PWR_LMT": "0", "DSCHG_PWR_LMT": "0"}))]):
+        run_async_local(client.refresh_config())
+    if client.ranges_for(sn).get("DSCHG_PWR_LMT") != (0, 6000) or client.inverter_limit(sn) != 6000.0:
+        print(f"ERROR: Predbat's own write undid the raise: {client.ranges_for(sn).get('DSCHG_PWR_LMT')} / {client.inverter_limit(sn)}")
+        failed = True
+    # The ceiling is persisted with the config cache and restored, so a restart does not lose it either.
+    saved = {}
+
+    async def save_cache(name, data):
+        """Stand in for the Storage component's save."""
+        saved[name] = data
+
+    async def load_cache(name):
+        """Stand in for the Storage component's load."""
+        return saved.get(name, {})
+
+    client.save_cache = save_cache
+    run_async_local(client.save_config())
+    restarted = MockHanchu()
+    restarted.load_cache = load_cache
+    run_async_local(restarted.restore_state())
+    if restarted.ranges_for(sn).get("DSCHG_PWR_LMT") != (0, 6000):
+        print(f"ERROR: the ceiling did not survive a restart: {restarted.ranges_for(sn).get('DSCHG_PWR_LMT')}")
+        failed = True
+    # A cache written before the ceiling existed is seeded from the settings it does hold.
+    older = MockHanchu()
+
+    async def load_old_cache(name):
+        """A config cache from before power_ceiling was saved."""
+        return {"config": {"device_settings": {sn: {"DSCHG_PWR_LMT": "6000"}}}}.get(name, {})
+
+    older.load_cache = load_old_cache
+    run_async_local(older.restore_state())
+    older.device_settings[sn] = {"DSCHG_PWR_LMT": "0"}
+    if older.ranges_for(sn).get("DSCHG_PWR_LMT") != (0, 6000):
+        print(f"ERROR: an older cache's held 6000 was not kept as the ceiling: {older.ranges_for(sn).get('DSCHG_PWR_LMT')}")
+        failed = True
+    assert not failed, "test_hanchu_power_ceiling_survives_predbat_overwriting_the_held_value"
+
+
+def unparseable_response(status, error=None):
+    """Build a mock response whose body is empty (json() gives None) or, with error, fails to parse."""
+    response = create_aiohttp_mock_response(status=status)
+
+    async def _json(*args, **kwargs):
+        """Return None for an empty body, or raise the parse error given."""
+        if error is not None:
+            raise error
+        return None
+
+    response.json = _json
+    return response
+
+
+def test_hanchu_http_401_without_a_json_body_triggers_reauth():
+    """An HTTP 401 re-authenticates whatever its body holds (batpred#5672).
+
+    The body was parsed before the status was looked at: an empty 401 body was refused as a non-object
+    and an HTML one raised and was retried as a transport failure, so neither ever re-authenticated and
+    every call failed until the proactive refresh, which can be weeks away.
+    """
+    failed = False
+    for label, error in (("empty", None), ("html", ValueError("Expecting value: line 1 column 1 (char 0)"))):
+        client = MockHanchu()
+        client._token = "tok-old"
+        client._token_time = time.time()
+        responses = [unparseable_response(401, error), mock_json_response(200, envelope(data="tok-new")), mock_json_response(200, envelope(data=DEVICE_LIST_SAMPLE))]
+        with patch("aiohttp.ClientSession", return_value=create_aiohttp_mock_session(responses)) as session_cls:
+            ok, data = run_async_local(client._post("device_list"))
+        if not ok or data != DEVICE_LIST_SAMPLE:
+            print(f"ERROR: a 401 with an {label} body did not re-authenticate and retry: ok={ok} data={data!r}")
+            failed = True
+        if session_cls.return_value.post.call_count != 3:
+            print(f"ERROR: a 401 with an {label} body made {session_cls.return_value.post.call_count} requests, expected 3 (call, re-auth, retry)")
+            failed = True
+        if session_cls.return_value.post.call_args.kwargs["headers"].get("access-token") != "tok-new":
+            print(f"ERROR: the retry after an {label} 401 did not carry the new token")
+            failed = True
+    assert not failed, "test_hanchu_http_401_without_a_json_body_triggers_reauth"
+
+
+def test_hanchu_watt_heuristic_applies_only_to_fields_without_a_unit_sibling():
+    """A small grid or battery reading whose unit is missing is watts, not kW (batpred#5672).
+
+    The below-10-means-kW heuristic is for loadPwr, which has no unit sibling at all. Applied to every
+    power field, a balanced 6 W grid reading or an idle 3 W battery became 6000 W or 3000 W.
+    """
+    failed = False
+    client = MockHanchu()
+    client._apply_status_payload("HC240100001", {"batSoc": 0.5, "batP": 3, "meterPPwr": 6, "pvTtPwr": 0, "loadPwr": 0.9})
+    values = client.device_values.get("HC240100001", {})
+    for leaf, expect in (("battery_power", -3.0), ("grid_power", -6.0), ("load_power", 900.0)):
+        if values.get(leaf) != expect:
+            print(f"ERROR: {leaf} = {values.get(leaf)}, expected {expect}")
+            failed = True
+    assert not failed, "test_hanchu_watt_heuristic_applies_only_to_fields_without_a_unit_sibling"
+
+
+def test_hanchu_api_trace_is_on_unless_turned_off():
+    """The request/response trace is on by default, so a customer's log carries it, and hanchu_api_debug: False turns it off.
+
+    The API is undocumented, so the trace is what a support request needs. It is long - up to 2000
+    characters per device on every poll (batpred#5672) - which is why it can be switched off.
+    """
+    failed = False
+    client = HanchuAPI.__new__(HanchuAPI)
+    client.log = lambda message: None
+    client.initialize(account="a@b.c", password="p")
+    if not client.api_debug:
+        print("ERROR: the API trace should default to on")
+        failed = True
+    client.initialize(account="a@b.c", password="p", api_debug=False)
+    if client.api_debug:
+        print("ERROR: hanchu_api_debug false should turn the trace off")
+        failed = True
+    traced = MockHanchu()
+    traced.log_messages.clear()
+    traced.debug_api("request", "/x", {"a": 1})
+    if traced.log_messages:
+        print(f"ERROR: the trace logged with api_debug off: {traced.log_messages}")
+        failed = True
+    traced.api_debug = True
+    traced.debug_api("request", "/x", {"a": 1})
+    if not traced.log_messages:
+        print("ERROR: the trace should log with api_debug on")
+        failed = True
+    assert not failed, "test_hanchu_api_trace_is_on_unless_turned_off"
+
+
+def test_hanchu_model_code_sets_battery_rate_max_and_inverter_limit():
+    """devModel picks the unit's ratings from HANCHU_MODELS, so they no longer depend on held settings (batpred#5664).
+
+    The menu's 0-5000 W power item is shared by 3-10 kW models, and the held limits are whatever they
+    were last set to, so a HESS-HY-S-3.0K came out at a 5000 W inverter_limit and a 10 kW unit holding
+    5000 W at 5000 W for both.
+    """
+    failed = False
+    sn = "HC240100001"
+    menu = {"CHG_PWR_LMT": (0, 5000), "DSCHG_PWR_LMT": (0, 5000)}
+    # (devModel as the API sends it, held settings, battery_rate_max, inverter_limit, writable power ceiling)
+    cases = [
+        # S-3.0K: battery 5000 W but AC only 3000 W - the menu's 5000 W overstated the inverter.
+        (1, {"CHG_PWR_LMT": "5000", "DSCHG_PWR_LMT": "5000"}, 5000.0, 3000.0, 5000),
+        # S-6.0K holding a 6000 W charge limit: the battery is still 5000 W, so 5000 is all that is written.
+        ("5", {"CHG_PWR_LMT": "6000", "DSCHG_PWR_LMT": "4000"}, 5000.0, 6000.0, 5000),
+        # S-10.0K holding 5000 W: the table raises both ratings, but not what Predbat writes - nothing
+        # shows the cloud accepts a limit above the menu's that the device has not been seen holding.
+        (32, {"CHG_PWR_LMT": "5000", "DSCHG_PWR_LMT": "5000"}, 10000.0, 10000.0, 5000),
+        # S-6K-S: no stated battery limit, so battery_rate_max falls back to the menu; AC rating 6000.
+        (28, {"CHG_PWR_LMT": "5000", "DSCHG_PWR_LMT": "5000"}, 5000.0, 6000.0, 5000),
+    ]
+    for code, held, rate_max, limit, ceiling in cases:
+        client = MockHanchu()
+        client.device_ranges[sn] = dict(menu)
+        client.device_settings[sn] = dict(held)
+        client._apply_status_payload(sn, dict(STATUS_SAMPLE, devModel=code))
+        if client.battery_rate_max(sn) != rate_max or client.inverter_limit(sn) != limit:
+            print(f"ERROR: devModel {code}: battery_rate_max {client.battery_rate_max(sn)} inverter_limit {client.inverter_limit(sn)}, expected {rate_max} / {limit}")
+            failed = True
+        ranges = client.ranges_for(sn)
+        if ranges["CHG_PWR_LMT"][1] != ceiling:
+            print(f"ERROR: devModel {code}: charge power ceiling {ranges['CHG_PWR_LMT']}, expected {ceiling}")
+            failed = True
+    # The name is recorded and said once.
+    client = MockHanchu()
+    for _ in range(2):
+        client._apply_status_payload(sn, dict(STATUS_SAMPLE, devModel=4))
+    if client.device_detail[sn].get("model") != "HESS-HY-S-5.0K":
+        print(f"ERROR: model {client.device_detail[sn].get('model')}, expected HESS-HY-S-5.0K")
+        failed = True
+    said = [message for message in client.log_messages if "is a HESS-HY-S-5.0K" in message]
+    if len(said) != 1 or "5000 W" not in said[0]:
+        print(f"ERROR: the model should be logged once with its ratings: {said}")
+        failed = True
+    # The user's overrides still win over the table.
+    client.battery_rate_max_override = 3600.0
+    client.inverter_limit_override = 3680.0
+    if client.battery_rate_max(sn) != 3600.0 or client.inverter_limit(sn) != 3680.0:
+        print(f"ERROR: overrides should beat the model table: {client.battery_rate_max(sn)} / {client.inverter_limit(sn)}")
+        failed = True
+    assert not failed, "test_hanchu_model_code_sets_battery_rate_max_and_inverter_limit"
+
+
+def test_hanchu_unknown_model_code_falls_back_to_the_menu():
+    """A devModel the table does not know keeps the menu and held-value derivation, and asks for a report."""
+    failed = False
+    sn = "HC240100001"
+    client = MockHanchu()
+    client.device_ranges[sn] = {"CHG_PWR_LMT": (0, 5000), "DSCHG_PWR_LMT": (0, 5000)}
+    client.device_settings[sn] = {"CHG_PWR_LMT": "5000", "DSCHG_PWR_LMT": "6000"}
+    client._apply_status_payload(sn, dict(STATUS_SAMPLE, devModel=99))
+    if client.battery_rate_max(sn) != 5000.0 or client.inverter_limit(sn) != 6000.0:
+        print(f"ERROR: an unknown model should fall back to the menu and held values: {client.battery_rate_max(sn)} / {client.inverter_limit(sn)}")
+        failed = True
+    if client.device_detail[sn].get("model_code") != 99 or "model" in client.device_detail[sn]:
+        print(f"ERROR: the unknown code should be kept without a name: {client.device_detail[sn]}")
+        failed = True
+    if not logged(client, "devModel 99, which Predbat has no ratings for"):
+        print(f"ERROR: an unknown model should be reported: {client.log_messages}")
+        failed = True
+    # A payload with no devModel at all leaves things as they were.
+    bare = MockHanchu()
+    bare._apply_status_payload(sn, STATUS_SAMPLE)
+    if "model_code" in bare.device_detail.get(sn, {}) or bare.model_rating(sn) != (None, None):
+        print(f"ERROR: no devModel should record no model: {bare.device_detail.get(sn)}")
+        failed = True
+    assert not failed, "test_hanchu_unknown_model_code_falls_back_to_the_menu"
+
+
+def test_hanchu_default_power_warning_waits_for_the_model():
+    """The menu is read before the first status poll, so the default-power warning waits for the model (batpred#5664).
+
+    A model in the table supplies both ratings, so its menu lacking power bounds is not worth a warning;
+    an unknown one is warned about straight after the status poll that showed it.
+    """
+    failed = False
+    for code, expect_warning in ((4, False), (99, True), (None, True)):
+        client = ready_client()
+        sn = "HC240100001"
+        with patched_session([(200, envelope(code=500, msg="busy")), (200, envelope(data={}))]):
+            run_async_local(client.refresh_config())
+        if logged(client, "did not report its power limits"):
+            print(f"ERROR: devModel {code}: warned before the status poll could name the model")
+            failed = True
+        status = dict(STATUS_SAMPLE) if code is None else dict(STATUS_SAMPLE, devModel=code)
+        with patched_session([(200, envelope(data=status))]):
+            run_async_local(client.refresh_power())
+        warnings = [message for message in client.log_messages if "did not report its power limits" in message]
+        if len(warnings) != (1 if expect_warning else 0):
+            print(f"ERROR: devModel {code}: expected {1 if expect_warning else 0} default-power warning after the status poll, got {warnings}")
+            failed = True
+        # Later polls do not repeat it either way.
+        with patched_session([(200, envelope(code=500, msg="busy")), (200, envelope(data={}))]):
+            run_async_local(client.refresh_config())
+        with patched_session([(200, envelope(data=status))]):
+            run_async_local(client.refresh_power())
+        if len([message for message in client.log_messages if "did not report its power limits" in message]) != len(warnings):
+            print(f"ERROR: devModel {code}: the default-power warning was repeated")
+            failed = True
+        if sn in client.default_power_deferred:
+            print(f"ERROR: devModel {code}: the deferral should be cleared once the model is known")
+            failed = True
+    assert not failed, "test_hanchu_default_power_warning_waits_for_the_model"
+
+
+def test_hanchu_model_rating_never_raises_what_is_written():
+    """A rating above what the device is known to accept is planned with but never written (batpred#5664 review).
+
+    The menu's 0-5000 W item may well be enforced by the cloud, and a refused CHG_PWR_LMT turns every
+    write into a partial accept that is resent each cycle. So the writes stay within the menu and the
+    values the device has been seen holding, the gap is said once, and a held value lifts it.
+    """
+    failed = False
+    sn = "HC240100001"
+    client = MockHanchu()
+    client.device_ranges[sn] = {"CHG_PWR_LMT": (0, 5000), "DSCHG_PWR_LMT": (0, 5000)}
+    client._apply_status_payload(sn, dict(STATUS_SAMPLE, devModel=32))
+    # Before any settings read the gap is not reported - the device may yet be holding more.
+    client.ranges_for(sn)
+    if logged(client, "is only known to accept"):
+        print("ERROR: the rating gap should wait for a settings read")
+        failed = True
+    client.device_settings[sn] = {"CHG_PWR_LMT": "5000", "DSCHG_PWR_LMT": "5000"}
+    plan = {
+        "reserve": 10,
+        "charge": {"enable": True, "soc": 90, "power": 10000, "start": "01:00:00", "end": "02:00:00"},
+        "export": {"enable": False, "soc": 0, "power": 10000, "start": "00:00:00", "end": "00:00:00"},
+    }
+    payload = client.build_write_payload(sn, plan)
+    if payload.get("CHG_PWR_LMT") != 5000 or payload.get("DSCHG_PWR_LMT") != 5000:
+        print(f"ERROR: a 10 kW plan should be written at the 5000 W the device is known to accept: {payload.get('CHG_PWR_LMT')} / {payload.get('DSCHG_PWR_LMT')}")
+        failed = True
+    if client.battery_rate_max(sn) != 10000.0:
+        print(f"ERROR: the plan should still be modelled at the model's 10000 W: {client.battery_rate_max(sn)}")
+        failed = True
+    gap = [message for message in client.log_messages if "is only known to accept" in message]
+    client.ranges_for(sn)
+    if len(gap) != 2 or len([message for message in client.log_messages if "is only known to accept" in message]) != 2:
+        print(f"ERROR: the gap should be said once for each power key: {gap}")
+        failed = True
+    # A device seen holding a higher limit has shown it accepts it, so that becomes writable.
+    client.device_settings[sn] = {"CHG_PWR_LMT": "10000", "DSCHG_PWR_LMT": "8000"}
+    client._note_power_ceiling(sn, client.device_settings[sn])
+    payload = client.build_write_payload(sn, dict(plan, export=dict(plan["export"], enable=True, start="03:00:00", end="04:00:00")))
+    if payload.get("CHG_PWR_LMT") != 10000 or payload.get("DSCHG_PWR_LMT") != 8000:
+        print(f"ERROR: held limits should become writable: {payload.get('CHG_PWR_LMT')} / {payload.get('DSCHG_PWR_LMT')}")
+        failed = True
+    assert not failed, "test_hanchu_model_rating_never_raises_what_is_written"
+
+
+def test_hanchu_model_battery_limit_caps_a_higher_held_setting():
+    """On a known model a held power setting above its battery limit is capped at that limit (batpred#5684).
+
+    Hardware: a HESS-HY-S-6.0K holds DSCHG_PWR_LMT 6000 against the menu's 0-5000 W and still exports
+    at its 5000 W battery limit, so advertising or writing 6000 promised power the battery cannot give.
+    """
+    failed = False
+    sn = "HC240100001"
+    client = MockHanchu()
+    client.device_ranges[sn] = {"CHG_PWR_LMT": (0, 5000), "DSCHG_PWR_LMT": (0, 5000)}
+    client.device_settings[sn] = {"CHG_PWR_LMT": "5000", "DSCHG_PWR_LMT": "6000"}
+    client._note_power_ceiling(sn, client.device_settings[sn])
+    client._apply_status_payload(sn, dict(STATUS_SAMPLE, devModel=5))
+    ranges = client.ranges_for(sn)
+    if ranges["DSCHG_PWR_LMT"] != (0, 5000) or ranges["CHG_PWR_LMT"] != (0, 5000):
+        print(f"ERROR: the 6.0K's limits should be capped at its 5000 W battery: {ranges['CHG_PWR_LMT']} / {ranges['DSCHG_PWR_LMT']}")
+        failed = True
+    if client.battery_rate_max(sn) != 5000.0 or client.inverter_limit(sn) != 6000.0:
+        print(f"ERROR: the ratings should stay battery 5000 / AC 6000: {client.battery_rate_max(sn)} / {client.inverter_limit(sn)}")
+        failed = True
+    if logged(client, "above the menu") or logged(client, "is only known to accept"):
+        print(f"ERROR: a capped held value is neither a raise nor a gap worth logging: {client.log_messages}")
+        failed = True
+    # A larger model seen holding above the menu keeps that, up to its own battery limit.
+    big = MockHanchu()
+    big.device_ranges[sn] = {"CHG_PWR_LMT": (0, 5000), "DSCHG_PWR_LMT": (0, 5000)}
+    big.device_settings[sn] = {"CHG_PWR_LMT": "12000", "DSCHG_PWR_LMT": "7000"}
+    big._note_power_ceiling(sn, big.device_settings[sn])
+    big._apply_status_payload(sn, dict(STATUS_SAMPLE, devModel=32))
+    ranges = big.ranges_for(sn)
+    if ranges["CHG_PWR_LMT"] != (0, 10000) or ranges["DSCHG_PWR_LMT"] != (0, 7000):
+        print(f"ERROR: a 10 kW unit should write up to min(held, 10000): {ranges['CHG_PWR_LMT']} / {ranges['DSCHG_PWR_LMT']}")
+        failed = True
+    assert not failed, "test_hanchu_model_battery_limit_caps_a_higher_held_setting"
+
+
 def run_hanchu_api_tests(my_predbat):
     """Run all Hanchu API and auth tests."""
     failed = False
@@ -1025,6 +1382,15 @@ def run_hanchu_api_tests(my_predbat):
         ("transport_failure", test_hanchu_transport_failure_is_retried_then_reported),
         ("no_credentials", test_hanchu_run_refuses_to_start_without_credentials),
         ("retry_delay_default", test_hanchu_retry_delay_default),
+        ("power_ceiling_kept", test_hanchu_power_ceiling_survives_predbat_overwriting_the_held_value),
+        ("http_401_unparseable", test_hanchu_http_401_without_a_json_body_triggers_reauth),
+        ("watt_heuristic_scope", test_hanchu_watt_heuristic_applies_only_to_fields_without_a_unit_sibling),
+        ("api_trace_default", test_hanchu_api_trace_is_on_unless_turned_off),
+        ("model_ratings", test_hanchu_model_code_sets_battery_rate_max_and_inverter_limit),
+        ("model_unknown", test_hanchu_unknown_model_code_falls_back_to_the_menu),
+        ("model_rating_not_written", test_hanchu_model_rating_never_raises_what_is_written),
+        ("model_battery_cap", test_hanchu_model_battery_limit_caps_a_higher_held_setting),
+        ("model_default_warning", test_hanchu_default_power_warning_waits_for_the_model),
     ]:
         try:
             if fn():

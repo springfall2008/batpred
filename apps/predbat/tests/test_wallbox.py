@@ -35,6 +35,7 @@ from wallbox import (
     WallboxTransport,
     basic_auth_header,
     normalise_charger,
+    plugged_state,
 )
 
 
@@ -629,7 +630,7 @@ def test_component_publishes_one_charger():
     wallbox_entities = {name for name in entities if "_wallbox_" in name}
     assert wallbox_entities == {
         "sensor.{}_status".format(prefix), "sensor.{}_power".format(prefix), "sensor.{}_session_energy".format(prefix),
-        "binary_sensor.{}_connected".format(prefix), "binary_sensor.{}_charging".format(prefix),
+        "binary_sensor.{}_connected".format(prefix), "binary_sensor.{}_plugged".format(prefix), "binary_sensor.{}_charging".format(prefix),
         "switch.{}_charging".format(prefix), "switch.{}_locked".format(prefix), "number.{}_max_charging_current".format(prefix),
     }, wallbox_entities
     assert entities["sensor.{}_status".format(prefix)]["state"] == "Charging"
@@ -639,6 +640,7 @@ def test_component_publishes_one_charger():
     assert entities["sensor.{}_power".format(prefix)]["attributes"]["unit_of_measurement"] == "W"
     assert entities["sensor.{}_session_energy".format(prefix)]["state"] == 4.5
     assert entities["binary_sensor.{}_connected".format(prefix)]["state"] == "on"
+    assert entities["binary_sensor.{}_plugged".format(prefix)]["state"] == "on"
     assert entities["binary_sensor.{}_charging".format(prefix)]["state"] == "on"
     assert entities["switch.{}_charging".format(prefix)]["state"] == "on"
     assert entities["switch.{}_locked".format(prefix)]["state"] == "off"
@@ -656,6 +658,7 @@ def test_component_publishes_two_chargers_and_eco_smart():
     entities = component.base.entities
     assert entities["sensor.predbat_wallbox_202_status"]["state"] == "Ready"
     assert entities["binary_sensor.predbat_wallbox_202_connected"]["state"] == "off"
+    assert entities["binary_sensor.predbat_wallbox_202_plugged"]["state"] == "off"
     assert entities["switch.predbat_wallbox_202_charging"]["state"] == "off"
     select = entities["select.predbat_wallbox_101_eco_smart"]
     assert select["state"] == "full_solar" and select["attributes"]["options"] == ["off", "eco_mode", "full_solar"]
@@ -896,6 +899,18 @@ def test_charger_for_entity_requires_a_whole_id():
     print("  ✓ Entities resolve to a whole charger id")
 
 
+def test_plugged_state():
+    """binary_sensor.<prefix>_plugged is off only when the status positively says no car - Disconnected is no reading."""
+    for status_id, expected in [(193, "on"), (180, "on"), (210, "on"), (161, "off"), (162, "off"), (165, "off"), (209, "off"), (0, "unavailable"), (163, "unavailable"), (14, "unavailable"), (166, "unavailable"), (999, "unavailable")]:
+        state = plugged_state(normalise_charger(101, _status(status_id=status_id)))
+        assert state == expected, (status_id, state)
+    # A charger that reported no status at all
+    payload = _status()
+    payload.pop("status_id")
+    assert plugged_state(normalise_charger(101, payload)) == "unavailable"
+    print("  ✓ The plugged sensor reads unavailable rather than unplugged when the status says nothing about the cable")
+
+
 def test_automatic_config_two_chargers():
     """Each argument is a per-car list in charger id order, and num_cars is raised to match."""
     component = _make_component({202: _status(), 101: _status()})
@@ -903,6 +918,7 @@ def test_automatic_config_two_chargers():
     args = component.base.args
     assert args["car_charging_energy"] == ["sensor.predbat_wallbox_101_session_energy", "sensor.predbat_wallbox_202_session_energy"]
     assert args["car_charging_planned"] == ["binary_sensor.predbat_wallbox_101_connected", "binary_sensor.predbat_wallbox_202_connected"]
+    assert args["car_charging_plugged"] == ["binary_sensor.predbat_wallbox_101_plugged", "binary_sensor.predbat_wallbox_202_plugged"]
     assert args["car_charging_power"] == ["sensor.predbat_wallbox_101_power", "sensor.predbat_wallbox_202_power"]
     assert args["car_charging_now"] == ["sensor.predbat_wallbox_101_power", "sensor.predbat_wallbox_202_power"]
     assert args["num_cars"] == 2
@@ -1780,5 +1796,6 @@ def test_wallbox(my_predbat=None):
     test_failed_control_state_save_is_retried()
     test_control_state_with_nothing_saved_is_read_once()
     test_schedule_restoration_is_retried_after_a_failure()
+    test_plugged_state()
     print("=" * 70)
     return False

@@ -185,9 +185,11 @@ def test_split_window_seconds_splits_at_midnight():
     if first != (82800, HANCHU_SECONDS_PER_DAY - 60) or second != (HANCHU_SLOT_DISABLED, 7200):
         print(f"ERROR: midnight-spanning window split to {first} {second}")
         failed = True
-    # Exactly midnight is not a wrap: it ends at the end of the day and slot 2 stays disabled.
+    # Exactly midnight is not a wrap: slot 2 stays disabled, and the end is clamped to 23:59 as
+    # hhmmss_to_seconds does - 86400 is outside the slot range, and one out-of-range key fails the
+    # whole batched iotSet (batpred#5672).
     first, second = split_window_seconds("22:00:00", "24:00:00")
-    if first != (79200, HANCHU_SECONDS_PER_DAY) or second != (HANCHU_SLOT_DISABLED, HANCHU_SLOT_DISABLED):
+    if first != (79200, HANCHU_SECONDS_PER_DAY - 60) or second != (HANCHU_SLOT_DISABLED, HANCHU_SLOT_DISABLED):
         print(f"ERROR: midnight-ending window split to {first} {second}")
         failed = True
     assert not failed, "test_split_window_seconds_splits_at_midnight"

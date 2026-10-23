@@ -1808,11 +1808,13 @@ def test_write_confirmation_timeout(my_predbat):
     agent = _agent_with_fake(my_predbat, _write_call_response(), _text_response("no answer"))
     agent.confirm_writes_enabled = lambda: True
     chat.CONFIRM_TIMEOUT_SECONDS_ORIGINAL = chat.CONFIRM_TIMEOUT_SECONDS
-    chat.CONFIRM_TIMEOUT_SECONDS = 0.5
+    # Short enough not to slow the suite, and polled faster than the real 0.2s so the waiter still loops many times before giving up
+    chat.CONFIRM_TIMEOUT_SECONDS = 0.1
     try:
         cid = asyncio.run(agent.store.create())
         started = time.monotonic()
-        asyncio.run(agent.run_turn(cid, "raise best soc keep"))
+        with _fast_confirm_poll():
+            asyncio.run(agent.run_turn(cid, "raise best soc keep"))
         elapsed = time.monotonic() - started
     finally:
         chat.CONFIRM_TIMEOUT_SECONDS = chat.CONFIRM_TIMEOUT_SECONDS_ORIGINAL

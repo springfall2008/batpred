@@ -52,6 +52,7 @@ def test_hanchu_component_registered():
         ("inverter_limit", "hanchu_inverter_limit", None),
         ("api_delay", "hanchu_api_delay", 1),
         ("min_write_interval", "hanchu_min_write_interval", 60),
+        ("api_debug", "hanchu_api_debug", True),
     ]:
         info = entry["args"].get(arg)
         if not info:
@@ -133,7 +134,8 @@ def test_hanchu_inverter_def_complete():
         "soc_units": "%",
         "time_button_press": True,
         "support_charge_freeze": True,
-        "support_discharge_freeze": True,
+        # CHG_PWR_LMT only limits grid charging, so a zero charge rate cannot freeze export (batpred#5665).
+        "support_discharge_freeze": False,
         # Wrap-around behaviour is undocumented for the slot pairs, so Predbat splits.
         "can_span_midnight": False,
         "charge_discharge_with_rate": False,
@@ -161,6 +163,7 @@ def test_hanchu_apps_schema_keys():
         "hanchu_inverter_limit": "float",
         "hanchu_api_delay": "float",
         "hanchu_min_write_interval": "integer",
+        "hanchu_api_debug": "boolean",
     }
     for key, kind in expected.items():
         entry = APPS_SCHEMA.get(key)

@@ -512,7 +512,7 @@ Connects directly to the GivEnergy Cloud to control your GivEnergy inverter and 
 | `ge_cloud_direct` | Boolean | Yes | - | `ge_cloud_direct` | Set to `true` to enable GivEnergy Cloud control |
 | `api_key` | String | Yes | - | `ge_cloud_key` | Your GivEnergy Cloud API key |
 | `automatic` | Boolean | No | false | `ge_cloud_automatic` | Set to `true` to automatically configured Predbat to use GivEnergy Cloud direct (no additional apps.yaml changes required) |
-| `automatic_evc` | Boolean | No | false | `ge_cloud_automatic_evc` | Set to `true` to wire your GivEnergy EV chargers into `car_charging_energy`, `car_charging_planned` and `num_cars` — see [EV chargers](#ev-chargers-gecloud). Separate from `ge_cloud_automatic` because it registers a car |
+| `automatic_evc` | Boolean | No | false | `ge_cloud_automatic_evc` | Set to `true` to wire your GivEnergy EV chargers into `car_charging_energy`, `car_charging_planned`, `car_charging_plugged` and `num_cars` — see [EV chargers](#ev-chargers-gecloud). Separate from `ge_cloud_automatic` because it registers a car |
 | `evc_control` | Boolean | No | false | `ge_cloud_evc_control` | Set to `true` to let Predbat start and stop your EV charger from its car charging plan — see [Charger control](#charger-control-gecloud). Needs `ge_cloud_automatic_evc` |
 | `load_today_ignore` | Boolean | No | false | `ge_cloud_load_today_ignore` | Set to `true` to ignore GE Cloud load_today data and use the `load_today` sensor from `apps.yaml` instead |
 | `automatic_shared_ct` | Boolean | No | false | `ge_cloud_automatic_shared_ct` | Set to `true` to force shared CT clamp mode — only the first inverter's grid and load readings are used, preventing double-counting on multi-inverter systems with a single shared CT |
@@ -561,8 +561,9 @@ describing the charger itself:
 | ------ | ----------- |
 | `sensor.predbat_gecloud_<serial>_evc_status` | The charger's status as GivEnergy reports it, e.g. `charging`, `idle`, `offline` |
 | `binary_sensor.predbat_gecloud_<serial>_evc_car_connected` | `on` while a car is plugged in, from the status above |
+| `binary_sensor.predbat_gecloud_<serial>_evc_car_plugged` | `on` while a car is plugged in, `off` only when the status is `available` or `idle`, and `unavailable` when the charger is offline, faulted or reports a status Predbat does not recognise |
 
-Those two entities are published whatever your settings say — they are new entities and
+Those entities are published whatever your settings say — they are new entities and
 change nothing that already exists.
 
 Setting `ge_cloud_automatic_evc` to `true` additionally wires the chargers into Predbat's
@@ -573,6 +574,10 @@ car planning, in serial order so charger N is car N:
   falling back to the `car_charging_threshold` heuristic
 - **car_charging_planned** — each charger's `_evc_car_connected`, so Predbat only plans
   car charging when there is actually a car on the cable
+- **car_charging_plugged** — each charger's `_evc_car_plugged`, which resets the
+  [manual car SoC](car-charging.md#predbat-led-charging) when the car is unplugged, and lets
+  Predbat track the SoC of a car with no **car_charging_soc**. A charger going offline is no
+  reading rather than an unplug, so it does not reset the car
 - **num_cars** — raised to the number of chargers if it is currently lower, never reduced,
   since another component may have registered cars of its own
 
@@ -929,6 +934,7 @@ Predbat supports both of myenergi's APIs:
 - With `myenergi_automatic` on (the default), Predbat sets these `apps.yaml` values for you:
     - `car_charging_energy` — every Zappi's session energy, so charging is subtracted from your house load rather than being learnt as base load. Ensure `switch.predbat_car_charging_hold` is on (it is by default) for that subtraction to take effect
     - `car_charging_planned` — every Zappi's plug status sensor, one entry per car, so Predbat knows when the car is plugged in and due to charge. The regex the `apps.yaml` templates ship for this key matches the third-party `ha-myenergi` integration's entity names, not the ones Predbat publishes, so without this Predbat would fall back to the `car_charging_threshold` heuristic
+    - `car_charging_plugged` — every Zappi's `_plugged` binary sensor, one entry per car. It resets the [manual car SoC](car-charging.md#predbat-led-charging) when the car is unplugged, and lets Predbat track the SoC of a car with no `car_charging_soc`. It reads `unavailable` rather than `off` when the plug state is not known or is a fault, so a dropout does not reset the car
     - `car_charging_now` — every Zappi's power sensor, one entry per car, so a car counts as charging (or boosting) while its Zappi draws 200W or more. Predbat uses it to hold the house battery while the car charges and to check that Octopus Intelligent dispatches are really charging the car. If you have set `car_charging_now` yourself in `apps.yaml`, Predbat keeps yours
     - `iboost_energy_today` — the first Eddi's session energy (first by serial number). This feeds the iboost model, and it is also subtracted from your historical house load whenever `switch.predbat_iboost_energy_subtract` is on (the default), which happens whether or not iboost itself is enabled
 - If you have an Eddi but charge your car with a different make of charger, set `myenergi_automatic_zappi` to `false`. It gates only the Zappi half, so `iboost_energy_today` is still wired from your Eddi while your Zappi contributes no car inputs and does not compete with the charger you actually use. The mirror case — a Zappi owner whose hot water diversion is handled elsewhere — is `myenergi_automatic_eddi: false`, which wires the Zappis but not `iboost_energy_today`. Turning `myenergi_automatic` off instead drops both halves
@@ -948,8 +954,8 @@ Predbat supports both of myenergi's APIs:
 | `key` | String | No | - | `myenergi_key` | OAuth access token, cloud transport |
 | `token_hash` | String | No | - | `myenergi_token_hash` | OAuth refresh token hash, used to refresh `key` automatically. At least one of `key` or `token_hash` is required when `auth_method` is `oauth` |
 | `token_expires_at` | String | No | - | `myenergi_token_expires_at` | OAuth access token expiry, used to trigger a refresh |
-| `automatic` | Boolean | No | true | `myenergi_automatic` | Set to `false` to stop Predbat wiring the device sensors into `car_charging_energy`, `car_charging_planned`, `car_charging_now` and `iboost_energy_today` automatically |
-| `automatic_zappi` | Boolean | No | true | `myenergi_automatic_zappi` | Set to `false` to wire only the Eddi half of the automatic configuration, leaving your Zappis out of `car_charging_energy`, `car_charging_planned`, `car_charging_now` and `car_charging_power`. Separate from `automatic` because the Zappi half registers a car |
+| `automatic` | Boolean | No | true | `myenergi_automatic` | Set to `false` to stop Predbat wiring the device sensors into `car_charging_energy`, `car_charging_planned`, `car_charging_plugged`, `car_charging_now` and `iboost_energy_today` automatically |
+| `automatic_zappi` | Boolean | No | true | `myenergi_automatic_zappi` | Set to `false` to wire only the Eddi half of the automatic configuration, leaving your Zappis out of `car_charging_energy`, `car_charging_planned`, `car_charging_plugged`, `car_charging_now` and `car_charging_power`. Separate from `automatic` because the Zappi half registers a car |
 | `automatic_eddi` | Boolean | No | true | `myenergi_automatic_eddi` | Set to `false` to wire only the Zappi half of the automatic configuration, leaving your Eddi out of `iboost_energy_today`. Separate from `automatic` so either device kind can be excluded on its own |
 | `enable_controls` | Boolean | No | true | `myenergi_enable_controls` | Set to `false` for monitor-only operation |
 | `poll_seconds` | Integer | No | 60 | `myenergi_poll_seconds` | Poll interval in seconds, rounded to the nearest whole multiple of 60, minimum 60 and maximum 1800 (a longer gap would make Predbat's own health check report the component as failed) |
@@ -981,7 +987,7 @@ myenergi_api_key: !secret myenergi_api_key
 Per Zappi (`{sn}` is the device serial number):
 
 - `sensor.predbat_myenergi_zappi_{sn}_status`, `_mode`, `_plug_status`, `_power`, `_session_energy`
-- `binary_sensor.predbat_myenergi_zappi_{sn}_charging`
+- `binary_sensor.predbat_myenergi_zappi_{sn}_charging`, `_plugged`
 - `switch.predbat_myenergi_zappi_{sn}_boost`, `number.predbat_myenergi_zappi_{sn}_boost_energy`
 
 Per Eddi:
@@ -1100,6 +1106,7 @@ For each charger, with `<id>` being the Wallbox charger id:
 | `sensor.predbat_wallbox_<id>_power` | Charging power in W |
 | `sensor.predbat_wallbox_<id>_session_energy` | Energy added in the current session in kWh; resets with each session |
 | `binary_sensor.predbat_wallbox_<id>_connected` | On while a car is plugged in |
+| `binary_sensor.predbat_wallbox_<id>_plugged` | On while a car is plugged in, off only when the status is `Ready` or `Locked` with no car, and `unavailable` for `Disconnected`, an error, an update or a status that is not known |
 | `binary_sensor.predbat_wallbox_<id>_charging` | On while the car is charging |
 | `switch.predbat_wallbox_<id>_charging` | Turn off to pause charging, on to resume a paused session |
 | `switch.predbat_wallbox_<id>_locked` | Lock or unlock the charger |
@@ -1116,7 +1123,7 @@ A locked charger cannot be paused or resumed: Wallbox refuses both. Predbat ther
 
 #### Automatic configuration (wallbox)
 
-With `wallbox_automatic` on (the default), Predbat sets **car_charging_energy**, **car_charging_planned**, **car_charging_power** and **car_charging_now** to the Wallbox entities, and raises **num_cars** to the number of chargers. Chargers are taken in numeric order of their id, so the charger with the lowest id is car 0. A charger added to the account while Predbat is running becomes the next car. A **car_charging_now** you have set yourself is kept.
+With `wallbox_automatic` on (the default), Predbat sets **car_charging_energy**, **car_charging_planned**, **car_charging_plugged**, **car_charging_power** and **car_charging_now** to the Wallbox entities, and raises **num_cars** to the number of chargers. Chargers are taken in numeric order of their id, so the charger with the lowest id is car 0. A charger added to the account while Predbat is running becomes the next car. A **car_charging_now** you have set yourself is kept.
 
 Predbat does not set **car_charging_soc**. If you want Predbat to plan to a target charge level, set it from your car's own integration.
 
