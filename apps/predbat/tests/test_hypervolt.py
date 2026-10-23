@@ -7,6 +7,7 @@ Unit tests for the Hypervolt EV charger integration
 import asyncio
 import json
 import os
+import random
 import sys
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -22,6 +23,7 @@ from hypervolt import (
     HYPERVOLT_API_URL,
     HYPERVOLT_TOKEN_URL,
     HypervoltApiError,
+    Backoff,
     HypervoltAuthError,
     HypervoltCharger,
     HypervoltRefusedError,
@@ -254,13 +256,18 @@ class FakeSocket:
 
 
 def _ws_session(sockets):
-    """A mock aiohttp session whose ws_connect() yields the next FakeSocket. Returns (session, connects)."""
+    """A mock aiohttp session whose ws_connect() yields the next FakeSocket. Returns (session, connects).
+
+    sockets is a list, or a dict from URL ending ("sync", "session/in-progress") to a list.
+    """
     connects = []
-    queue = list(sockets)
+    queues = {key: list(value) for key, value in sockets.items()} if isinstance(sockets, dict) else {"": list(sockets)}
 
     def _ws_connect(url, **kwargs):
-        """Record the connect and hand out the next socket."""
+        """Record the connect and hand out the next socket, from the queue whose key ends the URL when given a dict."""
         connects.append({"url": url, "headers": kwargs.get("headers") or {}})
+        key = next((key for key in queues if key and url.endswith(key)), "")
+        queue = queues.get(key, [])
         socket = queue.pop(0) if queue else FakeSocket()
         context = MagicMock()
         context.__aenter__ = AsyncMock(return_value=socket)
@@ -288,7 +295,21 @@ def _signed_in_transport():
     transport.refresh_token = "refresh-1"
     transport.token_expiry = time.time() + 3600
     transport.seen = []
-    transport.on_message = lambda charger_id, method, body: transport.seen.append((charger_id, method, body))
+    transport.sleeps = []
+    original = transport.on_message
+
+    def _on_message(charger_id, method, body):
+        """Record the message, then apply it as the transport would."""
+        transport.seen.append((charger_id, method, body))
+        original(charger_id, method, body)
+
+    async def _sleep(seconds):
+        """Record a back-off instead of waiting it out."""
+        transport.sleeps.append(seconds)
+        await asyncio.sleep(0)
+
+    transport.on_message = _on_message
+    transport.sleep = _sleep
     return transport
 
 
@@ -684,6 +705,218 @@ def test_on_message_updates_charger():
     print("  ✓ on_message updates the charger")
 
 
+def test_backoff_sequence():
+    """Back-off starts at 3-12 seconds, grows by 1.7 to a 300 second cap, and resets."""
+    random.seed(1)
+    backoff = Backoff()
+    first = backoff.next()
+    assert 3 <= first <= 12
+    delays = [first] + [backoff.next() for _ in range(12)]
+    for previous, current in zip(delays, delays[1:]):
+        assert current == min(300, int(previous * 1.7)), delays
+    assert delays[-1] == 300
+    backoff.reset()
+    assert 3 <= backoff.next() <= 12
+    print("  ✓ Back-off sequence")
+
+
+def test_reconnects_with_backoff():
+    """A closed socket is reopened after a back-off and logs in again; four messages reset the back-off."""
+    first, second = FakeSocket(), FakeSocket()
+    session, connects = _ws_session([first, second])
+
+    async def scenario():
+        """Close the first socket from the server side."""
+        transport = _signed_in_transport()
+        await _logged_in(transport, first)
+        first.queue(None)
+        await _settle()
+        assert len(connects) == 2 and second.methods()[0] == "login"
+        _reply_to(second, "login", {"authenticated": True})
+        for _ in range(4):
+            second.queue({"jsonrpc": "2.0", "method": "get.pilot_status", "params": {"pilot_status": "B"}})
+        await _settle()
+        assert transport.links[V3_ID].backoff.delay is None
+        await transport.close()
+        return transport
+
+    with patch("aiohttp.ClientSession", return_value=session), patch("hypervolt.record_api_call"):
+        transport = run_async(scenario())
+    assert len(transport.sleeps) == 1 and 3 <= transport.sleeps[0] <= 12
+    print("  ✓ Reconnects with back-off")
+
+
+def test_drop_fails_pending_commands():
+    """A command in flight when the socket drops fails at once rather than timing out."""
+    first = FakeSocket()
+    session, _ = _ws_session([first])
+
+    async def scenario():
+        """Drop the socket under a command."""
+        transport = _signed_in_transport()
+        await _logged_in(transport, first)
+        task = asyncio.ensure_future(transport.request(V3_ID, "sync.apply", {"release": True}))
+        await _settle()
+        first.queue(None)
+        started = time.time()
+        try:
+            await task
+            raise AssertionError("Expected HypervoltApiError")
+        except HypervoltTimeoutError:
+            raise AssertionError("Timed out instead of failing at once")
+        except HypervoltApiError:
+            pass
+        assert time.time() - started < 1
+        await transport.close()
+
+    with patch("aiohttp.ClientSession", return_value=session), patch("hypervolt.record_api_call"):
+        run_async(scenario())
+    print("  ✓ A drop fails pending commands")
+
+
+def test_reconnect_stops_on_auth_failure():
+    """A sign in refused during a reconnect stops the reader; a later good sign in and reconnect_all start it again."""
+    first, second = FakeSocket(), FakeSocket()
+    session, connects = _ws_session([first, second])
+
+    async def scenario():
+        """Expire the token and refuse the sign in, then accept it."""
+        transport = _signed_in_transport()
+        await _logged_in(transport, first)
+        transport.token_expiry = 0
+        transport.authenticate = AsyncMock(side_effect=HypervoltAuthError("refused"))
+        first.queue(None)
+        await _settle()
+        assert transport.auth_failed is True and len(connects) == 1
+        assert all(task.done() for task in transport.links[V3_ID].tasks)
+        transport.authenticate = AsyncMock(return_value="jwt-2")
+        transport.auth_failed = False
+        await transport.reconnect_all()
+        await _settle()
+        assert len(connects) == 2 and second.sent[0]["params"]["token"] == "jwt-2"
+        await transport.close()
+
+    with patch("aiohttp.ClientSession", return_value=session), patch("hypervolt.record_api_call"):
+        run_async(scenario())
+    print("  ✓ Reconnect stops on an auth failure")
+
+
+def test_successful_sign_in_clears_auth_failed():
+    """A token obtained again clears the auth failure flag."""
+    session, _ = _session([_response(_token_payload())])
+    transport = HypervoltTransport(print, "user@example.com", "secret")
+    transport.auth_failed = True
+    with patch("aiohttp.ClientSession", return_value=session), patch("hypervolt.record_api_call"):
+        run_async(transport.authenticate())
+    assert transport.auth_failed is False
+    print("  ✓ A good sign in clears the auth failure")
+
+
+def test_session_socket_only_for_api_2():
+    """An API 2 charger also gets the session socket, whose frames arrive as get.session; an API 3 charger does not."""
+    sync, sess = FakeSocket(), FakeSocket()
+    session, connects = _ws_session({"sync": [sync], "session/in-progress": [sess]})
+
+    async def scenario():
+        """Connect a V2 charger and send a session frame."""
+        transport = _signed_in_transport()
+        await _logged_in(transport, sync, V2_ID)
+        sess.queue(MOCK_SESSION_CHARGING)
+        await _settle()
+        await transport.close()
+        return transport
+
+    with patch("aiohttp.ClientSession", return_value=session), patch("hypervolt.record_api_call"):
+        transport = run_async(scenario())
+    urls = sorted(connect["url"] for connect in connects)
+    assert urls == ["wss://api.hypervolt.co.uk/ws/charger/{}/session/in-progress".format(V2_ID), "wss://api.hypervolt.co.uk/ws/charger/{}/sync".format(V2_ID)]
+    assert (V2_ID, "get.session", MOCK_SESSION_CHARGING) in transport.seen
+    assert sess.sent == []
+
+    sync3 = FakeSocket()
+    session, connects = _ws_session({"sync": [sync3]})
+
+    async def scenario3():
+        """Connect a V3 charger."""
+        transport = _signed_in_transport()
+        await _logged_in(transport, sync3, V3_ID)
+        await transport.close()
+
+    with patch("aiohttp.ClientSession", return_value=session), patch("hypervolt.record_api_call"):
+        run_async(scenario3())
+    assert [connect["url"] for connect in connects] == ["wss://api.hypervolt.co.uk/ws/charger/{}/sync".format(V3_ID)]
+    print("  ✓ Session socket only for the V2 API")
+
+
+def test_promotion_to_api_3():
+    """Short firmware on a V2 charger moves it to the V3 API: plugncharge.get is sent and the session socket closed."""
+    sync, sess = FakeSocket(), FakeSocket()
+    session, _ = _ws_session({"sync": [sync], "session/in-progress": [sess]})
+
+    async def scenario():
+        """Answer the firmware request with an updated version."""
+        transport = _signed_in_transport()
+        await _logged_in(transport, sync, V2_ID)
+        assert "plugncharge.get" not in sync.methods()
+        _reply_to(sync, "firmware.version", "1.0")
+        await _settle()
+        link = transport.links[V2_ID]
+        assert link.api_version == 3 and "plugncharge.get" in sync.methods()
+        assert sess.closed and link.session is None
+        await _settle()
+        await transport.close()
+        return transport
+
+    with patch("aiohttp.ClientSession", return_value=session), patch("hypervolt.record_api_call"):
+        transport = run_async(scenario())
+    assert transport.sleeps == []
+    print("  ✓ Promotion to the V3 API")
+
+
+def test_reconnect_all_uses_new_token():
+    """reconnect_all closes every socket and logs in again with the current token."""
+    first, second = FakeSocket(), FakeSocket()
+    session, connects = _ws_session([first, second])
+
+    async def scenario():
+        """Change the token, then reconnect."""
+        transport = _signed_in_transport()
+        await _logged_in(transport, first)
+        transport.access_token = "jwt-new"
+        await transport.reconnect_all()
+        await _settle()
+        assert first.closed and len(connects) == 2
+        assert second.sent[0]["params"]["token"] == "jwt-new"
+        await transport.close()
+
+    with patch("aiohttp.ClientSession", return_value=session), patch("hypervolt.record_api_call"):
+        run_async(scenario())
+    print("  ✓ reconnect_all uses the new token")
+
+
+def test_probe_and_reconnect_one():
+    """probe() asks a charger for a snapshot; reconnect() reopens just that charger."""
+    first, second = FakeSocket(), FakeSocket()
+    session, connects = _ws_session([first, second])
+
+    async def scenario():
+        """Probe, then reconnect."""
+        transport = _signed_in_transport()
+        await _logged_in(transport, first)
+        before = first.methods().count("sync.snapshot")
+        await transport.probe(V3_ID)
+        assert first.methods().count("sync.snapshot") == before + 1
+        await transport.probe("unknown")
+        await transport.reconnect(V3_ID)
+        await _settle()
+        assert first.closed and len(connects) == 2
+        await transport.close()
+
+    with patch("aiohttp.ClientSession", return_value=session), patch("hypervolt.record_api_call"):
+        run_async(scenario())
+    print("  ✓ Probe and single reconnect")
+
+
 def test_hypervolt(my_predbat=None):
     """Run every Hypervolt test."""
     print("=" * 70)
@@ -716,5 +949,14 @@ def test_hypervolt(my_predbat=None):
     test_charge_mode_options()
     test_captured_payloads()
     test_on_message_updates_charger()
+    test_backoff_sequence()
+    test_reconnects_with_backoff()
+    test_drop_fails_pending_commands()
+    test_reconnect_stops_on_auth_failure()
+    test_successful_sign_in_clears_auth_failed()
+    test_session_socket_only_for_api_2()
+    test_promotion_to_api_3()
+    test_reconnect_all_uses_new_token()
+    test_probe_and_reconnect_one()
     print("=" * 70)
     return False

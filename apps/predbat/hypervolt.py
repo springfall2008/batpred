@@ -24,6 +24,7 @@ import asyncio
 import copy
 import json
 import math
+import random
 import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
@@ -49,6 +50,16 @@ TOKEN_MARGIN_SECONDS = 600
 COMMAND_TIMEOUT_SECONDS = 10
 # Request ids remembered for matching replies; older ones are dropped
 MAX_SENT_IDS = 50
+
+# Websocket reconnect back-off, as the Home Assistant integration uses
+BACKOFF_MIN_SECONDS = 3
+BACKOFF_MAX_START_SECONDS = 12
+BACKOFF_GROWTH = 1.7
+BACKOFF_CAP_SECONDS = 300
+# Messages on one connection before it counts as good and the back-off resets
+BACKOFF_RESET_MESSAGES = 4
+# aiohttp pings the socket this often so a dead connection is noticed
+WS_HEARTBEAT_SECONDS = 30
 
 # A charger with no message for this long is probed, and at twice this reconnected
 STALE_SECONDS = 240
@@ -256,6 +267,26 @@ def charger_api_version(charger_id, firmware_version):
     return 2
 
 
+class Backoff:
+    """Reconnect delays: a random 3-12 seconds, growing by 1.7 each time to a 300 second cap, until reset."""
+
+    def __init__(self):
+        """Start with no delay used."""
+        self.delay = None
+
+    def next(self):
+        """The next delay in seconds."""
+        if self.delay is None:
+            self.delay = random.randint(BACKOFF_MIN_SECONDS, BACKOFF_MAX_START_SECONDS)  # nosec B311 - jitter, not security
+        else:
+            self.delay = min(BACKOFF_CAP_SECONDS, int(self.delay * BACKOFF_GROWTH))
+        return self.delay
+
+    def reset(self):
+        """Start again from a short delay."""
+        self.delay = None
+
+
 class ChargerLink:
     """One charger's websockets: the open sockets, their reader tasks, and the requests awaiting a reply."""
 
@@ -264,7 +295,10 @@ class ChargerLink:
         self.charger_id = charger_id
         self.api_version = api_version
         self.sync = None
+        # The session/in-progress socket, open only while the charger speaks the V2 API
+        self.session = None
         self.authenticated = False
+        self.backoff = Backoff()
         self.tasks = []
         # Request id -> future, for commands whose caller is waiting on the reply
         self.pending = {}
@@ -297,6 +331,11 @@ class HypervoltTransport:
         # Charger id -> its entry from list_chargers(), for the model
         self.charger_info = {}
         self.message_counter = int(time.time() * 1000)
+        # Set when a reconnect's sign in is refused: the readers stop until the component signs in again
+        self.auth_failed = False
+        self.closing = False
+        # Replaced by the tests so back-off does not wait in real time
+        self.sleep = asyncio.sleep
         # Called with ("<charger id> >>>" or "<charger id> <<<", message) for every message, token hidden
         self.raw_log: Optional[Callable[[str, dict], None]] = None
 
@@ -346,6 +385,7 @@ class HypervoltTransport:
             record_api_call("hypervolt", success=False, reason="decode_error")
             raise HypervoltApiError("unexpected sign in response from Hypervolt") from exc
         record_api_call("hypervolt", success=True)
+        self.auth_failed = False
         return self.access_token
 
     async def authenticate(self):
@@ -421,13 +461,144 @@ class HypervoltTransport:
             charger.name = body
 
     async def connect(self, charger_id):
-        """Open a charger's sync socket in the background. Returns at once; the reader logs in and asks for state."""
+        """Open a charger's sockets in the background. Returns at once; the readers log in and ask for state."""
         charger_id = str(charger_id)
         if charger_id in self.links:
             return
         link = ChargerLink(charger_id, self.charger(charger_id).api_version)
         self.links[charger_id] = link
-        link.tasks.append(asyncio.ensure_future(self._sync_reader(link)))
+        self._start_link(link)
+
+    def _start_link(self, link):
+        """Start a link's reader tasks: the sync socket, and the session socket for the V2 API."""
+        link.tasks = [asyncio.ensure_future(self._reader(link, "sync"))]
+        if link.api_version < 3:
+            link.tasks.append(asyncio.ensure_future(self._reader(link, "session")))
+
+    async def _stop_link(self, link):
+        """Close a link's sockets and end its reader tasks."""
+        for socket in (link.sync, link.session):
+            if socket is not None:
+                try:
+                    await socket.close()
+                except Exception:  # pylint: disable=broad-except
+                    pass
+        for task in link.tasks:
+            task.cancel()
+        for task in link.tasks:
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):  # pylint: disable=broad-except
+                pass
+        link.tasks = []
+        link.sync = None
+        link.session = None
+        link.authenticated = False
+        self._fail_pending(link)
+
+    def _fail_pending(self, link):
+        """Fail every command waiting on a link's reply: the connection it was sent on has gone."""
+        for future in link.pending.values():
+            if not future.done():
+                future.set_exception(HypervoltApiError("the connection to charger {} closed".format(link.charger_id)))
+        link.pending = {}
+
+    async def reconnect(self, charger_id):
+        """Close and reopen one charger's sockets."""
+        link = self.links.get(str(charger_id))
+        if link is None:
+            return
+        await self._stop_link(link)
+        self._start_link(link)
+
+    async def reconnect_all(self):
+        """Close and reopen every charger's sockets, so each logs in again with the current token."""
+        for link in list(self.links.values()):
+            await self._stop_link(link)
+            self._start_link(link)
+
+    async def probe(self, charger_id):
+        """Ask a quiet charger for a snapshot without waiting for the reply; its answer stamps last_message."""
+        link = self.links.get(str(charger_id))
+        if link is None or link.sync is None or not link.authenticated:
+            return
+        try:
+            await self._send(link, "sync.snapshot")
+        except Exception as exc:  # pylint: disable=broad-except
+            self.log("Warn: hypervolt: could not probe charger {}: {}".format(charger_id, exc))
+
+    async def _reader(self, link, kind):
+        """Hold one of a charger's sockets open, reconnecting with back-off, until closed or the sign in is refused.
+
+        kind is "sync" (logs in, carries state and commands) or "session" (V2 API session pushes).
+        """
+        backoff = link.backoff if kind == "sync" else Backoff()
+        url = HYPERVOLT_WS_URL.format(link.charger_id) + ("sync" if kind == "sync" else "session/in-progress")
+        while not self.closing:
+            try:
+                token = await self.authenticate()
+            except HypervoltAuthError as exc:
+                self.auth_failed = True
+                self.log("Error: hypervolt: sign in refused, charger {} is disconnected until it succeeds: {}".format(link.charger_id, exc))
+                return
+            except HypervoltApiError as exc:
+                self.log("Warn: hypervolt: sign in failed for charger {}: {}".format(link.charger_id, exc))
+                await self.sleep(backoff.next())
+                continue
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.ws_connect(url, headers={"Origin": HYPERVOLT_ORIGIN, "User-Agent": USER_AGENT}, heartbeat=WS_HEARTBEAT_SECONDS) as socket:
+                        record_api_call("hypervolt", success=True)
+                        await self._read_socket(link, kind, socket, token, backoff)
+            except asyncio.CancelledError:
+                raise
+            except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as exc:
+                record_api_call("hypervolt", success=False, reason="connection_error")
+                self.log("Warn: hypervolt: {} socket for charger {} failed: {}".format(kind, link.charger_id, exc))
+            if self.closing or (kind == "session" and link.api_version >= 3):
+                return
+            await self.sleep(backoff.next())
+
+    async def _read_socket(self, link, kind, socket, token, backoff):
+        """Read one connection until it closes."""
+        if kind == "sync":
+            link.sync = socket
+        else:
+            link.session = socket
+        try:
+            if kind == "sync":
+                await self._send(link, "login", {"token": token, "version": 3})
+            count = 0
+            while True:
+                frame = await socket.receive()
+                if frame.type != aiohttp.WSMsgType.TEXT:
+                    break
+                count += 1
+                if count >= BACKOFF_RESET_MESSAGES:
+                    backoff.reset()
+                if kind == "sync":
+                    await self._handle_sync_frame(link, frame.data)
+                else:
+                    self._handle_session_frame(link, frame.data)
+        finally:
+            if kind == "sync":
+                link.sync = None
+                link.authenticated = False
+                self._fail_pending(link)
+            else:
+                link.session = None
+
+    def _handle_session_frame(self, link, text):
+        """Route one session socket frame - a bare session object - to on_message as get.session."""
+        try:
+            message = json.loads(text)
+        except ValueError:
+            self.log("Warn: hypervolt: unreadable session message from charger {}".format(link.charger_id))
+            return
+        if self.raw_log:
+            self.raw_log("{} <<< session".format(link.charger_id), message)
+        if isinstance(message, dict):
+            self.on_message(link.charger_id, "get.session", message)
 
     async def _send(self, link, method, params=None, future=None):
         """Send one request on the sync socket and return its id. A future is registered before the send, so no reply can beat it."""
@@ -453,24 +624,6 @@ class HypervoltTransport:
             await self._send(link, "plugncharge.get")
         await self._send(link, "firmware.version")
         await self._send(link, "get.name")
-
-    async def _sync_reader(self, link):
-        """Hold a charger's sync socket open: log in, then read until it closes."""
-        token = await self.authenticate()
-        async with aiohttp.ClientSession() as session:
-            async with session.ws_connect(HYPERVOLT_WS_URL.format(link.charger_id) + "sync", headers={"Origin": HYPERVOLT_ORIGIN, "User-Agent": USER_AGENT}) as socket:
-                record_api_call("hypervolt", success=True)
-                link.sync = socket
-                try:
-                    await self._send(link, "login", {"token": token, "version": 3})
-                    while True:
-                        frame = await socket.receive()
-                        if frame.type != aiohttp.WSMsgType.TEXT:
-                            break
-                        await self._handle_sync_frame(link, frame.data)
-                finally:
-                    link.sync = None
-                    link.authenticated = False
 
     async def _handle_sync_frame(self, link, text):
         """Route one sync socket frame: a reply to its caller and on_message, a push to on_message."""
@@ -502,13 +655,28 @@ class HypervoltTransport:
                     await self._request_state(link)
                 else:
                     self.log("Warn: hypervolt: charger {} refused the login".format(link.charger_id))
+                    # Most likely a stale token: renew it before the reconnect
+                    self.token_expiry = 0
                     await link.sync.close()
                 return
             if future and not future.done():
                 future.set_result(result)
             self.on_message(link.charger_id, method, result)
+            if method == "firmware.version":
+                await self._check_promotion(link)
         elif "method" in message:
             self.on_message(link.charger_id, message["method"], message.get("params"))
+
+    async def _check_promotion(self, link):
+        """Move a V2 charger whose firmware speaks the V3 API onto it: ask for its mode and close the session socket."""
+        charger = self.chargers.get(link.charger_id)
+        if charger is None or charger.api_version <= link.api_version:
+            return
+        self.log("Info: hypervolt: charger {} firmware {} uses the V3 API".format(link.charger_id, charger.firmware_version))
+        link.api_version = charger.api_version
+        await self._send(link, "plugncharge.get")
+        if link.session is not None:
+            await link.session.close()
 
     async def request(self, charger_id, method, params=None):
         """Send a command to a charger and return its reply's result.
@@ -531,17 +699,7 @@ class HypervoltTransport:
 
     async def close(self):
         """Close every socket and end every reader task."""
-        for link in self.links.values():
-            if link.sync is not None:
-                try:
-                    await link.sync.close()
-                except Exception:  # pylint: disable=broad-except
-                    pass
-            for task in link.tasks:
-                task.cancel()
-            for task in link.tasks:
-                try:
-                    await task
-                except (asyncio.CancelledError, Exception):  # pylint: disable=broad-except
-                    pass
+        self.closing = True
+        for link in list(self.links.values()):
+            await self._stop_link(link)
         self.links = {}
