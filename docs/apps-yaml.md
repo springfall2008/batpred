@@ -2555,9 +2555,18 @@ Default value 1.0. Used to scale the import & export kWh data from GivTCP if the
   inverter_battery_rate_min: watts
 ```
 
-One per inverter (optional), set in Watts, when set models a "bug" in the inverter firmware
+Optional, set in Watts, when set models a "bug" in the inverter firmware
 in some models where if charge or discharge rates are set to 0 you actually get a small amount of charge or discharge.
 The recommended setting is 200 for Gen 1 hybrids with this issue.
+
+A single value applies to every inverter. With more than one inverter you can instead give one value per inverter as a list,
+which must have an entry for each inverter:
+
+```yaml
+  inverter_battery_rate_min:
+    - 200
+    - 100
+```
 
 ### Inverter reserve maximum
 

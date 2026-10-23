@@ -535,6 +535,13 @@ def test_validate_config(my_predbat):
     _run(my_predbat, {"inverter_reserve_max": [98], "num_inverters": 2}, expect_errors=["inverter_reserve_max"])
     print("  [integer single_value_ok] inverter_reserve_max zero still fails")
     _run(my_predbat, {"inverter_reserve_max": 0, "num_inverters": 2}, expect_errors=["inverter_reserve_max"])
+    # inverter_battery_rate_min has the same documented single-value form
+    print("  [integer single_value_ok] inverter_battery_rate_min single value passes with two inverters")
+    _run(my_predbat, {"inverter_battery_rate_min": 200, "num_inverters": 2}, expect_clean=["inverter_battery_rate_min"])
+    print("  [integer single_value_ok] inverter_battery_rate_min list per inverter passes")
+    _run(my_predbat, {"inverter_battery_rate_min": [200, 100], "num_inverters": 2}, expect_clean=["inverter_battery_rate_min"])
+    print("  [integer single_value_ok] inverter_battery_rate_min short list still fails")
+    _run(my_predbat, {"inverter_battery_rate_min": [200], "num_inverters": 2}, expect_errors=["inverter_battery_rate_min"])
 
     print("**** test_validate_config PASSED ****")
     return False

@@ -627,7 +627,7 @@ def test_inverter_reserve_max_forms(my_predbat):
     failed = False
     print("Test: test_inverter_reserve_max_forms")
 
-    saved = {arg: copy.deepcopy(my_predbat.args.get(arg, None)) for arg in ("inverter_type", "inverter_reserve_max", "num_inverters")}
+    saved = {arg: copy.deepcopy(my_predbat.args.get(arg, None)) for arg in ("inverter_type", "inverter_reserve_max", "inverter_battery_rate_min", "num_inverters")}
     try:
         my_predbat.args["num_inverters"] = 2
         my_predbat.args["inverter_type"] = ["GE", "GE"]
@@ -640,6 +640,29 @@ def test_inverter_reserve_max_forms(my_predbat):
                 inv = Inverter(my_predbat, inverter_id)
                 if inv.reserve_max != expect[inverter_id]:
                     print("ERROR: test_inverter_reserve_max_forms: {}: inverter {} reserve_max should be {} got {}".format(case, inverter_id, expect[inverter_id], inv.reserve_max))
+                    failed = True
+        # inverter_battery_rate_min takes the same two forms, in watts
+        for case, value, expect in (("rate_min list", [200, 100], [200, 100]), ("rate_min single", 200, [200, 200]), ("rate_min unset", None, [0, 0])):
+            if value is None:
+                my_predbat.args.pop("inverter_battery_rate_min", None)
+            else:
+                my_predbat.args["inverter_battery_rate_min"] = value
+            for inverter_id in (0, 1):
+                # A single value read per inverter id gave the right number but warned "incorrectly setup" every refresh
+                logged = []
+                saved_log = my_predbat.log
+                my_predbat.log = lambda message, *args, **kwargs: logged.append(message)
+                try:
+                    inv = Inverter(my_predbat, inverter_id)
+                finally:
+                    my_predbat.log = saved_log
+                rate_min_w = round(inv.battery_rate_min * MINUTE_WATT)
+                if rate_min_w != expect[inverter_id]:
+                    print("ERROR: test_inverter_reserve_max_forms: {}: inverter {} battery_rate_min should be {}W got {}W".format(case, inverter_id, expect[inverter_id], rate_min_w))
+                    failed = True
+                warned = [message for message in logged if "inverter_battery_rate_min is incorrectly setup" in message]
+                if warned:
+                    print("ERROR: test_inverter_reserve_max_forms: {}: inverter {} should not warn, got {}".format(case, inverter_id, warned))
                     failed = True
     finally:
         for arg, value in saved.items():

@@ -702,7 +702,9 @@ class Inverter:
         self.battery_rate_max_discharge = min(inverter_limit_discharge, self.battery_rate_max_raw) / MINUTE_WATT
         inverter_limit_export = self.base.get_arg("inverter_limit_export", inverter_limit_discharge, index=self.id, required_unit="W")
         self.battery_rate_max_export = min(inverter_limit_export, self.battery_rate_max_raw) / MINUTE_WATT
-        self.battery_rate_min = min(self.base.get_arg("inverter_battery_rate_min", 0, index=self.id, required_unit="W"), self.battery_rate_max_raw) / MINUTE_WATT
+        # One value for every inverter (as documented) or a per-inverter list, like inverter_reserve_max (#5369)
+        rate_min_index = self.id if isinstance(self.base.args.get("inverter_battery_rate_min"), list) else None
+        self.battery_rate_min = min(self.base.get_arg("inverter_battery_rate_min", 0, index=rate_min_index, required_unit="W"), self.battery_rate_max_raw) / MINUTE_WATT
 
         # Track and update battery size (if automatic)
         self.battery_size_tracking()
