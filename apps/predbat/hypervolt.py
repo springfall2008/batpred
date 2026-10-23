@@ -23,8 +23,10 @@ and start each charger from Predbat's own car charging plan.
 import asyncio
 import copy
 import json
+import math
 import time
-from typing import Any, Callable, Optional
+from dataclasses import dataclass, field
+from typing import Callable, Optional
 
 import aiohttp
 
@@ -48,6 +50,17 @@ COMMAND_TIMEOUT_SECONDS = 10
 # Request ids remembered for matching replies; older ones are dropped
 MAX_SENT_IDS = 50
 
+# A charger with no message for this long is probed, and at twice this reconnected
+STALE_SECONDS = 240
+
+RELEASE_STATES = ("default", "released")
+LOCK_STATES = ("unlocked", "pending_lock", "locked")
+PILOT_STATES = ("A", "B", "C")
+CHARGE_MODES = ["boost", "eco", "super_eco"]
+CHARGE_MODE_BATTERY_SAFE = "super_eco_battery_safe"
+# The charger feature that adds the Battery Safe mode
+FEATURE_BATTERY_SAFE = "home-battery-drain-prevention"
+
 # Updated V2 firmware reports a short version such as "1" or "1.0" and speaks the V3 API
 UPDATED_V2_FIRMWARE_MAX_LEN = 7
 
@@ -70,6 +83,153 @@ class HypervoltRefusedError(HypervoltApiError):
 
 class HypervoltTimeoutError(HypervoltApiError):
     """A command had no reply in time."""
+
+
+def _to_float(value):
+    """A finite float, or None when the value is missing or not a number."""
+    if isinstance(value, bool):
+        return None
+    try:
+        result = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return result if math.isfinite(result) else None
+
+
+@dataclass
+class HypervoltCharger:
+    """One charger's state, built up from the messages its websockets carry."""
+
+    charger_id: str
+    model: str = ""
+    name: str = ""
+    firmware_version: Optional[str] = None
+    api_version: int = 2
+    release_state: Optional[str] = None
+    charging: bool = False
+    pilot_status: Optional[str] = None
+    power_w: float = 0.0
+    session_id: Optional[int] = None
+    session_energy_kwh: float = 0.0
+    max_current_a: Optional[int] = None
+    charge_mode: Optional[str] = None
+    features: list = field(default_factory=list)
+    lock_state: Optional[str] = None
+    # Epoch seconds of the last message from either socket
+    last_message: float = 0.0
+
+
+def apply_snapshot(charger, items):
+    """Fold a sync.snapshot or sync.apply body - a list of single-key objects - into a charger. Bad items are skipped."""
+    if isinstance(items, dict):
+        items = [items]
+    if not isinstance(items, list):
+        return
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if item.get("release_state") in RELEASE_STATES:
+            charger.release_state = item["release_state"]
+        if item.get("lock_state") in LOCK_STATES:
+            charger.lock_state = item["lock_state"]
+        if "max_current" in item:
+            milliamps = _to_float(item["max_current"])
+            if milliamps is not None:
+                charger.max_current_a = int(round(milliamps / 1000.0))
+        if item.get("solar_mode") in CHARGE_MODES + [CHARGE_MODE_BATTERY_SAFE]:
+            charger.charge_mode = item["solar_mode"]
+        if isinstance(item.get("features"), list):
+            charger.features = list(item["features"])
+
+
+def apply_session(charger, result):
+    """Fold a session message into a charger: charging, power and the session's energy."""
+    if not isinstance(result, dict):
+        return
+    if "charging" in result:
+        charger.charging = bool(result["charging"])
+    if not charger.charging:
+        charger.power_w = 0.0
+    elif "ev_power" in result:
+        charger.power_w = _to_float(result["ev_power"]) or 0.0
+    elif "true_milli_amps" in result and "voltage" in result:
+        milliamps = _to_float(result["true_milli_amps"])
+        voltage = _to_float(result["voltage"])
+        charger.power_w = milliamps * voltage / 1000.0 if milliamps is not None and voltage is not None else 0.0
+    if "session" in result and result["session"] != charger.session_id:
+        # A new session: its energy starts again from whatever this message says
+        charger.session_id = result["session"]
+        charger.session_energy_kwh = 0.0
+    watt_hours = _to_float(result.get("watt_hours"))
+    if watt_hours is not None:
+        # The session's maximum, so the sensor only ever rises within a session
+        charger.session_energy_kwh = max(charger.session_energy_kwh, round(watt_hours / 1000.0, 3))
+
+
+def apply_pilot(charger, result):
+    """Fold a get.pilot_status message into a charger: A unplugged, B plugged in, C charging."""
+    if isinstance(result, dict) and result.get("pilot_status") in PILOT_STATES:
+        charger.pilot_status = result["pilot_status"]
+
+
+def apply_plugncharge(charger, result):
+    """Fold a plugncharge.get reply ({"applied": mode}) or plugncharge.set reply ({"mode": mode, "applied": bool}) into a charger."""
+    if not isinstance(result, dict):
+        return
+    applied = result.get("applied")
+    if isinstance(applied, bool):
+        if not applied:
+            return
+        mode = result.get("mode")
+    elif isinstance(applied, str):
+        mode = applied
+    else:
+        mode = result.get("mode")
+    if mode in CHARGE_MODES + [CHARGE_MODE_BATTERY_SAFE]:
+        charger.charge_mode = mode
+
+
+def connected_state(charger):
+    """binary_sensor.<prefix>_connected: the pilot status, or with none yet on while charging and unavailable otherwise."""
+    if charger.pilot_status in ("B", "C"):
+        return "on"
+    if charger.pilot_status == "A":
+        return "off"
+    return "on" if charger.charging else "unavailable"
+
+
+def plugged_state(charger):
+    """binary_sensor.<prefix>_plugged: the cable alone, from the pilot status and never guessed from charging."""
+    if charger.pilot_status in ("B", "C"):
+        return "on"
+    if charger.pilot_status == "A":
+        return "off"
+    return "unavailable"
+
+
+def status_text(charger):
+    """The status sensor's state: charging, disconnected, stopped, connected or unknown."""
+    if charger.charging:
+        return "charging"
+    if charger.pilot_status == "A":
+        return "disconnected"
+    if charger.release_state == "released":
+        return "stopped"
+    if charger.pilot_status in ("B", "C"):
+        return "connected"
+    return "unknown"
+
+
+def charge_mode_options(charger):
+    """The charge modes this charger accepts."""
+    if FEATURE_BATTERY_SAFE in (charger.features or []):
+        return CHARGE_MODES + [CHARGE_MODE_BATTERY_SAFE]
+    return list(CHARGE_MODES)
+
+
+def is_stale(charger, now):
+    """Has the charger sent nothing for longer than STALE_SECONDS."""
+    return now - charger.last_message > STALE_SECONDS
 
 
 def charger_major_version(charger_id):
@@ -133,6 +293,9 @@ class HypervoltTransport:
         # Absolute expiry time, in epoch seconds
         self.token_expiry = 0
         self.links = {}
+        self.chargers = {}
+        # Charger id -> its entry from list_chargers(), for the model
+        self.charger_info = {}
         self.message_counter = int(time.time() * 1000)
         # Called with ("<charger id> >>>" or "<charger id> <<<", message) for every message, token hidden
         self.raw_log: Optional[Callable[[str, dict], None]] = None
@@ -221,23 +384,48 @@ class HypervoltTransport:
     async def list_chargers(self):
         """Return the account's chargers, each a dict with id, model and adopted_at."""
         payload = await self._get("users/me?includes=chargers")
-        chargers = payload.get("chargers")
-        return [charger for charger in chargers or [] if isinstance(charger, dict) and charger.get("id") is not None]
+        chargers = [charger for charger in payload.get("chargers") or [] if isinstance(charger, dict) and charger.get("id") is not None]
+        for charger in chargers:
+            self.charger_info[str(charger["id"])] = charger
+        return chargers
 
     def next_message_id(self):
         """A request id unique within this transport."""
         self.message_counter += 1
         return str(self.message_counter)
 
+    def charger(self, charger_id):
+        """The state record for a charger, made on first use."""
+        charger_id = str(charger_id)
+        if charger_id not in self.chargers:
+            info = self.charger_info.get(charger_id, {})
+            self.chargers[charger_id] = HypervoltCharger(charger_id, model=str(info.get("model") or ""), api_version=charger_api_version(charger_id, None))
+        return self.chargers[charger_id]
+
     def on_message(self, charger_id, method, body):
-        """Take a state message from a charger: a push, or the reply to a state request."""
+        """Take a state message from a charger - a push, or the reply to a state request - into its record."""
+        charger = self.charger(charger_id)
+        charger.last_message = time.time()
+        if method in ("sync.snapshot", "sync.apply"):
+            apply_snapshot(charger, body)
+        elif method == "get.session":
+            apply_session(charger, body)
+        elif method == "get.pilot_status":
+            apply_pilot(charger, body)
+        elif method in ("plugncharge.get", "plugncharge.set"):
+            apply_plugncharge(charger, body)
+        elif method == "firmware.version" and body is not None:
+            charger.firmware_version = str(body)
+            charger.api_version = charger_api_version(charger.charger_id, charger.firmware_version)
+        elif method == "get.name" and isinstance(body, str):
+            charger.name = body
 
     async def connect(self, charger_id):
         """Open a charger's sync socket in the background. Returns at once; the reader logs in and asks for state."""
         charger_id = str(charger_id)
         if charger_id in self.links:
             return
-        link = ChargerLink(charger_id, charger_api_version(charger_id, None))
+        link = ChargerLink(charger_id, self.charger(charger_id).api_version)
         self.links[charger_id] = link
         link.tasks.append(asyncio.ensure_future(self._sync_reader(link)))
 

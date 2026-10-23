@@ -23,11 +23,22 @@ from hypervolt import (
     HYPERVOLT_TOKEN_URL,
     HypervoltApiError,
     HypervoltAuthError,
+    HypervoltCharger,
     HypervoltRefusedError,
     HypervoltTimeoutError,
     HypervoltTransport,
+    STALE_SECONDS,
+    apply_pilot,
+    apply_plugncharge,
+    apply_session,
+    apply_snapshot,
+    charge_mode_options,
     charger_api_version,
     charger_major_version,
+    connected_state,
+    is_stale,
+    plugged_state,
+    status_text,
 )
 
 # Charger ids are decimal; their hex form is 12 digits for a V2 and 16 for a V3
@@ -76,6 +87,21 @@ def _token_payload(access="jwt-1", refresh="refresh-1", life=300):
     """A Keycloak token response."""
     return {"access_token": access, "refresh_token": refresh, "expires_in": life, "token_type": "Bearer"}
 
+
+# Message bodies quoted in the Home Assistant integration's source (hypervolt_api_client.py).
+# They stand in for messages captured from a real charger with `python3 hypervolt.py --raw`,
+# and should be replaced by such captures (Rik's charger). Fields marked "assumed" are not in
+# those examples.
+MOCK_SNAPSHOT = [{"brightness": 0.25}, {"lock_state": "unlocked"}, {"release_state": "default"}, {"max_current": 32000}, {"ct_flags": 1}, {"solar_mode": "boost"}, {"features": ["super_eco"]}, {"random_start": True}]
+MOCK_SESSION_IDLE = {"charging": False, "session": 240, "milli_amps": 32000, "true_milli_amps": 0, "watt_hours": 2371, "ccy_spent": 34, "carbon_saved_grams": 1036, "ct_current": 0, "ct_power": 0, "voltage": 0}
+# assumed: a charging session in the same shape
+MOCK_SESSION_CHARGING = {"charging": True, "session": 241, "milli_amps": 32000, "true_milli_amps": 31000, "watt_hours": 5120, "ccy_spent": 70, "carbon_saved_grams": 2100, "ct_current": 31000, "ct_power": 7440, "voltage": 240}
+MOCK_PILOT_A = {"pilot_status": "A"}
+MOCK_PILOT_B = {"pilot_status": "B"}
+MOCK_PILOT_C = {"pilot_status": "C"}
+MOCK_PLUGNCHARGE_GET = {"applied": "boost"}
+MOCK_PLUGNCHARGE_SET = {"mode": "boost", "applied": True}
+MOCK_FIRMWARE = "2483.2"
 
 MOCK_CHARGERS = {"chargers": [{"id": V3_ID, "model": "Home 3 Pro", "adopted_at": "2024-01-01T00:00:00.000Z"}]}
 
@@ -513,6 +539,151 @@ def test_close_cancels_readers():
     print("  ✓ close() ends the readers")
 
 
+def test_apply_snapshot():
+    """A snapshot sets release state, current in amps, charge mode, features and lock state."""
+    charger = HypervoltCharger(V3_ID)
+    apply_snapshot(charger, MOCK_SNAPSHOT)
+    assert charger.release_state == "default"
+    assert charger.max_current_a == 32 and isinstance(charger.max_current_a, int)
+    assert charger.charge_mode == "boost"
+    assert charger.features == ["super_eco"]
+    assert charger.lock_state == "unlocked"
+    apply_snapshot(charger, [{"release_state": "released"}])
+    assert charger.release_state == "released" and charger.max_current_a == 32
+    print("  ✓ Snapshot applied")
+
+
+def test_apply_snapshot_ignores_bad_items():
+    """An unknown enum value or a non-number is skipped and the rest still applied."""
+    charger = HypervoltCharger(V3_ID, release_state="default")
+    apply_snapshot(charger, [{"release_state": "paused"}, {"max_current": "x"}, {"max_current": 16000}, "junk", {"solar_mode": "turbo"}, {"features": "nope"}])
+    assert charger.release_state == "default"
+    assert charger.max_current_a == 16
+    assert charger.charge_mode is None and charger.features == []
+    apply_snapshot(charger, None)
+    apply_snapshot(charger, {"release_state": "released"})
+    assert charger.release_state == "released"
+    print("  ✓ Bad snapshot items are skipped")
+
+
+def test_apply_session_power():
+    """Power is ev_power when sent, else amps times volts, and zero when not charging."""
+    charger = HypervoltCharger(V3_ID)
+    apply_session(charger, {"charging": True, "ev_power": 7100, "true_milli_amps": 16000, "voltage": 240})
+    assert charger.charging is True and charger.power_w == 7100.0
+    apply_session(charger, {"charging": True, "true_milli_amps": 16000, "voltage": 240})
+    assert charger.power_w == 3840.0
+    apply_session(charger, {"charging": False, "true_milli_amps": 16000, "voltage": 240})
+    assert charger.charging is False and charger.power_w == 0.0
+    apply_session(charger, {"charging": True, "ev_power": "bad"})
+    assert charger.charging is True and charger.power_w == 0.0
+    print("  ✓ Session power")
+
+
+def test_session_energy_holds_and_resets():
+    """Session energy is the session's maximum, held between sessions, restarting with a new session id."""
+    charger = HypervoltCharger(V3_ID)
+    apply_session(charger, {"charging": True, "session": 7, "watt_hours": 2371})
+    assert charger.session_energy_kwh == 2.371
+    apply_session(charger, {"charging": True, "session": 7, "watt_hours": 1000})
+    assert charger.session_energy_kwh == 2.371
+    apply_session(charger, {"charging": False})
+    assert charger.session_energy_kwh == 2.371
+    apply_session(charger, {"charging": True, "session": 8, "watt_hours": 150})
+    assert charger.session_energy_kwh == 0.15 and charger.session_id == 8
+    print("  ✓ Session energy holds and resets")
+
+
+def test_apply_pilot():
+    """Pilot A is unplugged, B and C plugged; anything else is ignored."""
+    charger = HypervoltCharger(V3_ID)
+    apply_pilot(charger, MOCK_PILOT_A)
+    assert connected_state(charger) == "off" and plugged_state(charger) == "off"
+    for frame in (MOCK_PILOT_B, MOCK_PILOT_C):
+        apply_pilot(charger, frame)
+        assert connected_state(charger) == "on" and plugged_state(charger) == "on"
+    apply_pilot(charger, {"pilot_status": "E"})
+    apply_pilot(charger, "junk")
+    assert charger.pilot_status == "C"
+    print("  ✓ Pilot status")
+
+
+def test_connected_state_unknown_until_pilot():
+    """With no pilot status, connected is on only while charging and plugged is never guessed."""
+    charger = HypervoltCharger(V3_ID)
+    assert connected_state(charger) == "unavailable" and plugged_state(charger) == "unavailable"
+    charger.charging = True
+    assert connected_state(charger) == "on" and plugged_state(charger) == "unavailable"
+    print("  ✓ Connection unknown until the pilot status arrives")
+
+
+def test_apply_plugncharge():
+    """Both reply forms set the mode; a refused set or unknown mode does not."""
+    charger = HypervoltCharger(V3_ID)
+    apply_plugncharge(charger, MOCK_PLUGNCHARGE_GET)
+    assert charger.charge_mode == "boost"
+    apply_plugncharge(charger, {"mode": "eco", "applied": True})
+    assert charger.charge_mode == "eco"
+    apply_plugncharge(charger, {"mode": "super_eco", "applied": False})
+    assert charger.charge_mode == "eco"
+    apply_plugncharge(charger, {"applied": "warp"})
+    apply_plugncharge(charger, ["junk"])
+    assert charger.charge_mode == "eco"
+    print("  ✓ Plug and charge mode")
+
+
+def test_status_text():
+    """Status reads charging, stopped, connected, disconnected or unknown."""
+    assert status_text(HypervoltCharger(V3_ID)) == "unknown"
+    assert status_text(HypervoltCharger(V3_ID, charging=True, release_state="released")) == "charging"
+    assert status_text(HypervoltCharger(V3_ID, release_state="released", pilot_status="B")) == "stopped"
+    assert status_text(HypervoltCharger(V3_ID, release_state="default", pilot_status="B")) == "connected"
+    assert status_text(HypervoltCharger(V3_ID, release_state="default", pilot_status="A")) == "disconnected"
+    print("  ✓ Status text")
+
+
+def test_charge_mode_options():
+    """Battery Safe is offered only when the charger lists the feature."""
+    assert charge_mode_options(HypervoltCharger(V3_ID)) == ["boost", "eco", "super_eco"]
+    assert charge_mode_options(HypervoltCharger(V3_ID, features=["home-battery-drain-prevention"])) == ["boost", "eco", "super_eco", "super_eco_battery_safe"]
+    print("  ✓ Charge mode options")
+
+
+def test_captured_payloads():
+    """The stand-in messages, applied in order, give the state they describe."""
+    charger = HypervoltCharger(V3_ID)
+    apply_snapshot(charger, MOCK_SNAPSHOT)
+    apply_plugncharge(charger, MOCK_PLUGNCHARGE_SET)
+    apply_session(charger, MOCK_SESSION_IDLE)
+    apply_pilot(charger, MOCK_PILOT_B)
+    assert status_text(charger) == "connected" and charger.power_w == 0.0 and charger.session_energy_kwh == 2.371
+    apply_session(charger, MOCK_SESSION_CHARGING)
+    apply_pilot(charger, MOCK_PILOT_C)
+    assert status_text(charger) == "charging" and charger.power_w == 7440.0 and charger.session_energy_kwh == 5.12
+    print("  ✓ Stand-in payloads give their states")
+
+
+def test_on_message_updates_charger():
+    """on_message keeps transport.chargers current and stamps last_message; firmware can promote a V2."""
+    transport = HypervoltTransport(print, "user@example.com", "secret")
+    transport.on_message(V3_ID, "get.pilot_status", MOCK_PILOT_B)
+    transport.on_message(V3_ID, "sync.apply", [{"release_state": "released"}])
+    transport.on_message(V3_ID, "get.session", MOCK_SESSION_CHARGING)
+    transport.on_message(V3_ID, "plugncharge.set", {"mode": "eco", "applied": True})
+    transport.on_message(V3_ID, "get.name", "Driveway")
+    charger = transport.chargers[V3_ID]
+    assert charger.pilot_status == "B" and charger.release_state == "released" and charger.charging is True
+    assert charger.charge_mode == "eco" and charger.name == "Driveway"
+    assert abs(charger.last_message - time.time()) < 5
+    assert not is_stale(charger, time.time()) and is_stale(charger, time.time() + STALE_SECONDS + 1)
+
+    transport.on_message(V2_ID, "firmware.version", "202111231810.abcdef")
+    assert transport.chargers[V2_ID].api_version == 2 and transport.chargers[V2_ID].firmware_version == "202111231810.abcdef"
+    transport.on_message(V2_ID, "firmware.version", "1.0")
+    assert transport.chargers[V2_ID].api_version == 3
+    print("  ✓ on_message updates the charger")
+
+
 def test_hypervolt(my_predbat=None):
     """Run every Hypervolt test."""
     print("=" * 70)
@@ -534,5 +705,16 @@ def test_hypervolt(my_predbat=None):
     test_replies_and_pushes_reach_on_message()
     test_raw_log_redacts_token()
     test_close_cancels_readers()
+    test_apply_snapshot()
+    test_apply_snapshot_ignores_bad_items()
+    test_apply_session_power()
+    test_session_energy_holds_and_resets()
+    test_apply_pilot()
+    test_connected_state_unknown_until_pilot()
+    test_apply_plugncharge()
+    test_status_text()
+    test_charge_mode_options()
+    test_captured_payloads()
+    test_on_message_updates_charger()
     print("=" * 70)
     return False
