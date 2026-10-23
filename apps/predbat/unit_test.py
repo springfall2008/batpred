@@ -74,6 +74,7 @@ from tests.test_joint_site_session import run_joint_site_session_tests
 from tests.test_joint_site_recurring import run_joint_site_recurring_tests
 from tests.test_joint_site_arrival import run_joint_site_arrival_tests
 from tests.test_joint_site_priority import run_joint_site_priority_tests
+from tests.test_joint_site_battery_windows import run_joint_site_battery_windows_tests
 from tests.test_joint_site_partial_apply import run_joint_site_partial_apply_tests
 from tests.test_joint_site_applied_view import run_joint_site_applied_view_tests
 from tests.test_basic_rates import test_basic_rates
@@ -463,6 +464,12 @@ def run_joint_site_grid_support_tests_isolated(my_predbat):
     return run_joint_site_grid_support_tests(create_predbat())
 
 
+def run_joint_site_battery_windows_core_tests(my_predbat):
+    """Run the pure minimum-window state-machine tests without a Home Assistant backend."""
+    suite = unittest.defaultTestLoader.loadTestsFromName("tests.test_joint_site_battery_windows_core")
+    return not unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful()
+
+
 def run_prediction_grid_support_tests_isolated(my_predbat):
     """Validate optional replay physics without contaminating the shared suite state."""
     return run_prediction_grid_support_tests(create_predbat())
@@ -539,6 +546,8 @@ def main():
         ("joint_site_recurring", run_joint_site_recurring_tests, "Standing EV policy and durable sensor-derived sessions", False),
         ("joint_site_arrival", run_joint_site_arrival_tests, "Absent EV demand in the native model without execution authority", False),
         ("joint_site_priority", run_joint_site_priority_tests, "HA charging priority dropdown and immediate plan invalidation", False),
+        ("joint_site_battery_windows", run_joint_site_battery_windows_tests, "Configurable battery minimum windows and observed continuity", False),
+        ("joint_site_battery_windows_core", run_joint_site_battery_windows_core_tests, "Pure minimum battery window state and physical constraints", False),
         ("joint_site_partial_apply", run_joint_site_partial_apply_tests, "Authorised partial targets through paired replay and dispatch", False),
         ("joint_site_applied_view", run_joint_site_applied_view_tests, "Truthful applied plan and execution receipt presentation", False),
         ("execute", run_execute_tests, "Execute tests", False),

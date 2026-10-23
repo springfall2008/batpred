@@ -67,6 +67,61 @@ energy. More expensive energy remains eligible when needed to meet the requested
 target by departure. This is the lowest validated cost found by bounded search,
 not a proof of a global optimum.
 
+### Battery window stability
+
+The native **Joint battery minimum window (minutes)** select offers exactly
+**5, 15, 30 and 60**, with **30 minutes** as the default for a new installation.
+An existing saved choice, including **5 minutes**, is retained rather than migrated.
+Its entity is
+`select.<prefix>_joint_battery_min_window_minutes`; the existing Predbat settings
+UI and save/restore mechanism own it. Changing it requests a new plan without an
+inverter reset. It is independent of the `cost` / `asap` / `now` / `solar` EV
+priority and of **Calculate plan every N minutes**.
+
+The pure solver API retains its five-minute compatibility default; the native
+planner always passes the resolved dropdown/override value explicitly.
+
+The setting constrains the duration of a planned battery **control mode**: grid
+charge request, demand/self-consumption, or hold where that backend supports it.
+It does not make grid, PV and battery mutually exclusive sources. Physics can
+still change actual power within a block: reaching a target does not force more
+charging, PV may disappear, and load priority/grid-support behaviour is retained.
+EV decisions keep their existing five-minute resolution, cooldown and expiry.
+Blocks may be longer than the selected minimum and need not start on clock-aligned
+half hours. A final run truncated by the forecast horizon is allowed.
+
+The normal five-minute forecast steps and short-lived EV leases are unchanged.
+Successful observed joint dispatch remembers the mode's original start, so each
+recalculation carries only its **remaining** minimum time. Updating an SOC ceiling
+or an EV request within the same mode does not restart that timer. Template SOC
+updates can still require their existing brief source-disable sequence; this is
+not a promise of uninterrupted electrical power.
+
+The commitment is a scheduling preference, **not permission to ignore safety**.
+Both complete native replays, reserves, manual minima, rate/import constraints,
+SOLAR surplus checks, connection/permission and all execution guards still apply.
+An unsafe candidate is rejected; the executor never holds an obsolete command to
+complete a timer. The minimum is not silently reduced to meet a deadline. If the
+bounded search cannot validate a schedule with it, the normal no-plan/rejection
+and explicitly authorised partial-target reporting remain visible. A longer
+minimum may cost more or prevent a complete EV target; a search miss is not proof
+of infeasibility.
+
+Continuity is only retained while configuration and cached controls still match.
+Manual setting changes, observed control drift, native household handback or a
+process restart discard it. A restart must calculate/replay again; no persisted
+inverter command or EV authority is inferred from an old timer. Off/shadow do not
+start or update a physical commitment, and ordinary native household planning is
+not constrained by this joint-only setting.
+
+An optional `joint_site.battery_min_window_minutes` override accepts one of the
+four integer values (or its exact string), or an existing HA `input_select` /
+`select` entity. A referenced entity is read from cache only and must expose one
+of the four values; unknown, unavailable and malformed values fail closed. As with
+the EV-priority helper, add an external selector to the existing `watch_list` for
+immediate replanning. Omit the override to use the native persisted dropdown.
+Changing a selection during calculation or dispatch rejects the old candidate.
+
 `ev_charging_priority: now` instead requires EV charging in the **current control
 interval**. It first tries a continuous block starting now; every bounded retry
 and separately authorised partial alternative retains that immediate-start

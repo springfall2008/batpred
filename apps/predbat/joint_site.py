@@ -106,6 +106,25 @@ class PlannerConfig:
     `_validate` and the search loop. When `allow_limited_discharge` is true,
     `limited_demand` is added on top of whatever subset is declared here.
     The planner never returns a mode that is not in this subset.
+
+    `battery_min_window_minutes` declares the minimum lifetime (in minutes) of
+    any newly committed battery mode before the next mode can be selected.
+    Accepted values are 5, 15, 30 or 60. The default of 5 reproduces the
+    previous solver: each new mode persists for at least one slot, so mode
+    changes can happen every step. The window constraint only governs the
+    battery mode; EV on/off and delivered kWh are evaluated independently
+    inside every slot, so EV decisions are never frozen within a window.
+
+    `initial_window_mode` and `initial_window_remaining_minutes` describe the
+    battery mode that is in effect at the horizon start and the minutes it
+    still has left in its current window. They are orthogonal to
+    `initial_battery_mode` (which remains the "first-step" hard constraint
+    for ASAP-style first-action forcing). When `initial_window_remaining_minutes`
+    is zero, no commitment is carried in: the first node simply holds the
+    declared mode tag with no remaining time, so any mode may be picked for
+    slot 0 and, if a different mode is picked, it must persist for the full
+    new window. A non-zero remaining time locks the initial mode until it
+    elapses; then a fresh full window begins for the next chosen mode.
     """
 
     time_step_minutes: int = 5
@@ -117,6 +136,9 @@ class PlannerConfig:
     initial_battery_mode: Optional[str] = None
     require_ev_start: bool = False
     solar_ev_only: bool = False
+    battery_min_window_minutes: int = 5
+    initial_window_mode: Optional[str] = None
+    initial_window_remaining_minutes: int = 0
 
 
 @dataclass(frozen=True)
@@ -240,6 +262,20 @@ def _validate(slots, ev, battery, site, planner):
         seen.add(mode)
     if planner.initial_battery_mode is not None and (type(planner.initial_battery_mode) is not str or planner.initial_battery_mode not in allowed):
         raise PlannerInputError("initial_battery_mode must be an allowed mode or None")
+    if type(planner.battery_min_window_minutes) is not int or planner.battery_min_window_minutes not in (5, 15, 30, 60):
+        raise PlannerInputError("battery_min_window_minutes must be an int in {5, 15, 30, 60}")
+    if planner.initial_window_mode is not None:
+        if type(planner.initial_window_mode) is not str:
+            raise PlannerInputError("initial_window_mode must be a string or None")
+        supported = set(allowed) | ({BATTERY_LIMITED_DEMAND} if planner.allow_limited_discharge else set())
+        if planner.initial_window_mode not in supported:
+            raise PlannerInputError("initial_window_mode must be an allowed mode (+limited_demand when supported) or None")
+    if type(planner.initial_window_remaining_minutes) is not int or not 0 <= planner.initial_window_remaining_minutes <= 60:
+        raise PlannerInputError("initial_window_remaining_minutes must be an int in 0..60")
+    if planner.initial_window_remaining_minutes > planner.battery_min_window_minutes:
+        raise PlannerInputError("initial_window_remaining_minutes must not exceed battery_min_window_minutes")
+    if planner.initial_window_remaining_minutes > 0 and planner.initial_window_mode is None:
+        raise PlannerInputError("initial_window_remaining_minutes > 0 requires initial_window_mode")
     _require_finite("soc_bucket_kwh", planner.soc_bucket_kwh, 1e-6)
     if not slots or len(slots) > 576 or (planner.beam_width is None and len(slots) > 12):
         raise PlannerInputError("Horizon must have 1..576 slots (at most 12 for exhaustive search)")
@@ -304,7 +340,16 @@ def _bucket(value, width):
 
 @dataclass(slots=True)
 class _Node:
-    """One retained search label, including the EV's execution-relevant temporal state."""
+    """One retained search label, including the EV's execution-relevant temporal state.
+
+    `mode` and `mode_remaining_minutes` carry the minimum-mode-window state:
+    the battery mode currently in effect for the next slot expansion and the
+    minutes left in its current window. Without an explicit initial commitment,
+    the default 5-minute window retains the original search shape and dedup key.
+    When `battery_min_window_minutes` is greater than 5 these fields
+    participate in the dedup key to keep semantically distinct commitments
+    from collapsing in `_prune`.
+    """
 
     battery_kwh: float
     ev_kwh: float
@@ -314,6 +359,8 @@ class _Node:
     switches: int = 0
     parent: Optional["_Node"] = None
     action: Optional[SlotAction] = None
+    mode: Optional[str] = None
+    mode_remaining_minutes: float = 0
 
 
 def _segment(duration, house_kw, ev_kw, pv_kw, soc, mode, battery, ev, site):
@@ -521,6 +568,15 @@ def plan(slots: Sequence[Slot], ev: EVConfig, battery: BatteryConfig, site: Site
     _validate(slots, ev, battery, site, planner)
     base_modes = tuple(planner.allowed_battery_modes)
     modes = base_modes + ((BATTERY_LIMITED_DEMAND,) if planner.allow_limited_discharge and BATTERY_LIMITED_DEMAND not in base_modes else ())
+    min_window = planner.battery_min_window_minutes
+    # Only partition the dedup key by mode/remaining when the window
+    # actually restricts the search. With the default 5-minute window and
+    # any horizon, slot_duration >= 5 so the remaining minutes always fall to
+    # zero after one slot, the new key components would carry no information,
+    # and adding them would silently change the dedup partition (and therefore
+    # the pruning frontier). Gate the new key components on a window strictly
+    # larger than 5 so the default reproduces the previous solver exactly.
+    windowed_dedup = min_window > 5
     required_end = _reachable_floor_envelope(slots, battery, site)
     deadline_idx = _deadline_slot_index(slots, ev.deadline_min)
     future = [0.0] * (len(slots) + 1)
@@ -530,14 +586,37 @@ def plan(slots: Sequence[Slot], ev: EVConfig, battery: BatteryConfig, site: Site
         future[i] = future[i + 1] + available_minutes / 60 * ev.rate_kw * ev.efficiency
     if ev.start_soc_kwh + future[0] < ev.stop_soc_kwh - EPSILON:
         return _bounded_no_plan(deadline_idx, 0, 0, "insufficient_available_charging_time")
-    frontier = [_Node(battery.initial_kwh, ev.start_soc_kwh, ev.initially_on, min(ev.initial_off_minutes, ev.min_off_minutes))]
+    initial_mode = planner.initial_window_mode
+    initial_remaining = planner.initial_window_remaining_minutes
+    # An explicit initial commitment also applies at min=5. Without one, the
+    # compatibility default retains the original frontier and dedup shape.
+    initial_carry_mode = initial_mode if windowed_dedup or initial_remaining else None
+    initial_carry_remaining = initial_remaining
+    frontier = [
+        _Node(
+            battery.initial_kwh,
+            ev.start_soc_kwh,
+            ev.initially_on,
+            min(ev.initial_off_minutes, ev.min_off_minutes),
+            mode=initial_carry_mode,
+            mode_remaining_minutes=initial_carry_remaining,
+        )
+    ]
     max_frontier = 1
     transitions = 0
     pruned = False
     for i, slot in enumerate(slots):
         next_states = {}
         for node in frontier:
-            for mode in (planner.initial_battery_mode,) if i == 0 and planner.initial_battery_mode is not None else modes:
+            if node.mode_remaining_minutes > 0:
+                allowed_modes = (node.mode,)
+            elif i == 0 and planner.initial_battery_mode is not None:
+                allowed_modes = (planner.initial_battery_mode,)
+            else:
+                allowed_modes = modes
+            if i == 0 and planner.initial_battery_mode is not None:
+                allowed_modes = tuple(mode for mode in allowed_modes if mode == planner.initial_battery_mode)
+            for mode in allowed_modes:
                 for on in (True,) if i == 0 and planner.require_ev_start else (False, True):
                     if on and planner.solar_ev_only and (mode != BATTERY_DEMAND or slot.pv_kwh - slot.ac_load_kwh < ev.rate_kw * slot.duration_min / 60 - EPSILON):
                         continue
@@ -554,10 +633,38 @@ def plan(slots: Sequence[Slot], ev: EVConfig, battery: BatteryConfig, site: Site
                     on_end = action.ev_on_minutes >= slot.duration_min - EPSILON and action.ev_on_minutes > 0
                     off_minutes = slot.duration_min - action.ev_on_minutes if action.ev_on_minutes else (0 if node.on else node.off_minutes) + slot.duration_min
                     off_minutes = 0 if on_end else min(off_minutes, ev.min_off_minutes)
-                    new = _Node(action.battery_soc_kwh_end, action.ev_soc_kwh_end, on_end, off_minutes, node.cost + action.slot_cost, node.switches + int(on != node.on), node, action)
+                    # The chosen mode persists into the next step for as long
+                    # as the new window has minutes left. Carried-over time
+                    # (from the parent) is decremented first; a freshly
+                    # different mode starts with the full min_window minus
+                    # this slot. Continuing a mature mode never renews its lock.
+                    # The final run can continue beyond the bounded horizon.
+                    if windowed_dedup:
+                        if mode == node.mode:
+                            next_remaining = max(0.0, node.mode_remaining_minutes - slot.duration_min)
+                        else:
+                            next_remaining = max(0.0, float(min_window) - float(slot.duration_min))
+                        next_mode = mode
+                    else:
+                        next_remaining = 0.0
+                        next_mode = None
+                    new = _Node(
+                        action.battery_soc_kwh_end,
+                        action.ev_soc_kwh_end,
+                        on_end,
+                        off_minutes,
+                        node.cost + action.slot_cost,
+                        node.switches + int(on != node.on),
+                        node,
+                        action,
+                        mode=next_mode,
+                        mode_remaining_minutes=next_remaining,
+                    )
                     # Exact search does not bucket unequal physical states together.
                     energy_key = (new.battery_kwh, new.ev_kwh) if planner.beam_width is None else (_bucket(new.battery_kwh, planner.soc_bucket_kwh), _bucket(new.ev_kwh, planner.soc_bucket_kwh))
                     key = energy_key + (on_end, off_minutes)
+                    if windowed_dedup:
+                        key = key + (new.mode, new.mode_remaining_minutes)
                     existing = next_states.get(key)
                     rank = (new.cost - battery.terminal_value_per_kwh * new.battery_kwh, new.switches)
                     if existing is None or rank < (existing.cost - battery.terminal_value_per_kwh * existing.battery_kwh, existing.switches):

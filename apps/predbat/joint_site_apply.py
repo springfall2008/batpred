@@ -116,6 +116,9 @@ def execution_fingerprint(base):
     from joint_site_native import _ev_charging_priority
 
     payload["ev_charging_priority"] = _ev_charging_priority(base)
+    from joint_site_battery_window import selected_window_minutes
+
+    payload["battery_min_window_minutes"] = selected_window_minutes(base)
     if payload["ev_charging_priority"] == "solar":
         payload["solar_meter_mapping"] = {name: base.args.get(name) for name in ("pv_power", "load_power", "load_power_invert", "deye_entity_prefix")}
         payload["solar_conversion"] = {name: getattr(base, name, None) for name in ("inverter_hybrid", "pv_ac_limit")}
@@ -353,6 +356,10 @@ def _candidate(base, pending, inverter, now, minute):
     _require(0 <= (now - _stamp(report["generated_at"])).total_seconds() <= RECEIPT_TTL_SECONDS, "candidate_stale_or_future")
     _require(pending.get("fingerprint") == execution_fingerprint(base), "configuration_changed")
     _require(pending["options"]["ev_charging_priority"] == _ev_charging_priority(base), "charging_priority_changed_during_planning")
+    from joint_site_battery_window import selected_window_minutes, commands_respect_windows, observed_window, command_mode, planning_window
+
+    minimum_window = selected_window_minutes(base)
+    _require(pending["options"].get("battery_min_window_minutes", 5) == minimum_window, "battery_window_changed_during_planning")
     closed = now >= _stamp(pending["options"]["settings"]["session"]["departure"])
     _require(report.get("session_closed", False) is closed, "session_phase_changed")
     _require(_finite(pending.get("initial_battery_soc_kwh"), base.reserve, base.soc_max), "initial_domestic_soc_missing")
@@ -369,6 +376,18 @@ def _candidate(base, pending, inverter, now, minute):
         _require(type(command.get("start")) is int and type(command.get("end")) is int, "invalid_command_time")
         _require(command.get("start") == base.minutes_now + index * PREDICT_STEP and command.get("end") == command["start"] + PREDICT_STEP, "command_timeline_mismatch")
     command = commands[0]
+    # Recheck live continuity, not the staging copy. Drift releases the old
+    # commitment: the candidate must then satisfy a fresh full minimum window.
+    current_mode, current_remaining = planning_window(base, base.now_utc, now, minimum_window)
+    _require(
+        commands_respect_windows(commands, minimum_window, current_mode, current_remaining),
+        "battery_window_candidate_invalid",
+    )
+    previous_window = observed_window(base, now) if minimum_window > 5 else None
+    _require(
+        not previous_window or command_mode(command) == previous_window["mode"] or now >= _stamp(previous_window["started_at"]) + timedelta(minutes=minimum_window),
+        "battery_window_still_active",
+    )
     _require(command["start"] <= minute < command["end"], "current_command_expired")
     if pending["options"]["ev_charging_priority"] == "now" and not closed and pending["options"]["ev_soc"] < base.car_charging_limit[0] - 0.002:
         _require(command["ev_on"], "immediate_start_not_validated")
@@ -469,6 +488,7 @@ def _blocked(base, reason, attempted=False):
 def _withdraw_for_household(base, reason, attempted=False):
     """Withdraw EV authority, then require observed relay OFF before the sole native handback."""
     base.joint_site_execution = None
+    base.joint_battery_window = None
     base.joint_site_pending = None
     base.car_charging_slots = [[] for _ in range(PREDBAT_MAX_CARS)]
     try:
@@ -540,6 +560,9 @@ def execute_joint_site(base):
             # actual OFF observation before withdrawing battery support.
             return _blocked(base, "waiting_for_ev_relay_off")
         target, freeze, power = _intent(command, inverter, bool(options.get("grid_charge_support_w")))
+        from joint_site_battery_window import observed_window, record_observed_window
+
+        previous_window = observed_window(base, now)
         base.inverter_rate_intent = {}
         # No call to the adapter directly: this is the same native entry point
         # whose optional DEYE implementation owns all physical service writes.
@@ -591,6 +614,7 @@ def execute_joint_site(base):
             "solar_observation": solar,
         }
         base.isCharging = target > 0 or freeze
+        record_observed_window(base, command, now, previous_window)
         base.isExporting = False
         _publish_ev(base, run, now, expires)
         _report(base, "applied", True, "inverter_observed_not_hardware_confirmed", attempted=True)

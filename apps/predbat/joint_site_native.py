@@ -165,6 +165,7 @@ def _options(base):
         "execution_authorised",
         "connection_error_acknowledgement",
         "ev_charging_priority",
+        "battery_min_window_minutes",
         "self_consumption_first",
         "household_fallback",
         "home_entity",
@@ -184,6 +185,9 @@ def _options(base):
     ev_priority = _ev_charging_priority(base)
     if ev_priority not in ("cost", "asap", "now", "solar"):
         raise ValueError("EV charging priority must be cost, asap, now or solar")
+    from joint_site_battery_window import selected_window_minutes, planning_window
+
+    battery_min_window = selected_window_minutes(base)
     if ev_priority in ("asap", "now", "solar") and (control_model != "deye_solarman" or not settings.get("grid_charge_support")):
         raise ValueError("ASAP, NOW and SOLAR charging require shared grid-support controls")
     self_consumption_first = settings.get("self_consumption_first", False)
@@ -259,6 +263,7 @@ def _options(base):
     # later in that block is NOT future-dated. Read the observation clock after
     # the cached states so a concurrent HA update is compared with current time.
     observed_now = _aware(_observation_clock(), "observation_clock")
+    initial_window_mode, initial_window_remaining = planning_window(base, now, observed_now, battery_min_window)
     manual_target_active = bool(getattr(base, "car_charging_manual_soc", None) and base.car_charging_manual_soc and base.car_charging_manual_soc[0])
     manual_target_kwh = None
     if manual_target_active:
@@ -409,6 +414,9 @@ def _options(base):
         "control_model": control_model,
         "grid_charge_support_w": support_w,
         "ev_charging_priority": ev_priority,
+        "battery_min_window_minutes": battery_min_window,
+        "initial_window_mode": initial_window_mode,
+        "initial_window_remaining_minutes": initial_window_remaining,
         "self_consumption_first": self_consumption_first,
         "deadline": end_offset,
         "departure_passed": departure <= observed_now,
@@ -601,6 +609,9 @@ def build_candidate(base, options):
             initial_battery_mode="demand" if options.get("initial_demand_only") else None,
             require_ev_start=options.get("ev_charging_priority") == "now" and not options.get("house_only") and options["ev_soc"] < base.car_charging_limit[0] - 0.002,
             solar_ev_only=options.get("ev_charging_priority") == "solar",
+            battery_min_window_minutes=options.get("battery_min_window_minutes", 5),
+            initial_window_mode=options.get("initial_window_mode"),
+            initial_window_remaining_minutes=options.get("initial_window_remaining_minutes", 0),
         ),
     )
     return result, slots
@@ -1036,6 +1047,10 @@ def evaluate_joint_site(base, publish=True):
             "control_model": options["control_model"],
             "grid_charge_support_w": options["grid_charge_support_w"],
             "ev_charging_priority": options["ev_charging_priority"],
+            "battery_min_window_minutes": options["battery_min_window_minutes"],
+            "battery_window_initial_mode": options["initial_window_mode"],
+            "battery_window_remaining_minutes": options["initial_window_remaining_minutes"],
+            "battery_window_policy": "minimum_mode_duration_no_silent_relaxation_safety_gates_take_precedence",
             "self_consumption_first": options["self_consumption_first"],
             "grid_charge_support_convention": "charge_request_with_load_priority_and_bounded_battery_support" if options["grid_charge_support_w"] else "disabled",
             "confirmed_observation": options["confirmed_observation"],

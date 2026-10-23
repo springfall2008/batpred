@@ -1029,6 +1029,14 @@ CONFIG_ITEMS = [
         "default": 10,
     },
     {
+        "name": "joint_battery_min_window_minutes",
+        "friendly_name": "Joint battery minimum window (minutes)",
+        "type": "select",
+        "options": ["5", "15", "30", "60"],
+        "icon": "mdi:timer-outline",
+        "default": "30",
+    },
+    {
         "name": "combine_charge_slots",
         "friendly_name": "Combine Charge Slots",
         "type": "switch",

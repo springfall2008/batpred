@@ -72,6 +72,8 @@ def _setup(base, pv=0, minutes=60):
     base.pv_forecast_minute90_step = pred.pv_forecast_minute90_step
     base.args["joint_site"] = {
         "mode": "shadow",
+        # These established scenarios model an explicitly retained pre-existing setting.
+        "battery_min_window_minutes": 5,
         "load_port_limit_w": 10000,
         "session": {
             "available_from": base.now_utc.isoformat(),
