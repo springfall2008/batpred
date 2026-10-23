@@ -1,0 +1,1590 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Discovery Reporter Rollout — Plan 2: AlphaESS, Solis, Deye and Sunsynk - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Discovery Reporter Rollout \u2014 Plan 2: AlphaESS, Solis, Deye and Sunsynk";
+        var mkdocs_page_input_path = "superpowers/plans/2026-09-21-discovery-reporters-alphaess-solis-deye-sunsynk.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../discovery-catalogue/">Discovery Catalogue</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Discovery Reporter Rollout — Plan 2: AlphaESS, Solis, Deye and Sunsynk</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="discovery-reporter-rollout-plan-2-alphaess-solis-deye-and-sunsynk">Discovery Reporter Rollout — Plan 2: AlphaESS, Solis, Deye and Sunsynk</h1>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Goal:</strong> Give AlphaESS, Solis Cloud, Deye Cloud and Sunsynk Cloud each an observe-only <code>build_discovery()</code> reporter, so the discovery catalogue covers the large majority of Predbat's cloud inverter base rather than GivEnergy and Fox alone.</p>
+<p><strong>Architecture:</strong> Each component gets one <code>build_discovery()</code> method that reads only state it already holds and builds records with the shared <code>inverter_record()</code>, plus one <code>self.refresh_discovery()</code> call in <code>run()</code> placed right after the cycle's publish and before any later early return. The four are independent: Deye and Sunsynk are hardware siblings but their data structures diverge (station grouping, export limit, telemetry shape, capacity derivation), so each reads its own attributes — no shared helper.</p>
+<p><strong>Tech Stack:</strong> Python 3.14, no new dependencies. Tests via <code>coverage/run_all</code>, quality via <code>coverage/run_pre_commit</code>.</p>
+<p><strong>Spec:</strong> <code>docs/superpowers/specs/2026-09-10-discovery-catalogue-design.md</code>, the reporter contract in <code>docs/discovery-catalogue.md</code> ("Writing a reporter"), and the rules learnt from Plan 1 in <code>docs/superpowers/plans/2026-09-20-discovery-reporter-rollout.md</code> (Global Constraints and Amendments).</p>
+<p><strong>Depends on:</strong> PR #5184 (the Fox reporter and the amended rollout plan), merged 2026-09-24. This plan was executed on a branch stacked on it, as PR #5206.</p>
+<h2 id="amendments">Amendments</h2>
+<p><em>Recorded 2026-09-24, after all five tasks were executed, the branch was reviewed as a whole, and PR #5206 had its first review. The working notes these rulings were made in are not committed, so they are copied here. The committed code is authoritative. Task 2's Solis code and test blocks below have been corrected to match it, since their superseded figures were the most likely to mislead. The other tasks' blocks still show the code as planned, and this list gives how they differ.</em></p>
+<p>Made during execution:</p>
+<ul>
+<li><strong>Task 2's fixture binds the real <code>SolisAPI.is_tou_v2_mode</code>.</strong> <code>MockSolisAPI.is_tou_v2_mode</code> returns a <code>_test_v2_mode</code> attribute and ignores the cached 43605 register the fixture sets, so the <code>tou_v2</code> assertion could never pass. The fixture binds the production method onto its instance with <code>__get__</code>, as the file already does for <code>automatic_config</code>.</li>
+<li><strong>Task 4's docstring states that Sunsynk excludes no device.</strong> Neither discovery nor <code>automatic_config()</code> filters Sunsynk devices, which Task 4's Background required saying and its code block omitted.</li>
+<li><strong>Task 5's paragraph sits after the "What each section describes" table.</strong> The anchor Step 2 named was the <code>inverters</code> row of that table, and a paragraph cannot go inside a table row.</li>
+</ul>
+<p>From the whole-branch review (commit 82fd66b2):</p>
+<ul>
+<li><strong>Solis <code>battery_capacity_ah</code> is the bank total</strong>, register 172 × <code>parallel_battery_count</code>, as <code>publish_entities()</code> computes it. As planned it was the per-pack figure, while Deye and Sunsynk report the whole bank under the same key.</li>
+<li><strong>Derived <code>battery_kwh</code> is rounded to 2 dp</strong> in the Solis and Sunsynk reporters. Deye already rounded.</li>
+<li><strong>A Solis inverter whose detail has not been read reports no <code>functions</code>.</strong> As planned it showed <code>["solar"]</code>, which reads as PV-only when <code>automatic_config()</code> treats the same state as "not read yet".</li>
+<li><strong>Two more Solis wiring tests.</strong> One checks that <code>run()</code> files a report with the auto-configure gate closed. The other checks that a changed fact is re-filed on a later cycle (<code>first=False</code>).</li>
+<li><strong>Docstring and docs wording.</strong> Sunsynk's <code>export_limit</code> is the per-device half of <code>automatic_config()</code>'s fleet-wide test. The Deye and Sunsynk / PV-only docs paragraph says records follow configuration, not hardware evidence, and how a misconfigured PV-only unit shows.</li>
+</ul>
+<p>From the first review of PR #5206:</p>
+<ul>
+<li><strong>Sunsynk keeps its last battery ratings through a partial poll.</strong> <code>fetch_device_data()</code> rebuilds <code>device_values</code> every poll and leaves out a field the battery endpoint did not return. <code>publish_data()</code> then leaves the <code>battery_capacity</code> sensor, and so <code>soc_max</code>, at its last value. The reporter now does the same (<code>_discovery_battery_ratings</code>) instead of filing a thinner report. The whole-branch review had accepted the drop-out, but it made the catalogue less stable than what Predbat uses.</li>
+<li><strong><code>nominal_pack_voltage()</code> warns once per <code>chargeVolt</code> it cannot place.</strong> Task 4's Background said it does not log, which was wrong: it logged a <code>Warn</code> on every call for a charge voltage that fits no LiFePO4 stack. That happened twice a cycle through <code>publish_data()</code>, and three times with the reporter.</li>
+</ul>
+<h2 id="global-constraints">Global Constraints</h2>
+<p>Copied verbatim from Plan 1's Global Constraints — they bind every task here:</p>
+<ul>
+<li><strong>Observe-only.</strong> Nothing in this plan may change any component's behaviour. No task writes <code>self.args</code>, calls <code>set_arg_auto()</code>, publishes an entity, or alters an existing control path. A reporter reads state that already exists.</li>
+<li><strong>A reporter never degrades its component.</strong> Never call <code>non_fatal_error_occurred()</code> from discovery code: it sets <code>base.had_errors</code>, which makes <code>update_pred()</code> skip <code>record_status()</code> and suppress the run notification. <code>ComponentBase.refresh_discovery()</code> already catches and logs; do not add a second try/except around it.</li>
+<li><strong>A reporter is <code>build_discovery()</code> plus one unconditional <code>self.refresh_discovery()</code> call in <code>run()</code>.</strong> Do not add a marker attribute, a state-key snapshot, or a try/except — <code>ComponentBase.refresh_discovery()</code> owns all of that. Return <code>None</code> from <code>build_discovery()</code> when there is nothing to describe yet.</li>
+<li><strong>Report only entities that exist.</strong> Build descriptors and pass them through <code>self.discovery_entities(descriptors)</code>, which keeps only those Home Assistant has actually seen.</li>
+<li><strong>Never invent a record to satisfy a cross-link.</strong> A dangling <code>measures_meter</code> is correct; a fabricated <code>meters</code> record is not.</li>
+<li><strong>Typed containers.</strong> <code>ratings</code> accepts numbers and booleans ONLY. <code>info</code> accepts bounded vendor strings. <code>hardware_ids</code> accepts bounded strings. <code>account_ids</code> is pseudonymised on output. <code>functions</code>/<code>capabilities</code>/<code>flags</code>/<code>effects</code> are lists of lowercase tokens matching <code>^[a-z0-9_]{1,32}$</code>. A value that does not fit its container is silently dropped by <code>validate_report()</code> — so putting a model name in <code>ratings</code> means losing it.</li>
+<li><strong>Call <code>refresh_discovery()</code> as soon as the discovery data is in hand</strong> - before the component's <code>automatic_config()</code> and before any later early return. <code>automatic_config()</code> can raise, and a report filed after it is never filed on the installs whose dump most needs one. Every wiring test includes a cycle where auto-config fails.</li>
+<li><strong>Set <code>inverter_type</code> using exactly the predicate the vendor's own <code>automatic_config()</code> uses to count a device as an inverter</strong>, duplicated with a comment naming <code>automatic_config()</code> as the source of truth, and test a device that predicate excludes.</li>
+<li><strong>Build fixtures from the module's real API samples and existing fixtures, units included; never invent them.</strong> Docstring samples, captured test fixtures, and real responses recorded in issues are the sources.</li>
+<li><strong>Any number reported as evidence must be able to distinguish the cases it claims to.</strong> Where the vendor figure is known to be wrong, name the rating after what the API returned, not after the true quantity it fails to measure.</li>
+<li><strong>Every reporter gets a test that pushes its report through <code>validate_report()</code></strong> and requires every record back unchanged.</li>
+<li><strong>Station/plant/site IDs go in <code>account_ids</code>; site NAMES never go in <code>info</code>.</strong> A site name is user-authored free text that can hold a street address, and <code>info</code>'s guards (a length cap, no <code>@</code>) would let one through.</li>
+<li><strong>Use the spec's capability tokens where one exists</strong> (<code>schedule</code>, <code>pause_mode</code>, <code>pause_slots</code>, <code>target_soc</code>, <code>discharge_target</code>, <code>charge_rate_power</code>, <code>charge_rate_percent</code>, <code>soh</code>). A fact about topology rather than something the device can do is a flag, not a capability.</li>
+<li><strong>Firmware goes in <code>info["firmware"]</code></strong>, flattened to one string when the vendor reports a version per board.</li>
+<li><strong>Comments cite symbols, not line numbers.</strong> A line number is wrong after the next edit above it.</li>
+<li><strong>Line length:</strong> 256 (Black), 250 (Flake8).</li>
+<li><strong>Docstrings:</strong> every function and class needs one (<code>interrogate</code>, 100%).</li>
+<li><strong>Spelling:</strong> British English via cspell. Add genuinely new words to <code>.cspell/custom-dictionary-workspace.txt</code> (auto-sorted on commit, so re-stage after).</li>
+<li><strong><code>git add</code> new files BEFORE running pre-commit.</strong> <code>--all-files</code> means git-tracked only, so an untracked new test file passes unchecked.</li>
+<li><strong>Tests run from <code>coverage/</code>:</strong> <code>./run_all --test &lt;name&gt;</code>. Save output to a file and grep it; do not pipe to grep directly.</li>
+<li><strong>Scope <code>git add</code> to the files you changed.</strong> A GitNexus re-index can regenerate banners into <code>CLAUDE.md</code>/<code>AGENTS.md</code>/<code>.claude/skills/**</code>; never commit those incidentally.</li>
+</ul>
+<p>Added for this plan:</p>
+<ul>
+<li><strong>No entity maps.</strong> Decided 2026-09-21: reporters ship without <code>entities</code>. Each integration's <code>automatic_config()</code> already maps Predbat's controls to its entities, but extracting that table into a shared constant touches a control path, which this observe-only rollout may not do. Entity maps are a separate later project.</li>
+<li><strong>No new API calls.</strong> A reporter reads only what the component already holds. Where a component does not hold a fact (a model, a firmware version, a station ID), the record omits it. Never add a fetch, and never read a response that the component fetches and then discards.</li>
+<li><strong>Report only stable facts.</strong> <code>refresh_discovery()</code> compares each whole report with the last one filed, so a value that moves from cycle to cycle — state of charge, live power, a status string — would re-file the report every cycle. Report ratings, identity, capabilities and topology; never telemetry or status.</li>
+<li><strong>Call only side-effect-free helpers from <code>build_discovery()</code>.</strong> A helper that logs or writes state (Deye's <code>derive_battery_capacity()</code> does both) would log once a minute. Each task names the pure accessors to use.</li>
+<li><strong>None of these four <code>automatic_config()</code> methods raises.</strong> The placement rule still holds, but for a different reason than Fox: AlphaESS, Deye and Sunsynk each return early with <code>if first and not live_ok: return False</code> after publishing and before <code>automatic_config()</code>, and Solis gates <code>automatic_config()</code> on its own state. Each placement comment states the component's real reason — never "because automatic_config() raises". The wiring test's "cycle where auto-config fails" is therefore each component's own early exit: the first cycle whose live telemetry fails, or <code>automatic_config()</code> configuring nothing.</li>
+</ul>
+<hr />
+<h2 id="research-basis">Research basis</h2>
+<p>Every fact below was established by reading the source, with the sample quoted where one exists. Where the repository holds no real sample, the task says so and the fixture is marked as derived, with its derivation.</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>AlphaESS</th>
+<th>Solis</th>
+<th>Deye</th>
+<th>Sunsynk</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>inverter_type</code> written by <code>automatic_config()</code></td>
+<td><code>"AlphaESSCloud"</code></td>
+<td><code>"SolisCloud"</code></td>
+<td><code>"DeyeCloud"</code></td>
+<td><code>"SunsynkCloud"</code></td>
+</tr>
+<tr>
+<td>Predicate for "an inverter it configures"</td>
+<td>every serial in <code>device_list</code> (<code>has_battery()</code> — <code>cobat &gt; 0</code> — already filtered at discovery)</td>
+<td>not <code>_reports_no_battery(detail)</code> AND <code>batteryHealthSoh</code> parses as a number</td>
+<td>every serial in <code>device_list</code> (<code>deviceType == "INVERTER"</code> at discovery)</td>
+<td>every serial in <code>device_list</code> (no filter)</td>
+</tr>
+<tr>
+<td><code>automatic_config()</code> raises?</td>
+<td>no</td>
+<td>no</td>
+<td>no</td>
+<td>no</td>
+</tr>
+<tr>
+<td><code>device_list</code> / fleet shape</td>
+<td>list of serial strings</td>
+<td><code>inverter_sn</code>: list of serial strings</td>
+<td>list of serial strings</td>
+<td>list of serial strings</td>
+</tr>
+<tr>
+<td>Model held</td>
+<td><code>minv</code>, <code>mbat</code></td>
+<td><code>productModel</code></td>
+<td>none</td>
+<td>none</td>
+</tr>
+<tr>
+<td>Firmware held</td>
+<td>none</td>
+<td>none</td>
+<td>none</td>
+<td>none</td>
+</tr>
+<tr>
+<td>Station/site ID held</td>
+<td>none</td>
+<td>none</td>
+<td><code>station_ids</code></td>
+<td>none</td>
+</tr>
+<tr>
+<td>Early return after publish</td>
+<td><code>if first and not live_ok</code></td>
+<td>none (gated <code>automatic_config()</code>)</td>
+<td><code>if first and not live_ok</code></td>
+<td><code>if first and not live_ok</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="file-structure">File Structure</h2>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Change</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>apps/predbat/alphaess.py</code></td>
+<td>add <code>build_discovery()</code>; add <code>refresh_discovery()</code> call in <code>run()</code></td>
+</tr>
+<tr>
+<td><code>apps/predbat/solis.py</code></td>
+<td>add <code>build_discovery()</code>; add <code>refresh_discovery()</code> call in <code>run()</code></td>
+</tr>
+<tr>
+<td><code>apps/predbat/deye.py</code></td>
+<td>add <code>build_discovery()</code>; add <code>refresh_discovery()</code> call in <code>run()</code></td>
+</tr>
+<tr>
+<td><code>apps/predbat/sunsynk.py</code></td>
+<td>add <code>build_discovery()</code>; add <code>refresh_discovery()</code> call in <code>run()</code></td>
+</tr>
+<tr>
+<td><code>apps/predbat/tests/test_alphaess_api.py</code></td>
+<td>reporter tests, registered in <code>run_alphaess_api_tests()</code></td>
+</tr>
+<tr>
+<td><code>apps/predbat/tests/test_solis.py</code></td>
+<td>reporter tests, registered in <code>run_solis_tests()</code></td>
+</tr>
+<tr>
+<td><code>apps/predbat/tests/test_deye_api.py</code></td>
+<td>reporter tests, registered in <code>run_deye_api_tests()</code></td>
+</tr>
+<tr>
+<td><code>apps/predbat/tests/test_sunsynk_config.py</code></td>
+<td>reporter tests, registered in <code>run_sunsynk_config_tests()</code></td>
+</tr>
+<tr>
+<td><code>docs/discovery-catalogue.md</code></td>
+<td>the four new reporters</td>
+</tr>
+</tbody>
+</table>
+<p>Each reporter's tests go in the file that already holds that component's real-sample fixtures and its <code>run()</code>-driving harness.</p>
+<hr />
+<h2 id="task-1-the-alphaess-reporter">Task 1: The AlphaESS reporter</h2>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/alphaess.py</code> (<code>AlphaESSAPI</code>: add <code>build_discovery()</code>; one call in <code>run()</code>)
+- Test: <code>apps/predbat/tests/test_alphaess_api.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>inverter_record(device_id, *, ...)</code> from <code>coordinator.py</code>; <code>ComponentBase.refresh_discovery()</code>.
+- Produces: <code>AlphaESSAPI.build_discovery() -&gt; dict | None</code>.</p>
+<p><strong>Background (verified):</strong>
+- <code>self.device_list</code> is a list of serial <strong>strings</strong> (<code>sysSn</code>) — not dicts like Fox's. Iterate <code>for sn in self.device_list:</code> and read <code>self.device_detail.get(sn, {})</code>, the raw <code>getEssList</code> entry.
+- Only systems that passed <code>has_battery()</code> (<code>cobat &gt; 0</code>) reach <code>device_list</code> and <code>device_detail</code>; a battery-less system (the VT1000 family) is dropped in <code>get_device_list()</code>. <code>automatic_config()</code> then registers <strong>every</strong> serial as <code>"AlphaESSCloud"</code> with no further test — so every reported system gets that <code>inverter_type</code>.
+- The real <code>getEssList</code> sample is <code>ESS_LIST_SAMPLE</code> in <code>test_alphaess_api.py</code>: <code>popv</code> (PV rating, kW), <code>poinv</code> (inverter rating, kW), <code>cobat</code> (battery, kWh), <code>minv</code> (inverter model), <code>mbat</code> (battery model), plus <code>surplusCobat</code>, <code>usCapacity</code> and <code>emsStatus</code>.
+- Pure accessors: <code>inverter_limit(sn)</code> returns <code>poinv * 1000</code> W; <code>battery_capacity(sn)</code> returns <code>cobat</code> kWh; <code>_as_float(value, default)</code> is a static helper. All read <code>device_detail</code> only.
+- <code>self._ev_present</code> is <code>{sn: True|False}</code>, set only from live telemetry (<code>_apply_live_payload()</code>), never from the history fallback. Absent means not yet seen.
+- Capabilities are static for the type (<code>INVERTER_DEF["AlphaESSCloud"]</code>): timed charge/discharge windows (<code>schedule</code>), target SoC (<code>target_soc</code>), reserve/discharge floor (<code>discharge_target</code>), rate as a power (<code>charge_rate_power</code>). There is no pause endpoint and no SoH field.
+- <code>run()</code> publishes with <code>await self.publish_data()</code>, then returns early with <code>if first and not live_ok: return False</code> (deferring startup when the first telemetry poll fails), then <code>if first and self.automatic: await self.automatic_config()</code>.
+- Not held, so not reported: firmware (the API exposes none); any station/site ID (every endpoint is keyed by <code>sysSn</code>); an AC-coupled verdict (<code>detect_ac_coupled()</code> infers it live, and <code>ALPHAESS_AC_COUPLED_MODELS</code> ships empty on purpose).
+- Deliberately not reported although held: <code>emsStatus</code> (a status that changes — would re-file the report); <code>usCapacity</code>/<code>surplusCobat</code> (they fit "current SoC" and "configured usable depth" equally well, which is why <code>publish_data()</code> never maps them to SoC).</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<p>Add to <code>apps/predbat/tests/test_alphaess_api.py</code>, after <code>test_alphaess_run_defers_startup_without_telemetry()</code>. Add <code>from coordinator import validate_report</code> to the imports at the top of the file.</p>
+<pre><code class="language-python">def _alphaess_discovered(payload):
+    &quot;&quot;&quot;A MockAlphaESS whose get_device_list() has run against the given getEssList payload, as refresh_static() does.&quot;&quot;&quot;
+    client = MockAlphaESS()
+    session = create_aiohttp_mock_session(create_aiohttp_mock_response(status=200, json_data=_envelope(200, payload)))
+    with patch(&quot;alphaess.aiohttp.ClientSession&quot;, return_value=session):
+        run_async_local(client.get_device_list())
+    return client
+
+
+def test_alphaess_catalogue_describes_each_system():
+    &quot;&quot;&quot;Each battery system becomes one AlphaESSCloud record carrying getEssList's own ratings and models.
+
+    Built from the real ESS_LIST_SAMPLE plus the two battery-less VT1000 entries the discovery tests
+    already use: get_device_list() drops those at discovery, so they must never be reported.
+    &quot;&quot;&quot;
+    failed = False
+    payload = list(ESS_LIST_SAMPLE) + [
+        {&quot;sysSn&quot;: &quot;VT100000000001&quot;, &quot;minv&quot;: &quot;VT1000&quot;, &quot;poinv&quot;: 0.8, &quot;popv&quot;: 0.8, &quot;cobat&quot;: 0},
+        {&quot;sysSn&quot;: &quot;VT100000000002&quot;, &quot;minv&quot;: &quot;VT1000&quot;, &quot;poinv&quot;: 0.8, &quot;popv&quot;: 0.8},
+    ]
+    client = _alphaess_discovered(payload)
+    report = client.build_discovery()
+    by_id = {record[&quot;device_id&quot;]: record for record in report[&quot;inverters&quot;]}
+    if set(by_id) != {&quot;alphaess:AL70110230306xx&quot;, &quot;alphaess:AL70110230302xx&quot;}:
+        print(&quot;ERROR: expected exactly the two battery systems, got {}&quot;.format(sorted(by_id)))
+        return True
+    first = by_id[&quot;alphaess:AL70110230306xx&quot;]
+    checks = [
+        (first[&quot;inverter_type&quot;], &quot;AlphaESSCloud&quot;),
+        (first[&quot;composition&quot;], &quot;direct&quot;),
+        (first[&quot;functions&quot;], [&quot;solar&quot;, &quot;battery&quot;]),
+        (first[&quot;hardware_ids&quot;], {&quot;serial&quot;: &quot;AL70110230306xx&quot;}),
+        (first[&quot;info&quot;], {&quot;model&quot;: &quot;SMILE5-INV&quot;, &quot;battery_model&quot;: &quot;SMILE-BAT-13.3P&quot;}),
+        (first[&quot;ratings&quot;], {&quot;inverter_w&quot;: 5000.0, &quot;pv_w&quot;: 9000.0, &quot;battery_kwh&quot;: 13.34}),
+        (sorted(first[&quot;capabilities&quot;]), [&quot;charge_rate_power&quot;, &quot;discharge_target&quot;, &quot;schedule&quot;, &quot;target_soc&quot;]),
+        (by_id[&quot;alphaess:AL70110230302xx&quot;][&quot;ratings&quot;][&quot;battery_kwh&quot;], 10.1),
+    ]
+    for actual, expected in checks:
+        if actual != expected:
+            print(&quot;ERROR: expected {!r}, got {!r}&quot;.format(expected, actual))
+            failed = True
+    for record in report[&quot;inverters&quot;]:
+        if &quot;account_ids&quot; in record or &quot;firmware&quot; in record.get(&quot;info&quot;, {}):
+            print(&quot;ERROR: AlphaESS holds no station ID or firmware, so none may be reported: {}&quot;.format(record))
+            failed = True
+        flat = str(record)
+        for held_but_unreported in (&quot;emsStatus&quot;, &quot;Normal&quot;, &quot;usCapacity&quot;, &quot;surplusCobat&quot;):
+            if held_but_unreported in flat:
+                print(&quot;ERROR: {} is a changing status or an ambiguous SoC figure and must not be reported: {}&quot;.format(held_but_unreported, record))
+                failed = True
+    return failed
+
+
+def test_alphaess_catalogue_ev_charger_only_when_seen():
+    &quot;&quot;&quot;An EV charger is a flag only once live telemetry has seen one; an unseen charger reports nothing either way.&quot;&quot;&quot;
+    failed = False
+    client = _alphaess_discovered(ESS_LIST_SAMPLE)
+    sn = &quot;AL70110230306xx&quot;
+    for present, expect_flag in ((True, True), (False, False), (None, False)):
+        client._ev_present = {} if present is None else {sn: present}
+        record = {r[&quot;device_id&quot;]: r for r in client.build_discovery()[&quot;inverters&quot;]}[&quot;alphaess:&quot; + sn]
+        has_flag = &quot;ev_charger&quot; in record.get(&quot;flags&quot;, [])
+        if has_flag != expect_flag:
+            print(&quot;ERROR: _ev_present {!r} should give ev_charger flag {}, got {}&quot;.format(present, expect_flag, has_flag))
+            failed = True
+    return failed
+
+
+def test_alphaess_catalogue_none_before_discovery():
+    &quot;&quot;&quot;With nothing discovered there is nothing to describe, so nothing is reported.&quot;&quot;&quot;
+    client = MockAlphaESS()
+    if client.build_discovery() is not None:
+        print(&quot;ERROR: an empty device_list must report None, meaning ask again next cycle&quot;)
+        return True
+    return False
+
+
+def test_alphaess_catalogue_round_trips_through_validate_report():
+    &quot;&quot;&quot;validate_report() hands every AlphaESS record back unchanged, so nothing is silently dropped.&quot;&quot;&quot;
+    failed = False
+    client = _alphaess_discovered(ESS_LIST_SAMPLE)
+    client._ev_present = {&quot;AL70110230306xx&quot;: True}
+    report = client.build_discovery()
+    warnings = []
+    cleaned = validate_report(report, &quot;alphaess&quot;, warnings.append)
+    if warnings:
+        print(&quot;ERROR: validation warned: {}&quot;.format(warnings))
+        failed = True
+    if cleaned.get(&quot;inverters&quot;) != report[&quot;inverters&quot;]:
+        print(&quot;ERROR: validation changed the records:\n{}\n{}&quot;.format(report[&quot;inverters&quot;], cleaned.get(&quot;inverters&quot;)))
+        failed = True
+    return failed
+
+
+def test_alphaess_catalogue_filed_when_first_cycle_defers():
+    &quot;&quot;&quot;run() files the report even on a first cycle that defers startup for want of telemetry.
+
+    Same setup as test_alphaess_run_defers_startup_without_telemetry: real getEssList, then every
+    telemetry call answers &quot;system offline&quot;, so run() publishes and then returns False from
+    `if first and not live_ok:` before automatic_config(). That early exit is exactly the install
+    whose dump most needs to say what hardware was found, so the report must already be filed.
+    &quot;&quot;&quot;
+    failed = False
+    client = MockAlphaESS(automatic=True)
+    reports = []
+    client.report_discovery = reports.append
+    responses = [create_aiohttp_mock_response(status=200, json_data=_envelope(200, ESS_LIST_SAMPLE))] + [create_aiohttp_mock_response(status=200, json_data=_envelope(6042, None, msg=&quot;system offline&quot;)) for _ in range(20)]
+    with patch(&quot;alphaess.aiohttp.ClientSession&quot;, return_value=create_aiohttp_mock_session(responses)):
+        ok = run_async_local(client.run(seconds=0, first=True))
+    if ok:
+        print(&quot;ERROR: run() should defer startup (return False) with no telemetry&quot;)
+        failed = True
+    if len(reports) != 1 or len(reports[0][&quot;inverters&quot;]) != 2:
+        print(&quot;ERROR: expected one report describing both systems despite the deferred startup, got {}&quot;.format(reports))
+        failed = True
+    return failed
+</code></pre>
+<p>Register all five in <code>run_alphaess_api_tests()</code>'s <code>(name, fn)</code> list:</p>
+<pre><code class="language-python">        (&quot;catalogue_describes_each_system&quot;, test_alphaess_catalogue_describes_each_system),
+        (&quot;catalogue_ev_charger_only_when_seen&quot;, test_alphaess_catalogue_ev_charger_only_when_seen),
+        (&quot;catalogue_none_before_discovery&quot;, test_alphaess_catalogue_none_before_discovery),
+        (&quot;catalogue_round_trips&quot;, test_alphaess_catalogue_round_trips_through_validate_report),
+        (&quot;catalogue_filed_when_first_cycle_defers&quot;, test_alphaess_catalogue_filed_when_first_cycle_defers),
+</code></pre>
+<p>(The existing <code>discovery_ratings</code> entry tests device discovery, not the catalogue — leave it alone.)</p>
+<ul>
+<li>[ ] <strong>Step 2: Run them and confirm they fail</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage
+./run_all --test alphaess_api &gt; /tmp/p2t1.log 2&gt;&amp;1; grep -E &quot;FAILED|EXCEPTION|ERROR&quot; /tmp/p2t1.log | head
+</code></pre>
+<p>Expected: every new test fails with <code>'MockAlphaESS' object has no attribute 'build_discovery'</code> (reported as EXCEPTION).</p>
+<ul>
+<li>[ ] <strong>Step 3: Write <code>build_discovery()</code></strong></li>
+</ul>
+<p>In <code>apps/predbat/alphaess.py</code>, add <code>from coordinator import inverter_record</code> beside the other project imports, then add this method to <code>AlphaESSAPI</code>, immediately after <code>automatic_config()</code>:</p>
+<pre><code class="language-python">    def build_discovery(self):
+        &quot;&quot;&quot;
+        Describe the discovered AlphaESS systems for the discovery catalogue.
+
+        Reads only what get_device_list() already holds - self.device_list and self.device_detail -
+        plus the EV-charger verdict _apply_live_payload() records, so this adds no API calls and
+        cannot change what AlphaESS does. Reporting is independent of self.automatic: the catalogue
+        records the hardware, and the report's own &quot;automatic&quot; flag says whether Predbat wired
+        apps.yaml to it.
+
+        self.device_list holds serial strings (sysSn), and only systems that passed has_battery()
+        at discovery: a battery-less system (the VT1000 family, cobat 0 or missing) is dropped in
+        get_device_list() and never reaches device_detail. automatic_config() applies no further
+        test - it registers every serial in device_list as &quot;AlphaESSCloud&quot; - so inverter_type is set
+        on every record, mirroring automatic_config() as the source of truth.
+
+        Ratings are getEssList's own figures: poinv (kW) as inverter_w via inverter_limit(), popv
+        (kW) as pv_w, cobat (kWh) as battery_kwh via battery_capacity(). cobat is one scalar per
+        system, so there is no list of entries to mis-sum. A system reports &quot;solar&quot; only when popv
+        says PV is attached.
+
+        Deliberately not reported:
+        - emsStatus: a status that changes. refresh_discovery() compares whole reports, so a
+          changing value would re-file the report every time it moved.
+        - usCapacity and surplusCobat: they fit &quot;current SoC&quot; and &quot;configured usable depth&quot; equally
+          well, which is why publish_data() never maps them to SoC; reporting either as a rating
+          would assert a meaning nobody knows.
+        - firmware: the AlphaESS Open API exposes none.
+        - account_ids: the API has no station, plant or site identifier; every endpoint is keyed by
+          sysSn alone.
+        - an AC-coupled verdict: detect_ac_coupled() infers it from live telemetry and
+          ALPHAESS_AC_COUPLED_MODELS ships empty on purpose, so there is no held fact to report.
+
+        An EV charger is reported as a flag only when _ev_present says True. That verdict comes from
+        live telemetry alone, so a charger not yet seen reports nothing either way rather than a
+        guess. No chargers record is invented for it: AlphaESS reports a charger's power, not its
+        identity.
+
+        Returns None when no system has been discovered yet, which refresh_discovery() treats as
+        &quot;nothing to report, ask again next cycle&quot;.
+        &quot;&quot;&quot;
+        if not self.device_list:
+            return None
+
+        inverters = []
+        for sn in self.device_list:
+            detail = self.device_detail.get(sn, {}) or {}
+            pv_kw = self._as_float(detail.get(&quot;popv&quot;), 0.0)
+
+            functions = [&quot;solar&quot;, &quot;battery&quot;] if pv_kw &gt; 0 else [&quot;battery&quot;]
+
+            info = {}
+            if detail.get(&quot;minv&quot;):
+                info[&quot;model&quot;] = str(detail[&quot;minv&quot;])
+            if detail.get(&quot;mbat&quot;):
+                info[&quot;battery_model&quot;] = str(detail[&quot;mbat&quot;])
+
+            ratings = {}
+            inverter_w = self.inverter_limit(sn)
+            if inverter_w &gt; 0:
+                ratings[&quot;inverter_w&quot;] = inverter_w
+            if pv_kw &gt; 0:
+                ratings[&quot;pv_w&quot;] = pv_kw * 1000.0
+            battery_kwh = self.battery_capacity(sn)
+            if battery_kwh &gt; 0:
+                ratings[&quot;battery_kwh&quot;] = battery_kwh
+
+            flags = [&quot;ev_charger&quot;] if self._ev_present.get(sn) is True else []
+
+            inverters.append(
+                inverter_record(
+                    &quot;alphaess:{}&quot;.format(sn),
+                    inverter_type=&quot;AlphaESSCloud&quot;,
+                    composition=&quot;direct&quot;,
+                    functions=functions,
+                    capabilities=[&quot;schedule&quot;, &quot;target_soc&quot;, &quot;discharge_target&quot;, &quot;charge_rate_power&quot;],
+                    flags=flags,
+                    hardware_ids={&quot;serial&quot;: sn},
+                    info=info,
+                    ratings=ratings,
+                )
+            )
+
+        return {&quot;automatic&quot;: self.automatic, &quot;inverters&quot;: inverters}
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Wire it into <code>run()</code></strong></li>
+</ul>
+<p>In <code>AlphaESSAPI.run()</code>, find:</p>
+<pre><code class="language-python">        await self.publish_data()
+</code></pre>
+<p>followed (after a blank line) by <code>if first and not live_ok:</code>. Insert between them, at the method body's indentation:</p>
+<pre><code class="language-python">        # Filed right after this cycle's publish and BEFORE `if first and not live_ok:` below:
+        # that branch returns False to defer startup when the first telemetry poll fails, and
+        # automatic_config() follows it, so a report filed any later would never be filed on
+        # exactly the installs whose dump most needs to say what hardware was found. (AlphaESS's
+        # automatic_config() does not raise - the early return is the reason.) refresh_discovery()
+        # owns the compare/retry/guard loop and never raises.
+        self.refresh_discovery()
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 5: Run the tests, then the full suite</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage
+./run_all --test alphaess_api &gt; /tmp/p2t1.log 2&gt;&amp;1; grep -E &quot;FAILED|EXCEPTION|passed&quot; /tmp/p2t1.log | tail -3
+./run_all &gt; /tmp/p2t1-full.log 2&gt;&amp;1; echo &quot;exit=$?&quot;; grep -E &quot;All tests passed|Some tests failed&quot; /tmp/p2t1-full.log | tail -1
+</code></pre>
+<p>Expected: <code>alphaess_api</code> passes; the full suite ends <code>All tests passed</code> in roughly two minutes.</p>
+<ul>
+<li>[ ] <strong>Step 6: Prove the tests are load-bearing</strong></li>
+</ul>
+<ol>
+<li>Move the <code>self.refresh_discovery()</code> call (and its comment) below the <code>if first and not live_ok:</code> block; confirm <code>catalogue_filed_when_first_cycle_defers</code> fails. Restore it.</li>
+<li>Change <code>if self._ev_present.get(sn) is True</code> to <code>if self._ev_present.get(sn) is not False</code>; confirm <code>catalogue_ev_charger_only_when_seen</code> fails. Restore it.</li>
+</ol>
+<p>Re-run <code>alphaess_api</code> green after each restore.</p>
+<ul>
+<li>[ ] <strong>Step 7: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/alphaess.py apps/predbat/tests/test_alphaess_api.py
+git commit -m &quot;feat(discovery): report AlphaESS systems to the discovery catalogue
+
+Co-Authored-By: Claude Opus 5 (1M context) &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<hr />
+<h2 id="task-2-the-solis-reporter">Task 2: The Solis reporter</h2>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/solis.py</code> (<code>SolisAPI</code>: add <code>build_discovery()</code>; one call in <code>run()</code>)
+- Test: <code>apps/predbat/tests/test_solis.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>inverter_record(device_id, *, ...)</code>; <code>ComponentBase.refresh_discovery()</code>.
+- Produces: <code>SolisAPI.build_discovery() -&gt; dict | None</code>.</p>
+<p><strong>Background (verified):</strong>
+- The fleet is <code>self.inverter_sn</code> (list of serial strings); <code>self.inverter_details</code> maps serial to the raw <code>inverterDetail</code> response. <code>self.cached_values</code> maps serial to <code>{cid: value}</code> register reads, values as strings.
+- <code>automatic_config()</code> counts an inverter as a battery inverter it configures only when <code>not self._reports_no_battery(detail)</code> AND <code>detail["batteryHealthSoh"]</code> parses as a number (<code>0</code> is a valid reading). It then writes <code>"SolisCloud"</code> for those. <code>_reports_no_battery()</code> is a static, side-effect-free method.
+- <code>automatic_config()</code> sets <code>pv_devices = [sn.lower() for sn in self.inverter_sn]</code> — <strong>every</strong> Solis inverter contributes PV, battery or not. So every record gets <code>"solar"</code>.
+- Battery capacity is not an <code>inverterDetail</code> field. <code>publish_entities()</code> computes it as register 172 (<code>SOLIS_CID_BATTERY_CAPACITY</code>, Ah per battery) × <code>self.parallel_battery_count[sn]</code> × a voltage from <code>get_capacity_voltage(sn)</code> (the configured <code>solis_nominal_voltage</code>, or <code>None</code>) falling back to <code>get_nominal_voltage(sn)</code>, an <strong>inference</strong> (GH#5090: for an HV pack still a live, moving reading). So the derived kWh is only a stated fact when <code>get_capacity_voltage(sn)</code> is not <code>None</code>. Register 172 is held as a string, e.g. <code>"100"</code> in the existing fixtures.
+- <code>get_capacity_voltage(sn)</code> is a pure read (<code>return self.nominal_pack_voltage</code>). <code>is_tou_v2_mode(sn)</code> is a pure read of <code>cached_values</code> (TOU V2 register layout when the mode register reads 43605).
+- Inverter rating: <code>detail["power"]</code> with its unit in <code>detail["powerStr"]</code>, which <code>publish_entities()</code> defaults to <code>"kW"</code>. No correction helper.
+- Model: <code>detail["productModel"]</code>. <code>detail["inverterName"]</code> is user-set and must not be reported.
+- Capabilities for a battery inverter Predbat drives (<code>INVERTER_DEF["SolisCloud"]</code>): <code>schedule</code>, <code>target_soc</code>, <code>discharge_target</code>, <code>charge_rate_power</code>, and <code>soh</code> (it reports <code>batteryHealthSoh</code>). No pause.
+- <code>run()</code> publishes with <code>if first or (seconds % 60 == 0): await self.publish_entities()</code>, then gates <code>automatic_config()</code> on <code>self.automatic and self.inverter_sn and not self.automatic_config_done</code>. <code>run()</code>'s only early return is inside <code>if first:</code>, before any publish, when discovery found nothing.
+- Not held: firmware; any station/plant/account ID.</p>
+<p><strong>Real fixtures:</strong> <code>_DETAIL_WITH_BATTERY</code> and <code>_DETAIL_NO_BATTERY</code> in <code>test_solis.py</code> were captured from a live two-inverter account. Neither carries <code>productModel</code>, <code>power</code> or <code>powerStr</code>; the only sample with <code>productModel</code> is <code>test_publish_entities</code>'s <code>"Solis-5G-Hybrid"</code>, and the repository holds <strong>no captured <code>power</code>/<code>powerStr</code> pair at all</strong>. The test therefore adds <code>"productModel": "Solis-5G-Hybrid"</code> from that sample and <code>"power": 5.0, "powerStr": "kW"</code> <strong>derived</strong> from it — the model name's "5G" rating and the API's own <code>&lt;field&gt;Str: "kW"</code> convention seen on <code>pacStr</code>/<code>eTotalStr</code> in the same sample. The test docstring must say so.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<p>Add to <code>apps/predbat/tests/test_solis.py</code>, after <code>_run_automatic_config()</code>. Add <code>from coordinator import validate_report</code> to the imports and make sure <code>SOLIS_CID_BATTERY_CAPACITY</code> and <code>SOLIS_CID_TOU_V2_MODE</code> are imported from <code>solis</code>.</p>
+<pre><code class="language-python">def _solis_fleet():
+    &quot;&quot;&quot;A MockSolisAPI holding one captured battery inverter and one captured PV-only inverter.
+
+    Both details are the live-captured _DETAIL_WITH_BATTERY / _DETAIL_NO_BATTERY. The battery
+    inverter additionally carries productModel from test_publish_entities' sample and a DERIVED
+    power/powerStr pair: the repository holds no captured power field, so 5.0 kW follows the
+    sample's &quot;Solis-5G-Hybrid&quot; rating and the API's &lt;field&gt;Str &quot;kW&quot; convention.
+    &quot;&quot;&quot;
+    api = MockSolisAPI()
+    api.inverter_sn = [&quot;BAT001&quot;, &quot;PV001&quot;]
+    api.inverter_details = {
+        &quot;BAT001&quot;: dict(_DETAIL_WITH_BATTERY, productModel=&quot;Solis-5G-Hybrid&quot;, power=5.0, powerStr=&quot;kW&quot;),
+        &quot;PV001&quot;: dict(_DETAIL_NO_BATTERY),
+    }
+    api.cached_values = {&quot;BAT001&quot;: {SOLIS_CID_BATTERY_CAPACITY: &quot;100&quot;, SOLIS_CID_TOU_V2_MODE: &quot;43605&quot;}}
+    api.parallel_battery_count = {&quot;BAT001&quot;: 2}
+    api.nominal_pack_voltage = None
+    return api
+
+
+def test_solis_catalogue_describes_battery_and_pv_only():
+    &quot;&quot;&quot;A battery inverter is a SolisCloud inverter; a PV-only one reports solar with no inverter_type.&quot;&quot;&quot;
+    report = _solis_fleet().build_discovery()
+    by_id = {record[&quot;device_id&quot;]: record for record in report[&quot;inverters&quot;]}
+    assert set(by_id) == {&quot;solis:BAT001&quot;, &quot;solis:PV001&quot;}, sorted(by_id)
+    battery = by_id[&quot;solis:BAT001&quot;]
+    assert battery[&quot;inverter_type&quot;] == &quot;SolisCloud&quot;
+    assert battery[&quot;composition&quot;] == &quot;direct&quot;
+    assert battery[&quot;functions&quot;] == [&quot;solar&quot;, &quot;battery&quot;]
+    assert battery[&quot;hardware_ids&quot;] == {&quot;serial&quot;: &quot;BAT001&quot;}
+    assert battery[&quot;info&quot;] == {&quot;model&quot;: &quot;Solis-5G-Hybrid&quot;}
+    assert sorted(battery[&quot;capabilities&quot;]) == [&quot;charge_rate_power&quot;, &quot;discharge_target&quot;, &quot;schedule&quot;, &quot;soh&quot;, &quot;target_soc&quot;]
+    assert battery[&quot;flags&quot;] == [&quot;tou_v2&quot;]
+    pv = by_id[&quot;solis:PV001&quot;]
+    assert &quot;inverter_type&quot; not in pv, &quot;a PV-only inverter is not one automatic_config() configures&quot;
+    assert pv[&quot;functions&quot;] == [&quot;solar&quot;], &quot;every Solis inverter feeds the PV totals (automatic_config's pv_devices)&quot;
+    assert &quot;capabilities&quot; not in pv
+    return False
+
+
+def test_solis_catalogue_battery_ratings_carry_only_stated_facts():
+    &quot;&quot;&quot;Register 172's Ah and the pack count are always reported; kWh only when the voltage is configured.
+
+    GH#5090: without solis_nominal_voltage the voltage is inferred, and for an HV pack still a live
+    reading that moves dump to dump, so a derived kWh would present an estimate as a rating.
+    &quot;&quot;&quot;
+    api = _solis_fleet()
+    ratings = {r[&quot;device_id&quot;]: r for r in api.build_discovery()[&quot;inverters&quot;]}[&quot;solis:BAT001&quot;][&quot;ratings&quot;]
+    # 100 Ah per pack (register 172) x 2 packs: battery_capacity_ah is the bank total (Amendments)
+    assert ratings == {&quot;inverter_w&quot;: 5000.0, &quot;battery_capacity_ah&quot;: 200.0, &quot;battery_pack_count&quot;: 2}, ratings
+    api.nominal_pack_voltage = 51.2
+    ratings = {r[&quot;device_id&quot;]: r for r in api.build_discovery()[&quot;inverters&quot;]}[&quot;solis:BAT001&quot;][&quot;ratings&quot;]
+    assert ratings[&quot;battery_kwh&quot;] == round(100.0 * 2 * 51.2 / 1000.0, 2), ratings
+    return False
+
+
+async def test_solis_catalogue_inverter_type_tracks_automatic_config():
+    &quot;&quot;&quot;inverter_type is set exactly where the real automatic_config() would configure the inverter.
+
+    Uses the existing _run_automatic_config() helper, which runs the real automatic_config() over the
+    captured details and returns the set_arg_auto args it recorded. &quot;battery but no SoH field&quot; is the
+    case the predicate excludes despite a battery: automatic_config() needs batteryHealthSoh to parse.
+    &quot;&quot;&quot;
+    cases = {
+        &quot;with battery&quot;: _DETAIL_WITH_BATTERY,
+        &quot;no battery&quot;: _DETAIL_NO_BATTERY,
+        &quot;no battery, alt firmware&quot;: _DETAIL_NO_BATTERY_ALT_FIRMWARE,
+        &quot;with battery, alt firmware&quot;: _DETAIL_WITH_BATTERY_ALT_FIRMWARE,
+        &quot;battery but no SoH field&quot;: {key: value for key, value in _DETAIL_WITH_BATTERY.items() if key != &quot;batteryHealthSoh&quot;},
+    }
+    for label, detail in cases.items():
+        recorded, api = await _run_automatic_config({&quot;INV001&quot;: dict(detail)})
+        record = api.build_discovery()[&quot;inverters&quot;][0]
+        assert (&quot;inverter_type&quot; in record) == (&quot;inverter_type&quot; in recorded), &quot;{}: catalogue says {!r}, automatic_config configured {!r}&quot;.format(label, record.get(&quot;inverter_type&quot;), recorded.get(&quot;inverter_type&quot;))
+    return False
+
+
+def test_solis_catalogue_never_reports_the_inverter_name():
+    &quot;&quot;&quot;inverterName is user-set free text and must never reach the report.&quot;&quot;&quot;
+    api = _solis_fleet()
+    api.inverter_details[&quot;BAT001&quot;][&quot;inverterName&quot;] = &quot;12 Acacia Avenue&quot;
+    assert &quot;Acacia&quot; not in str(api.build_discovery()), &quot;inverterName leaked into the report&quot;
+    return False
+
+
+def test_solis_catalogue_none_before_discovery():
+    &quot;&quot;&quot;With no inverters there is nothing to describe.&quot;&quot;&quot;
+    assert MockSolisAPI().build_discovery() is None
+    return False
+
+
+def test_solis_catalogue_round_trips_through_validate_report():
+    &quot;&quot;&quot;validate_report() hands every Solis record back unchanged.&quot;&quot;&quot;
+    api = _solis_fleet()
+    api.nominal_pack_voltage = 51.2
+    report = api.build_discovery()
+    warnings = []
+    cleaned = validate_report(report, &quot;solis&quot;, warnings.append)
+    assert not warnings, warnings
+    assert cleaned[&quot;inverters&quot;] == report[&quot;inverters&quot;], (report[&quot;inverters&quot;], cleaned[&quot;inverters&quot;])
+    return False
+
+
+async def test_solis_catalogue_filed_even_when_automatic_config_configures_nothing():
+    &quot;&quot;&quot;run() files the report on a cycle where the real automatic_config() finds no battery inverter.
+
+    Solis's automatic_config() returns False rather than raising, and is gated on
+    automatic_config_done; the report must not depend on either. Built on _make_run_api() and
+    test_run_first_success(): the discovered inverter has the captured no-battery detail.
+    &quot;&quot;&quot;
+    sn = &quot;INV001&quot;
+    api = _make_run_api(configured_sns=[sn], automatic=True)
+    # _make_run_api() stubs automatic_config(); put the real one back so it genuinely runs.
+    api.automatic_config = SolisAPI.automatic_config.__get__(api)
+    configured = {}
+    api.set_arg_auto = lambda key, value: configured.__setitem__(key, value)
+
+    async def mock_get_inverter_list():
+        &quot;&quot;&quot;Discover the one inverter.&quot;&quot;&quot;
+        return [{&quot;sn&quot;: sn}]
+
+    api.get_inverter_list = mock_get_inverter_list
+    # _make_run_api()'s fetch_inverter_details stub only records the call, so this detail survives.
+    api.inverter_details = {sn: dict(_DETAIL_NO_BATTERY)}
+    reports = []
+    api.report_discovery = reports.append
+    with patch.object(solis_module.aiohttp, &quot;ClientSession&quot;, return_value=_FakeAiohttpSession()), patch.object(solis_module.aiohttp, &quot;ClientTimeout&quot;, return_value=None):
+        await api.run(0, True)
+    # automatic_config() found no battery inverter. It returns details_read (True here), so
+    # automatic_config_done DOES become True - &quot;done, nothing to configure&quot; - which is why this
+    # asserts on what it configured, not on that flag.
+    assert &quot;inverter_type&quot; not in configured, &quot;automatic_config() found no battery inverter, so it must configure nothing: {}&quot;.format(configured)
+    assert len(reports) == 1 and reports[0][&quot;inverters&quot;][0][&quot;device_id&quot;] == &quot;solis:&quot; + sn, reports
+    return False
+</code></pre>
+<p>Register them in <code>run_solis_tests()</code> beside the other <code>failed |=</code> lines:</p>
+<pre><code class="language-python">        failed |= test_solis_catalogue_describes_battery_and_pv_only()
+        failed |= test_solis_catalogue_battery_ratings_carry_only_stated_facts()
+        failed |= asyncio.run(test_solis_catalogue_inverter_type_tracks_automatic_config())
+        failed |= test_solis_catalogue_never_reports_the_inverter_name()
+        failed |= test_solis_catalogue_none_before_discovery()
+        failed |= test_solis_catalogue_round_trips_through_validate_report()
+        failed |= asyncio.run(test_solis_catalogue_filed_even_when_automatic_config_configures_nothing())
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run them and confirm they fail</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage
+./run_all --test solis &gt; /tmp/p2t2.log 2&gt;&amp;1; grep -E &quot;AttributeError|Error|FAIL&quot; /tmp/p2t2.log | head
+</code></pre>
+<p>Expected: <code>'MockSolisAPI' object has no attribute 'build_discovery'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Write <code>build_discovery()</code></strong></li>
+</ul>
+<p>In <code>apps/predbat/solis.py</code>, add <code>from coordinator import inverter_record</code> beside the other project imports, then add to <code>SolisAPI</code>, immediately after <code>automatic_config()</code>:</p>
+<pre><code class="language-python">    def build_discovery(self):
+        &quot;&quot;&quot;
+        Describe the discovered Solis inverters for the discovery catalogue.
+
+        Reads only what the component already holds - self.inverter_sn, self.inverter_details,
+        self.cached_values and self.parallel_battery_count - so this adds no API calls and cannot
+        change what Solis does. Reporting is independent of self.automatic.
+
+        inverter_type &quot;SolisCloud&quot; is set with automatic_config()'s own test for a battery inverter
+        it configures, duplicated here rather than shared so the control path is untouched:
+        _reports_no_battery() must be false AND batteryHealthSoh must parse as a number (0 is a
+        valid reading). &quot;battery&quot; in functions is the hardware fact alone - details read and
+        Solis Cloud not saying &quot;no battery&quot; - so a battery inverter automatic_config() declines is
+        still described. Every inverter reports &quot;solar&quot;: automatic_config() puts every inverter in
+        pv_devices, battery or not.
+
+        Battery ratings carry only stated facts. Register 172 (SOLIS_CID_BATTERY_CAPACITY) is the
+        per-battery Ah; battery_capacity_ah reports the bank total - register 172 x
+        parallel_battery_count, the same product publish_entities() uses - so it means the same
+        thing here as on every other reporter. battery_pack_count carries the pack count alongside
+        it, and both are always reported for a battery inverter. A kWh figure is reported only when
+        get_capacity_voltage() returns the configured solis_nominal_voltage: otherwise
+        publish_entities() falls back to get_nominal_voltage(), an inference that for an HV pack is
+        still a live reading moving dump to dump (GH#5090), and a derived kWh would present that
+        estimate as a rating.
+
+        The inverter rating is inverterDetail's power in powerStr's unit - defaulted to &quot;kW&quot;
+        exactly as publish_entities() does - and is reported only for a unit this code knows how
+        to convert, never guessed.
+
+        Deliberately not reported: inverterName (user-set free text that can hold an address);
+        firmware (inverterDetail carries none); any station or account ID (none is held).
+        The TOU V2 register layout is reported as the flag &quot;tou_v2&quot; - how the inverter is driven,
+        not something it can do.
+
+        Returns None when no inverter has been discovered yet.
+        &quot;&quot;&quot;
+        if not self.inverter_sn:
+            return None
+
+        inverters = []
+        for sn in self.inverter_sn:
+            detail = self.inverter_details.get(sn, {}) or {}
+            has_battery = bool(detail) and not self._reports_no_battery(detail)
+            try:
+                float(detail.get(&quot;batteryHealthSoh&quot;))
+                reports_soh = True
+            except (TypeError, ValueError):
+                reports_soh = False
+            # automatic_config()'s own predicate for an inverter it configures - the source of truth.
+            drives_it = not self._reports_no_battery(detail) and reports_soh
+
+            info = {}
+            if detail.get(&quot;productModel&quot;):
+                info[&quot;model&quot;] = str(detail[&quot;productModel&quot;])
+
+            ratings = {}
+            try:
+                power = float(detail.get(&quot;power&quot;))
+            except (TypeError, ValueError):
+                power = 0.0
+            power_unit = str(detail.get(&quot;powerStr&quot;, &quot;kW&quot;)).strip()
+            if power &gt; 0 and power_unit == &quot;kW&quot;:
+                ratings[&quot;inverter_w&quot;] = power * 1000.0
+            elif power &gt; 0 and power_unit == &quot;W&quot;:
+                ratings[&quot;inverter_w&quot;] = power
+            if has_battery:
+                try:
+                    capacity_ah = float(self.cached_values.get(sn, {}).get(SOLIS_CID_BATTERY_CAPACITY))
+                except (TypeError, ValueError):
+                    capacity_ah = 0.0
+                if capacity_ah &gt; 0:
+                    pack_count = self.parallel_battery_count.get(sn, 1)
+                    ratings[&quot;battery_capacity_ah&quot;] = capacity_ah * pack_count
+                    ratings[&quot;battery_pack_count&quot;] = pack_count
+                    configured_volts = self.get_capacity_voltage(sn)
+                    if configured_volts:
+                        ratings[&quot;battery_kwh&quot;] = round(capacity_ah * pack_count * configured_volts / 1000.0, 2)
+
+            inverters.append(
+                inverter_record(
+                    &quot;solis:{}&quot;.format(sn),
+                    inverter_type=&quot;SolisCloud&quot; if drives_it else None,
+                    composition=&quot;direct&quot;,
+                    functions=[&quot;solar&quot;, &quot;battery&quot;] if has_battery else [&quot;solar&quot;],
+                    capabilities=[&quot;schedule&quot;, &quot;target_soc&quot;, &quot;discharge_target&quot;, &quot;charge_rate_power&quot;, &quot;soh&quot;] if drives_it else None,
+                    flags=[&quot;tou_v2&quot;] if self.is_tou_v2_mode(sn) else None,
+                    hardware_ids={&quot;serial&quot;: sn},
+                    info=info,
+                    ratings=ratings,
+                )
+            )
+
+        return {&quot;automatic&quot;: self.automatic, &quot;inverters&quot;: inverters}
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Wire it into <code>run()</code></strong></li>
+</ul>
+<p>In <code>SolisAPI.run()</code>, find:</p>
+<pre><code class="language-python">        if first or (seconds % 60 == 0):
+            await self.publish_entities()
+</code></pre>
+<p>followed by the comment beginning <code># Auto-configure Predbat if enabled.</code> Insert between them:</p>
+<pre><code class="language-python">        # Filed every cycle, right after this cycle's publish and before the automatic_config()
+        # gate below. Solis's automatic_config() never raises, but it runs only when
+        # self.automatic is set and automatic_config_done is not, so a report filed after it
+        # would depend on unrelated auto-config state. refresh_discovery() owns the
+        # compare/retry/guard loop and never raises.
+        self.refresh_discovery()
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 5: Run the tests, then the full suite</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage
+./run_all --test solis &gt; /tmp/p2t2.log 2&gt;&amp;1; grep -E &quot;Error|FAIL|passed&quot; /tmp/p2t2.log | tail -3
+./run_all &gt; /tmp/p2t2-full.log 2&gt;&amp;1; echo &quot;exit=$?&quot;; grep -E &quot;All tests passed|Some tests failed&quot; /tmp/p2t2-full.log | tail -1
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 6: Prove the tests are load-bearing</strong></li>
+</ul>
+<ol>
+<li>Report <code>battery_kwh</code> unconditionally (drop the <code>if configured_volts:</code> guard, using <code>self.get_nominal_voltage(sn)</code> when not configured); confirm <code>test_solis_catalogue_battery_ratings_carry_only_stated_facts</code> fails. Restore.</li>
+<li>Drop <code>and reports_soh</code> from <code>drives_it</code>; confirm <code>test_solis_catalogue_inverter_type_tracks_automatic_config</code> fails. Restore.</li>
+</ol>
+<ul>
+<li>[ ] <strong>Step 7: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/solis.py apps/predbat/tests/test_solis.py
+git commit -m &quot;feat(discovery): report Solis inverters to the discovery catalogue
+
+Co-Authored-By: Claude Opus 5 (1M context) &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<hr />
+<h2 id="task-3-the-deye-reporter">Task 3: The Deye reporter</h2>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/deye.py</code> (<code>DeyeAPI</code>: add <code>build_discovery()</code>; one call in <code>run()</code>)
+- Test: <code>apps/predbat/tests/test_deye_api.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>inverter_record(device_id, *, ...)</code>; <code>ComponentBase.refresh_discovery()</code>.
+- Produces: <code>DeyeAPI.build_discovery() -&gt; dict | None</code>.</p>
+<p><strong>Background (verified):</strong>
+- <code>self.device_list</code> is a list of serial strings (<code>deviceSn</code>), already filtered to <code>deviceType == "INVERTER"</code> in <code>get_device_list()</code>. <code>automatic_config()</code> registers <strong>every</strong> serial as <code>"DeyeCloud"</code> with no further test. Neither discovery nor <code>automatic_config()</code> can tell a PV-only unit from a hybrid: <code>automatic_config()</code> binds both PV and battery entities for every device. The reporter mirrors that — <code>functions: ["solar", "battery"]</code> on every record — which is exactly what Predbat believes about the device, and is the fact a maintainer needs when a PV-only unit has been configured as a battery inverter.
+- <code>self.station_ids</code> is a flat list of station IDs; <code>get_device_list()</code> queries every station at once and flattens the result, so which device belongs to which station is not held. A station ID can be attributed to every device only when the account has exactly one station.
+- Pure accessors: <code>battery_capacity(sn)</code> (kWh — <code>config/battery</code>'s <code>battCapacity</code> Ah scaled by <code>device_pack_voltage</code>, else <code>device_capacity</code>); <code>_battery_config_value(sn, "capacity")</code> (the raw <code>battCapacity</code> Ah); <code>_as_float(value, default)</code>. <code>self.device_rated_power[sn]</code> is <code>device/latest</code>'s <code>RatedPower</code> in W, written only when present.
+- <strong>Never call <code>derive_battery_capacity()</code></strong> from the reporter: it logs and writes <code>device_pack_voltage</code>/<code>device_capacity</code>. It is the producer <code>fetch_device_data()</code> calls; <code>battery_capacity()</code> is the accessor.
+- Capabilities (<code>INVERTER_DEF["DeyeCloud"]</code>): <code>schedule</code> (6-slot TOU), <code>target_soc</code>, <code>discharge_target</code>, <code>charge_rate_power</code>. No pause, no SoH, no export limit.
+- <code>run()</code> publishes (<code>await self.publish_data()</code> then a <code>for sn in self.device_list: await self.publish_schedule_settings_ha(sn)</code> loop), drains pending control orders, reconciles, returns early with <code>if first and not live_ok: return False</code>, then <code>if first and self.automatic: await self.automatic_config()</code>.
+- Not held: model, firmware (<code>device/measurePoints</code> and <code>station/latest</code> are fetched in <code>refresh_static()</code> for debug logging and discarded — do not read them).
+- The rule "test a device the predicate excludes": for Deye the exclusion happens at discovery, not in <code>automatic_config()</code> — <code>get_device_list()</code> drops anything whose <code>deviceType</code> is not <code>"INVERTER"</code>, and the existing <code>test_get_device_list_filters_inverters</code> already proves a <code>METER</code> never reaches <code>device_list</code>. There is nothing further to exclude, so the reporter tests do not repeat it.</p>
+<p><strong>Real fixtures:</strong> <code>LIVE_DATA_LIST</code> in <code>test_deye_api.py</code> is trimmed verbatim from a live <code>device/latest</code> response (<code>RatedPower 8000 W</code>, <code>BatteryRatedCapacity 1200 Ah</code>, <code>BMSChargeVoltage 57.60 V</code>). The live <code>config/battery</code> response is quoted in <code>deye_const.py</code>: <code>{"maxChargeCurrent": 185, "maxDischargeCurrent": 185, "battLowCapacity": 14, "battShutDownCapacity": 9, "battCapacity": 1200}</code>. The tests derive every figure through the component's own code from these, never by hand.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<p>Add to <code>apps/predbat/tests/test_deye_api.py</code>, after <code>test_run_first_cycle_publishes_and_configures()</code>. Add <code>from coordinator import validate_report</code> to the imports.</p>
+<pre><code class="language-python">DEYE_LIVE_BATTERY_CONFIG = {&quot;maxChargeCurrent&quot;: 185, &quot;maxDischargeCurrent&quot;: 185, &quot;battLowCapacity&quot;: 14, &quot;battShutDownCapacity&quot;: 9, &quot;battCapacity&quot;: 1200}
+
+
+def _deye_fleet(station_ids=(10,)):
+    &quot;&quot;&quot;A MockDeye holding one inverter populated from the live device/latest and config/battery samples.
+
+    The pack voltage and derived capacity come from the component's own derive_battery_capacity()
+    run on LIVE_DATA_LIST - test setup is allowed its side effects; the reporter never calls it.
+    &quot;&quot;&quot;
+    d = MockDeye()
+    sn = &quot;INV1&quot;
+    d.device_list = [sn]
+    d.station_ids = list(station_ids)
+    flat = d._datalist_to_dict(LIVE_DATA_LIST)
+    d.device_rated_power[sn] = d._as_float(flat.get(&quot;RatedPower&quot;), 0.0)
+    d.device_battery_config[sn] = dict(DEYE_LIVE_BATTERY_CONFIG)
+    d.derive_battery_capacity(sn, flat)
+    return d
+
+
+def test_deye_catalogue_describes_each_inverter():
+    &quot;&quot;&quot;Each inverter is a DeyeCloud record with the live sample's own ratings.&quot;&quot;&quot;
+    failed = False
+    d = _deye_fleet()
+    record = d.build_discovery()[&quot;inverters&quot;][0]
+    checks = [
+        (record[&quot;device_id&quot;], &quot;deye:INV1&quot;),
+        (record[&quot;inverter_type&quot;], &quot;DeyeCloud&quot;),
+        (record[&quot;composition&quot;], &quot;direct&quot;),
+        (record[&quot;functions&quot;], [&quot;solar&quot;, &quot;battery&quot;]),
+        (record[&quot;hardware_ids&quot;], {&quot;serial&quot;: &quot;INV1&quot;}),
+        (record[&quot;account_ids&quot;], {&quot;station_id&quot;: 10}),
+        (sorted(record[&quot;capabilities&quot;]), [&quot;charge_rate_power&quot;, &quot;discharge_target&quot;, &quot;schedule&quot;, &quot;target_soc&quot;]),
+        (record[&quot;ratings&quot;][&quot;inverter_w&quot;], 8000.0),
+        (record[&quot;ratings&quot;][&quot;battery_capacity_ah&quot;], 1200.0),
+        (record[&quot;ratings&quot;][&quot;battery_kwh&quot;], d.battery_capacity(&quot;INV1&quot;)),
+    ]
+    for actual, expected in checks:
+        if actual != expected:
+            print(&quot;ERROR: expected {!r}, got {!r}&quot;.format(expected, actual))
+            failed = True
+    if &quot;info&quot; in record:
+        print(&quot;ERROR: Deye holds no model or firmware, so info must be absent: {}&quot;.format(record[&quot;info&quot;]))
+        failed = True
+    return failed
+
+
+def test_deye_catalogue_station_id_only_when_unambiguous():
+    &quot;&quot;&quot;A station ID is attributed only when the account has exactly one station: devices are not held per station.&quot;&quot;&quot;
+    failed = False
+    for stations, expect in (((10,), {&quot;station_id&quot;: 10}), ((10, 11), None), ((), None)):
+        record = _deye_fleet(station_ids=stations).build_discovery()[&quot;inverters&quot;][0]
+        if record.get(&quot;account_ids&quot;) != expect:
+            print(&quot;ERROR: stations {} should give account_ids {!r}, got {!r}&quot;.format(stations, expect, record.get(&quot;account_ids&quot;)))
+            failed = True
+    return failed
+
+
+def test_deye_catalogue_does_not_derive_capacity():
+    &quot;&quot;&quot;The reporter reads battery_capacity() and never calls derive_battery_capacity(), which logs and writes state.&quot;&quot;&quot;
+    d = _deye_fleet()
+    d.derive_battery_capacity = MagicMock(side_effect=AssertionError(&quot;the reporter must not call derive_battery_capacity()&quot;))
+    d.log_messages.clear()
+    d.build_discovery()
+    if d.log_messages:
+        print(&quot;ERROR: build_discovery() logged: {}&quot;.format(d.log_messages))
+        return True
+    return False
+
+
+def test_deye_catalogue_none_before_discovery():
+    &quot;&quot;&quot;With no inverters there is nothing to describe.&quot;&quot;&quot;
+    if MockDeye().build_discovery() is not None:
+        print(&quot;ERROR: an empty device_list must report None&quot;)
+        return True
+    return False
+
+
+def test_deye_catalogue_round_trips_through_validate_report():
+    &quot;&quot;&quot;validate_report() hands every Deye record back unchanged.&quot;&quot;&quot;
+    report = _deye_fleet().build_discovery()
+    warnings = []
+    cleaned = validate_report(report, &quot;deye&quot;, warnings.append)
+    if warnings or cleaned.get(&quot;inverters&quot;) != report[&quot;inverters&quot;]:
+        print(&quot;ERROR: validation changed or warned on the report: {} {}&quot;.format(warnings, cleaned.get(&quot;inverters&quot;)))
+        return True
+    return False
+</code></pre>
+<p>Then add the wiring test. It is <code>test_run_first_cycle_publishes_and_configures()</code> with the live poll made to fail: <code>refresh_live()</code> sets <code>live_ok</code> only when <code>fetch_device_data(sn)</code> returns something truthy, so a fake returning <code>{}</code> sends <code>run()</code> into <code>if first and not live_ok: return False</code>.</p>
+<pre><code class="language-python">def test_deye_catalogue_filed_when_first_cycle_defers():
+    &quot;&quot;&quot;run() files the report even on a first cycle that defers startup because the live poll failed.
+
+    `if first and not live_ok: return False` - and automatic_config() after it - would otherwise
+    swallow the report on exactly the installs whose dump most needs to say what hardware was found.
+    Built on test_run_first_cycle_publishes_and_configures(); only fetch_device_data() differs.
+    &quot;&quot;&quot;
+    from unittest.mock import patch
+
+    failed = False
+    d = MockDeye(auth_method=&quot;oauth&quot;)
+    d.access_token = &quot;tok&quot;
+    d.automatic = True
+    seq = {&quot;configured&quot;: 0}
+    reports = []
+    d.report_discovery = reports.append
+
+    async def fake_dev_list():
+        &quot;&quot;&quot;Discover one inverter.&quot;&quot;&quot;
+        d.device_list = [&quot;INV1&quot;]
+        return [&quot;INV1&quot;]
+
+    async def fake_data(sn):
+        &quot;&quot;&quot;Fail the live poll: refresh_live() treats a falsy result as no data.&quot;&quot;&quot;
+        return {}
+
+    async def fake_batt(sn):
+        &quot;&quot;&quot;Return no battery config.&quot;&quot;&quot;
+        return {}
+
+    async def fake_publish():
+        &quot;&quot;&quot;Publish nothing.&quot;&quot;&quot;
+
+    async def fake_pub_sched(sn):
+        &quot;&quot;&quot;Publish no schedule.&quot;&quot;&quot;
+
+    async def fake_get_sched(sn):
+        &quot;&quot;&quot;Read no schedule.&quot;&quot;&quot;
+        return {}
+
+    async def fake_auto():
+        &quot;&quot;&quot;Record that automatic_config() ran.&quot;&quot;&quot;
+        seq[&quot;configured&quot;] += 1
+
+    with patch.multiple(
+        d,
+        get_device_list=fake_dev_list,
+        fetch_device_data=fake_data,
+        fetch_battery_config=fake_batt,
+        publish_data=fake_publish,
+        publish_schedule_settings_ha=fake_pub_sched,
+        get_schedule_settings_ha=fake_get_sched,
+        automatic_config=fake_auto,
+    ):
+        ok = run_async_local(d.run(0, True))
+    if ok:
+        print(&quot;ERROR: run() should defer startup (return False) when the first live poll fails&quot;)
+        failed = True
+    if seq[&quot;configured&quot;]:
+        print(&quot;ERROR: automatic_config() must not run on a deferred first cycle&quot;)
+        failed = True
+    if len(reports) != 1 or reports[0][&quot;inverters&quot;][0][&quot;device_id&quot;] != &quot;deye:INV1&quot;:
+        print(&quot;ERROR: the report must be filed before the deferring return, got {}&quot;.format(reports))
+        failed = True
+    return failed
+</code></pre>
+<p>Register all six in <code>run_deye_api_tests()</code>'s <code>(name, fn)</code> list:</p>
+<pre><code class="language-python">        (&quot;catalogue_describes_each_inverter&quot;, test_deye_catalogue_describes_each_inverter),
+        (&quot;catalogue_station_id_only_when_unambiguous&quot;, test_deye_catalogue_station_id_only_when_unambiguous),
+        (&quot;catalogue_does_not_derive_capacity&quot;, test_deye_catalogue_does_not_derive_capacity),
+        (&quot;catalogue_none_before_discovery&quot;, test_deye_catalogue_none_before_discovery),
+        (&quot;catalogue_round_trips&quot;, test_deye_catalogue_round_trips_through_validate_report),
+        (&quot;catalogue_filed_when_first_cycle_defers&quot;, test_deye_catalogue_filed_when_first_cycle_defers),
+</code></pre>
+<p><code>MagicMock</code> and <code>patch</code> are already imported at the top of <code>test_deye_api.py</code>.</p>
+<ul>
+<li>[ ] <strong>Step 2: Run them and confirm they fail</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage
+./run_all --test deye_api &gt; /tmp/p2t3.log 2&gt;&amp;1; grep -E &quot;FAILED|EXCEPTION|ERROR&quot; /tmp/p2t3.log | head
+</code></pre>
+<p>Expected: <code>'MockDeye' object has no attribute 'build_discovery'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Write <code>build_discovery()</code></strong></li>
+</ul>
+<p>In <code>apps/predbat/deye.py</code>, add <code>from coordinator import inverter_record</code> beside the other project imports, then add to <code>DeyeAPI</code>, immediately after <code>automatic_config()</code>:</p>
+<pre><code class="language-python">    def build_discovery(self):
+        &quot;&quot;&quot;
+        Describe the discovered Deye inverters for the discovery catalogue.
+
+        Reads only state the component already holds - device_list, station_ids,
+        device_rated_power and the battery accessors - so this adds no API calls and cannot
+        change what Deye does. Reporting is independent of self.automatic.
+
+        automatic_config() registers every serial in device_list (already filtered to deviceType
+        &quot;INVERTER&quot;) as &quot;DeyeCloud&quot; with no further test, and binds both PV and battery entities for
+        each. Deye's API offers no way to tell a PV-only unit from a hybrid, so neither can this:
+        every record carries inverter_type &quot;DeyeCloud&quot; and functions solar and battery, mirroring
+        automatic_config() as the source of truth. That is exactly what Predbat believes about the
+        device - and the fact a maintainer needs when a PV-only unit has been configured as a
+        battery inverter.
+
+        Ratings: RatedPower (W) as inverter_w; battery_capacity() (kWh) as battery_kwh; and
+        config/battery's battCapacity as battery_capacity_ah, the raw Ah the API returned, so a
+        reader can check the kWh against its inputs. derive_battery_capacity() is never called
+        here: it logs and writes device_pack_voltage/device_capacity, whereas battery_capacity()
+        only reads them.
+
+        station_ids goes in account_ids only when the account has exactly one station:
+        get_device_list() queries every station at once and flattens the result, so which device
+        belongs to which station is not held, and attributing one of several would be a guess.
+
+        Deliberately not reported: model and firmware (not held - device/measurePoints and
+        station/latest are fetched for debug logging and discarded, and reading them would be a
+        new API dependency).
+
+        Returns None when no inverter has been discovered yet.
+        &quot;&quot;&quot;
+        if not self.device_list:
+            return None
+
+        account_ids = {&quot;station_id&quot;: self.station_ids[0]} if len(self.station_ids) == 1 else None
+
+        inverters = []
+        for sn in self.device_list:
+            ratings = {}
+            rated_w = self._as_float(self.device_rated_power.get(sn), 0.0)
+            if rated_w &gt; 0:
+                ratings[&quot;inverter_w&quot;] = rated_w
+            battery_kwh = self.battery_capacity(sn)
+            if battery_kwh &gt; 0:
+                ratings[&quot;battery_kwh&quot;] = battery_kwh
+            configured_ah = self._battery_config_value(sn, &quot;capacity&quot;)
+            if configured_ah &gt; 0:
+                ratings[&quot;battery_capacity_ah&quot;] = configured_ah
+
+            inverters.append(
+                inverter_record(
+                    &quot;deye:{}&quot;.format(sn),
+                    inverter_type=&quot;DeyeCloud&quot;,
+                    composition=&quot;direct&quot;,
+                    functions=[&quot;solar&quot;, &quot;battery&quot;],
+                    capabilities=[&quot;schedule&quot;, &quot;target_soc&quot;, &quot;discharge_target&quot;, &quot;charge_rate_power&quot;],
+                    hardware_ids={&quot;serial&quot;: sn},
+                    account_ids=account_ids,
+                    ratings=ratings,
+                )
+            )
+
+        return {&quot;automatic&quot;: self.automatic, &quot;inverters&quot;: inverters}
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Wire it into <code>run()</code></strong></li>
+</ul>
+<p>In <code>DeyeAPI.run()</code>, find the loop:</p>
+<pre><code class="language-python">        for sn in self.device_list:
+            await self.publish_schedule_settings_ha(sn)
+</code></pre>
+<p>that follows <code>await self.publish_data()</code>. Insert immediately after that loop, before the comment that begins <code># Drain any control orders</code>:</p>
+<pre><code class="language-python">        # Filed right after this cycle's publish and BEFORE `if first and not live_ok:` below:
+        # that branch returns False to defer startup when the first live poll fails, and
+        # automatic_config() follows it, so a report filed any later would never be filed on
+        # exactly the installs whose dump most needs to say what hardware was found. (Deye's
+        # automatic_config() does not raise - the early return is the reason.) refresh_discovery()
+        # owns the compare/retry/guard loop and never raises.
+        self.refresh_discovery()
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 5: Run the tests, then the full suite</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage
+./run_all --test deye_api &gt; /tmp/p2t3.log 2&gt;&amp;1; grep -E &quot;FAILED|EXCEPTION|passed&quot; /tmp/p2t3.log | tail -3
+./run_all &gt; /tmp/p2t3-full.log 2&gt;&amp;1; echo &quot;exit=$?&quot;; grep -E &quot;All tests passed|Some tests failed&quot; /tmp/p2t3-full.log | tail -1
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 6: Prove the tests are load-bearing</strong></li>
+</ul>
+<ol>
+<li>Move the call below the <code>if first and not live_ok:</code> block; confirm <code>catalogue_filed_when_first_cycle_defers</code> fails. Restore.</li>
+<li>Make <code>account_ids</code> use <code>self.station_ids[0]</code> whenever the list is non-empty; confirm <code>catalogue_station_id_only_when_unambiguous</code> fails. Restore.</li>
+</ol>
+<ul>
+<li>[ ] <strong>Step 7: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/deye.py apps/predbat/tests/test_deye_api.py
+git commit -m &quot;feat(discovery): report Deye inverters to the discovery catalogue
+
+Co-Authored-By: Claude Opus 5 (1M context) &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<hr />
+<h2 id="task-4-the-sunsynk-reporter">Task 4: The Sunsynk reporter</h2>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/sunsynk.py</code> (<code>SunsynkAPI</code>: add <code>build_discovery()</code>; one call in <code>run()</code>)
+- Test: <code>apps/predbat/tests/test_sunsynk_config.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>inverter_record(device_id, *, ...)</code>; <code>ComponentBase.refresh_discovery()</code>.
+- Produces: <code>SunsynkAPI.build_discovery() -&gt; dict | None</code>.</p>
+<p><strong>Background (verified):</strong>
+- <code>self.device_list</code> is a list of serial strings (<code>sn</code>). Discovery applies <strong>no</strong> device-type filter, and <code>automatic_config()</code> registers every serial as <code>"SunsynkCloud"</code> with no further test, binding PV and battery entities for each. As with Deye, the reporter mirrors that: <code>inverter_type</code> and <code>functions: ["solar", "battery"]</code> on every record.
+- There is no station or plant grouping at all, so there is no <code>account_ids</code>.
+- Pure accessors: <code>inverter_limit(sn)</code> (<code>device_rated_power</code>, from <code>inverter_detail</code>'s <code>ratePower</code>, W); <code>battery_capacity(sn)</code> (kWh — <code>device_values[sn]["capacity"]</code> Ah × <code>nominal_pack_voltage(chargeVolt)</code>, 0 when underivable); <code>export_limit(sn)</code> (<code>min</code> of the rating and <code>settings["pvMaxLimit"]</code> over whichever are positive); <code>_as_float(value)</code>. <code>nominal_pack_voltage()</code> does not log.
+- <code>automatic_config()</code> binds <code>export_limit</code> only when <code>self.export_limit(sn) &gt; 0</code>, so the capability <code>export_limit</code> (the Fox precedent; the spec has no token for it) is reported per device on exactly that evidence. Deye has no such concept.
+- Capabilities otherwise: <code>schedule</code>, <code>target_soc</code>, <code>discharge_target</code>, <code>charge_rate_power</code>.
+- <code>run()</code> publishes with <code>await self.publish_data()</code>, then returns early with <code>if first and not live_ok: return False</code>, then <code>if first and self.automatic: await self.automatic_config()</code>.
+- Not held: model, firmware, any station ID.
+- The rule "test a device the predicate excludes" has nothing to bite on: Sunsynk excludes no device at discovery or in <code>automatic_config()</code>. Say so in <code>build_discovery()</code>'s docstring rather than invent a case.</p>
+<p><strong>Real fixtures, and their limits:</strong> <code>sunsynk_const.py</code> states plainly that no one on the project has a live Sunsynk account and many field names are inferred. The values used here are only those it records as <strong>confirmed live</strong>: <code>ratePower 8000</code> with settings <code>pvMaxLimit 7000</code>; <code>chargeVolt 58.4</code> → 16 cells, with <code>200</code> Ah → 10.24 kWh; and serial <code>2405116013</code>, the inverter the live telemetry sample was captured from. The test docstring must say the fixture is assembled from those confirmed values rather than from one captured response.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<p>Add to <code>apps/predbat/tests/test_sunsynk_config.py</code>, after <code>test_run_first_cycle_polls_and_publishes()</code>. Add <code>from coordinator import validate_report</code> to the imports.</p>
+<pre><code class="language-python">SUNSYNK_LIVE_SERIAL = &quot;2405116013&quot;
+
+
+def _sunsynk_fleet():
+    &quot;&quot;&quot;A MockSunsynk holding one inverter built from sunsynk_const.py's CONFIRMED-live values only.
+
+    No captured inverter_detail or settings response exists in the repository (sunsynk_const.py
+    records that nobody on the project has a live account), so this is assembled from the values it
+    does mark confirmed live: ratePower 8000 with pvMaxLimit 7000; chargeVolt 58.4 with a 200 Ah pack
+    (10.24 kWh); and the serial the live telemetry sample was taken from.
+    &quot;&quot;&quot;
+    s = MockSunsynk()
+    sn = SUNSYNK_LIVE_SERIAL
+    s.device_list = [sn]
+    s.device_rated_power = {sn: 8000.0}
+    s.device_values = {sn: {&quot;capacity&quot;: 200, &quot;chargeVolt&quot;: 58.4}}
+    s.device_settings = {sn: {&quot;pvMaxLimit&quot;: 7000}}
+    return s
+
+
+def test_sunsynk_catalogue_describes_each_inverter():
+    &quot;&quot;&quot;Each inverter is a SunsynkCloud record with the confirmed-live ratings.&quot;&quot;&quot;
+    failed = False
+    s = _sunsynk_fleet()
+    record = s.build_discovery()[&quot;inverters&quot;][0]
+    checks = [
+        (record[&quot;device_id&quot;], &quot;sunsynk:&quot; + SUNSYNK_LIVE_SERIAL),
+        (record[&quot;inverter_type&quot;], &quot;SunsynkCloud&quot;),
+        (record[&quot;composition&quot;], &quot;direct&quot;),
+        (record[&quot;functions&quot;], [&quot;solar&quot;, &quot;battery&quot;]),
+        (record[&quot;hardware_ids&quot;], {&quot;serial&quot;: SUNSYNK_LIVE_SERIAL}),
+        (sorted(record[&quot;capabilities&quot;]), [&quot;charge_rate_power&quot;, &quot;discharge_target&quot;, &quot;export_limit&quot;, &quot;schedule&quot;, &quot;target_soc&quot;]),
+        (record[&quot;ratings&quot;][&quot;inverter_w&quot;], 8000.0),
+        (record[&quot;ratings&quot;][&quot;battery_capacity_ah&quot;], 200.0),
+        (record[&quot;ratings&quot;][&quot;battery_kwh&quot;], s.battery_capacity(SUNSYNK_LIVE_SERIAL)),
+    ]
+    for actual, expected in checks:
+        if actual != expected:
+            print(&quot;ERROR: expected {!r}, got {!r}&quot;.format(expected, actual))
+            failed = True
+    if abs(record[&quot;ratings&quot;][&quot;battery_kwh&quot;] - 10.24) &gt; 0.01:
+        print(&quot;ERROR: the confirmed-live pack is 10.24 kWh, got {}&quot;.format(record[&quot;ratings&quot;][&quot;battery_kwh&quot;]))
+        failed = True
+    for absent in (&quot;info&quot;, &quot;account_ids&quot;):
+        if absent in record:
+            print(&quot;ERROR: Sunsynk holds no model, firmware or station ID, so {} must be absent: {}&quot;.format(absent, record[absent]))
+            failed = True
+    return failed
+
+
+def test_sunsynk_catalogue_export_limit_only_on_evidence():
+    &quot;&quot;&quot;export_limit is a capability exactly where automatic_config() would bind it: export_limit() &gt; 0.&quot;&quot;&quot;
+    s = _sunsynk_fleet()
+    s.device_rated_power = {}
+    s.device_settings = {}
+    record = s.build_discovery()[&quot;inverters&quot;][0]
+    if &quot;export_limit&quot; in record.get(&quot;capabilities&quot;, []):
+        print(&quot;ERROR: with no rating and no pvMaxLimit, export_limit() is 0 and the capability must be absent&quot;)
+        return True
+    return False
+
+
+def test_sunsynk_catalogue_none_before_discovery():
+    &quot;&quot;&quot;With no inverters there is nothing to describe.&quot;&quot;&quot;
+    if MockSunsynk().build_discovery() is not None:
+        print(&quot;ERROR: an empty device_list must report None&quot;)
+        return True
+    return False
+
+
+def test_sunsynk_catalogue_round_trips_through_validate_report():
+    &quot;&quot;&quot;validate_report() hands every Sunsynk record back unchanged.&quot;&quot;&quot;
+    report = _sunsynk_fleet().build_discovery()
+    warnings = []
+    cleaned = validate_report(report, &quot;sunsynk&quot;, warnings.append)
+    if warnings or cleaned.get(&quot;inverters&quot;) != report[&quot;inverters&quot;]:
+        print(&quot;ERROR: validation changed or warned on the report: {} {}&quot;.format(warnings, cleaned.get(&quot;inverters&quot;)))
+        return True
+    return False
+</code></pre>
+<p>Then add the wiring test. It is <code>test_run_first_cycle_polls_and_publishes()</code> with the live poll made to fail and <code>automatic_config()</code> observed: <code>refresh_live()</code> sets <code>live_ok</code> only when <code>fetch_device_data(sn)</code> returns something truthy, so a fake returning <code>{}</code> sends <code>run()</code> into <code>if first and not live_ok: return False</code>.</p>
+<pre><code class="language-python">def test_sunsynk_catalogue_filed_when_first_cycle_defers():
+    &quot;&quot;&quot;run() files the report even on a first cycle that defers startup because the live poll failed.
+
+    `if first and not live_ok: return False` - and automatic_config() after it - would otherwise
+    swallow the report on exactly the installs whose dump most needs to say what hardware was found.
+    Built on test_run_first_cycle_polls_and_publishes(); fetch_device_data() fails and
+    automatic_config() is observed.
+    &quot;&quot;&quot;
+    failed = False
+    s = ConfigSunsynk()
+    s.automatic = True
+    reports = []
+    s.report_discovery = reports.append
+    configured = []
+
+    async def fake_restore():
+        &quot;&quot;&quot;Restore nothing.&quot;&quot;&quot;
+
+    async def fake_token():
+        &quot;&quot;&quot;Log in successfully.&quot;&quot;&quot;
+        return True
+
+    async def fake_device_list():
+        &quot;&quot;&quot;Discover one inverter.&quot;&quot;&quot;
+        s.device_list = [&quot;INV1&quot;]
+        return [&quot;INV1&quot;]
+
+    async def fake_detail(sn):
+        &quot;&quot;&quot;Return the confirmed-live rating.&quot;&quot;&quot;
+        return {&quot;ratePower&quot;: 8000}
+
+    async def fake_device_data(sn):
+        &quot;&quot;&quot;Fail the live poll: refresh_live() treats a falsy result as no data.&quot;&quot;&quot;
+        return {}
+
+    async def fake_settings(sn):
+        &quot;&quot;&quot;Return a minimal settings read.&quot;&quot;&quot;
+        return {&quot;batteryLowCap&quot;: &quot;10&quot;}
+
+    async def fake_publish():
+        &quot;&quot;&quot;Publish nothing.&quot;&quot;&quot;
+
+    async def fake_auto():
+        &quot;&quot;&quot;Record that automatic_config() ran.&quot;&quot;&quot;
+        configured.append(True)
+
+    with (
+        patch.object(s, &quot;restore_state&quot;, side_effect=fake_restore),
+        patch.object(s, &quot;fetch_token&quot;, side_effect=fake_token),
+        patch.object(s, &quot;get_device_list&quot;, side_effect=fake_device_list),
+        patch.object(s, &quot;fetch_device_detail&quot;, side_effect=fake_detail),
+        patch.object(s, &quot;fetch_device_data&quot;, side_effect=fake_device_data),
+        patch.object(s, &quot;fetch_settings&quot;, side_effect=fake_settings),
+        patch.object(s, &quot;publish_data&quot;, side_effect=fake_publish),
+        patch.object(s, &quot;automatic_config&quot;, side_effect=fake_auto),
+    ):
+        result = run_async_local(s.run(0, True))
+    if result is not False:
+        print(&quot;ERROR: run() should defer startup (return False) when the first live poll fails, got {!r}&quot;.format(result))
+        failed = True
+    if configured:
+        print(&quot;ERROR: automatic_config() must not run on a deferred first cycle&quot;)
+        failed = True
+    if len(reports) != 1 or reports[0][&quot;inverters&quot;][0][&quot;device_id&quot;] != &quot;sunsynk:INV1&quot;:
+        print(&quot;ERROR: the report must be filed before the deferring return, got {}&quot;.format(reports))
+        failed = True
+    return failed
+</code></pre>
+<p>Register all five in <code>run_sunsynk_config_tests()</code>'s <code>(name, fn)</code> list:</p>
+<pre><code class="language-python">        (&quot;catalogue_describes_each_inverter&quot;, test_sunsynk_catalogue_describes_each_inverter),
+        (&quot;catalogue_export_limit_only_on_evidence&quot;, test_sunsynk_catalogue_export_limit_only_on_evidence),
+        (&quot;catalogue_none_before_discovery&quot;, test_sunsynk_catalogue_none_before_discovery),
+        (&quot;catalogue_round_trips&quot;, test_sunsynk_catalogue_round_trips_through_validate_report),
+        (&quot;catalogue_filed_when_first_cycle_defers&quot;, test_sunsynk_catalogue_filed_when_first_cycle_defers),
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run them and confirm they fail</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage
+./run_all --test sunsynk_config &gt; /tmp/p2t4.log 2&gt;&amp;1; grep -E &quot;FAILED|EXCEPTION|ERROR&quot; /tmp/p2t4.log | head
+</code></pre>
+<p>Expected: <code>'MockSunsynk' object has no attribute 'build_discovery'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Write <code>build_discovery()</code></strong></li>
+</ul>
+<p>In <code>apps/predbat/sunsynk.py</code>, add <code>from coordinator import inverter_record</code> beside the other project imports, then add to <code>SunsynkAPI</code>, immediately after <code>automatic_config()</code>:</p>
+<pre><code class="language-python">    def build_discovery(self):
+        &quot;&quot;&quot;
+        Describe the discovered Sunsynk inverters for the discovery catalogue.
+
+        Reads only state the component already holds - device_list, the rating, capacity and
+        export-limit accessors - so this adds no API calls and cannot change what Sunsynk does.
+        Reporting is independent of self.automatic.
+
+        Discovery applies no device-type filter and automatic_config() registers every serial as
+        &quot;SunsynkCloud&quot; with no further test, binding PV and battery entities for each. Nothing
+        Sunsynk returns tells a PV-only unit from a hybrid, so neither can this: every record
+        carries inverter_type &quot;SunsynkCloud&quot; and functions solar and battery, mirroring
+        automatic_config() as the source of truth.
+
+        Ratings: inverter_limit() (ratePower, W) as inverter_w; battery_capacity() (kWh) as
+        battery_kwh; and the battery endpoint's capacity field as battery_capacity_ah, the raw Ah
+        the API returned. export_limit is reported as a capability exactly where
+        automatic_config() would bind it - export_limit() &gt; 0.
+
+        Deliberately not reported: model, firmware and any station ID - none is held, and Sunsynk
+        has no station grouping at all.
+
+        Returns None when no inverter has been discovered yet.
+        &quot;&quot;&quot;
+        if not self.device_list:
+            return None
+
+        inverters = []
+        for sn in self.device_list:
+            ratings = {}
+            rated_w = self.inverter_limit(sn)
+            if rated_w &gt; 0:
+                ratings[&quot;inverter_w&quot;] = rated_w
+            battery_kwh = self.battery_capacity(sn)
+            if battery_kwh &gt; 0:
+                ratings[&quot;battery_kwh&quot;] = battery_kwh
+            capacity_ah = self._as_float(self.device_values.get(sn, {}).get(SUNSYNK_CAPACITY_AH_FIELD))
+            if capacity_ah &gt; 0:
+                ratings[&quot;battery_capacity_ah&quot;] = capacity_ah
+
+            capabilities = [&quot;schedule&quot;, &quot;target_soc&quot;, &quot;discharge_target&quot;, &quot;charge_rate_power&quot;]
+            if self.export_limit(sn) &gt; 0:
+                capabilities.append(&quot;export_limit&quot;)
+
+            inverters.append(
+                inverter_record(
+                    &quot;sunsynk:{}&quot;.format(sn),
+                    inverter_type=&quot;SunsynkCloud&quot;,
+                    composition=&quot;direct&quot;,
+                    functions=[&quot;solar&quot;, &quot;battery&quot;],
+                    capabilities=capabilities,
+                    hardware_ids={&quot;serial&quot;: sn},
+                    ratings=ratings,
+                )
+            )
+
+        return {&quot;automatic&quot;: self.automatic, &quot;inverters&quot;: inverters}
+</code></pre>
+<p><code>SUNSYNK_CAPACITY_AH_FIELD</code> is already imported in <code>sunsynk.py</code> (<code>battery_capacity()</code> uses it).</p>
+<ul>
+<li>[ ] <strong>Step 4: Wire it into <code>run()</code></strong></li>
+</ul>
+<p>In <code>SunsynkAPI.run()</code>, find:</p>
+<pre><code class="language-python">        await self.publish_data()
+</code></pre>
+<p>followed by <code>if first and not live_ok:</code>. Insert between them:</p>
+<pre><code class="language-python">        # Filed right after this cycle's publish and BEFORE `if first and not live_ok:` below:
+        # that branch returns False to defer startup when the first live poll fails, and
+        # automatic_config() follows it, so a report filed any later would never be filed on
+        # exactly the installs whose dump most needs to say what hardware was found. (Sunsynk's
+        # automatic_config() does not raise - the early return is the reason.) refresh_discovery()
+        # owns the compare/retry/guard loop and never raises.
+        self.refresh_discovery()
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 5: Run the tests, then the full suite</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage
+./run_all --test sunsynk_config &gt; /tmp/p2t4.log 2&gt;&amp;1; grep -E &quot;FAILED|EXCEPTION|passed&quot; /tmp/p2t4.log | tail -3
+./run_all &gt; /tmp/p2t4-full.log 2&gt;&amp;1; echo &quot;exit=$?&quot;; grep -E &quot;All tests passed|Some tests failed&quot; /tmp/p2t4-full.log | tail -1
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 6: Prove the tests are load-bearing</strong></li>
+</ul>
+<ol>
+<li>Move the call below the <code>if first and not live_ok:</code> block; confirm <code>catalogue_filed_when_first_cycle_defers</code> fails. Restore.</li>
+<li>Append <code>export_limit</code> unconditionally; confirm <code>catalogue_export_limit_only_on_evidence</code> fails. Restore.</li>
+</ol>
+<ul>
+<li>[ ] <strong>Step 7: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/sunsynk.py apps/predbat/tests/test_sunsynk_config.py
+git commit -m &quot;feat(discovery): report Sunsynk inverters to the discovery catalogue
+
+Co-Authored-By: Claude Opus 5 (1M context) &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<hr />
+<h2 id="task-5-documentation">Task 5: Documentation</h2>
+<p><strong>Files:</strong>
+- Modify: <code>docs/discovery-catalogue.md</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: Tasks 1–4.
+- Produces: nothing code-facing.</p>
+<ul>
+<li>[ ] <strong>Step 1: Add the four reporters to the reporter list</strong></li>
+</ul>
+<p>Find the sentence listing the reporters that populate no <code>programmes</code> — it currently names <code>(GivTCP, GE Cloud, Octopus, Ohme, Solcast, Fox)</code>. Change the list to <code>(GivTCP, GE Cloud, Octopus, Ohme, Solcast, Fox, AlphaESS, Solis, Deye, Sunsynk)</code>. Change nothing else on that line.</p>
+<ul>
+<li>[ ] <strong>Step 2: Say what the cloud reporters cannot tell apart</strong></li>
+</ul>
+<p>In the section that describes the <code>inverters</code> section, after the sentence about entities, add:</p>
+<pre><code class="language-markdown">Deye and Sunsynk cannot tell a PV-only inverter from a hybrid: their APIs give no signal, and
+their automatic configuration treats every discovered inverter as a battery inverter. Their
+records say the same - `solar` and `battery` on every inverter - because the catalogue reports
+what Predbat believes about the hardware. If a PV-only unit has been configured as a battery
+inverter, that record is where the mistake shows.
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 3: Run the quality gate</strong></li>
+</ul>
+<pre><code class="language-bash">git add docs/discovery-catalogue.md
+cd coverage
+./run_pre_commit &gt; /tmp/p2t5-pc.log 2&gt;&amp;1; echo &quot;exit=$?&quot;; grep -E &quot;Failed$&quot; -A5 /tmp/p2t5-pc.log || echo &quot;all hooks passed&quot;
+</code></pre>
+<p>If cspell flags a genuinely correct new word, add it to <code>.cspell/custom-dictionary-workspace.txt</code> and re-stage it.</p>
+<ul>
+<li>[ ] <strong>Step 4: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add docs/discovery-catalogue.md .cspell/custom-dictionary-workspace.txt
+git commit -m &quot;docs(discovery): AlphaESS, Solis, Deye and Sunsynk as reporters
+
+Co-Authored-By: Claude Opus 5 (1M context) &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<hr />
+<h2 id="not-in-this-plan">Not in this plan</h2>
+<ul>
+<li><strong>Entity maps</strong> for any cloud reporter — a separate project (decided 2026-09-21).</li>
+<li><strong>The remaining inverter reporters</strong> — Teslemetry, Sigenergy, SolaX, Enphase and Gateway — and <strong>myenergi, Kraken, Axle and Carbon</strong>, per the rollout plan's Subsequent plans.</li>
+<li><strong>A capability-vocabulary pass.</strong> This plan reuses the spec's tokens plus <code>export_limit</code> (Fox's precedent). <code>ev_charger</code> (AlphaESS) and <code>tou_v2</code> (Solis) are new flags. When five or more reporters have contributed tokens, it is worth reconciling them.</li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

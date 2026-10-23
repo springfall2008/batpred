@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Discovery Coordinator — Minimal Implementation Design - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Discovery Coordinator \u2014 Minimal Implementation Design";
+        var mkdocs_page_input_path = "superpowers/specs/2026-09-06-discovery-coordinator-design.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../discovery-catalogue/">Discovery Catalogue</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Discovery Coordinator — Minimal Implementation Design</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="discovery-coordinator-minimal-implementation-design">Discovery Coordinator — Minimal Implementation Design</h1>
+<p>Date: 2026-09-06. Status: <strong>deferred</strong>. Superseded for the first release by
+<code>2026-09-10-discovery-catalogue-design.md</code>, which ships discovery as an observe-only
+catalogue with no allocation. This document remains the design record for the slot
+allocator, to be implemented once catalogues from real installations can be read. Its
+report schema has since been revised there (entity descriptors, chargers separate from
+cars, tariffs as a property of meters).</p>
+<h2 id="problem">Problem</h2>
+<p>Predbat components auto-configure by racing to overwrite shared apps.yaml keys
+(<code>num_inverters</code>, <code>inverter_type</code>, the ~40 per-inverter entity lists, <code>num_cars</code>, the
+per-car lists). There is no arbitration: within phase 1 the winner is whichever
+component's <code>automatic_config()</code> runs last (dict order in <code>COMPONENT_LIST</code>, serialized by
+<code>wait_api_started()</code>). Consequences:</p>
+<ul>
+<li>Two inverter components cannot both be in automatic mode: each writes <code>num_inverters</code>
+  and replaces whole entity lists (e.g. <code>gecloud.py</code> even deletes <code>givtcp_rest</code> to win).</li>
+<li>Slot identity is positional. Only the Gateway sorts devices by serial (2026-06-04
+  incident: NVS wipe re-ordered discovery and bound control to the wrong slot).</li>
+<li><code>num_cars</code> is a max-of-claims; Ohme hard-wires car 0; <code>base.car_slot_owner</code> is the only
+  (two-party) arbitration.</li>
+<li>Sensor-only devices (e.g. extra PV inverters) have no home distinct from control slots.</li>
+</ul>
+<h2 id="decisions-agreed">Decisions (agreed)</h2>
+<ol>
+<li><strong>Coordinator assigns, components write.</strong> Components report <em>discovery offers</em> to a
+   central coordinator during their first run instead of auto-configuring. After phase-1
+   startup completes, the coordinator allocates inverter slots, car indices and sensor
+   indices, then each component's <code>apply_assignment()</code> writes its own apps.yaml keys at
+   its assigned indices. The alternative (coordinator performs the whole automatic config
+   from submitted sensor lists) centralises every vendor quirk and is rejected as too big;
+   the coordinator writes only the <em>fleet-shape</em> keys (<code>num_inverters</code>, <code>inverter_type</code>,
+   <code>num_cars</code>).</li>
+<li><strong>Serial start stays.</strong> No parallel component startup. The "all components started or
+   timed out" barrier is simply the return of <code>Components.start(phase=1)</code>.</li>
+<li><strong>The <code>*_automatic</code> apps.yaml keys stay.</strong> Discovery-driven allocation only powers what
+   <code>automatic</code> powers today; with it off, entities are still published and the user
+   configures apps.yaml manually, exactly as now.</li>
+<li><strong>User apps.yaml still wins per the existing rules.</strong> The <code>args_from_apps_yaml</code>
+   snapshot / <code>set_arg_auto()</code> semantics are preserved, including the history-bearing
+   energy keys rule from #4959 (<code>overwrite=False</code>).</li>
+<li><strong>Sensors get their own assignment.</strong> A component can offer more energy/PV sensors than
+   control slots (<code>pv_today</code> etc. are <em>summed</em> lists, unlike the slot-indexed control
+   keys). The coordinator assigns list indices per summed key; components write entries
+   with <code>set_arg(key, value, index=i)</code>.</li>
+<li><strong>Minimal migration set:</strong> GivTCP, GECloud, Octopus (cars + tariff record), Ohme.
+   All other components keep today's behaviour untouched. Kraken keeps reading
+   <code>base.car_slot_owner</code>, so the coordinator still sets it for parity.</li>
+</ol>
+<h2 id="architecture">Architecture</h2>
+<p>New module <code>apps/predbat/coordinator.py</code>, built around a <strong>discovery catalogue</strong>: a plain,
+JSON-serialisable dict. Discovery records are dictionaries, not typed classes — components
+can attach any vendor facts they discover (model, firmware, battery ratings — the facts
+found being discarded today) beyond the required keys, and the whole catalogue can be
+persisted, published on the diagnostics sensor, included in debug dumps, and shipped to
+predbat.com without a conversion layer. A validation helper warns on missing required keys
+and drops malformed entries (the typo-safety typed classes would have given), never
+crashing allocation on a bad vendor report.</p>
+<p>One report per component, a dict with optional sections:</p>
+<ul>
+<li><code>"automatic"</code>: bool (default True) — offers from a non-automatic component are catalogued
+  but excluded from allocation.</li>
+<li><code>"inverters"</code>: list of dicts, one per <strong>slot candidate</strong> (after the component's own
+  topology rules — GECloud's gateway collapse and EMS fan-out stay inside GECloud).
+  Required keys: <code>device_key</code>, <code>inverter_type</code>; well-known: <code>serial</code>; anything else is
+  carried verbatim into the catalogue.</li>
+<li><code>"sensors"</code>: list of dicts, one per entry the component wants in a summed list key
+  (<code>load_today</code>, <code>import_today</code>, <code>export_today</code>, <code>pv_today</code>, and GECloud's split-PV
+  extras). Required keys: <code>device_key</code>, <code>key</code>, <code>entity_id</code>.</li>
+<li><code>"cars"</code>: list of dicts. Required keys: <code>device_key</code>, <code>kind</code> (<code>"charger"</code> for Ohme,
+  <code>"intelligent_device"</code> for Octopus IOG); well-known: <code>octopus_intelligent</code> (the
+  charger's tri-state wish).</li>
+<li>
+<p><code>"tariff"</code>: dict with well-known keys <code>import_code</code>, <code>export_code</code>, <code>is_intelligent_go</code>,
+  <code>has_six_hour_cap</code> — reported by Octopus, exposed via <code>Coordinator.get_tariff()</code>.
+  (Ohme's IOG auto-detection moves from peeking at the Octopus component into the
+  coordinator's car allocation.)</p>
+</li>
+<li>
+<p><code>Assignment</code> — what a component receives; deliberately a class, not a dict: it is the
+  in-process API the components consume. Fields: <code>inverter_slots {device_key: slot}</code>,
+  <code>sensor_indices {key: {device_key: index}}</code>, <code>skip_keys</code> (user-configured summed keys),
+  <code>car_slots {device_key: car_index}</code>, <code>octopus_intelligent_owner</code> (bool, for Ohme),
+  totals; <code>to_dict()</code> for the catalogue.</p>
+</li>
+<li><code>Coordinator(base)</code> — thread-safe (<code>threading.Lock</code>; components report from their own
+  threads):</li>
+<li><code>report(component_name, report)</code> — validates and stores one component's report dict;
+    idempotent (a re-report replaces); a re-report after startup (GivTCP re-probe
+    adoption, Octopus device-set change) triggers reallocation.</li>
+<li><code>catalogue()</code> — the JSON-safe dict of every report plus the current allocation;
+    <code>json.dumps(coordinator.catalogue())</code> must always succeed.</li>
+<li><code>allocate()</code> — deterministic: offers ordered by <code>COMPONENT_LIST</code> position then
+    component-reported order; duplicate serials deduped (first claim wins, logged);
+    slot <strong>stickiness</strong> via a map persisted through the Storage component
+    (<code>storage.save("coordinator", "allocation", ...)</code>, called with <code>run_async()</code>):
+    devices keep their relative order across restarts, new devices append, slots are
+    compacted 0..N-1 (no holes — <code>Inverter</code> cannot skip an index). Offers from
+    components with <code>automatic=False</code> are excluded from allocation.</li>
+<li>Writes fleet-shape keys via the <code>set_arg_auto</code> logic (moved to a module-level
+    function so the coordinator and <code>ComponentBase</code> share it).</li>
+<li><code>allocate_and_apply()</code> — called from <code>PredBat.initialize()</code> between
+    <code>start(phase=1)</code> and <code>initialize(phase=2)</code>: allocate, post each reporting
+    component's <code>Assignment</code>, wait for all applies (poll, 60 s timeout).</li>
+<li>Publishes <code>sensor.predbat_coordinator</code> with the allocation as attributes for
+    supportability.</li>
+</ul>
+<p><code>ComponentBase</code> additions: <code>pending_assignment</code> checked every 5 s tick of the existing
+<code>start()</code> loop, dispatched to an overridable <code>async def apply_assignment(assignment)</code> on
+the component's <strong>own</strong> thread/event loop (no cross-thread calls into component state);
+<code>assignment_applied</code> flag; <code>report_discovery(...)</code> convenience. <code>set_arg</code> gains an
+<code>index=</code> pass-through.</p>
+<h3 id="car-allocation-rule-parity-with-today">Car allocation rule (parity with today)</h3>
+<p>Resolve Ohme's tri-state (<code>ohme_automatic_octopus_intelligent</code>: explicit value wins;
+unset ⇒ auto = <code>ohme_automatic</code> and tariff record says Intelligent Go). If Ohme wins it
+gets a car slot and <code>octopus_intelligent_owner=True</code>; Octopus's intelligent devices get
+<strong>no</strong> car slots (today's <code>car_slot_owner</code> behaviour — improving this to allocate the
+remaining devices as extra cars is a noted future enhancement, not in scope). Otherwise
+Octopus devices are allocated sorted by device id. <code>num_cars</code> is never lowered below the
+user's configured value.</p>
+<h3 id="slot-aligned-givtcp_rest">Slot-aligned <code>givtcp_rest</code></h3>
+<p><code>inverter_type[n] == "GE"</code> makes <code>Inverter(n)</code> read <code>givtcp_rest[n]</code> directly for REST
+control, so GivTCP's apply must write its REST URLs at its <strong>assigned</strong> slots (padding
+with <code>None</code>), and <code>GivTCPComponent</code> must tolerate <code>None</code> entries in <code>rest_urls</code> (skip,
+preserving positional ids) so a component restart re-reading the rewritten arg works.</p>
+<h3 id="known-limitations-carried-forward-unchanged-from-today">Known limitations carried forward (unchanged from today)</h3>
+<ul>
+<li>Mixed manual + automatic multi-vendor fleets: fleet-shape keys are written with
+  <code>set_arg_auto(overwrite=True)</code>, so automatic wins with the standard logged note.</li>
+<li>4-inverter ceilings in <code>set_reserve_min_N</code> config items and <code>create_missing_arg</code>.</li>
+<li>Unmigrated components (Kraken, DEYE, Sunsynk, …) still write whole lists; enabling one
+  of those alongside a migrated one behaves as today.</li>
+</ul>
+<h2 id="testing">Testing</h2>
+<p>Headline requirement: <strong>multi-inverter automatic mode across two components</strong> — GivTCP
+(mocked REST, one discovered inverter) + GECloud (<code>MockGECloudDirect</code>, one battery) both
+automatic, driven through report → allocate → apply, asserting the merged args:
+<code>num_inverters == 2</code>, <code>inverter_type == ["GEC", "GE"]</code> (GE Cloud precedes GivTCP in
+<code>COMPONENT_LIST</code>, and that position is what orders the offers), each per-inverter list holds each
+vendor's entity at its assigned index, and summed keys contain both vendors' sensors.
+Plus: coordinator unit tests (determinism, dedup, stickiness/compaction, sensor-only
+offers, user-configured skip keys, car tri-state × tariff cases), per-component
+offset tests (assigned slots not starting at 0), and regression that non-automatic and
+unmigrated paths are untouched. All registered in <code>TEST_REGISTRY</code>.</p>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

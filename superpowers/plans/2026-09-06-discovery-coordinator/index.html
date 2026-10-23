@@ -1,0 +1,1408 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Discovery Coordinator (Minimal) Implementation Plan - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Discovery Coordinator (Minimal) Implementation Plan";
+        var mkdocs_page_input_path = "superpowers/plans/2026-09-06-discovery-coordinator.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../discovery-catalogue/">Discovery Catalogue</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Discovery Coordinator (Minimal) Implementation Plan</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="discovery-coordinator-minimal-implementation-plan">Discovery Coordinator (Minimal) Implementation Plan</h1>
+<blockquote>
+<p><strong>STATUS: DEFERRED — do not execute.</strong> This plan implements slot allocation, which has
+been deferred. The first release is the observe-only catalogue specified in
+<code>docs/superpowers/specs/2026-09-10-discovery-catalogue-design.md</code>; a plan for that
+supersedes this one. Retained because Tasks 5 to 9 remain the reference for how the
+allocator would be wired once it is built.</p>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Goal:</strong> Components report discovery records into a JSON-serialisable catalogue held by a central coordinator, which allocates inverter slots, car indices and sensor indices after phase-1 startup; automatic configuration then writes apps.yaml keys at the assigned indices — unblocking multi-inverter automatic mode across two components (GivTCP + GECloud), proven by a test.</p>
+<p><strong>Architecture:</strong> New <code>apps/predbat/coordinator.py</code> holds a thread-safe <code>Coordinator</code> whose discovery catalogue is plain dicts (JSON-safe end to end; components may attach vendor facts beyond the required keys). <code>ComponentBase</code> gains a pending-assignment hand-off applied on each component's own thread. Migrated components (GivTCP, GECloud, Octopus, Ohme) report discovery in their first <code>run()</code> instead of auto-configuring, and their <code>automatic_config</code> paths accept an <code>Assignment</code> (a class — the in-process API components consume) that turns whole-list writes into slot-indexed writes. The coordinator alone writes the fleet-shape keys (<code>num_inverters</code>, <code>inverter_type</code>, <code>num_cars</code>). Serial component startup is unchanged; unmigrated components are untouched.</p>
+<p><strong>Tech Stack:</strong> Python 3 (no new dependencies), existing test harness (<code>unit_test.py</code> + <code>MockBase</code>), Storage component for persistence.</p>
+<p><strong>Spec:</strong> <code>docs/superpowers/specs/2026-09-06-discovery-coordinator-design.md</code></p>
+<h2 id="global-constraints">Global Constraints</h2>
+<ul>
+<li>Work on a new branch <code>feat/discovery-coordinator</code> created from <code>main</code>.</li>
+<li>CLAUDE.md mandates: run <code>impact({target: "&lt;symbol&gt;", direction: "upstream"})</code> before modifying any existing function/method listed in a task, and <code>detect_changes()</code> before every commit; warn on HIGH/CRITICAL.</li>
+<li>Tests: run from <code>coverage/</code> (<code>source setup.csh</code> first time). ALWAYS redirect output to a log file and grep it, e.g. <code>./run_all --test coordinator &gt; test_coordinator.log 2&gt;&amp;1; grep -E "PASS|FAIL|Error|Traceback" test_coordinator.log</code>. Never commit <code>.log</code> files.</li>
+<li>100% docstring coverage (<code>interrogate</code>) — every new function, class and method needs a docstring. British English spelling (CSpell, <code>en-gb</code>); add genuinely new words to <code>.cspell/custom-dictionary-workspace.txt</code> and re-stage after pre-commit sorts it.</li>
+<li>Line length: 256 (Black) / 250 (Flake8). Variable naming: <code>lower_case_with_underscores</code>.</li>
+<li>Run <code>./run_pre_commit</code> before each commit; <code>git add</code> new files first (pre-commit skips untracked files).</li>
+<li>Behaviour parity rule: with a single automatic component enabled, the resulting <code>self.args</code> contents must be identical to today's (same keys, same entity ids, same list lengths) — several tasks assert exactly this.</li>
+<li>Catalogue invariant: every report is stored as plain dicts/lists/scalars; <code>json.dumps(coordinator.catalogue())</code> must always succeed (Task 1 tests it and later tasks must not break it — no datetimes, sets or objects in reports).</li>
+</ul>
+<h2 id="discovery-report-schema-used-by-every-task">Discovery report schema (used by every task)</h2>
+<p>A component reports ONE dict. All sections optional; unknown extra keys in any record are preserved verbatim in the catalogue (that is the point — vendor facts like model/firmware ride along):</p>
+<pre><code class="language-python">{
+    &quot;automatic&quot;: True,                       # excluded from allocation when False (still catalogued)
+    &quot;inverters&quot;: [                           # slot candidates, post-topology
+        {&quot;device_key&quot;: &quot;givtcp:SN1&quot;, &quot;inverter_type&quot;: &quot;GE&quot;, &quot;serial&quot;: &quot;SN1&quot;, ...},
+    ],
+    &quot;sensors&quot;: [                             # entries for summed list keys
+        {&quot;device_key&quot;: &quot;givtcp:SN1&quot;, &quot;key&quot;: &quot;load_today&quot;, &quot;entity_id&quot;: &quot;sensor.predbat_givtcp_0_load_today&quot;},
+    ],
+    &quot;cars&quot;: [                                # chargers and intelligent devices
+        {&quot;device_key&quot;: &quot;ohme:CH1&quot;, &quot;kind&quot;: &quot;charger&quot;, &quot;octopus_intelligent&quot;: None, ...},
+    ],
+    &quot;tariff&quot;: {&quot;import_code&quot;: &quot;...&quot;, &quot;export_code&quot;: &quot;...&quot;, &quot;is_intelligent_go&quot;: False, &quot;has_six_hour_cap&quot;: False},
+}
+</code></pre>
+<p>Required keys per record: inverters <code>device_key</code>+<code>inverter_type</code>; sensors <code>device_key</code>+<code>key</code>+<code>entity_id</code>; cars <code>device_key</code>+<code>kind</code>. <code>Coordinator.report()</code> warns and drops records missing them.</p>
+<hr />
+<h3 id="task-1-coordinator-core-catalogue-validation-inverter-slot-allocation">Task 1: Coordinator core — catalogue, validation, inverter slot allocation</h3>
+<p><strong>Files:</strong>
+- Create: <code>apps/predbat/coordinator.py</code>
+- Create: <code>apps/predbat/tests/test_coordinator.py</code>
+- Modify: <code>apps/predbat/unit_test.py</code> (TEST_REGISTRY, around line 654 and the import block around line 256)</p>
+<p><strong>Interfaces:</strong>
+- Produces: <code>Assignment</code> (attributes <code>inverter_slots: dict</code>, <code>num_inverters: int</code>, <code>sensor_indices: dict</code>, <code>skip_keys: set</code>, <code>car_slots: dict</code>, <code>num_cars: int</code>, <code>octopus_intelligent_owner: bool</code>, method <code>to_dict()</code>), <code>Coordinator(base, priority)</code> with <code>report(component_name, report)</code>, <code>allocate() -&gt; dict[str, Assignment]</code>, <code>catalogue() -&gt; dict</code>, <code>fleet_inverter_types() -&gt; list</code>, <code>get_tariff() -&gt; dict|None</code>, and attribute <code>persisted_slots: dict[str, int]</code> (device_key → slot; injected by tests, wired to storage in Task 4).
+- Consumes: <code>MockBase</code> from <code>mock_base.py</code> (existing).</p>
+<ul>
+<li>[ ] <strong>Step 1: Create the branch</strong></li>
+</ul>
+<pre><code class="language-bash">git checkout main &amp;&amp; git pull &amp;&amp; git checkout -b feat/discovery-coordinator
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Write the failing tests</strong></li>
+</ul>
+<p>Create <code>apps/predbat/tests/test_coordinator.py</code>:</p>
+<pre><code class="language-python"># fmt: off
+# pylint: disable=line-too-long
+&quot;&quot;&quot;Unit tests for the discovery coordinator (coordinator.py) - catalogue collection and slot allocation.&quot;&quot;&quot;
+
+import json
+
+from mock_base import MockBase
+from coordinator import Coordinator
+
+
+def _coordinator(priority=None, persisted=None):
+    &quot;&quot;&quot;A Coordinator on a MockBase with an explicit component priority order and optional persisted slot map.&quot;&quot;&quot;
+    base = MockBase()
+    coordinator = Coordinator(base, priority=priority or [&quot;gecloud&quot;, &quot;givtcp&quot;])
+    if persisted:
+        coordinator.persisted_slots = dict(persisted)
+    return base, coordinator
+
+
+def test_allocate_two_components():
+    &quot;&quot;&quot;Two automatic inverter components get disjoint slots in priority order and the fleet totals are right.&quot;&quot;&quot;
+    base, coordinator = _coordinator()
+    coordinator.report(&quot;givtcp&quot;, {&quot;inverters&quot;: [{&quot;device_key&quot;: &quot;givtcp:SN100&quot;, &quot;serial&quot;: &quot;SN100&quot;, &quot;inverter_type&quot;: &quot;GE&quot;}]})
+    coordinator.report(&quot;gecloud&quot;, {&quot;inverters&quot;: [{&quot;device_key&quot;: &quot;gecloud:sn200&quot;, &quot;serial&quot;: &quot;sn200&quot;, &quot;inverter_type&quot;: &quot;GEC&quot;}]})
+    assignments = coordinator.allocate()
+    assert assignments[&quot;gecloud&quot;].inverter_slots == {&quot;gecloud:sn200&quot;: 0}, assignments[&quot;gecloud&quot;].inverter_slots
+    assert assignments[&quot;givtcp&quot;].inverter_slots == {&quot;givtcp:SN100&quot;: 1}, assignments[&quot;givtcp&quot;].inverter_slots
+    assert assignments[&quot;givtcp&quot;].num_inverters == 2
+    assert coordinator.fleet_inverter_types() == [&quot;GEC&quot;, &quot;GE&quot;]
+    print(&quot;PASS: two components allocated disjoint slots&quot;)
+    return 0
+
+
+def test_allocate_duplicate_serial():
+    &quot;&quot;&quot;The same physical inverter offered by two components is only allocated once - first component in priority order wins.&quot;&quot;&quot;
+    base, coordinator = _coordinator()
+    coordinator.report(&quot;gecloud&quot;, {&quot;inverters&quot;: [{&quot;device_key&quot;: &quot;gecloud:sn100&quot;, &quot;serial&quot;: &quot;SN100&quot;, &quot;inverter_type&quot;: &quot;GEC&quot;}]})
+    coordinator.report(&quot;givtcp&quot;, {&quot;inverters&quot;: [{&quot;device_key&quot;: &quot;givtcp:SN100&quot;, &quot;serial&quot;: &quot;sn100&quot;, &quot;inverter_type&quot;: &quot;GE&quot;}]})
+    assignments = coordinator.allocate()
+    assert assignments[&quot;gecloud&quot;].inverter_slots == {&quot;gecloud:sn100&quot;: 0}
+    assert assignments[&quot;givtcp&quot;].inverter_slots == {}, &quot;duplicate serial must not get a second slot&quot;
+    assert assignments[&quot;givtcp&quot;].num_inverters == 1
+    print(&quot;PASS: duplicate serial deduplicated, priority component won&quot;)
+    return 0
+
+
+def test_allocate_non_automatic_excluded():
+    &quot;&quot;&quot;Offers from a component whose automatic flag is off do not take part in allocation but stay catalogued.&quot;&quot;&quot;
+    base, coordinator = _coordinator()
+    coordinator.report(&quot;givtcp&quot;, {&quot;automatic&quot;: False, &quot;inverters&quot;: [{&quot;device_key&quot;: &quot;givtcp:SN1&quot;, &quot;inverter_type&quot;: &quot;GE&quot;}]})
+    coordinator.report(&quot;gecloud&quot;, {&quot;inverters&quot;: [{&quot;device_key&quot;: &quot;gecloud:sn2&quot;, &quot;inverter_type&quot;: &quot;GEC&quot;}]})
+    assignments = coordinator.allocate()
+    assert assignments[&quot;givtcp&quot;].inverter_slots == {}
+    assert assignments[&quot;gecloud&quot;].inverter_slots == {&quot;gecloud:sn2&quot;: 0}
+    assert assignments[&quot;gecloud&quot;].num_inverters == 1
+    assert coordinator.catalogue()[&quot;components&quot;][&quot;givtcp&quot;][&quot;inverters&quot;], &quot;non-automatic offers still catalogued&quot;
+    print(&quot;PASS: non-automatic offers excluded from allocation&quot;)
+    return 0
+
+
+def test_allocate_sticky_ordering():
+    &quot;&quot;&quot;A persisted slot map keeps devices in their previous relative order; a departed device compacts, a new one appends.&quot;&quot;&quot;
+    base, coordinator = _coordinator(persisted={&quot;givtcp:B&quot;: 0, &quot;givtcp:C&quot;: 1})
+    coordinator.report(&quot;givtcp&quot;, {&quot;inverters&quot;: [{&quot;device_key&quot;: &quot;givtcp:A&quot;, &quot;inverter_type&quot;: &quot;GE&quot;}, {&quot;device_key&quot;: &quot;givtcp:C&quot;, &quot;inverter_type&quot;: &quot;GE&quot;}]})
+    assignments = coordinator.allocate()
+    # C held slot 1 previously; B is gone so C compacts down to 0 and the new A appends after
+    assert assignments[&quot;givtcp&quot;].inverter_slots == {&quot;givtcp:C&quot;: 0, &quot;givtcp:A&quot;: 1}, assignments[&quot;givtcp&quot;].inverter_slots
+    assert coordinator.persisted_slots == {&quot;givtcp:C&quot;: 0, &quot;givtcp:A&quot;: 1}
+    print(&quot;PASS: sticky ordering compacts and appends deterministically&quot;)
+    return 0
+
+
+def test_report_is_idempotent():
+    &quot;&quot;&quot;Re-reporting replaces a component's previous report instead of accumulating it.&quot;&quot;&quot;
+    base, coordinator = _coordinator()
+    coordinator.report(&quot;givtcp&quot;, {&quot;inverters&quot;: [{&quot;device_key&quot;: &quot;givtcp:A&quot;, &quot;inverter_type&quot;: &quot;GE&quot;}]})
+    coordinator.report(&quot;givtcp&quot;, {&quot;inverters&quot;: [{&quot;device_key&quot;: &quot;givtcp:A&quot;, &quot;inverter_type&quot;: &quot;GE&quot;}, {&quot;device_key&quot;: &quot;givtcp:B&quot;, &quot;inverter_type&quot;: &quot;GE&quot;}]})
+    assignments = coordinator.allocate()
+    assert assignments[&quot;givtcp&quot;].inverter_slots == {&quot;givtcp:A&quot;: 0, &quot;givtcp:B&quot;: 1}
+    assert assignments[&quot;givtcp&quot;].num_inverters == 2
+    print(&quot;PASS: re-report replaces prior report&quot;)
+    return 0
+
+
+def test_invalid_records_dropped():
+    &quot;&quot;&quot;A record missing a required key is warned about and dropped without breaking the rest of the report.&quot;&quot;&quot;
+    base, coordinator = _coordinator()
+    coordinator.report(&quot;givtcp&quot;, {&quot;inverters&quot;: [{&quot;serial&quot;: &quot;no-device-key&quot;, &quot;inverter_type&quot;: &quot;GE&quot;}, {&quot;device_key&quot;: &quot;givtcp:OK&quot;, &quot;inverter_type&quot;: &quot;GE&quot;}]})
+    assignments = coordinator.allocate()
+    assert assignments[&quot;givtcp&quot;].inverter_slots == {&quot;givtcp:OK&quot;: 0}
+    print(&quot;PASS: invalid records dropped, valid ones kept&quot;)
+    return 0
+
+
+def test_catalogue_is_json_serialisable():
+    &quot;&quot;&quot;The whole catalogue, including extra vendor keys, round-trips through json.dumps.&quot;&quot;&quot;
+    base, coordinator = _coordinator()
+    coordinator.report(&quot;givtcp&quot;, {&quot;inverters&quot;: [{&quot;device_key&quot;: &quot;givtcp:A&quot;, &quot;inverter_type&quot;: &quot;GE&quot;, &quot;firmware&quot;: &quot;D0.451&quot;, &quot;givtcp_version&quot;: &quot;3.0.4&quot;}],
+                                  &quot;tariff&quot;: {&quot;import_code&quot;: &quot;E-1R-AGILE-24-10-01-A&quot;, &quot;is_intelligent_go&quot;: False}})
+    coordinator.allocate()
+    catalogue = coordinator.catalogue()
+    text = json.dumps(catalogue)
+    reloaded = json.loads(text)
+    assert reloaded[&quot;components&quot;][&quot;givtcp&quot;][&quot;inverters&quot;][0][&quot;firmware&quot;] == &quot;D0.451&quot;
+    assert reloaded[&quot;allocation&quot;][&quot;inverter_slots&quot;] == {&quot;givtcp:A&quot;: 0}
+    assert reloaded[&quot;allocation&quot;][&quot;fleet_inverter_types&quot;] == [&quot;GE&quot;]
+    print(&quot;PASS: catalogue serialises to JSON with vendor extras intact&quot;)
+    return 0
+
+
+def test_coordinator_all(my_predbat=None):
+    &quot;&quot;&quot;Run every coordinator test, returning the number of failures.&quot;&quot;&quot;
+    failures = 0
+    failures += test_allocate_two_components()
+    failures += test_allocate_duplicate_serial()
+    failures += test_allocate_non_automatic_excluded()
+    failures += test_allocate_sticky_ordering()
+    failures += test_report_is_idempotent()
+    failures += test_invalid_records_dropped()
+    failures += test_catalogue_is_json_serialisable()
+    return failures
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 3: Register the test and verify it fails</strong></li>
+</ul>
+<p>In <code>apps/predbat/unit_test.py</code> add beside the existing imports (~line 263): <code>from tests.test_coordinator import test_coordinator_all</code> and in <code>TEST_REGISTRY</code> beside the <code>components</code> entry: <code>("coordinator", test_coordinator_all, "Discovery coordinator catalogue and allocation tests", False),</code></p>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test coordinator &gt; test_coordinator.log 2&gt;&amp;1; grep -E "PASS|FAIL|Error|ModuleNotFound" test_coordinator.log</code>
+Expected: FAIL — <code>ModuleNotFoundError: No module named 'coordinator'</code></p>
+<ul>
+<li>[ ] <strong>Step 4: Implement coordinator.py</strong></li>
+</ul>
+<pre><code class="language-python"># -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+&quot;&quot;&quot;Central discovery coordinator and catalogue.
+
+Components report what they discovered (inverter slot candidates, summed-sensor entries,
+car chargers, the energy tariff) as plain dicts during their first run instead of writing
+shared apps.yaml keys directly. The reports form a JSON-serialisable discovery catalogue.
+After phase-1 startup the coordinator allocates inverter slots, car indices and sensor
+list indices deterministically, and each component's apply_assignment() then writes its
+own keys at the assigned indices. Only the fleet-shape keys (num_inverters, inverter_type,
+num_cars) are written by the coordinator itself. See
+docs/superpowers/specs/2026-09-06-discovery-coordinator-design.md for the report schema.
+&quot;&quot;&quot;
+
+import copy
+import threading
+
+# Required keys per record section; report() warns about and drops records missing one.
+REQUIRED_RECORD_KEYS = {
+    &quot;inverters&quot;: (&quot;device_key&quot;, &quot;inverter_type&quot;),
+    &quot;sensors&quot;: (&quot;device_key&quot;, &quot;key&quot;, &quot;entity_id&quot;),
+    &quot;cars&quot;: (&quot;device_key&quot;, &quot;kind&quot;),
+}
+
+
+class Assignment:
+    &quot;&quot;&quot;Slot and index allocations handed to one component after discovery.
+
+    Deliberately a class rather than a dict: this is the in-process API migrated
+    components consume, so named attributes with defaults beat dict.get chains.
+    &quot;&quot;&quot;
+
+    def __init__(self):
+        &quot;&quot;&quot;Start with an empty allocation; the coordinator fills the fields in allocate().&quot;&quot;&quot;
+        self.inverter_slots = {}
+        self.num_inverters = 0
+        self.sensor_indices = {}
+        self.skip_keys = set()
+        self.car_slots = {}
+        self.num_cars = 0
+        self.octopus_intelligent_owner = False
+
+    def to_dict(self):
+        &quot;&quot;&quot;A JSON-safe dict of this assignment, for the catalogue and diagnostics.&quot;&quot;&quot;
+        return {
+            &quot;inverter_slots&quot;: dict(self.inverter_slots),
+            &quot;num_inverters&quot;: self.num_inverters,
+            &quot;sensor_indices&quot;: {key: dict(value) for key, value in self.sensor_indices.items()},
+            &quot;skip_keys&quot;: sorted(self.skip_keys),
+            &quot;car_slots&quot;: dict(self.car_slots),
+            &quot;num_cars&quot;: self.num_cars,
+            &quot;octopus_intelligent_owner&quot;: self.octopus_intelligent_owner,
+        }
+
+
+class Coordinator:
+    &quot;&quot;&quot;Collects component discovery reports into a catalogue and allocates slots deterministically.
+
+    Thread-safe: components report from their own threads while allocate() runs on the
+    main thread at startup (and from a reporting component's thread on a later re-report).
+    &quot;&quot;&quot;
+
+    def __init__(self, base, priority):
+        &quot;&quot;&quot;Create an empty coordinator; priority is the component ordering (COMPONENT_LIST key order in production).&quot;&quot;&quot;
+        self.base = base
+        self.log = base.log
+        self.priority = list(priority)
+        self.lock = threading.Lock()
+        self.reports = {}
+        self.persisted_slots = {}
+        self.started = False
+        self._fleet_types = []
+        self._last_assignments = {}
+
+    def report(self, component_name, report):
+        &quot;&quot;&quot;Validate and store (or replace) one component's discovery report dict.
+
+        Idempotent per component: a re-report (fleet growth, device-set change) replaces
+        the previous report wholesale rather than accumulating. Records missing a required
+        key are logged and dropped; the rest of the report still counts.
+        &quot;&quot;&quot;
+        cleaned = {&quot;automatic&quot;: bool(report.get(&quot;automatic&quot;, True))}
+        for section, required in REQUIRED_RECORD_KEYS.items():
+            records = []
+            for record in report.get(section, []) or []:
+                missing = [key for key in required if not isinstance(record, dict) or record.get(key) is None]
+                if missing:
+                    self.log(&quot;Warn: Coordinator: dropping {} {} record missing {}: {}&quot;.format(component_name, section, &quot;/&quot;.join(missing), record))
+                    continue
+                records.append(dict(record))
+            cleaned[section] = records
+        if isinstance(report.get(&quot;tariff&quot;), dict):
+            cleaned[&quot;tariff&quot;] = dict(report[&quot;tariff&quot;])
+        with self.lock:
+            self.reports[component_name] = cleaned
+        self.log(&quot;Coordinator: {} reported {} inverter(s), {} sensor(s), {} car(s) (automatic={})&quot;.format(component_name, len(cleaned[&quot;inverters&quot;]), len(cleaned[&quot;sensors&quot;]), len(cleaned[&quot;cars&quot;]), cleaned[&quot;automatic&quot;]))
+
+    def get_tariff(self):
+        &quot;&quot;&quot;The reported tariff dict, or None when no tariff component has reported.&quot;&quot;&quot;
+        with self.lock:
+            for name in self._ordered_reports():
+                tariff = self.reports[name].get(&quot;tariff&quot;)
+                if tariff:
+                    return dict(tariff)
+        return None
+
+    def catalogue(self):
+        &quot;&quot;&quot;The whole discovery catalogue as a JSON-safe dict: every report plus the current allocation.&quot;&quot;&quot;
+        with self.lock:
+            return copy.deepcopy(
+                {
+                    &quot;components&quot;: self.reports,
+                    &quot;allocation&quot;: {
+                        &quot;inverter_slots&quot;: self.persisted_slots,
+                        &quot;fleet_inverter_types&quot;: self._fleet_types,
+                        &quot;assignments&quot;: {name: assignment.to_dict() for name, assignment in self._last_assignments.items()},
+                    },
+                }
+            )
+
+    def _ordered_reports(self):
+        &quot;&quot;&quot;Reporting components in priority order (unknown names last, in report order). Caller holds the lock.&quot;&quot;&quot;
+        known = [name for name in self.priority if name in self.reports]
+        unknown = [name for name in self.reports if name not in self.priority]
+        return known + unknown
+
+    def fleet_inverter_types(self):
+        &quot;&quot;&quot;The inverter_type list for the whole allocated fleet, ordered by slot (valid after allocate()).&quot;&quot;&quot;
+        return list(self._fleet_types)
+
+    def allocate(self):
+        &quot;&quot;&quot;Allocate inverter slots (and, in later tasks, sensor indices and car indices) and return per-component Assignments.
+
+        Deterministic: components in priority order, records in reported order, duplicate
+        serials deduplicated (first claim wins). Stickiness: persisted_slots orders devices
+        seen before ahead of new ones, then slots are compacted to 0..N-1 - Inverter cannot
+        cope with holes in the per-inverter lists.
+        &quot;&quot;&quot;
+        with self.lock:
+            assignments = {name: Assignment() for name in self.reports}
+            candidates = []
+            seen_serials = set()
+            for name in self._ordered_reports():
+                entry = self.reports[name]
+                if not entry[&quot;automatic&quot;]:
+                    continue
+                for record in entry[&quot;inverters&quot;]:
+                    serial = str(record.get(&quot;serial&quot;) or record[&quot;device_key&quot;]).casefold()
+                    if serial in seen_serials:
+                        self.log(&quot;Coordinator: {} record {} duplicates an already-claimed serial, skipping&quot;.format(name, record[&quot;device_key&quot;]))
+                        continue
+                    seen_serials.add(serial)
+                    candidates.append((name, record))
+            # Devices with a persisted slot keep their previous relative order; new devices follow in record order
+            order = sorted(range(len(candidates)), key=lambda i: (self.persisted_slots.get(candidates[i][1][&quot;device_key&quot;], len(self.persisted_slots) + i), i))
+            self._fleet_types = [None] * len(candidates)
+            new_persisted = {}
+            for slot, i in enumerate(order):
+                name, record = candidates[i]
+                assignments[name].inverter_slots[record[&quot;device_key&quot;]] = slot
+                self._fleet_types[slot] = record[&quot;inverter_type&quot;]
+                new_persisted[record[&quot;device_key&quot;]] = slot
+            if candidates:
+                self.persisted_slots = new_persisted
+            for assignment in assignments.values():
+                assignment.num_inverters = len(candidates)
+            self._last_assignments = assignments
+            return assignments
+</code></pre>
+<p>(Note <code>get_tariff</code>/<code>catalogue</code> take the lock, so <code>allocate()</code> must not call them internally — it reads <code>self.reports</code> directly.)</p>
+<ul>
+<li>[ ] <strong>Step 5: Run the tests, verify they pass</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test coordinator &gt; test_coordinator.log 2&gt;&amp;1; grep -cE "^PASS" test_coordinator.log &amp;&amp; grep -E "FAIL|Error|Traceback" test_coordinator.log</code>
+Expected: 7 PASS lines, no failures.</p>
+<ul>
+<li>[ ] <strong>Step 6: Pre-commit and commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/coordinator.py apps/predbat/tests/test_coordinator.py apps/predbat/unit_test.py docs/superpowers/specs/2026-09-06-discovery-coordinator-design.md docs/superpowers/plans/2026-09-06-discovery-coordinator.md
+./run_pre_commit
+git commit -m &quot;feat(coordinator): discovery catalogue and deterministic inverter slot allocation&quot;
+</code></pre>
+<p>(Per CLAUDE.md run <code>detect_changes()</code> first — expected scope: new symbols only.)</p>
+<hr />
+<h3 id="task-2-sensor-index-allocation-and-user-configured-skip-keys">Task 2: Sensor index allocation and user-configured skip keys</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/coordinator.py</code>
+- Test: <code>apps/predbat/tests/test_coordinator.py</code></p>
+<p><strong>Interfaces:</strong>
+- Produces: <code>Assignment.sensor_indices</code> as <code>{key: {device_key: index}}</code>; <code>Assignment.skip_keys</code> (summed keys the user configured in apps.yaml — the component must not write them); module constant <code>SLOT_EXTENDED_KEYS = ("pv_power", "load_power")</code> whose sensor indices start <strong>after</strong> the inverter fleet (those keys are slot-indexed for control devices, with extra sensor-only entries appended).
+- Consumes: <code>getattr(base, "args_from_apps_yaml", None)</code> — the user's raw apps.yaml snapshot (<code>predbat.py:1874</code>), same source <code>set_arg_auto</code> uses.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong> (append to <code>test_coordinator.py</code>, and call them from <code>test_coordinator_all</code>)</li>
+</ul>
+<pre><code class="language-python">def test_sensor_allocation():
+    &quot;&quot;&quot;Summed-key sensor records get indices 0..M-1 across components; slot-extended keys start after the inverter fleet.&quot;&quot;&quot;
+    base, coordinator = _coordinator()
+    coordinator.report(&quot;gecloud&quot;, {&quot;inverters&quot;: [{&quot;device_key&quot;: &quot;gecloud:sn1&quot;, &quot;inverter_type&quot;: &quot;GEC&quot;}],
+                                   &quot;sensors&quot;: [{&quot;device_key&quot;: &quot;gecloud:sn1&quot;, &quot;key&quot;: &quot;pv_today&quot;, &quot;entity_id&quot;: &quot;sensor.predbat_gecloud_sn1_solar_total&quot;},
+                                               {&quot;device_key&quot;: &quot;gecloud:pv9&quot;, &quot;key&quot;: &quot;pv_today&quot;, &quot;entity_id&quot;: &quot;sensor.predbat_gecloud_pv9_solar_total&quot;},
+                                               {&quot;device_key&quot;: &quot;gecloud:pv9&quot;, &quot;key&quot;: &quot;pv_power&quot;, &quot;entity_id&quot;: &quot;sensor.predbat_gecloud_pv9_solar_power&quot;}]})
+    coordinator.report(&quot;givtcp&quot;, {&quot;inverters&quot;: [{&quot;device_key&quot;: &quot;givtcp:SN2&quot;, &quot;inverter_type&quot;: &quot;GE&quot;}],
+                                  &quot;sensors&quot;: [{&quot;device_key&quot;: &quot;givtcp:SN2&quot;, &quot;key&quot;: &quot;pv_today&quot;, &quot;entity_id&quot;: &quot;sensor.predbat_givtcp_0_pv_today&quot;}]})
+    assignments = coordinator.allocate()
+    assert assignments[&quot;gecloud&quot;].sensor_indices[&quot;pv_today&quot;] == {&quot;gecloud:sn1&quot;: 0, &quot;gecloud:pv9&quot;: 1}
+    assert assignments[&quot;givtcp&quot;].sensor_indices[&quot;pv_today&quot;] == {&quot;givtcp:SN2&quot;: 2}
+    # pv_power is slot-indexed for control devices, so the sensor-only extra starts after the 2-inverter fleet
+    assert assignments[&quot;gecloud&quot;].sensor_indices[&quot;pv_power&quot;] == {&quot;gecloud:pv9&quot;: 2}
+    print(&quot;PASS: sensor indices allocated across components&quot;)
+    return 0
+
+
+def test_sensor_skip_user_configured():
+    &quot;&quot;&quot;A summed key the user wrote in apps.yaml is skipped entirely - the #4959 user-history-wins rule, centralised.&quot;&quot;&quot;
+    base, coordinator = _coordinator()
+    base.args_from_apps_yaml = {&quot;load_today&quot;: [&quot;sensor.my_own_meter&quot;]}
+    coordinator.report(&quot;givtcp&quot;, {&quot;inverters&quot;: [{&quot;device_key&quot;: &quot;givtcp:SN1&quot;, &quot;inverter_type&quot;: &quot;GE&quot;}],
+                                  &quot;sensors&quot;: [{&quot;device_key&quot;: &quot;givtcp:SN1&quot;, &quot;key&quot;: &quot;load_today&quot;, &quot;entity_id&quot;: &quot;sensor.predbat_givtcp_0_load_today&quot;}]})
+    assignments = coordinator.allocate()
+    assert &quot;load_today&quot; in assignments[&quot;givtcp&quot;].skip_keys
+    assert &quot;load_today&quot; not in assignments[&quot;givtcp&quot;].sensor_indices
+    print(&quot;PASS: user-configured summed key skipped&quot;)
+    return 0
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run and verify the new tests fail</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test coordinator &gt; test_coordinator.log 2&gt;&amp;1; grep -E "FAIL|Error|AssertionError|KeyError" test_coordinator.log</code>
+Expected: FAIL — <code>sensor_indices</code> empty / <code>KeyError: 'pv_today'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Implement</strong></li>
+</ul>
+<p>In <code>coordinator.py</code> add at module level <code>SLOT_EXTENDED_KEYS = ("pv_power", "load_power")</code> and extend <code>allocate()</code> after the inverter loop (inside the lock, before <code>self._last_assignments = assignments</code>):</p>
+<pre><code class="language-python">            # Summed-sensor keys: one shared list per key across all components, deduplicated by
+            # owning device, with the user's own apps.yaml entry winning the whole key (#4959).
+            raw_args = getattr(self.base, &quot;args_from_apps_yaml&quot;, None) or {}
+            key_counts = {}
+            seen_sensor = set()
+            for name in self._ordered_reports():
+                entry = self.reports[name]
+                if not entry[&quot;automatic&quot;]:
+                    continue
+                for record in entry[&quot;sensors&quot;]:
+                    if raw_args.get(record[&quot;key&quot;]) is not None:
+                        assignments[name].skip_keys.add(record[&quot;key&quot;])
+                        continue
+                    dedup = (record[&quot;key&quot;], str(record[&quot;device_key&quot;]).casefold())
+                    if dedup in seen_sensor:
+                        continue
+                    seen_sensor.add(dedup)
+                    start = len(candidates) if record[&quot;key&quot;] in SLOT_EXTENDED_KEYS else 0
+                    index = key_counts.get(record[&quot;key&quot;], start)
+                    key_counts[record[&quot;key&quot;]] = index + 1
+                    assignments[name].sensor_indices.setdefault(record[&quot;key&quot;], {})[record[&quot;device_key&quot;]] = index
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run tests, verify pass</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test coordinator &gt; test_coordinator.log 2&gt;&amp;1; grep -cE "^PASS" test_coordinator.log &amp;&amp; grep -E "FAIL|Error|Traceback" test_coordinator.log</code>
+Expected: 9 PASS, no failures.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">./run_pre_commit &amp;&amp; git add -u &amp;&amp; git commit -m &quot;feat(coordinator): sensor index allocation with user-configured skip keys&quot;
+</code></pre>
+<hr />
+<h3 id="task-3-car-allocation-and-the-ohmeoctopus-intelligent-rule">Task 3: Car allocation and the Ohme/Octopus intelligent rule</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/coordinator.py</code>
+- Test: <code>apps/predbat/tests/test_coordinator.py</code></p>
+<p><strong>Interfaces:</strong>
+- Produces: <code>Assignment.car_slots {device_key: car_index}</code>, <code>Assignment.num_cars</code>, <code>Assignment.octopus_intelligent_owner</code>.
+- Behaviour parity contract (consumed by Tasks 8–9): a charger record always gets car 0 (Ohme registers as a car regardless of tariff, <code>ohme.py:460-471</code>); intelligent devices get 0..N-1 sorted by device_key <strong>unless</strong> a charger wins the Octopus Intelligent claim, in which case they get no slots (today's <code>car_slot_owner</code> behaviour, <code>octopus.py:1316-1318</code>); <code>num_cars</code> is never lowered below <code>get_arg("num_cars", 0)</code>.
+- Tri-state resolution: a charger record's <code>octopus_intelligent</code> — explicit <code>True</code>/<code>False</code> wins; <code>None</code> (or absent) means auto = the reported tariff has <code>is_intelligent_go</code> truthy.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong> (append, and register in <code>test_coordinator_all</code>)</li>
+</ul>
+<pre><code class="language-python">def _car_reports():
+    &quot;&quot;&quot;An Ohme charger report plus a two-device Octopus report, for the ownership tests.&quot;&quot;&quot;
+    ohme = {&quot;cars&quot;: [{&quot;device_key&quot;: &quot;ohme:CH1&quot;, &quot;kind&quot;: &quot;charger&quot;, &quot;octopus_intelligent&quot;: None}]}
+    octopus = {&quot;cars&quot;: [{&quot;device_key&quot;: &quot;octopus:dev-b&quot;, &quot;kind&quot;: &quot;intelligent_device&quot;}, {&quot;device_key&quot;: &quot;octopus:dev-a&quot;, &quot;kind&quot;: &quot;intelligent_device&quot;}]}
+    return ohme, octopus
+
+
+def test_cars_ohme_wins_on_iog():
+    &quot;&quot;&quot;Tri-state unset + Intelligent Go tariff: the charger owns the intelligent slots and the devices get none.&quot;&quot;&quot;
+    base, coordinator = _coordinator(priority=[&quot;octopus&quot;, &quot;ohme&quot;])
+    ohme, octopus = _car_reports()
+    octopus[&quot;tariff&quot;] = {&quot;import_code&quot;: &quot;E-1R-INTELLI-VAR-22-10-14-A&quot;, &quot;is_intelligent_go&quot;: True}
+    coordinator.report(&quot;octopus&quot;, octopus)
+    coordinator.report(&quot;ohme&quot;, ohme)
+    assignments = coordinator.allocate()
+    assert assignments[&quot;ohme&quot;].car_slots == {&quot;ohme:CH1&quot;: 0}
+    assert assignments[&quot;ohme&quot;].octopus_intelligent_owner is True
+    assert assignments[&quot;octopus&quot;].car_slots == {}
+    assert assignments[&quot;ohme&quot;].num_cars == 1
+    print(&quot;PASS: Ohme owns the intelligent slots on an IOG tariff&quot;)
+    return 0
+
+
+def test_cars_octopus_wins_off_iog():
+    &quot;&quot;&quot;Tri-state unset + non-IOG tariff: devices get sorted car indices; the charger still registers as car 0.&quot;&quot;&quot;
+    base, coordinator = _coordinator(priority=[&quot;octopus&quot;, &quot;ohme&quot;])
+    ohme, octopus = _car_reports()
+    octopus[&quot;tariff&quot;] = {&quot;import_code&quot;: &quot;E-1R-AGILE-24-10-01-A&quot;, &quot;is_intelligent_go&quot;: False}
+    coordinator.report(&quot;octopus&quot;, octopus)
+    coordinator.report(&quot;ohme&quot;, ohme)
+    assignments = coordinator.allocate()
+    assert assignments[&quot;ohme&quot;].octopus_intelligent_owner is False
+    assert assignments[&quot;ohme&quot;].car_slots == {&quot;ohme:CH1&quot;: 0}
+    assert assignments[&quot;octopus&quot;].car_slots == {&quot;octopus:dev-a&quot;: 0, &quot;octopus:dev-b&quot;: 1}
+    assert assignments[&quot;octopus&quot;].num_cars == 2
+    print(&quot;PASS: Octopus devices allocated sorted off IOG&quot;)
+    return 0
+
+
+def test_cars_explicit_tri_state_false():
+    &quot;&quot;&quot;An explicit octopus_intelligent=False always leaves the slots with Octopus, even on IOG.&quot;&quot;&quot;
+    base, coordinator = _coordinator(priority=[&quot;octopus&quot;, &quot;ohme&quot;])
+    coordinator.report(&quot;octopus&quot;, {&quot;cars&quot;: [{&quot;device_key&quot;: &quot;octopus:dev-a&quot;, &quot;kind&quot;: &quot;intelligent_device&quot;}], &quot;tariff&quot;: {&quot;is_intelligent_go&quot;: True}})
+    coordinator.report(&quot;ohme&quot;, {&quot;cars&quot;: [{&quot;device_key&quot;: &quot;ohme:CH1&quot;, &quot;kind&quot;: &quot;charger&quot;, &quot;octopus_intelligent&quot;: False}]})
+    assignments = coordinator.allocate()
+    assert assignments[&quot;ohme&quot;].octopus_intelligent_owner is False
+    assert assignments[&quot;octopus&quot;].car_slots == {&quot;octopus:dev-a&quot;: 0}
+    print(&quot;PASS: explicit tri-state False respected&quot;)
+    return 0
+
+
+def test_cars_num_cars_never_lowered():
+    &quot;&quot;&quot;num_cars respects a larger user-configured value.&quot;&quot;&quot;
+    base, coordinator = _coordinator()
+    base.args[&quot;num_cars&quot;] = 3
+    coordinator.report(&quot;ohme&quot;, {&quot;cars&quot;: [{&quot;device_key&quot;: &quot;ohme:CH1&quot;, &quot;kind&quot;: &quot;charger&quot;}]})
+    assignments = coordinator.allocate()
+    assert assignments[&quot;ohme&quot;].num_cars == 3
+    print(&quot;PASS: num_cars never lowered&quot;)
+    return 0
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run, verify the four new tests fail</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test coordinator &gt; test_coordinator.log 2&gt;&amp;1; grep -E "FAIL|AssertionError" test_coordinator.log</code></p>
+<ul>
+<li>[ ] <strong>Step 3: Implement</strong> — extend <code>allocate()</code> (inside the lock, after the sensor block, before <code>self._last_assignments = assignments</code>). Gather the tariff without calling <code>get_tariff()</code> (which takes the lock):</li>
+</ul>
+<pre><code class="language-python">            # Car allocation. Parity with today's overlay semantics: a charger (Ohme) always
+            # registers as car 0; intelligent devices take 0..N-1 sorted by device_key so a given
+            # device always lands in the same slot - unless a charger wins the Octopus Intelligent
+            # claim, in which case the devices get no slots at all (the old car_slot_owner rule).
+            tariff = None
+            for name in self._ordered_reports():
+                if self.reports[name].get(&quot;tariff&quot;):
+                    tariff = self.reports[name][&quot;tariff&quot;]
+                    break
+            chargers = []
+            intelligent = []
+            for name in self._ordered_reports():
+                entry = self.reports[name]
+                if not entry[&quot;automatic&quot;]:
+                    continue
+                for record in entry[&quot;cars&quot;]:
+                    (chargers if record[&quot;kind&quot;] == &quot;charger&quot; else intelligent).append((name, record))
+            charger_owns_intelligent = False
+            if chargers:
+                name, record = chargers[0]  # one charger component in the minimal design; first in priority order decides
+                wish = record.get(&quot;octopus_intelligent&quot;)
+                charger_owns_intelligent = bool(wish) if wish is not None else bool(tariff and tariff.get(&quot;is_intelligent_go&quot;))
+                if charger_owns_intelligent:
+                    self.log(&quot;Coordinator: {} charger {} takes the Octopus Intelligent car slots&quot;.format(name, record[&quot;device_key&quot;]))
+            allocated_cars = 0
+            if chargers:
+                name, record = chargers[0]
+                assignments[name].car_slots[record[&quot;device_key&quot;]] = 0
+                assignments[name].octopus_intelligent_owner = charger_owns_intelligent
+                allocated_cars = 1
+            if not charger_owns_intelligent and intelligent:
+                for index, (name, record) in enumerate(sorted(intelligent, key=lambda pair: pair[1][&quot;device_key&quot;])):
+                    assignments[name].car_slots[record[&quot;device_key&quot;]] = index
+                allocated_cars = max(allocated_cars, len(intelligent))
+            num_cars = max(self.base.get_arg(&quot;num_cars&quot;, 0), allocated_cars)
+            for assignment in assignments.values():
+                assignment.num_cars = num_cars
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run tests, verify all pass; commit</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test coordinator &gt; test_coordinator.log 2&gt;&amp;1; grep -cE &quot;^PASS&quot; test_coordinator.log
+cd .. &amp;&amp; ./run_pre_commit &amp;&amp; git add -u &amp;&amp; git commit -m &quot;feat(coordinator): car allocation with Ohme/Octopus intelligent ownership rule&quot;
+</code></pre>
+<hr />
+<h3 id="task-4-persistence-of-the-slot-map-through-storage">Task 4: Persistence of the slot map through Storage</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/coordinator.py</code>
+- Test: <code>apps/predbat/tests/test_coordinator.py</code></p>
+<p><strong>Interfaces:</strong>
+- Produces: <code>Coordinator.load_persisted()</code> / <code>Coordinator.save_persisted()</code> using the Storage component (<code>storage.load("coordinator", "allocation")</code> / <code>storage.save(..., format="json")</code> via <code>run_async</code> from <code>utils</code>), called from <code>allocate_and_apply()</code> in Task 5. The saved payload is <code>{"inverter_slots": {...}, "catalogue": &lt;coordinator.catalogue()&gt;}</code> — the catalogue rides along purely for supportability (it is the JSON artefact a bug report can include); only <code>inverter_slots</code> is read back. When <code>base.components</code> is None (MockBase harnesses) both are silent no-ops.
+- Consumes: <code>run_async</code> (same pattern as <code>PredBat.save_plan</code>, <code>predbat.py:730</code>), storage lookup: <code>self.base.components.get_component("storage") if self.base.components else None</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing test</strong> (uses a stub storage, no real files)</li>
+</ul>
+<pre><code class="language-python">class _StubStorage:
+    &quot;&quot;&quot;In-memory stand-in for the Storage component's save/load used by the persistence tests.&quot;&quot;&quot;
+
+    def __init__(self):
+        &quot;&quot;&quot;Start with nothing saved.&quot;&quot;&quot;
+        self.saved = {}
+
+    async def save(self, module, filename, data, format=&quot;yaml&quot;, expiry=None, indent=None):
+        &quot;&quot;&quot;Record the saved payload keyed by module/filename.&quot;&quot;&quot;
+        self.saved[(module, filename)] = data
+
+    async def load(self, module, filename):
+        &quot;&quot;&quot;Return a previously saved payload, or None.&quot;&quot;&quot;
+        return self.saved.get((module, filename))
+
+
+class _StubComponents:
+    &quot;&quot;&quot;Just enough of the Components registry for the coordinator to find storage.&quot;&quot;&quot;
+
+    def __init__(self, storage):
+        &quot;&quot;&quot;Hold the single stubbed component.&quot;&quot;&quot;
+        self._storage = storage
+
+    def get_component(self, name):
+        &quot;&quot;&quot;Return the stub storage for &quot;storage&quot;, else None.&quot;&quot;&quot;
+        return self._storage if name == &quot;storage&quot; else None
+
+
+def test_persistence_round_trip():
+    &quot;&quot;&quot;Allocation saves the slot map (with the catalogue alongside), and a fresh coordinator loads the map back.&quot;&quot;&quot;
+    storage = _StubStorage()
+    base, coordinator = _coordinator()
+    base.components = _StubComponents(storage)
+    coordinator.report(&quot;givtcp&quot;, {&quot;inverters&quot;: [{&quot;device_key&quot;: &quot;givtcp:A&quot;, &quot;inverter_type&quot;: &quot;GE&quot;}, {&quot;device_key&quot;: &quot;givtcp:B&quot;, &quot;inverter_type&quot;: &quot;GE&quot;}]})
+    coordinator.allocate()
+    coordinator.save_persisted()
+    saved = storage.saved[(&quot;coordinator&quot;, &quot;allocation&quot;)]
+    assert saved[&quot;inverter_slots&quot;] == {&quot;givtcp:A&quot;: 0, &quot;givtcp:B&quot;: 1}
+    assert saved[&quot;catalogue&quot;][&quot;components&quot;][&quot;givtcp&quot;][&quot;inverters&quot;], &quot;catalogue snapshot saved for supportability&quot;
+    base2, coordinator2 = _coordinator()
+    base2.components = _StubComponents(storage)
+    coordinator2.load_persisted()
+    assert coordinator2.persisted_slots == {&quot;givtcp:A&quot;: 0, &quot;givtcp:B&quot;: 1}
+    print(&quot;PASS: allocation map round-trips through storage&quot;)
+    return 0
+</code></pre>
+<ul>
+<li>
+<p>[ ] <strong>Step 2: Run, verify it fails</strong> (<code>AttributeError: ... no attribute 'save_persisted'</code>)</p>
+</li>
+<li>
+<p>[ ] <strong>Step 3: Implement</strong> in <code>coordinator.py</code> (import <code>run_async</code> from <code>utils</code>):</p>
+</li>
+</ul>
+<pre><code class="language-python">    def _storage(self):
+        &quot;&quot;&quot;The Storage component, or None outside a full Predbat (CLI harnesses, unit tests).&quot;&quot;&quot;
+        components = getattr(self.base, &quot;components&quot;, None)
+        return components.get_component(&quot;storage&quot;) if components else None
+
+    def load_persisted(self):
+        &quot;&quot;&quot;Load the persisted device-to-slot map so slots stay stable across restarts.&quot;&quot;&quot;
+        storage = self._storage()
+        if not storage:
+            return
+        try:
+            data = run_async(storage.load(&quot;coordinator&quot;, &quot;allocation&quot;))
+        except Exception as e:
+            self.log(&quot;Warn: Coordinator: failed to load persisted allocation: {}&quot;.format(e))
+            return
+        if isinstance(data, dict) and isinstance(data.get(&quot;inverter_slots&quot;), dict):
+            self.persisted_slots = {str(key): int(slot) for key, slot in data[&quot;inverter_slots&quot;].items()}
+            self.log(&quot;Coordinator: restored slot map for {} device(s)&quot;.format(len(self.persisted_slots)))
+
+    def save_persisted(self):
+        &quot;&quot;&quot;Save the device-to-slot map, with a catalogue snapshot alongside for supportability.&quot;&quot;&quot;
+        storage = self._storage()
+        if not storage:
+            return
+        try:
+            run_async(storage.save(&quot;coordinator&quot;, &quot;allocation&quot;, {&quot;inverter_slots&quot;: dict(self.persisted_slots), &quot;catalogue&quot;: self.catalogue()}, format=&quot;json&quot;))
+        except Exception as e:
+            self.log(&quot;Warn: Coordinator: failed to save allocation: {}&quot;.format(e))
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run tests, verify pass; commit</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test coordinator &gt; test_coordinator.log 2&gt;&amp;1; grep -cE &quot;^PASS&quot; test_coordinator.log
+cd .. &amp;&amp; ./run_pre_commit &amp;&amp; git add -u &amp;&amp; git commit -m &quot;feat(coordinator): persist the slot map and catalogue through the storage component&quot;
+</code></pre>
+<hr />
+<h3 id="task-5-lifecycle-plumbing-componentbase-hand-off-components-ownership-startup-hook">Task 5: Lifecycle plumbing — ComponentBase hand-off, Components ownership, startup hook</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/component_base.py</code> (<code>__init__</code> ~line 56, <code>start()</code> loop ~line 207, <code>set_arg</code> ~line 97, <code>set_arg_auto</code> ~line 103)
+- Modify: <code>apps/predbat/components.py</code> (<code>Components.__init__</code> ~line 748, <code>initialize()</code> ~line 803)
+- Modify: <code>apps/predbat/coordinator.py</code> (<code>allocate_and_apply</code>, fleet-key writes, diagnostics entity)
+- Modify: <code>apps/predbat/predbat.py</code> (<code>initialize()</code> between lines 1930 and 1934)
+- Modify: <code>apps/predbat/mock_base.py</code> (<code>set_arg</code> index support, ~line 113)
+- Test: <code>apps/predbat/tests/test_coordinator.py</code>, <code>apps/predbat/tests/test_component_base.py</code></p>
+<p><strong>Interfaces:</strong>
+- Produces:
+  - module function <code>set_arg_auto_base(base, arg, value, overwrite=True)</code> in <code>component_base.py</code> — the existing <code>set_arg_auto</code> body with <code>self.base</code> → <code>base</code> and the final call being <code>base.set_arg(arg, value)</code>; <code>ComponentBase.set_arg_auto</code> delegates to it; the coordinator imports it for fleet-key writes.
+  - <code>ComponentBase</code>: <code>self.component_name</code> (default <code>self.__class__.__name__</code>, overwritten by <code>Components.initialize()</code> with the registry key), <code>self.pending_assignment = None</code>, <code>self.assignment_applied = False</code>, <code>async def apply_assignment(self, assignment)</code> (default no-op), <code>@property coordinator</code> returning <code>self.base.components.coordinator</code> or None, and <code>set_arg(self, arg, value, index=None)</code> passing <code>index</code> through to <code>base.set_arg</code>.
+  - <code>Coordinator.allocate_and_apply(wait=True, timeout=60)</code> — loads persistence (first call only), allocates, writes <code>num_inverters</code>/<code>inverter_type</code> (only when at least one automatic inverter record exists) and <code>num_cars</code> (only when it grows) via <code>set_arg_auto_base</code>, saves persistence, publishes <code>sensor.predbat_coordinator</code>, posts each reporting component's Assignment to <code>component.pending_assignment</code>, and (when <code>wait</code>) polls every 0.1 s until all <code>assignment_applied</code> or timeout. Sets <code>self.started = True</code>; a later <code>report()</code> with <code>self.started</code> re-runs <code>allocate_and_apply(wait=False)</code> so re-discovery re-applies without deadlocking the reporting thread.
+- Consumes: <code>Assignment</code>, <code>Coordinator</code> from Tasks 1–4; <code>COMPONENT_LIST</code> ordering.</p>
+<ul>
+<li>
+<p>[ ] <strong>Step 1: Impact analysis</strong> on <code>ComponentBase.start</code>, <code>ComponentBase.set_arg</code>, <code>ComponentBase.set_arg_auto</code>, <code>Components.initialize</code>, <code>PredBat.initialize</code>, and <code>set_arg</code> in <code>userinterface.py</code> (<code>impact({target: ..., direction: "upstream"})</code>); report blast radius before editing. These are wide-fan-in symbols — expect HIGH; the changes are strictly additive (new optional parameter, new attributes, new loop branch), state that when warning.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 2: Write the failing tests</strong></p>
+</li>
+</ul>
+<p>Append to <code>test_coordinator.py</code> (register in <code>test_coordinator_all</code>):</p>
+<pre><code class="language-python">def test_allocate_and_apply_hand_off():
+    &quot;&quot;&quot;allocate_and_apply posts each component's Assignment, writes the fleet keys, and publishes the catalogue.&quot;&quot;&quot;
+    from component_base import ComponentBase
+
+    class _FakeComponent(ComponentBase):
+        &quot;&quot;&quot;A minimal discovery-aware component that records the assignment it was handed.&quot;&quot;&quot;
+
+        def initialize(self, **kwargs):
+            &quot;&quot;&quot;Nothing to set up.&quot;&quot;&quot;
+            self.seen = None
+
+        async def run(self, seconds, first):
+            &quot;&quot;&quot;Never called in this test.&quot;&quot;&quot;
+            return True
+
+        async def apply_assignment(self, assignment):
+            &quot;&quot;&quot;Record the assignment for the test to inspect.&quot;&quot;&quot;
+            self.seen = assignment
+
+    base, coordinator = _coordinator(priority=[&quot;givtcp&quot;])
+    fake = _FakeComponent(base)
+    fake.component_name = &quot;givtcp&quot;
+
+    class _Registry:
+        &quot;&quot;&quot;Just enough of Components for allocate_and_apply to find the fake component.&quot;&quot;&quot;
+
+        def __init__(self):
+            &quot;&quot;&quot;Expose the coordinator the way Components does.&quot;&quot;&quot;
+            self.coordinator = coordinator
+
+        def get_component(self, name):
+            &quot;&quot;&quot;Return the fake for givtcp, None otherwise.&quot;&quot;&quot;
+            return fake if name == &quot;givtcp&quot; else None
+
+    base.components = _Registry()
+    coordinator.report(&quot;givtcp&quot;, {&quot;inverters&quot;: [{&quot;device_key&quot;: &quot;givtcp:A&quot;, &quot;inverter_type&quot;: &quot;GE&quot;}]})
+    coordinator.allocate_and_apply(wait=False)
+    assert fake.pending_assignment is not None
+    # Apply on the component's behalf, the way its start() loop would
+    from tests.test_infra import run_async
+    run_async(fake.apply_assignment(fake.pending_assignment))
+    assert fake.seen.inverter_slots == {&quot;givtcp:A&quot;: 0}
+    assert base.args[&quot;num_inverters&quot;] == 1
+    assert base.args[&quot;inverter_type&quot;] == [&quot;GE&quot;]
+    assert base.entities.get(&quot;sensor.predbat_coordinator&quot;), &quot;diagnostics entity must be published&quot;
+    print(&quot;PASS: allocate_and_apply hands off assignments and writes fleet keys&quot;)
+    return 0
+</code></pre>
+<p>Append to <code>apps/predbat/tests/test_component_base.py</code> (register in its module runner the same way its existing tests are) a test that the <code>start()</code> loop applies a pending assignment: build the module's existing minimal <code>ComponentBase</code> subclass whose <code>run()</code> returns True, set <code>component.pending_assignment = Assignment()</code> before driving <code>start()</code> via <code>tests.test_infra.run_async</code> with <code>api_stop</code> set after ~2 loop iterations (mirror how the module's newest <code>start()</code> test bounds the loop), then assert <code>component.assignment_applied is True</code> and <code>component.pending_assignment is None</code>.</p>
+<p>Also extend <code>MockBase.set_arg</code> (<code>mock_base.py:113</code>) to accept <code>index=None</code>, mirroring <code>userinterface.py:187</code>: with an index, pad <code>self.args[key]</code> with <code>None</code> up to the index and set the element (a <code>None</code> value with an index sets the element to <code>None</code> rather than deleting the key).</p>
+<ul>
+<li>[ ] <strong>Step 3: Run both test modules, verify the new tests fail</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test coordinator --test component_base &gt; test_task5.log 2&gt;&amp;1; grep -E "FAIL|Error|AttributeError" test_task5.log</code></p>
+<ul>
+<li>[ ] <strong>Step 4: Implement</strong></li>
+</ul>
+<p><code>component_base.py</code>:
+- Extract <code>set_arg_auto</code> body into module function <code>set_arg_auto_base(base, arg, value, overwrite=True)</code> (docstring: shared by ComponentBase and the Coordinator); the method delegates: <code>return set_arg_auto_base(self.base, arg, value, overwrite=overwrite)</code>.
+- <code>__init__</code> additions before <code>self.initialize(**kwargs)</code>: <code>self.component_name = self.__class__.__name__</code>, <code>self.pending_assignment = None</code>, <code>self.assignment_applied = False</code>.
+- <code>set_arg(self, arg, value, index=None)</code> → <code>return self.base.set_arg(arg, value, index=index)</code>. In <code>userinterface.py</code>'s <code>set_arg</code>, the <code>value is None</code> delete branch runs before the index handling — change it so a <code>None</code> value with an index sets the list element to <code>None</code> (pad as usual) and only a <code>None</code> value <strong>without</strong> an index deletes the key. Run <code>impact</code> on it first; grep for callers passing both <code>None</code> and <code>index</code> (expected: none today).
+- New default method:</p>
+<pre><code class="language-python">    async def apply_assignment(self, assignment):
+        &quot;&quot;&quot;Apply a coordinator Assignment. Discovery-aware components override this; the default does nothing.&quot;&quot;&quot;
+        pass
+</code></pre>
+<ul>
+<li>In the <code>start()</code> loop, after the <code>if should_run:</code> block and before <code>seconds += 5</code>:</li>
+</ul>
+<pre><code class="language-python">                # A coordinator assignment is applied here, on the component's own event loop and
+                # thread, so vendor code never runs cross-thread. Posted by allocate_and_apply().
+                if self.pending_assignment is not None:
+                    assignment = self.pending_assignment
+                    self.pending_assignment = None
+                    try:
+                        await self.apply_assignment(assignment)
+                    except Exception as e:
+                        self.log(&quot;Error: {}: apply_assignment failed: {}&quot;.format(self.__class__.__name__, e))
+                        self.log(&quot;Error: &quot; + traceback.format_exc())
+                        self.non_fatal_error_occurred()
+                    self.assignment_applied = True
+</code></pre>
+<ul>
+<li>Property:</li>
+</ul>
+<pre><code class="language-python">    @property
+    def coordinator(self):
+        &quot;&quot;&quot;The discovery coordinator, or None outside a full Predbat (CLI harnesses, unit tests).&quot;&quot;&quot;
+        components = getattr(self.base, &quot;components&quot;, None)
+        return getattr(components, &quot;coordinator&quot;, None)
+</code></pre>
+<p><code>components.py</code>:
+- <code>from coordinator import Coordinator</code> at the top; in <code>Components.__init__</code>: <code>self.coordinator = Coordinator(base, priority=list(COMPONENT_LIST.keys()))</code>.
+- In <code>initialize()</code>, right after successful construction (<code>self.components[component_name] = component_class(...)</code>): <code>self.components[component_name].component_name = component_name</code>.</p>
+<p><code>coordinator.py</code> — <code>allocate_and_apply</code> and <code>publish</code> (plus <code>import time</code> at the top; import <code>set_arg_auto_base</code> lazily inside the method — <code>component_base</code> must NOT import <code>coordinator</code>, and the lazy import avoids the cycle in the other direction):</p>
+<pre><code class="language-python">    def allocate_and_apply(self, wait=True, timeout=60):
+        &quot;&quot;&quot;Allocate slots and hand each reporting component its Assignment.
+
+        Called from PredBat.initialize() after phase-1 startup (wait=True), and again from a
+        component's own thread on a post-startup re-report (wait=False - waiting there would
+        deadlock, since the reporting component's loop is busy inside run()).
+        &quot;&quot;&quot;
+        from component_base import set_arg_auto_base
+
+        if not self.started:
+            self.load_persisted()
+        assignments = self.allocate()
+        fleet_types = self.fleet_inverter_types()
+        if fleet_types:
+            set_arg_auto_base(self.base, &quot;inverter_type&quot;, fleet_types)
+            set_arg_auto_base(self.base, &quot;num_inverters&quot;, len(fleet_types))
+            self.save_persisted()
+        num_cars = max((assignment.num_cars for assignment in assignments.values()), default=0)
+        if num_cars &gt; self.base.get_arg(&quot;num_cars&quot;, 0):
+            set_arg_auto_base(self.base, &quot;num_cars&quot;, num_cars)
+        self.publish()
+        waiting = []
+        for name, assignment in assignments.items():
+            components = getattr(self.base, &quot;components&quot;, None)
+            component = components.get_component(name) if components else None
+            if component:
+                component.assignment_applied = False
+                component.pending_assignment = assignment
+                waiting.append(component)
+        self.started = True
+        if wait:
+            deadline = time.monotonic() + timeout
+            while time.monotonic() &lt; deadline and not all(component.assignment_applied for component in waiting):
+                time.sleep(0.1)
+            stragglers = [component.component_name for component in waiting if not component.assignment_applied]
+            if stragglers:
+                self.log(&quot;Warn: Coordinator: timed out waiting for {} to apply their assignment&quot;.format(&quot;, &quot;.join(stragglers)))
+
+    def publish(self):
+        &quot;&quot;&quot;Publish the discovery catalogue as sensor.predbat_coordinator for supportability.&quot;&quot;&quot;
+        catalogue = self.catalogue()
+        attributes = {&quot;friendly_name&quot;: &quot;Predbat discovery coordinator&quot;, &quot;icon&quot;: &quot;mdi:sitemap&quot;}
+        attributes.update(catalogue[&quot;allocation&quot;])
+        attributes[&quot;components&quot;] = sorted(catalogue[&quot;components&quot;].keys())
+        self.base.dashboard_item(&quot;sensor.{}_coordinator&quot;.format(self.base.prefix), state=len(self.persisted_slots), attributes=attributes)
+</code></pre>
+<p>And at the end of <code>report()</code> (outside the lock): <code>if self.started: self.allocate_and_apply(wait=False)</code>.</p>
+<p><code>predbat.py</code> — in <code>initialize()</code> directly after the phase-1 <code>start</code> block (line 1932) and before <code>initialize(phase=2)</code>:</p>
+<pre><code class="language-python">            # Discovery barrier: every phase-1 component has now started (or timed out), so
+            # allocate inverter/car slots and let discovery-aware components apply them before
+            # phase 2 (solar, load_ml) reads the resulting configuration.
+            self.components.coordinator.allocate_and_apply()
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 5: Run the three affected suites, verify pass</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test coordinator --test component_base --test components &gt; test_task5.log 2&gt;&amp;1; grep -cE "^PASS" test_task5.log &amp;&amp; grep -E "FAIL|Error|Traceback" test_task5.log</code>
+Expected: all pass (the <code>components</code> suite guards the registry import of <code>coordinator</code>).</p>
+<ul>
+<li>[ ] <strong>Step 6: detect_changes, pre-commit, commit</strong></li>
+</ul>
+<pre><code class="language-bash">./run_pre_commit &amp;&amp; git add -u apps/predbat &amp;&amp; git commit -m &quot;feat(coordinator): component assignment hand-off and startup barrier&quot;
+</code></pre>
+<hr />
+<h3 id="task-6-migrate-givtcp-to-assigned-slots">Task 6: Migrate GivTCP to assigned slots</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/givtcp.py</code> (<code>initialize</code> ~line 380, <code>run()</code> ~lines 421–489, <code>automatic_config()</code> ~line 740)
+- Test: <code>apps/predbat/tests/test_givtcp_component.py</code></p>
+<p><strong>Interfaces:</strong>
+- Produces: <code>GivTCPComponent.build_discovery()</code> returning the report dict (<code>{"automatic": ..., "inverters": [...], "sensors": [...]}</code>); <code>automatic_config(assignment=None)</code> — <code>None</code> keeps today's whole-list behaviour byte-for-byte (CLI harness / coordinator absent); with an assignment, every per-inverter key is written with <code>self.set_arg(key, entity_id, index=slot)</code> at <code>assignment.inverter_slots[device_key]</code>, the energy-totals keys (<code>GIVTCP_ENERGY_TODAY_FIELDS</code>) are written at <code>assignment.sensor_indices[key][device_key]</code> and skipped when in <code>assignment.skip_keys</code>, <code>givtcp_rest</code> is rewritten slot-aligned (URL at the device's slot, <code>None</code> padding), and the fleet keys (<code>num_inverters</code>, <code>inverter_type</code>) are NOT written (coordinator owns them).
+- Consumes: <code>self.coordinator</code> property, <code>apply_assignment</code> hand-off (Task 5).
+- Device key: <code>_device_key(self, n)</code> = <code>"givtcp:{}".format(getattr(self.rest[n], "serial_number", None) or self.rest[n].inverter.rest_api)</code> — serial when GivTCP reports one, REST URL as the stable fallback. The inverter records also carry <code>serial</code>, <code>firmware</code> and <code>givtcp_version</code> (from the values <code>run()</code> logs at line 440) as catalogue extras.</p>
+<ul>
+<li>
+<p>[ ] <strong>Step 1: Impact analysis</strong> on <code>GivTCPComponent.run</code> and <code>GivTCPComponent.automatic_config</code> (<code>impact</code> upstream); report.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 2: Write the failing tests</strong> (append to <code>test_givtcp_component.py</code>, registered via the module's existing runner <code>test_givtcp_component</code>). The fixtures give no serial, so device keys use the URL fallback — assert that rather than guessing how <code>serial_number</code> is derived from the blob:</p>
+</li>
+</ul>
+<pre><code class="language-python">def test_automatic_config_with_assignment_offsets():
+    &quot;&quot;&quot;With a coordinator assignment, GivTCP writes its keys at the assigned slots rather than replacing whole lists.&quot;&quot;&quot;
+    from coordinator import Assignment
+    base, component = _make_component(rest_urls=[&quot;http://a:6345&quot;])
+    component.rest[0].inverter.rest_data = _rest_data_blob()
+    _mark_discovered(component)
+    component.published_discovery = {0: set(GIVTCP_AUTO_CONFIG_DISCOVERY_KEYS) | set(GIVTCP_AUTO_CONFIG_SCHEDULE_KEYS)}
+    device_key = component._device_key(0)
+    assert device_key == &quot;givtcp:http://a:6345&quot;, device_key
+    assignment = Assignment()
+    assignment.inverter_slots = {device_key: 1}
+    assignment.num_inverters = 2
+    assignment.sensor_indices = {key: {device_key: 1} for key in (&quot;load_today&quot;, &quot;import_today&quot;, &quot;export_today&quot;, &quot;pv_today&quot;)}
+    run_async(component.apply_assignment(assignment))
+    assert base.args[&quot;soc_kw&quot;][1] == &quot;sensor.predbat_givtcp_0_soc_kw&quot;, base.args[&quot;soc_kw&quot;]
+    assert base.args[&quot;soc_kw&quot;][0] is None
+    assert base.args[&quot;givtcp_rest&quot;] == [None, &quot;http://a:6345&quot;]
+    assert base.args[&quot;load_today&quot;][1] == &quot;sensor.predbat_givtcp_0_load_today&quot;
+    assert &quot;num_inverters&quot; not in base.args, &quot;fleet keys belong to the coordinator&quot;
+    print(&quot;PASS: GivTCP writes at assigned slots&quot;)
+    return 0
+
+
+def test_automatic_config_skip_keys():
+    &quot;&quot;&quot;A summed key in skip_keys is left alone entirely.&quot;&quot;&quot;
+    from coordinator import Assignment
+    base, component = _make_component(rest_urls=[&quot;http://a:6345&quot;])
+    component.rest[0].inverter.rest_data = _rest_data_blob()
+    _mark_discovered(component)
+    assignment = Assignment()
+    assignment.inverter_slots = {component._device_key(0): 0}
+    assignment.num_inverters = 1
+    assignment.skip_keys = {&quot;load_today&quot;}
+    base.args[&quot;load_today&quot;] = [&quot;sensor.my_meter&quot;]
+    run_async(component.apply_assignment(assignment))
+    assert base.args[&quot;load_today&quot;] == [&quot;sensor.my_meter&quot;]
+    print(&quot;PASS: skip keys respected&quot;)
+    return 0
+
+
+def test_none_rest_url_tolerated():
+    &quot;&quot;&quot;A None entry in rest_urls (a slot-aligned rewrite read back on restart) is skipped, preserving indices.&quot;&quot;&quot;
+    base, component = _make_component(rest_urls=[None, &quot;http://b:6345&quot;])
+    assert component.rest[0] is None
+    assert component.rest[1].inverter.rest_api == &quot;http://b:6345&quot;
+    print(&quot;PASS: None rest_urls entries tolerated&quot;)
+    return 0
+
+
+def test_legacy_automatic_config_unchanged():
+    &quot;&quot;&quot;Without an assignment (no coordinator - CLI harness) automatic_config behaves exactly as before.&quot;&quot;&quot;
+    base, component = _make_component(rest_urls=[&quot;http://a:6345&quot;])
+    component.rest[0].inverter.rest_data = _rest_data_blob()
+    _mark_discovered(component)
+    run_async(component.automatic_config())
+    assert base.args[&quot;num_inverters&quot;] == 1
+    assert base.args[&quot;inverter_type&quot;] == [&quot;GE&quot;]
+    assert base.args[&quot;soc_kw&quot;] == [&quot;sensor.predbat_givtcp_0_soc_kw&quot;]
+    print(&quot;PASS: legacy path unchanged&quot;)
+    return 0
+</code></pre>
+<p>(Adjust the exact expected entity ids to what the existing tests in this module assert — copy the strings from the module's current <code>automatic_config</code> tests rather than inventing them. <code>_make_component</code> builds <code>None</code>-URL rest entries only after the Step 4 change; until then <code>test_none_rest_url_tolerated</code> fails, which is the point.)</p>
+<ul>
+<li>[ ] <strong>Step 3: Run, verify the new tests fail</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test givtcp_component &gt; test_givtcp.log 2&gt;&amp;1; grep -E "FAIL|Error|TypeError" test_givtcp.log</code></p>
+<ul>
+<li>[ ] <strong>Step 4: Implement</strong></li>
+</ul>
+<p>In <code>givtcp.py</code>:
+- <code>initialize</code> (~line 386): build <code>self.rest</code> tolerating <code>None</code> URLs — <code>self.rest.append(GivTCPRest(self.base, InverterRestState(id=n, rest_api=url)) if url else None)</code>; guard every <code>self.rest[n]</code>/iteration in <code>run()</code>, <code>rediscover()</code>, <code>publish_data()</code> and <code>_parse_entity</code> handlers with <code>if rest is None: continue</code> (grep the file for <code>self.rest[</code> and <code>for ... self.rest</code> to catch all sites).
+- Add <code>_device_key(self, n)</code> per the Interfaces block (docstring: stable identity for the coordinator catalogue).
+- Add <code>build_discovery(self)</code> returning the report dict:</p>
+<pre><code class="language-python">    def build_discovery(self):
+        &quot;&quot;&quot;The discovery report for the coordinator: one inverter record per discovered endpoint plus its energy-total sensors.&quot;&quot;&quot;
+        inverters = []
+        sensors = []
+        for n in self.discovered:
+            rest = self.rest[n]
+            inverters.append({&quot;device_key&quot;: self._device_key(n), &quot;inverter_type&quot;: &quot;GE&quot;, &quot;serial&quot;: getattr(rest, &quot;serial_number&quot;, None), &quot;firmware&quot;: getattr(rest, &quot;firmware_version&quot;, None), &quot;givtcp_version&quot;: getattr(rest, &quot;givtcp_version&quot;, None), &quot;rest_api&quot;: rest.inverter.rest_api})
+            for key in GIVTCP_ENERGY_TODAY_FIELDS:
+                sensors.append({&quot;device_key&quot;: self._device_key(n), &quot;key&quot;: key, &quot;entity_id&quot;: self._entity_id(&quot;sensor&quot;, n, key)})
+        return {&quot;automatic&quot;: self.automatic, &quot;inverters&quot;: inverters, &quot;sensors&quot;: sensors}
+</code></pre>
+<ul>
+<li>In <code>run()</code> replace the trigger block at lines 479–482: when <code>self.coordinator</code> is not None, call <code>self.coordinator.report(self.component_name, self.build_discovery()); self.configured_for = list(self.discovered)</code> (the report replaces the direct <code>automatic_config()</code> call; <code>automatic_config_done</code> is set in <code>apply_assignment</code>). When <code>self.coordinator</code> is None keep the existing direct call — that is the CLI-harness/legacy path.</li>
+<li>Add:</li>
+</ul>
+<pre><code class="language-python">    async def apply_assignment(self, assignment):
+        &quot;&quot;&quot;Apply the coordinator's slot allocation by running automatic_config against it.&quot;&quot;&quot;
+        await self.automatic_config(assignment=assignment)
+        self.automatic_config_done = True
+</code></pre>
+<ul>
+<li>Change <code>automatic_config(self, assignment=None)</code>: the capability-gating body (lines 749–813) is unchanged. At the write stage (lines 815–827): when <code>assignment</code> is None keep the existing whole-list <code>set_arg_auto</code> calls including <code>inverter_type</code>/<code>num_inverters</code>; when an assignment is present, skip the fleet keys and write per device:</li>
+</ul>
+<pre><code class="language-python">        if assignment is not None:
+            for n in discovered:
+                slot = assignment.inverter_slots.get(self._device_key(n))
+                if slot is None:
+                    continue
+                self.set_arg(&quot;givtcp_rest&quot;, self.rest[n].inverter.rest_api, index=slot)
+                for key in keys:
+                    if key in GIVTCP_ENERGY_TODAY_FIELDS:
+                        index = assignment.sensor_indices.get(key, {}).get(self._device_key(n))
+                        if key in assignment.skip_keys or index is None:
+                            continue
+                        self.set_arg(key, self._entity_id(&quot;sensor&quot;, n, key), index=index)
+                        continue
+                    domain, _, _ = GIVTCP_CONTROLS.get(key, (None, None, None))
+                    domain = domain or &quot;sensor&quot;
+                    entity = self._entity_id(&quot;sensor&quot;, n, &quot;battery_dod_soh&quot;) if key == &quot;battery_scaling&quot; else self._entity_id(domain, n, key)
+                    self.set_arg(key, entity, index=slot)
+            return
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 5: Run the module's full suite (old + new tests), verify pass</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test givtcp_component --test givtcp_rest &gt; test_givtcp.log 2&gt;&amp;1; grep -cE "^PASS" test_givtcp.log &amp;&amp; grep -E "FAIL|Error|Traceback" test_givtcp.log</code></p>
+<ul>
+<li>[ ] <strong>Step 6: detect_changes, pre-commit, commit</strong></li>
+</ul>
+<pre><code class="language-bash">./run_pre_commit &amp;&amp; git add -u apps/predbat &amp;&amp; git commit -m &quot;feat(givtcp): report discovery and auto-configure at coordinator-assigned slots&quot;
+</code></pre>
+<hr />
+<h3 id="task-7-migrate-gecloud-to-assigned-slots">Task 7: Migrate GECloud to assigned slots</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/gecloud.py</code> (<code>async_automatic_config</code> ~line 1131, the <code>run()</code> first-pass call ~lines 1690–1694, the <code>givtcp_rest</code> deletion ~line 1276)
+- Test: <code>apps/predbat/tests/test_ge_cloud.py</code></p>
+<p><strong>Interfaces:</strong>
+- Produces: <code>GECloudDirect.build_discovery(devices)</code> returning the report dict whose inverter records are the <strong>post-topology</strong> candidates: the same <code>batteries</code> list <code>async_automatic_config</code> computes today (gateway collapse at lines 1148–1151 included), each <code>{"device_key": "gecloud:{serial}", "serial": serial, "inverter_type": "GEC"}</code> (<code>"GEE"</code> on the EMS path — reuse the existing detection), with any device facts already held (model, firmware from the devices dict) as catalogue extras; plus sensor records for <code>load_today</code>/<code>import_today</code>/<code>export_today</code>/<code>pv_today</code> per battery and, when <code>ge_cloud_automatic_split_pv</code> is set, the extra PV devices' <code>pv_today</code>/<code>pv_power</code>.
+- Produces: <code>async_automatic_config(devices, assignment=None)</code> — <code>None</code> byte-for-byte today; with an assignment, per-device index writes (same transformation as Task 6: <code>slot = assignment.inverter_slots.get(...)</code>, <code>build_entities</code>-derived entity at <code>index=slot</code>, summed keys via <code>assignment.sensor_indices</code>/<code>skip_keys</code>), fleet keys not written, and the <code>set_arg("givtcp_rest", None)</code> deletion <strong>not executed</strong> (under the coordinator GivTCP legitimately owns other slots; keep the deletion on the legacy path).
+- Consumes: <code>apply_assignment</code> hand-off; <code>self.devices_dict</code> (already stored by <code>run()</code>).
+- Extraction refactor: pull the topology decision (lines 1143–1151) into <code>_control_candidates(self, devices)</code> returning <code>(batteries, num_inverters)</code> with a docstring, used by both <code>build_discovery</code> and <code>async_automatic_config</code>, so the record list and the write list cannot diverge.</p>
+<ul>
+<li>
+<p>[ ] <strong>Step 1: Impact analysis</strong> on <code>async_automatic_config</code> and <code>GECloudDirect.run</code>; report.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 2: Write the failing tests</strong> — follow the arrangement of the existing <code>_test_async_automatic_config</code> (<code>test_ge_cloud.py:283</code>, using <code>MockGECloudDirect</code>): build the same devices/settings fixture it uses, then (a) <code>run_async(ge_cloud.apply_assignment(assignment))</code> with <code>assignment.inverter_slots = {"gecloud:&lt;serial&gt;": 1}</code>, <code>num_inverters=2</code> and assert the wired entity for <code>soc_percent</code> lands at index 1 with <code>None</code> at index 0, <code>num_inverters</code> untouched, and <code>givtcp_rest</code> NOT deleted when previously present in <code>base.args</code>; (b) assert the legacy call (<code>run_async(ge_cloud.async_automatic_config(devices))</code>) still produces exactly the args the existing test asserts (extend, do not weaken, that test); (c) a gateway-collapse case: two batteries plus a gateway and no EMS must produce exactly one inverter record in <code>build_discovery(devices)["inverters"]</code> whose serial is the gateway's.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 3: Run, verify failures</strong>: <code>cd coverage &amp;&amp; ./run_all --test ge_cloud &gt; test_gecloud.log 2&gt;&amp;1; grep -E "FAIL|Error|TypeError" test_gecloud.log</code></p>
+</li>
+<li>
+<p>[ ] <strong>Step 4: Implement</strong> per the Interfaces block: extract <code>_control_candidates</code>, add <code>build_discovery</code>, add <code>apply_assignment</code> calling <code>await self.async_automatic_config(self.devices_dict, assignment=assignment)</code>, thread <code>assignment</code> through the write block (every <code>self.set_arg(key, [ ... for device in batteries])</code> becomes, on the assignment path, a per-device <code>self.set_arg(key, entity, index=slot)</code> loop; <code>build_entities</code> per-device values keep their <code>None</code>-means-unsupported meaning — write <code>None</code> at the slot via the index-aware <code>set_arg</code> so an unsupported control stays unset for that slot), report from <code>run()</code>'s first pass (lines 1690–1694) when <code>self.coordinator</code> is not None instead of calling <code>async_automatic_config</code> directly, and gate the <code>givtcp_rest</code> deletion on <code>assignment is None</code>.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 5: Run the full GECloud suite, verify pass</strong>: <code>cd coverage &amp;&amp; ./run_all --test ge_cloud &gt; test_gecloud.log 2&gt;&amp;1; grep -cE "^PASS" test_gecloud.log &amp;&amp; grep -E "FAIL|Error|Traceback" test_gecloud.log</code></p>
+</li>
+<li>
+<p>[ ] <strong>Step 6: detect_changes, pre-commit, commit</strong></p>
+</li>
+</ul>
+<pre><code class="language-bash">./run_pre_commit &amp;&amp; git add -u apps/predbat &amp;&amp; git commit -m &quot;feat(gecloud): report discovery and auto-configure at coordinator-assigned slots&quot;
+</code></pre>
+<hr />
+<h3 id="task-8-migrate-octopus-car-records-and-the-tariff-record">Task 8: Migrate Octopus — car records and the tariff record</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/octopus.py</code> (<code>automatic_config</code> ~line 1294, the device-set-change re-run ~lines 675–685, first-run wiring)
+- Test: <code>apps/predbat/tests/test_octopus_intelligent_devices.py</code> (extend; it already covers <code>automatic_config</code> car wiring)</p>
+<p><strong>Interfaces:</strong>
+- Produces: <code>OctopusAPI.build_discovery()</code> returning the report dict: one <code>{"device_key": "octopus:{device_id}", "kind": "intelligent_device"}</code> car record per active (non-suspended) intelligent device (vehicle battery size and charge-point power from the device data as catalogue extras), and <code>"tariff": {"import_code": &lt;tariffs["import"]["tariffCode"]&gt;, "export_code": ..., "is_intelligent_go": self.is_intelligent_go_tariff(code), "has_six_hour_cap": self.has_six_hour_cap(code)}</code>.
+- Produces: <code>automatic_config(tariffs, assignment=None)</code> — the tariff/saving-session/rate-metric writes (lines 1298–1305) are unchanged on both paths. Car block: <code>None</code> ⇒ today's behaviour including the <code>car_slot_owner</code> check; with an assignment ⇒ for each device with a car slot write <code>octopus_intelligent_slot</code>/<code>octopus_ready_time</code>/<code>octopus_charge_limit</code> at <code>index=car_n</code> (<code>set_arg(key, entity, index=car_n)</code>), do NOT write <code>num_cars</code> (coordinator owns it), and when <code>assignment.car_slots</code> is empty log that another component owns the intelligent slots and leave them alone. Track <code>self.wired_car_indices</code> (set of indices written last apply) and blank entries that disappeared with <code>set_arg(key, None, index=stale_index)</code> so a removed device does not leave stale wiring (the index-aware <code>None</code> write from Task 5).
+- Produces: on the device-set change detected in <code>run()</code> (lines 675–685): when <code>self.coordinator</code> is not None, re-<code>report(...)</code> (which triggers <code>allocate_and_apply(wait=False)</code>) instead of calling <code>automatic_config</code> directly.
+- Consumes: <code>apply_assignment</code> hand-off (<code>async def apply_assignment(self, assignment)</code> calls <code>self.automatic_config(self.automatic_tariffs, assignment=assignment)</code> — capture the tariffs list used at first wiring on <code>self</code>, following how <code>run()</code> currently passes it).</p>
+<ul>
+<li>
+<p>[ ] <strong>Step 1: Impact analysis</strong> on <code>OctopusAPI.automatic_config</code> and its <code>run()</code> call sites; report.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 2: Write failing tests</strong> in <code>test_octopus_intelligent_devices.py</code>, mirroring its existing fixtures: (a) assignment with <code>car_slots = {"octopus:dev-a": 0, "octopus:dev-b": 1}</code> wires <code>octopus_intelligent_slot[0]</code>/<code>[1]</code> to the per-device entity names the existing tests assert, and does not touch <code>num_cars</code>; (b) empty <code>car_slots</code> leaves user-set <code>octopus_intelligent_slot</code> untouched; (c) <code>build_discovery()</code> on the module's standard two-device fixture returns two car records (suspended devices excluded) and a tariff dict with <code>is_intelligent_go</code> matching the fixture tariff; (d) a second apply with one device removed blanks the stale index.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 3: Run, verify failures</strong>: <code>cd coverage &amp;&amp; ./run_all -k octopus_ &gt; test_octopus.log 2&gt;&amp;1; grep -E "FAIL|Error|TypeError" test_octopus.log</code></p>
+</li>
+<li>
+<p>[ ] <strong>Step 4: Implement</strong> per the Interfaces block.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 5: Run the whole octopus keyword suite, verify pass</strong>: <code>cd coverage &amp;&amp; ./run_all -k octopus_ &gt; test_octopus.log 2&gt;&amp;1; grep -cE "^PASS" test_octopus.log &amp;&amp; grep -E "FAIL|Error|Traceback" test_octopus.log</code></p>
+</li>
+<li>
+<p>[ ] <strong>Step 6: detect_changes, pre-commit, commit</strong></p>
+</li>
+</ul>
+<pre><code class="language-bash">./run_pre_commit &amp;&amp; git add -u apps/predbat &amp;&amp; git commit -m &quot;feat(octopus): report car and tariff discovery, wire cars at assigned indices&quot;
+</code></pre>
+<hr />
+<h3 id="task-9-migrate-ohme-assigned-car-index-instead-of-hard-wired-car-0">Task 9: Migrate Ohme — assigned car index instead of hard-wired car 0</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/ohme.py</code> (<code>octopus_intelligent_wanted</code> ~line 434, <code>automatic_config</code> ~line 460, <code>automatic_config_octopus_intelligent</code> ~line 495, the first-run call site ~lines 255–262)
+- Test: <code>apps/predbat/tests/test_ohme.py</code></p>
+<p><strong>Interfaces:</strong>
+- Produces: <code>OhmeAPI.build_discovery()</code> returning <code>{"automatic": self.ohme_automatic, "cars": [{"device_key": "ohme:{serial}", "kind": "charger", "octopus_intelligent": self.ohme_automatic_octopus_intelligent}]}</code> (the raw tri-state, <code>None</code> meaning auto — the coordinator resolves it against the tariff record, replacing the <code>get_component("octopus")</code> peek for the coordinator path; <code>octopus_intelligent_wanted()</code> stays for the legacy path). Charger facts Ohme already holds (serial, model, current vehicle) go in as catalogue extras.
+- Produces: <code>automatic_config(assignment=None)</code> — <code>None</code> ⇒ today's behaviour. With an assignment: <code>car_n = assignment.car_slots.get(self._device_key())</code>; when present write <code>car_charging_planned</code> and <code>car_charging_soc</code> at <code>index=car_n</code> (not as one-element lists), keep the existing <code>car_charging_energy</code>/<code>car_charging_power</code> defensive logic verbatim (global keys, unchanged), do not write <code>num_cars</code>; when <code>assignment.octopus_intelligent_owner</code> also write the three <code>octopus_intelligent_slot</code>/<code>octopus_ready_time</code>/<code>octopus_charge_limit</code> entities at <code>index=car_n</code> and set <code>self.base.car_slot_owner = "ohme"</code> (Kraken still reads it — parity).
+- Consumes: <code>apply_assignment</code> hand-off; first-run call site reports via <code>self.coordinator.report(self.component_name, self.build_discovery())</code> when the coordinator exists, else the legacy direct calls.</p>
+<ul>
+<li>
+<p>[ ] <strong>Step 1: Impact analysis</strong> on <code>OhmeAPI.automatic_config</code>, <code>automatic_config_octopus_intelligent</code>, <code>octopus_intelligent_wanted</code>; report.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 2: Write failing tests</strong> in <code>test_ohme.py</code> following its existing component fixtures: (a) assignment <code>car_slots={"ohme:CH1": 1}, octopus_intelligent_owner=True</code> ⇒ <code>car_charging_planned[1] == "binary_sensor.predbat_ohme_connected"</code>, index 0 untouched, <code>octopus_intelligent_slot[1] == "binary_sensor.predbat_ohme_slot_active"</code>, <code>base.car_slot_owner == "ohme"</code>; (b) <code>octopus_intelligent_owner=False</code> ⇒ the three intelligent keys untouched; (c) legacy call with no assignment matches today's asserts (extend the existing automatic-config test rather than replacing it).</p>
+</li>
+<li>
+<p>[ ] <strong>Step 3: Run, verify failures</strong>: <code>cd coverage &amp;&amp; ./run_all --test ohme &gt; test_ohme.log 2&gt;&amp;1; grep -E "FAIL|Error|TypeError" test_ohme.log</code></p>
+</li>
+<li>
+<p>[ ] <strong>Step 4: Implement</strong> per the Interfaces block.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 5: Run, verify pass</strong>: <code>cd coverage &amp;&amp; ./run_all --test ohme &gt; test_ohme.log 2&gt;&amp;1; grep -cE "^PASS" test_ohme.log &amp;&amp; grep -E "FAIL|Error|Traceback" test_ohme.log</code></p>
+</li>
+<li>
+<p>[ ] <strong>Step 6: detect_changes, pre-commit, commit</strong></p>
+</li>
+</ul>
+<pre><code class="language-bash">./run_pre_commit &amp;&amp; git add -u apps/predbat &amp;&amp; git commit -m &quot;feat(ohme): register the charger at its coordinator-assigned car index&quot;
+</code></pre>
+<hr />
+<h3 id="task-10-headline-test-multi-inverter-automatic-mode-across-two-components">Task 10: Headline test — multi-inverter automatic mode across two components</h3>
+<p><strong>Files:</strong>
+- Create: <code>apps/predbat/tests/test_discovery_multi_inverter.py</code>
+- Modify: <code>apps/predbat/unit_test.py</code> (import + registry entry)</p>
+<p><strong>Interfaces:</strong>
+- Consumes: everything above — real <code>GivTCPComponent</code> (mocked REST, fixtures from <code>test_givtcp_component.py</code>) and <code>MockGECloudDirect</code> (from <code>test_ge_cloud.py</code>) on one shared <code>MockBase</code>, with a real <code>Coordinator</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the test</strong></li>
+</ul>
+<pre><code class="language-python"># fmt: off
+# pylint: disable=line-too-long
+&quot;&quot;&quot;End-to-end discovery test: GivTCP and GECloud both in automatic mode on one base, allocated disjoint inverter slots by the coordinator - the multi-vendor case that positional auto-config could never do.&quot;&quot;&quot;
+
+from tests.test_infra import run_async
+from mock_base import MockBase
+from coordinator import Coordinator
+
+
+def test_two_vendor_automatic_fleet(my_predbat=None):
+    &quot;&quot;&quot;GivTCP (one REST inverter) + GECloud (one battery) both automatic produce one coherent two-inverter fleet.&quot;&quot;&quot;
+    base = MockBase()
+    coordinator = Coordinator(base, priority=[&quot;gecloud&quot;, &quot;givtcp&quot;])
+
+    class _Registry:
+        &quot;&quot;&quot;Minimal Components stand-in exposing the coordinator and the two components.&quot;&quot;&quot;
+
+        def __init__(self):
+            &quot;&quot;&quot;Hold the coordinator; components registered after construction.&quot;&quot;&quot;
+            self.coordinator = coordinator
+            self.members = {}
+
+        def get_component(self, name):
+            &quot;&quot;&quot;Return a registered component by name.&quot;&quot;&quot;
+            return self.members.get(name)
+
+    registry = _Registry()
+    base.components = registry
+
+    # --- GivTCP with one answering REST endpoint (fixtures per test_givtcp_component.py) ---
+    from givtcp import GivTCPComponent
+    from tests.test_givtcp_component import _rest_data_blob
+    givtcp = GivTCPComponent(base, rest_urls=[&quot;http://a:6345&quot;], automatic=True)
+    givtcp.component_name = &quot;givtcp&quot;
+    givtcp.rest[0].inverter.rest_data = _rest_data_blob()
+    givtcp.discovered = [0]
+    givtcp.discovery_done = True
+    registry.members[&quot;givtcp&quot;] = givtcp
+
+    # --- GECloud with one battery device (fixtures per test_ge_cloud.py's automatic_config test) ---
+    from tests.test_ge_cloud import MockGECloudDirect
+    gecloud = MockGECloudDirect()
+    gecloud.component_name = &quot;gecloud&quot;
+    # ... arrange gecloud.base = base / devices+settings exactly as _test_async_automatic_config does ...
+    registry.members[&quot;gecloud&quot;] = gecloud
+
+    # Report -&gt; allocate -&gt; apply, the way run()/allocate_and_apply drive it in production
+    coordinator.report(&quot;givtcp&quot;, givtcp.build_discovery())
+    coordinator.report(&quot;gecloud&quot;, gecloud.build_discovery(gecloud.devices_dict))
+    coordinator.allocate_and_apply(wait=False)
+    run_async(gecloud.apply_assignment(gecloud.pending_assignment))
+    run_async(givtcp.apply_assignment(givtcp.pending_assignment))
+
+    assert base.args[&quot;num_inverters&quot;] == 2, base.args.get(&quot;num_inverters&quot;)
+    assert base.args[&quot;inverter_type&quot;] == [&quot;GEC&quot;, &quot;GE&quot;], base.args.get(&quot;inverter_type&quot;)
+    assert base.args[&quot;soc_kw&quot;][1] == &quot;sensor.predbat_givtcp_0_soc_kw&quot;
+    assert base.args[&quot;soc_percent&quot;][0].startswith(&quot;sensor.predbat_gecloud_&quot;)
+    assert base.args[&quot;givtcp_rest&quot;] == [None, &quot;http://a:6345&quot;]
+    load_today = base.args[&quot;load_today&quot;]
+    assert any(&quot;gecloud&quot; in entity for entity in load_today if entity) and any(&quot;givtcp&quot; in entity for entity in load_today if entity), load_today
+
+    # The catalogue for this fleet is one JSON document - the discovery artefact a bug report can carry
+    import json
+    catalogue = json.loads(json.dumps(coordinator.catalogue()))
+    assert set(catalogue[&quot;components&quot;].keys()) == {&quot;gecloud&quot;, &quot;givtcp&quot;}
+    print(&quot;PASS: two-vendor automatic fleet allocated coherently&quot;)
+    return 0
+</code></pre>
+<p>(The GECloud arrangement lines are copied from <code>test_ge_cloud.py</code>'s <code>_test_async_automatic_config</code> — the executor lifts the exact fixture, keeping the serial used in the <code>soc_percent</code> assert consistent with it. If <code>MockGECloudDirect</code>'s constructor builds its own MockBase, re-point <code>gecloud.base</code>, <code>gecloud.args</code>, <code>gecloud.log</code> at the shared <code>base</code> immediately after construction.)</p>
+<ul>
+<li>
+<p>[ ] <strong>Step 2: Register</strong> in <code>unit_test.py</code>: <code>from tests.test_discovery_multi_inverter import test_two_vendor_automatic_fleet</code> and <code>("discovery_multi_inverter", test_two_vendor_automatic_fleet, "Two-vendor automatic multi-inverter allocation (discovery coordinator)", False),</code></p>
+</li>
+<li>
+<p>[ ] <strong>Step 3: Run, iterate until green</strong></p>
+</li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test discovery_multi_inverter &gt; test_headline.log 2&gt;&amp;1; grep -E "PASS|FAIL|Error|Traceback" test_headline.log</code>
+Expected: PASS. Any failure here is an integration bug in Tasks 5–7 — fix there, not by weakening the asserts.</p>
+<ul>
+<li>[ ] <strong>Step 4: Full quick suite regression</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --quick &gt; test_full.log 2&gt;&amp;1; grep -E "FAIL|Error:" test_full.log | head -50</code>
+Expected: no new failures versus main (compare against a fresh <code>main</code> run if anything looks pre-existing).</p>
+<ul>
+<li>[ ] <strong>Step 5: detect_changes, pre-commit, commit</strong></li>
+</ul>
+<pre><code class="language-bash">./run_pre_commit &amp;&amp; git add apps/predbat/tests/test_discovery_multi_inverter.py &amp;&amp; git add -u &amp;&amp; git commit -m &quot;test(coordinator): two-vendor automatic multi-inverter headline test&quot;
+</code></pre>
+<hr />
+<h3 id="task-11-documentation">Task 11: Documentation</h3>
+<p><strong>Files:</strong>
+- Create: <code>docs/discovery-coordinator.md</code>
+- Modify: <code>mkdocs.yml</code> (add the page to the nav, near the components/apps-yaml pages)</p>
+<ul>
+<li>
+<p>[ ] <strong>Step 1: Write the page</strong> — user-facing first (what changes for a user: two automatic inverter components now coexist; slots are stable across restarts; where to see the allocation — <code>sensor.predbat_coordinator</code> and its JSON catalogue; the <code>*_automatic</code> keys and manual apps.yaml configuration are unchanged), then a developer section: the report dict schema (copy the schema block from this plan), the offer/report/allocate/apply lifecycle, and how to migrate another component (<code>build_discovery()</code> + <code>apply_assignment()</code> + report from <code>run()</code>, keep the legacy path when <code>self.coordinator</code> is None, attach vendor facts as extra record keys). Link the spec for rationale.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 2: Verify the docs build</strong>: <code>mkdocs build &gt; docs_build.log 2&gt;&amp;1; grep -iE "error|warning" docs_build.log</code></p>
+</li>
+<li>
+<p>[ ] <strong>Step 3: Commit</strong></p>
+</li>
+</ul>
+<pre><code class="language-bash">./run_pre_commit &amp;&amp; git add docs/discovery-coordinator.md mkdocs.yml &amp;&amp; git commit -m &quot;docs: discovery coordinator page&quot;
+</code></pre>
+<hr />
+<h2 id="self-review-notes">Self-review notes</h2>
+<ul>
+<li>Spec §Decisions 1–6 map to: 1 → Tasks 1, 5–9; 2 → Task 5 (barrier location only); 3 → legacy paths kept in Tasks 6–9; 4 → Task 2 skip keys + <code>set_arg_auto_base</code> fleet writes; 5 → Tasks 2, 6, 7; 6 → Tasks 6–9 with unmigrated components untouched (verified by the Task 10 full-suite run). The catalogue/JSON requirement → Task 1 (<code>catalogue()</code>, JSON test), Task 4 (saved snapshot), Task 5 (<code>publish()</code>), Task 10 (end-to-end JSON assert).</li>
+<li>Type consistency: report dicts use the schema block verbatim in Tasks 1–3 and 6–10; <code>Assignment</code> field names (<code>inverter_slots</code>, <code>sensor_indices</code>, <code>skip_keys</code>, <code>car_slots</code>, <code>num_cars</code>, <code>num_inverters</code>, <code>octopus_intelligent_owner</code>) are used identically throughout; <code>build_discovery()</code> returns the full report dict for every migrated component (GECloud's takes <code>devices</code>).</li>
+<li>Known deliberate parity gaps (documented in the spec): mixed manual+automatic multi-vendor, 4-inverter ceilings, unmigrated components' whole-list writes, <code>set_arg_auto(overwrite=False)</code>'s value-equality nuance replaced by the coarser skip-keys check.</li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>
