@@ -1192,6 +1192,91 @@ def test_final_closes_transport():
     print("  ✓ final() closes the transport")
 
 
+def _started_component(chargers=None, **overrides):
+    """A component that has completed its first run, with the call log cleared."""
+    component = _make_component(chargers, **overrides)
+    assert run_async(component.run(0, True)) is True
+    component.transport.calls.clear()
+    return component
+
+
+def _requests(component):
+    """The commands sent, as (charger id, method, params)."""
+    return [call[1:] for call in component.transport.calls if call[0] == "request"]
+
+
+SWITCH = "switch.predbat_hypervolt_{}_charging".format(V3_ID)
+NUMBER = "number.predbat_hypervolt_{}_max_charging_current".format(V3_ID)
+SELECT = "select.predbat_hypervolt_{}_charge_mode".format(V3_ID)
+
+
+def test_controls_queue_rather_than_call():
+    """An event is queued and sent on the next run, not from the event handler."""
+    component = _started_component()
+    run_async(component.switch_event(SWITCH, "turn_off"))
+    assert _requests(component) == []
+    run_async(component.run(60, False))
+    assert _requests(component) == [(V3_ID, "sync.apply", {"release": True})]
+    print("  ✓ Controls are queued for the run loop")
+
+
+def test_switch_charging():
+    """The charge switch sends release false to charge and release true to stop."""
+    component = _started_component()
+    run_async(component.switch_event(SWITCH, "turn_on"))
+    run_async(component.switch_event(SWITCH, "turn_off"))
+    run_async(component.switch_event(SWITCH, "toggle"))
+    run_async(component.run(60, False))
+    assert _requests(component) == [(V3_ID, "sync.apply", {"release": False}), (V3_ID, "sync.apply", {"release": True})]
+    print("  ✓ Charge switch")
+
+
+def test_number_current_clamps_and_ignores_junk():
+    """The current is sent in milliamps, clamped to 6-32 A; junk is ignored."""
+    component = _started_component()
+    for value in ("16", 40, 3, "abc", None):
+        run_async(component.number_event(NUMBER, value))
+    run_async(component.run(60, False))
+    assert _requests(component) == [(V3_ID, "sync.apply", {"max_current": 16000}), (V3_ID, "sync.apply", {"max_current": 32000}), (V3_ID, "sync.apply", {"max_current": 6000})]
+    assert _logged(component, "ignoring charging current 'abc'")
+    print("  ✓ Current is clamped and junk ignored")
+
+
+def test_select_charge_mode_by_api_version():
+    """The mode goes by plugncharge.set on the V3 API and sync.apply on the V2 API; unknown or unsupported modes are ignored."""
+    component = _started_component()
+    for value in ("eco", "turbo", "super_eco_battery_safe"):
+        run_async(component.select_event(SELECT, value))
+    run_async(component.run(60, False))
+    assert _requests(component) == [(V3_ID, "plugncharge.set", {"mode": "eco"})]
+
+    component = _started_component([HypervoltCharger(V2_ID, api_version=2, features=["home-battery-drain-prevention"], last_message=time.time())])
+    run_async(component.select_event("select.predbat_hypervolt_{}_charge_mode".format(V2_ID), "super_eco_battery_safe"))
+    run_async(component.run(60, False))
+    assert _requests(component) == [(V2_ID, "sync.apply", {"solar_mode": "super_eco_battery_safe"})]
+    print("  ✓ Charge mode by API version")
+
+
+def test_control_refused_logged_with_reason():
+    """A refused command is logged with Hypervolt's reason and the run still succeeds."""
+    component = _started_component()
+    component.transport.errors["request"] = HypervoltRefusedError("charger refused sync.apply: 409 Concurrent modifications invalidated this request")
+    run_async(component.switch_event(SWITCH, "turn_off"))
+    assert run_async(component.run(60, False)) is True
+    assert any(message.startswith("Warn: hypervolt:") and "409 Concurrent" in message for message in component.log_messages)
+    assert component.queued_events == []
+    print("  ✓ Refused command logged with the reason")
+
+
+def test_charger_for_entity_requires_whole_id():
+    """A charger id that is a prefix of another does not claim its entities."""
+    component = _started_component([HypervoltCharger("12", last_message=time.time()), HypervoltCharger("123", last_message=time.time())])
+    assert component.charger_for_entity("switch.predbat_hypervolt_123_charging").charger_id == "123"
+    assert component.charger_for_entity("switch.predbat_hypervolt_12_charging").charger_id == "12"
+    assert component.charger_for_entity("switch.predbat_hypervolt_1_charging") is None
+    print("  ✓ Entities match whole charger ids")
+
+
 def test_hypervolt(my_predbat=None):
     """Run every Hypervolt test."""
     print("=" * 70)
@@ -1245,5 +1330,11 @@ def test_hypervolt(my_predbat=None):
     test_publishes_two_chargers()
     test_update_success_only_when_fresh()
     test_final_closes_transport()
+    test_controls_queue_rather_than_call()
+    test_switch_charging()
+    test_number_current_clamps_and_ignores_junk()
+    test_select_charge_mode_by_api_version()
+    test_control_refused_logged_with_reason()
+    test_charger_for_entity_requires_whole_id()
     print("=" * 70)
     return False

@@ -861,7 +861,81 @@ class HypervoltAPI(ComponentBase):
 
     async def process_events(self):
         """Run every queued control. Returns True when at least one ran."""
-        return False
+        ran = False
+        while self.queued_events:
+            handler, *event_args = self.queued_events.pop(0)
+            try:
+                await handler(*event_args)
+            except HypervoltAuthError:
+                raise
+            except HypervoltRefusedError as exc:
+                # Something the user asked for, so every refusal is reported, with Hypervolt's reason
+                self.log("Warn: hypervolt: control refused: {}".format(exc))
+            except Exception as exc:  # pylint: disable=broad-except
+                # Dropped rather than retried: an event left on the queue would block every later one
+                self.log("Warn: hypervolt: control failed: {}".format(exc))
+            ran = True
+        return ran
+
+    def charger_for_entity(self, entity_id):
+        """Find the charger an entity belongs to, or None. The trailing underscore anchors the match to a whole id."""
+        for charger in self.ordered_chargers():
+            if "{}_".format(self.entity_prefix(charger)) in entity_id:
+                return charger
+        return None
+
+    async def switch_event(self, entity_id, service):
+        """Queue a switch service call for the run loop."""
+        self.queued_events.append((self.switch_event_handler, entity_id, service))
+
+    async def number_event(self, entity_id, value):
+        """Queue a number change for the run loop."""
+        self.queued_events.append((self.number_event_handler, entity_id, value))
+
+    async def select_event(self, entity_id, value):
+        """Queue a select change for the run loop."""
+        self.queued_events.append((self.select_event_handler, entity_id, value))
+
+    async def send_command(self, charger, command):
+        """Send a (method, params) command to a charger and wait for its reply."""
+        method, params = command
+        return await self.transport.request(charger.charger_id, method, params)
+
+    async def switch_event_handler(self, entity_id, service):
+        """Let a charger charge or stop it, in response to its charge switch."""
+        if service not in ("turn_on", "turn_off"):
+            return
+        charger = self.charger_for_entity(entity_id)
+        if not charger or not entity_id.endswith("_charging"):
+            return
+        charge = service == "turn_on"
+        self.log("Info: hypervolt: {} charging on {}".format("allowing" if charge else "stopping", charger.name or charger.charger_id))
+        await self.send_command(charger, release_command(charge))
+
+    async def number_event_handler(self, entity_id, value):
+        """Set the maximum charging current, clamped to 6-32 A."""
+        if not entity_id.endswith("_max_charging_current"):
+            return
+        charger = self.charger_for_entity(entity_id)
+        if not charger:
+            return
+        amps = _to_float(value)
+        if amps is None:
+            self.log("Warn: hypervolt: ignoring charging current '{}' for {}".format(value, charger.name or charger.charger_id))
+            return
+        command = max_current_command(amps)
+        self.log("Info: hypervolt: setting {} maximum charging current to {}A".format(charger.name or charger.charger_id, command[1]["max_current"] // 1000))
+        await self.send_command(charger, command)
+
+    async def select_event_handler(self, entity_id, value):
+        """Set the charge mode, if the charger offers it."""
+        if not entity_id.endswith("_charge_mode"):
+            return
+        charger = self.charger_for_entity(entity_id)
+        if not charger or value not in charge_mode_options(charger):
+            return
+        self.log("Info: hypervolt: setting {} charge mode to {}".format(charger.name or charger.charger_id, value))
+        await self.send_command(charger, charge_mode_command(charger.api_version, value))
 
     def charger_attributes(self, charger, key):
         """A copy of one entity's attributes with the charger's name in the friendly name."""
