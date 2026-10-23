@@ -436,15 +436,26 @@ class HypervoltTransport:
         self.auth_failed = False
         return self.access_token
 
-    async def authenticate(self):
-        """Return a usable access token: reuse it, refresh it, or sign in. One sign in at a time."""
+    async def authenticate(self, retry_refused=False):
+        """Return a usable access token: reuse it, refresh it, or sign in. One sign in at a time.
+
+        Once a password sign in has been refused, only a caller passing retry_refused (the
+        component's run loop, which backs off) tries again; the readers get the refusal at once,
+        so old credentials cannot be sent once per socket.
+        """
         if not self.token_due():
             return self.access_token
         async with self.auth_lock:
             # Another caller may have renewed it while this one waited
             if not self.token_due():
                 return self.access_token
-            return await self._renew_token()
+            if self.auth_failed and not retry_refused:
+                raise HypervoltAuthError("an earlier sign in was refused")
+            try:
+                return await self._renew_token()
+            except HypervoltAuthError:
+                self.auth_failed = True
+                raise
 
     async def _renew_token(self):
         """Refresh the token, falling back to a password sign in."""
@@ -596,8 +607,11 @@ class HypervoltTransport:
         backoff = link.backoff if kind == "sync" else Backoff()
         url = HYPERVOLT_WS_URL.format(link.charger_id) + ("sync" if kind == "sync" else "session/in-progress")
         while not self.closing:
+            token = None
             try:
-                token = await self.authenticate()
+                if kind == "sync":
+                    # Only the sync socket logs in; the session socket carries no token
+                    token = await self.authenticate()
             except HypervoltAuthError as exc:
                 self.auth_failed = True
                 self.log("Error: hypervolt: sign in refused, charger {} is disconnected until it succeeds: {}".format(link.charger_id, exc))
@@ -874,7 +888,7 @@ class HypervoltAPI(ComponentBase):
                 # dropped reconnects with whatever token is current
                 restart = self.transport.auth_failed and not first
                 try:
-                    await self.transport.authenticate()
+                    await self.transport.authenticate(retry_refused=True)
                 except HypervoltAuthError:
                     if not first:
                         self.auth_backoff_seconds = min(AUTH_BACKOFF_MAX_SECONDS, max(AUTH_BACKOFF_MIN_SECONDS, self.auth_backoff_seconds * 2))
@@ -1104,7 +1118,7 @@ class HypervoltAPI(ComponentBase):
             self.dashboard_item("sensor.{}_power".format(prefix), state=charger.power_w, attributes=self.charger_attributes(charger, "power"), app="hypervolt")
             self.dashboard_item("sensor.{}_session_energy".format(prefix), state=charger.session_energy_kwh, attributes=self.charger_attributes(charger, "session_energy"), app="hypervolt")
             connected = connected_state(charger)
-            if connected == "unavailable" and charger.charger_id in self.released_by_predbat:
+            if connected == "unavailable" and charger.charger_id in self.released_by_predbat and charger.release_state == "released":
                 # Fail open: a charger Predbat stopped must keep its car's plan, or it is never started again
                 connected = "on"
             self.dashboard_item("binary_sensor.{}_connected".format(prefix), state=connected, attributes=self.charger_attributes(charger, "connected"), app="hypervolt")
@@ -1167,11 +1181,13 @@ class HypervoltAPI(ComponentBase):
         return not self.control_state_dirty
 
     def control_read_only_now(self):
-        """Is Predbat in read only mode - the live attribute first, then the config argument."""
-        read_only = getattr(self.base, "set_read_only", None)
-        if read_only is None:
-            read_only = self.get_arg("set_read_only", False)
-        return bool(read_only)
+        """Is Predbat in read only mode.
+
+        Read with get_arg: the base's set_read_only attribute is True from reset() until the first
+        update_pred(), which comes after this component's first run, so reading it would release
+        every charger Predbat had stopped on each restart.
+        """
+        return bool(self.get_arg("set_read_only", False))
 
     def refresh_car_windows(self, now):
         """Read each car's planned charging windows. A car with no slot sensor is absent, so its charger is left alone."""
@@ -1277,6 +1293,9 @@ class HypervoltAPI(ComponentBase):
             if charger.release_state == "released":
                 self.log("Info: hypervolt: allowing {} to charge for car {}".format(charger.name or charger.charger_id, car_n))
                 await self.send_command(charger, release_command(True))
+                self.forget(charger)
+            elif charger.release_state == "default":
+                # Not stopped - a stop that was refused or never sent - so nothing is owed
                 self.forget(charger)
         elif charger.release_state == "default" and connected_state(charger) == "on":
             self.log("Info: hypervolt: stopping {} for car {}".format(charger.name or charger.charger_id, car_n))

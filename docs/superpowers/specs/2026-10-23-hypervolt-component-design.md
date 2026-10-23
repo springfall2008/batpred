@@ -149,6 +149,8 @@ futures; it never calls Predbat.
   A refresh does not reconnect the sockets: the token is only sent at login, and a reader that is
   dropped reconnects with the current token. `authenticate()` holds a lock, so readers
   reconnecting together share one refresh.
+- Only the sync reader signs in; the session socket carries no token. Once a password sign in
+  is refused, readers get the refusal without a request, and only `run()` retries.
 - After start-up, a refused sign in backs off (120 seconds doubling to an hour) so old
   credentials cannot lock the Hypervolt account; each `run()` still logs and returns False.
   When it succeeds again the stopped readers are restarted.
@@ -270,9 +272,14 @@ reader tasks only record state.
 At most one command per charger per `run()`, only on fresh state (no message older than
 `STALE_SECONDS`).
 
-**Fail open.** A charger in `released_by_predbat` whose connection is unknown publishes
-`_connected` as on. Otherwise a V2 API charger, or a V3 charger after a restart with no pilot
+**Fail open.** A charger in `released_by_predbat` that still reads `released` and whose
+connection is unknown publishes `_connected` as on. One whose stop never took effect (it reads
+`default`) does not, and is forgotten inside a window. Otherwise a V2 API charger, or a V3 charger after a restart with no pilot
 status, would drop out of `car_charging_planned` once stopped, get no plan, and never be started.
+
+**Read only** is read with `get_arg("set_read_only")`: the base's `set_read_only` attribute is
+`True` from `reset()` until the first `update_pred()`, which comes after this component's first
+run.
 
 **Release.** When Predbat is read-only, or the control switch is off, or control is unavailable,
 every charger in `released_by_predbat` is sent `release: false` and forgotten. This hands the

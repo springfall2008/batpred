@@ -1213,7 +1213,7 @@ For each charger, with `<id>` being the Hypervolt charger id:
 | `binary_sensor.predbat_hypervolt_<id>_connected` | On while a car is plugged in. A charger that has not yet reported its cable since Predbat started shows on while charging and `unavailable` otherwise |
 | `binary_sensor.predbat_hypervolt_<id>_plugged` | The cable alone: on or off from the charger's report, `unavailable` until it has reported |
 | `binary_sensor.predbat_hypervolt_<id>_charging` | On while the car is charging |
-| `switch.predbat_hypervolt_<id>_charging` | Turn off to stop charging, on to let the charger charge again |
+| `switch.predbat_hypervolt_<id>_charging` | Turn off to stop charging, on to let the charger charge again. With Predbat-led charging on, Predbat sets it from its plan within a minute |
 | `number.predbat_hypervolt_<id>_max_charging_current` | Maximum charging current, 6 to 32 A |
 | `select.predbat_hypervolt_<id>_charge_mode` | Charge mode: `boost`, `eco` or `super_eco`, plus `super_eco_battery_safe` on chargers that offer it |
 
@@ -1241,7 +1241,7 @@ Set `hypervolt_control: True` to let Predbat stop and start each charger from it
 Things to know:
 
 - Put the charger in `boost` mode and turn off any schedule in the Hypervolt app. A schedule makes the charger wait for its own times even inside a Predbat slot, and the Eco modes only charge from spare solar.
-- While Predbat-led charging is on, Predbat lets a stopped charger charge inside a planned slot even if you stopped it yourself. Turn `switch.predbat_hypervolt_control` off first if you want it to stay stopped.
+- While Predbat-led charging is on, Predbat follows its plan over the charge switch: it lets a stopped charger charge inside a planned slot even if you stopped it yourself, and stops a car you started outside a slot within a minute. Turn `switch.predbat_hypervolt_control` off first if you want to stop or start the charger by hand.
 - Some cars go to sleep when charging is stopped and do not wake when it is allowed again. If yours does, Predbat-led charging will not suit it.
 
 #### Configuration Options (hypervolt)

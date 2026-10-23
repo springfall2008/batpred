@@ -810,12 +810,12 @@ def test_reconnect_stops_on_auth_failure():
 
 
 def test_successful_sign_in_clears_auth_failed():
-    """A token obtained again clears the auth failure flag."""
+    """A token obtained again, by an explicit retry, clears the auth failure flag."""
     session, _ = _session([_response(_token_payload())])
     transport = HypervoltTransport(print, "user@example.com", "secret")
     transport.auth_failed = True
     with patch("aiohttp.ClientSession", return_value=session), patch("hypervolt.record_api_call"):
-        run_async(transport.authenticate())
+        run_async(transport.authenticate(retry_refused=True))
     assert transport.auth_failed is False
     print("  ✓ A good sign in clears the auth failure")
 
@@ -968,7 +968,7 @@ class _StubTransport:
         """Whether the token needs renewing, as the test set it."""
         return self.due
 
-    async def authenticate(self):
+    async def authenticate(self, retry_refused=False):
         """Record a sign in."""
         self._record("authenticate")
         self.auth_failed = False
@@ -1580,7 +1580,7 @@ def test_control_releases_on_read_only_and_switch_off():
         component = _control_component({0: PLAN_OUTSIDE}, [_charger(release_state="released", pilot_status="B"), other], storage=storage)
         component.released_by_predbat.add(V3_ID)
         if setup == "read_only":
-            component.base.set_read_only = True
+            component.base.args["set_read_only"] = True
         else:
             component.control_enabled = False
         run_async(component.control_tick(CONTROL_NOW))
@@ -1859,6 +1859,73 @@ def test_unplugged_released_charger_is_released():
     print("  ✓ Unplugged but still stopped charger is released")
 
 
+def test_read_only_comes_from_get_arg():
+    """Read only is read with get_arg, not from the base attribute that reset() leaves True until the first update_pred()."""
+    component = _control_component({0: PLAN_OUTSIDE}, [_charger(release_state="released", pilot_status="B")])
+    component.released_by_predbat.add(V3_ID)
+    component.base.set_read_only = True
+    component.base.args["set_read_only"] = False
+    run_async(component.control_tick(CONTROL_NOW))
+    assert _requests(component) == [], "A restart must not release the chargers Predbat stopped"
+    assert component.released_by_predbat == {V3_ID}
+    component.base.args["set_read_only"] = True
+    run_async(component.control_tick(CONTROL_NOW))
+    assert _requests(component) == [(V3_ID, "sync.apply", {"release": False})]
+    print("  ✓ Read only comes from get_arg")
+
+
+def test_refused_stop_does_not_hold_connected():
+    """A charger whose stop never took effect does not read connected, and is forgotten inside a window."""
+    component = _make_component([_charger(release_state="default", pilot_status=None, charging=False)])
+    component.released_by_predbat.add(V3_ID)
+    run_async(component.run(0, True))
+    assert component.base.entities["binary_sensor.predbat_hypervolt_{}_connected".format(V3_ID)]["state"] == "unavailable"
+    component = _control_component({0: PLAN_INSIDE}, [_charger(release_state="default", pilot_status=None)])
+    component.released_by_predbat.add(V3_ID)
+    run_async(component.control_tick(CONTROL_NOW))
+    assert _requests(component) == [] and component.released_by_predbat == set()
+    print("  ✓ A stop that never took effect does not hold the charger connected")
+
+
+def test_refused_sign_in_not_retried_by_readers():
+    """After a refused password, readers get the refusal without a request; only an explicit retry signs in again."""
+    session, calls = _session([_response({"error": "invalid_grant"}, status=401), _response(_token_payload())])
+    transport = HypervoltTransport(print, "user@example.com", "secret")
+    with patch("aiohttp.ClientSession", return_value=session), patch("hypervolt.record_api_call"):
+        for _ in range(2):
+            try:
+                run_async(transport.authenticate())
+                raise AssertionError("Expected HypervoltAuthError")
+            except HypervoltAuthError:
+                pass
+        assert transport.auth_failed is True and len(calls) == 1
+        assert run_async(transport.authenticate(retry_refused=True)) == "jwt-1"
+    assert len(calls) == 2 and transport.auth_failed is False
+    print("  ✓ Readers do not retry a refused sign in")
+
+
+def test_session_reader_does_not_sign_in():
+    """The V2 session socket carries no login, so its reader does not sign in."""
+    sync, sess = FakeSocket(), FakeSocket()
+    session, connects = _ws_session({"sync": [sync], "session/in-progress": [sess]})
+
+    async def scenario():
+        """Connect a V2 charger and count the sign ins."""
+        transport = _signed_in_transport()
+        transport.authenticate = AsyncMock(return_value="jwt-1")
+        await transport.connect(V2_ID)
+        await _settle()
+        assert len(connects) == 2
+        count = transport.authenticate.await_count
+        await transport.close()
+        return count
+
+    with patch("aiohttp.ClientSession", return_value=session), patch("hypervolt.record_api_call"):
+        count = run_async(scenario())
+    assert count == 1, count
+    print("  ✓ Session reader does not sign in")
+
+
 def test_hypervolt(my_predbat=None):
     """Run every Hypervolt test."""
     print("=" * 70)
@@ -1951,5 +2018,9 @@ def test_hypervolt(my_predbat=None):
     test_sign_in_backs_off_after_auth_failure()
     test_quiet_charger_probed_before_stale()
     test_unplugged_released_charger_is_released()
+    test_read_only_comes_from_get_arg()
+    test_refused_stop_does_not_hold_connected()
+    test_refused_sign_in_not_retried_by_readers()
+    test_session_reader_does_not_sign_in()
     print("=" * 70)
     return False
