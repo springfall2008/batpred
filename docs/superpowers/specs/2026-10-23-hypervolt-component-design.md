@@ -99,8 +99,8 @@ It pushes session objects (2.6) only. An API version 3 charger delivers the same
 
 Pure function `charger_api_version(charger_id, firmware_version)`, ported from the integration:
 
-- Major version from the id: the decimal id in hex, rounded up to whole bytes; 12 → 2, 16 → 3,
-  anything else (or unparsable) → 3.
+- Major version from the id: the number of hex digits in the decimal id, rounded up to an even
+  number; 12 → 2, 16 → 3, anything else (or unparsable) → 3.
 - Major 3 → API 3. Major 2 with a firmware version string of 7 characters or fewer (updated V2
   firmware reports `"1"` or `"1.0"`) → API 3. Otherwise → API 2, including while firmware is not
   yet known.
