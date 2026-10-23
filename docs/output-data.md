@@ -437,7 +437,8 @@ The following sensors are set based on what Predbat is currently controlling the
   export slot, or 'none' when not exporting. The export icon shown next to the SoC in the Predbat Web Interface is coloured from
   this - green for an active export, amber for a freeze export. A freeze applied outside an export slot by
   [set_freeze_export_during_demand](customisation.md#freeze-export-during-demand) shows '[Freeze exporting]' in the status but leaves this sensor 'off' and
-  the attribute 'none', as it is not an export slot.
+  the attribute 'none', as it is not an export slot. 'Hold exporting' (an export slot already at its target, or a target export slot while
+  **switch.predbat_set_export_freeze_only** is On) is Demand mode with the battery held, so it is also 'off' and 'none'.
 
 These are useful for automations if for example, you want to turn off car charging when the battery is being exported.
 
