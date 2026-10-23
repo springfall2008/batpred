@@ -47,8 +47,10 @@ HYPERVOLT_SCOPE = "openid profile email offline_access"
 USER_AGENT = "Predbat"
 
 API_TIMEOUT = 30
-# Refresh the access token once it has less than this left
+# Refresh the access token once it has less than this left, or less than half its life for a short-lived token
 TOKEN_MARGIN_SECONDS = 600
+# Token lifetime assumed when the sign in reply does not say (Keycloak's default)
+DEFAULT_TOKEN_LIFE_SECONDS = 300
 
 # Seconds to wait for the reply to a command
 COMMAND_TIMEOUT_SECONDS = 10
@@ -74,8 +76,13 @@ HYPERVOLT_CONTROL_STATE = "control_state"
 # The charger list is re-read this often, to pick up a charger added to the account
 CHARGER_LIST_SECONDS = 30 * 60
 
-# A charger with no message for this long is probed, and at twice this reconnected
+# A charger with no message for this long is stale (published, but skipped by control), and at twice this reconnected
 STALE_SECONDS = 240
+# A quiet charger is probed well before it goes stale, so its answer arrives in time
+PROBE_SECONDS = STALE_SECONDS // 2
+# Sign in back-off after a refused password, so old credentials cannot lock the account
+AUTH_BACKOFF_MIN_SECONDS = 120
+AUTH_BACKOFF_MAX_SECONDS = 3600
 
 RELEASE_STATES = ("default", "released")
 LOCK_STATES = ("unlocked", "pending_lock", "locked")
@@ -362,6 +369,9 @@ class HypervoltTransport:
         self.refresh_token = None
         # Absolute expiry time, in epoch seconds
         self.token_expiry = 0
+        self.token_margin = TOKEN_MARGIN_SECONDS
+        # Readers reconnecting together share one sign in rather than racing with the same refresh token
+        self.auth_lock = asyncio.Lock()
         self.links = {}
         self.chargers = {}
         # Charger id -> its entry from list_chargers(), for the model
@@ -383,7 +393,7 @@ class HypervoltTransport:
 
     def token_due(self):
         """Is the access token missing or within TOKEN_MARGIN_SECONDS of expiring."""
-        return not self.access_token or self.token_expiry - TOKEN_MARGIN_SECONDS <= time.time()
+        return not self.access_token or self.token_expiry - self.token_margin <= time.time()
 
     async def _call(self, method, url, headers=None, data=None):
         """Perform one HTTP request and return (status, decoded JSON or None)."""
@@ -415,7 +425,9 @@ class HypervoltTransport:
         try:
             self.access_token = payload["access_token"]
             self.refresh_token = payload.get("refresh_token", self.refresh_token)
-            self.token_expiry = time.time() + float(payload.get("expires_in", 0))
+            life = _to_float(payload.get("expires_in")) or DEFAULT_TOKEN_LIFE_SECONDS
+            self.token_margin = min(TOKEN_MARGIN_SECONDS, life / 2.0)
+            self.token_expiry = time.time() + life
         except (KeyError, TypeError, ValueError) as exc:
             self._clear_tokens()
             record_api_call("hypervolt", success=False, reason="decode_error")
@@ -425,9 +437,17 @@ class HypervoltTransport:
         return self.access_token
 
     async def authenticate(self):
-        """Return a usable access token: reuse it, refresh it, or sign in."""
+        """Return a usable access token: reuse it, refresh it, or sign in. One sign in at a time."""
         if not self.token_due():
             return self.access_token
+        async with self.auth_lock:
+            # Another caller may have renewed it while this one waited
+            if not self.token_due():
+                return self.access_token
+            return await self._renew_token()
+
+    async def _renew_token(self):
+        """Refresh the token, falling back to a password sign in."""
         if self.refresh_token:
             try:
                 return await self._token_request({"client_id": HYPERVOLT_CLIENT_ID, "grant_type": "refresh_token", "refresh_token": self.refresh_token})
@@ -553,6 +573,11 @@ class HypervoltTransport:
             await self._stop_link(link)
             self._start_link(link)
 
+    def link_alive(self, charger_id):
+        """Is the charger's sync reader running."""
+        link = self.links.get(str(charger_id))
+        return bool(link and link.tasks and not link.tasks[0].done())
+
     async def probe(self, charger_id):
         """Ask a quiet charger for a snapshot without waiting for the reply; its answer stamps last_message."""
         link = self.links.get(str(charger_id))
@@ -591,6 +616,9 @@ class HypervoltTransport:
             except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as exc:
                 record_api_call("hypervolt", success=False, reason="connection_error")
                 self.log("Warn: hypervolt: {} socket for charger {} failed: {}".format(kind, link.charger_id, exc))
+            except Exception as exc:  # pylint: disable=broad-except
+                # Anything unexpected reconnects with back-off rather than leaving the charger without a reader
+                self.log("Warn: hypervolt: {} socket for charger {} stopped unexpectedly: {}".format(kind, link.charger_id, exc))
             if self.closing or (kind == "session" and link.api_version >= 3):
                 return
             await self.sleep(backoff.next())
@@ -612,10 +640,16 @@ class HypervoltTransport:
                 count += 1
                 if count >= BACKOFF_RESET_MESSAGES:
                     backoff.reset()
-                if kind == "sync":
-                    await self._handle_sync_frame(link, frame.data)
-                else:
-                    self._handle_session_frame(link, frame.data)
+                try:
+                    if kind == "sync":
+                        await self._handle_sync_frame(link, frame.data)
+                    else:
+                        self._handle_session_frame(link, frame.data)
+                except (asyncio.CancelledError, aiohttp.ClientError, OSError):
+                    raise
+                except Exception as exc:  # pylint: disable=broad-except
+                    # One bad message must not end the reader: log it and read the next
+                    self.log("Warn: hypervolt: could not handle a message from charger {}: {}".format(link.charger_id, exc))
         finally:
             if kind == "sync":
                 link.sync = None
@@ -660,6 +694,8 @@ class HypervoltTransport:
             await self._send(link, "plugncharge.get")
         await self._send(link, "firmware.version")
         await self._send(link, "get.name")
+        # The integration only ever sees this pushed on a change; asking means a restart need not wait for the cable to move
+        await self._send(link, "get.pilot_status")
 
     async def _handle_sync_frame(self, link, text):
         """Route one sync socket frame: a reply to its caller and on_message, a push to on_message."""
@@ -680,9 +716,15 @@ class HypervoltTransport:
                 # A reply nobody is waiting for: late, or from an earlier connection
                 return
             if "error" in message:
-                error = message.get("error") or {}
+                error = message.get("error")
+                if not isinstance(error, dict):
+                    # Seen as a bare string, e.g. "plugncharge.get not allowed"
+                    error = {"error": error}
+                if method == "login":
+                    await self._login_refused(link)
+                    return
                 if future and not future.done():
-                    future.set_exception(HypervoltRefusedError("charger {} refused {}: {} {}".format(link.charger_id, method, error.get("code", ""), error.get("error", error)).strip()))
+                    future.set_exception(HypervoltRefusedError("charger {} refused {}: {} {}".format(link.charger_id, method, error.get("code", ""), error.get("error", "")).strip()))
                 return
             result = message.get("result")
             if method == "login":
@@ -690,10 +732,7 @@ class HypervoltTransport:
                     link.authenticated = True
                     await self._request_state(link)
                 else:
-                    self.log("Warn: hypervolt: charger {} refused the login".format(link.charger_id))
-                    # Most likely a stale token: renew it before the reconnect
-                    self.token_expiry = 0
-                    await link.sync.close()
+                    await self._login_refused(link)
                 return
             if future and not future.done():
                 future.set_result(result)
@@ -702,6 +741,13 @@ class HypervoltTransport:
                 await self._check_promotion(link)
         elif "method" in message:
             self.on_message(link.charger_id, message["method"], message.get("params"))
+
+    async def _login_refused(self, link):
+        """A charger refused the login: most likely a stale token, so renew it and let the reader reconnect."""
+        self.log("Warn: hypervolt: charger {} refused the login".format(link.charger_id))
+        self.token_expiry = 0
+        if link.sync is not None:
+            await link.sync.close()
 
     async def _check_promotion(self, link):
         """Move a V2 charger whose firmware speaks the V3 API onto it: ask for its mode and close the session socket."""
@@ -726,7 +772,10 @@ class HypervoltTransport:
             raise HypervoltApiError("charger {} is not connected".format(charger_id))
         future = asyncio.get_running_loop().create_future()
         try:
-            await self._send(link, method, params, future=future)
+            try:
+                await self._send(link, method, params, future=future)
+            except (aiohttp.ClientError, OSError, RuntimeError) as exc:
+                raise HypervoltApiError("could not send {} to charger {}: {}".format(method, charger_id, exc)) from exc
             return await asyncio.wait_for(future, COMMAND_TIMEOUT_SECONDS)
         except asyncio.TimeoutError as exc:
             raise HypervoltTimeoutError("charger {} did not answer {}".format(charger_id, method)) from exc
@@ -770,6 +819,8 @@ class HypervoltAPI(ComponentBase):
         self.reconnected_at = {}
         # Seconds the first run waits for a charger's first message
         self.first_wait_seconds = 20
+        self.auth_backoff_seconds = 0
+        self.auth_retry_at = 0
         self._auto_configured_order = None
         self.api_2_noted = set()
         self.control_active = False
@@ -815,10 +866,23 @@ class HypervoltAPI(ComponentBase):
             self.enable_control()
         try:
             if first or self.transport.auth_failed or self.transport.token_due():
-                reconnect = not first
-                await self.transport.authenticate()
-                if reconnect:
-                    # The sync login carries the token, so every socket logs in again with the new one
+                if not first and time.time() < self.auth_retry_at:
+                    self.log("Error: hypervolt: sign in was refused, check hypervolt_username and hypervolt_password; next attempt in {} minutes".format(int((self.auth_retry_at - time.time()) / 60) + 1))
+                    return False
+                # Readers stop when a sign in is refused, so they are restarted once it works again. A plain
+                # refresh leaves the sockets alone: the token is only sent at login, and a reader that is
+                # dropped reconnects with whatever token is current
+                restart = self.transport.auth_failed and not first
+                try:
+                    await self.transport.authenticate()
+                except HypervoltAuthError:
+                    if not first:
+                        self.auth_backoff_seconds = min(AUTH_BACKOFF_MAX_SECONDS, max(AUTH_BACKOFF_MIN_SECONDS, self.auth_backoff_seconds * 2))
+                        self.auth_retry_at = time.time() + self.auth_backoff_seconds
+                    raise
+                self.auth_backoff_seconds = 0
+                self.auth_retry_at = 0
+                if restart:
                     await self.transport.reconnect_all()
             await self.refresh_charger_list(seconds, first)
             if first:
@@ -906,13 +970,18 @@ class HypervoltAPI(ComponentBase):
     async def check_links(self, now):
         """Probe a quiet charger, and reconnect a silent one that has not been reconnected recently."""
         for charger in self.ordered_chargers():
+            if not self.transport.auth_failed and not self.transport.link_alive(charger.charger_id):
+                self.log("Warn: hypervolt: charger {} has no reader running, reconnecting".format(charger.charger_id))
+                self.reconnected_at[charger.charger_id] = now
+                await self.transport.reconnect(charger.charger_id)
+                continue
             silence = now - charger.last_message
             if silence > 2 * STALE_SECONDS:
                 if now - self.reconnected_at.get(charger.charger_id, 0) > 2 * STALE_SECONDS:
                     self.log("Warn: hypervolt: charger {} has sent nothing for {} seconds, reconnecting".format(charger.charger_id, int(silence)))
                     self.reconnected_at[charger.charger_id] = now
                     await self.transport.reconnect(charger.charger_id)
-            elif silence > STALE_SECONDS:
+            elif silence > PROBE_SECONDS:
                 await self.transport.probe(charger.charger_id)
 
     async def process_events(self):
@@ -1034,7 +1103,11 @@ class HypervoltAPI(ComponentBase):
             self.dashboard_item("sensor.{}_status".format(prefix), state=status_text(charger), attributes=status_attributes, app="hypervolt")
             self.dashboard_item("sensor.{}_power".format(prefix), state=charger.power_w, attributes=self.charger_attributes(charger, "power"), app="hypervolt")
             self.dashboard_item("sensor.{}_session_energy".format(prefix), state=charger.session_energy_kwh, attributes=self.charger_attributes(charger, "session_energy"), app="hypervolt")
-            self.dashboard_item("binary_sensor.{}_connected".format(prefix), state=connected_state(charger), attributes=self.charger_attributes(charger, "connected"), app="hypervolt")
+            connected = connected_state(charger)
+            if connected == "unavailable" and charger.charger_id in self.released_by_predbat:
+                # Fail open: a charger Predbat stopped must keep its car's plan, or it is never started again
+                connected = "on"
+            self.dashboard_item("binary_sensor.{}_connected".format(prefix), state=connected, attributes=self.charger_attributes(charger, "connected"), app="hypervolt")
             self.dashboard_item("binary_sensor.{}_plugged".format(prefix), state=plugged_state(charger), attributes=self.charger_attributes(charger, "plugged"), app="hypervolt")
             self.dashboard_item("binary_sensor.{}_charging".format(prefix), state="on" if charger.charging else "off", attributes=self.charger_attributes(charger, "charging"), app="hypervolt")
             self.dashboard_item("switch.{}_charging".format(prefix), state="on" if charger.release_state == "default" else "off", attributes=self.charger_attributes(charger, "charging_switch"), app="hypervolt")
@@ -1165,13 +1238,13 @@ class HypervoltAPI(ComponentBase):
 
     async def release_one(self, charger):
         """Release one charger: send release false if it is still stopped, and forget it once nothing is owed."""
-        if charger.pilot_status == "A" or charger.release_state == "default":
-            # Unplugged, or already charging again: nothing is owed
-            self.forget(charger)
-            return
         if charger.release_state == "released":
+            # Even when unplugged: whether a stop survives the cable coming out is not known
             self.log("Info: hypervolt: releasing {}".format(charger.name or charger.charger_id))
             await self.send_command(charger, release_command(True))
+            self.forget(charger)
+        elif charger.pilot_status == "A" or charger.release_state == "default":
+            # Unplugged, or already charging again: nothing is owed
             self.forget(charger)
 
     async def control_charge(self, now):
@@ -1193,6 +1266,10 @@ class HypervoltAPI(ComponentBase):
     async def control_one(self, car_n, charger, wanted):
         """Apply the plan to one charger."""
         if charger.pilot_status == "A":
+            if charger.release_state == "released" and charger.charger_id in self.released_by_predbat:
+                # Hand it back before forgetting it: a stop that outlives the unplug would hold the next car too
+                self.log("Info: hypervolt: releasing {} as the car was unplugged".format(charger.name or charger.charger_id))
+                await self.send_command(charger, release_command(True))
             self.forget(charger)
             return
         if wanted:

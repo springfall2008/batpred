@@ -66,6 +66,7 @@ After connecting, the client sends `login` and, on `{"authenticated": true}`, as
 | `plugncharge.get` | — (API version 3 only) | `{"applied": "boost"}` |
 | `firmware.version` | — | a string or number, e.g. `"2483.2"` |
 | `get.name` | — | the charger's name |
+| `get.pilot_status` | — | `{"pilot_status": …}`; the integration only sees it pushed, so whether the request is answered is to be confirmed (section 13) |
 | `sync.apply` | one or more of `{"release": bool}`, `{"max_current": <mA>}`, `{"solar_mode": "<mode>"}` | the applied keys, as a snapshot |
 | `plugncharge.set` | `{"mode": "<mode>"}` (API version 3 only) | `{"mode": "boost", "applied": true}` |
 
@@ -143,11 +144,19 @@ futures; it never calls Predbat.
 
 `run()` checks link health each cycle:
 
-- The access token is refreshed when it has less than `TOKEN_MARGIN_SECONDS` (600) left; after a
-  refresh every link is reconnected so the sync login uses the new token.
-- A link whose charger has had no message for `STALE_SECONDS` (240) is sent `sync.snapshot`; at
-  480 seconds it is reconnected. A stale charger is published but skipped by control, as Wallbox
-  skips a charger whose status read failed.
+- The access token is refreshed when it has less than `TOKEN_MARGIN_SECONDS` (600), or half its
+  lifetime if that is shorter, left (a 300 second Keycloak token would otherwise always be due).
+  A refresh does not reconnect the sockets: the token is only sent at login, and a reader that is
+  dropped reconnects with the current token. `authenticate()` holds a lock, so readers
+  reconnecting together share one refresh.
+- After start-up, a refused sign in backs off (120 seconds doubling to an hour) so old
+  credentials cannot lock the Hypervolt account; each `run()` still logs and returns False.
+  When it succeeds again the stopped readers are restarted.
+- A charger with no message for `PROBE_SECONDS` (120) is sent `sync.snapshot`; at
+  `STALE_SECONDS` (240) it is stale, published but skipped by control; at 480 seconds it is
+  reconnected. A charger whose reader task has ended is reconnected on the next `run()`.
+- One message that cannot be handled is logged and skipped; anything else unexpected reconnects
+  with back-off. An `error` reply may be a dict or a bare string.
 - `final()` cancels every reader task and closes every socket, so a component restart leaves no
   orphaned task.
 
@@ -249,7 +258,8 @@ parse it with `utils.parse_car_plan_windows` / `in_car_plan_window`:
 - Outside a window, connected, and `release_state` is `default` → add the charger to
   `released_by_predbat`, save, then send `release: true`. Recorded before it is sent, as Wallbox
   records a pause.
-- Disconnected (pilot A) → forget the charger from `released_by_predbat`; send nothing.
+- Disconnected (pilot A) → if it is still `released` and Predbat stopped it, send `release: false`
+  (whether a stop outlives the unplug is not known); then forget it.
 - Stale, or no plan for the car → nothing.
 
 Unlike Wallbox, which can only pause a charger that is already charging, a Hypervolt can be
@@ -259,6 +269,10 @@ reader tasks only record state.
 
 At most one command per charger per `run()`, only on fresh state (no message older than
 `STALE_SECONDS`).
+
+**Fail open.** A charger in `released_by_predbat` whose connection is unknown publishes
+`_connected` as on. Otherwise a V2 API charger, or a V3 charger after a restart with no pilot
+status, would drop out of `car_charging_planned` once stopped, get no plan, and never be started.
 
 **Release.** When Predbat is read-only, or the control switch is off, or control is unavailable,
 every charger in `released_by_predbat` is sent `release: false` and forgotten. This hands the

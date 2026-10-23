@@ -1235,7 +1235,8 @@ Set `hypervolt_control: True` to let Predbat stop and start each charger from it
 
 - Inside a planned car charging slot, a stopped charger is let charge again.
 - Outside a slot, a charger with a car plugged in is stopped, whether or not the car has started charging, so a car plugged in outside a slot is stopped within a minute.
-- When control is released, every charger Predbat stopped is let charge again, which hands it back to its own charge mode and schedule.
+- When control is released, every charger Predbat stopped is let charge again, which hands it back to its own charge mode and schedule. A charger Predbat stopped is also let charge again when the car is unplugged, so the next car is not held.
+- A charger Predbat has stopped reads as connected until it reports otherwise, so its car keeps its plan and is started in the next slot.
 
 Things to know:
 

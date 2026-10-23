@@ -355,7 +355,7 @@ def test_sync_login_and_state_requests():
         assert all(message["jsonrpc"] == "2.0" and message["id"] for message in socket.sent)
         assert len({message["id"] for message in socket.sent}) == len(socket.sent)
         methods = socket.methods()
-        for method in ("sync.snapshot", "firmware.version", "get.name"):
+        for method in ("sync.snapshot", "firmware.version", "get.name", "get.pilot_status"):
             assert method in methods, methods
         assert ("plugncharge.get" in methods) == expect_plugncharge, methods
     print("  ✓ Sync socket logs in then asks for state")
@@ -951,6 +951,11 @@ class _StubTransport:
         self.errors = {}
         self.due = False
         self.auth_failed = False
+        self.dead = set()
+
+    def link_alive(self, charger_id):
+        """Whether the charger's reader is running, as the test set it."""
+        return charger_id not in self.dead
 
     def _record(self, *call):
         """Record a call, raising the queued error for it if there is one."""
@@ -967,6 +972,7 @@ class _StubTransport:
         """Record a sign in."""
         self._record("authenticate")
         self.auth_failed = False
+        self.due = False
         return "jwt-1"
 
     async def list_chargers(self):
@@ -985,6 +991,7 @@ class _StubTransport:
     async def reconnect(self, charger_id):
         """Record a reconnect of one charger."""
         self._record("reconnect", charger_id)
+        self.dead.discard(charger_id)
 
     async def probe(self, charger_id):
         """Record a probe."""
@@ -1072,14 +1079,64 @@ def test_run_first_signs_in_lists_and_connects():
 
 
 def test_run_refreshes_token():
-    """A token near expiry is renewed and every socket reconnected with it."""
+    """A token near expiry is renewed without tearing down the sockets, so commands in the same run still work."""
     component = _make_component()
     run_async(component.run(0, True))
     component.transport.due = True
     run_async(component.run(60, False))
-    assert ("reconnect_all",) in component.transport.calls
     assert component.transport.count("authenticate") == 2
-    print("  ✓ Token renewed and sockets reconnected")
+    assert component.transport.count("reconnect_all") == 0
+    print("  ✓ Token renewed without reconnecting")
+
+
+def test_run_restarts_readers_after_auth_recovery():
+    """Once a refused sign in succeeds again, the stopped readers are restarted."""
+    component = _make_component()
+    run_async(component.run(0, True))
+    component.transport.auth_failed = True
+    run_async(component.run(60, False))
+    assert component.transport.count("reconnect_all") == 1
+    print("  ✓ Readers restarted after the sign in recovers")
+
+
+def test_short_lived_token_not_due():
+    """A 300 second token is not due straight after sign in; it falls due in its second half."""
+    session, _ = _session([_response(_token_payload(life=300))])
+    transport = HypervoltTransport(print, "user@example.com", "secret")
+    with patch("aiohttp.ClientSession", return_value=session), patch("hypervolt.record_api_call"):
+        run_async(transport.authenticate())
+    assert transport.token_due() is False
+    transport.token_expiry = time.time() + 100
+    assert transport.token_due() is True
+    session, _ = _session([_response({"access_token": "jwt-x"})])
+    transport = HypervoltTransport(print, "user@example.com", "secret")
+    with patch("aiohttp.ClientSession", return_value=session), patch("hypervolt.record_api_call"):
+        run_async(transport.authenticate())
+    assert transport.token_due() is False, "A reply without expires_in is not taken as already expired"
+    print("  ✓ A short-lived token is not due at once")
+
+
+def test_concurrent_authenticate_makes_one_request():
+    """Readers signing in together share one token request."""
+    transport = HypervoltTransport(print, "user@example.com", "secret")
+    calls = []
+
+    async def _slow_call(method, url, headers=None, data=None):
+        """A token request that takes a moment, as a real one does, so the callers overlap."""
+        calls.append(data)
+        await asyncio.sleep(0.01)
+        return 200, _token_payload(access="jwt-{}".format(len(calls)), life=3600)
+
+    transport._call = _slow_call
+
+    async def scenario():
+        """Sign in from three places at once."""
+        return await asyncio.gather(transport.authenticate(), transport.authenticate(), transport.authenticate())
+
+    with patch("hypervolt.record_api_call"):
+        tokens = run_async(scenario())
+    assert len(calls) == 1 and tokens == ["jwt-1", "jwt-1", "jwt-1"], (calls, tokens)
+    print("  ✓ Concurrent sign ins share one request")
 
 
 def test_run_probes_then_reconnects_stale():
@@ -1479,8 +1536,8 @@ def test_control_waits_for_pilot_status():
 
 
 def test_control_forgets_unplugged():
-    """A recorded charger that reports unplugged is forgotten and sent nothing."""
-    component = _control_component({0: PLAN_INSIDE}, [_charger(release_state="released", pilot_status="A")])
+    """A recorded charger that reports unplugged, and is no longer stopped, is forgotten and sent nothing."""
+    component = _control_component({0: PLAN_INSIDE}, [_charger(release_state="default", pilot_status="A")])
     component.released_by_predbat.add(V3_ID)
     run_async(component.control_tick(CONTROL_NOW))
     assert _requests(component) == [] and component.released_by_predbat == set()
@@ -1606,6 +1663,202 @@ def test_control_failure_does_not_fail_run():
     print("  ✓ A control failure does not fail the run")
 
 
+def test_released_charger_reads_connected_without_pilot():
+    """A charger Predbat stopped, with no pilot status, still reads connected, so its car keeps a plan and can be started."""
+    component = _make_component([_charger(release_state="released", pilot_status=None, charging=False)])
+    component.released_by_predbat.add(V3_ID)
+    run_async(component.run(0, True))
+    entities = component.base.entities
+    assert entities["binary_sensor.predbat_hypervolt_{}_connected".format(V3_ID)]["state"] == "on"
+    assert entities["binary_sensor.predbat_hypervolt_{}_plugged".format(V3_ID)]["state"] == "unavailable"
+    other = _make_component([_charger(release_state="released", pilot_status=None, charging=False)])
+    run_async(other.run(0, True))
+    assert other.base.entities["binary_sensor.predbat_hypervolt_{}_connected".format(V3_ID)]["state"] == "unavailable"
+    print("  ✓ A charger Predbat stopped reads connected without a pilot status")
+
+
+def test_string_error_reply_fails_caller_and_reader_survives():
+    """An error that is a bare string fails its caller at once and the reader carries on."""
+    socket = FakeSocket()
+    session, _ = _ws_session([socket])
+
+    async def scenario():
+        """Answer a command with a string error, then push."""
+        transport = _signed_in_transport()
+        await _logged_in(transport, socket)
+        task = asyncio.ensure_future(transport.request(V3_ID, "plugncharge.set", {"mode": "eco"}))
+        await _settle()
+        socket.queue({"jsonrpc": "2.0", "id": socket.last("plugncharge.set")["id"], "error": "plugncharge.set not allowed"})
+        started = time.time()
+        try:
+            await task
+            raise AssertionError("Expected HypervoltRefusedError")
+        except HypervoltRefusedError as exc:
+            assert "not allowed" in str(exc)
+        assert time.time() - started < 1
+        socket.queue({"jsonrpc": "2.0", "method": "get.pilot_status", "params": {"pilot_status": "B"}})
+        await _settle()
+        assert transport.chargers[V3_ID].pilot_status == "B"
+        assert not any(task.done() for task in transport.links[V3_ID].tasks)
+        await transport.close()
+
+    with patch("aiohttp.ClientSession", return_value=session), patch("hypervolt.record_api_call"), patch("hypervolt.COMMAND_TIMEOUT_SECONDS", 5):
+        run_async(scenario())
+    print("  ✓ String error fails the caller and the reader survives")
+
+
+def test_reader_survives_a_handler_exception():
+    """An unexpected exception handling one frame is logged and the next frame is still read."""
+    socket = FakeSocket()
+    session, _ = _ws_session([socket])
+
+    async def scenario():
+        """Make on_message raise once."""
+        transport = _signed_in_transport()
+        await _logged_in(transport, socket)
+        original = transport.on_message
+        state = {"raised": False}
+
+        def _flaky(charger_id, method, body):
+            """Raise on the first push only."""
+            if not state["raised"]:
+                state["raised"] = True
+                raise KeyError("boom")
+            original(charger_id, method, body)
+
+        transport.on_message = _flaky
+        socket.queue({"jsonrpc": "2.0", "method": "get.pilot_status", "params": {"pilot_status": "A"}})
+        socket.queue({"jsonrpc": "2.0", "method": "get.pilot_status", "params": {"pilot_status": "C"}})
+        await _settle()
+        assert transport.chargers[V3_ID].pilot_status == "C"
+        await transport.close()
+
+    with patch("aiohttp.ClientSession", return_value=session), patch("hypervolt.record_api_call"):
+        run_async(scenario())
+    print("  ✓ Reader survives a handler exception")
+
+
+def test_link_alive_and_dead_link_restarted():
+    """link_alive() reports a finished reader, and run() restarts a dead link unless the sign in has failed."""
+    socket = FakeSocket()
+    session, _ = _ws_session([socket])
+
+    async def scenario():
+        """Kill the reader and check link_alive."""
+        transport = _signed_in_transport()
+        await _logged_in(transport, socket)
+        assert transport.link_alive(V3_ID) is True
+        for task in transport.links[V3_ID].tasks:
+            task.cancel()
+        await _settle()
+        assert transport.link_alive(V3_ID) is False
+        await transport.close()
+
+    with patch("aiohttp.ClientSession", return_value=session), patch("hypervolt.record_api_call"):
+        run_async(scenario())
+
+    component = _make_component()
+    run_async(component.run(0, True))
+    component.transport.dead.add(V3_ID)
+    run_async(component.run(60, False))
+    assert ("reconnect", V3_ID) in component.transport.calls
+    component.transport.calls.clear()
+    component.transport.auth_failed = True
+    component.transport.errors["authenticate"] = HypervoltAuthError("refused")
+    run_async(component.run(120, False))
+    assert ("reconnect", V3_ID) not in component.transport.calls
+    print("  ✓ Dead link detected and restarted")
+
+
+def test_login_error_reply_is_a_refusal():
+    """An error reply to the login is treated as a refused login: the socket is closed and the token renewed."""
+    socket = FakeSocket()
+    session, _ = _ws_session([socket])
+
+    async def scenario():
+        """Answer the login with an error."""
+        transport = _signed_in_transport()
+        await transport.connect(V3_ID)
+        await _settle()
+        socket.queue({"jsonrpc": "2.0", "id": socket.last("login")["id"], "error": {"code": 401, "error": "invalid token"}})
+        await _settle()
+        assert socket.closed and transport.token_expiry == 0
+        await transport.close()
+
+    with patch("aiohttp.ClientSession", return_value=session), patch("hypervolt.record_api_call"):
+        run_async(scenario())
+    print("  ✓ Login error reply is a refusal")
+
+
+def test_request_send_failure_is_api_error():
+    """A send on a closing socket raises HypervoltApiError, not a raw connection error."""
+    socket = FakeSocket()
+    session, _ = _ws_session([socket])
+
+    async def scenario():
+        """Make the send fail."""
+        transport = _signed_in_transport()
+        await _logged_in(transport, socket)
+        socket.send_str = AsyncMock(side_effect=ConnectionResetError("closing"))
+        try:
+            await transport.request(V3_ID, "sync.apply", {"release": True})
+            raise AssertionError("Expected HypervoltApiError")
+        except HypervoltApiError:
+            pass
+        assert transport.links[V3_ID].pending == {}
+        await transport.close()
+
+    with patch("aiohttp.ClientSession", return_value=session), patch("hypervolt.record_api_call"):
+        run_async(scenario())
+    print("  ✓ Send failure is an API error")
+
+
+def test_sign_in_backs_off_after_auth_failure():
+    """After a refused sign in, attempts back off (logged and failed every run), so the account is not locked out."""
+    component = _make_component()
+    run_async(component.run(0, True))
+    component.transport.due = True
+    component.transport.errors["authenticate"] = HypervoltAuthError("refused")
+    assert run_async(component.run(60, False)) is False
+    assert component.transport.count("authenticate") == 2
+    component.log_messages.clear()
+    assert run_async(component.run(120, False)) is False
+    assert component.transport.count("authenticate") == 2, "No sign in attempt during the back-off"
+    assert len([message for message in component.log_messages if message.startswith("Error: hypervolt:")]) == 1
+    component.auth_retry_at = 0
+    component.transport.errors["authenticate"] = HypervoltAuthError("refused")
+    run_async(component.run(180, False))
+    assert component.transport.count("authenticate") == 3
+    assert component.auth_backoff_seconds == 240, component.auth_backoff_seconds
+    component.auth_retry_at = 0
+    assert run_async(component.run(240, False)) is True
+    assert component.auth_backoff_seconds == 0
+    print("  ✓ Sign in backs off after a refusal")
+
+
+def test_quiet_charger_probed_before_stale():
+    """A charger quiet for two and a half minutes is probed while still fresh, so the run still succeeds."""
+    component = _make_component([_charger(last_message=time.time() - 150)])
+    assert run_async(component.run(0, True)) is True
+    assert ("probe", V3_ID) in component.transport.calls
+    print("  ✓ Quiet charger probed before it goes stale")
+
+
+def test_unplugged_released_charger_is_released():
+    """A charger Predbat stopped that is unplugged while still stopped is released before it is forgotten."""
+    component = _control_component({0: PLAN_OUTSIDE}, [_charger(release_state="released", pilot_status="A")])
+    component.released_by_predbat.add(V3_ID)
+    run_async(component.control_tick(CONTROL_NOW))
+    assert _requests(component) == [(V3_ID, "sync.apply", {"release": False})]
+    assert component.released_by_predbat == set()
+    component = _control_component({0: PLAN_OUTSIDE}, [_charger(release_state="released", pilot_status="A")], hypervolt_control=False)
+    component.released_by_predbat.add(V3_ID)
+    run_async(component.control_tick(CONTROL_NOW))
+    assert _requests(component) == [(V3_ID, "sync.apply", {"release": False})]
+    assert component.released_by_predbat == set()
+    print("  ✓ Unplugged but still stopped charger is released")
+
+
 def test_hypervolt(my_predbat=None):
     """Run every Hypervolt test."""
     print("=" * 70)
@@ -1652,6 +1905,9 @@ def test_hypervolt(my_predbat=None):
     test_component_missing_credentials()
     test_run_first_signs_in_lists_and_connects()
     test_run_refreshes_token()
+    test_run_restarts_readers_after_auth_recovery()
+    test_short_lived_token_not_due()
+    test_concurrent_authenticate_makes_one_request()
     test_run_probes_then_reconnects_stale()
     test_run_lists_chargers_every_30_minutes()
     test_run_auth_failure_after_start()
@@ -1686,5 +1942,14 @@ def test_hypervolt(my_predbat=None):
     test_control_without_storage_still_works()
     test_control_state_load_is_retried()
     test_control_failure_does_not_fail_run()
+    test_released_charger_reads_connected_without_pilot()
+    test_string_error_reply_fails_caller_and_reader_survives()
+    test_reader_survives_a_handler_exception()
+    test_link_alive_and_dead_link_restarted()
+    test_login_error_reply_is_a_refusal()
+    test_request_send_failure_is_api_error()
+    test_sign_in_backs_off_after_auth_failure()
+    test_quiet_charger_probed_before_stale()
+    test_unplugged_released_charger_is_released()
     print("=" * 70)
     return False
