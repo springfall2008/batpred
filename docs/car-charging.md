@@ -450,20 +450,22 @@ The car's battery size and target charge level are left to your existing `car_ch
 
 **ohme_automatic_octopus_intelligent** takes the planned Octopus Intelligent car charging slots, the ready time and the charge limit from Ohme rather than from Octopus Intelligent
 directly, by pointing `octopus_intelligent_planned_slot`, `octopus_ready_time` and `octopus_charge_limit` at the Ohme entities. Left unset it is auto-detected: if `ohme_automatic` is on, the Octopus component reports an Intelligent tariff and
-the device Octopus Intelligent controls is your Ohme charger, Predbat uses the Ohme slots. Set it explicitly to override that either way - `true` forces it on (needed if you have no
+there is no Intelligent device on the account for Octopus to report dispatches for, Predbat uses the Ohme slots. Set it explicitly to override that either way - `true` forces it on (needed if you have no
 Octopus component for Predbat to detect from), `false` forces it off so the slots come from Octopus directly.
 
 Which device Octopus Intelligent controls matters, because that is the device Octopus schedules the charge through:
 
-- **Your Ohme charger** - Ohme's slots are the Octopus dispatches, so Predbat takes the planned slots from Ohme. The slots that have already finished are taken from Octopus,
-  see [Completed slots on Octopus Intelligent](#completed-slots-on-octopus-intelligent) below.
-- **Your car** (a BMW, Mini or Volkswagen linked to Octopus directly, say) or another make of charger - Octopus schedules the charge through that device and the Ohme is just the socket.
-  Predbat leaves the car slots, ready time and charge limit with the Octopus component, and does not use Ohme's schedule at all. The Ohme is still registered as the charger, so its
-  power and energy readings are used. `ohme_control` is ignored here too, as Octopus is already scheduling the charge - unless the car is the Octopus device and you turn on
+- **Your Ohme charger, your car** (a BMW, Mini or Volkswagen linked to Octopus directly, say) **or another make of charger** - Octopus schedules the charge through that device, and the Octopus component
+  reports its dispatches. Predbat leaves the car slots, ready time and charge limit with the Octopus component, and does not use Ohme's schedule at all. Ohme's slots are only a copy
+  of the same dispatches, passed on a few minutes later, and do not say which kind of dispatch each one is - a boost started from the Ohme app would look like a cheap slot.
+  The Ohme is still registered as the charger, so its power and energy readings are used.
+  `ohme_control` is ignored here too, as Octopus is already scheduling the charge - unless the car is the Octopus device and you turn on
   **switch.predbat_octopus_intelligent_charger_follows_car**, which lets `ohme_control` drive the Ohme to the car's dispatches (see [Octopus Intelligent and charger control](#octopus-intelligent-and-charger-control)).
+  Where the Ohme itself is the Octopus device, Predbat never drives it.
 - **Smart charging suspended** on every device in the Octopus app - Octopus is not scheduling anything, so there are no dispatches. Predbat uses Ohme's own schedule at your normal
   tariff rates, as described in [Which car charging plan Predbat shows](#which-car-charging-plan-predbat-shows) below.
 - **No Intelligent device on the account at all** - Predbat takes the slots from Ohme, as Octopus has nothing of its own to offer.
+  See [Completed slots on Octopus Intelligent](#completed-slots-on-octopus-intelligent) below for where the slots already used come from.
 
 Predbat checks this every two minutes, so linking a different device to Octopus Intelligent is picked up without a restart.
 
@@ -503,7 +505,8 @@ With `ohme_automatic` on, the car charging plan in Predbat comes from whoever is
 
 | Setup | Who schedules the car | The car plan in Predbat |
 | ----- | --------------------- | ----------------------- |
-| Octopus Intelligent tariff with the Ohme as the Intelligent device, unless you have set `ohme_automatic_octopus_intelligent: false` - or any setup with it set to `true` | Octopus, through Ohme | Ohme's planned slots and Octopus's completed ones, priced at the Intelligent off-peak rate |
+| Octopus Intelligent tariff with the Ohme as the Intelligent device | Octopus, through Ohme | Octopus's own dispatches, from the Octopus component |
+| Octopus Intelligent tariff with no Intelligent device on the account - or any setup with `ohme_automatic_octopus_intelligent: true` | Octopus, through Ohme | Ohme's planned slots and Octopus's completed ones where there is an Octopus sensor, priced at the Intelligent off-peak rate |
 | Octopus Intelligent tariff with your car (or another charger) as the Intelligent device | Octopus, through that device | Octopus's own dispatches, from the Octopus component |
 | `ohme_control: true` | Predbat | Predbat's own plan, which it carries out on the charger |
 | Neither of the above | Ohme | Ohme's own schedule, priced at your normal tariff rates |
@@ -719,6 +722,14 @@ It only applies to Octopus Intelligent charging (**switch.predbat_octopus_intell
 Octopus only confirms a dispatch as completed some time after it has run, typically 15 to 60 minutes later.
 Until then Predbat keeps the dispatch rate on each half hour the dispatch ran in, unless the check above cancelled it, so today's cost does not jump up after each half hour of charging and fall back later.
 A half hour Octopus has still not confirmed after 90 minutes goes back to your normal rate.
+
+With the Octopus component, Predbat also reads what Octopus says the device is doing:
+
+- **Smart charge in progress**: if the car is charging (from **car_charging_now**) in a half hour Octopus has no dispatch listed for, that half hour is kept at the dispatch rate as well.
+  Octopus starts charging as soon as the car is plugged in, but only lists that first half hour once it has completed, an hour or so later.
+  Octopus also answers with no planned dispatches for a few minutes while it re-plans a charge in progress, so Predbat keeps the last plan it had for up to 10 minutes.
+- **Unplugged, or smart control off**: Octopus is not dispatching anything, so Predbat ignores any planned dispatches Octopus still lists.
+- **Boosting**: a boost is billed at the full rate and Octopus lists it as a boost, so it is never treated as cheap.
 
 **Setting it up**
 
