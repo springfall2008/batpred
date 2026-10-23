@@ -50,7 +50,11 @@ STATE_FIELDS = (
     "dynamic_load_car_effective",
     "dynamic_load_car_confirmed",
     "dynamic_load_car_confirmed_periods",
+    "car_charging_now",
 )
+
+# The Octopus component's dispatch sensor for the car, carrying the device's currentState
+DISPATCH_SENSOR = "binary_sensor.predbat_test_hold_intelligent_dispatch"
 
 
 def _check(name, condition, detail=""):
@@ -96,6 +100,16 @@ def _reset(my_predbat):
     my_predbat.dynamic_load_car_effective = {}
     my_predbat.dynamic_load_car_confirmed = {}
     my_predbat.dynamic_load_car_confirmed_periods = {}
+    my_predbat.car_charging_now = [False]
+    my_predbat.args["octopus_intelligent_slot"] = [DISPATCH_SENSOR]
+    _device_state(my_predbat, None)
+
+
+def _device_state(my_predbat, state):
+    """
+    Publish the Octopus device's currentState on the car's dispatch sensor, as the Octopus component does.
+    """
+    my_predbat.set_state_wrapper(DISPATCH_SENSOR, "off", attributes={"current_state": state})
 
 
 def _cycle(my_predbat, minute, planned=None, completed=None, cancelled=False, save=True, seconds=0):
@@ -270,6 +284,64 @@ def _run(my_predbat):
     rates = my_predbat.rate_add_io_slots(0, {minute: RATE_DAY for minute in range(-2 * 24 * 60, 2 * 24 * 60)}, [_dispatch(my_predbat, 1110, 1112)])
     failed |= _check("t13 the same two minutes as a dispatch are not", _day(rates, 1110, 1140), "rate {}".format(rates[1110]))
 
+    print("Test 14: a car charging in a smart charge with no dispatch listed holds its half hour (the plug-in charge)")
+    # Octopus starts charging as soon as the car is plugged in but never lists that half hour as planned, only as
+    # completed an hour or so later: seen on three of six Ohme instances, the plug-in half hour billed off-peak
+    _reset(my_predbat)
+    _device_state(my_predbat, "SMART_CONTROL_IN_PROGRESS")
+    my_predbat.car_charging_now = [True]
+    _cycle(my_predbat, 1085)
+    failed |= _check("t14 half hour recorded", my_predbat.octopus_slots_held.get(0), "held {}".format(my_predbat.octopus_slots_held))
+    rates = _cycle(my_predbat, 1095)
+    failed |= _check("t14 half hour in progress cheap", _low(rates, 1080, 1110), "rate {}".format(rates[1080]))
+    failed |= _check("t14 no car slot planned from it", not [slot for slot in my_predbat.car_charging_slots[0] if slot["end"] > my_predbat.minutes_now], "slots {}".format(my_predbat.car_charging_slots[0]))
+    my_predbat.car_charging_now = [False]
+    rates = _cycle(my_predbat, 1115)
+    failed |= _check("t14 held once it has passed", _low(rates, 1080, 1110), "rate {}".format(rates[1080]))
+    failed |= _check("t14 next half hour not cheap", _day(rates, 1110, 1140), "rate {}".format(rates[1110]))
+
+    for state in (None, "SMART_CONTROL_CAPABLE", "BOOSTING", "SMART_CONTROL_NOT_AVAILABLE"):
+        print("Test 15: a car charging with the device {} holds nothing".format(state))
+        _reset(my_predbat)
+        _device_state(my_predbat, state)
+        my_predbat.car_charging_now = [True]
+        _cycle(my_predbat, 1085)
+        rates = _cycle(my_predbat, 1095)
+        failed |= _check("t15 nothing recorded for {}".format(state), not my_predbat.octopus_slots_held.get(0), "held {}".format(my_predbat.octopus_slots_held))
+        failed |= _check("t15 day rate for {}".format(state), _day(rates, 1080, 1110), "rate {}".format(rates[1080]))
+
+    print("Test 16: a smart charge in progress with the car not charging holds nothing")
+    _reset(my_predbat)
+    _device_state(my_predbat, "SMART_CONTROL_IN_PROGRESS")
+    _cycle(my_predbat, 1085)
+    failed |= _check("t16 nothing recorded", not my_predbat.octopus_slots_held.get(0), "held {}".format(my_predbat.octopus_slots_held))
+
+    print("Test 17: a half hour slot confirmation cancelled is not held for the car charging either")
+    _reset(my_predbat)
+    _device_state(my_predbat, "SMART_CONTROL_IN_PROGRESS")
+    my_predbat.car_charging_now = [True]
+    _cycle(my_predbat, 1085, cancelled=True)
+    failed |= _check("t17 nothing recorded", not my_predbat.octopus_slots_held.get(0), "held {}".format(my_predbat.octopus_slots_held))
+
+    for slot_config in ([DISPATCH_SENSOR], DISPATCH_SENSOR):
+        print("Test 18: a second car charging with no slot sensor of its own ({}) holds nothing, and logs nothing".format(type(slot_config).__name__))
+        # Only car 0 is on the Intelligent tariff: car 1 must neither read car 0's dispatch sensor, which a single
+        # entity resolves to at any index, nor warn every cycle and 15 second poll that it has no entry of its own
+        _reset(my_predbat)
+        my_predbat.num_cars = 2
+        my_predbat.args["octopus_intelligent_slot"] = slot_config
+        _device_state(my_predbat, "SMART_CONTROL_IN_PROGRESS")
+        my_predbat.car_charging_now = [False, True]
+        logged = []
+        original_log = my_predbat.log
+        my_predbat.log = lambda msg, *args, **kwargs: logged.append(msg)
+        try:
+            _cycle(my_predbat, 1085)
+        finally:
+            my_predbat.log = original_log
+        failed |= _check("t18 nothing held for car 1 ({})".format(type(slot_config).__name__), not my_predbat.octopus_slots_held.get(1), "held {}".format(my_predbat.octopus_slots_held))
+        failed |= _check("t18 no warning ({})".format(type(slot_config).__name__), not [msg for msg in logged if "octopus_intelligent_slot" in msg], "logged {}".format(logged))
+
     return failed
 
 
@@ -280,7 +352,7 @@ def test_octopus_dispatch_hold(my_predbat):
     """
     print("*** Running test: Octopus dispatch hold")
     saved_state = {field: copy.deepcopy(getattr(my_predbat, field, None)) for field in STATE_FIELDS}
-    saved_args = {key: my_predbat.args.get(key) for key in ("octopus_slot_low_rate", "octopus_slot_max")}
+    saved_args = {key: my_predbat.args.get(key) for key in ("octopus_slot_low_rate", "octopus_slot_max", "octopus_intelligent_slot")}
     try:
         my_predbat.args["octopus_slot_low_rate"] = True
         my_predbat.args["octopus_slot_max"] = 48

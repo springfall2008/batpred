@@ -319,6 +319,7 @@ iess
 iflux
 importlimit
 inday
+indra
 inteless
 INTELLI
 intelligentdevice
@@ -385,6 +386,8 @@ lookback
 lpignore
 lstrip
 luxpower
+luxpowertek
+luxpython
 malloc
 mallopt
 markdownlint
@@ -793,3 +796,4 @@ zappi
 zappis
 zcat
 zigbee
+zoneinfo
