@@ -1221,7 +1221,16 @@ def print_charger_table(chargers):  # pragma: no cover
     for charger in chargers:
         print(
             "{:<22} {:<16} {:<13} {:>4} {:>8} {:>9.0f} {:>12.3f} {:>6} {:<10} {:>8}".format(
-                charger.charger_id, charger.name[:16], status_text(charger), charger.api_version, charger.pilot_status or "-", charger.power_w, charger.session_energy_kwh, charger.max_current_a or "-", charger.charge_mode or "-", charger.release_state or "-"
+                charger.charger_id,
+                charger.name[:16],
+                status_text(charger),
+                charger.api_version,
+                charger.pilot_status or "-",
+                charger.power_w,
+                charger.session_energy_kwh,
+                charger.max_current_a or "-",
+                charger.charge_mode or "-",
+                charger.release_state or "-",
             )
         )
 

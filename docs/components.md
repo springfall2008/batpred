@@ -19,6 +19,7 @@ This document provides a comprehensive overview of all Predbat components, their
     - [Ohme Charger (ohme)](#ohme-charger-ohme)
     - [myenergi (myenergi)](#myenergi-myenergi)
     - [Wallbox Charger (wallbox)](#wallbox-charger-wallbox)
+    - [Hypervolt Charger (hypervolt)](#hypervolt-charger-hypervolt)
     - [Fox ESS API (fox)](#fox-ess-api-fox)
     - [Tesla Powerwall Teslemetry API (teslemetry)](#tesla-powerwall-teslemetry-api-teslemetry)
     - [Enphase API (enphase)](#enphase-api-enphase)
@@ -275,7 +276,7 @@ with `xxx`, so your API keys are not sent to your AI provider; pass `masked: fal
 deliberately want the raw values. A value counts as a credential if its name contains `_key`,
 `password`, `secret` or `token`, **or** if the component registry flags it explicitly - which
 covers the credentials a name alone cannot reveal, such as your Octopus account number, a Kraken
-MPAN, a site or plant id, and login identifiers like `deye_username`, `kraken_email`, `wallbox_username` and
+MPAN, a site or plant id, and login identifiers like `deye_username`, `kraken_email`, `wallbox_username`, `hypervolt_username` and
 `myenergi_hub_serial` (the myenergi API's digest-auth username). Inverter serial numbers are
 deliberately *not* redacted: they identify hardware rather than authenticate it, and they are
 what makes an integration bug report diagnosable. `get_state` applies the same rule *and* the debug yaml's exclusion list, so it can never
@@ -1153,6 +1154,103 @@ Things to know:
 | `automatic` | Boolean | No | `True` | `wallbox_automatic` | Register the chargers with Predbat as cars |
 | `wallbox_control` | Boolean | No | `False` | `wallbox_control` | Let Predbat pause and resume the chargers from its own plan. Requires `wallbox_automatic`; released by read only mode |
 | `poll_seconds` | Integer | No | `120` | `wallbox_poll_seconds` | How often to poll Wallbox, 60 to 1800, in steps of 60 |
+
+---
+
+### Hypervolt Charger (hypervolt)
+
+Talks directly to the Hypervolt cloud, so it works with or without Home Assistant. It monitors every charger on your Hypervolt account, can register them with Predbat as cars, and can stop and start them from Predbat's car charging plan.
+
+Hypervolt publishes no API. This component uses the one the community [Home Assistant Hypervolt integration](https://github.com/gndean/home-assistant-hypervolt-charger) uses, so a change on Hypervolt's side can break both.
+
+#### Setting it up (hypervolt)
+
+1. You need the email address and password of your Hypervolt account, the ones you use in the Hypervolt app.
+2. Put the two values in `secrets.yaml`:
+
+    ```yaml
+    hypervolt_username: "you@example.com"
+    hypervolt_password: "your-hypervolt-password"
+    ```
+
+3. Add the component to `apps.yaml`:
+
+    ```yaml
+      hypervolt_username: !secret hypervolt_username
+      hypervolt_password: !secret hypervolt_password
+    ```
+
+4. Restart Predbat. Within a minute the entities below appear for every charger on the account, and the log shows the **car_charging_** settings Predbat has made for you. If sign in fails, the log says `hypervolt: sign in failed` and the component shows as failed.
+5. Decide who controls charging:
+
+    - **Monitoring only** (the default). Predbat sees the charger and removes car charging from its house load, but the Hypervolt app's schedule, your car or your energy supplier decides when the car charges.
+    - **Predbat-led charging.** Add `hypervolt_control: True` and Predbat stops and starts the charger from its own car charging plan. See [Predbat-led charging](#predbat-led-charging-hypervolt) below.
+    - **Octopus Intelligent Go.** Leave `hypervolt_control` off. Octopus controls the charger, and Predbat takes the car's charging slots from the Octopus integration as usual.
+
+If you previously pointed **car_charging_energy**, **car_charging_planned** or **car_charging_now** at the Home Assistant Hypervolt integration's sensors, you can remove those lines and the start/stop automation: with `hypervolt_automatic` on, Predbat uses its own Hypervolt entities and logs a note when it replaces a setting of yours.
+
+#### Trying it from the command line (hypervolt)
+
+From the `apps/predbat` directory:
+
+```bash
+python3 hypervolt.py --username you@example.com --raw
+```
+
+It asks for your Hypervolt password, so the password never appears in your shell history. It signs in, connects to every charger, listens for 20 seconds (`--wait` changes this) and prints a summary line per charger. `--raw` prints every message sent and received, with your access token hidden, which is the most useful thing to attach to a bug report; remove charger ids and names first.
+
+To try a control by hand, add one of `--stop`, `--start`, `--max-current <amps>` or `--mode <boost|eco|super_eco|super_eco_battery_safe>`, with `--charger <id>` to choose a charger other than the first.
+
+#### What it publishes (hypervolt)
+
+For each charger, with `<id>` being the Hypervolt charger id:
+
+| Entity | Description |
+| ------ | ----------- |
+| `sensor.predbat_hypervolt_<id>_status` | `charging`, `connected` (a car is plugged in), `stopped` (charging has been stopped, by you or by Predbat), `disconnected` or `unknown`. Attributes give the model, name, firmware, charge mode details, the raw `release_state` and `pilot_status`, the lock state, and `stale`, which is true when the charger has sent nothing for four minutes |
+| `sensor.predbat_hypervolt_<id>_power` | Charging power in W |
+| `sensor.predbat_hypervolt_<id>_session_energy` | Energy added in the current session in kWh. It keeps the last session's value until the next session starts, rather than going `unknown` |
+| `binary_sensor.predbat_hypervolt_<id>_connected` | On while a car is plugged in. A charger that has not yet reported its cable since Predbat started shows on while charging and `unavailable` otherwise |
+| `binary_sensor.predbat_hypervolt_<id>_plugged` | The cable alone: on or off from the charger's report, `unavailable` until it has reported |
+| `binary_sensor.predbat_hypervolt_<id>_charging` | On while the car is charging |
+| `switch.predbat_hypervolt_<id>_charging` | Turn off to stop charging, on to let the charger charge again |
+| `number.predbat_hypervolt_<id>_max_charging_current` | Maximum charging current, 6 to 32 A |
+| `select.predbat_hypervolt_<id>_charge_mode` | Charge mode: `boost`, `eco` or `super_eco`, plus `super_eco_battery_safe` on chargers that offer it |
+
+Each entity's friendly name includes the name you gave the charger, so two chargers are easy to tell apart. The entity ids use the charger id, which does not change.
+
+A Hypervolt cannot report the car's state of charge, so there is no battery sensor.
+
+Hypervolt 2.0 chargers on older firmware cannot report a car that is plugged in but not charging, so their `_connected` sensor is on only while they charge. See [Hypervolt direct integration](car-charging.md#hypervolt-car-charger-direct-integration) for what to do about it.
+
+#### Automatic configuration (hypervolt)
+
+With `hypervolt_automatic` on (the default), Predbat sets **car_charging_energy**, **car_charging_planned**, **car_charging_plugged**, **car_charging_power** and **car_charging_now** to the Hypervolt entities, and raises **num_cars** to the number of chargers. Chargers are taken in numeric order of their id, so the charger with the lowest id is car 0. A charger added to the account while Predbat is running becomes the next car. A **car_charging_now** you have set yourself is kept.
+
+Predbat does not set **car_charging_soc**. If you want Predbat to plan to a target charge level, set it from your car's own integration.
+
+#### Predbat-led charging (hypervolt)
+
+Set `hypervolt_control: True` to let Predbat stop and start each charger from its own car charging plan. It needs `hypervolt_automatic`. While it is active Predbat publishes `switch.predbat_hypervolt_control`, which you can turn off to hand the chargers back at any time; read only mode does the same.
+
+- Inside a planned car charging slot, a stopped charger is let charge again.
+- Outside a slot, a charger with a car plugged in is stopped, whether or not the car has started charging, so a car plugged in outside a slot is stopped within a minute.
+- When control is released, every charger Predbat stopped is let charge again, which hands it back to its own charge mode and schedule.
+
+Things to know:
+
+- Put the charger in `boost` mode and turn off any schedule in the Hypervolt app. A schedule makes the charger wait for its own times even inside a Predbat slot, and the Eco modes only charge from spare solar.
+- While Predbat-led charging is on, Predbat lets a stopped charger charge inside a planned slot even if you stopped it yourself. Turn `switch.predbat_hypervolt_control` off first if you want it to stay stopped.
+- Some cars go to sleep when charging is stopped and do not wake when it is allowed again. If yours does, Predbat-led charging will not suit it.
+
+#### Configuration Options (hypervolt)
+
+| Option | Type | Required | Default | Config Key | Description |
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
+| `username` | String | Yes | - | `hypervolt_username` | Your Hypervolt account email address |
+| `password` | String | Yes | - | `hypervolt_password` | Your Hypervolt account password |
+| `automatic` | Boolean | No | `True` | `hypervolt_automatic` | Register the chargers with Predbat as cars |
+| `hypervolt_control` | Boolean | No | `False` | `hypervolt_control` | Let Predbat stop and start the chargers from its own plan. Requires `hypervolt_automatic`; released by read only mode |
 
 ---
 
