@@ -516,6 +516,8 @@ Connects directly to the GivEnergy Cloud to control your GivEnergy inverter and 
 
 - Requires a GivEnergy Cloud account and API key
 - Can also control GivEnergy EV chargers and smart devices
+- Inverter settings refresh in the background every 10 minutes (hourly for battery inverters under EMS control), so slow settings reads do not delay live measurements. Startup and device-list changes still wait for a full settings snapshot.
+- A setting marked `read_failed: true` holds its last known value because its latest read failed or was deliberately skipped. After three consecutive failures while other device reads succeed, that setting is retried after 15, then 30, then at most 60 minutes. External changes to it may therefore take longer to appear. Skipped settings are logged separately from attempted reads that failed.
 
 #### Configuration Options (gecloud)
 
