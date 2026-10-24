@@ -407,7 +407,7 @@ def _run_any_car(my_predbat):
     Any car charging confirms an Octopus car's dispatch. Octopus links the dispatch to one car, but with
     two chargers Predbat cannot tell which one that car is plugged into - automatic charger set-up
     numbers them by serial - so the car it calls 0 can read idle while the dispatch's car charges on
-    the charger it calls 1 (#2696).
+    the charger it calls 1 (#5726).
     """
     failed = False
 
