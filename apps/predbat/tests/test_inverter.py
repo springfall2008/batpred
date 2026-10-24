@@ -118,6 +118,188 @@ def test_solis_energy_control(test_name, my_predbat, ha, inverter_type, switch_s
     return failed
 
 
+def test_custom_type_respects_configured_time_entity(my_predbat):
+    """
+    Regression test for issue #4738: for an inverter type whose charge_time_format is not
+    HH:MM:SS, a real time entity the user set in apps.yaml for charge/discharge start/end time must
+    be used, not silently replaced by a self-created dummy sensor.
+
+    "Set in apps.yaml" is judged from args_from_apps_yaml, the snapshot taken before Predbat's own
+    defaulting, so a dummy Predbat wrote into args on an earlier refresh never reads back as user
+    configuration. Since #5126 inverters persist and refresh_config() runs every plan cycle, so the
+    refresh path is tested on one object as well as fresh construction.
+    """
+    failed = False
+    print("Test: test_custom_type_respects_configured_time_entity")
+
+    # Restored in place: other objects hold a reference to this dict, so rebinding the attribute
+    # would leave them with the mutated one
+    saved_args = copy.deepcopy(my_predbat.args)
+    had_raw = hasattr(my_predbat, "args_from_apps_yaml")
+    saved_raw = copy.deepcopy(getattr(my_predbat, "args_from_apps_yaml", None))
+    # Each construction also writes its dummy entities into the shared HA mock
+    saved_items = dict(getattr(my_predbat.ha_interface, "dummy_items", {}))
+    test_types = ["TEST_TIME_ENTITY", "TEST_TIME_ENTITY_2"]
+    saved_defs = {name: copy.deepcopy(INVERTER_DEF.get(name)) for name in test_types}
+    time_args = ["charge_start_time", "charge_end_time", "discharge_start_time", "discharge_end_time"]
+
+    def configure(apps_yaml):
+        """Stand in for loading apps.yaml: args and its pre-defaulting snapshot both get the values."""
+        for arg in time_args:
+            my_predbat.args.pop(arg, None)
+        my_predbat.args.update(copy.deepcopy(apps_yaml))
+        my_predbat.args_from_apps_yaml = copy.deepcopy(apps_yaml)
+
+    def dummy(arg, inverter_type="TEST_TIME_ENTITY", inverter_id=0):
+        """The entity id create_entity() gives this inverter's dummy."""
+        return "sensor.{}_{}_{}_{}".format(my_predbat.prefix, inverter_type, inverter_id, arg)
+
+    def check(case, arg, expected, inverter_id=0):
+        """Report a mismatch in the live args slot."""
+        got = my_predbat.args[arg][inverter_id]
+        if got != expected:
+            print("ERROR: test_custom_type_respects_configured_time_entity: {}: {}[{}] should be {}, got {}".format(case, arg, inverter_id, expected, got))
+            return True
+        return False
+
+    try:
+        my_predbat.args["inverter_type"] = ["TEST_TIME_ENTITY"]
+        my_predbat.args["inverter"] = {"charge_time_format": "S", "has_time_window": True, "has_charge_enable_time": True, "has_discharge_enable_time": True}
+        my_predbat.args["givtcp_rest"] = None
+
+        # Case 1: real entities set in apps.yaml are kept, on construction and on every refresh
+        configure({arg: ["time.real_" + arg] for arg in time_args})
+        inv = Inverter(my_predbat, 0, quiet=True)
+        inv.refresh_config()
+        for arg in time_args:
+            failed |= check("apps.yaml list value", arg, "time.real_" + arg)
+
+        # Case 2: a single (non-list) value in apps.yaml is kept too - create_missing_arg() turns a
+        # single value into a list of defaults, so it has to be put back
+        configure({"discharge_start_time": "time.real_single"})
+        Inverter(my_predbat, 0, quiet=True)
+        failed |= check("apps.yaml single value", "discharge_start_time", "time.real_single")
+
+        # Case 3: nothing set - the dummy is created
+        configure({})
+        inv = Inverter(my_predbat, 0, quiet=True)
+        failed |= check("unset", "discharge_start_time", dummy("discharge_start_time"))
+
+        # Case 4: persisted object - refresh keeps its own dummy (it is not in apps.yaml, so it never
+        # reads back as configuration) and re-creates the state if HA has lost it
+        my_predbat.ha_interface.dummy_items.pop(dummy("discharge_start_time"), None)
+        inv.refresh_config()
+        failed |= check("refresh after HA lost the dummy", "discharge_start_time", dummy("discharge_start_time"))
+        if my_predbat.get_state_wrapper(dummy("discharge_start_time")) is None:
+            print("ERROR: test_custom_type_respects_configured_time_entity: refresh should re-create the dummy state HA lost")
+            failed = True
+
+        # Case 5: the inverter type changes on the persisted object, as it does in production (execute.py
+        # refreshes rather than rebuilds) - the old type's dummy is replaced by the new type's
+        my_predbat.args["inverter_type"] = ["TEST_TIME_ENTITY_2"]
+        inv.refresh_config()
+        failed |= check("type change on refresh", "discharge_start_time", dummy("discharge_start_time", "TEST_TIME_ENTITY_2"))
+        my_predbat.args["inverter_type"] = ["TEST_TIME_ENTITY"]
+
+        # Case 6: a bare placeholder set in apps.yaml (the shipped Sofar templates do this) is not an
+        # entity - the dummy replaces it. And it stays a dummy on refresh: apps.yaml did set the key,
+        # but not to an entity, so the dummy now in the live slot must not be trusted as configured
+        configure({"discharge_start_time": ["00:00:00"]})
+        inv = Inverter(my_predbat, 0, quiet=True)
+        failed |= check("bare placeholder", "discharge_start_time", dummy("discharge_start_time"))
+        my_predbat.ha_interface.dummy_items.pop(dummy("discharge_start_time"), None)
+        inv.refresh_config()
+        if my_predbat.get_state_wrapper(dummy("discharge_start_time")) is None:
+            print("ERROR: test_custom_type_respects_configured_time_entity: bare placeholder: the dummy was read back as configured on refresh and its lost state not re-created")
+            failed = True
+
+        # Case 7: an entity in args that apps.yaml never set is not user configuration
+        configure({})
+        my_predbat.args["discharge_start_time"] = ["time.not_from_apps_yaml"]
+        Inverter(my_predbat, 0, quiet=True)
+        failed |= check("entity not from apps.yaml", "discharge_start_time", dummy("discharge_start_time"))
+
+        # Case 8: apps.yaml names inverter 0 only. Inverter 1 gets its own dummy, and it is still
+        # treated as a dummy on refresh - its live slot then holds an entity id, but apps.yaml set
+        # nothing for it, so a lost state must be re-created rather than the slot trusted as configured
+        my_predbat.args["inverter_type"] = ["TEST_TIME_ENTITY", "TEST_TIME_ENTITY"]
+        configure({"discharge_start_time": ["time.real_inverter0"]})
+        Inverter(my_predbat, 0, quiet=True)
+        inv1 = Inverter(my_predbat, 1, quiet=True)
+        my_predbat.ha_interface.dummy_items.pop(dummy("discharge_start_time", inverter_id=1), None)
+        inv1.refresh_config()
+        failed |= check("multi-inverter, inverter 0", "discharge_start_time", "time.real_inverter0", 0)
+        failed |= check("multi-inverter, inverter 1", "discharge_start_time", dummy("discharge_start_time", inverter_id=1), 1)
+        if my_predbat.get_state_wrapper(dummy("discharge_start_time", inverter_id=1)) is None:
+            print("ERROR: test_custom_type_respects_configured_time_entity: multi-inverter: inverter 1's dummy was read back as configured and its lost state not re-created")
+            failed = True
+
+        # Case 8b: a single value in apps.yaml is inverter 0's - inverter 1 gets its own dummy and
+        # keeps treating it as one on refresh
+        configure({"discharge_start_time": "time.real_single"})
+        Inverter(my_predbat, 0, quiet=True)
+        inv1 = Inverter(my_predbat, 1, quiet=True)
+        my_predbat.ha_interface.dummy_items.pop(dummy("discharge_start_time", inverter_id=1), None)
+        inv1.refresh_config()
+        failed |= check("single value, inverter 0", "discharge_start_time", "time.real_single", 0)
+        failed |= check("single value, inverter 1", "discharge_start_time", dummy("discharge_start_time", inverter_id=1), 1)
+        if my_predbat.get_state_wrapper(dummy("discharge_start_time", inverter_id=1)) is None:
+            print("ERROR: test_custom_type_respects_configured_time_entity: single value: inverter 1's dummy was read back as configured and its lost state not re-created")
+            failed = True
+        my_predbat.args["inverter_type"] = ["TEST_TIME_ENTITY"]
+
+        # Case 9: a malformed value (a nested list) must not crash the refresh; the dummy is used
+        configure({"discharge_start_time": [["time.nested"]]})
+        Inverter(my_predbat, 0, quiet=True)
+        failed |= check("malformed value", "discharge_start_time", dummy("discharge_start_time"))
+
+        # Case 10: a re: pattern that matched nothing. auto_config() deletes a single unmatched key and
+        # leaves None in an unmatched list slot, so the first cycle writes the dummy there - and from
+        # then on the pattern must not make that dummy read back as the user's entity
+        for shape, apps_yaml_value, live_value in (("single", "re:(time\\.nothing_.*)", None), ("list", ["re:(time\\.nothing_.*)"], [None])):
+            configure({})
+            my_predbat.args_from_apps_yaml = {"discharge_start_time": apps_yaml_value}
+            if live_value is not None:
+                my_predbat.args["discharge_start_time"] = live_value
+            inv = Inverter(my_predbat, 0, quiet=True)
+            failed |= check("unmatched re: ({})".format(shape), "discharge_start_time", dummy("discharge_start_time"))
+            my_predbat.ha_interface.dummy_items.pop(dummy("discharge_start_time"), None)
+            inv.refresh_config()
+            if my_predbat.get_state_wrapper(dummy("discharge_start_time")) is None:
+                print("ERROR: test_custom_type_respects_configured_time_entity: unmatched re: ({}): the dummy was read back as configured and its lost state not re-created".format(shape))
+                failed = True
+            my_predbat.args["inverter_type"] = ["TEST_TIME_ENTITY_2"]
+            inv.refresh_config()
+            failed |= check("unmatched re: ({}), type change".format(shape), "discharge_start_time", dummy("discharge_start_time", "TEST_TIME_ENTITY_2"))
+            my_predbat.args["inverter_type"] = ["TEST_TIME_ENTITY"]
+
+        # Case 11: a re: pattern that did match is the user's entity, and stays so across refreshes
+        configure({})
+        my_predbat.args_from_apps_yaml = {"discharge_start_time": ["re:(time\\.matched_.*)"]}
+        my_predbat.args["discharge_start_time"] = ["time.matched_x"]
+        inv = Inverter(my_predbat, 0, quiet=True)
+        inv.refresh_config()
+        failed |= check("matched re:", "discharge_start_time", "time.matched_x")
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        if had_raw:
+            my_predbat.args_from_apps_yaml = saved_raw
+        elif hasattr(my_predbat, "args_from_apps_yaml"):
+            del my_predbat.args_from_apps_yaml
+        items = getattr(my_predbat.ha_interface, "dummy_items", None)
+        if items is not None:
+            items.clear()
+            items.update(saved_items)
+        for name, saved_def in saved_defs.items():
+            if saved_def is None:
+                INVERTER_DEF.pop(name, None)
+            else:
+                INVERTER_DEF[name] = saved_def
+
+    return failed
+
+
 def test_support_feedin_first_is_opt_in():
     """
     support_feedin_first says the inverter's Freeze Export really is a "Feed-in First" mode (load,
@@ -897,6 +1079,113 @@ def test_rate_write_quantised(test_name, ha, inv, prev_rate, rate, expect_writes
     return failed
 
 
+def test_create_missing_arg_does_not_fill_sibling_entries(test_name, my_predbat):
+    """
+    create_missing_arg() pads every OTHER inverter's slot with None, not the default (#5359 follow-up).
+
+    When the key is entirely missing from args, create_missing_arg() used to fill all four slots
+    with the same default value, and only the caller's own index was then overwritten with its
+    dummy entity. On a mixed fleet where inverter 0 triggers this (e.g. inv_output_charge_control
+    != "power") before inverter 1 is even constructed, inverter 1's slot ended up holding a bare
+    number rather than None - which the per-entry "is this inverter's entry set" check added for
+    #5359 then misreads as a configured entity, since a truthy value is indistinguishable from one.
+
+    The padding applies to every arg create_missing_arg() builds, not just the rates, so every arg
+    that constructing inverter 0 turned into a list is checked.
+    """
+    failed = False
+    print(f"**** Running Test: {test_name} ****")
+
+    saved_args = copy.deepcopy(my_predbat.args)
+    try:
+        my_predbat.args["num_inverters"] = 2
+        # GS (Solis) drives charge rate via current rather than power and has no target SoC, so
+        # constructing inverter 0 takes several create_missing_arg() branches, charge_rate among them
+        my_predbat.args["inverter_type"] = ["GS", "GS"]
+        my_predbat.args.pop("charge_rate", None)
+        my_predbat.args.pop("charge_rate_percent", None)
+        before = {key: value for key, value in my_predbat.args.items() if isinstance(value, list)}
+
+        inv0 = Inverter(my_predbat, 0, quiet=True)
+        if inv0.inv_output_charge_control == "power":
+            print("ERROR: {} test assumes a non-power charge control to exercise create_missing_arg('charge_rate', ...)".format(test_name))
+            return 1
+
+        created = sorted(key for key, value in my_predbat.args.items() if isinstance(value, list) and key not in before)
+        if "charge_rate" not in created:
+            print("ERROR: {} expected charge_rate to be created as a per-inverter list, created {}".format(test_name, created))
+            failed = True
+        for key in created:
+            siblings = my_predbat.args[key][1:]
+            if any(slot is not None for slot in siblings):
+                print("ERROR: {} expected {}'s sibling slots to stay None until those inverters are constructed, got {}".format(test_name, key, siblings))
+                failed = True
+
+        # The consequence: a percent-only inverter 1 beside it must see its own charge_rate entry as unbound,
+        # not take inverter 0's leftover default number for a watts entity and write to it
+        my_predbat.args["inverter_type"] = ["GS", "GEC"]
+        my_predbat.args["charge_rate_percent"] = [None, "number.rate_percent"]
+        inv1 = Inverter(my_predbat, 1, quiet=True)
+        if inv1.rate_controls("charge_rate") != (False, True):
+            print("ERROR: {} expected inverter 1 to use only its percent control, got {}".format(test_name, inv1.rate_controls("charge_rate")))
+            failed = True
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+
+    return 1 if failed else 0
+
+
+def test_create_missing_arg_keeps_inverter_0_single_value(test_name, my_predbat):
+    """
+    A single (non-list) apps.yaml value is inverter 0's, and must survive another inverter creating its dummy.
+
+    On a mixed fleet where inverter 0 has the control and inverter 1 does not, inverter 1's
+    create_missing_arg() turned the single value into a fresh list and threw it away, so inverter 0
+    lost its own entity: it read the literal default (100%) instead of its real target SoC, and every
+    write to it failed with "not an entity id" (or, padded with None, "No entity_id").
+    """
+    failed = False
+    print(f"**** Running Test: {test_name} ****")
+
+    saved_args = copy.deepcopy(my_predbat.args)
+    saved_apps_yaml = getattr(my_predbat, "args_from_apps_yaml", None)
+    dummy_items = my_predbat.ha_interface.dummy_items
+    saved_entity = dummy_items.get("number.inv0_charge_limit")
+    try:
+        my_predbat.args["num_inverters"] = 2
+        # GE has a target SoC control, GS does not, so only inverter 1 builds a charge_limit dummy
+        my_predbat.args["inverter_type"] = ["GE", "GS"]
+        my_predbat.args["charge_limit"] = "number.inv0_charge_limit"
+        my_predbat.args_from_apps_yaml = copy.deepcopy(my_predbat.args)
+        dummy_items["number.inv0_charge_limit"] = 55
+
+        inv0 = Inverter(my_predbat, 0, quiet=True)
+        Inverter(my_predbat, 1, quiet=True)
+
+        expected = ["number.inv0_charge_limit", "sensor.{}_GS_1_charge_limit".format(my_predbat.prefix), None, None]
+        if my_predbat.args["charge_limit"] != expected:
+            print("ERROR: {} expected charge_limit {} got {}".format(test_name, expected, my_predbat.args["charge_limit"]))
+            failed = True
+        current = my_predbat.get_arg("charge_limit", index=0, default=100.0)
+        if current != 55:
+            print("ERROR: {} expected inverter 0 to read its own charge limit 55 got {}".format(test_name, current))
+            failed = True
+        if inv0.user_configured_entity("charge_limit") != "number.inv0_charge_limit":
+            print("ERROR: {} expected inverter 0's apps.yaml entity to still count as configured, got {}".format(test_name, inv0.user_configured_entity("charge_limit")))
+            failed = True
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        my_predbat.args_from_apps_yaml = saved_apps_yaml
+        if saved_entity is None:
+            dummy_items.pop("number.inv0_charge_limit", None)
+        else:
+            dummy_items["number.inv0_charge_limit"] = saved_entity
+
+    return 1 if failed else 0
+
+
 def test_custom_inverter_def_drops_rate_step(test_name, my_predbat, ha):
     """
     A custom inverter type is built from a copy of the GE row, but must not inherit GivEnergy's rate step (#5324).
@@ -920,6 +1209,174 @@ def test_custom_inverter_def_drops_rate_step(test_name, my_predbat, ha):
             failed = True
     finally:
         INVERTER_DEF.pop("CUSTOM5324", None)
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        ha.dummy_items.clear()
+        ha.dummy_items.update(saved_items)
+    return failed
+
+
+def test_rate_control_is_per_inverter(test_name, my_predbat, ha):
+    """
+    An inverter reads and writes its rate through the control its own entry is bound to, whichever settings exist
+    for the fleet: a GE Cloud fleet mixing a unit with a power register and a 3-phase one with only the percentage
+    binds each setting for one inverter and leaves it empty for the other (#5359). It also means the 3-phase unit's
+    percentage entity is bound, so its grid_charge_only mark is seen in a mixed fleet (#5082).
+
+    Building an Inverter writes args and publishes entities on the shared fixture, so both are restored whole (#5079).
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+    saved_args = copy.deepcopy(my_predbat.args)
+    saved_items = copy.deepcopy(ha.dummy_items)
+    try:
+        my_predbat.args["inverter_type"] = ["GEC"]
+        # this inverter's entry in each setting, the rate it should read, the entities a new rate is written to
+        for watts_entity, percent_entity, expect_read, expect_writes in (
+            ("number.rate_watts", None, 1500, ["number.rate_watts"]),
+            (None, "number.rate_percent", 1300, ["number.rate_percent"]),
+            ("number.rate_watts", "number.rate_percent", 1300, ["number.rate_watts", "number.rate_percent"]),
+        ):
+            for rate_arg, read_rate, adjust_rate in (("charge_rate", "get_current_charge_rate", "adjust_charge_rate"), ("discharge_rate", "get_current_discharge_rate", "adjust_discharge_rate")):
+                for name in ("charge_rate", "charge_rate_percent", "discharge_rate", "discharge_rate_percent"):
+                    my_predbat.args.pop(name, None)
+                # Both settings exist for the fleet; only this inverter's entries differ
+                my_predbat.args[rate_arg] = [watts_entity]
+                my_predbat.args[rate_arg + "_percent"] = [percent_entity]
+                ha.dummy_items["number.rate_watts"] = 1500
+                ha.dummy_items["number.rate_percent"] = {"state": 50, "unit_of_measurement": "%", "grid_charge_only": True}
+                inv = Inverter(my_predbat, 0, quiet=True)
+                inv.battery_rate_max_raw = 2600
+                inv.battery_rate_max_charge = inv.battery_rate_max_discharge = 2600 / MINUTE_WATT
+                got = getattr(inv, read_rate)()
+                if got != expect_read:
+                    print("ERROR: {} {} watts {} percent {} expected to read {} got {}".format(test_name, rate_arg, watts_entity, percent_entity, expect_read, got))
+                    failed = True
+                written = []
+                call_service = ha.call_service
+
+                def recording_call_service(service, **kwargs):
+                    """Record which entity a rate write went to."""
+                    if service == "number/set_value":
+                        written.append(kwargs.get("entity_id"))
+                    return call_service(service, **kwargs)
+
+                ha.call_service = recording_call_service
+                try:
+                    getattr(inv, adjust_rate)(0)
+                finally:
+                    ha.call_service = call_service
+                if sorted(set(written)) != sorted(expect_writes):
+                    print("ERROR: {} {} watts {} percent {} expected writes to {} got {}".format(test_name, rate_arg, watts_entity, percent_entity, expect_writes, written))
+                    failed = True
+                # The mark on the percentage charge rate is seen whenever this inverter is bound to it
+                if rate_arg == "charge_rate" and inv.inv_support_discharge_freeze is not (percent_entity is None):
+                    print("ERROR: {} watts {} percent {} Freeze Export support is {}".format(test_name, watts_entity, percent_entity, inv.inv_support_discharge_freeze))
+                    failed = True
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        ha.dummy_items.clear()
+        ha.dummy_items.update(saved_items)
+    return failed
+
+
+def test_grid_charge_only_disables_discharge_freeze(test_name, my_predbat, ha):
+    """
+    A charge rate entity marked grid_charge_only turns Freeze Export support off for that inverter: the GivEnergy
+    3-phase units have no pause register and their charge rate only limits grid charging, so a zero rate leaves
+    solar filling the battery (#5082). The hub marks its charge_rate entity, GE Cloud its percentage one.
+
+    Building an Inverter writes args and publishes entities on the shared fixture, so both are restored whole (#5079).
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+    saved_args = copy.deepcopy(my_predbat.args)
+    saved_items = copy.deepcopy(ha.dummy_items)
+    try:
+        # inverter type, the arg the rate entity is bound to, the entity, expected Freeze Export support
+        for inverter_type, rate_arg, entity, expect in (
+            ("GWMQTT", "charge_rate", {"state": 1100, "grid_charge_only": True}, False),
+            ("GWMQTT", "charge_rate", {"state": 1100, "grid_charge_only": "true"}, False),
+            ("GWMQTT", "charge_rate", {"state": 1100, "grid_charge_only": False}, True),
+            ("GWMQTT", "charge_rate", {"state": 1100, "step_percent_of_capacity": 1}, True),
+            ("GWMQTT", "charge_rate", 1100, True),
+            ("GEC", "charge_rate_percent", {"state": 100, "grid_charge_only": True}, False),
+            ("GEC", "charge_rate_percent", {"state": 100, "unit_of_measurement": "%"}, True),
+            ("GEC", "charge_rate", {"state": 1100, "max": 6000}, True),
+        ):
+            my_predbat.args.pop("charge_rate", None)
+            my_predbat.args.pop("charge_rate_percent", None)
+            my_predbat.args[rate_arg] = "number.rate_under_test"
+            my_predbat.args["inverter_type"] = [inverter_type]
+            ha.dummy_items["number.rate_under_test"] = entity
+            inv = Inverter(my_predbat, 0, quiet=True)
+            if inv.inv_support_discharge_freeze is not expect:
+                print("ERROR: {} type {} {} {} expected Freeze Export support {} got {}".format(test_name, inverter_type, rate_arg, entity, expect, inv.inv_support_discharge_freeze))
+                failed = True
+        for inverter_type in ("GWMQTT", "GEC"):
+            if INVERTER_DEF[inverter_type]["support_discharge_freeze"] is not True:
+                print("ERROR: {} the {} row must keep Freeze Export, only a marked inverter loses it".format(test_name, inverter_type))
+                failed = True
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        ha.dummy_items.clear()
+        ha.dummy_items.update(saved_items)
+    return failed
+
+
+def test_hub_midnight_capability_from_entity(test_name, my_predbat, ha):
+    """Read a device's can_span_midnight restriction per inverter and refresh, preserving other profiles."""
+    failed = False
+    print("Test: {}".format(test_name))
+    saved_args = copy.deepcopy(my_predbat.args)
+    saved_items = copy.deepcopy(ha.dummy_items)
+    orig_log = my_predbat.log
+    try:
+        my_predbat.args["charge_start_time"] = ["select.ems_start", "select.other_start"]
+        my_predbat.args["inverter_type"] = ["GWMQTT", "GWMQTT"]
+        ha.dummy_items["select.ems_start"] = {"state": "00:00:00", "can_span_midnight": False}
+        ha.dummy_items["select.other_start"] = {"state": "00:00:00"}
+        first = Inverter(my_predbat, 0, quiet=True)
+        second = Inverter(my_predbat, 1, quiet=True)
+        if first.inv_can_span_midnight or not second.inv_can_span_midnight or not INVERTER_DEF["GWMQTT"]["can_span_midnight"]:
+            print("ERROR: {} the EMS capability must not affect another inverter or the GWMQTT profile".format(test_name))
+            failed = True
+        for value, expect in [(None, True), (False, False), (True, True), ("false", True), (0, True)]:
+            ha.dummy_items["select.ems_start"] = {"state": "00:00:00", "can_span_midnight": value}
+            first.refresh_config(quiet=True)
+            if first.inv_can_span_midnight is not expect:
+                print("ERROR: {} capability {} expected {} got {}".format(test_name, value, expect, first.inv_can_span_midnight))
+                failed = True
+        my_predbat.args["inverter_type"] = ["GEE", "GWMQTT"]
+        ha.dummy_items["select.ems_start"] = {"state": "00:00:00", "can_span_midnight": True}
+        first.refresh_config(quiet=True)
+        if first.inv_can_span_midnight:
+            print("ERROR: {} an entity must not loosen the direct EMS profile".format(test_name))
+            failed = True
+        # Any inverter type can be restricted, not only a Hub device
+        my_predbat.args["inverter_type"] = ["GE", "GWMQTT"]
+        for value, expect in [(None, True), (False, False), (True, True)]:
+            ha.dummy_items["select.ems_start"] = {"state": "00:00:00", "can_span_midnight": value}
+            first.refresh_config(quiet=True)
+            if first.inv_can_span_midnight is not expect:
+                print("ERROR: {} GE capability {} expected {} got {}".format(test_name, value, expect, first.inv_can_span_midnight))
+                failed = True
+        if not INVERTER_DEF["GE"]["can_span_midnight"]:
+            print("ERROR: {} an entity must not change the shared GE profile".format(test_name))
+            failed = True
+        # A fixed time (as the Sofar templates use) has no attributes, and must not warn every refresh
+        my_predbat.args["charge_start_time"] = ["00:00:00", "select.other_start"]
+        log_messages = []
+        my_predbat.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
+        first.refresh_config(quiet=True)
+        my_predbat.log = orig_log
+        if not first.inv_can_span_midnight or any("fixed value" in message for message in log_messages):
+            print("ERROR: {} a fixed charge start time should be skipped quietly, logged {}".format(test_name, log_messages))
+            failed = True
+    finally:
+        my_predbat.log = orig_log
         my_predbat.args.clear()
         my_predbat.args.update(saved_args)
         ha.dummy_items.clear()
@@ -1724,6 +2181,71 @@ def test_call_adjust_charge_immediate(test_name, my_predbat, ha, inv, dummy_item
     return failed
 
 
+def test_charge_target_overshoot_hold(my_predbat, ha, inv, dummy_items):
+    """An overshot software charge target should hold, preserving native targets and stop fallbacks."""
+    failed = False
+    original_args = dict(my_predbat.args)
+    original_soc = inv.soc_percent
+    original_native_target = inv.inv_has_target_soc
+    original_solis_control = inv.inv_has_solis_energy_control
+    original_rate = dummy_items["number.charge_rate"]
+    cases = [
+        ("software_overshoot", False, 20, False, True, "charge_freeze"),
+        ("software_overshoot_without_freeze", False, 20, False, False, "charge_stop"),
+        ("native_overshoot", True, 20, False, True, "charge_start"),
+        ("native_overshoot_without_freeze", True, 20, False, False, "charge_start"),
+        ("software_at_target", False, 22, False, True, "charge_freeze"),
+        ("software_at_target_without_freeze", False, 22, False, False, "charge_start"),
+        ("software_below_target", False, 25, False, True, "charge_start"),
+        ("explicit_freeze", False, 20, True, True, "charge_freeze"),
+        ("explicit_freeze_without_service", False, 20, True, False, "charge_stop"),
+        ("charge_ended", False, 0, False, True, "charge_stop"),
+    ]
+    try:
+        my_predbat.args.update({"charge_start_service": "charge_start", "charge_stop_service": "charge_stop", "discharge_stop_service": "discharge_stop", "charge_rate": "number.charge_rate", "device_id": "DID0"})
+        my_predbat.args.pop("charge_rate_percent", None)
+        dummy_items["number.charge_rate"] = 1101
+        inv.soc_percent = 22
+        inv.inv_has_solis_energy_control = False
+        ha.service_store_enable = True
+        for name, native_target, target, freeze, has_freeze, expected_service in cases:
+            print("**** Running Test: charge_target_{} ****".format(name))
+            inv.inv_has_target_soc = native_target
+            my_predbat.args["charge_freeze_service"] = "charge_freeze" if has_freeze else None
+            my_predbat.last_service_hash.pop("charge", None)
+            my_predbat.last_service_hash.pop("discharge", None)
+            ha.service_store = []
+            inv.adjust_charge_immediate(target, freeze=freeze)
+            expected = []
+            if target > 0:
+                expected.append(["discharge_stop", {"device_id": "DID0"}])
+            data = {"device_id": "DID0"}
+            if expected_service != "charge_stop":
+                data.update({"target_soc": target, "power": 1101})
+            expected.append([expected_service, data])
+            result = ha.get_service_store()
+            if result != expected:
+                print("ERROR: charge target {} expected {} got {}".format(name, expected, result))
+                failed = True
+            # Repeating the same hold must not issue another mode or power command.
+            ha.service_store = []
+            inv.adjust_charge_immediate(target, freeze=freeze)
+            result = ha.get_service_store()
+            if result:
+                print("ERROR: charge target {} repeated commands {}".format(name, result))
+                failed = True
+    finally:
+        my_predbat.args = original_args
+        inv.soc_percent = original_soc
+        inv.inv_has_target_soc = original_native_target
+        inv.inv_has_solis_energy_control = original_solis_control
+        dummy_items["number.charge_rate"] = original_rate
+        ha.service_store_enable = False
+        my_predbat.last_service_hash.pop("charge", None)
+        my_predbat.last_service_hash.pop("discharge", None)
+    return failed
+
+
 def test_call_adjust_export_immediate(test_name, my_predbat, ha, inv, dummy_items, soc, repeat=False, freeze=False, clear=False, charge_stop=False, discharge_start_time="00:00:00", discharge_end_time="23:55:00", no_freeze=False):
     """
     Tests;
@@ -2017,6 +2539,47 @@ def test_charge_window_none_illegal_time(test_name, my_predbat, dummy_items):
     if inv.track_charge_end != "00:00:00":
         print(f"ERROR: {test_name} - track_charge_end should be '00:00:00', got {inv.track_charge_end}")
         failed = True
+
+    return failed
+
+
+def test_battery_power_validity(test_name, my_predbat, dummy_items):
+    """
+    update_status() records whether battery_power was actually read: a number (or numeric string)
+    is valid, an unavailable sensor or an unconfigured one is not - and both still read as 0W, as
+    before, so nothing else that uses battery_power changes.
+    """
+    failed = False
+    print(f"**** Running Test: {test_name} ****")
+
+    saved_state = dummy_items.get("sensor.battery_power")
+    saved_arg = my_predbat.args.get("battery_power")
+    try:
+        inv = Inverter(my_predbat, 0)
+        inv.sleep = dummy_sleep
+        if inv.battery_power_valid is not False or inv.requested_charge_w is not None or inv.requested_discharge_w is not None:
+            print(f"ERROR: {test_name} - a new inverter should start with no valid power and no requested rates")
+            failed = True
+
+        for state, expect_power, expect_valid in ((1500.0, 1500.0, True), ("-750", -750.0, True), ("unavailable", 0.0, False), ("unknown", 0.0, False), (None, 0.0, False)):
+            dummy_items["sensor.battery_power"] = state
+            inv.update_status(my_predbat.minutes_now, quiet=True)
+            if inv.battery_power != expect_power or inv.battery_power_valid is not expect_valid:
+                print(f"ERROR: {test_name} - state {state!r}: battery_power {inv.battery_power} valid {inv.battery_power_valid}, expected {expect_power} {expect_valid}")
+                failed = True
+
+        dummy_items["sensor.battery_power"] = 1500.0
+        my_predbat.args.pop("battery_power", None)
+        inv.update_status(my_predbat.minutes_now, quiet=True)
+        if inv.battery_power != 0.0 or inv.battery_power_valid is not False:
+            print(f"ERROR: {test_name} - unconfigured battery_power: {inv.battery_power} valid {inv.battery_power_valid}, expected 0.0 False")
+            failed = True
+    finally:
+        dummy_items["sensor.battery_power"] = saved_state
+        if saved_arg is None:
+            my_predbat.args.pop("battery_power", None)
+        else:
+            my_predbat.args["battery_power"] = saved_arg
 
     return failed
 
@@ -4950,6 +5513,7 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_foxess_support_discharge_freeze_matches_foxcloud()
     failed |= test_support_feedin_first_is_opt_in()
     failed |= test_has_solis_energy_control_is_opt_in()
+    failed |= test_custom_type_respects_configured_time_entity(my_predbat)
     ha = my_predbat.ha_interface
 
     time_now = my_predbat.now_utc.strftime("%Y-%m-%dT%H:%M:%S%z")
@@ -5308,7 +5872,10 @@ def run_inverter_tests(my_predbat_dummy):
     # #5324: GivEnergy stores the rate as a whole percent of capacity, so 1300W reads back 1206W
     failed |= test_rate_tolerances("rate_tolerances", inv)
     failed |= test_custom_inverter_def_drops_rate_step("custom_inverter_def_drops_rate_step", my_predbat, ha)
+    failed |= test_hub_midnight_capability_from_entity("hub_midnight_capability_from_entity", my_predbat, ha)
     failed |= test_rate_step_from_charge_rate_entity("rate_step_from_charge_rate_entity", my_predbat, ha)
+    failed |= test_grid_charge_only_disables_discharge_freeze("grid_charge_only_disables_discharge_freeze", my_predbat, ha)
+    failed |= test_rate_control_is_per_inverter("rate_control_is_per_inverter", my_predbat, ha)
     failed |= test_rate_write_quantised("rate_write_quantised_charge", ha, inv, 2600, 1300, 1, 1206)
     failed |= test_rate_write_quantised("rate_write_quantised_charge_settled", ha, inv, 1206, 1300, 0, 1206)
     failed |= test_rate_write_quantised("rate_write_quantised_charge_next_step", ha, inv, 1206, 1350, 1, 1341)
@@ -5659,6 +6226,10 @@ charge_start_service:
     if failed:
         return failed
 
+    failed |= test_charge_target_overshoot_hold(my_predbat, ha, inv, dummy_items)
+    if failed:
+        return failed
+
     failed |= test_auto_restart(
         "auto_restart0",
         my_predbat,
@@ -5786,6 +6357,10 @@ charge_start_service:
     if failed:
         return failed
 
+    failed |= test_battery_power_validity("battery_power_validity", my_predbat, dummy_items)
+    if failed:
+        return failed
+
     failed |= test_charge_window_no_source_configured("charge_window_no_source_configured", my_predbat, dummy_items)
     if failed:
         return failed
@@ -5802,6 +6377,8 @@ charge_start_service:
     failed |= test_export_window_no_source_configured_raises("export_window_no_source_configured_raises", my_predbat, dummy_items)
     failed |= test_window_warning_names_components_when_type_unset("window_warning_names_components_when_type_unset", my_predbat, dummy_items)
     failed |= test_short_per_inverter_list_gets_its_dummy_entity("short_per_inverter_list_gets_its_dummy_entity", my_predbat)
+    failed |= test_create_missing_arg_does_not_fill_sibling_entries("create_missing_arg_does_not_fill_sibling_entries", my_predbat)
+    failed |= test_create_missing_arg_keeps_inverter_0_single_value("create_missing_arg_keeps_inverter_0_single_value", my_predbat)
     if failed:
         return failed
 

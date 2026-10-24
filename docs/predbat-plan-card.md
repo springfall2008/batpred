@@ -209,8 +209,8 @@ There's a further [explanation of the Predbat forecast and plan](faq.md#the-plan
 
 ## Customising and Reformatting the Predbat Plan
 
-An additional independent front-end Home Assistant component the 'Predbat Table Card' is available on HACS that gives a number of additional customisation and configuration options
-to tailor how the Predbat plan looks and is highly recommended if you want to change the standard plan look and feel:
+A couple of additional independent front-end Home Assistant components have been created by the Predbat community, the 'Predbat Table Card' on HACS, that gives additional customisation and configuration options
+to tailor how the Predbat plan looks and are highly recommended if you want to change the standard plan look and feel:
 
 - Change the sequence of columns and which columns are shown in the plan
 - Restyle the columns, or retain the Predbat original colour scheme
@@ -223,7 +223,9 @@ to tailor how the Predbat plan looks and is highly recommended if you want to ch
 
 ![image](images/predbat-table-card.png)
 
-See the [Predbat Table Card repository](https://github.com/pacemaker82/PredBat-Table-Card) for more details.
+The original [Predbat Table Card](https://github.com/pacemaker82/PredBat-Table-Card) which is now no longer being actively developed, and the recently released [Predbat Table Card Next](https://github.com/llbbdd/Predbat-Table-Card-Next).
+
+Please give them a try.
 
 ## PV Prediction summary
 
@@ -232,3 +234,18 @@ The same author of the Predbat Table Card has produced a nice visualisation for 
 ![image](images/pv-card-preview.png)
 
 See the [PV Card Preview repository](https://github.com/pacemaker82/PV-Card-Preview)
+
+## Predbat Card
+
+[Predbat Card](https://github.com/mimikm/Predbat-Card) is an independent community card that gives an at-a-glance overview of Predbat on your dashboard:
+
+- Status header with Predbat status, mode and last update
+- Overview tiles for battery SoC, what the battery is doing now, cost today, predicted saving today, and the next charge and export windows
+- Battery forecast chart (Predbat plan vs baseline), grid import & export chart and energy rates chart
+- Colour-coded plan timeline, upcoming actions and an expandable plan table
+- Visual editor with all Predbat entities prefilled
+- Six visual styles, light/dark override and adjustable text size
+
+![image](https://github.com/mimikm/Predbat-Card/blob/main/images/styles-light.png?raw=true)
+
+Install through HACS as a custom repository (Dashboard): `https://github.com/mimikm/Predbat-Card`

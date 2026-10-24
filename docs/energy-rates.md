@@ -194,6 +194,8 @@ reduction in this period. E.g. setting to a value of 0.8 would indicate you will
 
 As the saving session import and export rates are very high compared to normal Predbat will plan additional export during the saving session period.
 If necessary, a pre-charge may happen at some point during the day to maintain the battery right level for the session.
+This needs the automatic import threshold (**input_number.predbat_rate_low_threshold** set to 0): a manual threshold is a cap
+Predbat will not charge above, even ahead of a session - see [rate thresholds](customisation.md#battery-margins-and-metrics-options).
 
 Note that Predbat's operational mode **select.predbat_mode** must be set to either 'Control charge'
 or 'Control charge & discharge' for Predbat to be able to manage the battery for the saving session.
@@ -299,6 +301,9 @@ The following entries are required for the Kraken component in `apps.yaml`:
 ```
 
 Full details of what to configure are given in the [component documentation](components.md#kraken-energy-kraken)
+
+If you have an EV on a smart-charging tariff with Eon.Next (such as Next Drive Smart), Eon bills every half hour of a planned charging dispatch at the cheap rate whether or not the car charged in it, unlike Octopus Intelligent.
+With `kraken_provider: eon` Predbat prices dispatches that way automatically; see **intelligent_dispatch_billing** in the [car charging documentation](car-charging.md) to change it.
 
 ## Energidataservice Integration
 
