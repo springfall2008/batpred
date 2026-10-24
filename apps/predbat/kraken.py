@@ -1833,6 +1833,7 @@ async def test_kraken_api(
     dispatches=False,
     flextras=False,
     property_id=None,
+    auth_method=None,
 ):  # pragma: no cover
     """Run a live Kraken (EDF/E.ON) API test from the command line.
 
@@ -1855,7 +1856,10 @@ async def test_kraken_api(
     if supabase_key:
         os.environ["SUPABASE_KEY"] = supabase_key
 
-    if key:
+    if auth_method:
+        # Given explicitly (kraken_auth_method from --config): an OAuth access token also arrives as key
+        pass
+    elif key:
         auth_method = "api_key"
     elif email and password:
         auth_method = "email"
@@ -1992,13 +1996,88 @@ async def test_kraken_api(
     print(f"Requests={kraken.requests_total}  Failures={kraken.failures_total}")
 
 
+# Kraken settings as they appear in apps.yaml, mapped to the command line fields they stand in for,
+# so --config can supply them instead. Written out by hand rather than read from COMPONENT_LIST:
+# components.py pulls predbat in behind it. test_kraken_cli_config_keys_match_component keeps
+# this in step with what the component actually declares.
+KRAKEN_CLI_CONFIG_KEYS = {
+    "provider": "kraken_provider",
+    "account_id": "kraken_account_id",
+    "api_key": "kraken_key",
+    "email": "kraken_email",
+    "password": "kraken_password",
+    "auth_method": "kraken_auth_method",
+    "token_hash": "kraken_token_hash",
+    "token_expires": "kraken_token_expires_at",
+    "mpan": "kraken_mpan",
+    "export_account_id": "kraken_export_account_id",
+    "export_mpan": "kraken_export_mpan",
+    "base_url": "kraken_base_url",
+}
+
+# The OAuth refresh settings, which are not Kraken component args: oauth_mixin reads
+# SUPABASE_URL/SUPABASE_KEY from the environment and user_id from base.args, so without them an
+# OAuth run cannot refresh its token.
+KRAKEN_CLI_OAUTH_KEYS = {
+    "user_id": "user_id",
+    "supabase_url": "supabase_url",
+    "supabase_key": "supabase_key",
+}
+
+
+def merge_kraken_cli_settings(cli, config):
+    """Fill in any Kraken setting not given on the command line from an apps.yaml pred_bat section.
+
+    An explicit command line value always wins, so a one-off run against another account does not
+    mean editing apps.yaml. Returns (merged, used), where used lists the config keys actually taken
+    so the caller can name them - a key the CLI does not look for otherwise fails silently, with an
+    auth error further down as its only symptom.
+
+    kraken_auth_method decides which credentials apply, as it does in the component: with api_key
+    the email/password are left out, with email the key is, and with oauth kraken_key is the OAuth
+    access token. A command line credential overrides the config's method, so --api-key on top of
+    an OAuth config tests that key.
+    """
+    merged = dict(cli)
+    used = []
+    if merged.get("api_key"):
+        merged["auth_method"] = merged.get("auth_method") or "api_key"
+    elif merged.get("email") and merged.get("password"):
+        merged["auth_method"] = merged.get("auth_method") or "email"
+
+    auth_method = merged.get("auth_method") or config.get("kraken_auth_method")
+    skip = set()
+    if auth_method == "email":
+        skip.add("api_key")
+    elif auth_method in ("api_key", "oauth"):
+        skip.update(("email", "password"))
+    if auth_method != "oauth":
+        skip.update(("token_hash", "token_expires"))
+
+    for mapping in (KRAKEN_CLI_CONFIG_KEYS, KRAKEN_CLI_OAUTH_KEYS):
+        for cli_name, config_key in mapping.items():
+            if merged.get(cli_name) not in (None, "") or cli_name in skip:
+                continue
+            value = config.get(config_key)
+            if value not in (None, "", []):
+                merged[cli_name] = str(value) if cli_name == "token_expires" else value
+                used.append(config_key)
+    return merged, used
+
+
 def main():  # pragma: no cover
     """Command-line entry point for driving the Kraken API test harness."""
     import argparse
 
     parser = argparse.ArgumentParser(description="Test Kraken (EDF/E.ON) API")
-    parser.add_argument("--provider", default="edf", help="Provider: edf or eon")
-    parser.add_argument("--account-id", required=True, help="Kraken account number (e.g. A-XXXXXXXX)")
+    parser.add_argument("--provider", default=None, help="Provider: edf or eon (default edf)")
+    parser.add_argument("--account-id", help="Kraken account number (e.g. A-XXXXXXXX)")
+    parser.add_argument(
+        "--config",
+        help="Read settings from an apps.yaml-format file instead of passing them here, resolving !secret as Predbat does (a secrets.yaml beside the file is used unless PREDBAT_SECRETS_FILE is set). Reads "
+        + ", ".join(list(KRAKEN_CLI_CONFIG_KEYS.values()) + list(KRAKEN_CLI_OAUTH_KEYS.values()))
+        + ". Anything also given on the command line wins",
+    )
 
     # Local auth: API key, or email+password. OAuth needs no token hash — Supabase
     # url/key + user-id are enough (the edge function fetches the token by user_id + provider).
@@ -2023,27 +2102,50 @@ def main():  # pragma: no cover
     parser.add_argument("--property-id", help="Kraken property id for --flextras (default: looked up with the properties query)")
 
     args = parser.parse_args()
+    settings = {name: getattr(args, name, None) for name in list(KRAKEN_CLI_CONFIG_KEYS) + list(KRAKEN_CLI_OAUTH_KEYS)}
 
+    if args.config:
+        import os
+        import yaml
+        from utils import load_apps_yaml
+
+        # load_secrets() looks in the working directory and the Home Assistant config paths, so a
+        # copy of a config kept elsewhere would lose its secrets - use a secrets.yaml beside it.
+        beside = os.path.join(os.path.dirname(os.path.abspath(args.config)), "secrets.yaml")
+        if not os.getenv("PREDBAT_SECRETS_FILE") and os.path.isfile(beside):
+            os.environ["PREDBAT_SECRETS_FILE"] = beside
+        try:
+            config, _ = load_apps_yaml(args.config)
+        except (yaml.YAMLError, KeyError, OSError) as exc:
+            parser.error(f"could not read Kraken settings from {args.config}: {exc}")
+        settings, used = merge_kraken_cli_settings(settings, config or {})
+        print("Read from {}: {}".format(args.config, ", ".join(used) if used else "nothing - no keys the CLI looks for"))
+        if settings.get("auth_method") == "oauth" and not (settings.get("supabase_url") and settings.get("supabase_key") and settings.get("user_id")):
+            print("Warning: an OAuth token cannot be refreshed without supabase_url, supabase_key and user_id - expect auth errors once it expires")
+
+    if not settings.get("account_id"):
+        parser.error("no account: pass --account-id, or --config pointing at an apps.yaml holding kraken_account_id")
     # Require at least one usable auth path.
-    if not (args.api_key or (args.email and args.password) or args.supabase_url or args.user_id):
-        parser.error("provide auth: --api-key, or --email/--password, or OAuth via --supabase-url/--supabase-key/--user-id")
+    if not (settings.get("api_key") or (settings.get("email") and settings.get("password")) or settings.get("supabase_url") or settings.get("user_id")):
+        parser.error("provide auth: --api-key, or --email/--password, or OAuth via --supabase-url/--supabase-key/--user-id, or --config")
 
     asyncio.run(
         test_kraken_api(
-            provider=args.provider,
-            account_id=args.account_id,
-            key=args.api_key,
-            email=args.email,
-            password=args.password,
-            token_hash=args.token_hash,
-            token_expires=args.token_expires,
-            supabase_url=args.supabase_url,
-            supabase_key=args.supabase_key,
-            user_id=args.user_id,
-            mpan=args.mpan,
-            export_account_id=args.export_account_id,
-            export_mpan=args.export_mpan,
-            base_url=args.base_url,
+            provider=settings.get("provider") or "edf",
+            account_id=settings["account_id"],
+            key=settings.get("api_key"),
+            email=settings.get("email"),
+            password=settings.get("password"),
+            token_hash=settings.get("token_hash"),
+            token_expires=settings.get("token_expires"),
+            supabase_url=settings.get("supabase_url"),
+            supabase_key=settings.get("supabase_key"),
+            user_id=settings.get("user_id"),
+            mpan=settings.get("mpan"),
+            export_account_id=settings.get("export_account_id"),
+            export_mpan=settings.get("export_mpan"),
+            base_url=settings.get("base_url"),
+            auth_method=settings.get("auth_method"),
             discover=args.discover,
             introspect_type=args.introspect_type,
             dispatches=args.dispatches,

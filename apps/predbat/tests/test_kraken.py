@@ -2910,3 +2910,105 @@ def test_find_property_id_reads_first_property():
     assert asyncio.run(api.async_find_property_id()) == "987"
     api.async_graphql_query = AsyncMock(return_value=None)
     assert asyncio.run(api.async_find_property_id()) is None
+
+
+# ── Command line --config (apps.yaml) ────────────────────────────────────────
+
+
+def _cli_settings(**given):
+    """The CLI's settings dict as main() builds it, with every field unset unless given."""
+    from kraken import KRAKEN_CLI_CONFIG_KEYS, KRAKEN_CLI_OAUTH_KEYS
+
+    settings = {name: None for name in list(KRAKEN_CLI_CONFIG_KEYS) + list(KRAKEN_CLI_OAUTH_KEYS)}
+    settings.update(given)
+    return settings
+
+
+def test_kraken_cli_config_keys_match_component():
+    """Every apps.yaml key the CLI reads is one the Kraken component actually declares."""
+    from components import COMPONENT_LIST
+    from kraken import KRAKEN_CLI_CONFIG_KEYS
+
+    declared = {spec.get("config") for spec in COMPONENT_LIST["kraken"]["args"].values() if spec.get("config")}
+    for cli_name, config_key in KRAKEN_CLI_CONFIG_KEYS.items():
+        assert config_key in declared, f"{cli_name} maps to {config_key}, which the kraken component does not declare: {sorted(declared)}"
+
+
+def test_kraken_cli_config_oauth_takes_token_and_refresh_settings():
+    """A SaaS-style OAuth config supplies the access token as key, plus the token and refresh settings."""
+    from kraken import merge_kraken_cli_settings
+
+    config = {
+        "kraken_provider": "edf",
+        "kraken_account_id": "A-1234ABCD",
+        "kraken_auth_method": "oauth",
+        "kraken_key": "access-token",
+        "kraken_token_hash": "hash",
+        "kraken_token_expires_at": datetime(2026, 10, 24, 20, 0, tzinfo=timezone.utc),
+        "kraken_email": "ignored@example.com",
+        "user_id": "inst-1",
+        "supabase_url": "https://x.supabase.co",
+        "supabase_key": "anon",
+    }
+    merged, used = merge_kraken_cli_settings(_cli_settings(), config)
+
+    assert merged["auth_method"] == "oauth"
+    assert merged["api_key"] == "access-token"
+    assert merged["account_id"] == "A-1234ABCD"
+    assert merged["token_hash"] == "hash"
+    assert isinstance(merged["token_expires"], str), "a YAML timestamp arrives as a datetime; the CLI passes a string"
+    assert (merged["user_id"], merged["supabase_url"], merged["supabase_key"]) == ("inst-1", "https://x.supabase.co", "anon")
+    assert merged["email"] is None, "email is not an OAuth credential"
+    assert "kraken_email" not in used and "kraken_key" in used
+
+
+def test_kraken_cli_config_command_line_wins():
+    """An explicit command line value beats the file, and a command line key overrides the file's OAuth method."""
+    from kraken import merge_kraken_cli_settings
+
+    config = {"kraken_account_id": "A-FROMFILE", "kraken_auth_method": "oauth", "kraken_key": "access-token", "kraken_token_hash": "hash"}
+    merged, used = merge_kraken_cli_settings(_cli_settings(account_id="A-CLI", api_key="sk_live_cli"), config)
+
+    assert merged["account_id"] == "A-CLI"
+    assert merged["api_key"] == "sk_live_cli"
+    assert merged["auth_method"] == "api_key"
+    assert merged["token_hash"] is None, "an OAuth token hash does not apply to an API key run"
+    assert used == []
+
+
+def test_kraken_cli_config_email_method_skips_key():
+    """With kraken_auth_method: email, the email and password are used and a stray kraken_key is not."""
+    from kraken import merge_kraken_cli_settings
+
+    config = {"kraken_account_id": "A-1", "kraken_auth_method": "email", "kraken_email": "me@example.com", "kraken_password": "pw", "kraken_key": "stale"}
+    merged, _ = merge_kraken_cli_settings(_cli_settings(), config)
+
+    assert (merged["email"], merged["password"], merged["api_key"]) == ("me@example.com", "pw", None)
+
+
+def test_kraken_cli_config_reads_apps_yaml_with_secrets():
+    """load_apps_yaml resolves !secret from a secrets.yaml beside the file, as --config sets it up."""
+    import tempfile
+    from utils import load_apps_yaml
+    from kraken import merge_kraken_cli_settings
+
+    with tempfile.TemporaryDirectory() as folder:
+        apps = os.path.join(folder, "apps.yaml")
+        with open(apps, "w") as handle:
+            handle.write("pred_bat:\n  module: predbat\n  kraken_provider: edf\n  kraken_account_id: A-1234ABCD\n  kraken_auth_method: api_key\n  kraken_key: !secret kraken_key\n")
+        with open(os.path.join(folder, "secrets.yaml"), "w") as handle:
+            handle.write("kraken_key: sk_live_secret\n")
+        saved = os.environ.get("PREDBAT_SECRETS_FILE")
+        os.environ["PREDBAT_SECRETS_FILE"] = os.path.join(folder, "secrets.yaml")
+        try:
+            config, _ = load_apps_yaml(apps, log=lambda *a, **k: None)
+        finally:
+            if saved is None:
+                os.environ.pop("PREDBAT_SECRETS_FILE", None)
+            else:
+                os.environ["PREDBAT_SECRETS_FILE"] = saved
+
+    merged, used = merge_kraken_cli_settings(_cli_settings(), config)
+    assert merged["api_key"] == "sk_live_secret"
+    assert merged["provider"] == "edf" and merged["account_id"] == "A-1234ABCD"
+    assert set(used) == {"kraken_provider", "kraken_account_id", "kraken_auth_method", "kraken_key"}
