@@ -639,6 +639,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         self.register_list = {}
         self.settings = {}
         self.status = {}
+        self.live_display_samples = {}  # unmerged measured samples, never sensor defaults
         self.meter = {}
         self.info = {}
         self.register_entity_map = {}
@@ -3261,6 +3262,10 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         if previous is None:
             previous = {}
         result = await self.async_get_inverter_data_retry(GE_API_INVERTER_STATUS, serial)
+        # Display provenance must retain neither missing fields nor an old
+        # field under a new timestamp. The ordinary merged control cache stays
+        # unchanged; the optional display adapter consumes only this raw sample.
+        self.live_display_samples[serial.lower()] = result
         if result is None:
             return previous
         return merge_non_null(result, previous)
