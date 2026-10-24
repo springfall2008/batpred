@@ -303,6 +303,19 @@ COMPONENT_LIST = {
         "phase": 1,
         "can_restart": True,
     },
+    "hypervolt": {
+        "class": "hypervolt.HypervoltAPI",
+        "name": "Hypervolt Charger",
+        "event_filter": "predbat_hypervolt_",
+        "args": {
+            "username": {"required": True, "secret": True, "config": "hypervolt_username"},
+            "password": {"required": True, "secret": True, "config": "hypervolt_password"},
+            "automatic": {"required": False, "config": "hypervolt_automatic", "default": True},
+            "hypervolt_control": {"required": False, "config": "hypervolt_control", "default": False},
+        },
+        "phase": 1,
+        "can_restart": True,
+    },
     "fox": {
         "class": "fox.FoxAPI",
         "name": "Fox API",
@@ -464,6 +477,47 @@ COMPONENT_LIST = {
         # Gate activation on having an AppID. Without this the component would start for
         # every instance, since all individual args are optional.
         "required_or": ["app_id"],
+        "phase": 1,
+        "can_restart": True,
+    },
+    "hanchu": {
+        "class": "hanchu.HanchuAPI",
+        "name": "Hanchu ESS Cloud API",
+        "inverter": True,
+        "event_filter": "predbat_hanchu_",
+        "args": {
+            # The e-mail address and password the user signs into the Hanchu phone app with. There
+            # is no developer portal and no API key: the app account IS the credential.
+            "account": {"required": False, "secret": True, "config": "hanchu_account"},
+            "password": {"required": False, "secret": True, "config": "hanchu_password"},
+            "inverter_sn": {"required": False, "config": "hanchu_inverter_sn"},
+            "automatic": {"required": False, "default": False, "config": "hanchu_automatic"},
+            "automatic_ignore_pv": {"required": False, "default": False, "config": "hanchu_automatic_ignore_pv"},
+            # On by default, matching alphaess_control_enable and sunsynk_control_enable: an
+            # inverter component that does not drive the inverter is not what a user configuring it
+            # expects. Set false for monitoring only. switch.predbat_set_read_only still gates
+            # every write.
+            "control_enable": {"required": False, "default": True, "config": "hanchu_control_enable"},
+            # The escape hatch for the one genuinely inferred behaviour in this component: nothing
+            # documents which work mode honours the timed slots, so "User-defined" is a deduction.
+            # Set false to write the windows and leave the mode exactly as the user set it.
+            "work_mode_control": {"required": False, "default": True, "config": "hanchu_work_mode_control"},
+            # The API reports no battery power limit directly - it is taken from the charge power
+            # setting's own upper bound. This is the escape hatch for a user who knows their pack's
+            # real limit.
+            "battery_rate_max": {"required": False, "config": "hanchu_battery_rate_max"},
+            # Same idea for the inverter's AC rating, which is taken from the discharge power
+            # setting's upper bound. Hanchu units come in 3.68, 5, 6 and 10 kW.
+            "inverter_limit": {"required": False, "config": "hanchu_inverter_limit"},
+            "api_delay": {"required": False, "default": 1.0, "config": "hanchu_api_delay"},
+            "min_write_interval": {"required": False, "default": 60, "config": "hanchu_min_write_interval"},
+            # Logs every API request and response. Off by default: on, it writes thousands of long
+            # lines a day per device. For a tester proving what hanchu_const.py marks INFERRED.
+            "api_debug": {"required": False, "default": True, "config": "hanchu_api_debug"},
+        },
+        # Gate activation on having an account. Without this the component would start for every
+        # instance, since all individual args are optional.
+        "required_or": ["account"],
         "phase": 1,
         "can_restart": True,
     },
@@ -749,6 +803,7 @@ COMPONENT_LIST = {
             "load_ml_source": {"required": False, "config": "load_ml_source", "default": False},
             "load_ml_max_days_history": {"required": False, "config": "load_ml_max_days_history", "default": 28},
             "load_ml_database_days": {"required": False, "config": "load_ml_database_days", "default": 90},
+            "load_ml_retrain_interval_hours": {"required": False, "config": "load_ml_retrain_interval_hours", "default": 2},
         },
         "phase": 2,  # Load ML in phase 2 so that any Predbat cloud components (such as GEcloud) have been started and initialised pv_today, etc
         "can_restart": True,
@@ -764,6 +819,7 @@ COMPONENT_LIST = {
             "mqtt_port": {"required": False, "config": "gateway_mqtt_port", "default": 8883},
             "mqtt_token": {"required": True, "secret": True, "config": "gateway_mqtt_token"},
             "gateway_inverter_serial": {"required": False, "config": "gateway_inverter_serial", "default": None},
+            "gateway_display_only": {"required": False, "config": "gateway_display_only", "default": False},
             "gateway_evc_automatic": {"required": False, "config": "gateway_evc_automatic", "default": False},
             "gateway_evc_control": {"required": False, "config": "gateway_evc_control", "default": False},
             "gateway_shared_ct": {"required": False, "config": "gateway_shared_ct", "default": True},
@@ -1076,11 +1132,11 @@ class Components:
         question rather than a per-inverter one: a component serves whichever inverters it
         discovered, and Inverter only needs to know whether to keep waiting.
         """
-        return any(COMPONENT_LIST.get(name, {}).get("inverter", False) and component for name, component in self.components.items())
+        return any(COMPONENT_LIST.get(name, {}).get("inverter", False) and component and getattr(component, "gateway_display_only", False) is not True for name, component in self.components.items())
 
     def inverter_source_names(self):
         """The display names of every active inverter component, for user-facing messages."""
-        return [COMPONENT_LIST[name]["name"] for name, component in self.components.items() if component and COMPONENT_LIST.get(name, {}).get("inverter", False)]
+        return [COMPONENT_LIST[name]["name"] for name, component in self.components.items() if component and COMPONENT_LIST.get(name, {}).get("inverter", False) and getattr(component, "gateway_display_only", False) is not True]
 
     def inverter_source_status(self):
         """
@@ -1113,6 +1169,8 @@ class Components:
                 continue
             load_error = self.load_error(name)
             component = self.components.get(name, None)
+            if component and getattr(component, "gateway_display_only", False) is True:
+                continue
             if load_error is not None:
                 state = "failed to start: {}".format(load_error)
             elif not component:

@@ -13,7 +13,8 @@ Unit tests for Output.calculate_yesterday().
 
 Covered scenarios
 -----------------
-1. Early-exit when savings_last_updated is fresh (< 59 min old, same day).
+1. Early-exit when savings_last_updated is in the current plan slot; a run once a slot
+   has ended (test 1b) or the day has rolled over (tests 4 and 4b) is not skipped.
 2. Basic run with no car: function runs, key dashboard entities are published
    and all state attributes are correctly restored afterwards.
 3. Car-slot subtraction: when car_charging_slots has a slot covering some
@@ -26,10 +27,12 @@ import copy
 from datetime import datetime, timedelta
 
 import pytz
+from zoneinfo import ZoneInfo
 
+import const
 from const import PREDICT_STEP, EXPORT_MODE_FREEZE, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
 from utils import export_mode_of
-from output import yesterday_slot_is_exporting, more_active_slot_status
+from output import yesterday_slot_is_exporting, split_status_warning, more_active_slot_status
 from tests.test_infra import reset_rates, reset_inverter
 
 UTC = pytz.UTC
@@ -219,8 +222,8 @@ def _apply_mocks(my_predbat, now_utc, cost_value=100.0, soc_value=5.0):
 
     my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
     my_predbat.get_history_wrapper = _make_history_mock(my_predbat, now_utc, cost_value, soc_value)
-    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
-    my_predbat.publish_html_plan = lambda *a, **kw: ("", "{}")
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", {})
+    my_predbat.publish_html_plan = lambda *a, **kw: ("", {})
 
     original_run_pred = my_predbat.run_prediction
     mock_run_pred = _make_mock_run_prediction(captured_load_steps)
@@ -262,12 +265,13 @@ def _restore_methods(my_predbat, original_run_pred, original_step_data=None, ori
 
 
 def _test_early_exit(my_predbat, failed):
-    """Test 1: Early-exit when savings_last_updated is < 59 min old, same day."""
-    print("calculate_yesterday: Test 1 – early-exit when timestamp is fresh")
+    """Test 1: Early-exit when savings_last_updated is in the current plan slot."""
+    print("calculate_yesterday: Test 1 – early-exit when timestamp is in the current slot")
     now_utc = _setup_base(my_predbat)
 
-    # Mark as recently updated (10 minutes ago, same day)
-    my_predbat.savings_last_updated = now_utc - timedelta(minutes=10)
+    # 06:25 now, updated at 06:10 - both count towards the 06:05-06:35 history slot (one run past the boundary)
+    my_predbat.now_utc = now_utc + timedelta(minutes=25)
+    my_predbat.savings_last_updated = now_utc + timedelta(minutes=10)
 
     # Make sure dashboard_item is NOT called by asserting that the savings
     # entity is absent before the call (it might or might not exist from a
@@ -281,8 +285,93 @@ def _test_early_exit(my_predbat, failed):
         print("ERROR: savings_last_updated was changed despite fresh timestamp")
         failed = True
 
-    # Reset for next test
+    # Reset for next test, including the clock moved above on the shared fixture
+    my_predbat.now_utc = now_utc
     my_predbat.savings_last_updated = None
+    return failed
+
+
+def _test_rebuild_after_slot_ends(my_predbat, failed):
+    """Test 1b: A run once the slot of the last update has ended is not skipped, however recent the update.
+
+    The plan history shows each slot from what actually happened, so rebuilding as soon as a slot ends keeps the
+    last finished slot on show; the hourly rebuild this replaced left up to an hour of slots in no view.
+    """
+    print("calculate_yesterday: Test 1b – rebuilt once the last update's slot has ended")
+    now_utc = _setup_base(my_predbat)
+
+    # Updated at 05:50, ten minutes ago but towards the 05:35-06:05 history slot; the 06:00 run is still in it
+    # (it waits a run so its own cost_today write is recorded), so move on to the 06:05 run
+    my_predbat.savings_last_updated = now_utc - timedelta(minutes=10)
+    # Mocked first, so a broken early exit fails here rather than running for real on the shared fixture
+    captured_load, original_run_pred = _apply_mocks(my_predbat, now_utc + timedelta(minutes=5))
+    my_predbat.calculate_yesterday()
+    if my_predbat.savings_last_updated != now_utc - timedelta(minutes=10):
+        print("ERROR: the run at the slot boundary should wait a run before rebuilding")
+        failed = True
+    now_utc = now_utc + timedelta(minutes=5)
+    my_predbat.now_utc = now_utc
+    my_predbat.minutes_now = 365
+
+    my_predbat.calculate_yesterday()
+
+    if my_predbat.savings_last_updated != now_utc:
+        print("ERROR: calculate_yesterday did not rebuild once the slot had ended: savings_last_updated {}".format(my_predbat.savings_last_updated))
+        failed = True
+
+    _restore_methods(my_predbat, original_run_pred)
+    my_predbat.now_utc = now_utc - timedelta(minutes=5)
+    my_predbat.minutes_now = 360
+    my_predbat.savings_last_updated = None
+    return failed
+
+
+def _test_history_slot(my_predbat, failed):
+    """Test 1c: history_slot() follows plan_interval_minutes, one run late, and the published refresh interval matches."""
+    print("calculate_yesterday: Test 1c – history slots follow plan_interval_minutes")
+    _setup_base(my_predbat)
+    saved = (my_predbat.plan_interval_minutes, my_predbat.calculate_plan_every)
+    try:
+        my_predbat.plan_interval_minutes = 15
+        my_predbat.calculate_plan_every = 10
+        base = datetime(2024, 10, 4, 6, 0, 0, tzinfo=UTC)
+        # 06:05-06:19 is one 15-minute history slot, 06:20 starts the next; 00:00 still counts towards yesterday
+        if my_predbat.history_slot(base + timedelta(minutes=5)) != my_predbat.history_slot(base + timedelta(minutes=19)):
+            print("ERROR: 06:05 and 06:19 should be the same 15-minute history slot")
+            failed = True
+        if my_predbat.history_slot(base + timedelta(minutes=19)) == my_predbat.history_slot(base + timedelta(minutes=20)):
+            print("ERROR: 06:20 should start a new 15-minute history slot")
+            failed = True
+        if my_predbat.history_slot(datetime(2024, 10, 5, 0, 0, 0, tzinfo=UTC)) != my_predbat.history_slot(datetime(2024, 10, 4, 23, 50, 0, tzinfo=UTC)):
+            print("ERROR: the midnight run should still count towards the last slot of the day before")
+            failed = True
+        # When the clocks go back, 01:00-01:59 happens twice: the first and second 01:35 are an hour apart and
+        # must be separate slots, or with an hourly re-plan the second is skipped and the history goes two hours
+        # without a rebuild. Both ways a local time can be built: pytz (as update_time does) and zoneinfo (fold).
+        london = pytz.timezone("Europe/London")
+        first = datetime(2024, 10, 27, 0, 35, 0, tzinfo=UTC).astimezone(london)
+        second = datetime(2024, 10, 27, 1, 35, 0, tzinfo=UTC).astimezone(london)
+        if first.strftime("%H:%M") != "01:35" or second.strftime("%H:%M") != "01:35":
+            print("ERROR: test setup - expected both instants to read 01:35 local, got {} and {}".format(first, second))
+            failed = True
+        if my_predbat.history_slot(first) == my_predbat.history_slot(second):
+            print("ERROR: the first and second 01:35 on the autumn clock change should be different history slots (pytz)")
+            failed = True
+        london_zi = ZoneInfo("Europe/London")
+        if my_predbat.history_slot(first.astimezone(london_zi)) == my_predbat.history_slot(second.astimezone(london_zi)):
+            print("ERROR: the first and second 01:35 on the autumn clock change should be different history slots (zoneinfo)")
+            failed = True
+        # The run that crosses back to 01:00 GMT waits one run as normal: 01:02 GMT counts towards the slot before it
+        # (00:30 UTC onwards, the BST 01:30 slot), not a slot of its own
+        if my_predbat.history_slot(datetime(2024, 10, 27, 1, 2, 0, tzinfo=UTC).astimezone(london)) != my_predbat.history_slot(datetime(2024, 10, 27, 0, 57, 0, tzinfo=UTC).astimezone(london)):
+            print("ERROR: 01:02 GMT should still count towards the slot that ended at the clock change")
+            failed = True
+        # A 15-minute slot, the 5-minute run it waits and a 10-minute re-plan interval
+        if my_predbat.history_refresh_minutes() != 30:
+            print("ERROR: history_refresh_minutes {} should be a slot, a run and a re-plan interval".format(my_predbat.history_refresh_minutes()))
+            failed = True
+    finally:
+        my_predbat.plan_interval_minutes, my_predbat.calculate_plan_every = saved
     return failed
 
 
@@ -350,6 +439,13 @@ def _test_basic_no_car(my_predbat, failed):
             print("ERROR: entity {} was not published".format(entity_id))
             failed = True
 
+    # --- The plan history views carry how long they may go between rebuilds, for the web page's stale check ---
+    for entity_suffix in (".cost_yesterday", ".savings_yesterday_predbat"):
+        history_json = my_predbat.get_state_wrapper(prefix + entity_suffix, attribute="json")
+        if not isinstance(history_json, dict) or history_json.get("refresh_minutes") != my_predbat.history_refresh_minutes():
+            print("ERROR: {} json should carry refresh_minutes {}, got {}".format(entity_suffix, my_predbat.history_refresh_minutes(), history_json.get("refresh_minutes") if isinstance(history_json, dict) else history_json))
+            failed = True
+
     # --- run_prediction was called (once for baseline, once for no-pvbat) ---
     if len(captured_load) < 2:
         print("ERROR: run_prediction should have been called at least twice, got {} captures".format(len(captured_load)))
@@ -384,8 +480,8 @@ def _test_forecast_minutes_widened_before_step_data(my_predbat, failed):
     forecast_minutes_snapshots = []
     my_predbat.step_data_history = _make_recording_step_data(my_predbat.pv_today, my_predbat, forecast_minutes_snapshots)
     my_predbat.get_history_wrapper = _make_history_mock(my_predbat, now_utc)
-    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
-    my_predbat.publish_html_plan = lambda *a, **kw: ("", "{}")
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", {})
+    my_predbat.publish_html_plan = lambda *a, **kw: ("", {})
     original_run_pred = my_predbat.run_prediction
     my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
 
@@ -636,12 +732,12 @@ def _test_car_slot_from_energy_sensor(my_predbat, failed):
 
 def _test_early_exit_respects_day_rollover(my_predbat, failed):
     """Test 4: Early-exit is NOT triggered if savings_last_updated was from
-    a previous day (even if it is < 59 min old by clock, the date differs)."""
+    a previous day (the same time of day yesterday is a different slot)."""
     print("calculate_yesterday: Test 4 – early-exit skipped when date rolls over")
     now_utc = _setup_base(my_predbat)
 
-    # Timestamp from yesterday – even though it is within 59 minutes of now_utc,
-    # the dates differ so the early-return condition should NOT fire.
+    # Timestamp from yesterday, five minutes into the same time-of-day slot - a different slot,
+    # so the early-return condition should NOT fire.
     my_predbat.savings_last_updated = (now_utc - timedelta(days=1)) + timedelta(minutes=5)
 
     captured_load, original_run_pred = _apply_mocks(my_predbat, now_utc)
@@ -659,6 +755,37 @@ def _test_early_exit_respects_day_rollover(my_predbat, failed):
 
     _restore_methods(my_predbat, original_run_pred)
     my_predbat.savings_last_updated = None
+    return failed
+
+
+def _test_midnight_replan_rebuilds(my_predbat, failed):
+    """Test 4b: The forced midnight re-plan rebuilds, although the one-run wait counts 00:00 towards yesterday's last slot.
+
+    Otherwise, with an hourly re-plan, the *_yesterday sensors would go on showing the day before yesterday until 01:00.
+    """
+    print("calculate_yesterday: Test 4b – the midnight re-plan rebuilds")
+    _setup_base(my_predbat)
+    saved = (my_predbat.now_utc, my_predbat.plan_interval_minutes)
+    # No cost_today history: a run that gets past the early exit records the attempt and stops, so the probe is cheap
+    my_predbat.get_history_wrapper = lambda *args, **kwargs: None
+    try:
+        my_predbat.plan_interval_minutes = 30
+        my_predbat.savings_last_updated = datetime(2024, 10, 4, 23, 40, 0, tzinfo=UTC)
+        # Same slot and same day still waits
+        my_predbat.now_utc = datetime(2024, 10, 4, 23, 55, 0, tzinfo=UTC)
+        my_predbat.calculate_yesterday()
+        if my_predbat.savings_last_updated != datetime(2024, 10, 4, 23, 40, 0, tzinfo=UTC):
+            print("ERROR: 23:55 is in the same history slot as 23:40 and should not rebuild")
+            failed = True
+        my_predbat.now_utc = datetime(2024, 10, 5, 0, 0, 0, tzinfo=UTC)
+        my_predbat.calculate_yesterday()
+        if my_predbat.savings_last_updated != my_predbat.now_utc:
+            print("ERROR: the midnight re-plan should rebuild for the day just ended: savings_last_updated {}".format(my_predbat.savings_last_updated))
+            failed = True
+    finally:
+        my_predbat.now_utc, my_predbat.plan_interval_minutes = saved
+        del my_predbat.get_history_wrapper
+        my_predbat.savings_last_updated = None
     return failed
 
 
@@ -1333,8 +1460,8 @@ def _test_soc_kw_h0_fallback(my_predbat, failed):
 
     my_predbat.get_history_wrapper = _history_no_soc
     my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
-    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
-    my_predbat.publish_html_plan = lambda *a, **kw: ("", "{}")
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", {})
+    my_predbat.publish_html_plan = lambda *a, **kw: ("", {})
     original_run_pred = my_predbat.run_prediction
 
     ran_count = [0]
@@ -1358,8 +1485,8 @@ def _test_soc_kw_h0_fallback(my_predbat, failed):
 
     my_predbat.get_history_wrapper = _history_no_soc  # still returns None for soc_kw_h0
     my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
-    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
-    my_predbat.publish_html_plan = lambda *a, **kw: ("", "{}")
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", {})
+    my_predbat.publish_html_plan = lambda *a, **kw: ("", {})
     original_run_pred = my_predbat.run_prediction
     ran_count_b = [0]
     my_predbat.run_prediction = lambda *a, **kw: _make_counting_run_pred(ran_count_b)(my_predbat, *a, **kw)
@@ -1415,11 +1542,11 @@ def _test_cross_charging_reconstructed_as_both_windows(my_predbat, failed):
         captured["charge_window_best"] = copy.deepcopy(my_predbat.charge_window_best)
         captured["export_window_best"] = copy.deepcopy(my_predbat.export_window_best)
         captured["export_limits_best"] = copy.deepcopy(my_predbat.export_limits_best)
-        return ("", "{}")
+        return ("", {})
 
     my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
     my_predbat.get_history_wrapper = _history_with_cross_charging
-    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", {})
     my_predbat.publish_html_plan = _capture_publish_html_plan
     original_run_pred = my_predbat.run_prediction
     my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
@@ -1497,11 +1624,11 @@ def _test_slot_status_read_at_the_right_minute(my_predbat, failed):
 
     def _capture_publish_html_plan(*args, **kwargs):
         captured["export_window_best"] = copy.deepcopy(my_predbat.export_window_best)
-        return ("", "{}")
+        return ("", {})
 
     my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
     my_predbat.get_history_wrapper = _history_with_one_export
-    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", {})
     my_predbat.publish_html_plan = _capture_publish_html_plan
     original_run_pred = my_predbat.run_prediction
     my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
@@ -1558,11 +1685,11 @@ def _test_recorded_hold_for_car_minutes(my_predbat, failed):
     def _capture_publish_html_plan(*args, **kwargs):
         """Record the car_hold_minutes the actual-history table is rendered with."""
         captured["car_hold_minutes"] = kwargs.get("car_hold_minutes")
-        return ("", "{}")
+        return ("", {})
 
     my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
     my_predbat.get_history_wrapper = _history_with_one_hold
-    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", {})
     my_predbat.publish_html_plan = _capture_publish_html_plan
     original_run_pred = my_predbat.run_prediction
     my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
@@ -1656,11 +1783,11 @@ def _test_mixed_slot_keeps_most_active_state(my_predbat, failed):
     def _capture_publish_html_plan(*args, **kwargs):
         captured["export_window_best"] = copy.deepcopy(my_predbat.export_window_best)
         captured["export_limits_best"] = copy.deepcopy(my_predbat.export_limits_best)
-        return ("", "{}")
+        return ("", {})
 
     my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
     my_predbat.get_history_wrapper = _history_with_split_slots
-    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", {})
     my_predbat.publish_html_plan = _capture_publish_html_plan
     original_run_pred = my_predbat.run_prediction
     my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
@@ -1752,11 +1879,11 @@ def _test_short_export_inside_a_freeze_slot(my_predbat, failed):
     def _capture_publish_html_plan(*args, **kwargs):
         captured["export_window_best"] = copy.deepcopy(my_predbat.export_window_best)
         captured["export_limits_best"] = copy.deepcopy(my_predbat.export_limits_best)
-        return ("", "{}")
+        return ("", {})
 
     my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
     my_predbat.get_history_wrapper = _history_with_short_export
-    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", {})
     my_predbat.publish_html_plan = _capture_publish_html_plan
     original_run_pred = my_predbat.run_prediction
     my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
@@ -1827,11 +1954,11 @@ def _test_full_edge_state_counts_toward_the_dominant_tally(my_predbat, failed):
     def _capture_publish_html_plan(*args, **kwargs):
         captured["export_window_best"] = copy.deepcopy(my_predbat.export_window_best)
         captured["export_limits_best"] = copy.deepcopy(my_predbat.export_limits_best)
-        return ("", "{}")
+        return ("", {})
 
     my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
     my_predbat.get_history_wrapper = _history_with_edge_export
-    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", {})
     my_predbat.publish_html_plan = _capture_publish_html_plan
     original_run_pred = my_predbat.run_prediction
     my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
@@ -1893,11 +2020,11 @@ def _test_brief_edge_blip_is_not_counted(my_predbat, failed):
     def _capture_publish_html_plan(*args, **kwargs):
         captured["export_window_best"] = copy.deepcopy(my_predbat.export_window_best)
         captured["charge_window_best"] = copy.deepcopy(my_predbat.charge_window_best)
-        return ("", "{}")
+        return ("", {})
 
     my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
     my_predbat.get_history_wrapper = _history_with_edge_blip
-    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", {})
     my_predbat.publish_html_plan = _capture_publish_html_plan
     original_run_pred = my_predbat.run_prediction
     my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
@@ -1968,11 +2095,11 @@ def _test_edge_only_state_still_gets_real_window_bounds(my_predbat, failed):
     def _capture_publish_html_plan(*args, **kwargs):
         captured["charge_window_best"] = copy.deepcopy(my_predbat.charge_window_best)
         captured["export_window_best"] = copy.deepcopy(my_predbat.export_window_best)
-        return ("", "{}")
+        return ("", {})
 
     my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
     my_predbat.get_history_wrapper = _history_with_edge_only_states
-    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", {})
     my_predbat.publish_html_plan = _capture_publish_html_plan
     original_run_pred = my_predbat.run_prediction
     my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
@@ -2042,11 +2169,11 @@ def _test_cross_charging_export_window_covers_the_slot(my_predbat, failed):
     def _capture_publish_html_plan(*args, **kwargs):
         captured["charge_window_best"] = copy.deepcopy(my_predbat.charge_window_best)
         captured["export_window_best"] = copy.deepcopy(my_predbat.export_window_best)
-        return ("", "{}")
+        return ("", {})
 
     my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
     my_predbat.get_history_wrapper = _history_with_cross_charging
-    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", {})
     my_predbat.publish_html_plan = _capture_publish_html_plan
     original_run_pred = my_predbat.run_prediction
     my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
@@ -2113,6 +2240,8 @@ def _test_missing_cost_today_history(my_predbat, failed):
     my_predbat.step_data_history = _counting_step_data
     my_predbat.get_history_wrapper = _no_history
     my_predbat.savings_last_updated = None
+    # 06:05, the first run counting towards the 06:05-06:35 history slot
+    my_predbat.now_utc = now_utc + timedelta(minutes=5)
 
     my_predbat.calculate_yesterday()
 
@@ -2124,14 +2253,14 @@ def _test_missing_cost_today_history(my_predbat, failed):
         print("ERROR: calculate_yesterday did not record the attempt, so it will redo this work every cycle")
         failed = True
 
-    # A second call ten minutes later must early-exit rather than fetching and warning all over again
+    # A second call ten minutes later, in the same slot, must early-exit rather than fetching and warning all over again
     history_calls.clear()
-    my_predbat.now_utc = now_utc + timedelta(minutes=10)
+    my_predbat.now_utc = now_utc + timedelta(minutes=15)
 
     my_predbat.calculate_yesterday()
 
     if history_calls:
-        print("ERROR: calculate_yesterday retried within the hour, fetching {}".format(history_calls))
+        print("ERROR: calculate_yesterday retried within the same slot, fetching {}".format(history_calls))
         failed = True
 
     my_predbat.now_utc = now_utc
@@ -2224,6 +2353,254 @@ def _test_yesterday_slot_is_exporting(my_predbat, failed):
     return failed
 
 
+def _test_split_status_warning(my_predbat, failed):
+    """Test: split_status_warning() keeps real states and blanks out warnings and errors.
+
+    A warning pinned on the status sensor was read by substring: "car_charging_soc" contains
+    "charging", so a day of force exports was rebuilt as charge holds.
+    """
+    print("calculate_yesterday: Test - split_status_warning drops warnings and errors, keeps real states")
+
+    cases = [
+        ("Exporting", "Exporting"),
+        ("Hold charging", "Hold charging"),
+        ("Freeze exporting", "Freeze exporting"),
+        ("Demand", "Demand"),
+        ("Warn: Return bad float value unavailable from car_charging_soc", ""),
+        ("Warn: Inverter 0 set_charge_window: No entity_id for charge_start_time to write 00:00", ""),
+        ("Error: Inverter 0 unable to read Export window - no source is configured", ""),
+        ("Error: Complete run status Exporting with component errors: gecloud", "Exporting"),
+        ("Error: Complete run status Hold charging with component errors: fox", "Hold charging"),
+        ("Warn: Return bad float value unavailable from car_charging_soc [Exporting]", "Exporting"),
+        ("Error: Inverter 0 unable to read Export window [Freeze exporting, Hold for car]", "Freeze exporting, Hold for car"),
+        ("Warn - Unable to fetch data from sensor.outdoor_temperature", ""),
+        ("Warn - Unable to fetch data from sensor.outdoor_temperature [Exporting]", "Exporting"),
+        # The run's state can carry brackets of its own, so the suffix is matched by balance
+        ("Warn: Return bad float value unavailable from car_charging_soc [Demand [Freeze exporting]]", "Demand [Freeze exporting]"),
+        ("Warn: Return bad float value unavailable from car_charging_soc [Charging [Alert]]", "Charging [Alert]"),
+        # A warning that ends in brackets of its own, with no state after it, has no state
+        ("Warn: Bad windows [1, 2]", ""),
+        ("Warn: Unknown entities ['sensor.a', 'sensor.b']", ""),
+        ("Error: Some components failed to start (phase 1)", ""),
+        ("Warn: Bad windows [1, 2] [Hold charging]", "Hold charging"),
+        # An unbalanced tail is not a state either
+        ("Warn: truncated text ]", ""),
+    ]
+    for status, expected in cases:
+        result = split_status_warning(status)[0]
+        if result != expected:
+            print("ERROR: split_status_warning({!r}) state should be {!r}, got {!r}".format(status, expected, result))
+            failed = True
+
+    # The warning half is what flags the History slot, so every form must hand one back
+    warning_cases = [
+        ("Exporting", ""),
+        ("Warn - Unable to fetch data from sensor.outdoor_temperature", "Warn - Unable to fetch data from sensor.outdoor_temperature"),
+        ("Warn - Unable to fetch data from sensor.outdoor_temperature [Exporting]", "Warn - Unable to fetch data from sensor.outdoor_temperature"),
+        ("Warn: Return bad float value unavailable from car_charging_soc [Exporting]", "Warn: Return bad float value unavailable from car_charging_soc"),
+        ("Warn: Return bad float value unavailable from car_charging_soc [Demand [Freeze exporting]]", "Warn: Return bad float value unavailable from car_charging_soc"),
+        # Brackets that are not a state stay part of the warning
+        ("Warn: Bad windows [1, 2]", "Warn: Bad windows [1, 2]"),
+        ("Warn: Bad windows [1, 2] [Hold charging]", "Warn: Bad windows [1, 2]"),
+    ]
+    for status, expected in warning_cases:
+        result = split_status_warning(status)[1]
+        if result != expected:
+            print("ERROR: split_status_warning({!r}) warning should be {!r}, got {!r}".format(status, expected, result))
+            failed = True
+
+    # Every run state execute.py can write must come back out from behind a warning, or History shows
+    # those slots as no state while the warning lasts. A RUN_STATE_* name missing from RUN_STATE_NAMES
+    # is the drift this catches; the qualified forms are the ones execute.py builds from the names.
+    run_states = [value for key, value in vars(const).items() if key.startswith("RUN_STATE_") and key != "RUN_STATE_NAMES"]
+    qualified = [
+        const.RUN_STATE_DEMAND + " (Holiday)",
+        const.RUN_STATE_READ_ONLY + " (Axle)",
+        const.RUN_STATE_DEMAND + " [" + const.RUN_STATE_FREEZE_EXPORTING + "]",
+        const.RUN_STATE_FREEZE_EXPORTING + ", " + const.RUN_STATE_HOLD_FOR_CAR,
+        const.RUN_STATE_CHARGING + ", " + const.RUN_STATE_HOLD_FOR_IBOOST,
+        const.RUN_STATE_CHARGING + " [Alert]",
+    ]
+    for run_state in run_states + qualified:
+        status = "Warn: Return bad float value unavailable from car_charging_soc [" + run_state + "]"
+        result = split_status_warning(status)[0]
+        if result != run_state:
+            print("ERROR: run state {!r} behind a warning should read back as itself, got {!r} - is it in RUN_STATE_NAMES?".format(run_state, result))
+            failed = True
+
+    return failed
+
+
+def _reconstruct_windows_from_status(my_predbat, status_for_stamp):
+    """Run calculate_yesterday() against a predbat.status history built by status_for_stamp and
+    return the charge and export windows it hands to publish_html_plan().
+
+    status_for_stamp(stamp) returns a list of (seconds_offset, state) points for the 5-minute cycle
+    starting at stamp.
+    """
+    now_utc = _setup_base(my_predbat)
+    prefix = my_predbat.prefix
+
+    start = now_utc - timedelta(days=2)
+    status_points = []
+    for step in range(0, 2 * 24 * 60, 5):
+        stamp = start + timedelta(minutes=step)
+        for seconds_offset, state in status_for_stamp(stamp):
+            point_time = stamp + timedelta(seconds=seconds_offset)
+            status_points.append({"state": state, "last_updated": point_time.strftime("%Y-%m-%dT%H:%M:%S+00:00"), "attributes": {"p/kWh": "0.0"}})
+    status_hist = [status_points]
+
+    def _history_with_status(entity_id, days=30, required=True, tracked=True):
+        if entity_id == prefix + ".cost_today":
+            return _make_constant_history(100.0, now_utc)
+        elif entity_id == prefix + ".soc_kw_h0":
+            return _make_constant_history(5.0, now_utc)
+        elif entity_id == prefix + ".status":
+            return status_hist
+        return None
+
+    captured = {}
+
+    def _capture_publish_html_plan(*args, **kwargs):
+        captured["charge_window_best"] = copy.deepcopy(my_predbat.charge_window_best)
+        captured["export_window_best"] = copy.deepcopy(my_predbat.export_window_best)
+        captured["export_limits_best"] = copy.deepcopy(my_predbat.export_limits_best)
+        captured["status_warnings"] = kwargs.get("status_warnings")
+        return ("", {})
+
+    my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
+    my_predbat.get_history_wrapper = _history_with_status
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", {})
+    my_predbat.publish_html_plan = _capture_publish_html_plan
+    original_run_pred = my_predbat.run_prediction
+    my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
+
+    my_predbat.calculate_yesterday()
+
+    _restore_methods(my_predbat, original_run_pred)
+    my_predbat.savings_last_updated = None
+    return captured
+
+
+def _test_warning_status_is_not_a_charge_state(my_predbat, failed):
+    """A warning pinned on predbat.status must not be rebuilt as a charge window.
+
+    A car integration logged out, so car_charging_soc read "unavailable" and every cycle recorded
+    "Warn: Return bad float value unavailable from car_charging_soc" with had_errors, which pins the
+    warning on the status sensor for the whole run. The History view then showed a day of force
+    exports as HoldChrg, because the reconstruction matched "charging" inside "car_charging_soc".
+    """
+    print("calculate_yesterday: Test - a pinned car_charging_soc warning is not rebuilt as charging")
+    warning = "Warn: Return bad float value unavailable from car_charging_soc"
+
+    # The warning holds the sensor for the whole day, as it does when it recurs every cycle
+    captured = _reconstruct_windows_from_status(my_predbat, lambda stamp: [(0, warning)])
+    if "charge_window_best" not in captured:
+        print("ERROR: publish_html_plan was never called - could not observe the reconstructed windows")
+        return True
+    if captured["charge_window_best"]:
+        print("ERROR: a pinned warning should rebuild no charge windows, got {}".format(len(captured["charge_window_best"])))
+        failed = True
+
+    # A warning at the top of each cycle that the real status then replaces - the export must survive
+    captured = _reconstruct_windows_from_status(my_predbat, lambda stamp: [(0, warning), (60, "Exporting")])
+    if captured.get("charge_window_best"):
+        print("ERROR: a transient warning before each Exporting cycle rebuilt {} charge windows, expected none".format(len(captured["charge_window_best"])))
+        failed = True
+    if not captured.get("export_window_best"):
+        print("ERROR: a transient warning before each Exporting cycle should still rebuild export windows, got none")
+        failed = True
+
+    # A run records its state after the warning - the state is rebuilt, the warning flagged
+    captured = _reconstruct_windows_from_status(my_predbat, lambda stamp: [(0, warning + " [Exporting]")])
+    if captured.get("charge_window_best"):
+        print("ERROR: 'Warn: ... [Exporting]' rebuilt {} charge windows, expected none".format(len(captured["charge_window_best"])))
+        failed = True
+    if not captured.get("export_window_best"):
+        print("ERROR: 'Warn: ... [Exporting]' should rebuild export windows, got none")
+        failed = True
+    elif any(export_mode_of(limit) == EXPORT_MODE_FREEZE for limit in captured["export_limits_best"]):
+        print("ERROR: 'Warn: ... [Exporting]' should rebuild force exports, not freezes")
+        failed = True
+    if not captured.get("status_warnings") or set(captured["status_warnings"].values()) != {warning}:
+        print("ERROR: the warning should be passed on to flag the slots, got {}".format(captured.get("status_warnings") and set(captured["status_warnings"].values())))
+        failed = True
+
+    # The real sequence in a cycle: the bare warning mid-run, then the state added after it
+    captured = _reconstruct_windows_from_status(my_predbat, lambda stamp: [(0, warning), (8, warning + " [Exporting]")])
+    if captured.get("charge_window_best") or not captured.get("export_window_best"):
+        print("ERROR: a bare warning followed by 'Warn: ... [Exporting]' should rebuild exports only, got {} charge and {} export windows".format(len(captured.get("charge_window_best") or []), len(captured.get("export_window_best") or [])))
+        failed = True
+
+    # A freeze export under a warning stays a freeze - the exact state survives, not just its side
+    captured = _reconstruct_windows_from_status(my_predbat, lambda stamp: [(0, warning + " [Freeze exporting]")])
+    if not captured.get("export_limits_best") or any(export_mode_of(limit) != EXPORT_MODE_FREEZE for limit in captured["export_limits_best"]):
+        print("ERROR: 'Warn: ... [Freeze exporting]' should rebuild freeze exports only")
+        failed = True
+
+    # A bare warning (no state after it - nothing executed) is still flagged
+    captured = _reconstruct_windows_from_status(my_predbat, lambda stamp: [(0, warning)])
+    if not captured.get("status_warnings"):
+        print("ERROR: a bare warning should still flag its slots")
+        failed = True
+
+    # The flag lands on the plan minutes the warning covered, and no others. _setup_base fixes now at
+    # 2024-10-04 06:00 UTC, so plan minute 0 is yesterday midnight; flag yesterday 16:00-17:00 only.
+    plan_start = datetime(2024, 10, 3, 0, 0, 0, tzinfo=pytz.utc)
+    warning_start, warning_end = 16 * 60, 17 * 60
+
+    def _warning_for_one_hour(stamp):
+        plan_minute = int((stamp - plan_start).total_seconds() // 60)
+        if warning_start <= plan_minute < warning_end:
+            return [(0, warning + " [Exporting]")]
+        return [(0, "Exporting")]
+
+    captured = _reconstruct_windows_from_status(my_predbat, _warning_for_one_hour)
+    flagged = set((captured.get("status_warnings") or {}).keys())
+    if flagged != set(range(warning_start, warning_end)):
+        print("ERROR: the warning should flag plan minutes {}-{} exactly, got {} minutes from {} to {}".format(warning_start, warning_end - 1, len(flagged), min(flagged) if flagged else None, max(flagged) if flagged else None))
+        failed = True
+
+    # A warning that lags two minutes into the next slot, under the previous slot's state, is that
+    # slot's leftover: the next slot's state is rebuilt without those minutes, so its flag is too.
+    lag_slot = 16 * 60
+
+    def _warning_lags_into_next_slot(stamp):
+        plan_minute = int((stamp - plan_start).total_seconds() // 60)
+        if lag_slot - 30 <= plan_minute < lag_slot:
+            return [(0, warning + " [Charging]")]
+        if plan_minute == lag_slot:
+            return [(0, warning + " [Charging]"), (120, "Exporting")]
+        return [(0, "Exporting")]
+
+    captured = _reconstruct_windows_from_status(my_predbat, _warning_lags_into_next_slot)
+    flagged = set((captured.get("status_warnings") or {}).keys())
+    if flagged != set(range(lag_slot - 30, lag_slot)):
+        print(
+            "ERROR: a warning lagging into the next slot's edge should flag only the slot it belongs to ({}-{}), got {} minutes from {} to {}".format(
+                lag_slot - 30, lag_slot - 1, len(flagged), min(flagged) if flagged else None, max(flagged) if flagged else None
+            )
+        )
+        failed = True
+
+    # A clean run is not flagged
+    captured = _reconstruct_windows_from_status(my_predbat, lambda stamp: [(0, "Exporting")])
+    if captured.get("status_warnings"):
+        print("ERROR: a history with no warnings should flag no slots, got {}".format(len(captured["status_warnings"])))
+        failed = True
+
+    # The component-error summary carries the real run status and must still count as exporting
+    captured = _reconstruct_windows_from_status(my_predbat, lambda stamp: [(0, "Error: Complete run status Exporting with component errors: gecloud")])
+    if captured.get("charge_window_best"):
+        print("ERROR: a component-error Exporting status rebuilt {} charge windows, expected none".format(len(captured["charge_window_best"])))
+        failed = True
+    if not captured.get("export_window_best"):
+        print("ERROR: a component-error Exporting status should rebuild export windows, got none")
+        failed = True
+
+    return failed
+
+
 # ---------------------------------------------------------------------------
 # Entry point registered in TEST_REGISTRY
 # ---------------------------------------------------------------------------
@@ -2238,11 +2615,14 @@ def test_calculate_yesterday(my_predbat):
     print("**** Running calculate_yesterday tests ****")
 
     failed = _test_early_exit(my_predbat, failed)
+    failed = _test_rebuild_after_slot_ends(my_predbat, failed)
+    failed = _test_history_slot(my_predbat, failed)
     failed = _test_basic_no_car(my_predbat, failed)
     failed = _test_forecast_minutes_widened_before_step_data(my_predbat, failed)
     failed = _test_car_slot_subtraction(my_predbat, failed)
     failed = _test_car_slot_from_energy_sensor(my_predbat, failed)
     failed = _test_early_exit_respects_day_rollover(my_predbat, failed)
+    failed = _test_midnight_replan_rebuilds(my_predbat, failed)
     failed = _test_reconstruct_car_slots(my_predbat, failed)
     failed = _test_reconstruct_car_slots_called_with_widened_end_record(my_predbat, failed)
     failed = _test_soc_not_mutated_and_override_passed(my_predbat, failed)
@@ -2260,5 +2640,7 @@ def test_calculate_yesterday(my_predbat):
     failed = _test_brief_edge_blip_is_not_counted(my_predbat, failed)
     failed = _test_edge_only_state_still_gets_real_window_bounds(my_predbat, failed)
     failed = _test_cross_charging_export_window_covers_the_slot(my_predbat, failed)
+    failed = _test_split_status_warning(my_predbat, failed)
+    failed = _test_warning_status_is_not_a_charge_state(my_predbat, failed)
 
     return failed

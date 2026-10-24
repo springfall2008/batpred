@@ -21,7 +21,7 @@ The offset is the part worth pinning: a value recorded at 10:00 describing 11:00
 
 from datetime import timedelta
 
-from utils import prune_today
+from utils import prune_today, str2time
 
 
 def test_soc_lookahead_recorded(my_predbat):
@@ -98,11 +98,73 @@ def test_lookahead_offset_aligns_with_actual(my_predbat):
     return failed
 
 
+def test_lookahead_prune_keeps_what_lands_today(my_predbat):
+    """Pruning to today judges a point by where it is plotted, not when it was recorded.
+
+    A +8h prediction made at 18:00 yesterday describes 02:00 today, so it belongs on today's chart;
+    one made two days ago does not, however far ahead it looked.
+    """
+    print("  - test_lookahead_prune_keeps_what_lands_today")
+    failed = False
+    midnight = my_predbat.midnight_utc
+    yesterday_evening = midnight - timedelta(hours=6)
+    two_days_ago = midnight - timedelta(days=2)
+    this_morning = midnight + timedelta(hours=1)
+    recorded = {two_days_ago.isoformat(): 1.0, yesterday_evening.isoformat(): 2.0, this_morning.isoformat(): 3.0}
+
+    shifted8 = prune_today(recorded, my_predbat.now_utc, midnight, prune=True, offset_minutes=60 * 8)
+    expected = {(yesterday_evening + timedelta(hours=8)).isoformat(): 2.0, (this_morning + timedelta(hours=8)).isoformat(): 3.0}
+    if shifted8 != expected:
+        print("ERROR: +8h pruned to today should keep yesterday evening's and this morning's points, got {}".format(shifted8))
+        failed = True
+    return failed
+
+
+def test_battery_chart_lookahead_starts_today(my_predbat):
+    """The Battery chart's +1h/+8h series start today, like its other series, not a week back.
+
+    They are built from a 7-day history; unpruned, that history stretched the chart's x-axis back
+    across every day of it.
+    """
+    print("  - test_battery_chart_lookahead_starts_today")
+    from web import WebInterface
+
+    failed = False
+    midnight = my_predbat.midnight_utc
+    fmt = "%Y-%m-%dT%H:%M:%S.%f%z"
+    records = []
+    for hours_back in range(24 * 6, 0, -1):
+        stamp = my_predbat.now_utc - timedelta(hours=hours_back)
+        records.append({"state": "5.0", "attributes": {"soc_h1": 5.0, "soc_h8": 6.0}, "last_updated": stamp.strftime(fmt)})
+
+    web = WebInterface(my_predbat, web_port=5052)
+    captured = {}
+    web.get_history_with_now_attrs = lambda entity_id, days: [list(records)]
+    web.get_entity_results = lambda entity_id: {my_predbat.now_utc.strftime(fmt): 1.0}
+    web.render_chart = lambda series_data, *args, **kwargs: captured.setdefault("series", series_data) and ""
+    web.get_chart("Battery")
+
+    series = {item["name"]: item["data"] for item in captured.get("series", [])}
+    for name in ("Predicted (+1h)", "Predicted (+8h)"):
+        data = series.get(name)
+        if not data:
+            print("ERROR: the {} series is missing or empty".format(name))
+            failed = True
+            continue
+        earliest = min(str2time(stamp) for stamp in data)
+        if earliest < midnight:
+            print("ERROR: {} starts at {}, before midnight {} - the chart would reach back days".format(name, earliest, midnight))
+            failed = True
+    return failed
+
+
 def run_battery_accuracy_tests(my_predbat):
     """Run every battery prediction-accuracy test."""
     print("**** Running battery accuracy tests ****\n")
     failed = test_soc_lookahead_recorded(my_predbat)
     failed |= test_lookahead_offset_aligns_with_actual(my_predbat)
+    failed |= test_lookahead_prune_keeps_what_lands_today(my_predbat)
+    failed |= test_battery_chart_lookahead_starts_today(my_predbat)
     failed |= test_load_power_less_car(my_predbat)
     failed |= test_load_power_less_car_matches_chart(my_predbat)
     return failed

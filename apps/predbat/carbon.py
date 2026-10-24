@@ -15,6 +15,7 @@
 TIME_FORMAT_CARBON = "%Y-%m-%dT%H:%MZ"
 
 from datetime import datetime, timezone, timedelta
+from utils import strptime_aware
 import asyncio
 import sys
 import aiohttp
@@ -116,8 +117,8 @@ class CarbonAPI(ComponentBase):
         value_now = "unknown"
         now_utc = datetime.now(timezone.utc)
         for point in self.carbon_data_points:
-            from_time = datetime.strptime(point["from"], TIME_FORMAT_HA)
-            to_time = datetime.strptime(point["to"], TIME_FORMAT_HA)
+            from_time = strptime_aware(point["from"], TIME_FORMAT_HA)
+            to_time = strptime_aware(point["to"], TIME_FORMAT_HA)
             if now_utc >= from_time and now_utc < to_time:
                 value_now = point["intensity"]
 
@@ -182,8 +183,8 @@ async def test_carbon_api(postcode, show_slots=False):  # pragma: no cover
         return 1
 
     now_utc = datetime.now(timezone.utc)
-    first_from = datetime.strptime(points[0]["from"], TIME_FORMAT_HA)
-    last_to = datetime.strptime(points[-1]["to"], TIME_FORMAT_HA)
+    first_from = strptime_aware(points[0]["from"], TIME_FORMAT_HA)
+    last_to = strptime_aware(points[-1]["to"], TIME_FORMAT_HA)
     hours_ahead = (last_to - now_utc).total_seconds() / 3600.0
 
     print("Covers {} -> {}".format(first_from.strftime("%Y-%m-%d %H:%M %Z"), last_to.strftime("%Y-%m-%d %H:%M %Z")))
@@ -200,8 +201,8 @@ async def test_carbon_api(postcode, show_slots=False):  # pragma: no cover
     if show_slots:
         print("\nForecast slots:")
         for point in points:
-            slot_from = datetime.strptime(point["from"], TIME_FORMAT_HA)
-            marker = " <- now" if slot_from <= now_utc < datetime.strptime(point["to"], TIME_FORMAT_HA) else ""
+            slot_from = strptime_aware(point["from"], TIME_FORMAT_HA)
+            marker = " <- now" if slot_from <= now_utc < strptime_aware(point["to"], TIME_FORMAT_HA) else ""
             print("  {}  {:>4} gCO2/kWh{}".format(slot_from.strftime("%Y-%m-%d %H:%M"), point["intensity"], marker))
 
     await carbon_api.final()
