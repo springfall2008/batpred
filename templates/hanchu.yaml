@@ -40,9 +40,9 @@ pred_bat:
   #
   # EXPERIMENTAL, AND MORE SO THAN THE OTHER CLOUD INTEGRATIONS. Hanchu publish no API
   # specification at all: this integration was written by reading open-source Home
-  # Assistant integrations, so some of its behaviour is deduced rather than documented.
-  # Nobody on the Predbat project has Hanchu hardware. Please report what you see -
-  # every request and response is traced to the log while this beds in.
+  # Assistant integrations, so some of its behaviour is deduced rather than documented,
+  # and it has been tested on only a couple of units. Please report what you see -
+  # every request and response is traced to the log by default (hanchu_api_debug, below).
   hanchu_account: 'you@example.com'
   hanchu_password: 'xxxx'
 
@@ -52,6 +52,15 @@ pred_bat:
   # Set False for monitoring only - Predbat will not write to the inverter.
   # switch.predbat_set_read_only also holds back every write, including Predbat's own
   # periodic re-apply.
+  #
+  # NOTE: once Predbat takes control it writes all three charge and all three discharge
+  # time slots, and sets the ones its plan does not use to 00:00-00:00. Any schedule you
+  # set up in the Hanchu app is cleared at Predbat's first write. This is deliberate: in
+  # User-defined mode every enabled slot runs, so a slot left over from the app would run
+  # alongside Predbat's plan and fight it. Nothing is cleared while monitoring only.
+  #
+  # Freeze Export is not available on Hanchu: the charge power limit only limits charging
+  # from the grid, so it cannot stop solar charging the battery.
   hanchu_control_enable: True
 
   # IMPORTANT, AND THE MOST LIKELY THING TO NEED CHANGING.
@@ -65,14 +74,15 @@ pred_bat:
   # Optional: restrict to one device when the account has several
   #hanchu_inverter_sn: 'YOURSERIAL'
 
-  # Optional: Predbat takes the battery power limit from the charge power setting's own
-  # upper limit, which is the only power ceiling this API reports. Set this if you know
-  # your pack's real limit.
+  # Optional: the battery power limit. Predbat looks your model up from the model code
+  # the inverter reports and logs what it found ("Hanchu ... is a HESS-HY-S-5.0K"). For a
+  # model it does not know, it falls back to the charge power setting's upper limit. Set
+  # this if Predbat's value is wrong for your pack.
   #hanchu_battery_rate_max: 5000
 
-  # Optional: the inverter's AC rating, taken from the discharge power setting's upper
-  # limit. Hanchu units come in 3.68, 5, 6 and 10 kW; set this if Predbat's value is wrong
-  # for yours (a warning is logged when the device does not report its limits).
+  # Optional: the inverter's AC rating, from the same model lookup, or for an unknown model
+  # from the discharge power setting's upper limit (a warning is logged when the device
+  # reports neither). Set this if Predbat's value is wrong for yours.
   #hanchu_inverter_limit: 5000
 
   # Optional pacing. Predbat batches every setting change into ONE write per cycle, which
@@ -80,6 +90,12 @@ pred_bat:
   # published rate limit, so this default is deliberately mild.
   #hanchu_api_delay: 1
   #hanchu_min_write_interval: 60
+
+  # Every API request and response is logged by default, because that is what is needed
+  # to look into a problem with your inverter. It writes thousands of long lines a day:
+  # once everything is working you can set this to False to quieten the log, and turn it
+  # back on before reporting an issue.
+  #hanchu_api_debug: True
 
   # REQUIRED: the API does not report a grid export limit. If your grid connection is
   # capped below the inverter rating (G98/G99), set it here or Predbat will plan exports
@@ -190,6 +206,13 @@ pred_bat:
     - 'locked'
     - 'plugged in'
     - 'waiting'
+
+  # car_charging_plugged can be set to a sensor that says only whether the car is plugged in - staying on after
+  # its charge has finished - matched against car_charging_planned_response. Predbat resets the manual car SoC
+  # (input_number.predbat_car_charging_manual_soc_kwh) to 0 when it reads unplugged, and with car_charging_energy
+  # set it tracks the SoC of a car that has no car_charging_soc sensor. One entry per car - e.g. for a myenergi Zappi:
+  #car_charging_plugged:
+  #  - 're:(sensor.myenergi_zappi_[0-9a-z]+_plug_status)'
 
   # car_charging_now can be set to a sensor that shows the car is charging right now, so that
   # Predbat holds the house battery for the car while it charges. It never adds a charging slot.

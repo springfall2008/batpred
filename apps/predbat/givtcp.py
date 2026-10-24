@@ -55,8 +55,8 @@ GIVTCP_PAUSE_MODES = ["Disabled", "PauseCharge", "PauseDischarge", "PauseBoth"]
 # GivTCP raw.invertor.model values confirmed not to support the Discharge_Target_SOC_1 register
 # (#4517). "Ac" (AC Coupled) and "Hybrid_gen1" are confirmed live - the latter on two separate
 # reporter inverters, still repeating the write every cycle post-fix until added here.
-# "Hybrid_gen2" is inferred from the same GivEnergy firmware-archive generational split
-# (github.com/DJBenson/giv-firmware), not independently confirmed on real Gen2 hardware yet.
+# "Hybrid_gen2" was first inferred from the same GivEnergy firmware-archive generational split
+# (github.com/DJBenson/giv-firmware), and has since been confirmed on real Gen2 hardware (#5679).
 #
 # These inverters accept the write and report success, but it never persists, so the caller sees a
 # permanent mismatch and rewrites every cycle. Not publishing the entity at all is what stops that:
@@ -70,13 +70,13 @@ DISCHARGE_TARGET_UNSUPPORTED_MODELS = ("Ac", "Hybrid_gen1", "Hybrid_gen2")
 # Matched on the set of alphanumeric tokens because the two vocabularies disagree on word order and
 # spacing: "Gen 1 Hybrid" against "Hybrid_gen1". Both reduce to {gen, 1, hybrid}.
 #
-# Gen2 Hybrid is deliberately absent. "Hybrid_gen2" above was inferred from a firmware archive
-# rather than observed, and is still honoured where a build reports that exact raw model - but
-# extending it to Invertor_Type would remove export target control from every Gen2 Hybrid on v3 on
-# the strength of that inference. Add it here once an affected Gen2 is actually confirmed.
+# Gen2 Hybrid was originally left out because "Hybrid_gen2" above was only inferred. It is now
+# confirmed (#5679, giv_tcp#664): GivTCP 3.6 refuses the per-slot write as unsupported on a Gen2
+# Hybrid, so the read-back stays 0 and Predbat retried and warned on every export cycle.
 DISCHARGE_TARGET_UNSUPPORTED_TYPES = (
     frozenset({"ac"}),
     frozenset({"gen", "1", "hybrid"}),
+    frozenset({"gen", "2", "hybrid"}),
 )
 
 # Control.Mode values. Predbat only ever writes Eco or Timed Export, but the inverter reports the

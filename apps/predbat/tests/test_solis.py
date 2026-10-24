@@ -1573,7 +1573,7 @@ def test_solis_catalogue_export_limit_is_the_configured_register():
     """export_limit is register 499 in watts, converted as publish_entities() presents it; 0 or unread gives no rating.
 
     publish_entities() shows an unset or 0 register as 99999 W ("no limit") - a placeholder, not a
-    configured figure, so no rating is reported for it. A value under 200 is in 100 W units there.
+    configured figure, so no rating is reported for it. Every other value is in 100 W units (GH#5385).
     """
     api = _solis_fleet()
 
@@ -1586,8 +1586,8 @@ def test_solis_catalogue_export_limit_is_the_configured_register():
     assert "export_limit" not in ratings(), "0 means no limit"
     api.cached_values["BAT001"][SOLIS_CID_MAX_EXPORT_POWER] = "37"
     assert ratings()["export_limit"] == 3700.0, ratings()
-    api.cached_values["BAT001"][SOLIS_CID_MAX_EXPORT_POWER] = "3680"
-    assert ratings()["export_limit"] == 3680.0, ratings()
+    api.cached_values["BAT001"][SOLIS_CID_MAX_EXPORT_POWER] = "480"
+    assert ratings()["export_limit"] == 48000.0, ratings()
     return False
 
 
@@ -7522,8 +7522,9 @@ async def test_rate_setpoints_do_not_drift_with_battery_voltage():
 async def test_publish_entities_export_power_unit_conversion():
     """Test publish_entities converts max export power CID value to watts correctly.
 
-    The Solis API returns CID 499 (max export power) in either 100W units (when value < 200)
-    or watts (when value >= 200).  A value of 0 is treated as 'no limit' and mapped to 99999.
+    The Solis API returns CID 499 (max export power) in 100W units at every value - the same units
+    number_event_handler() writes - so a read of 480 is 48000W (GH#5385).  A value of 0 is treated
+    as 'no limit' and mapped to 99999.
     """
     print("\n=== Test: publish_entities export power unit conversion ===")
 
@@ -7532,7 +7533,7 @@ async def test_publish_entities_export_power_unit_conversion():
     def _make_api(export_power_cid_value):
         """Helper: create a minimal MockSolisAPI with a single inverter."""
         api = MockSolisAPI()
-        sn = "EXPORT_TEST"
+        sn = "SN0EXPORT1"  # No underscore, so number_event_handler() can parse it back out of the entity id
         api.inverter_sn = [sn]
         api.inverter_details[sn] = {"inverterName": "Test"}
         api.cached_values[sn] = {
@@ -7544,14 +7545,14 @@ async def test_publish_entities_export_power_unit_conversion():
         api.max_discharge_current[sn] = 50
         return api, sn
 
-    # Case 1: value >= 200 — already in watts, no conversion applied
-    api, sn = _make_api("5000")
+    # Case 1: GH#5385 - a register reading of 480 is 48000W, not 480W
+    api, sn = _make_api("480")
     await api.publish_entities()
     entity_id = f"number.predbat_solis_{sn.lower()}_max_export_power"
     item = api.dashboard_items[entity_id]
-    assert item["state"] == 5000.0, f"Expected 5000W unchanged, got {item['state']}"
+    assert item["state"] == 48000.0, f"Expected 480 * 100 = 48000W, got {item['state']}"
 
-    # Case 2: value < 200 — treated as 100W units, multiplied by 100
+    # Case 2: small value — 100W units, multiplied by 100
     api, sn = _make_api("50")
     await api.publish_entities()
     item = api.dashboard_items[entity_id]
@@ -7577,17 +7578,31 @@ async def test_publish_entities_export_power_unit_conversion():
     item = api.dashboard_items[entity_id]
     assert item["state"] == 99999, f"Expected 99999 for invalid value, got {item['state']}"
 
-    # Case 6: boundary — value exactly 200 is NOT multiplied (only < 200 triggers conversion)
-    api, sn = _make_api("200")
-    await api.publish_entities()
-    item = api.dashboard_items[entity_id]
-    assert item["state"] == 200.0, f"Expected 200W unchanged at boundary, got {item['state']}"
-
-    # Case 7: value is 199 — last value that triggers 100W-unit conversion
+    # Case 6: no threshold — 199 and 200 either side of the old < 200 cut-off both convert
     api, sn = _make_api("199")
     await api.publish_entities()
     item = api.dashboard_items[entity_id]
     assert item["state"] == 19900.0, f"Expected 199 * 100 = 19900W, got {item['state']}"
+    api, sn = _make_api("200")
+    await api.publish_entities()
+    item = api.dashboard_items[entity_id]
+    assert item["state"] == 20000.0, f"Expected 200 * 100 = 20000W, got {item['state']}"
+
+    # Case 7: round trip — a watt value written through number_event_handler() reads back unchanged
+    api, sn = _make_api("0")
+    written = {}
+
+    async def mock_read_and_write_cid(inverter_sn, cid, value, field_description=None):
+        """Record the written register value in the cache as the inverter would hold it."""
+        written["value"] = value
+        api.cached_values[inverter_sn][cid] = value
+        return True
+
+    api.read_and_write_cid = mock_read_and_write_cid
+    await api.number_event_handler(entity_id, 30000)
+    assert written["value"] == "300", f"Expected 30000W written as '300', got {written}"
+    item = api.dashboard_items[entity_id]
+    assert item["state"] == 30000.0, f"Expected 30000W to read back as 30000W, got {item['state']}"
 
     # Verify unit of measurement on the published entity
     assert item["attributes"]["unit_of_measurement"] == "W", "unit_of_measurement should be W"
@@ -8343,7 +8358,10 @@ async def test_with_retry_does_not_retry_settled_codes():
             raise solis_module.SolisAPIError("transient", status_code=500)
         return "ok"
 
-    if await api._with_retry(flaky_operation, max_retry_time=5) != "ok" or transient_attempts["n"] != 2:
+    # The retry delay is shortened so the test asserts that a retry happens without sitting out the real 1s back-off
+    with patch.object(solis_module, "SOLIS_INITIAL_RETRY_DELAY", 0.01):
+        result = await api._with_retry(flaky_operation, max_retry_time=5)
+    if result != "ok" or transient_attempts["n"] != 2:
         print("ERROR: a transient error should still be retried, got {} attempts".format(transient_attempts["n"]))
         failed = True
 

@@ -10,7 +10,9 @@
 
 import predbat  # noqa: F401  (import first - avoids circular import: config.py does `from predbat import THIS_VERSION`)
 import asyncio
+import threading
 import time
+from unittest.mock import patch
 from hanchu_const import (
     HANCHU_KEY_CHARGE_END,
     HANCHU_KEY_CHARGE_POWER,
@@ -322,8 +324,14 @@ def test_hanchu_unchanged_payload_sends_nothing():
     if not ok:
         print("ERROR: 'already matches' must report True - the device does match the plan")
         failed = True
-    if not logged(client, "unchanged"):
-        print("ERROR: the skipped write was not explained")
+    # Said on every tick, so it is only said while the API trace is on (batpred#5672).
+    if logged(client, "unchanged"):
+        print("ERROR: the skipped write was logged with the API trace off")
+        failed = True
+    client.api_debug = True
+    run_async_local(client.apply_schedule(SN))
+    if not logged(client, "Debug: Hanchu {} settings unchanged".format(SN)):
+        print("ERROR: with the API trace on, the skipped write should be explained at debug level")
         failed = True
     assert not failed, "test_hanchu_unchanged_payload_sends_nothing"
 
@@ -864,12 +872,12 @@ def test_hanchu_hold_inside_a_charge_window_stops_charging_only_at_the_target():
 
 
 def test_hanchu_freeze_export_passes_the_zero_charge_rate_through_without_a_slot():
-    """Freeze export (charge rate 0, no window running) adds no slot: the battery must stay free to cover the house.
+    """A zero charge rate with no window running adds no slot: the battery must stay free to cover the house.
 
-    Predbat's freeze export exports surplus solar while the battery still covers the house load. Hardware
-    (batpred#5305): a discharge slot at zero power stopped the battery covering the house, so it is the
-    wrong tool. Outside a slot the inverter is in self-use, which covers the house; whether a zero charge
-    rate there stops the battery absorbing solar is still to be live-tested in sunshine.
+    Predbat no longer plans Freeze Export here (support_discharge_freeze is False - hardware, batpred#5665:
+    CHG_PWR_LMT only limits grid charging, so solar fills the battery regardless), but a zero charge rate
+    set by hand still arrives. Hardware (batpred#5305): a discharge slot at zero power stopped the battery
+    covering the house, so the rate is passed through to self-use rather than turned into a slot.
     """
     failed = False
     client = ready()
@@ -900,6 +908,346 @@ def test_hanchu_no_rate_signal_adds_no_slot():
             print(f"ERROR: {label} should open no slot: {payload}")
             failed = True
     assert not failed, "test_hanchu_no_rate_signal_adds_no_slot"
+
+
+def _start_owner_loop():
+    """Start an event loop on its own thread, as ComponentBase runs the component, and return (loop, thread)."""
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, name="hanchu-owner-loop", daemon=True)
+    thread.start()
+    return loop, thread
+
+
+def _stop_owner_loop(loop, thread):
+    """Stop and close a loop started by _start_owner_loop()."""
+    loop.call_soon_threadsafe(loop.stop)
+    thread.join(5)
+    loop.close()
+
+
+def test_hanchu_write_button_from_another_loop_writes_on_the_component_loop():
+    """A write-button press that arrives on another event loop is written on the component's own loop.
+
+    Predbat presses the button from its plan thread through ha.py's run_async(), which runs the event on
+    a throwaway loop. The HTTP session and the write lock belong to the component's loop, so writing from
+    the throwaway one failed with "Timeout context manager should be used inside a task", and the change
+    only reached the device on the component's next tick, about a minute later.
+    """
+    failed = False
+    client = ready()
+    button = client._control_name("switch", SN, "battery_schedule_charge_write")
+    seen = []
+
+    async def recording_apply(sn, force=False):
+        """Stand in for apply_schedule, noting which loop it ran on."""
+        seen.append(asyncio.get_running_loop())
+        return True
+
+    client.apply_schedule = recording_apply
+    owner, thread = _start_owner_loop()
+    try:
+        client._loop = owner
+        # From the plan thread's throwaway loop: handed over to the component's loop.
+        run_async_local(client._handle_control_event(button, "turn_on"))
+        if seen != [owner]:
+            print(f"ERROR: the write should run on the component's loop, ran on {seen}")
+            failed = True
+        if SN not in client.control_active:
+            print("ERROR: the press should still mark the device as controlled")
+            failed = True
+        # From the component's own loop: run in place, not handed to itself.
+        seen.clear()
+        asyncio.run_coroutine_threadsafe(client._handle_control_event(button, "turn_on"), owner).result(5)
+        if seen != [owner]:
+            print(f"ERROR: on its own loop the write should run in place: {seen}")
+            failed = True
+    finally:
+        _stop_owner_loop(owner, thread)
+    # With the component's loop gone the write runs where it was asked for, as before.
+    seen.clear()
+    run_async_local(client._handle_control_event(button, "turn_on"))
+    if len(seen) != 1 or seen[0] is owner:
+        print(f"ERROR: with the component loop closed the write should run on the caller's loop: {seen}")
+        failed = True
+    assert not failed, "test_hanchu_write_button_from_another_loop_writes_on_the_component_loop"
+
+
+def test_hanchu_handed_over_write_gives_up_waiting_after_the_timeout():
+    """A write handed to the component's loop is not waited on forever, so a stuck loop cannot hang the plan thread - and is not cancelled either."""
+    failed = False
+    client = ready()
+    button = client._control_name("switch", SN, "battery_schedule_charge_write")
+
+    finished = threading.Event()
+
+    async def slow_apply(sn, force=False):
+        """Stand in for an apply_schedule that is still waiting on the cloud."""
+        await asyncio.sleep(0.3)
+        finished.set()
+        return True
+
+    client.apply_schedule = slow_apply
+    owner, thread = _start_owner_loop()
+    try:
+        client._loop = owner
+        with patch("hanchu.HANCHU_LOOP_HANDOVER_TIMEOUT", 0.05):
+            started = time.time()
+            run_async_local(client._handle_control_event(button, "turn_on"))
+            waited = time.time() - started
+        if waited > 1:
+            print(f"ERROR: the caller should stop waiting after the timeout, waited {waited:.2f}s")
+            failed = True
+        if not logged(client, "still running on the component's loop"):
+            print(f"ERROR: giving up should be logged: {client.log_messages}")
+            failed = True
+        # Giving up waiting must not cancel the write itself: it carries on to completion.
+        if not finished.wait(3):
+            print("ERROR: the write was cancelled when the caller stopped waiting for it")
+            failed = True
+    finally:
+        _stop_owner_loop(owner, thread)
+    assert not failed, "test_hanchu_handed_over_write_gives_up_waiting_after_the_timeout"
+
+
+def test_hanchu_handed_over_write_cancelled_by_a_stopping_component_is_logged():
+    """A handed-over write that the component's loop cancels as it stops is logged, not raised (#5684 review).
+
+    Stopping or restarting the component ends its asyncio.run(), which cancels the write still in
+    flight. That CancelledError used to escape the hand-over, killing run_async()'s thread with a
+    traceback instead of saying what happened.
+    """
+    failed = False
+    client = ready()
+    button = client._control_name("switch", SN, "battery_schedule_charge_write")
+    started = threading.Event()
+
+    async def endless_apply(sn, force=False):
+        """Stand in for an apply_schedule still waiting on the cloud when the component stops."""
+        started.set()
+        await asyncio.sleep(30)
+        return True
+
+    def cancel_owner_tasks():
+        """Cancel every task on the owner loop, as asyncio.run's shutdown does."""
+        started.wait(5)
+        owner.call_soon_threadsafe(lambda: [task.cancel() for task in asyncio.all_tasks(owner)])
+
+    client.apply_schedule = endless_apply
+    owner, thread = _start_owner_loop()
+    try:
+        client._loop = owner
+        threading.Thread(target=cancel_owner_tasks, daemon=True).start()
+        result = run_async_local(client._handle_control_event(button, "turn_on"))
+        if result is not None:
+            print(f"ERROR: the press should complete normally: {result}")
+            failed = True
+        if not logged(client, "cancelled on the component's loop"):
+            print(f"ERROR: the cancelled write should be logged: {client.log_messages}")
+            failed = True
+    except BaseException as error:
+        print(f"ERROR: the cancellation escaped the hand-over: {type(error).__name__}")
+        failed = True
+    finally:
+        _stop_owner_loop(owner, thread)
+    assert not failed, "test_hanchu_handed_over_write_cancelled_by_a_stopping_component_is_logged"
+
+
+def test_hanchu_handed_over_write_stops_waiting_when_the_component_loop_stops():
+    """A write handed over just as the component's loop stops is given up at once, not after the full timeout (#5684 review).
+
+    The loop can stop between the is_running() check and running the handed-over callback. The write
+    then never starts, so waiting HANCHU_LOOP_HANDOVER_TIMEOUT for it only holds the caller.
+    """
+    failed = False
+    client = ready()
+    button = client._control_name("switch", SN, "battery_schedule_charge_write")
+    ran = []
+
+    async def recording_apply(sn, force=False):
+        """Stand in for apply_schedule; it must never run here."""
+        ran.append(True)
+        return True
+
+    client.apply_schedule = recording_apply
+    owner, thread = _start_owner_loop()
+    release = threading.Event()
+
+    def busy_then_stop():
+        """Hold the loop busy until the hand-over is queued, then stop it before the queued write runs."""
+        release.wait(5)
+        owner.stop()
+
+    owner.call_soon_threadsafe(busy_then_stop)
+    threading.Timer(0.2, release.set).start()
+    try:
+        client._loop = owner
+        with patch("hanchu.HANCHU_LOOP_HANDOVER_TIMEOUT", 30):
+            started = time.time()
+            run_async_local(client._handle_control_event(button, "turn_on"))
+            waited = time.time() - started
+        if waited > 5:
+            print(f"ERROR: the caller should stop waiting once the loop has stopped, waited {waited:.1f}s")
+            failed = True
+        if ran:
+            print("ERROR: the write should not have run on a stopped loop")
+            failed = True
+        if not logged(client, "component's loop stopped before the write ran"):
+            print(f"ERROR: giving up should be logged: {client.log_messages}")
+            failed = True
+    finally:
+        thread.join(5)
+        if not owner.is_closed():
+            owner.close()
+    assert not failed, "test_hanchu_handed_over_write_stops_waiting_when_the_component_loop_stops"
+
+
+def test_hanchu_run_records_the_component_loop():
+    """run() records the loop it runs on, so events arriving elsewhere know where to hand writes."""
+    failed = False
+    client = MockHanchu(account="", password="")
+
+    async def tick():
+        """Run one tick and return the loop it ran on."""
+        await client.run(0, True)
+        return asyncio.get_running_loop()
+
+    loop = run_async_local(tick())
+    if client._loop is not loop:
+        print(f"ERROR: run() should record its own loop: {client._loop} != {loop}")
+        failed = True
+    assert not failed, "test_hanchu_run_records_the_component_loop"
+
+
+def test_hanchu_hold_with_no_room_for_a_slot_keeps_the_charge_rate():
+    """A hold that cannot be placed does not zero the charge rate (batpred#5672).
+
+    The rate was zeroed for the hold before _extra_slot() was asked for room, so when there was none the
+    hold was dropped but CHG_PWR_LMT=0 was still written, leaving every enabled charge slot at 0 W.
+    """
+    failed = False
+    client = ready()
+    client.device_values[SN] = {"soc": 60.0}
+    # 19:47: the hold slot would start at 19:30, but Predbat's own charge window still covers 19:30.
+    client.set_mock_clock(19 * 60 + 47)
+    payload = client.build_write_payload(SN, schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "19:30:00", "end": "19:45:00"}, export={"power": 0}))
+    if 3 in enabled_slots(payload, HANCHU_KEY_CHARGE_START, HANCHU_KEY_CHARGE_END):
+        print(f"ERROR: there is no room for a hold slot, so none should be written: {payload}")
+        failed = True
+    if payload.get(HANCHU_KEY_CHARGE_POWER) != 3000:
+        print(f"ERROR: with no hold slot the charge rate should stay at the plan's 3000: {payload.get(HANCHU_KEY_CHARGE_POWER)}")
+        failed = True
+    assert not failed, "test_hanchu_hold_with_no_room_for_a_slot_keeps_the_charge_rate"
+
+
+def test_hanchu_settings_changed_on_the_device_are_re_sent():
+    """A read-back that no longer matches what Predbat wrote forgets the applied payload, so it is sent again (batpred#5672).
+
+    Change detection compared a new payload only with the last one sent, so a slot edited in the Hanchu
+    app, a device reset or a write that never landed left the inverter on the wrong settings until the
+    plan itself changed - the same silent drift as batpred#5157.
+    """
+    failed = False
+    client = ready()
+    client.control_active.add(SN)
+    client.local_schedule[SN] = schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "04:00:00"})
+    with patched_session([(200, envelope(data={}))]):
+        run_async_local(client.apply_schedule(SN))
+    applied = dict(client.applied_payload[SN])
+    client.last_write_time[SN] = time.time() - 3600
+    menu = {"energy": {"items": []}}
+
+    # The device still holds the write, read back as strings and floats the way iotGet returns them.
+    same = {key: str(value) for key, value in applied.items()}
+    same[HANCHU_KEY_DISCHARGE_SOC] = "{:.2f}".format(applied[HANCHU_KEY_DISCHARGE_SOC])
+    with patched_session([(200, envelope(data=menu)), (200, envelope(data=same))]):
+        run_async_local(client.refresh_config())
+    if client.applied_payload.get(SN) != applied or logged(client, "no longer match"):
+        print(f"ERROR: an unchanged read-back was treated as drift: {client.applied_payload.get(SN)}")
+        failed = True
+
+    # A key the read-back does not carry is not evidence of a change.
+    partial = {key: value for key, value in same.items() if key != HANCHU_KEY_WORK_MODE}
+    with patched_session([(200, envelope(data=menu)), (200, envelope(data=partial))]):
+        run_async_local(client.refresh_config())
+    if client.applied_payload.get(SN) != applied:
+        print("ERROR: a key missing from the read-back was treated as drift")
+        failed = True
+
+    # The user moves slot 1 in the Hanchu app.
+    edited = dict(same, **{HANCHU_KEY_CHARGE_START.format(1): "7200"})
+    with patched_session([(200, envelope(data=menu)), (200, envelope(data=edited))]):
+        run_async_local(client.refresh_config())
+    if SN in client.applied_payload:
+        print("ERROR: drift on the device should forget the applied payload")
+        failed = True
+    if not logged(client, HANCHU_KEY_CHARGE_START.format(1)):
+        print("ERROR: the drift warning should name the key that changed")
+        failed = True
+    with patched_session([(200, envelope(data={}))]) as session_cls:
+        run_async_local(client._reconcile_control(SN))
+    if session_cls.return_value.post.call_count != 1 or client.applied_payload.get(SN) != applied:
+        print(f"ERROR: the next reconcile should re-send the plan: {session_cls.return_value.post.call_count} call(s)")
+        failed = True
+
+    # A read that a write may have overtaken is not judged: the write landed after the read began.
+    client.log_messages.clear()
+    client.last_write_time[SN] = time.time() + 5
+    with patched_session([(200, envelope(data=menu)), (200, envelope(data=edited))]):
+        run_async_local(client.refresh_config())
+    if client.applied_payload.get(SN) != applied or logged(client, "no longer match"):
+        print("ERROR: a read overtaken by a write was judged as drift")
+        failed = True
+    assert not failed, "test_hanchu_settings_changed_on_the_device_are_re_sent"
+
+
+def test_hanchu_hold_caps_the_grid_charge_limit_at_the_soc():
+    """During a hold the grid-charge limit is never above the SoC, so a 0 W write that did not land cannot grid charge (batpred#5667).
+
+    A hold added outside a charge window used to carry the NEXT window's target, up to 100, beside a charge
+    slot whose only protection was CHG_PWR_LMT=0. The cap goes in the same iotSet, so it costs no call.
+    """
+    failed = False
+    client = ready()
+    client.set_mock_clock(19 * 60 + 47)
+    later = {"enable": True, "soc": 100, "power": 3000, "start": "23:30:00", "end": "23:59:00"}
+    client.device_values[SN] = {"soc": 63.4}
+    payload = client.build_write_payload(SN, schedule(charge=later, export={"power": 0}))
+    if payload.get(HANCHU_KEY_GRID_CHARGE_SOC) != 63:
+        print(f"ERROR: a hold at 63.4% should cap the grid-charge limit at 63, not the later window's 100: {payload.get(HANCHU_KEY_GRID_CHARGE_SOC)}")
+        failed = True
+    # Solar raising the SoC during the hold does not change the limit already written, so it sends nothing new.
+    client.applied_payload[SN] = dict(payload)
+    client.device_values[SN] = {"soc": 70.0}
+    if client.build_write_payload(SN, schedule(charge=later, export={"power": 0})).get(HANCHU_KEY_GRID_CHARGE_SOC) != 63:
+        print("ERROR: a written limit still at or below the SoC should be kept, not re-sent at every percent")
+        failed = True
+    # A SoC that has fallen below the written limit brings it down with it.
+    client.device_values[SN] = {"soc": 60.0}
+    if client.build_write_payload(SN, schedule(charge=later, export={"power": 0})).get(HANCHU_KEY_GRID_CHARGE_SOC) != 60:
+        print("ERROR: a SoC below the written limit should lower it")
+        failed = True
+    # Below the device's 20% floor it is 20, without the clamp warning a plan's own target would earn.
+    client.applied_payload.pop(SN, None)
+    client.device_values[SN] = {"soc": 12.0}
+    if client.build_write_payload(SN, schedule(charge=later, export={"power": 0})).get(HANCHU_KEY_GRID_CHARGE_SOC) != 20:
+        print("ERROR: a hold below 20% should write the device's 20% floor")
+        failed = True
+    if logged(client, "cannot be set to"):
+        print(f"ERROR: the hold's own cap should not be reported as a clamped plan: {client.log_messages}")
+        failed = True
+    # Once the hold ends, the window's real target is written again.
+    client.device_values[SN] = {"soc": 63.4}
+    if client.build_write_payload(SN, schedule(charge=later)).get(HANCHU_KEY_GRID_CHARGE_SOC) != 100:
+        print("ERROR: with no hold the grid-charge limit should carry the window's target")
+        failed = True
+    # A hold inside a charge window whose target is met already writes that target, which is below the SoC.
+    client.set_mock_clock(19 * 60 + 30)
+    window = {"enable": True, "soc": 50, "power": 3000, "start": "19:00:00", "end": "21:00:00"}
+    client.device_values[SN] = {"soc": 60.0}
+    if client.build_write_payload(SN, schedule(charge=window, export={"power": 0})).get(HANCHU_KEY_GRID_CHARGE_SOC) != 50:
+        print("ERROR: a met in-window target should still be written as it is")
+        failed = True
+    assert not failed, "test_hanchu_hold_caps_the_grid_charge_limit_at_the_soc"
 
 
 def run_hanchu_control_tests(my_predbat):
@@ -938,6 +1286,14 @@ def run_hanchu_control_tests(my_predbat):
         ("hold_in_window", test_hanchu_hold_inside_a_charge_window_stops_charging_only_at_the_target),
         ("freeze_export_no_slot", test_hanchu_freeze_export_passes_the_zero_charge_rate_through_without_a_slot),
         ("no_rate_signal", test_hanchu_no_rate_signal_adds_no_slot),
+        ("event_loop_handover", test_hanchu_write_button_from_another_loop_writes_on_the_component_loop),
+        ("event_loop_handover_timeout", test_hanchu_handed_over_write_gives_up_waiting_after_the_timeout),
+        ("run_records_loop", test_hanchu_run_records_the_component_loop),
+        ("event_loop_handover_cancelled", test_hanchu_handed_over_write_cancelled_by_a_stopping_component_is_logged),
+        ("event_loop_handover_stopped", test_hanchu_handed_over_write_stops_waiting_when_the_component_loop_stops),
+        ("hold_without_room", test_hanchu_hold_with_no_room_for_a_slot_keeps_the_charge_rate),
+        ("device_drift", test_hanchu_settings_changed_on_the_device_are_re_sent),
+        ("hold_grid_cap", test_hanchu_hold_caps_the_grid_charge_limit_at_the_soc),
     ]:
         try:
             if fn():

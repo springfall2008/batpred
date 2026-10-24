@@ -12,6 +12,7 @@
 
 import asyncio
 from datetime import datetime, timezone, timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from sigenergy import (
@@ -26,8 +27,10 @@ from sigenergy import (
     SIGENERGY_MODE_MSC,
     SIGENERGY_MODE_NBI,
     SIGENERGY_MODE_VPP,
+    SIGENERGY_MQTT_TOPIC_MODE,
     SIGENERGY_VPP_RECLAIM_INTERVAL,
     SIGENERGY_OPTIONS_TIME,
+    _SIGENERGY_OK,
     _safe_float,
     _safe_int,
 )
@@ -134,6 +137,8 @@ class MockSigenergyAPI(SigenergyAPI):
         self.dashboard_items = {}
         self.set_args = {}
         self.args = {}
+        # The parts of PredBat that ComponentBase.set_arg_auto() reads: the apps.yaml snapshot and its one-time warning set
+        self.base = SimpleNamespace(args_from_apps_yaml={}, apps_yaml_override_warned=set())
 
         # Now call the SigenergyAPI initialize directly
         self.initialize(
@@ -504,6 +509,324 @@ def test_sigenergy_automatic_config(my_predbat):
     assert api.set_args.get("load_today") == ["sensor.predbat_sigenergy_sig001_load_lifetime", "sensor.predbat_sigenergy_sig002_load_lifetime"], "load_today wired to lifetime totals"
     assert api.set_args.get("import_today") == ["sensor.predbat_sigenergy_sig001_grid_import_lifetime", "sensor.predbat_sigenergy_sig002_grid_import_lifetime"], "import_today wired to lifetime totals"
     assert api.set_args.get("export_today") == ["sensor.predbat_sigenergy_sig001_grid_export_lifetime", "sensor.predbat_sigenergy_sig002_grid_export_lifetime"], "export_today wired to lifetime totals"
+    assert api.set_args.get("export_limit") == ["sensor.predbat_sigenergy_sig001_export_limit", "sensor.predbat_sigenergy_sig002_export_limit"], "export_limit wired to the grid backfeed limit sensors"
+
+    return failed
+
+
+def test_sigenergy_automatic_config_keeps_user_export_limit(my_predbat):
+    """An export_limit the user set in apps.yaml survives automatic_config() rather than being replaced by the sensor."""
+    failed = False
+    api = MockSigenergyAPI()
+    api.automatic = True
+    api.systems = {"SIG001": {"systemName": "Home"}}
+    api.base.args_from_apps_yaml = {"export_limit": 3680}
+    api.args["export_limit"] = 3680
+
+    run_async(api.automatic_config())
+
+    assert "export_limit" not in api.set_args, "automatic_config must not set export_limit over the user's own, got {}".format(api.set_args.get("export_limit"))
+    assert api.args["export_limit"] == 3680, "The user's 3680 W export_limit is kept, got {}".format(api.args["export_limit"])
+    assert any("keeping your apps.yaml setting" in m for m in api.log_messages), "Keeping the user's export_limit is logged"
+
+    return failed
+
+
+def test_sigenergy_publish_export_limit(my_predbat):
+    """The grid backfeed limit from an MQTT change message is published as the export limit sensor in W."""
+    failed = False
+    api = MockSigenergyAPI()
+
+    system_id = "SIG12345"
+    slug = api._system_slug(system_id)
+    api.systems[system_id] = {"systemName": "My Site"}
+    api.devices[system_id] = [{"deviceType": "Inverter", "attrMap": {"ratedActivePower": 12.0}}]
+
+    api._handle_mqtt_change(system_id, {"inverterMaxActivePowerW": "12000.0", "gridMaxBackfeedPowerW": "5000.0"})
+    run_async(api.publish_system_entities(system_id))
+
+    key = "sensor.predbat_sigenergy_{}_export_limit".format(slug)
+    assert key in api.dashboard_items, "Export limit entity published"
+    assert api.dashboard_items[key]["state"] == 5000, "Backfeed limit 5kW published as 5000W, got {}".format(api.dashboard_items[key]["state"])
+    assert api.dashboard_items[key]["attributes"].get("unit_of_measurement") == "W", "Export limit is in W so get_arg(required_unit='W') accepts it"
+
+    return failed
+
+
+def test_sigenergy_publish_export_limit_unknown(my_predbat):
+    """With no backfeed limit reported yet the export limit sensor reads 99999 W, i.e. no limit beyond the inverter's own."""
+    failed = False
+    api = MockSigenergyAPI()
+
+    system_id = "SIG12345"
+    slug = api._system_slug(system_id)
+    api.systems[system_id] = {"systemName": "My Site"}
+    api.devices[system_id] = [{"deviceType": "Inverter", "attrMap": {"ratedActivePower": 12.0}}]
+
+    run_async(api.publish_system_entities(system_id))
+
+    key = "sensor.predbat_sigenergy_{}_export_limit".format(slug)
+    assert key in api.dashboard_items, "Export limit entity published"
+    assert api.dashboard_items[key]["state"] == 99999, "Unknown backfeed limit published as 99999W, got {}".format(api.dashboard_items[key]["state"])
+
+    return failed
+
+
+# A real openapi/change message from a plant with a 3.68 kW G98 export cap on a 12 kW inverter (PR #5681 review)
+SIGENERGY_LIVE_CHANGE_MESSAGE = {
+    "antiReflux": "on",
+    "batteryRatedChargePowerW": "13200.0",
+    "batteryRatedCapabilityWh": "27120.0",
+    "backupCutOffSOC%": "16.0",
+    "inverterMaxAbsorptionPowerW": "12000.0",
+    "peakShavingStatus": "off",
+    "stormWatchStatus": "off",
+    "batteryRatedDischargePowerW": "14400.0",
+    "inverterMaxActivePowerW": "12000.0",
+    "dischargeCutOffSOC%": "0.0",
+    "chargeCutOffSOC%": "100.0",
+    "peakShavingCutOffSOC%": "0.0",
+    "gridMaxBackfeedPowerW": "3680.0",
+    "inverterMaxApprentPowerVar": "12000.0",
+}
+
+
+def _published_export_limit(api, system_id):
+    """Publish a system's entities and return the state of its export limit sensor."""
+    run_async(api.publish_system_entities(system_id))
+    return api.dashboard_items["sensor.predbat_sigenergy_{}_export_limit".format(api._system_slug(system_id))]["state"]
+
+
+def _make_export_limit_api(system_id="SIG12345"):
+    """Return a MockSigenergyAPI with one 12 kW system and no export limit reported yet."""
+    api = MockSigenergyAPI()
+    api.systems[system_id] = {"systemName": "My Site"}
+    api.devices[system_id] = [{"deviceType": "Inverter", "attrMap": {"ratedActivePower": 12.0}}]
+    return api
+
+
+def test_sigenergy_export_limit_live_change_message(my_predbat):
+    """The live change message (antiReflux on, 3680 W backfeed) publishes a 3680 W export limit."""
+    failed = False
+    api = _make_export_limit_api()
+
+    api._handle_mqtt_change("SIG12345", dict(SIGENERGY_LIVE_CHANGE_MESSAGE))
+
+    state = _published_export_limit(api, "SIG12345")
+    assert state == 3680, "antiReflux on with a 3680 W backfeed limit publishes 3680 W, got {}".format(state)
+
+    return failed
+
+
+def test_sigenergy_export_limit_anti_reflux_off(my_predbat):
+    """With antiReflux off the plant is not limiting export, so the backfeed value is ignored and 99999 W is published."""
+    failed = False
+    api = _make_export_limit_api()
+
+    api._handle_mqtt_change("SIG12345", dict(SIGENERGY_LIVE_CHANGE_MESSAGE, antiReflux="off"))
+
+    state = _published_export_limit(api, "SIG12345")
+    assert state == 99999, "antiReflux off publishes 99999 W whatever gridMaxBackfeedPowerW says, got {}".format(state)
+
+    return failed
+
+
+def test_sigenergy_export_limit_anti_reflux_on_zero(my_predbat):
+    """With antiReflux on a 0 W backfeed limit means zero export, so 0 W is published rather than no limit."""
+    failed = False
+    api = _make_export_limit_api()
+
+    api._handle_mqtt_change("SIG12345", dict(SIGENERGY_LIVE_CHANGE_MESSAGE, gridMaxBackfeedPowerW="0.0"))
+
+    state = _published_export_limit(api, "SIG12345")
+    assert state == 0, "antiReflux on with a 0 W backfeed limit publishes 0 W (zero export), got {}".format(state)
+
+    return failed
+
+
+def test_sigenergy_export_limit_zero_without_anti_reflux(my_predbat):
+    """Without antiReflux a 0 W backfeed limit is ambiguous, so it keeps reading as no limit (99999 W)."""
+    failed = False
+    api = _make_export_limit_api()
+
+    api._handle_mqtt_change("SIG12345", {"gridMaxBackfeedPowerW": "0.0"})
+
+    state = _published_export_limit(api, "SIG12345")
+    assert state == 99999, "A 0 W backfeed limit with no antiReflux flag publishes 99999 W, got {}".format(state)
+
+    return failed
+
+
+def test_sigenergy_export_limit_partial_change_keeps_limit(my_predbat):
+    """A later change message without the export fields leaves the reported limit in place."""
+    failed = False
+    api = _make_export_limit_api()
+
+    api._handle_mqtt_change("SIG12345", dict(SIGENERGY_LIVE_CHANGE_MESSAGE))
+    api._handle_mqtt_change("SIG12345", {"backupCutOffSOC%": "20.0"})
+
+    state = _published_export_limit(api, "SIG12345")
+    assert state == 3680, "A change message carrying only the reserve keeps the 3680 W limit, got {}".format(state)
+
+    return failed
+
+
+def test_sigenergy_export_limit_survives_restart(my_predbat):
+    """run() persists the reported export limit and load_cached_data() restores it, so a restart doesn't fall back to 99999 W."""
+    failed = False
+    sid = "SIG12345"
+    storage = FakeStorage()
+
+    api = _make_export_limit_api(sid)
+    api._mock_storage = storage
+    api.current_mode = {sid: SIGENERGY_MODE_VPP}
+    api.system_id_filter = {sid}
+    task = MagicMock()
+    task.done = MagicMock(return_value=False)
+    api._mqtt_task = task
+    api._manage_vpp_registration = AsyncMock(return_value=True)
+    api.fetch_inverter_realtime = AsyncMock(return_value=True)
+    api.fetch_energy_flow = AsyncMock(return_value=True)
+    api.fetch_daily_summary = AsyncMock(return_value=True)
+    api.fetch_history_totals = AsyncMock(return_value=True)
+    api.apply_controls = AsyncMock()
+    api._handle_mqtt_change(sid, dict(SIGENERGY_LIVE_CHANGE_MESSAGE))
+
+    run_async(api.run(seconds=300, first=False))
+
+    restarted = _make_export_limit_api(sid)
+    restarted._mock_storage = storage
+    run_async(restarted.load_cached_data())
+
+    state = _published_export_limit(restarted, sid)
+    assert state == 3680, "The 3680 W limit is restored from the cache after a restart, got {}".format(state)
+
+    return failed
+
+
+def _published_battery_reserve_min(api, system_id):
+    """Publish a system's entities and return its battery reserve min sensor, or None when it was not published."""
+    run_async(api.publish_system_entities(system_id))
+    return api.dashboard_items.get("sensor.predbat_sigenergy_{}_battery_reserve_min".format(api._system_slug(system_id)))
+
+
+def test_sigenergy_automatic_config_battery_min_soc(my_predbat):
+    """automatic_config() binds battery_min_soc to the backup cut-off sensors, so the plan's floor is the device's own."""
+    failed = False
+    api = MockSigenergyAPI()
+    api.automatic = True
+    api.systems = {"SIG001": {"systemName": "Home"}, "SIG002": {"systemName": "Office"}}
+
+    run_async(api.automatic_config())
+
+    assert api.set_args.get("battery_min_soc") == [
+        "sensor.predbat_sigenergy_sig001_battery_reserve_min",
+        "sensor.predbat_sigenergy_sig002_battery_reserve_min",
+    ], "battery_min_soc wired to the backup cut-off sensors, got {}".format(api.set_args.get("battery_min_soc"))
+
+    return failed
+
+
+def test_sigenergy_automatic_config_keeps_user_battery_min_soc(my_predbat):
+    """A battery_min_soc the user set in apps.yaml survives automatic_config() rather than being replaced by the sensor."""
+    failed = False
+    api = MockSigenergyAPI()
+    api.automatic = True
+    api.systems = {"SIG001": {"systemName": "Home"}}
+    api.base.args_from_apps_yaml = {"battery_min_soc": 5}
+    api.args["battery_min_soc"] = 5
+
+    run_async(api.automatic_config())
+
+    assert "battery_min_soc" not in api.set_args, "automatic_config must not set battery_min_soc over the user's own, got {}".format(api.set_args.get("battery_min_soc"))
+    assert api.args["battery_min_soc"] == 5, "The user's 5% battery_min_soc is kept, got {}".format(api.args["battery_min_soc"])
+
+    return failed
+
+
+def test_sigenergy_battery_reserve_min_live_change_message(my_predbat):
+    """The live change message's backupCutOffSOC% (16%) is published as the battery reserve min sensor in %."""
+    failed = False
+    api = _make_export_limit_api()
+
+    api._handle_mqtt_change("SIG12345", dict(SIGENERGY_LIVE_CHANGE_MESSAGE))
+
+    item = _published_battery_reserve_min(api, "SIG12345")
+    assert item is not None, "Battery reserve min entity published once the backup cut-off is known"
+    assert item["state"] == 16, "backupCutOffSOC% 16.0 publishes 16, got {}".format(item["state"])
+    assert item["attributes"].get("unit_of_measurement") == "%", "Battery reserve min is in % so get_arg(required_unit='%') accepts it"
+
+    return failed
+
+
+def test_sigenergy_battery_reserve_min_zero(my_predbat):
+    """A 0% backup cut-off is a real floor of 0%, published as 0 rather than dropped as falsy."""
+    failed = False
+    api = _make_export_limit_api()
+
+    api._handle_mqtt_change("SIG12345", dict(SIGENERGY_LIVE_CHANGE_MESSAGE, **{"backupCutOffSOC%": "0.0"}))
+
+    item = _published_battery_reserve_min(api, "SIG12345")
+    assert item is not None, "A 0% backup cut-off is published"
+    assert item["state"] == 0, "backupCutOffSOC% 0.0 publishes 0, got {}".format(item["state"])
+
+    return failed
+
+
+def test_sigenergy_battery_reserve_min_unknown(my_predbat):
+    """Until the plant reports its backup cut-off the sensor is not published, so battery_min_soc keeps Predbat's own default."""
+    failed = False
+    api = _make_export_limit_api()
+
+    item = _published_battery_reserve_min(api, "SIG12345")
+    assert item is None, "No battery reserve min entity before the backup cut-off is known, got {}".format(item)
+
+    return failed
+
+
+def test_sigenergy_battery_reserve_min_partial_change_keeps_value(my_predbat):
+    """A later change message without backupCutOffSOC% leaves the reported cut-off in place."""
+    failed = False
+    api = _make_export_limit_api()
+
+    api._handle_mqtt_change("SIG12345", dict(SIGENERGY_LIVE_CHANGE_MESSAGE))
+    api._handle_mqtt_change("SIG12345", {"gridMaxBackfeedPowerW": "5000.0"})
+
+    item = _published_battery_reserve_min(api, "SIG12345")
+    assert item is not None and item["state"] == 16, "A change message without the cut-off keeps 16%, got {}".format(item)
+
+    return failed
+
+
+def test_sigenergy_battery_reserve_min_survives_restart(my_predbat):
+    """run() persists the backup cut-off and load_cached_data() restores it, so a restart doesn't fall back to the 4% default."""
+    failed = False
+    sid = "SIG12345"
+    storage = FakeStorage()
+
+    api = _make_export_limit_api(sid)
+    api._mock_storage = storage
+    api.current_mode = {sid: SIGENERGY_MODE_VPP}
+    api.system_id_filter = {sid}
+    task = MagicMock()
+    task.done = MagicMock(return_value=False)
+    api._mqtt_task = task
+    api._manage_vpp_registration = AsyncMock(return_value=True)
+    api.fetch_inverter_realtime = AsyncMock(return_value=True)
+    api.fetch_energy_flow = AsyncMock(return_value=True)
+    api.fetch_daily_summary = AsyncMock(return_value=True)
+    api.fetch_history_totals = AsyncMock(return_value=True)
+    api.apply_controls = AsyncMock()
+    api._handle_mqtt_change(sid, dict(SIGENERGY_LIVE_CHANGE_MESSAGE, **{"backupCutOffSOC%": "0.0"}))
+
+    run_async(api.run(seconds=300, first=False))
+
+    restarted = _make_export_limit_api(sid)
+    restarted._mock_storage = storage
+    run_async(restarted.load_cached_data())
+
+    item = _published_battery_reserve_min(restarted, sid)
+    assert item is not None and item["state"] == 0, "The 0% cut-off is restored from the cache after a restart, got {}".format(item)
 
     return failed
 
@@ -1258,6 +1581,73 @@ def test_sigenergy_apply_controls_deduplication(my_predbat):
     return failed
 
 
+def test_sigenergy_handle_mqtt_change_backup_only_keeps_reserve(my_predbat):
+    """A change message carrying only backupCutOffSOC% (a Backup SOC edit in the app) leaves the reserve - the discharge cut-off - alone."""
+    failed = False
+    api = MockSigenergyAPI()
+    api.systems["SYS1"] = {"systemName": "Test System"}
+    api._handle_mqtt_change("SYS1", {"dischargeCutOffSOC%": "3.0", "backupCutOffSOC%": "0.0"})
+
+    api._handle_mqtt_change("SYS1", {"backupCutOffSOC%": "5.0"})
+
+    assert api.controls["SYS1"]["reserve"] == 3, "reserve stays at the 3% discharge cut-off, got {}".format(api.controls["SYS1"]["reserve"])
+    assert api.device_cutoffs["SYS1"] == {"backup": 5.0, "discharge": 3.0}, "Backup cut-off updated, discharge kept, got {}".format(api.device_cutoffs.get("SYS1"))
+
+    return failed
+
+
+def test_sigenergy_fetch_controls_keeps_device_reserve(my_predbat):
+    """On startup the change snapshot arrives before fetch_controls(); the device's discharge cut-off must survive it rather than revert to the 10% default."""
+    failed = False
+    api = MockSigenergyAPI()
+    system_id = "SIG001"
+    api.systems[system_id] = {"systemName": "Home"}
+    api._handle_mqtt_change(system_id, {"dischargeCutOffSOC%": "0.0", "backupCutOffSOC%": "0.0"})
+
+    run_async(api.fetch_controls(system_id))
+
+    assert api.controls[system_id]["reserve"] == 0, "reserve keeps the device's 0% discharge cut-off, got {}".format(api.controls[system_id]["reserve"])
+
+    return failed
+
+
+def test_sigenergy_apply_controls_export_stops_at_backup_cutoff(my_predbat):
+    """A forced export stops at the device's backup cut-off when that is above Predbat's export target and the discharge cut-off."""
+    failed = False
+    api = MockSigenergyAPI()
+    system_id = "SIG001"
+    api.systems[system_id] = {"systemName": "Home", "batteryCapacity": 10.0}
+    api.devices[system_id] = [{"deviceType": "Battery", "attrMap": {"ratedChargePower": 3.0}}]
+    api.energy_flow[system_id] = {"batterySoc": 12.0}
+    api._handle_mqtt_change(system_id, {"dischargeCutOffSOC%": "0.0", "backupCutOffSOC%": "15.0"})
+
+    now = datetime.now(timezone.utc)
+    start_str = (now - timedelta(hours=1)).strftime("%H:%M:%S")
+    end_str = (now + timedelta(hours=1)).strftime("%H:%M:%S")
+    api.controls[system_id].update(
+        {
+            "charge": {"enable": False, "start_time": "00:00:00", "end_time": "00:00:00", "target_soc": 100, "rate": 3000},
+            "export": {"enable": True, "start_time": start_str, "end_time": end_str, "target_soc": 4, "rate": 3000},
+        }
+    )
+
+    commands_sent = []
+
+    async def mock_send_battery_command(sid, active_mode, duration_min, charging_power_kw=None, **kwargs):
+        commands_sent.append(("battery_cmd", sid, active_mode, duration_min, charging_power_kw))
+        return True
+
+    api.send_battery_command = mock_send_battery_command
+
+    run_async(api.apply_controls(system_id))
+
+    bat_cmds = [c for c in commands_sent if c[0] == "battery_cmd"]
+    assert len(bat_cmds) >= 1, "send_battery_command called"
+    assert bat_cmds[0][2] == SIGENERGY_ACTIVE_MODE_SELF_GRID, "At 12% with a 15% backup cut-off the export freezes rather than discharging, got {}".format(bat_cmds[0][2])
+
+    return failed
+
+
 def test_sigenergy_apply_controls_export_mode(my_predbat):
     """Test apply_controls sends discharge command during export window."""
     failed = False
@@ -1795,9 +2185,10 @@ def test_sigenergy_handle_mqtt_change(my_predbat):
     api._handle_mqtt_change("SYS1", value_dict)
 
     # Controls
-    assert api.controls["SYS1"]["reserve"] == 15, "reserve = 15 (backupCutOffSOC%)"
+    assert api.controls["SYS1"]["reserve"] == 5, "reserve = 5 (dischargeCutOffSOC%), got {}".format(api.controls["SYS1"]["reserve"])
     assert api.controls["SYS1"]["charge"]["target_soc"] == 100, "charge target_soc = 100 (chargeCutOffSOC%)"
-    assert api.controls["SYS1"]["export"]["target_soc"] == 5, "export target_soc = 5 (dischargeCutOffSOC%)"
+    assert "target_soc" not in api.controls["SYS1"].get("export", {}), "The device's discharge cut-off must not overwrite Predbat's export target"
+    assert api.device_cutoffs["SYS1"] == {"backup": 15.0, "discharge": 5.0}, "Both cut-offs kept as the device reported them, got {}".format(api.device_cutoffs.get("SYS1"))
 
     # System capacity and power limits
     sys = api.systems["SYS1"]
@@ -1805,7 +2196,7 @@ def test_sigenergy_handle_mqtt_change(my_predbat):
     assert abs(sys["ratedChargePower"] - 22.0) < 0.01, "ratedChargePower = 22.0"
     assert abs(sys["ratedDischargePower"] - 24.0) < 0.01, "ratedDischargePower = 24.0"
     assert abs(sys["ratedActivePower"] - 12.0) < 0.01, "ratedActivePower = 12.0"
-    assert abs(sys["gridMaxBackfeedPower"] - 5.0) < 0.01, "gridMaxBackfeedPower = 5.0"
+    assert api.grid_export["SYS1"] == {"gridMaxBackfeedPowerW": 5000.0}, "Backfeed limit kept in W for the export limit, got {}".format(api.grid_export.get("SYS1"))
     assert any("MQTT change" in m for m in api.log_messages), "Change data logged"
 
     return failed
@@ -1916,9 +2307,9 @@ def test_sigenergy_mqtt_listener_loop(my_predbat):
 
     # Change message: controls updated
     ctrl = api.controls.get("XRTKQ1773829273", {})
-    assert ctrl.get("reserve") == 20, "reserve = 20 from MQTT change"
+    assert ctrl.get("reserve") == 10, "reserve = 10 (dischargeCutOffSOC%) from MQTT change"
     assert ctrl.get("charge", {}).get("target_soc") == 95, "charge target_soc = 95"
-    assert ctrl.get("export", {}).get("target_soc") == 10, "export target_soc = 10"
+    assert ctrl.get("export", {}).get("target_soc") is None, "export target_soc is Predbat's own, not the device's discharge cut-off"
 
     # Subscription requests published (3: period, change, alarm)
     sub_topics = [t for t, _ in publishes]
@@ -2378,7 +2769,7 @@ def test_sigenergy_build_tls_context(my_predbat):
 
 
 def test_sigenergy_set_operating_mode(my_predbat):
-    """Test set_operating_mode publishes MQTT and returns True on success, False on failure."""
+    """Test set_operating_mode switches over MQTT only - no REST call, which counts against the app key's rate limit."""
     failed = False
     api = MockSigenergyAPI()
 
@@ -2387,31 +2778,45 @@ def test_sigenergy_set_operating_mode(my_predbat):
 
     api.get_access_token = mock_token
 
-    # Success: MQTT publish succeeds
+    rest_calls = []
+    published = []
+
+    async def mock_request(method, path, params=None, json_data=None, retries=None, log_response=True):
+        rest_calls.append({"method": method, "path": path, "json": json_data})
+        return _SIGENERGY_OK
+
     async def mock_publish_ok(topic, payload_dict):
+        published.append((topic, payload_dict))
         return True
-
-    api._publish_mqtt = mock_publish_ok
-    ok = run_async(api.set_operating_mode("SIG001", 0))
-    assert ok is True, "set_operating_mode should return True when MQTT publish succeeds"
-    assert not any("Failed" in m for m in api.log_messages), "No failure logged on success"
-
-    # Failure: MQTT publish fails
-    api.log_messages = []
 
     async def mock_publish_fail(topic, payload_dict):
         return False
 
+    api._request = mock_request
+
+    # Success: MQTT publish succeeds, and no REST switch is sent
+    api._publish_mqtt = mock_publish_ok
+    ok = run_async(api.set_operating_mode("SIG001", 0))
+    assert ok is True, "set_operating_mode should return True when the MQTT publish succeeds"
+    assert len(published) == 1 and published[0][0] == SIGENERGY_MQTT_TOPIC_MODE, "Mode switch published on the MQTT mode topic, got {}".format(published)
+    assert published[0][1]["systemId"] == "SIG001" and published[0][1]["mode"] == "MSC", "MQTT payload carries the system and mode name, got {}".format(published[0][1])
+    assert rest_calls == [], "No REST mode switch is sent, got {}".format(rest_calls)
+    assert not any("Failed" in m for m in api.log_messages), "No failure logged on success"
+
+    # Failure: MQTT publish fails, and there is no REST fallback
+    api.log_messages = []
     api._publish_mqtt = mock_publish_fail
     ok = run_async(api.set_operating_mode("SIG001", 0))
-    assert ok is False, "set_operating_mode should return False when MQTT publish fails"
-    assert any("Failed" in m for m in api.log_messages), "Failure warning logged when publish fails"
+    assert ok is False, "set_operating_mode should return False when the MQTT publish fails"
+    assert any("Failed" in m for m in api.log_messages), "Failure warning logged when the publish fails"
+    assert rest_calls == [], "No REST fallback when MQTT fails, got {}".format(rest_calls)
 
-    # Failure: unknown mode int
+    # Failure: unknown mode int, nothing sent
     api.log_messages = []
     api._publish_mqtt = mock_publish_ok
     ok = run_async(api.set_operating_mode("SIG001", 99))
     assert ok is False, "set_operating_mode should return False for unknown mode int"
+    assert rest_calls == [], "No REST switch for an unknown mode"
 
     return failed
 
@@ -4294,6 +4699,25 @@ def run_sigenergy_tests(my_predbat):
         ("publish_system_entities_operational_mode_fallback", test_sigenergy_publish_system_entities_operational_mode_fallback),
         ("publish_system_entities_operational_mode_invalid_value", test_sigenergy_publish_system_entities_operational_mode_invalid_value),
         ("automatic_config", test_sigenergy_automatic_config),
+        ("publish_export_limit", test_sigenergy_publish_export_limit),
+        ("publish_export_limit_unknown", test_sigenergy_publish_export_limit_unknown),
+        ("automatic_config_keeps_user_export_limit", test_sigenergy_automatic_config_keeps_user_export_limit),
+        ("export_limit_live_change_message", test_sigenergy_export_limit_live_change_message),
+        ("export_limit_anti_reflux_off", test_sigenergy_export_limit_anti_reflux_off),
+        ("export_limit_anti_reflux_on_zero", test_sigenergy_export_limit_anti_reflux_on_zero),
+        ("export_limit_zero_without_anti_reflux", test_sigenergy_export_limit_zero_without_anti_reflux),
+        ("export_limit_partial_change_keeps_limit", test_sigenergy_export_limit_partial_change_keeps_limit),
+        ("export_limit_survives_restart", test_sigenergy_export_limit_survives_restart),
+        ("handle_mqtt_change_backup_only_keeps_reserve", test_sigenergy_handle_mqtt_change_backup_only_keeps_reserve),
+        ("fetch_controls_keeps_device_reserve", test_sigenergy_fetch_controls_keeps_device_reserve),
+        ("apply_controls_export_stops_at_backup_cutoff", test_sigenergy_apply_controls_export_stops_at_backup_cutoff),
+        ("automatic_config_battery_min_soc", test_sigenergy_automatic_config_battery_min_soc),
+        ("automatic_config_keeps_user_battery_min_soc", test_sigenergy_automatic_config_keeps_user_battery_min_soc),
+        ("battery_reserve_min_live_change_message", test_sigenergy_battery_reserve_min_live_change_message),
+        ("battery_reserve_min_zero", test_sigenergy_battery_reserve_min_zero),
+        ("battery_reserve_min_unknown", test_sigenergy_battery_reserve_min_unknown),
+        ("battery_reserve_min_partial_change_keeps_value", test_sigenergy_battery_reserve_min_partial_change_keeps_value),
+        ("battery_reserve_min_survives_restart", test_sigenergy_battery_reserve_min_survives_restart),
         ("fetch_controls", test_sigenergy_fetch_controls),
         ("publish_controls", test_sigenergy_publish_controls),
         ("parse_entity_system", test_sigenergy_parse_entity_system),
