@@ -61,6 +61,7 @@ export function addEntitySuggestions(
      * The second branch exists purely to provide entity suggestions.
      */
     return {
+      description: schema.description,
       anyOf: [
         schema,
         {

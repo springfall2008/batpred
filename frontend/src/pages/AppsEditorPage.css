@@ -71,7 +71,7 @@
   cursor: default;
 }
 
-.apps-editor-monaco {
+.apps-editor-codemirror {
   flex: 1;
   min-height: 32rem;
   overflow: hidden;
@@ -107,4 +107,29 @@
   .apps-editor-actions span {
     flex: 1 0 100%;
   }
+}
+
+.apps-editor-codemirror .cm-editor {
+  height: 100%;
+  min-height: 32rem;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 14px;
+}
+
+.apps-editor-codemirror .cm-scroller {
+  overflow: auto;
+  font-family: monospace;
+}
+
+.apps-editor-codemirror .cm-gutters,
+.apps-editor-codemirror .cm-tooltip,
+.apps-editor-codemirror .cm-panels {
+  border-color: var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.apps-editor-codemirror .cm-cursor {
+  border-left-color: var(--color-text);
 }

@@ -136,7 +136,7 @@ def _apps_schema_value(spec):
         "sensor": {"type": "string", "x-ha-entity": True},
         "integer_list": {"type": "array", "items": {"type": "integer"}},
         "float_list": {"type": "array", "items": {"type": "number"}},
-        "string_list": {"type": "array", "items": {"type": "string"}},
+        "string_list": {"type": ["string", "array"], "items": {"type": "string"}},
         "boolean_list": {"type": "array", "items": {"type": "boolean"}},
         "dict_list": {"type": "array", "items": {"type": "object"}},
         "sensor_list": {"type": "array", "items": {"type": ["string", "number", "boolean"], "x-ha-entity": True}},
@@ -145,7 +145,7 @@ def _apps_schema_value(spec):
     choices = [copy.deepcopy(scalar_types[item]) for item in spec.get("type", "string").split("|") if item in scalar_types]
     if spec.get("or_auto"):
         choices.append({"const": "auto"})
-    schema = choices[0] if len(choices) == 1 else {"oneOf": choices}
+    schema = choices[0] if len(choices) == 1 else {"anyOf": choices}
     if spec.get("allowed"):
         schema = {"enum": spec["allowed"]}
     return schema
