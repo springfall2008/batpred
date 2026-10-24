@@ -877,11 +877,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
             value = data["msg"]
             info = copy.deepcopy(data)
 
-            if inverter_sn not in self.cached_values:
-                self.cached_values[inverter_sn] = {}
-                self.cached_infos[inverter_sn] = {}
-            self.cached_values[inverter_sn][cid] = str(value)
-            self.cached_infos[inverter_sn][cid] = info
+            self.cached_values.setdefault(inverter_sn, {})[cid] = str(value)
+            self.cached_infos.setdefault(inverter_sn, {})[cid] = info
 
             return value, info
 
@@ -2610,14 +2607,10 @@ class SolisAPI(ComponentBase, OAuthMixin):
                     values[cid] = value
                     infos[cid] = copy.deepcopy(info)
 
-            # Initialise cache for this inverter if not exists
-            if inverter_sn not in self.cached_values:
-                self.cached_values[inverter_sn] = {}
-                self.cached_infos[inverter_sn] = {}
-
-            # Update cached values
-            self.cached_values[inverter_sn].update(values)
-            self.cached_infos[inverter_sn].update(infos)
+            # Update cached values, initialising each cache on its own: show_soc_limit_now() can create
+            # cached_values[inverter_sn] before the first successful poll, with no cached_infos entry
+            self.cached_values.setdefault(inverter_sn, {}).update(values)
+            self.cached_infos.setdefault(inverter_sn, {}).update(infos)
 
             return True
 
