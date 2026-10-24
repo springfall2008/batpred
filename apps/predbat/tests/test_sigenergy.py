@@ -1580,6 +1580,73 @@ def test_sigenergy_apply_controls_deduplication(my_predbat):
     return failed
 
 
+def test_sigenergy_handle_mqtt_change_backup_only_keeps_reserve(my_predbat):
+    """A change message carrying only backupCutOffSOC% (a Backup SOC edit in the app) leaves the reserve - the discharge cut-off - alone."""
+    failed = False
+    api = MockSigenergyAPI()
+    api.systems["SYS1"] = {"systemName": "Test System"}
+    api._handle_mqtt_change("SYS1", {"dischargeCutOffSOC%": "3.0", "backupCutOffSOC%": "0.0"})
+
+    api._handle_mqtt_change("SYS1", {"backupCutOffSOC%": "5.0"})
+
+    assert api.controls["SYS1"]["reserve"] == 3, "reserve stays at the 3% discharge cut-off, got {}".format(api.controls["SYS1"]["reserve"])
+    assert api.device_cutoffs["SYS1"] == {"backup": 5.0, "discharge": 3.0}, "Backup cut-off updated, discharge kept, got {}".format(api.device_cutoffs.get("SYS1"))
+
+    return failed
+
+
+def test_sigenergy_fetch_controls_keeps_device_reserve(my_predbat):
+    """On startup the change snapshot arrives before fetch_controls(); the device's discharge cut-off must survive it rather than revert to the 10% default."""
+    failed = False
+    api = MockSigenergyAPI()
+    system_id = "SIG001"
+    api.systems[system_id] = {"systemName": "Home"}
+    api._handle_mqtt_change(system_id, {"dischargeCutOffSOC%": "0.0", "backupCutOffSOC%": "0.0"})
+
+    run_async(api.fetch_controls(system_id))
+
+    assert api.controls[system_id]["reserve"] == 0, "reserve keeps the device's 0% discharge cut-off, got {}".format(api.controls[system_id]["reserve"])
+
+    return failed
+
+
+def test_sigenergy_apply_controls_export_stops_at_backup_cutoff(my_predbat):
+    """A forced export stops at the device's backup cut-off when that is above Predbat's export target and the discharge cut-off."""
+    failed = False
+    api = MockSigenergyAPI()
+    system_id = "SIG001"
+    api.systems[system_id] = {"systemName": "Home", "batteryCapacity": 10.0}
+    api.devices[system_id] = [{"deviceType": "Battery", "attrMap": {"ratedChargePower": 3.0}}]
+    api.energy_flow[system_id] = {"batterySoc": 12.0}
+    api._handle_mqtt_change(system_id, {"dischargeCutOffSOC%": "0.0", "backupCutOffSOC%": "15.0"})
+
+    now = datetime.now(timezone.utc)
+    start_str = (now - timedelta(hours=1)).strftime("%H:%M:%S")
+    end_str = (now + timedelta(hours=1)).strftime("%H:%M:%S")
+    api.controls[system_id].update(
+        {
+            "charge": {"enable": False, "start_time": "00:00:00", "end_time": "00:00:00", "target_soc": 100, "rate": 3000},
+            "export": {"enable": True, "start_time": start_str, "end_time": end_str, "target_soc": 4, "rate": 3000},
+        }
+    )
+
+    commands_sent = []
+
+    async def mock_send_battery_command(sid, active_mode, duration_min, charging_power_kw=None, **kwargs):
+        commands_sent.append(("battery_cmd", sid, active_mode, duration_min, charging_power_kw))
+        return True
+
+    api.send_battery_command = mock_send_battery_command
+
+    run_async(api.apply_controls(system_id))
+
+    bat_cmds = [c for c in commands_sent if c[0] == "battery_cmd"]
+    assert len(bat_cmds) >= 1, "send_battery_command called"
+    assert bat_cmds[0][2] == SIGENERGY_ACTIVE_MODE_SELF_GRID, "At 12% with a 15% backup cut-off the export freezes rather than discharging, got {}".format(bat_cmds[0][2])
+
+    return failed
+
+
 def test_sigenergy_apply_controls_export_mode(my_predbat):
     """Test apply_controls sends discharge command during export window."""
     failed = False
@@ -2117,9 +2184,10 @@ def test_sigenergy_handle_mqtt_change(my_predbat):
     api._handle_mqtt_change("SYS1", value_dict)
 
     # Controls
-    assert api.controls["SYS1"]["reserve"] == 15, "reserve = 15 (backupCutOffSOC%)"
+    assert api.controls["SYS1"]["reserve"] == 5, "reserve = 5 (dischargeCutOffSOC%), got {}".format(api.controls["SYS1"]["reserve"])
     assert api.controls["SYS1"]["charge"]["target_soc"] == 100, "charge target_soc = 100 (chargeCutOffSOC%)"
-    assert api.controls["SYS1"]["export"]["target_soc"] == 5, "export target_soc = 5 (dischargeCutOffSOC%)"
+    assert "target_soc" not in api.controls["SYS1"].get("export", {}), "The device's discharge cut-off must not overwrite Predbat's export target"
+    assert api.device_cutoffs["SYS1"] == {"backup": 15.0, "discharge": 5.0}, "Both cut-offs kept as the device reported them, got {}".format(api.device_cutoffs.get("SYS1"))
 
     # System capacity and power limits
     sys = api.systems["SYS1"]
@@ -2238,9 +2306,9 @@ def test_sigenergy_mqtt_listener_loop(my_predbat):
 
     # Change message: controls updated
     ctrl = api.controls.get("XRTKQ1773829273", {})
-    assert ctrl.get("reserve") == 20, "reserve = 20 from MQTT change"
+    assert ctrl.get("reserve") == 10, "reserve = 10 (dischargeCutOffSOC%) from MQTT change"
     assert ctrl.get("charge", {}).get("target_soc") == 95, "charge target_soc = 95"
-    assert ctrl.get("export", {}).get("target_soc") == 10, "export target_soc = 10"
+    assert ctrl.get("export", {}).get("target_soc") is None, "export target_soc is Predbat's own, not the device's discharge cut-off"
 
     # Subscription requests published (3: period, change, alarm)
     sub_topics = [t for t, _ in publishes]
@@ -4660,6 +4728,9 @@ def run_sigenergy_tests(my_predbat):
         ("export_limit_zero_without_anti_reflux", test_sigenergy_export_limit_zero_without_anti_reflux),
         ("export_limit_partial_change_keeps_limit", test_sigenergy_export_limit_partial_change_keeps_limit),
         ("export_limit_survives_restart", test_sigenergy_export_limit_survives_restart),
+        ("handle_mqtt_change_backup_only_keeps_reserve", test_sigenergy_handle_mqtt_change_backup_only_keeps_reserve),
+        ("fetch_controls_keeps_device_reserve", test_sigenergy_fetch_controls_keeps_device_reserve),
+        ("apply_controls_export_stops_at_backup_cutoff", test_sigenergy_apply_controls_export_stops_at_backup_cutoff),
         ("automatic_config_battery_min_soc", test_sigenergy_automatic_config_battery_min_soc),
         ("automatic_config_keeps_user_battery_min_soc", test_sigenergy_automatic_config_keeps_user_battery_min_soc),
         ("battery_reserve_min_live_change_message", test_sigenergy_battery_reserve_min_live_change_message),

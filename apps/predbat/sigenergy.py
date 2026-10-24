@@ -228,7 +228,7 @@ SIGENERGY_HISTORY_NODES = [
 # Storage cache keys for poll-interval system state persisted between restarts (see
 # load_cached_data()). System/device discovery is deliberately excluded — it is always
 # re-fetched fresh on startup.
-SIGENERGY_CACHE_KEYS = ["energy_flow", "daily_summary", "history_totals", "onboard_status", "grid_export", "backup_cutoff"]
+SIGENERGY_CACHE_KEYS = ["energy_flow", "daily_summary", "history_totals", "onboard_status", "grid_export", "device_cutoffs"]
 
 # Sentinel returned by _request() when the API responds with code=0 but an empty/null data field.
 # Distinguishes "success with no payload" from None which always means "request failed".
@@ -490,7 +490,7 @@ class SigenergyAPI(ComponentBase):
         self._offboard_done = set()           # systemIds successfully offboarded this process
         self.onboard_status = {}  # systemId → onboarding status string (published for the SaaS UI)
         self.grid_export = {}     # systemId → {"antiReflux": "on"/"off", "gridMaxBackfeedPowerW": W} from openapi/change, cached
-        self.backup_cutoff = {}   # systemId → backupCutOffSOC% from openapi/change, cached - the device's own discharge floor
+        self.device_cutoffs = {}  # systemId → {"backup": %, "discharge": %} from openapi/change, cached - the plant's own SoC floors
 
         # Age (datetime of last update) of each SIGENERGY_CACHE_KEYS category, used to avoid an
         # unnecessary API refresh on restart when the persisted cache is still fresh
@@ -1927,10 +1927,11 @@ class SigenergyAPI(ComponentBase):
         changes (e.g. via the Sigenergy app or a remote API command), which can
         be days apart - hence grid_export is cached across restarts.
 
-        Per the user's clarification:
-          backupCutOffSOC%   → reserve (backup/emergency minimum)
-          chargeCutOffSOC%   → charge target_soc
-          dischargeCutOffSOC% → export target_soc (minimum discharge floor)
+        The SoC cut-offs are the plant's own settings, read-only to Predbat, kept in
+        ``self.device_cutoffs[system_id]`` (cached, as with grid_export):
+          backupCutOffSOC%    → battery_min_soc (the hard floor, via the battery_reserve_min sensor)
+          dischargeCutOffSOC% → reserve (the floor for discharging to the grid)
+          chargeCutOffSOC%    → charge target_soc
           antiReflux + gridMaxBackfeedPowerW → export limit (see _get_export_limit_w)
 
         Example message, from a plant with a 3.68 kW G98 export cap on a 12 kW inverter:
@@ -1959,24 +1960,21 @@ class SigenergyAPI(ComponentBase):
         if system_id not in self.controls:
             self.controls[system_id] = {}
 
-        reserve = _safe_float(value_dict.get("backupCutOffSOC%", None), None)
-        if reserve is not None:
-            self.controls[system_id]["reserve"] = reserve
-            # Kept apart from the reserve control, which the user can edit and which reads 10% until the
-            # plant reports - this is only ever what the plant said, and is what battery_min_soc reads
-            self.backup_cutoff[system_id] = reserve
+        # Merged field by field - a message may carry only the cut-off that changed
+        backup_cutoff = _safe_float(value_dict.get("backupCutOffSOC%", None), None)
+        if backup_cutoff is not None:
+            self.device_cutoffs.setdefault(system_id, {})["backup"] = backup_cutoff
+
+        discharge_cutoff = _safe_float(value_dict.get("dischargeCutOffSOC%", None), None)
+        if discharge_cutoff is not None:
+            self.device_cutoffs.setdefault(system_id, {})["discharge"] = discharge_cutoff
+            self.controls[system_id]["reserve"] = discharge_cutoff
 
         charge_target = _safe_float(value_dict.get("chargeCutOffSOC%", None), None)
         if charge_target is not None:
             if "charge" not in self.controls[system_id]:
                 self.controls[system_id]["charge"] = {}
             self.controls[system_id]["charge"]["target_soc"] = charge_target
-
-        export_target = _safe_float(value_dict.get("dischargeCutOffSOC%", None), None)
-        if export_target is not None:
-            if "export" not in self.controls[system_id]:
-                self.controls[system_id]["export"] = {}
-            self.controls[system_id]["export"]["target_soc"] = export_target
 
         # Update system capacity / power limits
         if system_id not in self.systems:
@@ -2005,8 +2003,8 @@ class SigenergyAPI(ComponentBase):
             self.grid_export.setdefault(system_id, {})["gridMaxBackfeedPowerW"] = backfeed_w
 
         self.log(
-            "SigenergyAPI: MQTT change {}: reserve={}% charge_target={}% export_target={}%".format(
-                system_id, reserve, charge_target, export_target
+            "SigenergyAPI: MQTT change {}: backup_cutoff={}% discharge_cutoff={}% charge_target={}%".format(
+                system_id, backup_cutoff, discharge_cutoff, charge_target
             )
         )
 
@@ -2354,10 +2352,10 @@ class SigenergyAPI(ComponentBase):
         # --- Battery reserve min (%) ---
         # Only published once the plant has reported its backup cut-off: until then the entity is absent and
         # battery_min_soc falls back to Predbat's own default rather than a guess
-        if system_id in self.backup_cutoff:
+        if "backup" in self.device_cutoffs.get(system_id, {}):
             self.dashboard_item(
                 "sensor.{}_sigenergy_{}_battery_reserve_min".format(self.prefix, slug),
-                state=round(self.backup_cutoff[system_id]),
+                state=round(self.device_cutoffs[system_id]["backup"]),
                 attributes={
                     "friendly_name": "Sigenergy {} Battery Reserve Min".format(system_name),
                     "unit_of_measurement": "%",
@@ -2595,6 +2593,11 @@ class SigenergyAPI(ComponentBase):
             elif field_type == "switch":
                 if isinstance(state, str):
                     state = state.lower() == "on"
+            if field == "reserve" and "discharge" in self.device_cutoffs.get(system_id, {}):
+                # The reserve is read-only (SIGCLOUD has no reserve control), so the plant's discharge cut-off wins
+                # over the entity - on startup the change snapshot arrives before this runs, and the entity would
+                # otherwise put it back to the 10% default
+                state = _safe_int(self.device_cutoffs[system_id]["discharge"], default=default)
             self.controls[system_id][field] = state
 
     async def publish_controls(self, system_id=None):
@@ -2821,7 +2824,9 @@ class SigenergyAPI(ComponentBase):
         # Determine desired mode (export takes priority)
         if export_window and export_start_dt and export_end_dt:
             duration_min = max(1, int((export_end_dt - now).total_seconds() / 60))
-            effective_target = max(export_target_soc, reserve_soc)
+            # The plant stops discharging at its backup cut-off as well as the discharge cut-off (the reserve)
+            backup_soc = _safe_int(self.device_cutoffs.get(system_id, {}).get("backup", 0), 0)
+            effective_target = max(export_target_soc, reserve_soc, backup_soc)
             if effective_target >= battery_soc_pct:
                 # Already at or below target — freeze (idle)
                 new_mode = "freeze_export"
@@ -3172,8 +3177,9 @@ class SigenergyAPI(ComponentBase):
         sensible values immediately rather than "unknown"/0 while the first poll is in flight.
         grid_export is restored because nothing but an openapi/change message reports it, and
         those can be days apart - without it the export limit would read 99999 until the next one.
-        backup_cutoff is restored for the same reason - without it battery_min_soc would fall back to
-        the 4% default after every restart and push set_reserve_min back up.
+        device_cutoffs is restored for the same reason - without it battery_min_soc would fall back to
+        the 4% default after every restart and push set_reserve_min back up, and the reserve would
+        read the 10% default.
         """
         if not self.storage:
             return
@@ -3198,9 +3204,9 @@ class SigenergyAPI(ComponentBase):
         if grid_export is not None:
             self.grid_export = grid_export
 
-        backup_cutoff = await self._load_cache("backup_cutoff")
-        if backup_cutoff is not None:
-            self.backup_cutoff = backup_cutoff
+        device_cutoffs = await self._load_cache("device_cutoffs")
+        if device_cutoffs is not None:
+            self.device_cutoffs = device_cutoffs
 
 
         self.log("SigenergyAPI: Restored cached poll-interval state from storage")
@@ -3354,8 +3360,8 @@ class SigenergyAPI(ComponentBase):
             # after a day and the plant may go longer than that without reporting its export limit again
             if self.grid_export:
                 await self._save_cache("grid_export", self.grid_export)
-            if self.backup_cutoff:
-                await self._save_cache("backup_cutoff", self.backup_cutoff)
+            if self.device_cutoffs:
+                await self._save_cache("device_cutoffs", self.device_cutoffs)
 
         # Fetch controls from HA on first run only
         if first:
