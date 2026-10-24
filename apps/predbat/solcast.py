@@ -934,7 +934,7 @@ class SolarAPI(ComponentBase):
             ts_str = item.get("period_start")
             val = float(item.get(value_field, item.get("pv_estimate", 0.0)))
             try:
-                start_dt = strptime_aware(ts_str, TIME_FORMAT).astimezone(pytz.utc)
+                start_dt = strptime_aware(ts_str, TIME_FORMAT).astimezone(timezone.utc)
             except (ValueError, TypeError):
                 continue
 
@@ -951,7 +951,7 @@ class SolarAPI(ComponentBase):
         for target_item in pv_forecast_data:
             ts_str = target_item.get("period_start")
             try:
-                target_start = strptime_aware(ts_str, TIME_FORMAT).astimezone(pytz.utc)
+                target_start = strptime_aware(ts_str, TIME_FORMAT).astimezone(timezone.utc)
             except (ValueError, TypeError):
                 continue
             target_end = target_start + timedelta(minutes=target_period)
