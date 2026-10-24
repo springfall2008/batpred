@@ -303,7 +303,8 @@ surplus solar. The docs tell users to use Boost with the schedule off when they 
   logs an error each `run()` and returns False.
 - A socket that will not connect is the reader's business (its back-off); `run()` returns True
   while the account signed in and at least one charger has a fresh message, and False when every
-  charger is stale.
+  charger is stale. An account with no chargers yet returns True without stamping a success, as
+  Wallbox does, so start-up is not held up waiting for it.
 - `update_success_timestamp()` is called only when at least one charger has a fresh message.
 - The charger list is fetched on the first run and every 30 minutes; a charger added later gets
   a link and becomes the next car.

@@ -915,9 +915,11 @@ class HypervoltAPI(ComponentBase):
         except HypervoltError as exc:
             self.log("Warn: hypervolt: {}".format(exc))
             return False
+        if not self.car_order:
+            # Signed in, but no charger on the account yet: started, as Wallbox does, but with no success stamped
+            return True
         if not self.fresh_chargers(time.time()):
-            if self.car_order:
-                self.log("Warn: hypervolt: no charger has sent anything for {} seconds".format(STALE_SECONDS))
+            self.log("Warn: hypervolt: no charger has sent anything for {} seconds".format(STALE_SECONDS))
             return False
         self.update_success_timestamp()
         return True

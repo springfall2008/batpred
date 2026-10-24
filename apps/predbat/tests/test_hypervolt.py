@@ -1926,6 +1926,17 @@ def test_session_reader_does_not_sign_in():
     print("  ✓ Session reader does not sign in")
 
 
+def test_empty_account_reports_started():
+    """An account with no chargers yet reports started, as Wallbox does, without stamping a success or failing later runs."""
+    component = _make_component([])
+    assert run_async(component.run(0, True)) is True
+    assert _logged(component, "no chargers were found")
+    assert component.last_success_timestamp is None
+    assert run_async(component.run(60, False)) is True
+    assert not [name for name in component.base.entities if "_hypervolt_" in name]
+    print("  ✓ An empty account reports started")
+
+
 def test_hypervolt(my_predbat=None):
     """Run every Hypervolt test."""
     print("=" * 70)
@@ -2022,5 +2033,6 @@ def test_hypervolt(my_predbat=None):
     test_refused_stop_does_not_hold_connected()
     test_refused_sign_in_not_retried_by_readers()
     test_session_reader_does_not_sign_in()
+    test_empty_account_reports_started()
     print("=" * 70)
     return False
