@@ -43,6 +43,7 @@ CHG_BAT_SOC_LMT, also caps solar charging, so it is never written.
 """
 
 import asyncio
+import base64
 import json
 import os
 import statistics
@@ -55,7 +56,13 @@ from hanchu_const import (
     HANCHU_ACK_MAP,
     HANCHU_ACK_OK,
     HANCHU_AC_COUPLED_FIELD,
+    HANCHU_AES_IV,
+    HANCHU_AES_KEY,
     HANCHU_BASE_URL,
+    HANCHU_BATTERY_FIELDS,
+    HANCHU_BMS_ID_FIELDS,
+    HANCHU_BMS_DEVICE_FIELDS,
+    HANCHU_BMS_SERIES_FIELDS,
     HANCHU_CACHE_CONFIG,
     HANCHU_CACHE_CONTROL,
     HANCHU_CACHE_STATIC,
@@ -72,8 +79,10 @@ from hanchu_const import (
     HANCHU_DEVICE_STATUSES,
     HANCHU_DEVICE_SN_FIELD,
     HANCHU_DEVICE_TYPE_FIELD,
+    HANCHU_ENCRYPTED_ENDPOINTS,
     HANCHU_ENDPOINTS,
     HANCHU_ENERGY,
+    HANCHU_ERROR_BODY_CHARS,
     HANCHU_HEADER_LOCALE,
     HANCHU_HEADER_PLATFORM,
     HANCHU_HEADER_TOKEN,
@@ -348,6 +357,17 @@ class HanchuAPI(ComponentBase):
         timeout = aiohttp.ClientTimeout(total=HANCHU_TIMEOUT)
         auth_retried = False
         attempt = 0
+        # The /gateway/platform/ battery endpoints take the body AES-encrypted as raw data, with no JSON
+        # content type, and refuse JSON outright (HANCHU_ENCRYPTED_ENDPOINTS); everything else is JSON.
+        encrypted = endpoint_key in HANCHU_ENCRYPTED_ENDPOINTS
+        if encrypted:
+            try:
+                request_body = {"data": encrypt_payload(body if body is not None else {})}
+            except RuntimeError as error:
+                self.log("Warn: Hanchu {} cannot be called: {}".format(path, error))
+                return False, None
+        else:
+            request_body = {"json": body if body is not None else {}}
 
         # A while loop rather than for-in-range: `attempt` counts transport failures only. The
         # re-auth branch deliberately does not touch it, and `auth_retried` caps that to one extra
@@ -356,9 +376,13 @@ class HanchuAPI(ComponentBase):
             self.debug_api("request", path, body if body is not None else {})
             try:
                 session = self._http_session(timeout)
-                async with session.post(url, headers=self._headers(), json=body if body is not None else {}) as response:
+                headers = self._headers()
+                if encrypted:
+                    headers.pop("Content-Type", None)
+                async with session.post(url, headers=headers, **request_body) as response:
                     status = response.status
                     payload = None
+                    error_body = None
                     if status == 200:
                         payload = await response.json(content_type=None)
                     elif status == HANCHU_CODE_UNAUTHORISED:
@@ -368,6 +392,13 @@ class HanchuAPI(ComponentBase):
                             payload = await response.json(content_type=None)
                         except ValueError:
                             payload = None
+                    else:
+                        # Kept for the log: on any other status the body is the only clue to why (a 403
+                        # from the /gateway/platform/ battery endpoints, say). Never allowed to fail the call.
+                        try:
+                            error_body = " ".join(str(await response.text()).split())[:HANCHU_ERROR_BODY_CHARS]
+                        except Exception:
+                            error_body = None
             # Deliberately broad: the docstring promises this never raises, so every caller can fail
             # closed. A narrower tuple let a bare OSError from the socket layer escape run().
             except Exception as error:
@@ -379,7 +410,8 @@ class HanchuAPI(ComponentBase):
                 continue
 
             if status != 200 and status != HANCHU_CODE_UNAUTHORISED:
-                self.log("Warn: Hanchu {} returned HTTP {}".format(path, status))
+                self.log("Warn: Hanchu {} returned HTTP {}{}".format(path, status, ": {}".format(error_body) if error_body else ""))
+                self.last_api_error = error_message(error_body) or "HTTP {}".format(status)
                 attempt += 1
                 if attempt >= HANCHU_RETRIES:
                     return False, None
@@ -404,7 +436,13 @@ class HanchuAPI(ComponentBase):
             if payload.get("success") or (code == HANCHU_CODE_OK and endpoint_key in HANCHU_SUCCESS_BY_CODE_ENDPOINTS):
                 return True, payload.get("data")
             message = payload.get("msg")
-            self.last_api_error = str(message) if message is not None else ""
+            # Some rejections carry no message at all, only a code in data - "200003" from an iotGet that
+            # waited 15 s on the inverter (HARDWARE, 2026-10-24) - so that code is what gets reported.
+            data = payload.get("data")
+            if message:
+                self.last_api_error = str(message)
+            else:
+                self.last_api_error = "no message, data {}".format(data) if data not in (None, "", {}, []) else ""
             if code == HANCHU_CODE_FAILED:
                 self.log("Warn: Hanchu {} was rejected by the device: {}".format(path, self.last_api_error))
             else:
@@ -2137,6 +2175,44 @@ class HanchuAPI(ComponentBase):
             self.update_success_timestamp()
         return True
 
+    async def read_battery_health(self, sn, serials=None):
+        """Read the BMS figures for every battery pack on a device's station, for the --battery-health report.
+
+        Returns {"station", "packs": {device id: battery data}, "devices": {device id: list entry},
+        "error": last API error}, or None when the device has reported no station id (its status poll
+        has not answered yet). bmsInfo/queryAllList lists the station's battery devices; each is then
+        read on its own. Command-line harness only - see HANCHU_ENCRYPTED_ENDPOINTS.
+
+        serials names the devices instead, skipping the list - the pack serials the Hanchu web portal
+        shows - for an account where the list call is refused.
+
+        A body is used even when the envelope carries no success flag: these /gateway/platform/ calls
+        are new to this component, and a diagnostic is more useful showing what came back than refusing
+        it. _post() still logs such a reply as unsuccessful.
+        """
+        station = self.device_detail.get(sn, {}).get("station_id")
+        devices = {}
+        if serials:
+            device_ids = [str(serial) for serial in serials]
+        elif not station:
+            return None
+        else:
+            _, listed = await self._post("bms_list", body={"stationId": station})
+            device_ids = []
+            for device in listed if isinstance(listed, list) else []:
+                device_id = next((device.get(field) for field in HANCHU_BMS_ID_FIELDS if device.get(field)), None) if isinstance(device, dict) else None
+                if not device_id:
+                    continue
+                device_ids.append(str(device_id))
+                devices[str(device_id)] = device
+        packs = {}
+        for device_id in device_ids:
+            _, data = await self._post("battery_data", body={"deviceId": device_id})
+            packs[device_id] = data if isinstance(data, dict) else {}
+            if self.api_delay:
+                await asyncio.sleep(self.api_delay)
+        return {"station": station, "packs": packs, "devices": devices, "error": self.last_api_error}
+
     async def final(self):
         """Persist state on shutdown so a restart resumes without re-polling, then close the HTTP session."""
         await self.save_static()
@@ -2185,6 +2261,69 @@ HANCHU_CLI_SETTLE_SECONDS = 60
 
 # Battery or surplus power below this many watts is treated as noise when judging a run.
 HANCHU_CLI_THRESHOLD_W = 100
+
+
+def encrypt_payload(data):
+    """Encrypt one request body for a HANCHU_ENCRYPTED_ENDPOINTS call, returning the Base64 text to send.
+
+    Compact JSON, PKCS7-padded, AES-128-CBC with the fixed HANCHU_AES_KEY / HANCHU_AES_IV, then Base64 -
+    exactly UPTON crypto.py _encrypt_payload. The cryptography package is imported here rather than at
+    the top of the module because only the command-line harness needs it: Predbat itself never calls
+    these endpoints and does not depend on it. RuntimeError says how to install it when it is missing.
+    """
+    try:
+        from cryptography.hazmat.primitives import padding as sym_padding
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    except ImportError as error:
+        raise RuntimeError("the cryptography package is needed for the encrypted battery endpoints (pip install cryptography)") from error
+    raw = json.dumps(data, separators=(",", ":")).encode("utf-8")
+    padder = sym_padding.PKCS7(128).padder()
+    padded = padder.update(raw) + padder.finalize()
+    encryptor = Cipher(algorithms.AES(HANCHU_AES_KEY), modes.CBC(HANCHU_AES_IV)).encryptor()
+    return base64.b64encode(encryptor.update(padded) + encryptor.finalize()).decode("utf-8")
+
+
+def error_message(body):
+    """Return the msg of a JSON error body, or "" when the body is not JSON or carries none."""
+    try:
+        parsed = json.loads(body) if body else None
+    except (TypeError, ValueError):
+        return ""
+    return str(parsed.get("msg") or "") if isinstance(parsed, dict) else ""
+
+
+def battery_device_summary(device):
+    """Return one line describing a bmsInfo/queryAllList entry - slot, logger, firmware, online - or ""."""
+    parts = ["{} {}".format(label, device[field]) for field, label in HANCHU_BMS_DEVICE_FIELDS.items() if device.get(field) not in (None, "")]
+    return ", ".join(parts)
+
+
+def battery_health_lines(pack):
+    """Return the --battery-health report lines for one pack's battery data, known fields first.
+
+    Each known field is printed with its label and unit (HANCHU_BATTERY_FIELDS). Numbered per-cell series
+    (vBat1..vBatN, tBat1..tBatN - HANCHU_BMS_SERIES_FIELDS) are gathered onto one line each, in cell
+    order. Anything else the pack reports follows by its raw name, so a field nobody has mapped yet is
+    still seen. Where both the state of health and the design capacity are present, the capacity they
+    imply is added, since that is the question the report exists to answer.
+    """
+    lines = []
+    for field, (label, unit) in HANCHU_BATTERY_FIELDS.items():
+        if pack.get(field) is not None:
+            lines.append("{:<22} {} {}".format(label, pack[field], unit).rstrip())
+    soh = HanchuAPI._as_float(pack.get("sohPack"), 0.0)
+    design = HanchuAPI._as_float(pack.get("designCapacity"), 0.0)
+    if soh > 0 and design > 0:
+        lines.append("{:<22} {:.2f} kWh (design capacity x state of health)".format("Implied capacity", design * soh / 100.0))
+    in_series = set()
+    for prefix, (label, unit) in HANCHU_BMS_SERIES_FIELDS.items():
+        numbered = sorted((int(key[len(prefix) :]), key) for key in pack if key.startswith(prefix) and key[len(prefix) :].isdigit())
+        if numbered:
+            in_series.update(key for _, key in numbered)
+            lines.append("{:<22} {} {}".format(label, " ".join(str(pack[key]) for _, key in numbered), unit))
+    for field in sorted(key for key in pack if key not in HANCHU_BATTERY_FIELDS and key not in in_series):
+        lines.append("{:<22} {!r}".format(field, pack[field]))
+    return lines
 
 
 def merge_hanchu_credentials(cli, config):
@@ -2698,6 +2837,30 @@ async def _cli_await_settings(client, sn, expected, timeout=120, interval=10):  
         await asyncio.sleep(interval)
 
 
+async def _cli_print_battery_health(client, sn, serials=None):  # pragma: no cover
+    """Print every battery pack's BMS figures - state of health and full-charge capacity among them."""
+    health = await client.read_battery_health(sn, serials)
+    if health is None:
+        print("  battery health  no station id reported, so the battery packs cannot be listed")
+        return
+    if serials:
+        print("  battery health  {} named battery device(s)".format(len(health["packs"])))
+    else:
+        print("  battery health  station {}: {} battery device(s)".format(health["station"], len(health["packs"])))
+    if not health["packs"] or not any(health["packs"].values()):
+        if "permission denied" in str(health["error"]).lower():
+            print("                  Hanchu answered Permission Denied - sign into the Hanchu web portal once with this account, then try again")
+        elif not health["packs"] and not serials:
+            print("                  none listed (see the Warn: lines above) - --battery-serial can name the packs the Hanchu web portal shows")
+    for device_id, pack in health["packs"].items():
+        summary = battery_device_summary(health["devices"].get(device_id, {}))
+        print("    battery {}{}".format(device_id, " ({})".format(summary) if summary else ""))
+        if not pack:
+            print("      no data returned")
+        for line in battery_health_lines(pack):
+            print("      {}".format(line))
+
+
 def _cli_print_mismatches(mismatches):  # pragma: no cover
     """Print each setting that did not read back as written."""
     for key, wanted, got in mismatches:
@@ -2760,6 +2923,8 @@ async def test_hanchu_api(args):  # pragma: no cover
         _cli_print_device(client, sn)
         await _cli_print_coupling(client, sn)
         await _cli_print_menu(client, sn, args.dump_menu)
+        if args.battery_health:
+            await _cli_print_battery_health(client, sn, args.battery_serial)
     print("\nThe 'Set arg' lines above are what hanchu_automatic: true would put in apps.yaml.")
     await client.final()
     print("Done")
@@ -2932,6 +3097,8 @@ def main():  # pragma: no cover
     parser.add_argument("--api-delay", type=float, default=1, help="Seconds to wait between API calls (default 1)")
     parser.add_argument("--no-trace", action="store_true", help="Stop printing every API request and response")
     parser.add_argument("--dump-menu", metavar="FILE", help="With the read-only report, save the device's full settings menu as JSON to FILE")
+    parser.add_argument("--battery-health", action="store_true", help="With the read-only report, read each battery pack's BMS figures (state of health, full-charge capacity) through the encrypted battery endpoints - needs the cryptography package")
+    parser.add_argument("--battery-serial", action="append", metavar="SERIAL", help="With --battery-health, read this battery pack (as shown in the Hanchu web portal) instead of listing the station's packs; repeat for each pack")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--write-test", action="store_true", help="Write a charge window three hours from now, read it back, then restore - moves no energy")
     mode.add_argument("--live-window", choices=HANCHU_CLI_SCENARIOS, help="Run this Predbat state on the inverter now, watch the battery, then restore")

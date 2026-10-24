@@ -29,6 +29,9 @@ The sources, and the short names used in the annotations below:
             to a DIFFERENT API surface (the web app's, not the Home Assistant one), so where it
             agrees on a PARAMETER NAME that is strong independent corroboration - the same
             control key reached over a different path.
+  DANNY     https://github.com/dannycrone/hanchu - another integration on the web app's surface,
+            with its own portal login. It carries NO licence, so only wire facts (endpoint paths,
+            field names) are taken from it, never code. Used for the battery endpoints only.
 
 GUOXIA is Hanchu's OWN integration (Guoxiatech is the company trading as Hanchu), so the shared
 login and request layer in GUOXIA and UPTON is the vendor's code, not a third-party guess. It was
@@ -61,7 +64,8 @@ HANCHU_BASE_URL = "https://iess3.hanchuess.com"
 # BLUSTERY reaches equivalent operations through "/gateway/platform/..." instead
 # (platform/deviceNew/iotGet, platform/deviceNew/iotSet, platform/remoteContrDtu/fastChargeDischarge,
 # platform/homePage/stationInfo) with AES-CBC-encrypted bodies. We use the app/ha family because it
-# is the maintained one AND because it needs no crypto - see HANCHU_ENCRYPTED_ENDPOINTS_NOT_USED.
+# is the maintained one AND because it needs no crypto - see HANCHU_ENCRYPTED_ENDPOINTS, which only the
+# command-line harness uses.
 HANCHU_ENDPOINTS = {
     # CORROBORATED: UPTON api.py async_login, GUOXIA api.py async_login. Body {"account", "pwd"},
     # password in PLAINTEXT over TLS. Response data is the bare token STRING, not an object.
@@ -96,16 +100,77 @@ HANCHU_ENDPOINTS = {
     "fast_charge": "/gateway/app/ha/fastChargeDischarge",
 }
 
-# Endpoints this component deliberately does NOT call, recorded so a later reader does not have to
-# rediscover them:
-#   /gateway/platform/station/detail                       (OBSERVED: UPTON api.py async_get_station_detail)
-#   /gateway/platform/bmsInfo/queryBatteryDataDivisions    (OBSERVED: UPTON api.py async_get_battery_data)
-# Both take an AES-CBC-encrypted, Base64 body keyed with a FIXED key and IV hard-coded in the
-# integration (OBSERVED: UPTON const.py AES_IV / AES_SECRET_KEY, crypto.py). They carry per-pack BMS
-# detail - cell temperatures, pack voltage/current, SoH - that Predbat does not plan with. Skipping
-# them keeps a hard-coded vendor key out of Predbat and removes a crypto dependency, at the cost of
-# per-pack temperature and SoH sensors. Revisit only if Predbat gains a use for them.
-HANCHU_ENCRYPTED_ENDPOINTS_NOT_USED = ("/gateway/platform/station/detail", "/gateway/platform/bmsInfo/queryBatteryDataDivisions")
+# --- Battery (BMS) endpoints - command-line harness only -------------------------------------
+# Both live on the /gateway/platform/ surface. They back the harness's --battery-health report, which
+# answers "is the battery smaller than it says" (bmsDesignCap is a design figure, not a measured one);
+# the component itself never calls them, as Predbat plans with none of these figures.
+#
+# OBSERVED (DANNY api.py async_fetch_bms_devices): bmsInfo/queryAllList with {"stationId"} lists the
+# station's battery devices, data[] of {sn, devId, dtuSn, onlineStatus, packList}. The station id is
+# getDeviceStatus's stationId (HANCHU_STATION_FIELD). HARDWARE (2026-10-24): the station/detail call
+# UPTON lists packs with answers code 100 "This API has been deprecated.", so it is not used.
+# OBSERVED (UPTON api.py async_get_battery_data, DANNY api.py) and HARDWARE (2026-10-24): battery data
+# with {"deviceId"} gives one pack's BMS figures - state of health, design and full-charge capacity,
+# voltage, current, temperatures - with the ordinary app/ha token, once the account has signed into
+# the Hanchu web portal at least once (before that it answered HTTP 403 "Permission Denied").
+HANCHU_ENDPOINTS["bms_list"] = "/gateway/platform/bmsInfo/queryAllList"
+HANCHU_ENDPOINTS["battery_data"] = "/gateway/platform/bmsInfo/queryBatteryDataDivisions"
+
+# OBSERVED (UPTON api.py send_as_json=False, DANNY api.py _post): both integrations send these with the
+# body AES-encrypted as raw data, no JSON. HARDWARE (2026-10-24): that is REQUIRED - a plain JSON body
+# to either is refused with HTTP 403 {"code":433,"msg":"Json Request Forbidden Under Crypto Mode On"},
+# and the encrypted one is accepted with the ordinary app/ha token.
+HANCHU_ENCRYPTED_ENDPOINTS = ("bms_list", "battery_data")
+
+# OBSERVED: UPTON const.py AES_SECRET_KEY / AES_IV, crypto.py _encrypt_payload. A FIXED key and IV,
+# the same for every account and published in that open-source integration, so they identify the
+# client, not the user - no user credential is involved. The body is the request JSON with compact
+# separators, PKCS7-padded, AES-128-CBC encrypted and Base64 encoded.
+HANCHU_AES_KEY = b"9z64Qr8mZH7Pg8d1"
+HANCHU_AES_IV = b"9z64Qr8mZH7Pg8d1"
+
+# OBSERVED (DANNY api.py async_discover_batteries): a battery device's id for the battery data call is
+# devId, falling back to sn and then dtuSn. HARDWARE (2026-10-24): devId equals sn, the pack serial the
+# web portal shows (ADR:1, ADR:2 on its Device page); there was no packList, which DANNY also reads.
+HANCHU_BMS_ID_FIELDS = ("devId", "sn", "dtuSn")
+
+# HARDWARE (2026-10-24): queryAllList entry fields worth a line in the report, field -> label. adr is the
+# pack's position on the bus (the portal's ADR:1, ADR:2), dtuSn the pack's own cloud logger.
+HANCHU_BMS_DEVICE_FIELDS = {
+    "adr": "slot",
+    "dtuSn": "logger",
+    "softwareVer": "firmware",
+    "onlineStatus": "online",
+}
+
+# HARDWARE (2026-10-24): numbered per-cell series in the battery data, prefix -> (label, unit), gathered
+# onto one line each - vBat1..vBat16 for a 16-cell pack, tBat1..tBat<numBatT>.
+HANCHU_BMS_SERIES_FIELDS = {
+    "vBat": ("Cell voltages", "V"),
+    "tBat": ("Cell temperatures", "C"),
+}
+
+# OBSERVED: UPTON sensor.py BATTERY_SENSORS. Battery data field -> (label, unit), in the order the
+# --battery-health report prints them. Units are UPTON's; capFull and capRemain are amp-hours.
+HANCHU_BATTERY_FIELDS = {
+    "sohPack": ("State of health", "%"),
+    "designCapacity": ("Design capacity", "kWh"),
+    "capFull": ("Full-charge capacity", "Ah"),
+    "capRemain": ("Remaining capacity", "Ah"),
+    "socPack": ("Pack SoC", "%"),
+    "vPack": ("Pack voltage", "V"),
+    "iPack": ("Pack current", "A"),
+    "tPack": ("Pack temperature", "C"),
+    "tEnv": ("Ambient temperature", "C"),
+    "tMos": ("MOSFET temperature", "C"),
+    # HARDWARE (2026-10-24) rather than UPTON: the cell figures a Home-ESS-LV-9.4K-H pack reports.
+    "numBat": ("Cells", ""),
+    "maxVoltage": ("Highest cell", "V"),
+    "minVoltage": ("Lowest cell", "V"),
+    "maxVoltageDifference": ("Cell spread", "V"),
+    "numBatT": ("Temperature sensors", ""),
+    "stateHeatmembrane": ("Heater on", ""),
+}
 
 # --- Request/response envelope ----------------------------------------------------------------
 # CORROBORATED: UPTON api.py _headers, GUOXIA api.py _headers. "appPlat: ha" identifies the client
@@ -148,6 +213,10 @@ HANCHU_REFRESH_MIN_INTERVAL = 30
 # OBSERVED: UPTON api.py _request uses a 15-second timeout and 3 attempts with a 2s, 4s backoff.
 # GUOXIA's copy uses 10 seconds and a single attempt. UPTON's is the maintained figure.
 HANCHU_TIMEOUT = 15
+
+# Characters of an error reply's body (any HTTP status other than 200 and 401) quoted in the warning,
+# whitespace collapsed. An error page can be long HTML; the start is what says why.
+HANCHU_ERROR_BODY_CHARS = 300
 HANCHU_RETRIES = 3
 
 # --- Device type ------------------------------------------------------------------------------
