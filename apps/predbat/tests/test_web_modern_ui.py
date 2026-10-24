@@ -13,6 +13,32 @@ from aiohttp.test_utils import TestClient, TestServer
 from web import WebInterface
 
 
+async def check_empty_asset_responses(server, etag, modified):
+    """Ensure cached and HEAD responses cannot corrupt a reused ingress connection."""
+    for encoding in ("deflate", "gzip"):
+        for method, condition, status in (
+            ("GET", "If-None-Match: " + etag, 304),
+            ("GET", "If-Modified-Since: " + modified, 304),
+            ("HEAD", "", 200),
+        ):
+            reader, writer = await asyncio.open_connection(server.host, server.port)
+            try:
+                request = f"{method} /ui/ HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: {encoding}\r\n"
+                if condition:
+                    request += condition + "\r\n"
+                request += "\r\nGET /ui/predbat_ui_scene.webp HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+                writer.write(request.encode("ascii"))
+                await writer.drain()
+                data = await asyncio.wait_for(reader.read(), timeout=5)
+                headers, following = data.split(b"\r\n\r\n", 1)
+                assert headers.startswith(f"HTTP/1.1 {status} ".encode()), headers
+                assert following.startswith(b"HTTP/1.1 200 OK\r\n"), (encoding, method, condition, following[:100])
+                assert following.endswith(b"RIFF-webp-fixture"), following
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+
 async def check_modern_ui_assets():
     """Exercise the real asset handlers without a Home Assistant connection."""
     with TemporaryDirectory() as directory:
@@ -83,6 +109,8 @@ async def check_modern_ui_assets():
                 os.utime(root / "predbat_ui.html", (1_700_000_000, 1_700_000_000))
                 response = await client.get("/ui/", headers={"Accept-Encoding": "identity"})
                 modified = response.headers["Last-Modified"]
+                await response.read()
+                await check_empty_asset_responses(client.server, response.headers["ETag"], modified)
                 response = await client.get("/ui/", headers={"If-Modified-Since": modified, "Accept-Encoding": "identity"})
                 assert response.status == 304
                 (root / "predbat_ui.html").write_bytes(html + b"updated")

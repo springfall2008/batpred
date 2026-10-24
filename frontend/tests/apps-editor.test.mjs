@@ -41,19 +41,22 @@ try {
 }
 
 // Exercise the actual backend mapping without importing the Home Assistant runtime.
-const stringListSchema = JSON.parse(execFileSync('python3', ['-c', `
+const backendDefinitions = JSON.parse(execFileSync('python3', ['-c', `
 import ast, copy, json
 from pathlib import Path
 root = Path(${JSON.stringify(fileURLToPath(new URL('../../', import.meta.url)))})
-web = ast.parse((root / 'apps/predbat/web.py').read_text())
-helper = next(node for node in web.body if isinstance(node, ast.FunctionDef) and node.name == '_apps_schema_value')
-namespace = {'copy': copy}
-exec(compile(ast.Module(body=[helper], type_ignores=[]), 'web.py', 'exec'), namespace)
+namespace = {'copy': copy, 'THIS_VERSION': 'test'}
+exec(compile(ast.parse((root / 'apps/predbat/const.py').read_text()), 'const.py', 'exec'), namespace)
 config = ast.parse((root / 'apps/predbat/config.py').read_text())
-apps = next(node.value for node in config.body if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == 'APPS_SCHEMA' for target in node.targets))
-spec = next(ast.literal_eval(value) for key, value in zip(apps.keys, apps.values) if isinstance(key, ast.Constant) and key.value == 'inverter_type')
-print(json.dumps({'inverter_type': namespace['_apps_schema_value'](spec), 'currency_symbols': namespace['_apps_schema_value']({'type': 'string|string_list'})}))
+config.body = [node for node in config.body if not isinstance(node, (ast.Import, ast.ImportFrom))]
+exec(compile(config, 'config.py', 'exec'), namespace)
+web = ast.parse((root / 'apps/predbat/web.py').read_text())
+names = {'_apps_schema_value', '_apps_schema_description', 'build_apps_json_schema', 'APPS_SCHEMA_DESCRIPTIONS', 'INTEGRATION_NAMES', 'INTEGRATION_SETTING_DESCRIPTIONS'}
+selected = [node for node in web.body if isinstance(node, ast.FunctionDef) and node.name in names or isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id in names for target in node.targets)]
+exec(compile(ast.Module(body=selected, type_ignores=[]), 'web.py', 'exec'), namespace)
+print(json.dumps({'schema': namespace['build_apps_json_schema'](), 'specs': namespace['APPS_SCHEMA'], 'config_items': namespace['CONFIG_ITEMS']}))
 `], { encoding: 'utf8' }))
+const backendSchema = backendDefinitions.schema.$defs.predbatApp.properties
 
 const schema = support.addEntitySuggestions({
   $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -65,7 +68,7 @@ const schema = support.addEntitySuggestions({
       properties: {
         threads: { type: 'integer', minimum: 0 },
         prefix: { type: 'string', pattern: '^[a-z][a-z0-9_]*$', description: 'Prefix added to every Home Assistant entity Predbat creates.' },
-        ...stringListSchema,
+        ...backendSchema,
         module: { type: 'string', const: 'predbat' },
         ha_key: { type: 'string' },
         mode: { type: 'string', enum: ['auto', 'manual'] },
@@ -165,4 +168,94 @@ test('prefix validation gives a concise correction without technical schema deta
   const hover = support.appsYamlHoverOptions.getHoverTexts({ schema: { description: 'Prefix help', type: 'string', pattern: '^[a-z][a-z0-9_]*$' }, pointer: '/pred_bat/prefix' })
   assert.deepEqual(hover, { message: 'Prefix help', typeInfo: '' })
   assert.ok(diagnostics('pred_bat:\n  threads: invalid').length)
+})
+
+
+test('backend list settings accept single values and lists while rejecting wrong shapes', () => {
+  for (const [name, valid, invalid] of [
+    ['inverter_limit', ['5000', '5000.5', 'sensor.grid_power', '[5000, sensor.grid_power]'], ['{limit: 5000}', '[[5000]]']],
+    ['inverter_limit_charge', ['3000', '[3000]'], ['{limit: 3000}', '[[3000]]']],
+    ['battery_rate_max', ['2600', '[2600, 3000]'], ['{rate: 2600}', '[[2600]]']],
+    ['car_charging_exclusive', ['true', 'false', '[true, false]'], ['123', '[true, 123]', '{value: true}']],
+    ['days_previous', ['7', '[7, 14]'], ['7.5', '[7, invalid]', '{days: 7}']],
+    ['days_previous_weight', ['1', '0.5', '[1, 0.5]'], ['invalid', '[1, invalid]', '{weight: 1}']],
+    ['rates_import_override', ['{start: "00:00", end: "06:00", rate: 10}', '[{rate: 10}]'], ['10', '[10]']],
+  ]) {
+    for (const value of valid) assert.deepEqual(diagnostics(`pred_bat:\n  ${name}: ${value}`), [], `${name}: ${value}`)
+    for (const value of invalid) assert.ok(diagnostics(`pred_bat:\n  ${name}: ${value}`).length, `${name}: ${value}`)
+  }
+})
+
+test('single-value sensor list settings retain entity completion', () => {
+  for (const doc of ['pred_bat:\n  inverter_limit: sensor.', 'pred_bat:\n  inverter_limit:\n    - sensor.']) {
+    const state = stateFor(doc)
+    const result = support.createAppsYamlCompletion()(new CompletionContext(state, doc.length, true))
+    assert.ok(result.options.some(option => option.label.replaceAll('"', '') === 'sensor.grid_power'))
+  }
+})
+
+
+function fieldDiagnostics(name, value) {
+  const fieldSchema = backendSchema[name]
+  assert.ok(fieldSchema, `Missing editor schema for ${name}`)
+  const state = EditorState.create({
+    doc: `value: ${JSON.stringify(value)}`,
+    extensions: [yaml(), support.stateExtensions({
+      type: 'object', properties: { value: fieldSchema }, $defs: backendDefinitions.schema.$defs,
+    })],
+  })
+  return support.createAppsYamlLinter()({ state })
+}
+
+test('every declared apps setting accepts its supported single and list forms', () => {
+  const failures = []
+  const samples = { string: 'example', integer: 1, float: 1.5, boolean: true, dict: {}, sensor: 'sensor.schema_audit', int_float_dict: { 50: 0.85 } }
+  for (const [name, spec] of Object.entries(backendDefinitions.specs)) {
+    for (const declared of spec.type.split('|')) {
+      const kind = declared.replace(/_list$/, '')
+      assert.ok(Object.hasOwn(samples, kind), `Unhandled backend type ${declared}`)
+      let value = samples[kind]
+      const property = backendSchema[name]
+      if (property.enum) {
+        value = property.enum.find(option => typeof option === typeof value)
+        if (value === undefined) continue
+      }
+      if (typeof value === 'number') value = Math.max(value, property.minimum ?? spec.min ?? value)
+      const forms = declared.endsWith('_list') || kind === 'sensor' || spec.entries ? [value, [value]] : [value]
+      for (const form of forms) {
+        const errors = fieldDiagnostics(name, form)
+        if (errors.length) failures.push({ name, declared, value: form, errors: errors.map(error => error.message) })
+      }
+    }
+    if (spec.or_auto && fieldDiagnostics(name, 'auto').length) failures.push({ name, value: 'auto' })
+  }
+  assert.deepEqual(failures, [])
+})
+
+test('every published editor default has a matching schema type and constraints', () => {
+  const failures = []
+  for (const [name, property] of Object.entries(backendSchema)) {
+    if (!Object.hasOwn(property, 'default')) continue
+    const errors = fieldDiagnostics(name, property.default)
+    if (errors.length) failures.push({ name, value: property.default, errors: errors.map(error => error.message) })
+  }
+  assert.deepEqual(failures, [])
+})
+
+
+test('per-device integer arrays and sensor arrays keep their item validation', () => {
+  for (const name of ['inverter_battery_rate_min', 'inverter_reserve_max']) {
+    assert.deepEqual(fieldDiagnostics(name, [1, 2]), [])
+    assert.ok(fieldDiagnostics(name, [1, 'invalid']).length)
+    assert.ok(fieldDiagnostics(name, [1.5]).length)
+  }
+  assert.deepEqual(fieldDiagnostics('car_charging_limit', ['sensor.car_one', 'sensor.car_two']), [])
+  assert.ok(fieldDiagnostics('car_charging_limit', [{ invalid: true }]).length)
+})
+
+test('every declared numeric range rejects values outside its bounds', () => {
+  for (const [name, spec] of Object.entries(backendDefinitions.specs)) {
+    if (Object.hasOwn(spec, 'min')) assert.ok(fieldDiagnostics(name, spec.min - 1).length, name)
+    if (Object.hasOwn(spec, 'max')) assert.ok(fieldDiagnostics(name, spec.max + 1).length, name)
+  }
 })
