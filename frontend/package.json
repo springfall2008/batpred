@@ -8,10 +8,7 @@
     "bundle": "npm run build && python3 -m zipfile -c ../apps/predbat/frontend.zip dist",
     "lint": "oxlint",
     "test": "node --test tests/*.test.mjs",
-    "preview": "vite preview",
-    "images:house": "node scripts/convert-house-images.mjs",
-    "prebuild": "npm run images:house",
-    "predev": "npm run images:house"
+    "preview": "vite preview"
   },
   "dependencies": {
     "@cubone/react-file-manager": "^1.35.0",
@@ -32,7 +29,6 @@
     "@types/react-dom": "^19.2.7",
     "@vitejs/plugin-react": "^6.1.1",
     "oxlint": "^1.81.0",
-    "sharp": "^0.35.5",
     "typescript": "~6.0.2",
     "vite": "^8.3.0"
   }
