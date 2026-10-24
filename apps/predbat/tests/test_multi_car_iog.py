@@ -766,7 +766,7 @@ def run_iog_model_limit_fetch_test(testname, my_predbat):
         "minutes_now",
     ]
     saved = {attr: copy.deepcopy(getattr(my_predbat, attr)) for attr in snapshot_attrs if hasattr(my_predbat, attr)}
-    arg_keys = ["car_charging_loss", "car_charging_soc", "car_charging_limit", "octopus_intelligent_slot"]
+    arg_keys = ["car_charging_loss", "car_charging_soc", "car_charging_limit", "octopus_intelligent_slot", "octopus_charge_limit", "octopus_charge_limit_is_additive"]
     saved_args = {key: copy.deepcopy(my_predbat.args[key]) for key in arg_keys if key in my_predbat.args}
 
     my_predbat.num_cars = 2
@@ -855,6 +855,24 @@ def run_iog_model_limit_fetch_test(testname, my_predbat):
     if not my_predbat.car_charging_slots[0]:
         print("ERROR: car 0 should still have IOG slots with consider_full on (limit not yet reached), got none")
         failed = True
+
+    # A charger requesting +30% must not mark a car at 50% as already full (#3034).
+    slot_entity = "binary_sensor.octopus_energy_intelligent_dispatching_car_a"
+    for is_charger, override, expected in [(True, None, 80.0), (False, None, 30.0), (False, True, 80.0), (True, False, 30.0)]:
+        attributes = {key: value for key, value in my_predbat.ha_interface.get_state(slot_entity, raw=True).items() if key != "state"}
+        attributes["is_charger"] = is_charger
+        my_predbat.ha_interface.set_state(slot_entity, "on", attributes=attributes)
+        my_predbat.args["octopus_charge_limit"] = [30.0, 30.0]
+        if override is None:
+            my_predbat.args.pop("octopus_charge_limit_is_additive", None)
+        else:
+            my_predbat.args["octopus_charge_limit_is_additive"] = [override, False]
+        for _ in range(2):
+            my_predbat.octopus_slots = [[], []]
+            my_predbat.fetch_sensor_data_cars()
+            if abs(my_predbat.car_charging_limit[0] - expected) > 0.01:
+                print("ERROR: additive target charger={} override={} expected {}, got {}".format(is_charger, override, expected, my_predbat.car_charging_limit[0]))
+                failed = True
 
     # Restore the shared fixture state captured above
     for key in arg_keys:

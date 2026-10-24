@@ -1,0 +1,95 @@
+/* Shared semantic tokens: components use the same meanings in both themes. */
+:root,
+:root[data-theme='light'] {
+  color-scheme: light;
+  --color-bg: #f3f4f6;
+  --color-surface: #ffffff;
+  --color-border: #e5e7eb;
+  --color-border-soft: #dddddd;
+  --color-text: #111827;
+  --color-text-muted: #6b7280;
+  --color-text-secondary: #4b5563;
+  --color-text-subtle: #9ca3af;
+  --color-success: #16a34a;
+  --color-warning: #f59e0b;
+  --color-danger: #dc2626;
+  --color-current: #2563eb;
+  --color-primary: var(--color-current);
+  --color-car: #b45309;
+  --color-semantic-contrast: #ffffff;
+  --focus-ring: color-mix(in srgb, var(--color-current) 72%, white);
+
+  /* Action colours */
+  --color-charge: #2563eb;
+  --color-hold-charge: #3b82f6;
+  --color-freeze-charge: #0891b2;
+  --color-export: #7c3aed;
+  --color-hold-export: #8b5cf6;
+  --color-freeze-export: #9333ea;
+  --color-hold-car: #b45309;
+  --color-hold-iboost: #0284c7;
+  --color-no-charge: #6b7280;
+  --color-demand: #374151;
+  --color-tooltip-bg: #111827;
+  --color-tooltip-text: #ffffff;
+  --color-battery-track: #e5e7eb;
+  --color-battery-low: #ef4444;
+  --color-battery-medium: #f59e0b;
+  --color-battery-high: #22c55e;
+  --shadow-sm: 0 1px 3px color-mix(in srgb, var(--color-text) 12%, transparent);
+  --shadow-card: 0 2px 8px color-mix(in srgb, var(--color-text) 6%, transparent);
+  --shadow-tooltip: 0 8px 24px color-mix(in srgb, var(--color-text) 18%, transparent);
+  --color-flow-solar: #f59e0b;
+  --color-solar-text: #92400e;
+  /* Match the battery connection to the charging label; green identifies household load. */
+  --color-flow-battery: var(--color-charge);
+  --color-flow-grid: #6b7280;
+  --color-flow-car: var(--color-charge);
+  --color-flow-home: #16a34a;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --color-bg: #111827;
+  --color-surface: #1f2937;
+  --color-border: #374151;
+  --color-border-soft: #4b5563;
+  --color-text: #f9fafb;
+  --color-text-muted: #9ca3af;
+  --color-text-secondary: #d1d5db;
+  --color-text-subtle: #6b7280;
+  --color-success: #22c55e;
+  --color-warning: #f59e0b;
+  --color-danger: #f87171;
+  --color-primary: var(--color-current);
+  --color-car: #fbbf24;
+  --color-semantic-contrast: #111827;
+  --focus-ring: color-mix(in srgb, var(--color-current) 78%, white);
+
+  /* Action colours */
+  --color-charge: #60a5fa;
+  --color-hold-charge: #93c5fd;
+  --color-freeze-charge: #22d3ee;
+  --color-export: #a78bfa;
+  --color-hold-export: #c4b5fd;
+  --color-freeze-export: #c084fc;
+  --color-hold-car: #fbbf24;
+  --color-hold-iboost: #38bdf8;
+  --color-no-charge: #9ca3af;
+  --color-demand: #d1d5db;
+  --color-tooltip-bg: #030712;
+  --color-tooltip-text: #f9fafb;
+  --color-battery-track: #374151;
+  --color-battery-low: #f87171;
+  --color-battery-medium: #fbbf24;
+  --color-battery-high: #4ade80;
+  --shadow-sm: 0 1px 3px color-mix(in srgb, black 32%, transparent);
+  --shadow-card: 0 2px 8px color-mix(in srgb, black 25%, transparent);
+  --shadow-tooltip: 0 8px 24px color-mix(in srgb, black 40%, transparent);
+  --color-flow-solar: #fbbf24;
+  --color-solar-text: #fbbf24;
+  --color-flow-battery: var(--color-charge);
+  --color-flow-grid: #9ca3af;
+  --color-flow-car: var(--color-charge);
+  --color-flow-home: #4ade80;
+}

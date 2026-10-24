@@ -1,0 +1,33 @@
+.app-content > main:has(> .compare-page) { max-width: none; margin-block: 0; padding: 1.5rem clamp(.75rem, 2vw, 2rem); }
+.compare-page { display: flex; flex-direction: column; gap: 1rem; width: 100%; min-width: 0; }
+.compare-page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.compare-page-header h1, .compare-page-header p, .compare-charts h2, .compare-charts p { margin: 0; }
+.compare-page-header h1 { color: var(--color-text); font-size: 1.5rem; }
+.compare-page-header p, .compare-charts p { margin-top: .2rem; color: var(--color-text-muted); font-size: .8rem; }
+.compare-page-header button { display: inline-flex; align-items: center; gap: .45rem; padding: .55rem .8rem; border: 0; border-radius: 8px; background: var(--color-current); color: white; font: inherit; font-size: .75rem; font-weight: 700; cursor: pointer; }
+.compare-page-header button:disabled { opacity: .55; cursor: wait; }
+.compare-message { padding: 1rem; border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-surface); color: var(--color-text-secondary); font-size: .82rem; }
+.compare-message.is-error { border-color: var(--color-danger); color: var(--color-danger); }
+.compare-table-card, .compare-charts article, .compare-plans details { border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-surface); box-shadow: var(--shadow-card); }
+.compare-table-scroll { overflow-x: auto; }
+.compare-table-card table { width: 100%; border-collapse: collapse; font-size: .74rem; white-space: nowrap; }
+.compare-table-card th, .compare-table-card td { padding: .7rem .75rem; border-bottom: 1px solid var(--color-border); text-align: right; }
+.compare-table-card thead th { color: var(--color-text-muted); font-size: .64rem; text-transform: uppercase; }
+.compare-table-card tr:last-child > * { border-bottom: 0; }
+.compare-table-card tbody th { text-align: left; }
+.compare-table-card tbody th a { color: var(--color-text); text-decoration: none; }
+.compare-table-card tbody th small { display: block; margin-top: .15rem; color: var(--color-text-muted); font-weight: 400; }
+.compare-table-card tr.is-best { background: color-mix(in srgb, var(--color-success) 7%, transparent); }
+.compare-badges { display: flex; gap: .3rem; }
+.compare-badges b, .compare-badges i, .compare-plans summary span { padding: .18rem .38rem; border-radius: 999px; background: color-mix(in srgb, var(--color-success) 16%, transparent); color: var(--color-success); font-size: .62rem; font-style: normal; }
+.compare-badges i { background: color-mix(in srgb, var(--color-current) 14%, transparent); color: var(--color-current); }
+.compare-charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.compare-charts article { min-width: 0; padding: 1rem; }
+.compare-charts h2 { color: var(--color-text); font-size: .95rem; }
+.compare-chart { height: 20rem; margin-top: .8rem; }
+.compare-plans { display: grid; gap: .75rem; }
+.compare-plans details { min-width: 0; overflow: hidden; }
+.compare-plans summary { display: flex; align-items: center; gap: .5rem; padding: .9rem 1rem; color: var(--color-text); font-size: .85rem; font-weight: 700; cursor: pointer; }
+.compare-plans details > p { padding: 0 1rem 1rem; color: var(--color-text-muted); }
+.compare-plans .plan-table-card { margin: 0; border: 0; border-top: 1px solid var(--color-border); border-radius: 0; box-shadow: none; }
+@media (max-width: 900px) { .compare-charts { grid-template-columns: 1fr; } .compare-page-header { align-items: stretch; flex-direction: column; } .compare-page-header button { align-self: flex-start; } }

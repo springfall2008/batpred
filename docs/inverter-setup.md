@@ -2798,6 +2798,29 @@ To run PredBat with Solis hybrid inverters with firmware level prior to FB00 (yo
 
 7. Ensure the correct entity IDs are used for your specific inverter setup. These entries should correspond to the buttons exposed by your Home Assistant Solis integration.
 
+### Optional reserve holds on pre-FB00 Solis
+
+On pre-FB00 firmware where Backup SOC has been verified to stop discharge in
+**Backup/Reserve - No Grid Charging**, enable reserve control while keeping `inverter_type: GS`:
+
+```yaml
+  inverter:
+    has_reserve_soc: true
+  reserve:
+    - number.solis_backup_mode_soc
+```
+
+Use your integration's actual reserve entity, merge `has_reserve_soc` into any existing
+`inverter` block, and enable `switch.predbat_set_reserve_enable`. The Energy Storage Control
+Switch must be configured as `energy_control_switch`.
+Predbat selects Backup/Reserve - No Grid Charging when it raises reserve to hold the battery
+at its current SOC (including car and iBoost holds), and restores the mode requested by the
+current plan when it resets reserve (Self-Use for normal demand).
+It keeps a nonzero discharge-current limit during the hold: some GS firmware resets a requested
+0 A battery discharge limit to its maximum, so the reserve enforces the hold instead.
+This is opt-in; verify both the absence of battery discharge and unwanted grid charging on your
+firmware before relying on it. This does not require the FB00 integration or inverter profile.
+
 ## Solis Inverters FB00 or later
 
 To run PredBat with Solis hybrid inverters with firmware level FB00 or later (you can recognise these by having 6 slots for charging times), follow the following steps:

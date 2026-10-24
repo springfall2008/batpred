@@ -23,6 +23,7 @@ taught about it.
 """
 
 import asyncio
+import json
 
 from coordinator import Coordinator
 from web import WebInterface
@@ -343,7 +344,7 @@ def test_discovery_page_escapes_rendered_values(my_predbat):
 
 
 def test_discovery_route_is_registered(my_predbat):
-    """/discovery is wired into the router, so the nav link actually resolves."""
+    """The Discovery page and its JSON source are wired into the router."""
     print("**** test_discovery_route_is_registered ****")
     import inspect
 
@@ -352,8 +353,34 @@ def test_discovery_route_is_registered(my_predbat):
     if '"/discovery"' not in source:
         print("  ERROR: expected /discovery to be registered on the router")
         failed = True
+    if '"/api/discovery"' not in source:
+        print("  ERROR: expected /api/discovery to be registered on the router")
+        failed = True
     if not failed:
         print("PASS: the /discovery route is registered")
+    return failed
+
+
+def test_discovery_api_is_redacted_by_default(my_predbat):
+    """The modern UI API only returns identifying values when raw mode is explicit."""
+    print("**** test_discovery_api_is_redacted_by_default ****")
+    failed = False
+    saved = getattr(my_predbat, "components", None)
+    try:
+        w = _make_web(my_predbat, _real_coordinator(my_predbat))
+        redacted = json.loads(asyncio.run(w.html_api_discovery(FakeRequest())).text)
+        raw = json.loads(asyncio.run(w.html_api_discovery(FakeRequest({"raw": "1"}))).text)
+        if SAMPLE_MPAN in json.dumps(redacted):
+            print("  ERROR: the default API response exposed an MPAN")
+            failed = True
+        if SAMPLE_MPAN not in json.dumps(raw):
+            print("  ERROR: raw mode did not return the MPAN")
+            failed = True
+    finally:
+        my_predbat.components = saved
+
+    if not failed:
+        print("PASS: the Discovery API is redacted by default")
     return failed
 
 
@@ -368,4 +395,5 @@ def run_web_discovery_tests(my_predbat):
     failed |= test_discovery_page_renders_a_field_it_was_never_taught(my_predbat)
     failed |= test_discovery_page_escapes_rendered_values(my_predbat)
     failed |= test_discovery_route_is_registered(my_predbat)
+    failed |= test_discovery_api_is_redacted_by_default(my_predbat)
     return failed

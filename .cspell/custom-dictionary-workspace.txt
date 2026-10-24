@@ -76,6 +76,7 @@ byok
 cadata
 calcsize
 calib
+calvind
 Cantarell
 cbat
 CDLL
@@ -86,6 +87,7 @@ ceyyyy
 CGNAT
 Chae
 Chaf
+charg
 chargedischarge
 chargeenergytotal
 chargefreeze
@@ -119,6 +121,7 @@ creds
 crosscharge
 ctrdis
 ctypes
+cubone
 customauthorizer
 customisation
 Customise
@@ -224,6 +227,7 @@ euids
 EVAC
 evc
 EVDC
+evenodd
 evergen
 evilspringfall
 evse
@@ -375,6 +379,8 @@ libc
 libyaml
 LIFEPO
 linebreak
+linecap
+linejoin
 linestyle
 Liskov
 lmt
@@ -470,6 +476,7 @@ notgithub
 notsn
 nrgheat
 numpy
+nums
 OCPP
 octo
 octoplus
@@ -501,6 +508,7 @@ pac
 packettypes
 paho
 parseable
+partlycloudy
 pbat
 pbgw
 pcharging
@@ -672,6 +680,7 @@ suback
 subclassing
 submessage
 substep
+subvalue
 sunspec
 sunsynk
 supabase
@@ -712,12 +721,14 @@ tmpfs
 tmrw
 tojson
 topbar
+TOTL
 tottime
 trapezoidally
 trapz
 Trefor
 treforsiphone
 treforsouthwell
+TRGT
 triggerable
 trydan
 tunables
@@ -760,6 +771,7 @@ Vallery
 varh
 venv
 Victron
+VIEWBOX
 visibilitychange
 vvwwxxabcdefyyzzuu
 waf
@@ -783,6 +795,7 @@ xaxistooltip
 xlabel
 xlim
 xload
+Xmark
 xrtkq
 xtest
 xticks
