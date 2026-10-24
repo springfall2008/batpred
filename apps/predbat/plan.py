@@ -3689,13 +3689,19 @@ class Plan:
                             )
                         limits[window_n] = limit
                         continue
+                    if self.debug_enable:
+                        self.log(
+                            "Prune trade-off {} slot {} {}-{} limit {} - nominal metric {} vs baseline {}, blended metric {} vs baseline {}".format(
+                                typ, window_n, self.time_abs_str(window["start"]), self.time_abs_str(window["end"]), limit, dp2(trial), dp2(baseline), dp2(blended_trial), dp2(blended_baseline)
+                            )
+                        )
                     blended_baseline = blended_trial
                 else:
                     # Dead slot - the blended metric may still move, so measure it afresh if needed
                     blended_baseline = None
+                    if self.debug_enable:
+                        self.log("Prune dead {} slot {} {}-{} limit {} - nominal metric {} vs baseline {}".format(typ, window_n, self.time_abs_str(window["start"]), self.time_abs_str(window["end"]), limit, dp2(trial), dp2(baseline)))
 
-                if self.debug_enable:
-                    self.log("Prune dead {} slot {} {}-{} limit {} - nominal metric {} vs baseline {}".format(typ, window_n, self.time_abs_str(window["start"]), self.time_abs_str(window["end"]), limit, dp2(trial), dp2(baseline)))
                 baseline = trial
                 pruned += 1
         if pruned:
