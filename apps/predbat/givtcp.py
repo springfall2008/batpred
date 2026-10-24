@@ -53,10 +53,10 @@ GIVTCP_TIME_OPTIONS = ["{:02d}:{:02d}:00".format(m // 60, m % 60) for m in range
 GIVTCP_PAUSE_MODES = ["Disabled", "PauseCharge", "PauseDischarge", "PauseBoth"]
 
 # GivTCP raw.invertor.model values confirmed not to support the Discharge_Target_SOC_1 register
-# (#4517). "Ac" (AC Coupled) and "Hybrid_gen1" are confirmed live - the latter on two separate
+# (#4517, #5679). "Ac" (AC Coupled) and "Hybrid_gen1" are confirmed live - the latter on two separate
 # reporter inverters, still repeating the write every cycle post-fix until added here.
-# "Hybrid_gen2" is inferred from the same GivEnergy firmware-archive generational split
-# (github.com/DJBenson/giv-firmware), not independently confirmed on real Gen2 hardware yet.
+# "Hybrid_gen2" was first inferred from the same GivEnergy firmware-archive generational split
+# (github.com/DJBenson/giv-firmware), and has since been confirmed on real Gen2 hardware (#5679).
 #
 # These inverters accept the write and report success, but it never persists, so the caller sees a
 # permanent mismatch and rewrites every cycle. Not publishing the entity at all is what stops that:
@@ -70,13 +70,18 @@ DISCHARGE_TARGET_UNSUPPORTED_MODELS = ("Ac", "Hybrid_gen1", "Hybrid_gen2")
 # Matched on the set of alphanumeric tokens because the two vocabularies disagree on word order and
 # spacing: "Gen 1 Hybrid" against "Hybrid_gen1". Both reduce to {gen, 1, hybrid}.
 #
-# Gen2 Hybrid is deliberately absent. "Hybrid_gen2" above was inferred from a firmware archive
-# rather than observed, and is still honoured where a build reports that exact raw model - but
-# extending it to Invertor_Type would remove export target control from every Gen2 Hybrid on v3 on
-# the strength of that inference. Add it here once an affected Gen2 is actually confirmed.
+# Gen2 Hybrid was held back while "Hybrid_gen2" above was only inferred from a firmware archive,
+# as matching it here removes export target control from every Gen2 Hybrid on GivTCP v3.
+#
+# Confirmed that a Gen 2 has no per-slot discharge target: GivEnergy's register map lists the 10-slot block,
+# which holds those targets, as "unavailable" on Gen 1 and Gen 2.
+# GivTCP v3.5 wrote to those registers anyway which the Gen 2 ignores, which is why Predbat didn't complain then.
+# GivTCP v3.6 now reports Predbat's request to write to these registers as skipped rather than writing to these registers,
+# Predbat then reads back discharge_target_soc, which a Gen 2 doesn't have, so it keeps retrying.
 DISCHARGE_TARGET_UNSUPPORTED_TYPES = (
     frozenset({"ac"}),
     frozenset({"gen", "1", "hybrid"}),
+    frozenset({"gen", "2", "hybrid"}),
 )
 
 # Control.Mode values. Predbat only ever writes Eco or Timed Export, but the inverter reports the
@@ -415,6 +420,20 @@ GIVTCP_RECORD_KEYS = [
 GIVTCP_INVERTER_TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 
 
+def discharge_target_unsupported(rest):
+    """
+    Whether this inverter has no working Discharge_Target_SOC_1 register (#4517, #5679).
+
+    Matches both the raw GivTCP model code and the readable Invertor_Type, using the two tables
+    above. publish_data() uses it to withhold the entity, and automatic_config() to leave
+    discharge_target_soc unclaimed, so the two cannot disagree about which inverters have it.
+    """
+    rest_data = rest.inverter.rest_data or {}
+    inverter_model = rest_data.get("raw", {}).get("invertor", {}).get("model", "")
+    inverter_type_tokens = frozenset(re.findall(r"[a-z]+|\d+", rest.inverter_type().lower()))
+    return inverter_model in DISCHARGE_TARGET_UNSUPPORTED_MODELS or inverter_type_tokens in DISCHARGE_TARGET_UNSUPPORTED_TYPES
+
+
 class GivTCPComponent(ComponentBase):
     """
     Publishes one or more GivTCP-connected inverters as HA entities.
@@ -665,8 +684,7 @@ class GivTCPComponent(ComponentBase):
                 # Publishing one would restart the every-cycle rewrite loop of #4517, because the write
                 # reports success and then silently fails to persist.
                 inverter_model = rest.inverter.rest_data.get("raw", {}).get("invertor", {}).get("model", "")
-                inverter_type_tokens = frozenset(re.findall(r"[a-z]+|\d+", rest.inverter_type().lower()))
-                model_unsupported = inverter_model in DISCHARGE_TARGET_UNSUPPORTED_MODELS or inverter_type_tokens in DISCHARGE_TARGET_UNSUPPORTED_TYPES
+                model_unsupported = discharge_target_unsupported(rest)
                 if not rest.rest_v3:
                     # v2 has no /setDischargeTarget - see GIVTCP_AUTO_CONFIG_DISCHARGE_TARGET_KEYS
                     pass
@@ -958,10 +976,10 @@ class GivTCPComponent(ComponentBase):
         else:
             self.log("Info: GivTCP: Enable_Charge_Target is not reported by every inverter - leaving charge_limit_enable to your apps.yaml config")
 
-        if all(self.rest[n].rest_v3 for n in discovered):
+        if all(self.rest[n].rest_v3 and not discharge_target_unsupported(self.rest[n]) for n in discovered):
             keys += GIVTCP_AUTO_CONFIG_DISCHARGE_TARGET_KEYS
         else:
-            self.log("Info: GivTCP: the export target register needs GivTCP v3 on every inverter - leaving discharge_target_soc to your apps.yaml config")
+            self.log("Info: GivTCP: the export target register needs GivTCP v3 and a model that supports it on every inverter - leaving discharge_target_soc to your apps.yaml config")
 
         if not all(self.rest[n].rest_v3 for n in discovered):
             self.log("Info: GivTCP: pause control needs GivTCP v3 on every inverter - leaving pause_mode/pause_start_time/pause_end_time to your apps.yaml config")

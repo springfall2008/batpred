@@ -446,11 +446,23 @@ def test_discharge_target_not_published_for_unsupported_models(my_predbat=None):
     return 0
 
 
-def _rest_from_fixture(filename):
+# cases/rest_v3.json was captured from a Gen 2 Hybrid, which has no working Discharge_Target_SOC_1
+# register (#5679), so as recorded it is an inverter that publishes no export target. Most tests use
+# it as "a fully featured v3 inverter", so unless a test asks for the capture exactly as recorded
+# (keep_capture_type=True) its Invertor_Type is relabelled as an inverter that does support it.
+SUPPORTED_V3_INVERTOR_TYPE = "Gen3 Hybrid"
+
+
+def _rest_from_fixture(filename, keep_capture_type=False):
     """A component whose single inverter holds a real captured GivTCP /readData response."""
     base, component = _make_component()
     with open(filename, "r") as handle:
-        component.rest[0].inverter.rest_data = json.load(handle)
+        rest_data = json.load(handle)
+    if not keep_capture_type and filename.endswith("rest_v3.json"):
+        for block in rest_data.values():
+            if isinstance(block, dict) and "Invertor_Type" in block:
+                block["Invertor_Type"] = SUPPORTED_V3_INVERTOR_TYPE
+    component.rest[0].inverter.rest_data = rest_data
     return base, component
 
 
@@ -987,7 +999,7 @@ def test_gap_and_tail_slots_are_logged_separately(my_predbat=None):
 
     run_async(component.run(seconds=0, first=True))
 
-    gap =[m for m in messages if m.startswith("Warn: GivTCP: no inverter has answered yet")]
+    gap = [m for m in messages if m.startswith("Warn: GivTCP: no inverter has answered yet")]
     tail = [m for m in messages if "leaving inverter(s)" in m]
     if len(gap) != 1 or "http://dead:6345" not in gap[0] or "inverter(s) 0 keep their own slot" not in gap[0]:
         print("ERROR: expected one warning naming gap slot 0 and its URL, got {}".format(gap))
@@ -1620,23 +1632,45 @@ def test_unsupported_model_detected_from_invertor_type(my_predbat=None):
     """
     assert not _publishes_discharge_target(invertor_type="Gen 1 Hybrid"), "a Gen 1 Hybrid must not get an export target control"
     assert not _publishes_discharge_target(invertor_type="Ac"), "an AC coupled inverter must not get an export target control"
+    assert not _publishes_discharge_target(invertor_type="Gen2 Hybrid"), "a Gen 2 Hybrid must not get an export target control (#5679)"
+    assert _publishes_discharge_target(invertor_type="Gen3 Hybrid"), "a Gen 3 Hybrid keeps its export target control"
     print("PASS: unsupported models are detected from Invertor_Type")
     return 0
 
 
-def test_gen2_hybrid_keeps_its_export_target(my_predbat=None):
+def test_gen2_hybrid_publishes_no_export_target(my_predbat=None):
     """
-    Gen2 Hybrid is deliberately NOT matched on Invertor_Type.
+    Gen2 Hybrid has no working Discharge_Target_SOC_1 register (#5679), so it is matched on
+    Invertor_Type like Gen 1 and AC - including the real Gen 2 Hybrid capture, exactly as recorded.
+    """
+    base, component = _rest_from_fixture("cases/rest_v3.json", keep_capture_type=True)
+    assert "gen2" in component.rest[0].inverter_type().lower().replace(" ", ""), "the capture is expected to be a Gen2 Hybrid, got {!r}".format(component.rest[0].inverter_type())
+    _set_v3(component.rest[0], True)
+    run_async(component.publish_data())
+    assert "number.predbat_givtcp_0_discharge_target_soc" not in base.entities, "the real Gen2 Hybrid capture must not publish a discharge target control"
+    print("PASS: a Gen2 Hybrid publishes no export target")
+    return 0
 
-    "Hybrid_gen2" was inferred from a firmware archive rather than observed on hardware, and it is
-    still honoured where a GivTCP build reports that exact raw.invertor.model. Extending it to
-    Invertor_Type would newly remove export target control from every Gen2 Hybrid on v3 - the
-    largest group of users - on the strength of that inference.
+
+def test_discharge_target_not_claimed_for_unsupported_models(my_predbat=None):
     """
-    assert _publishes_discharge_target(invertor_type="Gen2 Hybrid"), "a Gen2 Hybrid should keep its export target control"
-    # but an explicit raw model saying so is still honoured, exactly as before
-    assert not _publishes_discharge_target(invertor_type="Gen2 Hybrid", raw_model="Hybrid_gen2"), "an explicit Hybrid_gen2 raw model must still suppress it"
-    print("PASS: Gen2 Hybrid keeps its export target unless the raw model says otherwise")
+    automatic_config() leaves discharge_target_soc alone for a model with no working register (#5679).
+
+    The entity is never published for such a model, so claiming it would bind the setting to an entity
+    that does not exist. Left unclaimed, Inverter skips the export target write, and the discovery
+    record agrees with what automatic_config() bound. Uses the real Gen 2 Hybrid capture as recorded.
+    """
+    component, record = _v3_capture_record(keep_capture_type=True)
+    assert "discharge_target_soc" not in record["entities"], "the Gen 2 capture must not list a discharge target entity"
+    captured = capture_automatic_config(component)
+    assert "discharge_target_soc" not in captured, "an unsupported model must not have discharge_target_soc claimed, got {}".format(captured.get("discharge_target_soc"))
+    assert_record_agrees(record, captured, index=0)
+
+    # a model that does have the register is still claimed, as the relabelled capture shows
+    component, record = _v3_capture_record()
+    assert "discharge_target_soc" in record["entities"], "a supported model must list the discharge target entity"
+    assert "discharge_target_soc" in capture_automatic_config(component), "a supported model must have discharge_target_soc claimed"
+    print("PASS: discharge_target_soc is claimed only for models that have the register")
     return 0
 
 
@@ -1644,6 +1678,7 @@ def test_raw_model_matching_is_unchanged(my_predbat=None):
     """The original raw.invertor.model signal still works for builds that report names there."""
     assert not _publishes_discharge_target(raw_model="Hybrid_gen1"), "raw model Hybrid_gen1 must still suppress the control"
     assert not _publishes_discharge_target(raw_model="Ac"), "raw model Ac must still suppress the control"
+    assert not _publishes_discharge_target(raw_model="Hybrid_gen2"), "raw model Hybrid_gen2 must still suppress the control"
     assert _publishes_discharge_target(raw_model="2"), "a numeric model code identifies nothing and must not suppress"
     print("PASS: raw.invertor.model matching is unchanged")
     return 0
@@ -2632,7 +2667,8 @@ def test_build_discovery_round_trips_through_the_coordinator(my_predbat=None):
     """
     from coordinator import Coordinator
 
-    base, component = _rest_from_fixture("cases/rest_v3.json")
+    # As recorded: this test asserts the capture's own model string, so it must not be relabelled
+    base, component = _rest_from_fixture("cases/rest_v3.json", keep_capture_type=True)
     _mark_discovered(component)
     run_async(component.publish_data())
     report = component.build_discovery()
@@ -2665,9 +2701,9 @@ def test_build_discovery_round_trips_through_the_coordinator(my_predbat=None):
     return 0
 
 
-def _v3_capture_record():
+def _v3_capture_record(keep_capture_type=False):
     """The real rest_v3.json capture published by a component, and the one validated inverter record build_discovery() makes of it."""
-    base, component = _rest_from_fixture("cases/rest_v3.json")
+    base, component = _rest_from_fixture("cases/rest_v3.json", keep_capture_type=keep_capture_type)
     _mark_discovered(component)
     run_async(component.publish_data())
     records = validated_inverters(component.build_discovery())
@@ -2997,7 +3033,8 @@ def test_givtcp_component(my_predbat=None):
         ("dt_on_v3", test_discharge_target_still_published_on_v3, "discharge target published on v3"),
         ("dt_mixed_fleet", test_discharge_target_needs_v3_on_every_inverter, "discharge target needs v3 everywhere"),
         ("dt_type_match", test_unsupported_model_detected_from_invertor_type, "unsupported model from Invertor_Type"),
-        ("dt_gen2_kept", test_gen2_hybrid_keeps_its_export_target, "Gen2 Hybrid keeps its export target"),
+        ("dt_gen2_suppressed", test_gen2_hybrid_publishes_no_export_target, "Gen2 Hybrid publishes no export target"),
+        ("dt_not_claimed", test_discharge_target_not_claimed_for_unsupported_models, "discharge target not claimed for unsupported models"),
         ("dt_raw_model", test_raw_model_matching_is_unchanged, "raw.invertor.model matching unchanged"),
         ("reserve_min_default", test_reserve_entity_min_defaults_to_the_ge_floor, "reserve entity min defaults to 4"),
         ("reserve_min_lower", test_reserve_entity_min_respects_a_lower_battery_min_soc, "lower battery_min_soc respected"),

@@ -3154,9 +3154,10 @@ class Inverter:
         # reads back as None, and writing to it every cycle just produces errors.
         if force_export:
             target_soc = int(self.reserve_percent)
-            # A model with no working Discharge_Target_SOC_1 register (#4517) reaches here with no
-            # entity published for it, so the "cannot read it, leave it alone" branch below is what
-            # stops the every-cycle rewrite - see DISCHARGE_TARGET_UNSUPPORTED_MODELS in givtcp.py.
+            # A model with no working Discharge_Target_SOC_1 register (#4517 AC & Gen 1 hybrid, #5679 Gen 2 hybrid)
+            # has no entity published for it, and GivTCP's automatic_config() leaves discharge_target_soc unset for it,
+            # so the check below skips the write and nothing is rewritten every cycle - see DISCHARGE_TARGET_UNSUPPORTED_MODELS in
+            # givtcp.py. A target the user has configured but that cannot be read is still left alone.
             if "discharge_target_soc" in self.base.args:
                 current = self.base.get_arg("discharge_target_soc", index=self.id, required_unit="%")
                 try:
