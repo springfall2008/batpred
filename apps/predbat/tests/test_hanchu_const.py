@@ -12,6 +12,7 @@ import predbat  # noqa: F401  (import first - avoids circular import: config.py 
 from hanchu_const import (
     HANCHU_BASE_URL,
     HANCHU_CONTROL_KEYS,
+    HANCHU_ENCRYPTED_ENDPOINTS,
     HANCHU_ENDPOINTS,
     HANCHU_ENERGY,
     HANCHU_KEY_CHARGE_END,
@@ -56,7 +57,13 @@ def test_hanchu_base_url_and_endpoints():
         "iot_get": "/gateway/app/ha/iotGet",
         "iot_set": "/gateway/app/ha/iotSet",
         "fast_charge": "/gateway/app/ha/fastChargeDischarge",
+        # Command-line harness only (--battery-health), AES-encrypted bodies - see HANCHU_ENCRYPTED_ENDPOINTS.
+        "station_detail": "/gateway/platform/station/detail",
+        "battery_data": "/gateway/platform/bmsInfo/queryBatteryDataDivisions",
     }
+    if set(HANCHU_ENCRYPTED_ENDPOINTS) != {"station_detail", "battery_data"}:
+        print(f"ERROR: encrypted endpoints {HANCHU_ENCRYPTED_ENDPOINTS}")
+        failed = True
     for key, path in expected.items():
         if HANCHU_ENDPOINTS.get(key) != path:
             print(f"ERROR: endpoint {key} = {HANCHU_ENDPOINTS.get(key)} != {path}")

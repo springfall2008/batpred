@@ -61,7 +61,8 @@ HANCHU_BASE_URL = "https://iess3.hanchuess.com"
 # BLUSTERY reaches equivalent operations through "/gateway/platform/..." instead
 # (platform/deviceNew/iotGet, platform/deviceNew/iotSet, platform/remoteContrDtu/fastChargeDischarge,
 # platform/homePage/stationInfo) with AES-CBC-encrypted bodies. We use the app/ha family because it
-# is the maintained one AND because it needs no crypto - see HANCHU_ENCRYPTED_ENDPOINTS_NOT_USED.
+# is the maintained one AND because it needs no crypto - see HANCHU_ENCRYPTED_ENDPOINTS, which only the
+# command-line harness uses.
 HANCHU_ENDPOINTS = {
     # CORROBORATED: UPTON api.py async_login, GUOXIA api.py async_login. Body {"account", "pwd"},
     # password in PLAINTEXT over TLS. Response data is the bare token STRING, not an object.
@@ -96,16 +97,43 @@ HANCHU_ENDPOINTS = {
     "fast_charge": "/gateway/app/ha/fastChargeDischarge",
 }
 
-# Endpoints this component deliberately does NOT call, recorded so a later reader does not have to
-# rediscover them:
-#   /gateway/platform/station/detail                       (OBSERVED: UPTON api.py async_get_station_detail)
-#   /gateway/platform/bmsInfo/queryBatteryDataDivisions    (OBSERVED: UPTON api.py async_get_battery_data)
-# Both take an AES-CBC-encrypted, Base64 body keyed with a FIXED key and IV hard-coded in the
-# integration (OBSERVED: UPTON const.py AES_IV / AES_SECRET_KEY, crypto.py). They carry per-pack BMS
-# detail - cell temperatures, pack voltage/current, SoH - that Predbat does not plan with. Skipping
-# them keeps a hard-coded vendor key out of Predbat and removes a crypto dependency, at the cost of
-# per-pack temperature and SoH sensors. Revisit only if Predbat gains a use for them.
-HANCHU_ENCRYPTED_ENDPOINTS_NOT_USED = ("/gateway/platform/station/detail", "/gateway/platform/bmsInfo/queryBatteryDataDivisions")
+# --- Encrypted battery (BMS) endpoints - command-line harness only ---------------------------
+# OBSERVED: UPTON api.py async_get_station_detail and async_get_battery_data. These two live on the
+# /gateway/platform/ surface and take an AES-CBC encrypted, Base64 request body sent as raw data rather
+# than JSON; the response is ordinary JSON. The station detail lists the station's battery packs
+# (data.bmsList[].sn) and the battery data gives one pack's BMS figures - state of health, design and
+# full-charge capacity, voltage, current, temperatures. The component itself never calls them: Predbat
+# plans with none of these figures. They back the harness's --battery-health report, which answers
+# "is the battery smaller than it says" (bmsDesignCap is a design figure, not a measured one).
+HANCHU_ENDPOINTS["station_detail"] = "/gateway/platform/station/detail"
+HANCHU_ENDPOINTS["battery_data"] = "/gateway/platform/bmsInfo/queryBatteryDataDivisions"
+HANCHU_ENCRYPTED_ENDPOINTS = ("station_detail", "battery_data")
+
+# OBSERVED: UPTON const.py AES_SECRET_KEY / AES_IV, crypto.py _encrypt_payload. A FIXED key and IV,
+# the same for every account and published in that open-source integration, so they identify the
+# client, not the user - no user credential is involved. The body is the request JSON with compact
+# separators, PKCS7-padded, AES-128-CBC encrypted and Base64 encoded.
+HANCHU_AES_KEY = b"9z64Qr8mZH7Pg8d1"
+HANCHU_AES_IV = b"9z64Qr8mZH7Pg8d1"
+
+# OBSERVED: UPTON battery.py extract_battery_serials reads data.bmsList[].sn from the station detail.
+HANCHU_STATION_BMS_LIST = "bmsList"
+HANCHU_STATION_BMS_SN = "sn"
+
+# OBSERVED: UPTON sensor.py BATTERY_SENSORS. Battery data field -> (label, unit), in the order the
+# --battery-health report prints them. Units are UPTON's; capFull and capRemain are amp-hours.
+HANCHU_BATTERY_FIELDS = {
+    "sohPack": ("State of health", "%"),
+    "designCapacity": ("Design capacity", "kWh"),
+    "capFull": ("Full-charge capacity", "Ah"),
+    "capRemain": ("Remaining capacity", "Ah"),
+    "socPack": ("Pack SoC", "%"),
+    "vPack": ("Pack voltage", "V"),
+    "iPack": ("Pack current", "A"),
+    "tPack": ("Pack temperature", "C"),
+    "tEnv": ("Ambient temperature", "C"),
+    "tMos": ("MOSFET temperature", "C"),
+}
 
 # --- Request/response envelope ----------------------------------------------------------------
 # CORROBORATED: UPTON api.py _headers, GUOXIA api.py _headers. "appPlat: ha" identifies the client
