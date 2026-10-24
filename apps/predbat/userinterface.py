@@ -165,7 +165,8 @@ class UserInterface:
             if combine:
                 final = 0
                 for item in value:
-                    got = self.resolve_arg(arg, item, default=default, indirect=True)
+                    # Convert each entry before summing: one sensor in kW among values in W would otherwise be added as W
+                    got = self.resolve_arg(arg, item, default=default, indirect=True, required_unit=required_unit)
                     try:
                         final += float(got)
                     except (ValueError, TypeError):

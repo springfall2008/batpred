@@ -1,5 +1,6 @@
 # src/batpred/apps/predbat/tests/test_kraken.py
 import asyncio
+import json
 import time
 from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -777,6 +778,150 @@ def test_fetch_standing_charges_transient_error_does_not_fall_back_to_graphql():
 
         assert result is None, f"Expected None for HTTP {status_code}, got {result}"
         api.async_fetch_standing_charges_graphql.assert_not_called()
+        assert api.failures_total == 1, f"HTTP {status_code} must count one failure, got {api.failures_total}"
+
+
+def _fetch_standing_charges_404_with_fallback(fallback):
+    """Run async_fetch_standing_charges() against a REST 404 with the given GraphQL fallback side effect."""
+    api = make_kraken_api(provider="eon", account_id="A-AA8A473C")
+    api.current_tariff = {"tariff_code": "E-TOU-NEXT_SMART_SAVER_FIXED_12M_V8-M", "product_code": "NEXT_SMART_SAVER_FIXED_12M_V8"}
+    api.import_mpan = "1900000000456"
+    api.failures_total = 0
+    api.async_fetch_standing_charges_graphql = AsyncMock(side_effect=lambda mpan: fallback(api))
+
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(side_effect=lambda url, **kwargs: _mk_get_ctx(404))
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = asyncio.run(api.async_fetch_standing_charges())
+    return api, result
+
+
+def test_fetch_standing_charges_404_recovered_by_graphql_is_not_a_failure():
+    """GH#5584: the expected E.ON Next TOU 404 must not count a failure when the GraphQL fallback succeeds."""
+    api, result = _fetch_standing_charges_404_with_fallback(lambda api: 0.6195)
+    assert result == 0.6195
+    assert api.failures_total == 0, f"a recovered 404 must not count as a failure, got {api.failures_total}"
+
+
+def test_fetch_standing_charges_404_graphql_empty_counts_one_failure():
+    """A 404 whose GraphQL fallback returns nothing (without counting) is one genuine failure."""
+    api, result = _fetch_standing_charges_404_with_fallback(lambda api: None)
+    assert result is None
+    assert api.failures_total == 1
+
+
+def test_fetch_standing_charges_404_graphql_failure_counts_once_not_twice():
+    """A fallback that already counted its own failure inside async_graphql_query is not counted again."""
+
+    def graphql_failure(api):
+        """Stand in for a fallback that failed inside async_graphql_query, which counts its own."""
+        api.failures_total += 1
+        return None
+
+    api, result = _fetch_standing_charges_404_with_fallback(graphql_failure)
+    assert result is None
+    assert api.failures_total == 1, f"one failed cycle must count once, got {api.failures_total}"
+
+
+def _mk_undecodable_get_ctx():
+    """Build a mock GET context yielding a 200 whose body claims JSON but does not parse."""
+    ctx = _mk_get_ctx(200)
+    resp = ctx.__aenter__.return_value
+    resp.json = AsyncMock(side_effect=json.JSONDecodeError("Expecting value", "<html>Bad gateway</html>", 0))
+    return ctx
+
+
+def test_fetch_standing_charges_undecodable_200_is_counted_not_raised():
+    """GH#5584: a 200 with a malformed JSON body is logged and counted rather than escaping the fetch."""
+    api = make_kraken_api()
+    api.current_tariff = {"tariff_code": "E-1R-VAR-01-J", "product_code": "VAR-01"}
+    api.failures_total = 0
+
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(side_effect=lambda url, **kwargs: _mk_undecodable_get_ctx())
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = asyncio.run(api.async_fetch_standing_charges())
+
+    assert result is None
+    assert api.failures_total == 1
+
+
+def test_fetch_rates_undecodable_200_is_counted_not_raised():
+    """GH#5584: a 200 with a malformed JSON body on the REST rates endpoint is a counted failure, not an exception."""
+    api = make_kraken_api()
+    api.current_tariff = {"tariff_code": "E-1R-VAR-01-J", "product_code": "VAR-01"}
+    api.failures_total = 0
+    api.async_fetch_rates_graphql = AsyncMock()
+
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(side_effect=lambda url, **kwargs: _mk_undecodable_get_ctx())
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = asyncio.run(api.async_fetch_rates())
+
+    assert result is None
+    assert api.failures_total == 1
+    api.async_fetch_rates_graphql.assert_not_called()
+
+
+# JSON bodies that parse but are not an object, so data.get() on them would raise AttributeError.
+NON_OBJECT_JSON_BODIES = [[], None, "Bad gateway", 42]
+
+
+def _mk_non_object_get_ctx(body):
+    """Build a mock GET context yielding a 200 whose body parses as JSON but is not an object."""
+    ctx = _mk_get_ctx(200)
+    resp = ctx.__aenter__.return_value
+    resp.json = AsyncMock(return_value=body)
+    return ctx
+
+
+def test_fetch_standing_charges_non_object_200_is_counted_not_raised():
+    """A 200 whose JSON is not an object is logged and counted rather than escaping as AttributeError."""
+    for body in NON_OBJECT_JSON_BODIES:
+        api = make_kraken_api()
+        api.current_tariff = {"tariff_code": "E-1R-VAR-01-J", "product_code": "VAR-01"}
+        api.failures_total = 0
+
+        mock_session = AsyncMock()
+        mock_session.get = MagicMock(side_effect=lambda url, **kwargs: _mk_non_object_get_ctx(body))
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            result = asyncio.run(api.async_fetch_standing_charges())
+
+        assert result is None, f"body {body!r}: expected None, got {result!r}"
+        assert api.failures_total == 1, f"body {body!r}: expected one failure, got {api.failures_total}"
+
+
+def test_fetch_rates_non_object_200_is_counted_not_raised():
+    """A 200 whose JSON is not an object on the REST rates endpoint is a counted failure, not an exception."""
+    for body in NON_OBJECT_JSON_BODIES:
+        api = make_kraken_api()
+        api.current_tariff = {"tariff_code": "E-1R-VAR-01-J", "product_code": "VAR-01"}
+        api.failures_total = 0
+        api.async_fetch_rates_graphql = AsyncMock()
+
+        mock_session = AsyncMock()
+        mock_session.get = MagicMock(side_effect=lambda url, **kwargs: _mk_non_object_get_ctx(body))
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            result = asyncio.run(api.async_fetch_rates())
+
+        assert result is None, f"body {body!r}: expected None, got {result!r}"
+        assert api.failures_total == 1, f"body {body!r}: expected one failure, got {api.failures_total}"
+        api.async_fetch_rates_graphql.assert_not_called()
 
 
 def test_export_discovery_clears_stale_when_not_found():
