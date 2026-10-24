@@ -29,29 +29,40 @@ async def check_modern_ui_assets():
         (root / "predbat_ui_directory.js").mkdir()
         interface = WebInterface.__new__(WebInterface)
         app = web.Application()
-        app.router.add_get("/", interface.html_modern_ui)
-        app.router.add_get("/{filename:.*}", interface.html_modern_ui_asset)
+        interface.default_page = "./plan"
+        app.router.add_get("/", interface.html_default)
+        interface._register_modern_ui_routes(app)
         client = TestClient(TestServer(app))
         with patch("web.__file__", str(root / "web.py")):
             await client.start_server()
             try:
-                response = await client.get("/", headers={"Accept-Encoding": "identity"})
+                landing = await client.get("/")
+                assert landing.status == 200
+                assert "predbat-interface:" in await landing.text()
+                assert landing.headers["Cache-Control"] == "no-store"
+                redirect = await client.get("/ui", allow_redirects=False)
+                assert redirect.status == 302 and redirect.headers["Location"] == "./ui/"
+                for page in ("plan", "apps_editor", "chat", "annual", "cards"):
+                    page_response = await client.get("/ui/" + page)
+                    assert page_response.status == 200 and await page_response.read() == html
+                assert (await client.get("/ui/unknown")).status == 404
+                response = await client.get("/ui/", headers={"Accept-Encoding": "identity"})
                 assert response.status == 200
                 assert await response.read() == html
                 assert response.content_type == "text/html"
                 assert response.headers["Cache-Control"] == "no-cache"
                 assert "Last-Modified" in response.headers
                 etag = response.headers["ETag"]
-                response = await client.get("/", headers={"If-None-Match": etag, "Accept-Encoding": "identity"})
+                response = await client.get("/ui/", headers={"If-None-Match": etag, "Accept-Encoding": "identity"})
                 assert response.status == 304
-                response = await client.get("/predbat_ui.js", headers={"Accept-Encoding": "gzip"}, auto_decompress=False)
+                response = await client.get("/ui/predbat_ui.js", headers={"Accept-Encoding": "gzip"}, auto_decompress=False)
                 assert response.status == 200
                 assert response.headers["Content-Encoding"] == "gzip"
                 assert "Accept-Encoding" in response.headers["Vary"]
                 assert gzip.decompress(await response.read()) == javascript
                 assert response.headers["Cache-Control"] == "no-cache"
                 for name in ("predbat_ui_style.css", "predbat_ui_scene.webp"):
-                    response = await client.get("/" + name)
+                    response = await client.get("/ui/" + name)
                     assert response.status == 200, name
                 for name in (
                     "apps.yaml",
@@ -66,20 +77,20 @@ async def check_modern_ui_assets():
                     "predbat_ui_../secrets.yaml",
                     "predbat_ui_%2f",
                 ):
-                    response = await client.get("/" + name)
+                    response = await client.get("/ui/" + name)
                     assert response.status == 404, name
                     assert "private configuration" not in await response.text(), name
                 os.utime(root / "predbat_ui.html", (1_700_000_000, 1_700_000_000))
-                response = await client.get("/", headers={"Accept-Encoding": "identity"})
+                response = await client.get("/ui/", headers={"Accept-Encoding": "identity"})
                 modified = response.headers["Last-Modified"]
-                response = await client.get("/", headers={"If-Modified-Since": modified, "Accept-Encoding": "identity"})
+                response = await client.get("/ui/", headers={"If-Modified-Since": modified, "Accept-Encoding": "identity"})
                 assert response.status == 304
                 (root / "predbat_ui.html").write_bytes(html + b"updated")
-                response = await client.get("/", headers={"If-None-Match": etag, "Accept-Encoding": "identity"})
+                response = await client.get("/ui/", headers={"If-None-Match": etag, "Accept-Encoding": "identity"})
                 assert response.status == 200
                 assert await response.read() == html + b"updated"
                 (root / "predbat_ui.html").unlink()
-                response = await client.get("/")
+                response = await client.get("/ui/")
                 assert response.status == 503
             finally:
                 await client.close()

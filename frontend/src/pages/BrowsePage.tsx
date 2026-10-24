@@ -13,7 +13,7 @@ type BrowseResponse = {
 function fileUrl(file: FileManagerFile) {
   const separator = file.path.lastIndexOf('/')
   const directory = file.path.slice(1, separator) || '.'
-  return `./download?path=${encodeURIComponent(directory)}&file=${encodeURIComponent(file.name)}`
+  return `../download?path=${encodeURIComponent(directory)}&file=${encodeURIComponent(file.name)}`
 }
 
 function FilePreview({ file }: { file: FileManagerFile }) {
@@ -44,7 +44,7 @@ export default function BrowsePage() {
   const loadFolder = useCallback(async (path = '') => {
     setLoading(true)
     try {
-      const response = await fetch(`./api/browse?path=${encodeURIComponent(path.replace(/^\//, ''))}`, { cache: 'no-store' })
+      const response = await fetch(`../api/browse?path=${encodeURIComponent(path.replace(/^\//, ''))}`, { cache: 'no-store' })
       const data = await response.json() as BrowseResponse
       if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`)
       setFiles((current) => {

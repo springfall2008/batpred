@@ -37,7 +37,7 @@ export default function InternalsPage() {
   const loadObject = useCallback(async (nextPath: string) => {
     setLoading(true)
     try {
-      const response = await fetch(`./api/internals?path=${encodeURIComponent(nextPath)}`, { cache: 'no-store' })
+      const response = await fetch(`../api/internals?path=${encodeURIComponent(nextPath)}`, { cache: 'no-store' })
       const data = await response.json() as { success: boolean; members?: InternalMember[]; error?: string }
       if (!response.ok || !data.success) throw new Error(data.error ?? `HTTP ${response.status}`)
       setPath(nextPath)
@@ -52,7 +52,7 @@ export default function InternalsPage() {
 
   const loadThreads = useCallback(async () => {
     try {
-      const response = await fetch('./api/internals/threads', { cache: 'no-store' })
+      const response = await fetch('../api/internals/threads', { cache: 'no-store' })
       const data = await response.json() as { success: boolean; threads?: ThreadInfo[]; error?: string }
       if (!response.ok || !data.success) throw new Error(data.error ?? `HTTP ${response.status}`)
       setThreads(data.threads ?? [])
@@ -122,7 +122,7 @@ export default function InternalsPage() {
           <div><h2>Object hierarchy</h2><p>{members.length} members at this level</p></div>
           <div className="internals-object-actions">
             <input type="search" name="search" autoComplete="off" value={search} placeholder="Filter members…" aria-label="Filter object members" onChange={(event) => setSearch(event.target.value)} />
-            <a href={`./api/internals/download?path=${encodeURIComponent(path)}`}><FontAwesomeIcon icon={faDownload} /> YAML</a>
+            <a href={`../api/internals/download?path=${encodeURIComponent(path)}`}><FontAwesomeIcon icon={faDownload} /> YAML</a>
           </div>
         </header>
 

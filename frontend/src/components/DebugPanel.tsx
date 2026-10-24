@@ -56,7 +56,7 @@ export default function DebugPanel({ planData, statusData, powerFlowData }: Debu
     // Cancelling still downloads a file, but keeps credentials redacted.
     const masked = includeCredentials ? '0' : '1'
 
-    const endpoint = source === 'live' ? './debug_apps_live' : './debug_apps'
+    const endpoint = source === 'live' ? '../debug_apps_live' : '../debug_apps'
 
     window.location.href = `${endpoint}?masked=${masked}`
   }
@@ -75,7 +75,7 @@ export default function DebugPanel({ planData, statusData, powerFlowData }: Debu
     setRestartMessage(null)
 
     try {
-      const response = await fetch('./api/restart', {
+      const response = await fetch('../api/restart', {
         method: 'POST',
         cache: 'no-store',
         headers: {
@@ -155,7 +155,7 @@ export default function DebugPanel({ planData, statusData, powerFlowData }: Debu
             <span>Generate a diagnostic snapshot</span>
           </div>
 
-          <a className="debug-action-button" href="./debug_yaml">
+          <a className="debug-action-button" href="../debug_yaml">
             <FontAwesomeIcon icon={faDownload} />
             Create
           </a>
@@ -175,7 +175,7 @@ export default function DebugPanel({ planData, statusData, powerFlowData }: Debu
             <span>Download the current Predbat log</span>
           </div>
 
-          <a className="debug-action-button" href="./debug_log">
+          <a className="debug-action-button" href="../debug_log">
             <FontAwesomeIcon icon={faDownload} />
             Download
           </a>
@@ -195,7 +195,7 @@ export default function DebugPanel({ planData, statusData, powerFlowData }: Debu
             <span>Download the current generated plan</span>
           </div>
 
-          <a className="debug-action-button" href="./debug_plan">
+          <a className="debug-action-button" href="../debug_plan">
             <FontAwesomeIcon icon={faDownload} />
             Download
           </a>
@@ -215,7 +215,7 @@ export default function DebugPanel({ planData, statusData, powerFlowData }: Debu
             <span>Download all retained debug snapshots</span>
           </div>
 
-          <a className="debug-action-button" href="./debug_history_download_all">
+          <a className="debug-action-button" href="../debug_history_download_all">
             <FontAwesomeIcon icon={faDownload} />
             Download all
           </a>

@@ -47,7 +47,7 @@ class WebSecurityTests(unittest.TestCase):
                     response = asyncio.run(WebInterface.html_download_file(stub, SimpleNamespace(query=query)))
                     self.assertEqual(response.status, 403, query)
                     response = asyncio.run(WebInterface.html_browse(stub, SimpleNamespace(query=query)))
-                    self.assertNotIn("<pre class=\"code-content\">outside</pre>", response.text, query)
+                    self.assertNotIn('<pre class="code-content">outside</pre>', response.text, query)
                 response = asyncio.run(WebInterface.html_browse(stub, SimpleNamespace(query={})))
                 self.assertNotIn(">escape</a>", response.text)
                 self.assertNotIn(" escape</a>", response.text)
@@ -59,7 +59,6 @@ class WebSecurityTests(unittest.TestCase):
         for address in (None, "127.0.0.1", "192.168.1.10"):
             stub = MagicMock()
             stub.web_port = 5052
-            stub.get_web_ui.return_value = "legacy"
             stub.get_arg.side_effect = lambda key, default, indirect: address if address is not None else default
             stub.base.plugin_system = None
             stub.registered_endpoints = []
@@ -80,7 +79,6 @@ class WebSecurityTests(unittest.TestCase):
         self.assertNotIn(payload, rendered)
         self.assertIn(html.escape(payload), rendered)
         self.assertIn('href="./entity?entity_id=sensor.example"', rendered)
-
 
     def test_masked_yaml_parse_error(self):
         """Malformed configuration must not quote credentials in a masked attachment."""
@@ -125,7 +123,7 @@ class WebSecurityTests(unittest.TestCase):
             from userinterface import dump_debug_yaml
             from io import StringIO
 
-            for secret in ("private\nmultiline", 'private \"quoted\" value', "private " * 30, "true"):
+            for secret in ("private\nmultiline", 'private "quoted" value', "private " * 30, "true"):
                 section = StringIO()
                 dump_debug_yaml({"sensor_note": "prefix " + secret + " suffix", "unrelated": True}, section, compile_log_secret_pattern({secret: "dummy"}))
                 loaded = yaml.safe_load(section.getvalue())

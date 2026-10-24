@@ -11,9 +11,6 @@ export default function AnnualPage() {
     if (!document) return
 
     document.querySelector('.menu-bar')?.remove()
-    document.querySelectorAll<HTMLAnchorElement>('a[href="./annual"]').forEach((link) => {
-      link.href = './legacy_annual'
-    })
     document.documentElement.classList.toggle('dark-mode', window.document.documentElement.dataset.theme === 'dark')
     document.body.classList.toggle('dark-mode', window.document.documentElement.dataset.theme === 'dark')
 
@@ -37,7 +34,7 @@ export default function AnnualPage() {
         <h1>What If</h1>
         <p>Model the annual cost, savings and payback for different solar, battery and tariff choices.</p>
       </header>
-      <iframe ref={frameRef} className="annual-frame" src="./legacy_annual" title="Predbat What If" onLoad={styleEmbeddedPage} />
+      <iframe ref={frameRef} className="annual-frame" src="../annual" title="Predbat What If" onLoad={styleEmbeddedPage} />
     </section>
   )
 }

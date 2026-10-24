@@ -39,7 +39,7 @@ export default function DiscoveryPage() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const response = await fetch(`./api/discovery${raw ? '?raw=1' : ''}`, { cache: 'no-store' })
+      const response = await fetch(`../api/discovery${raw ? '?raw=1' : ''}`, { cache: 'no-store' })
       const data = await response.json() as Catalogue & { error?: string }
       if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`)
       setCatalogue(data)

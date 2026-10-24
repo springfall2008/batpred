@@ -39,7 +39,7 @@ export default function ConfigPage() {
 
   const load = useCallback(async () => {
     try {
-      const response = await fetch('./api/config', { cache: 'no-store' })
+      const response = await fetch('../api/config', { cache: 'no-store' })
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       const data = await response.json() as { items: ConfigItem[], errors?: Record<string, string> }
       setItems(data.items)
@@ -47,7 +47,7 @@ export default function ConfigPage() {
       setError('')
 
       try {
-        const ratesResponse = await fetch('./api/chart_data?chart=rates', { cache: 'no-store' })
+        const ratesResponse = await fetch('../api/chart_data?chart=rates', { cache: 'no-store' })
         if (!ratesResponse.ok) throw new Error(`HTTP ${ratesResponse.status}`)
         const rates = await ratesResponse.json() as RatesChartData
         const analysis = analyseTariff(data.items, rates)
@@ -73,7 +73,7 @@ export default function ConfigPage() {
   async function postChanges(changes: Array<{ item: ConfigItem, value: string | number | boolean }>) {
     const body = new URLSearchParams()
     changes.forEach(({ item, value }) => body.set(item.entity.replace('.', '__'), item.type === 'switch' ? (value ? 'on' : 'off') : String(value)))
-    const response = await fetch('./api/config', { method: 'POST', body })
+    const response = await fetch('../api/config', { method: 'POST', body })
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
   }
 

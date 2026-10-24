@@ -77,11 +77,6 @@ export default defineConfig({
         changeOrigin: true,
       },
 
-      '/legacy_apps': {
-        target: 'http://localhost:5052',
-        changeOrigin: true,
-      },
-
       '/apps_value': {
         target: 'http://localhost:5052',
         changeOrigin: true,
@@ -90,9 +85,21 @@ export default defineConfig({
       '^/apps(?:\\?.*)?$': {
         target: 'http://localhost:5052',
         changeOrigin: true,
-        bypass(request) {
-          return request.method === 'GET' ? '/index.html' : undefined
-        },
+      },
+
+      '^/(?:chat|annual|component_restart|download|debug_)[^/]*(?:/.*)?$': {
+        target: 'http://localhost:5052',
+        changeOrigin: true,
+      },
+
+      '/compare': {
+        target: 'http://localhost:5052',
+        changeOrigin: true,
+      },
+
+      '/images': {
+        target: 'http://localhost:5052',
+        changeOrigin: true,
       },
 
       '/metrics': {

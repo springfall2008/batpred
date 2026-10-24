@@ -41,9 +41,9 @@ export default function AppsEditorPage() {
   async function load() {
     try {
       const [yamlResponse, schemaResponse, entitiesResponse] = await Promise.all([
-        fetch('./api/apps_yaml', { cache: 'no-store' }),
-        fetch('./api/apps_schema', { cache: 'no-store' }),
-        fetch('./api/entities?all=1', { cache: 'no-store' })
+        fetch('../api/apps_yaml', { cache: 'no-store' }),
+        fetch('../api/apps_schema', { cache: 'no-store' }),
+        fetch('../api/entities?all=1', { cache: 'no-store' })
       ])
       if (!yamlResponse.ok || !schemaResponse.ok) throw new Error(`HTTP ${yamlResponse.ok ? schemaResponse.status : yamlResponse.status}`)
       const yaml = await yamlResponse.json() as AppsYamlResponse
@@ -118,7 +118,7 @@ export default function AppsEditorPage() {
     setMessage('')
     try {
       const content = editor.state.doc.toString()
-      const response = await fetch('./api/apps_yaml', {
+      const response = await fetch('../api/apps_yaml', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content, checksum: source.checksum })

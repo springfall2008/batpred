@@ -12,6 +12,7 @@ export default function ChatPage() {
 
     document.querySelector('.menu-bar')?.remove()
     document.querySelectorAll<HTMLAnchorElement>('a[href="./log"], a[href="./components"]').forEach((link) => {
+      link.setAttribute('href', link.getAttribute('href')!.replace('./', './ui/'))
       link.target = '_parent'
     })
     document.documentElement.classList.toggle('dark-mode', window.document.documentElement.dataset.theme === 'dark')
@@ -37,7 +38,7 @@ export default function ChatPage() {
         <h1>Chat</h1>
         <p>Ask Predbat about your system, configuration and plan.</p>
       </header>
-      <iframe ref={frameRef} className="chat-frame" src="./legacy_chat" title="Predbat Chat" onLoad={styleEmbeddedPage} />
+      <iframe ref={frameRef} className="chat-frame" src="../chat" title="Predbat Chat" onLoad={styleEmbeddedPage} />
     </section>
   )
 }

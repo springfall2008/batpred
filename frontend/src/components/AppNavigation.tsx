@@ -192,6 +192,7 @@ const navigationGroups: NavigationGroup[] = [
   {
     label: 'Support',
     items: [
+      { label: 'Classic interface', href: '../?ui=classic', icon: faRightLeft },
       {
         label: 'GitHub',
         href: 'https://github.com/springfall2008/batpred',
@@ -320,7 +321,7 @@ export default function AppNavigation({
   const nextThemeLabel = nextTheme === 'light' ? 'Light' : nextTheme === 'dark' ? 'Dark' : 'Auto'
 
   const pathPage = window.location.pathname.replace(/\/+$/, '').split('/').pop() ?? 'dash'
-  const currentPage = new URLSearchParams(window.location.search).get('page') ?? pathPage
+  const currentPage = new URLSearchParams(window.location.search).get('page') ?? (pathPage === 'ui' || !pathPage ? 'dash' : pathPage)
 
   return (
     <>

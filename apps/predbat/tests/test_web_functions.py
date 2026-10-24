@@ -10,9 +10,9 @@
 
 import asyncio
 import os
-from aiohttp.web import FileResponse
+from aiohttp.web import FileResponse, Application
 from tests.test_web_modern_ui import run_web_modern_ui_tests
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from web import WebInterface, is_data_numerical
 from web_helper import get_plan_renderer_js
@@ -40,22 +40,35 @@ def run_web_functions_tests(my_predbat):
     prefix = my_predbat.prefix
     failed += run_web_modern_ui_tests()
 
-    print("Test: legacy UI is the default and the bundled modern UI is selectable")
-    had_web_ui = "web_ui" in my_predbat.args
-    original_web_ui = my_predbat.args.get("web_ui")
-    my_predbat.args.pop("web_ui", None)
-    if web.get_web_ui() != "legacy":
-        print("  ERROR: missing web_ui should select the legacy interface")
-        failed += 1
-    my_predbat.args["web_ui"] = "modern"
-    modern_response = asyncio.run(web.html_plan(None))
+    modern_response = asyncio.run(web.html_modern_ui(None))
     if modern_response.status != 200 or not isinstance(modern_response, FileResponse):
-        print("  ERROR: web_ui modern did not serve the bundled React interface")
+        print("  ERROR: modern interface is unavailable")
         failed += 1
-    if had_web_ui:
-        my_predbat.args["web_ui"] = original_web_ui
-    else:
-        my_predbat.args.pop("web_ui", None)
+
+    print("Test: both interfaces register together without a configuration selector")
+    app = Application()
+    runner = MagicMock(setup=AsyncMock(), cleanup=AsyncMock())
+    site = MagicMock(start=AsyncMock())
+    old_stop = web.api_stop
+    web.api_stop = True
+    try:
+        with patch("web.web.Application", return_value=app), patch("web.web.AppRunner", return_value=runner), patch("web.web.TCPSite", return_value=site):
+            asyncio.run(web.start())
+        routes = {(route.method, route.resource.canonical): route.handler for route in app.router.routes()}
+        for path, handler in (
+            ("/", web.html_default),
+            ("/plan", web.html_plan_legacy),
+            ("/apps", web.html_apps),
+            ("/ui/plan", web.html_modern_ui),
+            ("/ui/apps", web.html_modern_ui),
+            ("/annual", web.annual_page.html_annual),
+            ("/chat", web.chat_page.html_chat),
+        ):
+            assert routes[("GET", path)] == handler, path
+        assert routes[("POST", "/apps")] == web.html_apps_post
+        assert not any(path.startswith("/legacy_") for _, path in routes)
+    finally:
+        web.api_stop = old_stop
 
     charging_entity = "binary_sensor." + prefix + "_charging"
     exporting_entity = "binary_sensor." + prefix + "_exporting"

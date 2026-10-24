@@ -6,20 +6,19 @@
 
 ## Test UI
 
-**Latest version has been moved to a new repo for pull request into official predbat: https://github.com/calvind80/batpred**
+**Latest version has been moved to a new repo for pull request into official predbat: <https://github.com/calvind80/batpred>**
 
 It's possible to replace the existing ui in Predbat with this test version. Disable auto update then edit apps.yaml as follows
 
 ```yaml
 pred_bat:
 
-  web_ui: modern #legacy restores original predbat ui
   auto_update: false
   predbat_repository: calvind80/batpred #delete this row to go back to the main predbat branch
 
 ```
 
-Once predbat restarts, choose the main version and once updated the new ui should appear. To remove it and go back to standard delete the predbat_repository line from apps.yaml and choose an official version.
+Once predbat restarts, choose the main version and once updated select **Try the new interface** in the menu. Use **Classic interface** to return; your browser remembers your choice. To remove it and go back to standard delete the predbat_repository line from apps.yaml and choose an official version.
 
 ## Introduction
 

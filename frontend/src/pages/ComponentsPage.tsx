@@ -44,7 +44,7 @@ export default function ComponentsPage() {
 
   const load = useCallback(async () => {
     try {
-      const response = await fetch('./api/components', { cache: 'no-store' })
+      const response = await fetch('../api/components', { cache: 'no-store' })
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       const data = await response.json() as ComponentsResponse
       setComponents(data.components)
@@ -73,7 +73,7 @@ export default function ComponentsPage() {
     setError('')
     try {
       const body = new URLSearchParams({ component: component.id })
-      const response = await fetch('./component_restart', { method: 'POST', body })
+      const response = await fetch('../component_restart', { method: 'POST', body })
       const result = await response.json() as { message?: string }
       if (!response.ok) throw new Error(result.message ?? `HTTP ${response.status}`)
       await load()

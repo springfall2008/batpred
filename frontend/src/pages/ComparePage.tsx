@@ -139,7 +139,7 @@ export default function ComparePage() {
 
   const load = useCallback(async () => {
     try {
-      const response = await fetch('./api/compare', { cache: 'no-store' })
+      const response = await fetch('../api/compare', { cache: 'no-store' })
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       setData(await response.json() as CompareData)
       setError('')
@@ -161,7 +161,7 @@ export default function ComparePage() {
     setStarting(true)
     setError('')
     try {
-      const response = await fetch('./compare', { method: 'POST', body: new URLSearchParams({ run: 'run' }) })
+      const response = await fetch('../compare', { method: 'POST', body: new URLSearchParams({ run: 'run' }) })
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       await load()
     } catch (reason) {
