@@ -8,6 +8,7 @@ adbase
 afci
 afewyards
 agentic
+aggrdata
 AIO
 AIO's
 aiofiles
@@ -239,8 +240,10 @@ figsize
 finaliser
 Fingerbot
 firstparty
+FKIA
 fline
 FLOMASTA
+flowdata
 fontsize
 fontweight
 footgun
@@ -554,6 +557,7 @@ pvlib
 pvlimit
 PVONLY
 pvpower
+pvsystems
 pvwatts
 pwindow
 pwr
@@ -615,6 +619,7 @@ Selfrun
 Selfuse
 semodbus
 Sergoe
+serialnumber
 sess
 setattr
 setdefault
