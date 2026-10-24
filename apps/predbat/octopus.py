@@ -1501,8 +1501,13 @@ class OctopusAPI(ComponentBase):
 
         # Check if currently in an active saving session
         # Handle both old API keys (start/end) and new API keys (startAt/endAt)
+        # A joined Weekend Happy Hour is free electricity, not a turn-down session - the planner prices it as a
+        # free slot (fetch_octopus_sessions), so it must not assert the saving session sensor either (#5615).
+        # Events whose type is absent or unresolvable still count, matching the planner's fall-through.
         active_event = False
         for event in joined_events:
+            if event_type.get(event.get("eventId", None), None) == "WEEKEND_HAPPY_HOUR":
+                continue
             start = event.get("startAt", event.get("start", None))
             end = event.get("endAt", event.get("end", None))
             if start and end:
