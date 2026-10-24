@@ -64,6 +64,30 @@ _EV_MAX_ATTEMPTS = 3
 # Hard cap on start sends per charging window, however often a flapping plug status re-arms the budget
 _EV_MAX_STARTS_PER_WINDOW = 6
 
+# gateway_evc_schedule_control: the hub's recurring daily charge window follows the car plan.
+# Each write is a flash write on the hub and a profile re-send to the charger, so writes are capped
+# per local day. The window is the plan's next 24 h rounded outward to whole slots.
+# A write that adds time or current lets the car charge, so it gets the larger budget; flash writes on
+# the hub stay bounded at 10 a day.
+_EV_SCHEDULE_MAX_GROWS_PER_DAY = 8
+_EV_SCHEDULE_MAX_SHRINKS_PER_DAY = 2
+# Once the hub reports its window, a write it has not echoed within this long is sent again (seconds)
+_EV_SCHEDULE_ECHO_SECONDS = 180
+# Sends of the same window the hub has not echoed, beyond the first; these do not count against the daily limits
+_EV_SCHEDULE_MAX_RESENDS = 3
+# Connections in a row that end this soon after the ev/schedule subscribe, before any report, after which the
+# broker is taken to refuse it by disconnecting and it is not tried again in this run (seconds, connections)
+_EV_SCHEDULE_SUBSCRIBE_GRACE = 10
+_EV_SCHEDULE_SUBSCRIBE_DROPS = 2
+_EV_SCHEDULE_SLOT_MINUTES = 30
+_EV_SCHEDULE_SLOTS = 24 * 60 // _EV_SCHEDULE_SLOT_MINUTES
+_EV_SCHEDULE_HORIZON = datetime.timedelta(hours=24)
+_EV_SCHEDULE_VOLTS = 230
+_EV_SCHEDULE_MIN_AMPS = 6
+_EV_SCHEDULE_DEFAULT_AMPS = 32
+# Stops sent for sessions running inside the managed window with no planned charge, per gap between windows
+_EV_MAX_UNPLANNED_STOPS = 3
+
 # How long an identical control command waits for the hub's ack (or, after an ack,
 # for telemetry to catch up) before it may be published again (seconds). Covers the
 # GWMQTT write_and_poll loop (3 attempts of up to 10 s each, see INVERTER_DEF), so one
@@ -295,6 +319,9 @@ class GatewayMQTT(ComponentBase):
     _assumed_ratings = frozenset()
     _reserve_before_zero = {}  # replaced, never changed in place
     gateway_device_id = None
+    gateway_evc_schedule_control = False
+    _ev_sched = None
+    _ev_sched_sub_disabled = False
 
     def initialize(
         self,
@@ -305,6 +332,7 @@ class GatewayMQTT(ComponentBase):
         gateway_inverter_serial=None,
         gateway_evc_automatic=False,
         gateway_evc_control=False,
+        gateway_evc_schedule_control=False,
         gateway_shared_ct=True,
         gateway_integrate_power=False,
         gateway_display_only=False,
@@ -328,6 +356,10 @@ class GatewayMQTT(ComponentBase):
                 the current time falls inside a planned car-charging window and send RemoteStartTransaction
                 plus SetChargingProfile on window entry, or RemoteStopTransaction on window exit. Each
                 command is confirmed from the charger's telemetry and re-sent (at most 3 sends).
+            gateway_evc_schedule_control: When True (requires gateway_evc_control), also keep the hub's
+                recurring daily charge window (0 A outside it) on the span of the planned car charging in
+                the next 24 hours, written only when it changes and at most 10 times a day. Off by default:
+                the hub's window is then never written. Turning it off does not put back an earlier window.
             gateway_shared_ct: When True (the default), several inverters are taken to share one grid CT
                 clamp, so each reports the same grid and load. Only the first inverter's grid and load
                 readings are then used, so the house's grid and load are not counted once per inverter.
@@ -348,6 +380,11 @@ class GatewayMQTT(ComponentBase):
         self.gateway_display_only = gateway_display_only
         self.gateway_evc_automatic = bool(gateway_evc_automatic)
         self.gateway_evc_control = bool(gateway_evc_control)
+        if isinstance(gateway_evc_schedule_control, str):
+            gateway_evc_schedule_control = gateway_evc_schedule_control.strip().lower() in ("true", "1", "yes", "on")
+        self.gateway_evc_schedule_control = bool(gateway_evc_schedule_control)
+        if self.gateway_evc_schedule_control and not self.gateway_evc_control:
+            self.log("Warn: GatewayMQTT: gateway_evc_schedule_control needs gateway_evc_control, the charger's window will not be managed")
         self.gateway_shared_ct = bool(gateway_shared_ct)
         self.gateway_integrate_power = bool(gateway_integrate_power)
         # Today's import, export and load integrated from power while gateway_integrate_power is on
@@ -387,6 +424,8 @@ class GatewayMQTT(ComponentBase):
         self.topic_schedule = f"{self._topic_base}/schedule"
         self.topic_command = f"{self._topic_base}/command"
         self.topic_ack = f"{self._topic_base}/ack/+"
+        self.topic_ev_schedule = f"{self._topic_base}/ev/schedule"
+        self.topic_ev_capabilities = f"{self._topic_base}/ev/capabilities"
         self._ack_topic_prefix = f"{self._topic_base}/ack/"
 
         # Runtime state
@@ -438,6 +477,7 @@ class GatewayMQTT(ComponentBase):
         self._ev_max_current: dict = {}  # charge_point_id → last known max_current_a from telemetry
         self._ev_telemetry: dict = {}  # charge_point_id → {"online", "has_status", "car_connected", "session_active", "time"} from the last telemetry
         self._reset_ev_control_state()
+        self._reset_ev_schedule_state()
         self._suffix_to_serial = {}  # maps entity suffix (last 6 chars of serial) -> full serial string
         # Incrementing counter included in every published command, seeded from the clock so
         # ids do not restart at PBAT1 after a restart: the hub rejects ids it has recently seen
@@ -649,6 +689,7 @@ class GatewayMQTT(ComponentBase):
         """Clear the per-window counters, at each change of desired state."""
         self._ev_window_starts = 0  # start sends in this window, capped at _EV_MAX_STARTS_PER_WINDOW
         self._ev_unplugged_start_sent = False  # the one start sent while the plug read unplugged this window
+        self._ev_unplanned_stops = 0  # unplanned sessions stopped since the last change of desired state
         self._ev_session_end_logged = False  # a confirmed session ending mid-window has been logged this window
         self._ev_start_confirmed = False  # telemetry has shown this window's start take: no further starts this window
 
@@ -660,20 +701,27 @@ class GatewayMQTT(ComponentBase):
         self._ev_latched = False
 
     def _report_ev_latch(self):
-        """Show the latch warning on the status, re-asserting it once the main loop has replaced it.
+        """Show the latch warning on the status, re-asserting it once the main loop has replaced it."""
+        self._report_ev_warning(self._ev_latch_message)
+
+    def _report_ev_warning(self, message):
+        """Show an EV control warning on the status, re-asserting it once the main loop has replaced it.
 
         It is recorded without had_errors, so the main loop's next status write replaces it rather
         than keeping it as the run's warning; writing it again each cycle it is missing keeps it
-        visible for as long as the latch holds. It never replaces a real error: nothing is written
+        visible for as long as the condition holds. It never replaces a real error: nothing is written
         while the run has had_errors set or the status shows an error.
+
+        Args:
+            message: The ``Warn:`` status text.
         """
         base = self.base  # PredBat: status_state, had_errors and record_status come from its Output status path
         shown = base.status_state
-        if shown == self._ev_latch_message or base.had_errors is True:
+        if shown == message or base.had_errors is True:
             return
         if isinstance(shown, str) and shown.startswith("Error"):
             return
-        base.record_status(self._ev_latch_message, had_errors=False)
+        base.record_status(message, had_errors=False)
 
     def _ev_telemetry_confirms(self, state, should_charge):
         """Return True if the charger's telemetry shows the desired session state and is fresh enough to trust.
@@ -731,8 +779,11 @@ class GatewayMQTT(ComponentBase):
         A charger that reports no OCPP status cannot show plug state, so at a transition it gets the
         previous behaviour: one send with no confirmation or retry. Once a send has gone out under an OCPP
         status, a later empty status is not taken as success: the confirm/retry path carries on, confirming
-        from the session state. A stop is only ever sent after PredBat wanted the car charging, so a
-        session the user started outside a window is never stopped.
+        from the session state. With gateway_evc_schedule_control off, a stop is only ever sent after
+        PredBat wanted the car charging, so a session the user started outside a window is never stopped.
+        With it on, a session running with no planned charge inside the charge window PredBat manages on
+        the hub (see _ev_unplanned_session) is stopped too, at most _EV_MAX_UNPLANNED_STOPS times between
+        windows; outside that window the hub holds it at 0 A.
 
         Once telemetry has confirmed a start in a window, no further start is sent in that window, whatever
         the plug reads: on the firmware below a stop from the charger's own app reads "Available" with the
@@ -764,6 +815,15 @@ class GatewayMQTT(ComponentBase):
         state = self._ev_telemetry.get(cp_id)
         online = bool(state and state["online"])
         has_status = bool(state and state["has_status"])
+
+        if not should_charge and self._ev_confirmed and not self._ev_latched and self._ev_unplanned_session(state):
+            # Schedule control: a session inside the window PredBat wrote, with no planned charge now, is
+            # closed with the normal confirmed stop. Bounded per gap so a session restarted again and
+            # again is not fought indefinitely.
+            self._ev_unplanned_stops += 1
+            self.log(f"Info: GatewayMQTT: EVC '{cp_id}' has a session with no planned charge inside the managed window, stopping it ({self._ev_unplanned_stops}/{_EV_MAX_UNPLANNED_STOPS})")
+            self._ev_confirmed = False
+            self._reset_ev_budget()
 
         if should_charge and online and has_status and not state["car_connected"] and not self._ev_start_confirmed:
             # Reads unplugged, which older hub firmware also reports for a plugged car after a reconnect:
@@ -881,6 +941,546 @@ class GatewayMQTT(ComponentBase):
             payload["charge_point_id"] = charge_point_id
         await self._publish_raw(self.topic_command, json.dumps(payload).encode())
 
+    def _ev_now(self):
+        """The current local time for charge window decisions (patchable in tests)."""
+        return datetime.datetime.now(self.local_tz)
+
+    def _reset_ev_schedule_state(self):
+        """Forget the hub charge window written by schedule control (reloaded from storage before first use)."""
+        self._ev_sched = None  # {"charge_point_id", "start_min", "end_min", "current_a"} last written to the hub
+        self._ev_sched_writes_date = None  # local date (ISO) the write counts belong to
+        self._ev_sched_grows = 0  # windows written on that date that added time or current
+        self._ev_sched_shrinks = 0  # windows written on that date that only removed time or current
+        self._ev_sched_loaded = False  # the stored window has been read
+        self._ev_sched_deferred = None  # what was last logged as held back, so it is logged once
+        self._ev_sched_pending = None  # (window, _monotonic() when sent) awaiting the hub's echo on ev/schedule
+        self._ev_sched_unconfirmed = None  # the window last sent that the hub has not echoed (re-sends are free)
+        self._ev_sched_since = None  # (window, local time it was first seen in place); narrowing waits for its end
+        self._ev_sched_resends = 0  # re-sends of _ev_sched_unconfirmed, at most _EV_SCHEDULE_MAX_RESENDS
+        self._ev_hub_max_amps = None  # maxAmps from the hub's retained ev/capabilities, when it reports one
+        self._ev_sched_sub_drops = 0  # connections in a row that ended just after the ev/schedule subscribe
+        self._ev_sched_multi_warned = False  # the one-charger limitation has been logged
+        self._ev_hub_sched_seen = False  # the hub has reported its window on ev/schedule on this connection
+        self._ev_hub_sched = None  # the window the hub reports ({"start_min", "end_min", "current_a"}), None for none
+        self._ev_sched_subscribed = False  # the broker granted the ev/schedule subscription on this connection
+        self._ev_sched_sub_disabled = False  # the broker dropped the connection after the subscribe: never try again
+        self._ev_sched_sub_at = None  # _monotonic() when ev/schedule was last subscribed
+        self._ev_sched_sub_logged = False  # the refused-subscription note has been logged (once per process)
+        self._ev_sched_retry_subscribe = False  # a token refresh asks for the subscription to be tried again
+
+    def _ev_schedule_filename(self):
+        """Storage name of this hub's managed EV charge window."""
+        return f"ev_schedule_{self.gateway_device_id}"
+
+    async def _load_ev_schedule(self):
+        """Load the window last written to the hub, so a restart does not write it again.
+
+        Returns:
+            bool: True once loaded (or there is no storage); False to try again next cycle.
+        """
+        storage = self.storage
+        if storage is None:
+            return True
+        try:
+            saved = await storage.load(GATEWAY_STORAGE_MODULE, self._ev_schedule_filename())
+        except Exception as e:
+            self.log(f"Warn: GatewayMQTT: failed to load the stored EV charge window: {e}")
+            return False
+        if isinstance(saved, dict):
+            try:
+                window = saved.get("window")
+                if window is not None:
+                    window = {
+                        "charge_point_id": str(window["charge_point_id"]),
+                        "start_min": int(window["start_min"]),
+                        "end_min": int(window["end_min"]),
+                        "current_a": int(window["current_a"]),
+                    }
+                    if not self._ev_schedule_valid(window):
+                        window = None
+                self._ev_sched = window
+                if window is not None:
+                    # When it came into place; unknown (an older file, or unreadable) counts as having run, so it can narrow
+                    since = None
+                    try:
+                        since = datetime.datetime.fromisoformat(str(saved["since"])).astimezone(self.local_tz) if saved.get("since") else None
+                    except (TypeError, ValueError):
+                        since = None
+                    self._ev_sched_since = (window, since)
+                self._ev_sched_writes_date = str(saved["writes_date"]) if saved.get("writes_date") else None
+                self._ev_sched_grows = max(int(saved.get("grows") or 0), 0)
+                self._ev_sched_shrinks = max(int(saved.get("shrinks") or 0), 0)
+            except (AttributeError, KeyError, TypeError, ValueError):
+                self.log("Warn: GatewayMQTT: ignoring unreadable stored EV charge window")
+        return True
+
+    async def _save_ev_schedule(self):
+        """Store the window last written to the hub and today's write counts."""
+        storage = self.storage
+        if storage is None:
+            return
+        since = self._ev_sched_since
+        since = since[1].isoformat() if since and since[1] is not None and self._ev_schedule_same(since[0], self._ev_sched) else None
+        data = {"window": self._ev_sched, "since": since, "writes_date": self._ev_sched_writes_date, "grows": self._ev_sched_grows, "shrinks": self._ev_sched_shrinks}
+        try:
+            saved = await storage.save(GATEWAY_STORAGE_MODULE, self._ev_schedule_filename(), data, format="json")
+        except Exception as e:
+            self.log(f"Warn: GatewayMQTT: failed to save the EV charge window: {e}")
+            return
+        if not saved:
+            self.log("Warn: GatewayMQTT: failed to save the EV charge window")
+
+    @staticmethod
+    def _ev_schedule_valid(window):
+        """Whether a window is one the hub accepts (start 0..1439, end 1..1440, start != end, 0..125 A)."""
+        return 0 <= window["start_min"] <= 1439 and 1 <= window["end_min"] <= 1440 and window["start_min"] != window["end_min"] and 0 <= window["current_a"] <= 125
+
+    @staticmethod
+    def _ev_schedule_same(a, b):
+        """Whether two windows have the same times and current (the hub's window carries no charger id)."""
+        if not a or not b:
+            return not a and not b
+        return all(a[key] == b[key] for key in ("start_min", "end_min", "current_a"))
+
+    def _process_ev_schedule(self, payload):
+        """Record the window the hub reports on its retained ev/schedule topic.
+
+        The hub publishes ``{"valid", "start_min", "end_min", "current_a"}`` after every window write
+        (and retains it, so it arrives on subscribing). An empty payload or ``valid: false`` means no
+        window. Once a report has arrived the hub's window is what schedule control compares against.
+
+        Args:
+            payload: The raw message payload.
+        """
+        window = None
+        text = payload.decode("utf-8", errors="replace").strip() if isinstance(payload, (bytes, bytearray)) else str(payload or "").strip()
+        if text:
+            try:
+                data = json.loads(text)
+                if isinstance(data, dict) and data.get("valid") is True:
+                    window = {"start_min": int(data["start_min"]), "end_min": int(data["end_min"]), "current_a": int(data["current_a"])}
+                    if not self._ev_schedule_valid(window):
+                        window = None
+            except (KeyError, TypeError, ValueError) as e:
+                self.log(f"Warn: GatewayMQTT: ignoring unreadable EV schedule report: {e}")
+                return
+        self._ev_hub_sched_seen = True
+        self._ev_hub_sched = window
+        self._ev_sched_sub_drops = 0
+        if self._ev_sched_unconfirmed and self._ev_schedule_same(window, self._ev_sched_unconfirmed):
+            self._ev_sched_pending = None
+            self._ev_sched_unconfirmed = None
+            self._ev_sched_resends = 0
+            self.log(f"Info: GatewayMQTT: EVC charge window {self._ev_schedule_text(window)} confirmed by the hub")
+
+    def _process_ev_capabilities(self, payload):
+        """Record the charger's maximum current from the hub's retained ev/capabilities (``maxAmps``, 0 = unknown).
+
+        Args:
+            payload: The raw message payload.
+        """
+        try:
+            data = json.loads(payload.decode("utf-8", errors="replace") if isinstance(payload, (bytes, bytearray)) else str(payload or ""))
+            amps = int(data.get("maxAmps") or 0) if isinstance(data, dict) else 0
+        except (TypeError, ValueError):
+            return
+        self._ev_hub_max_amps = amps if 0 < amps <= 125 else None
+
+    async def _subscribe_ev_schedule(self, client):
+        """Subscribe to the hub's retained EV window, tolerating a broker that refuses it.
+
+        Without it schedule control compares against the window it last wrote, as before. A refusal
+        is noted once at Info. A broker that drops the connection instead of refusing is detected by
+        the connection ending just after the subscribe (see _mqtt_loop), and the subscription is not
+        tried again in this run.
+
+        Returns:
+            bool: True if the broker granted the subscription.
+        """
+        self._ev_sched_sub_at = _monotonic()
+        try:
+            result = await client.subscribe(self.topic_ev_schedule, qos=0)
+            code = result[0] if result else 0x80
+            code = int(getattr(code, "value", code))
+            if code < 0x80:
+                self.log(f"Info: GatewayMQTT: Subscribed to {self.topic_ev_schedule}")
+                try:
+                    await client.subscribe(self.topic_ev_capabilities, qos=0)  # optional: the charger's maxAmps
+                except Exception as e:
+                    self.log(f"Info: GatewayMQTT: Cannot subscribe to {self.topic_ev_capabilities} ({e})")
+                return True
+            reason = f"refused by broker, code {code}"
+            self._ev_sched_sub_at = None  # a clean refusal is not a broker that disconnects on deny
+        except Exception as e:
+            reason = str(e)
+        if not self._ev_sched_sub_logged:
+            self._ev_sched_sub_logged = True
+            self.log(f"Info: GatewayMQTT: Cannot subscribe to the hub's EV charge window ({reason}) - the window last written is tracked instead")
+        return False
+
+    def _ev_schedule_token_refreshed(self):
+        """A new broker token may carry a grant the old one lacked: try the ev/schedule subscription afresh.
+
+        Clears the disconnect rule and asks run() to subscribe on the live connection; every reconnect
+        also subscribes again, so a refusal under an earlier token never sticks.
+        """
+        self._ev_sched_sub_disabled = False
+        self._ev_sched_sub_drops = 0
+        self._ev_sched_retry_subscribe = True
+
+    async def _retry_ev_schedule_subscribe(self):
+        """After a token refresh, subscribe to ev/schedule on the live connection if it is not already."""
+        if not getattr(self, "_ev_sched_retry_subscribe", False):
+            return
+        self._ev_sched_retry_subscribe = False
+        client = self._mqtt_client
+        if not client or not self._mqtt_connected or self._ev_sched_subscribed or self._ev_sched_sub_disabled:
+            return
+        self._ev_sched_subscribed = await self._subscribe_ev_schedule(client)
+
+    def _ev_schedule_connection_lost(self, dropped=True):
+        """Forget what the hub reported on a connection that has ended.
+
+        A connection dropped (not closed by PredBat) within _EV_SCHEDULE_SUBSCRIBE_GRACE of the ev/schedule
+        subscribe, before any report, counts towards _EV_SCHEDULE_SUBSCRIBE_DROPS in a row, after which the
+        broker is taken to refuse it by disconnecting and it is not tried again until the next token refresh.
+
+        Args:
+            dropped: False when PredBat itself is stopping the connection.
+        """
+        sub_at = getattr(self, "_ev_sched_sub_at", None)
+        if sub_at is not None and dropped:
+            if _monotonic() - sub_at < _EV_SCHEDULE_SUBSCRIBE_GRACE and not getattr(self, "_ev_hub_sched_seen", False):
+                self._ev_sched_sub_drops = getattr(self, "_ev_sched_sub_drops", 0) + 1
+                if self._ev_sched_sub_drops >= _EV_SCHEDULE_SUBSCRIBE_DROPS:
+                    self._ev_sched_sub_disabled = True
+                    self.log(f"Info: GatewayMQTT: connection dropped just after subscribing to the hub's EV charge window {self._ev_sched_sub_drops} times in a row, not subscribing again - the window last written is tracked instead")
+            else:
+                self._ev_sched_sub_drops = 0
+        self._ev_sched_sub_at = None
+        self._ev_sched_subscribed = False
+        self._ev_hub_sched_seen = False
+        self._ev_hub_sched = None
+        self._ev_sched_pending = None
+        self._ev_sched_unconfirmed = None
+        self._ev_sched_resends = 0
+
+    @staticmethod
+    def _ev_schedule_slots(start_min, end_min):
+        """The daily slots (index of each _EV_SCHEDULE_SLOT_MINUTES period from midnight) a window covers.
+
+        Args:
+            start_min: Window start, minutes from local midnight (0..1439).
+            end_min: Window end, minutes from local midnight (1..1440); below the start it wraps midnight.
+
+        Returns:
+            frozenset: The covered slot indices.
+        """
+        first = start_min // _EV_SCHEDULE_SLOT_MINUTES
+        last = -(-end_min // _EV_SCHEDULE_SLOT_MINUTES)  # exclusive, rounded up
+        if last <= first:
+            last += _EV_SCHEDULE_SLOTS
+        return frozenset(slot % _EV_SCHEDULE_SLOTS for slot in range(first, last))
+
+    @staticmethod
+    def _ev_schedule_text(window):
+        """A window as HH:MM-HH:MM for logs and the status."""
+        if not window:
+            return "none"
+        return "{:02d}:{:02d}-{:02d}:{:02d}".format(*divmod(window["start_min"], 60), *divmod(window["end_min"], 60))
+
+    def _ev_schedule_target(self, now):
+        """The daily window that covers the planned car charging starting in the next 24 hours, or None.
+
+        Every planned window that starts before now + 24 h counts in full (one already under way
+        counts from now) and is marked onto the daily clock in whole slots, rounded outward. Taking a
+        window whole means a window that comes into view is added in one write, not one slot at a time
+        as the horizon moves. The target is the shortest daily window that covers every marked slot:
+        earliest start to latest end, measured round the clock so a plan that runs past midnight
+        wraps, and the window under way and the same window planned again tomorrow land on the same
+        slots. Planned charging of 24 hours or more in one run, or that marks every slot, gives the
+        whole day.
+
+        Args:
+            now: The current local time.
+
+        Returns:
+            tuple: (start_min, end_min) in local minutes from midnight, or None with no planned charge.
+        """
+        horizon = now + _EV_SCHEDULE_HORIZON
+        windows = sorted((start, end) for start, end in self._ev_windows if end > now and start < horizon and end > start)
+        if not windows:
+            return None
+
+        run_start, run_end = windows[0]
+        for start, end in windows[1:] + [(None, None)]:
+            if start is not None and start <= run_end:
+                run_end = max(run_end, end)
+                continue
+            if run_end - run_start >= datetime.timedelta(hours=24):
+                return (0, 1440)
+            run_start, run_end = start, end
+
+        slot = datetime.timedelta(minutes=_EV_SCHEDULE_SLOT_MINUTES)
+        marked = set()
+        for start, end in windows:
+            start = max(start, now)
+            at = start.replace(minute=start.minute - start.minute % _EV_SCHEDULE_SLOT_MINUTES, second=0, microsecond=0)
+            while at < end and len(marked) < _EV_SCHEDULE_SLOTS:
+                marked.add((at.hour * 60 + at.minute) // _EV_SCHEDULE_SLOT_MINUTES)
+                at = at + slot
+                normalize = getattr(at.tzinfo, "normalize", None)
+                if normalize:
+                    at = normalize(at)
+        return self._ev_schedule_hull(marked)
+
+    @staticmethod
+    def _ev_schedule_hull(marked):
+        """The shortest daily window that covers every marked slot.
+
+        Args:
+            marked: Non-empty set of slot indices (see _ev_schedule_slots).
+
+        Returns:
+            tuple: (start_min, end_min) in local minutes from midnight; (0, 1440) when every slot is marked.
+        """
+        if len(marked) >= _EV_SCHEDULE_SLOTS:
+            return (0, 1440)
+
+        # The longest unmarked run round the clock is what the window leaves out
+        gap_start, gap_len = None, 0
+        for index in range(_EV_SCHEDULE_SLOTS):
+            if index in marked or (index - 1) % _EV_SCHEDULE_SLOTS not in marked:
+                continue
+            length = 0
+            while (index + length) % _EV_SCHEDULE_SLOTS not in marked:
+                length += 1
+            if length > gap_len:
+                gap_start, gap_len = index, length
+        start_min = ((gap_start + gap_len) % _EV_SCHEDULE_SLOTS) * _EV_SCHEDULE_SLOT_MINUTES
+        end_min = gap_start * _EV_SCHEDULE_SLOT_MINUTES or 1440
+        return (start_min, end_min)
+
+    def _ev_schedule_current_a(self, cp_id):
+        """The window's charge current: the car's planned charge rate in amps, within the charger's range.
+
+        The charger's maximum is the hub's ev/capabilities ``maxAmps`` when it reports one, else the
+        telemetry's max_current_a, else 32 A.
+
+        Args:
+            cp_id: The charge point the window is written to.
+
+        Returns:
+            int: Amps, between _EV_SCHEDULE_MIN_AMPS and the charger's maximum.
+        """
+        max_a = int(getattr(self, "_ev_hub_max_amps", None) or self._ev_max_current.get(cp_id) or _EV_SCHEDULE_DEFAULT_AMPS)
+        rates = getattr(getattr(self, "base", None), "car_charging_rate", None)
+        try:
+            rate_kw = float(rates[0]) if isinstance(rates, (list, tuple)) and rates else None
+        except (TypeError, ValueError):
+            rate_kw = None
+        if not rate_kw or rate_kw <= 0:
+            return max_a
+        amps = int(round(rate_kw * 1000.0 / _EV_SCHEDULE_VOLTS))
+        return max(min(amps, max_a), min(_EV_SCHEDULE_MIN_AMPS, max_a))
+
+    def _ev_schedule_covers(self, window, now):
+        """Whether now falls inside a daily window."""
+        minute = now.hour * 60 + now.minute
+        return bool(window) and (minute // _EV_SCHEDULE_SLOT_MINUTES) in self._ev_schedule_slots(window["start_min"], window["end_min"])
+
+    def _ev_schedule_in_force(self, window, now, since=None):
+        """Whether a window has not yet ended, so a narrower one must wait.
+
+        A whole-day window never ends on the clock, so it counts as ended once no planned charge is
+        under way. Any other window has ended once its end time has passed since it came into place
+        (``since``) and now is outside it: a window that has not yet run is not narrowed, so a planner
+        that flips between two windows settles on their join rather than writing back and forth.
+
+        Args:
+            window: The window in place.
+            now: The current local time.
+            since: When the window came into place (local time), or None if unknown.
+        """
+        if window["start_min"] == 0 and window["end_min"] == 1440:
+            return in_car_plan_window(self._ev_windows, now)
+        if self._ev_schedule_covers(window, now):
+            return True
+        if since is None:
+            return False
+        day = since.replace(tzinfo=None, hour=0, minute=0, second=0, microsecond=0)
+        end = day + datetime.timedelta(minutes=window["end_min"])
+        if end <= since.replace(tzinfo=None):
+            end += datetime.timedelta(days=1)
+        localize = getattr(self.local_tz, "localize", None)
+        end = localize(end) if localize else end.replace(tzinfo=self.local_tz)
+        return now < end
+
+    def _ev_schedule_managed(self):
+        """The window PredBat manages on the hub, or None if the hub has another one (or none).
+
+        Once the hub has reported its window, it is the managed one only while it is the window
+        PredBat last wrote: a window set from elsewhere is not PredBat's to enforce.
+        """
+        if not self._ev_sched or self._ev_sched["charge_point_id"] != min(self._configured_ev_chargers):
+            return None
+        if self._ev_hub_sched_seen and not self._ev_schedule_same(self._ev_hub_sched, self._ev_sched):
+            return None
+        return self._ev_sched
+
+    def _ev_unplanned_session(self, state):
+        """Whether schedule control should stop a session running with no planned charge.
+
+        Only inside the window PredBat manages on the hub (outside it the charger itself holds 0 A),
+        only from fresh telemetry of an online charger that reports its status, and at most
+        _EV_MAX_UNPLANNED_STOPS times between windows.
+
+        Args:
+            state: The charger's last telemetry record, or None.
+        """
+        if not self.gateway_evc_schedule_control or not state:
+            return False
+        if not (state["online"] and state["has_status"] and state["session_active"]):
+            return False
+        if (time.time() - state["time"]) >= _TELEMETRY_STALE_THRESHOLD or self._ev_unplanned_stops >= _EV_MAX_UNPLANNED_STOPS:
+            return False
+        managed = self._ev_schedule_managed()
+        return bool(managed) and self._ev_schedule_covers(managed, self._ev_now())
+
+    async def _apply_ev_schedule(self):
+        """Keep the hub's recurring daily charge window on the span of the planned car charging.
+
+        Called every run() cycle while gateway_evc_schedule_control (and gateway_evc_control) is on.
+        Outside the window the hub holds the charger at 0 A itself, so it charges only at a time
+        PredBat planned even if PredBat, the connection or the hub stops; inside it, the start/stop
+        control closes any gaps between planned windows.
+
+        The window in place is the one the hub reports on ev/schedule once a report has arrived, so a
+        window changed from elsewhere, or a write the hub did not apply, is corrected; a write then
+        counts as done when the hub echoes it, and is sent again after _EV_SCHEDULE_ECHO_SECONDS
+        without one, up to _EV_SCHEDULE_MAX_RESENDS times; re-sends do not count against the limits. Where the broker does not allow that subscription, or the hub has never reported
+        a window, it is the window last written (kept in storage, so a restart writes nothing new).
+
+        A target that adds time or current is written at once, as it lets the car charge, joined with
+        the window in place so a grow never removes anything, at most
+        _EV_SCHEDULE_MAX_GROWS_PER_DAY times a local day; one that only removes time or current waits
+        until the window in place has run to its end (see _ev_schedule_in_force), at most
+        _EV_SCHEDULE_MAX_SHRINKS_PER_DAY times a day.
+        Past a limit the window is kept and a warning shown. With no planned charge in the next 24
+        hours the window is left in place. Nothing is written while the charger is offline or the hub
+        is not connected, as the hub would have no charger to apply it to.
+        """
+        if not self._configured_ev_chargers:
+            return
+        if not self._ev_sched_loaded:
+            self._ev_sched_loaded = await self._load_ev_schedule()
+            if not self._ev_sched_loaded:
+                return
+        cp_id = min(self._configured_ev_chargers)
+        if len(self._configured_ev_chargers) > 1 and not self._ev_sched_multi_warned:
+            self._ev_sched_multi_warned = True
+            self.log(f"Warn: GatewayMQTT: the hub applies its one charge window to every charger, but it follows the plan for '{cp_id}' only")
+        now = self._ev_now()
+        span = self._ev_schedule_target(now)
+        if span is None:
+            return
+
+        if self._ev_hub_sched_seen:
+            current = self._ev_hub_sched
+        else:
+            current = self._ev_sched if self._ev_sched and self._ev_sched["charge_point_id"] == cp_id else None
+        if self._ev_sched_since is None or not self._ev_schedule_same(self._ev_sched_since[0], current):
+            self._ev_sched_since = (current, now)
+        target = {"charge_point_id": cp_id, "start_min": span[0], "end_min": span[1], "current_a": self._ev_schedule_current_a(cp_id)}
+        if self._ev_schedule_same(target, current):
+            self._ev_sched_deferred = None
+            self._ev_sched_pending = None
+            if not self._ev_schedule_same(target, self._ev_sched) or (self._ev_sched or {}).get("charge_point_id") != cp_id:
+                self._ev_sched = target  # the hub already has it: adopt it without a write
+                await self._save_ev_schedule()
+            return
+
+        pending = self._ev_sched_pending
+        if pending and self._ev_hub_sched_seen:
+            if _monotonic() - pending[1] < _EV_SCHEDULE_ECHO_SECONDS:
+                return  # waiting for the hub to echo the last write
+            self.log(f"Warn: GatewayMQTT: EVC charge window {self._ev_schedule_text(pending[0])} was not confirmed by the hub, the hub reports {self._ev_schedule_text(current)}")
+            self._ev_sched_pending = None
+
+        grows = True
+        if current:
+            target_slots = self._ev_schedule_slots(target["start_min"], target["end_min"])
+            current_slots = self._ev_schedule_slots(current["start_min"], current["end_min"])
+            grows = bool(target_slots - current_slots) or target["current_a"] > current["current_a"]
+            if grows:
+                # A grow never removes time or current: write the window in place joined with the target, so
+                # a planner flipping between two windows settles after one write. Narrowing is only done by
+                # the shrink path, once the window has ended.
+                start_min, end_min = self._ev_schedule_hull(target_slots | current_slots)
+                target = {"charge_point_id": cp_id, "start_min": start_min, "end_min": end_min, "current_a": max(target["current_a"], current["current_a"])}
+            elif self._ev_schedule_in_force(current, now, self._ev_sched_since[1]):
+                if self._ev_sched_deferred != target:
+                    self._ev_sched_deferred = target
+                    self.log(f"Info: GatewayMQTT: EVC '{cp_id}' charge window {self._ev_schedule_text(target)} narrows {self._ev_schedule_text(current)}, waiting for the current window to end")
+                return
+
+        state = self._ev_telemetry.get(cp_id)
+        if not (state and state["online"]) or (time.time() - state["time"]) >= _TELEMETRY_STALE_THRESHOLD:
+            return
+        if not self._mqtt_connected or not self._mqtt_client or self.gateway_display_only:
+            return
+
+        if self._ev_hub_sched_seen and self._ev_sched_unconfirmed and self._ev_schedule_same(target, self._ev_sched_unconfirmed):
+            # The same window again, not echoed by the hub: a re-send, outside the daily limits but bounded
+            if self._ev_sched_resends >= _EV_SCHEDULE_MAX_RESENDS:
+                message = f"Warn: GatewayMQTT: EV charger '{cp_id}' charge window {self._ev_schedule_text(target)} was not confirmed by the hub after {self._ev_sched_resends + 1} sends, the hub reports {self._ev_schedule_text(current)}"
+                if self._ev_sched_deferred != ("unconfirmed", target):
+                    self._ev_sched_deferred = ("unconfirmed", target)
+                    self.log(message)
+                self._report_ev_warning(message)
+                return
+            self._ev_sched_resends += 1
+            self.log(f"Info: GatewayMQTT: EVC '{cp_id}' re-sending charge window {self._ev_schedule_text(target)} (re-send {self._ev_sched_resends}/{_EV_SCHEDULE_MAX_RESENDS})")
+            try:
+                await self._send_ev_command({"action": "SetChargingProfile", "recurring": True, "start_min": target["start_min"], "end_min": target["end_min"], "current_a": target["current_a"]}, charge_point_id=cp_id)
+            except Exception as e:
+                self.log(f"Warn: GatewayMQTT: failed to send the EV charge window: {e}")
+                return
+            self._ev_sched_pending = (target, _monotonic())
+            return
+
+        today = now.date().isoformat()
+        if self._ev_sched_writes_date != today:
+            self._ev_sched_writes_date = today
+            self._ev_sched_grows = 0
+            self._ev_sched_shrinks = 0
+        used, limit, kind = (self._ev_sched_grows, _EV_SCHEDULE_MAX_GROWS_PER_DAY, "widened") if grows else (self._ev_sched_shrinks, _EV_SCHEDULE_MAX_SHRINKS_PER_DAY, "narrowed")
+        if used >= limit:
+            message = f"Warn: GatewayMQTT: EV charger '{cp_id}' charge window kept at {self._ev_schedule_text(current)}: already {kind} {used} times today, the planned {self._ev_schedule_text(target)} waits until tomorrow"
+            if self._ev_sched_deferred != ("limit", target):
+                self._ev_sched_deferred = ("limit", target)
+                self.log(message)
+            self._report_ev_warning(message)
+            return
+
+        self.log(f"Info: GatewayMQTT: EVC '{cp_id}' charge window {self._ev_schedule_text(current)} -> {self._ev_schedule_text(target)} at {target['current_a']} A ({kind} {used + 1}/{limit} today)")
+        try:
+            await self._send_ev_command({"action": "SetChargingProfile", "recurring": True, "start_min": target["start_min"], "end_min": target["end_min"], "current_a": target["current_a"]}, charge_point_id=cp_id)
+        except Exception as e:
+            self.log(f"Warn: GatewayMQTT: failed to send the EV charge window: {e}")
+            return
+        self._ev_sched = target
+        if grows:
+            self._ev_sched_grows += 1
+        else:
+            self._ev_sched_shrinks += 1
+        self._ev_sched_deferred = None
+        self._ev_sched_pending = (target, _monotonic())
+        self._ev_sched_unconfirmed = target
+        self._ev_sched_resends = 0
+        self._ev_sched_since = (target, now)
+        await self._save_ev_schedule()
+
     async def _startup_wait(self, ticks, ready):
         """Poll ``ready`` at 0.5 s intervals until it is true or the startup budget is spent.
 
@@ -977,6 +1577,10 @@ class GatewayMQTT(ComponentBase):
             # EVC minute-level control: refresh windows from HA plan, then start/stop if needed
             if self.gateway_evc_control and self._auto_configured:
                 self._refresh_ev_windows()
+                if self.gateway_evc_schedule_control:
+                    await self._retry_ev_schedule_subscribe()
+                    # Before start/stop, so a window that grows is open on the charger when the start is sent
+                    await self._apply_ev_schedule()
                 await self._apply_ev_charging_state()
 
             # Tell the gateway the current read-only state (once on startup, then on every change)
@@ -1031,27 +1635,35 @@ class GatewayMQTT(ComponentBase):
                     identifier=client_id,
                     keepalive=60,
                 ) as client:
-                    self._mqtt_client = client
-                    self._mqtt_connected = True
-                    self._first_connection_attempted = True
-                    backoff = 5  # Reset backoff on successful connection
-                    self.log(f"Info: GatewayMQTT: Connected to {self.mqtt_host}:{self.mqtt_port}")
+                    try:
+                        self._mqtt_client = client
+                        self._mqtt_connected = True
+                        self._first_connection_attempted = True
+                        backoff = 5  # Reset backoff on successful connection
+                        self.log(f"Info: GatewayMQTT: Connected to {self.mqtt_host}:{self.mqtt_port}")
 
-                    # Subscribe to status and LWT topics
-                    await client.subscribe(self.topic_status, qos=1)
-                    await client.subscribe(self.topic_online, qos=1)
-                    self.log(f"Info: GatewayMQTT: Subscribed to {self.topic_status} and {self.topic_online}")
+                        # Subscribe to status and LWT topics
+                        await client.subscribe(self.topic_status, qos=1)
+                        await client.subscribe(self.topic_online, qos=1)
+                        self.log(f"Info: GatewayMQTT: Subscribed to {self.topic_status} and {self.topic_online}")
 
-                    # Command acks are optional: without them control writes behave as before
-                    with self._command_lock:
-                        self._pending_commands = {}
-                        self._acks_seen = False
-                    self._ack_subscribed = await self._subscribe_acks(client)
+                        # Command acks are optional: without them control writes behave as before
+                        with self._command_lock:
+                            self._pending_commands = {}
+                            self._acks_seen = False
+                        self._ack_subscribed = await self._subscribe_acks(client)
+                        # The hub's own report of its EV charge window, only wanted by schedule control and
+                        # optional: without it the window last written is tracked instead
+                        if self.gateway_evc_control and self.gateway_evc_schedule_control and not self._ev_sched_sub_disabled:
+                            self._ev_sched_subscribed = await self._subscribe_ev_schedule(client)
 
-                    async for message in client.messages:
-                        if self.api_stop:
-                            break
-                        await self._handle_message(message)
+                        async for message in client.messages:
+                            if self.api_stop:
+                                break
+                            await self._handle_message(message)
+                    finally:
+                        # Every way out of this connection: what the hub reported on it no longer holds
+                        self._ev_schedule_connection_lost(dropped=not self.api_stop)
 
             except asyncio.CancelledError:
                 self.log("Info: GatewayMQTT: MQTT loop cancelled")
@@ -1115,6 +1727,10 @@ class GatewayMQTT(ComponentBase):
                 await self._save_discovery()
             elif topic.startswith(getattr(self, "_ack_topic_prefix", "\0")):
                 self._process_ack(message.payload)
+            elif topic == getattr(self, "topic_ev_schedule", None):
+                self._process_ev_schedule(message.payload)
+            elif topic == getattr(self, "topic_ev_capabilities", None):
+                self._process_ev_capabilities(message.payload)
             elif topic == self.topic_online:
                 payload = message.payload.decode("utf-8", errors="replace").strip()
                 was_online = self._gateway_online
@@ -3727,6 +4343,7 @@ class GatewayMQTT(ComponentBase):
             except (ValueError, AttributeError):
                 self.mqtt_token_expires_at = 0
         self.log("Info: GatewayMQTT: MQTT token refreshed")
+        self._ev_schedule_token_refreshed()
         return True
 
     async def _do_token_refresh(self):

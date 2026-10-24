@@ -617,7 +617,7 @@ To also have Predbat send the plan to the charger (so the EVC charges according 
 
 When `gateway_evc_control` is enabled, Predbat checks once per minute whether the current time falls inside one of the planned car-charging windows (from `binary_sensor.predbat_car_charging_slot`). On each state transition it sends OCPP commands to the EVC via MQTT — `SetChargingProfile` (at the configured max current) followed by `RemoteStartTransaction` to begin a session, or `RemoteStopTransaction` to end one. This means the charger responds within a minute of a window boundary rather than relying on a schedule that must be reprogrammed each time the plan changes.
 Predbat checks the charger's reported session state to confirm each start or stop took effect, and sends it again if it has not after two minutes, up to three times in all. If the charger still does not respond, Predbat shows a warning on `predbat.status` and stops retrying until the window ends, the car is unplugged, or the charger setup changes; a replan that only moves the current window's times does not restart the retries. The warning never replaces an error already shown on `predbat.status`. Once the charger reports the session in the state Predbat wanted, Predbat stops writing the warning, and it clears at the next normal status update (within about five minutes).
-Once the charger has reported a session started in a window, Predbat sends no further start in that window, whatever the plug status then shows: stopping the charge from the charger's own app looks exactly like the charger dropping the session, and on some gateway firmware also like unplugging the car, so a restart would override your stop. Predbat logs a session ending part-way through the window once, and the next window starts afresh. A session you start yourself after Predbat has stopped one is also left alone.
+Once the charger has reported a session started in a window, Predbat sends no further start in that window, whatever the plug status then shows: stopping the charge from the charger's own app looks exactly like the charger dropping the session, and on some gateway firmware also like unplugging the car, so a restart would override your stop. Predbat logs a session ending part-way through the window once, and the next window starts afresh. A session you start yourself after Predbat has stopped one is also left alone, unless `gateway_evc_schedule_control` (below) is on.
 
 Some cases are handled more simply:
 
@@ -627,6 +627,27 @@ Some cases are handled more simply:
 - Nothing is sent or confirmed while the charger is offline from the gateway. A charger that stays offline for a whole window is not started and no warning is shown; its online state is on the charger's `online` sensor.
 
 `car_charging_now` is wired to the charger's charging sensor, which is on while the car is drawing power (OCPP status `Charging`), so Predbat holds the house battery for the car while it charges. A car that stays connected once it is full or paused (`SuspendedEV`) does not hold the battery. It never adds a charging slot, so it cannot hold a session open against the window boundaries `gateway_evc_control` enforces.
+
+### Letting Predbat manage the gateway's charge window
+
+The gateway can also hold one recurring daily charge window for the charger: inside it the charger may charge, and outside it the gateway limits the charger to 0 A, even if the gateway loses its connection. A window set this way (for example from an app's schedule form) caps Predbat's starts: a planned window outside it never charges. To have Predbat keep that window on its own plan, add a third flag:
+
+```yaml
+  gateway_evc_automatic: true
+  gateway_evc_control: true
+  gateway_evc_schedule_control: true
+```
+
+`gateway_evc_schedule_control` only works together with `gateway_evc_control`. While it is on, Predbat:
+
+- Sets the window to cover the car charging that starts in the next 24 hours, from the earliest planned start to the latest planned end, rounded outward to whole half hours (01:10-04:50 becomes 01:00-05:00). Each planned window counts in full as soon as it starts within 24 hours, so it is added in one change. A window already under way counts from now, and the same window planned again for tomorrow lands on the same daily window rather than stretching it to a whole day. A plan that runs past midnight gives a window that wraps midnight, and 24 hours or more of planned charging gives the whole day. The window's current is the car charge rate in amps (at 230 V), between 6 A and the charger's maximum (as the gateway reports it, or 32 A if it does not).
+- Starts and stops the charger inside the window as described above, so gaps between planned windows are still closed. A session that runs inside the window with no charge planned is stopped, at most three times between planned windows.
+- Writes the window only when it changes: every write is stored on the gateway and re-sent to the charger. A change that adds time (or current) is written straight away, as it lets the car charge, at most **8 times per day**; it is joined with the window already there, so it never removes anything and a plan that moves back and forth settles after one change. Removing time waits until the window in place has run to its end, at most **2 times per day**. A whole-day window counts as ended once no planned charge is under way. Past either limit Predbat keeps the current window until the next day and shows a warning (not an error) on `predbat.status`.
+- Leaves the last window in place when no charge is planned in the next 24 hours, and writes nothing while the charger is offline from the gateway.
+- Reads back the window the gateway reports, where the MQTT broker allows the subscription. A write counts as done when the gateway reports it, and is sent again (up to three more times, which do not count towards the daily limits) if it does not within three minutes. A window changed from elsewhere (for example an app's schedule form) is put back to Predbat's. Where the subscription is not allowed, Predbat remembers the window it last wrote instead, so a restart does not write it again; it asks again on every reconnection and after each MQTT token refresh.
+- The gateway applies its one window to every charger it controls, while Predbat follows the plan for one charger; with more than one charger Predbat logs a warning.
+
+Turning `gateway_evc_schedule_control` off stops Predbat writing the window, but does **not** put back the window that was there before: the gateway keeps the last window Predbat wrote. Set the window you want again yourself, for example from the app that set it originally.
 
 ## Predbat starting and stopping your charger
 
