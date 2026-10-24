@@ -240,6 +240,8 @@ pred_bat:
   ohme_password: !secret ohme_password  # Ohme account password (if using Ohme direct)
   wallbox_username: !secret wallbox_username  # Wallbox account e-mail (if using Wallbox direct)
   wallbox_password: !secret wallbox_password  # Wallbox account password (if using Wallbox direct)
+  hypervolt_username: !secret hypervolt_username  # Hypervolt account e-mail (if using Hypervolt direct)
+  hypervolt_password: !secret hypervolt_password  # Hypervolt account password (if using Hypervolt direct)
 ```
 
 If a credential-like value (matching a key name containing `_key`, `password`, `secret` or `token`) is found written directly in `apps.yaml` instead of via `!secret`, Predbat logs a warning and lists the affected item(s) on the [web interface](web-interface.md) apps.yaml page. This is a warning rather than a validation error - the configuration still works, but moving the value into `secrets.yaml` keeps it out of `apps.yaml`, which is more likely to end up shared, backed up or attached to a bug report.
@@ -2158,6 +2160,7 @@ whether you are within an Octopus Energy "smart charge" slot
 (see [car charging documentation](car-charging.md))
 - **car_charging_planned** - Indicates when your EV is plugged in and planned to charge during low-rate slots.
 - **car_charging_planned_response** - Values for the car_charging_planned sensor that indicate that the car is plugged in and will charge in the next low rate slot.
+- **car_charging_plugged** - Optional, indicates only whether your EV is plugged in, even after its charge has finished. Used to reset the manual car SoC when the car is unplugged; **car_charging_planned** is not used for this, as many chargers turn it off when a charge finishes.
 - **car_charging_now** - Sensor to indicate when the EV is charging, used to hold the house battery for the car. Either an on/off sensor or a charging power sensor (W or kW, 200W or more counts as charging)
 - **car_charging_now_response** - Responses for car_charging_now to indicate that the car is charging (default `yes`, `on`, `enable`, `true` and `charging`). The sensor state must match one of them, ignoring case
 - **car_charging_battery_size** - Car battery size in kWh
@@ -2171,6 +2174,10 @@ whether you are within an Octopus Energy "smart charge" slot
 - **wallbox_automatic** - Register the Wallbox chargers with Predbat as cars (default `True`)
 - **wallbox_control** - Let Predbat pause and resume the Wallbox chargers from its own car charging plan (default `False`)
 - **wallbox_poll_seconds** - How often to poll the Wallbox cloud in seconds (default `120`)
+- **hypervolt_username** - Hypervolt EV charger account email address
+- **hypervolt_password** - Password for the above Hypervolt account
+- **hypervolt_automatic** - Register the Hypervolt chargers with Predbat as cars (default `True`)
+- **hypervolt_control** - Let Predbat stop and start the Hypervolt chargers from its own car charging plan (default `False`)
 
 ## myenergi Integration
 
