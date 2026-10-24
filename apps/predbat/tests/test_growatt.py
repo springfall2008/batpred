@@ -105,6 +105,55 @@ def test_growatt_constants_and_utc_conversion():
     assert local_window_to_utc_slots("00:00:00", "00:00:00", 50, summer) == []
 
 
+def test_growatt_utc_midnight_split():
+    eastern = pytz.timezone("US/Eastern")
+    winter = eastern.localize(datetime(2026, 1, 15, 12, 0))
+    # 18:00-19:00 EST is 23:00-00:00 UTC: no after-midnight portion, so no 00:00-00:00 slot.
+    assert local_window_to_utc_slots("18:00:00", "19:00:00", 50, winter) == [{"startTime": "23:00", "endTime": "23:59", "percentage": 50}]
+    # 18:00-21:00 EST is 23:00-02:00 UTC, split at UTC midnight.
+    assert local_window_to_utc_slots("18:00:00", "21:00:00", -30, winter) == [
+        {"startTime": "23:00", "endTime": "23:59", "percentage": -30},
+        {"startTime": "00:00", "endTime": "02:00", "percentage": -30},
+    ]
+
+
+def test_growatt_stale_telemetry_withholds_slots():
+    client, sn = _ready_client()
+    client.local_schedule[sn] = _schedule()
+    payload = {"soc": 50, "utcTime": "2026-01-15 12:00:00"}
+    with patch("growatt.time.time", return_value=1_000_000):
+        assert client._apply_telemetry(sn, payload)
+        assert len(client.build_time_slots(sn, client.local_schedule[sn])) == 2
+    # The cloud keeps serving the same sample: the freshness clock does not advance.
+    with patch("growatt.time.time", return_value=1_000_000 + 6 * 60):
+        assert client._apply_telemetry(sn, dict(payload))
+        assert client.telemetry_stale(sn)
+        assert client.build_time_slots(sn, client.local_schedule[sn]) == []
+        assert any("telemetry has not updated" in message for message in client.log_messages)
+    # A new sample restores both slots.
+    with patch("growatt.time.time", return_value=1_000_000 + 7 * 60):
+        assert client._apply_telemetry(sn, {"soc": 50, "utcTime": "2026-01-15 12:07:00"})
+        assert not client.telemetry_stale(sn)
+        assert len(client.build_time_slots(sn, client.local_schedule[sn])) == 2
+
+
+def test_growatt_device_info_failure_keeps_known_device():
+    client, sn = _ready_client()
+
+    async def post(endpoint_key, body=None):
+        if endpoint_key == "devices":
+            return 0, [{"deviceSn": sn}]
+        return -1, None
+
+    client._post = post
+    assert run_async_local(client.refresh_static())
+    assert client.device_list == [sn]
+    # A device never seen usable before is still dropped when its details cannot be read.
+    client.device_list = []
+    assert not run_async_local(client.refresh_static())
+    assert client.device_list == []
+
+
 def test_growatt_telemetry_signs_and_energy_balance():
     client, sn = _ready_client()
     payload = {
@@ -249,6 +298,9 @@ def run_growatt_tests(my_predbat):
     failed = False
     tests = [
         ("constants_utc", test_growatt_constants_and_utc_conversion),
+        ("utc_midnight_split", test_growatt_utc_midnight_split),
+        ("stale_telemetry", test_growatt_stale_telemetry_withholds_slots),
+        ("device_info_failure", test_growatt_device_info_failure_keeps_known_device),
         ("telemetry", test_growatt_telemetry_signs_and_energy_balance),
         ("slots_soc_gates", test_growatt_time_slots_use_power_percentages_and_soc_gates),
         ("control_round_trip", test_growatt_control_entities_round_trip),

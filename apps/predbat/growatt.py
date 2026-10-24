@@ -40,6 +40,7 @@ from growatt_const import (
     GROWATT_RETRIES,
     GROWATT_TTL_STATIC,
     GROWATT_TTL_LIVE,
+    GROWATT_TELEMETRY_STALE,
     GROWATT_DISPATCH_INTERVAL,
     GROWATT_SET_TIME_SLOTS,
     GROWATT_SET_ENABLE_CONTROL,
@@ -99,6 +100,7 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         self.device_list = []
         self.device_detail = {}
         self.device_values = {}
+        self.telemetry_time = {}
         self.device_energy = {}
         self.local_schedule = {}
         self.applied_slots = {}
@@ -242,6 +244,11 @@ class GrowattAPI(ComponentBase, OAuthMixin):
                 await asyncio.sleep(self.api_delay)
             code, data = await self._post("device_info", {"deviceSn": sn})
             if code != GROWATT_CODE_OK or not isinstance(data, dict):
+                # Static details rarely change, so a device that was already usable keeps
+                # its cached details through a transient failure rather than dropping out.
+                if sn in previous:
+                    self.log("Warn: Growatt {} device info refresh failed, keeping its cached details".format(sn))
+                    usable.append(sn)
                 continue
             self.device_detail[sn] = dict(self.device_detail.get(sn, {}), **data)
             if data.get("existBattery") is False:
@@ -269,6 +276,10 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         self.device_values[sn] = values
 
         detail = self.device_detail.setdefault(sn, {})
+        # Only fresh data advances the freshness clock: a payload repeating the previous
+        # utcTime is the same sample served again, not a new reading.
+        if data.get("utcTime") is None or data.get("utcTime") != detail.get("utcTime") or sn not in self.telemetry_time:
+            self.telemetry_time[sn] = time.time()
         for key in ("maxChargePower", "maxDischargePower", "status", "batteryStatus", "utcTime"):
             if data.get(key) is not None:
                 detail[key] = data[key]
@@ -512,11 +523,18 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         self.update_local_schedule(sn, entity_id, value)
         await self.publish_schedule_settings_ha(sn)
 
+    def telemetry_stale(self, sn):
+        """Return True when a device's last fresh telemetry is older than GROWATT_TELEMETRY_STALE minutes."""
+        received = self.telemetry_time.get(sn)
+        return received is not None and time.time() - received > GROWATT_TELEMETRY_STALE * 60
+
     def _gate_reason(self, sn, direction, window, schedule):
         """Return why a slot must be withheld at the latest observed SoC, or None."""
         soc = self.device_values.get(sn, {}).get("soc")
         if soc is None:
             return None
+        if self.telemetry_stale(sn):
+            return "telemetry has not updated for over {} minutes, so the SoC gate cannot be enforced".format(GROWATT_TELEMETRY_STALE)
         if direction == "charge":
             target = self._as_float(window.get("soc"), 0)
             if target <= 0:
@@ -565,11 +583,6 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         body = {"deviceSn": sn, "setType": set_type, "value": value, "requestId": self.request_id()}
         code, _ = await self._post("dispatch", body)
         return code == GROWATT_CODE_OK
-
-    async def read_dispatch(self, sn, set_type):
-        body = {"deviceSn": sn, "setType": set_type, "requestId": self.request_id()}
-        code, data = await self._post("read_dispatch", body)
-        return (code == GROWATT_CODE_OK), data
 
     def _is_read_only(self):
         return self.get_state_wrapper("switch.{}_set_read_only".format(self.prefix), default="off") == "on"

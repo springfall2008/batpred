@@ -15,9 +15,7 @@ GROWATT_ENDPOINTS = {
     "devices": "/oauth2/getDeviceListAuthed",
     "device_info": "/oauth2/getDeviceInfo",
     "device_data": "/oauth2/getDeviceData",
-    "device_energy": "/oauth2/getDeviceEnergyData",
     "dispatch": "/oauth2/deviceDispatch",
-    "read_dispatch": "/oauth2/readDeviceDispatch",
 }
 
 GROWATT_RETURN_CODES = {
@@ -35,7 +33,6 @@ GROWATT_RETURN_CODES = {
 
 GROWATT_CODE_OK = 0
 GROWATT_CODE_TOKEN_INVALID = 2
-GROWATT_CODE_TOO_MANY = 105
 
 GROWATT_TIMEOUT = 30
 GROWATT_RETRIES = 3
@@ -45,6 +42,9 @@ GROWATT_RETRIES = 3
 # stricter published limit until Growatt resolves the discrepancy.
 GROWATT_TTL_STATIC = 8 * 60
 GROWATT_TTL_LIVE = 1
+# Minutes without fresh telemetry before the software SoC gates stop trusting the last
+# reading - several missed one-minute polls, so a single slow response does not trip it.
+GROWATT_TELEMETRY_STALE = 5
 GROWATT_DISPATCH_INTERVAL = 5
 
 GROWATT_SET_TIME_SLOTS = "time_slot_charge_discharge"
@@ -129,10 +129,12 @@ def local_window_to_utc_slots(start, end, percentage, now_local):
 
     # A normal daily Predbat window can cross at most one UTC midnight. 23:59 is
     # the documented end-of-day representation used by Growatt's own example.
-    return [
-        {"startTime": start_utc.strftime("%H:%M"), "endTime": "23:59", "percentage": percent},
-        {"startTime": "00:00", "endTime": end_utc.strftime("%H:%M"), "percentage": percent},
-    ]
+    slots = [{"startTime": start_utc.strftime("%H:%M"), "endTime": "23:59", "percentage": percent}]
+    # A window ending exactly at UTC midnight has no after-midnight portion; a
+    # 00:00-00:00 slot has no documented meaning on the device, so omit it.
+    if end_utc.strftime("%H:%M") != "00:00":
+        slots.append({"startTime": "00:00", "endTime": end_utc.strftime("%H:%M"), "percentage": percent})
+    return slots
 
 
 def normalize_slots(value):

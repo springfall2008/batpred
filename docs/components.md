@@ -1734,8 +1734,9 @@ Connects to Growatt's public OAuth OpenAPI, discovers the inverter authorised du
 - Growatt accepts charge/discharge power as a percentage of the reported battery rating. Predbat converts its watt targets before dispatch
 - Growatt documents schedule times in UTC. Predbat converts its local `HH:MM:SS` controls to UTC and splits a window at UTC midnight rather than relying on undocumented wrap-around behaviour
 - The public dispatch API has **no writable SoC target or reserve field**. Predbat keeps those controls locally and removes the relevant slot after its one-minute telemetry sees the target or floor reached. This is software enforcement and can react up to one telemetry interval late. The inverter's own `dischargeCutOffSOC` remains the hard local minimum and is never lowered by Predbat
+- If telemetry stops updating for more than five minutes (device offline, or Growatt repeating the same sample), Predbat can no longer enforce those SoC limits, so it withholds both slots until fresh telemetry returns
 - Freeze Charge and Freeze Export are not advertised as capabilities. A zero percentage only applies inside a configured slot and cannot hold the battery in ordinary self-consumption
-- Device dispatch and read-back are limited to one request per five seconds per device. Predbat changes only a differing slot table and enforces that interval
+- Device dispatch is limited to one request per five seconds per device. Predbat changes only a differing slot table and enforces that interval
 - `getDeviceData`'s endpoint page says one request per minute, while the rate-limit appendix says one per ten seconds. Predbat uses the stricter one-minute interval
 - The API reports the inverter and battery ratings, but not the site's grid export cap. Set `export_limit` manually when the DNO limit is below the inverter rating
 
