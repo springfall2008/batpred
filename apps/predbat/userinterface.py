@@ -18,7 +18,7 @@ service calls) to the appropriate handlers.
 """
 
 import os
-from datetime import timedelta
+from datetime import timedelta, timezone
 from utils import get_override_time_from_string, mask_secret_args, is_debug_excluded_key, export_limits_from_stored, export_limits_to_stored, is_secret_key, SECRET_MASK, RepeatLogGate
 import functools
 import io
@@ -1713,7 +1713,7 @@ class UserInterface:
         # Reconstruct the list in order based on minutes
         values_list = []
         for minute, rate in rate_overrides:
-            minute_str = (midnight_utc + timedelta(minutes=minute)).strftime("%a %H:%M")
+            minute_str = (midnight_utc.astimezone(timezone.utc) + timedelta(minutes=minute)).astimezone(self.now_utc.tzinfo).strftime("%a %H:%M")
             minute_rate_str = minute_str + "=" + str(rate)
             if minute_rate_str not in exclude and minute_rate_str not in values_list:
                 values_list.append(minute_rate_str)
@@ -1725,7 +1725,12 @@ class UserInterface:
         if update:
             time_values = ["off"]
             for minute in range(minutes_now, minutes_now + manual_rate_max, plan_interval):
-                minute_str = (midnight_utc + timedelta(minutes=minute)).strftime("%a %H:%M")
+                minute_time = (midnight_utc.astimezone(timezone.utc) + timedelta(minutes=minute)).astimezone(self.now_utc.tzinfo)
+                minute_str = minute_time.strftime("%a %H:%M")
+                # A day/time label can select only the first occurrence of a repeated autumn slot.
+                selected_time = get_override_time_from_string(self.now_utc, minute_str, plan_interval)
+                if selected_time.astimezone(timezone.utc) != minute_time.astimezone(timezone.utc):
+                    continue
                 if minute in rate_overrides_minutes:
                     rate_value = rate_overrides_minutes[minute]
                     minute_str = f"{minute_str}={rate_value}"
@@ -1793,7 +1798,7 @@ class UserInterface:
         # Reconstruct the list in order based on minutes
         values_list = []
         for minute in time_overrides:
-            minute_str = (midnight_utc + timedelta(minutes=minute)).strftime("%a %H:%M")
+            minute_str = (midnight_utc.astimezone(timezone.utc) + timedelta(minutes=minute)).astimezone(self.now_utc.tzinfo).strftime("%a %H:%M")
             if minute_str not in exclude and minute_str not in values_list:
                 values_list.append(minute_str)
         values = ",".join(values_list)
@@ -1804,7 +1809,12 @@ class UserInterface:
         if update:
             time_values = ["off"]
             for minute in range(minutes_now, minutes_now + manual_time_max, plan_interval):
-                minute_str = (midnight_utc + timedelta(minutes=minute)).strftime("%a %H:%M")
+                minute_time = (midnight_utc.astimezone(timezone.utc) + timedelta(minutes=minute)).astimezone(self.now_utc.tzinfo)
+                minute_str = minute_time.strftime("%a %H:%M")
+                # A day/time label can select only the first occurrence of a repeated autumn slot.
+                selected_time = get_override_time_from_string(self.now_utc, minute_str, plan_interval)
+                if selected_time.astimezone(timezone.utc) != minute_time.astimezone(timezone.utc):
+                    continue
                 if minute in time_overrides:
                     minute_str = "[" + minute_str + "]"
                 time_values.append(minute_str)
