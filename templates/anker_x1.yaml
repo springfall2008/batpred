@@ -1,0 +1,317 @@
+# Predbat config for the Anker SOLIX X1, via the anker-x1-ha HACS integration
+# (local Modbus TCP, https://github.com/afewyards/anker-x1-ha, 0.7.0 or later)
+#
+# The X1 has no charge schedule, target SoC or reserve over Modbus, so this is a
+# custom inverter type controlled through Predbat's Service API: every service
+# below calls one Home Assistant script that writes the X1's battery power
+# setpoint in VPP mode. See the Anker SOLIX X1 section of the inverter setup docs.
+#
+# Copy this over your apps.yaml and:
+#   1. Install the anker-x1-ha integration via HACS and check its sensors work.
+#   2. Install the Home Assistant package templates/anker_x1_package.yaml (the
+#      control script, rate helpers, house load and SoC sensors) and restart
+#      Home Assistant.
+#   3. Set soc_max to your battery size in kWh (5 per battery module).
+#   4. Check inverter_limit and battery_rate_max against your inverter model
+#      (sensor.anker_x1_model); 5000 is for the X1-H5K-S.
+#   5. Set reserve and battery_min_soc to the minimum SoC set in the Anker app.
+#   6. Delete the template: True line below once you have configured this file.
+---
+pred_bat:
+  module: predbat
+  class: PredBat
+  prefix: predbat
+  timezone: Europe/London
+  currency_symbols:
+    - '£'
+    - 'p'
+  threads: auto
+  # XXX: This is a configuration template, delete this line once you edit your configuration
+  template: True
+  load_filter_threshold: 30
+
+  # ─── Anker SOLIX X1 energy sensors ────────────────────────────────────────
+  # Energy (kWh) sensors that only ever go up. Daily counters and lifetime
+  # totals both work: Predbat only uses how much they rose since midnight.
+  # The X1 reports no house load energy, so load_today is the energy balance
+  # sensor from anker_x1_package.yaml.
+  load_today:
+    - sensor.anker_x1_house_load_today
+  # anker-x1-ha 0.7.0 renamed "Grid Bought Today" / "Grid Fed-in Today" to
+  # "Grid Bought" / "Grid Fed-in"; these match the entity under either name.
+  # They are lifetime totals on X1 firmware 1.0.19.16 and reset at midnight on
+  # 1.0.16.1, and both work here.
+  import_today:
+    - 're:(sensor.anker_x1_grid_bought(_today|))'
+  export_today:
+    - 're:(sensor.anker_x1_grid_fed_in(_today|))'
+  pv_today:
+    - sensor.anker_x1_pv_energy_today
+
+  # ─── Anker SOLIX X1 inverter definition ───────────────────────────────────
+  # Every setting Predbat reads from an inverter definition is spelled out,
+  # because anything left out is copied from the GivEnergy one.
+  num_inverters: 1
+  balance_inverters_seconds: 0
+  inverter_type: "AX1"
+  inverter:
+    name: "Anker SOLIX X1"
+    has_rest_api: false
+    has_mqtt_api: false
+    has_service_api: true
+    output_charge_control: "power"
+    charge_control_immediate: false
+    current_dp: 1
+    charge_discharge_with_rate: false
+    has_charge_enable_time: false
+    has_discharge_enable_time: false
+    # No target SoC or reserve register over Modbus: Predbat watches the SoC
+    # and stops the charge or export itself
+    has_target_soc: false
+    target_soc_used_for_discharge: false
+    has_reserve_soc: false
+    has_timed_pause: false
+    time_button_press: false
+    # A hold (0 W) stops the battery charging from solar too, which isn't what
+    # Predbat's freeze modes assume, so leave them off
+    support_charge_freeze: false
+    support_discharge_freeze: false
+    support_feedin_first: false
+    has_ge_inverter_mode: false
+    has_ge_eco_toggle: false
+    has_idle_time: false
+    charge_time_format: "S"
+    charge_time_entity_is_option: false
+    can_span_midnight: true
+    clock_time_format: "%Y-%m-%d %H:%M:%S"
+    num_load_entities: 1
+    soc_units: "%"
+    write_and_poll_sleep: 2
+
+  # ─── Anker SOLIX X1 control surface (write) ───────────────────────────────
+  # All through script.predbat_anker_x1_control (anker_x1_package.yaml):
+  #   charge / discharge -> VPP mode with a battery setpoint of -power / +power
+  #   hold               -> VPP mode at 0 W
+  #   auto               -> clear the setpoint and switch the X1 to Self-consumption
+  # The start and hold calls repeat on every Predbat run so control is taken
+  # back if the X1 drops out of VPP mode; the script skips unchanged writes.
+  charge_start_service:
+    - service: script.predbat_anker_x1_control
+      command: charge
+      power: "{power}"
+      target_soc: "{target_soc}"
+      repeat: true
+  charge_freeze_service:
+    - service: script.predbat_anker_x1_control
+      command: hold
+      repeat: true
+  charge_stop_service:
+    - service: script.predbat_anker_x1_control
+      command: auto
+  discharge_start_service:
+    - service: script.predbat_anker_x1_control
+      command: discharge
+      power: "{power}"
+      target_soc: "{target_soc}"
+      repeat: true
+  discharge_stop_service:
+    - service: script.predbat_anker_x1_control
+      command: auto
+
+  # ─── Anker SOLIX X1 sensor entities (read) ────────────────────────────────
+  # Predbat writes the charge/discharge power it wants here (W) and passes it
+  # to the script as {power}
+  charge_rate:
+    - input_number.predbat_anker_x1_charge_rate
+  discharge_rate:
+    - input_number.predbat_anker_x1_discharge_rate
+  # The X1's SoC through a filter that holds the last good reading for up to
+  # 15 minutes, so a dropout or a glitch to 0% doesn't make Predbat plan from
+  # an empty battery
+  soc_percent:
+    - sensor.anker_x1_battery_soc_for_predbat
+  # Battery size in kWh: 5 per battery module (measured 5.2-5.3 kWh usable per
+  # module). A fixed number can't drop out the way the integration's Battery
+  # Nominal Capacity sensor can.
+  soc_max:
+    - 10
+  # Positive while discharging, negative while charging, as Predbat expects
+  battery_power:
+    - sensor.anker_x1_battery_power
+  battery_power_invert:
+    - false
+  pv_power:
+    - sensor.anker_x1_usable_pv_power
+  # The X1's external meter reads negative while exporting and Predbat wants
+  # export positive, hence the invert
+  grid_power:
+    - sensor.anker_x1_meter_total_power
+  grid_power_invert:
+    - true
+  # Solar + battery + grid, from anker_x1_package.yaml
+  load_power:
+    - sensor.anker_x1_house_load_power
+
+  # ─── Anker SOLIX X1 battery and inverter limits ───────────────────────────
+  # The X1 has no reserve setting over Modbus, so Predbat plans with its own
+  # Reserve (input_number.predbat_set_reserve_min). Neither setting changes
+  # where the X1 itself stops discharging (the minimum SoC in the Anker app),
+  # so set both to the same value as the app.
+  reserve:
+    - 4
+  battery_min_soc:
+    - 4
+  # Maximum battery charge/discharge power in W
+  battery_rate_max:
+    - 5000
+  # Inverter AC limit in W: 5000 for the X1-H5K-S. sensor.anker_x1_dischargeable_power
+  # is the battery pack's DC capability (3300 W per module), not the AC output.
+  inverter_limit:
+    - 5000
+  inverter_clock_skew_start: 0
+  inverter_clock_skew_end: 0
+  inverter_clock_skew_discharge_start: 0
+  inverter_clock_skew_discharge_end: 0
+  clock_skew: 0
+
+  # ─── Solcast solar forecast ───────────────────────────────────────────────
+  # Solcast cloud interface, set this or the local interface below
+  #solcast_host: 'https://api.solcast.com.au/'
+  #solcast_api_key: 'xxxx'
+  #solcast_poll_hours: 8
+  pv_forecast_today: re:(sensor.(solcast_|)(pv_forecast_|)forecast_today)
+  pv_forecast_tomorrow: re:(sensor.(solcast_|)(pv_forecast_|)forecast_tomorrow)
+  pv_forecast_d3: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_3|d3))
+  pv_forecast_d4: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_4|d4))
+  # ─── Car charging ─────────────────────────────────────────────────────────
+  car_charging_energy: 're:(sensor.myenergi_zappi_[0-9a-z]+_charge_added_session|sensor.wallbox_portal_added_energy)'
+
+  # car_charging_power is the live charging power of your car charger, in Watts
+  # It is display only - it drives the car shown on the web interface power flow diagram
+  # and the predbat.car_charging_power sensor. The plan itself is unaffected by it.
+  # Automatically set to detect Wallbox and Zappi, if it doesn't match manually enter your sensor name
+  car_charging_power: 're:(sensor.myenergi_zappi_[0-9a-z]+_internal_load_ct1|sensor.wallbox_portal_charging_power)'
+  num_cars: 1
+  car_charging_planned:
+    - 're:(sensor.wallbox_portal_status_description|sensor.myenergi_zappi_[0-9a-z]+_plug_status)'
+  car_charging_planned_response:
+    - 'yes'
+    - 'on'
+    - 'true'
+    - 'connected'
+    - 'ev connected'
+    - 'ev ready to charge'
+    - 'charging'
+    - 'paused'
+    - 'waiting for car demand'
+    - 'waiting for ev'
+    - 'scheduled'
+    - 'enabled'
+    - 'latched'
+    - 'locked'
+    - 'plugged in'
+    - 'waiting'
+  # car_charging_now can be set to a sensor that shows the car is charging right now, so that
+  # Predbat holds the house battery for the car while it charges. It never adds a charging slot.
+  # Use an on/off sensor (matched against car_charging_now_response), or a charging power sensor
+  # in W or kW where 200W or more counts as charging - e.g. for a Wallbox charger:
+  #car_charging_now:
+  #  - sensor.wallbox_portal_charging_power
+  car_charging_now_response:
+    - 'yes'
+    - 'on'
+    - 'true'
+    - 'charging'
+  #car_charging_battery_size:
+  #  - 75
+  #car_charging_limit:
+  #  - 're:number.tsunami_charge_limit'
+  #car_charging_soc:
+  #  - 're:sensor.tsunami_battery'
+  #car_charging_exclusive:
+  #  - True
+  # ─── Octopus Energy ───────────────────────────────────────────────────────
+  octopus_intelligent_slot: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_intelligent_dispatching)'
+  octopus_ready_time: 're:((select|time).octopus_energy_([0-9a-z_]+|)_intelligent_target_time)'
+  octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_target)'
+  #octopus_intelligent_slot: 'binary_sensor.ohme_slot_active'
+  #octopus_ready_time: 'time.ohme_target_time'
+  #octopus_charge_limit: 'number.ohme_target_percent'
+  #octopus_slot_low_rate: False
+  octopus_saving_session: 're:(event.octopus_energy([0-9a-z_]+|)_saving_session_event(s|))'
+  octopus_saving_session_octopoints_per_penny: 8
+  octopus_free_session: 're:(event.octopus_energy_([0-9a-z_]+|)_octoplus_free_electricity_session_events)'
+  # octopus_free_url: 'http://octopus.energy/free-electricity'
+  # axle_api_key: "xxxxxxx"
+  # ─── Energy rates ─────────────────────────────────────────────────────────
+  metric_octopus_import: 're:(event.octopus_energy_electricity_[0-9a-z_]+(?<!export)_current_day_rates)'
+  #metric_octopus_export: 're:(event.octopus_energy_electricity_[0-9a-z_]+_export_current_day_rates)'
+  metric_standing_charge: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_standing_charge)'
+  #metric_energidataservice_import: 'sensor.energi_data_service_import'
+  #metric_energidataservice_export: 'sensor.energi_data_service_export'
+  #rates_import:
+  #  -  start: "00:30:00"
+  #     end: "04:30:00"
+  #     rate: 7.5
+  #  -  start: "04:30:00"
+  #     end: "00:30:00"
+  #     rate: 40.0
+  #rates_export:
+  #  -  rate: 4.2
+  # rates_import_octopus_url : "https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-{octopus_region}/standard-unit-rates"
+  # rates_export_octopus_url: "https://api.octopus.energy/v1/products/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-A/standard-unit-rates/"
+  #rates_import_override:
+  # -  date: '2023-09-10'
+  #    start: '14:00:00'
+  #    end: '14:30:00'
+  #    rate: 112
+  #    load_scaling: 0.8
+  # ─── Forecast and history ─────────────────────────────────────────────────
+  days_previous:
+    - 7
+  forecast_hours: 48
+  load_ml_enable: true
+  # load_ml_source: true
+  temperature_enable: true
+  # ─── Notifications ────────────────────────────────────────────────────────
+  #notify_devices:
+  #  - mobile_app_my_phone
+  # ─── Scaling ──────────────────────────────────────────────────────────────
+  battery_scaling:
+    - 1.0
+  import_export_scaling: 1.0
+  # ─── Export triggers ──────────────────────────────────────────────────────
+  export_triggers:
+    - name: 'large'
+      minutes: 60
+      energy: 1.0
+    - name: 'small'
+      minutes: 15
+      energy: 0.25
+  #iboost_energy_today: 'sensor.xxxxx'
+  #iboost_energy_scaling: 1.0
+  #metric_octopus_gas: 're:(sensor.(octopus_energy_|)gas_[0-9a-z]+_[0-9a-z]+_current_rate)'
+  #futurerate_url: 'https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices?date=DATE&market=N2EX_DayAhead&deliveryArea=UK&currency=GBP'
+  #futurerate_adjust_import: True
+  #futurerate_adjust_export: False
+  #futurerate_peak_start: "16:00:00"
+  #futurerate_peak_end: "19:00:00"
+  #futurerate_peak_premium_import: 14
+  #futurerate_peak_premium_export: 6.5
+  #octopus_region: "A"
+  #compare_list:
+  #  - id: 'current'
+  #    name: 'Current Tariff'
+  #alerts:
+  #  url: "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-united-kingdom"
+  #  event: "(Amber|Yellow|Orange|Red).*(Wind|Snow|Fog|Rain|Thunderstorm|Avalanche|Frost|Heat|Coastal event|Flood|Forestfire|Ice|Low temperature|Storm|Tornado|Tsunami|Volcano|Wildfire)"
+  #  severity: "Moderate|Severe|Extreme"
+  #  certainty: "Possible|Likely|Expected"
+  #  keep: 40
+  #watch_list:
+  #  - '{octopus_intelligent_slot}'
+  #  - '{octopus_ready_time}'
+  #  - '{octopus_charge_limit}'
+  #  - '{octopus_saving_session}'
+  #  - '+[car_charging_planned]'
+  #  - '+[car_charging_soc]'
