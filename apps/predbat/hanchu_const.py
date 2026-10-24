@@ -176,6 +176,10 @@ HANCHU_REFRESH_MIN_INTERVAL = 30
 # OBSERVED: UPTON api.py _request uses a 15-second timeout and 3 attempts with a 2s, 4s backoff.
 # GUOXIA's copy uses 10 seconds and a single attempt. UPTON's is the maintained figure.
 HANCHU_TIMEOUT = 15
+
+# Characters of an error reply's body (any HTTP status other than 200 and 401) quoted in the warning,
+# whitespace collapsed. An error page can be long HTML; the start is what says why.
+HANCHU_ERROR_BODY_CHARS = 300
 HANCHU_RETRIES = 3
 
 # --- Device type ------------------------------------------------------------------------------

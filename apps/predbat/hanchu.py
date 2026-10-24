@@ -79,6 +79,7 @@ from hanchu_const import (
     HANCHU_ENCRYPTED_ENDPOINTS,
     HANCHU_ENDPOINTS,
     HANCHU_ENERGY,
+    HANCHU_ERROR_BODY_CHARS,
     HANCHU_HEADER_LOCALE,
     HANCHU_HEADER_PLATFORM,
     HANCHU_HEADER_TOKEN,
@@ -380,6 +381,7 @@ class HanchuAPI(ComponentBase):
                 async with session.post(url, headers=headers, **request_body) as response:
                     status = response.status
                     payload = None
+                    error_body = None
                     if status == 200:
                         payload = await response.json(content_type=None)
                     elif status == HANCHU_CODE_UNAUTHORISED:
@@ -389,6 +391,13 @@ class HanchuAPI(ComponentBase):
                             payload = await response.json(content_type=None)
                         except ValueError:
                             payload = None
+                    else:
+                        # Kept for the log: on any other status the body is the only clue to why (a 403
+                        # from the /gateway/platform/ battery endpoints, say). Never allowed to fail the call.
+                        try:
+                            error_body = " ".join(str(await response.text()).split())[:HANCHU_ERROR_BODY_CHARS]
+                        except Exception:
+                            error_body = None
             # Deliberately broad: the docstring promises this never raises, so every caller can fail
             # closed. A narrower tuple let a bare OSError from the socket layer escape run().
             except Exception as error:
@@ -400,7 +409,7 @@ class HanchuAPI(ComponentBase):
                 continue
 
             if status != 200 and status != HANCHU_CODE_UNAUTHORISED:
-                self.log("Warn: Hanchu {} returned HTTP {}".format(path, status))
+                self.log("Warn: Hanchu {} returned HTTP {}{}".format(path, status, ": {}".format(error_body) if error_body else ""))
                 attempt += 1
                 if attempt >= HANCHU_RETRIES:
                     return False, None

@@ -1457,6 +1457,40 @@ def test_hanchu_battery_health_lines_label_the_fields_and_imply_capacity():
     assert not failed, "test_hanchu_battery_health_lines_label_the_fields_and_imply_capacity"
 
 
+def test_hanchu_error_reply_body_is_logged():
+    """A reply with a status other than 200 or 401 has the start of its body in the warning, not just the code.
+
+    Hardware (2026-10-24): /gateway/platform/station/detail answered HTTP 403 for a HESS-HY-S-6.0K account,
+    and "returned HTTP 403" alone could not say whether that was permissions, the token or the request.
+    """
+    failed = False
+    client = ready_client()
+    responses = [mock_json_response(status=403) for _ in range(3)]
+
+    async def body_text():
+        """Return a forbidden reply's body, with the whitespace an error page tends to carry."""
+        return '{"code": 403,\n   "msg": "Forbidden - no permission"}'
+
+    for response in responses:
+        response.text = body_text
+    with patch("aiohttp.ClientSession", return_value=create_aiohttp_mock_session(responses)):
+        with patch("hanchu.asyncio.sleep", new=AsyncMock()):
+            ok, data = run_async_local(client._post("device_status", body={"sn": "HC240100001"}))
+    warnings = [message for message in client.log_messages if "returned HTTP 403" in message]
+    if ok or data is not None or not warnings or 'Forbidden - no permission"}' not in warnings[0] or "\n" in warnings[0]:
+        print(f"ERROR: the 403 body should be quoted on one line: ok={ok} {warnings}")
+        failed = True
+    # A body that cannot be read is no reason to fail differently.
+    plain = ready_client()
+    with patched_session([(500, envelope(data={})) for _ in range(3)]):
+        with patch("hanchu.asyncio.sleep", new=AsyncMock()):
+            ok, _ = run_async_local(plain._post("device_status", body={"sn": "HC240100001"}))
+    if ok or not logged(plain, "returned HTTP 500"):
+        print(f"ERROR: an unreadable error body should still log the status: {plain.log_messages}")
+        failed = True
+    assert not failed, "test_hanchu_error_reply_body_is_logged"
+
+
 def run_hanchu_api_tests(my_predbat):
     """Run all Hanchu API and auth tests."""
     failed = False
@@ -1496,6 +1530,7 @@ def run_hanchu_api_tests(my_predbat):
         ("power_ceiling_kept", test_hanchu_power_ceiling_survives_predbat_overwriting_the_held_value),
         ("http_401_unparseable", test_hanchu_http_401_without_a_json_body_triggers_reauth),
         ("watt_heuristic_scope", test_hanchu_watt_heuristic_applies_only_to_fields_without_a_unit_sibling),
+        ("error_body_logged", test_hanchu_error_reply_body_is_logged),
         ("encrypted_endpoint", test_hanchu_encrypted_endpoint_sends_the_body_as_raw_ciphertext),
         ("encrypt_payload", test_hanchu_encrypt_payload_matches_the_reference_scheme),
         ("battery_health", test_hanchu_read_battery_health_lists_every_pack),
