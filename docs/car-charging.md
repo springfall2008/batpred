@@ -802,6 +802,7 @@ and an inverter whose data arrives late, so on its own it can read low while the
 A low 5-minute reading with a live load that is not low, or is unavailable, is ignored - it neither cancels the slots nor brings them back.
 
 A reading that shows the car charging counts straight away, and an "unknown" or "unavailable" sensor is ignored rather than taken as not charging.
+With more than one car, any car's **car_charging_now** showing charging counts for all of them. Octopus links a dispatch to one car, but Predbat cannot tell which charger that car is plugged into: with two Zappis, `myenergi_automatic` numbers them by serial, not by which one Octopus controls.
 With **car_charging_now**, Predbat checks the sensor every 15 seconds between plan updates, so it reacts within seconds of these times.
 
 **Very short dispatches**
