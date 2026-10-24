@@ -1436,6 +1436,19 @@ def test_hanchu_read_battery_health_lists_every_pack():
     if health != {"station": "ST-9001", "packs": {"PACK1": {"sohPack": 96}, "PACK2": {"sohPack": 91}}}:
         print(f"ERROR: unexpected battery health {health}")
         failed = True
+    # Named serials skip the station detail, which has answered "This API has been deprecated."
+    # Hardware (2026-10-24) - and need no station id at all.
+    named = ready_client()
+    with patch("hanchu.encrypt_payload", side_effect=lambda body: "enc") as encrypt:
+        with patched_session([(200, envelope(data={"sohPack": 99})), (200, envelope(data={"sohPack": 98}))]):
+            health = run_async_local(named.read_battery_health(sn, ["B0073K64E0287", "B007R658S0587"]))
+    bodies = [call.args[0] for call in encrypt.call_args_list]
+    if bodies != [{"deviceId": "B0073K64E0287"}, {"deviceId": "B007R658S0587"}]:
+        print(f"ERROR: named serials should be read directly, without the station detail: {bodies}")
+        failed = True
+    if (health or {}).get("packs") != {"B0073K64E0287": {"sohPack": 99}, "B007R658S0587": {"sohPack": 98}}:
+        print(f"ERROR: unexpected battery health for named serials {health}")
+        failed = True
     assert not failed, "test_hanchu_read_battery_health_lists_every_pack"
 
 

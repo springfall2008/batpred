@@ -2167,21 +2167,28 @@ class HanchuAPI(ComponentBase):
             self.update_success_timestamp()
         return True
 
-    async def read_battery_health(self, sn):
+    async def read_battery_health(self, sn, serials=None):
         """Read the BMS figures for every battery pack on a device's station, for the --battery-health report.
 
         Returns {"station": id, "packs": {pack serial: battery data dict}}, or None when the device has
         reported no station id (its status poll has not answered yet). The station detail lists the
         packs; each pack is then read on its own. Command-line harness only - see HANCHU_ENCRYPTED_ENDPOINTS.
 
+        serials names the packs instead, skipping the station detail. HARDWARE (2026-10-24): that call
+        answered code 100 "This API has been deprecated." for a HESS-HY-S-6.0K account, while the web
+        portal still lists the packs and their serials.
+
         A body is used even when the envelope carries no success flag: these /gateway/platform/ calls
         are unobserved through this component, and a diagnostic is more useful showing what came back
         than refusing it. _post() still logs such a reply as unsuccessful.
         """
         station = self.device_detail.get(sn, {}).get("station_id")
-        if not station:
+        if serials:
+            detail = {HANCHU_STATION_BMS_LIST: [{HANCHU_STATION_BMS_SN: serial} for serial in serials]}
+        elif not station:
             return None
-        _, detail = await self._post("station_detail", body={"stationId": station})
+        else:
+            _, detail = await self._post("station_detail", body={"stationId": station})
         packs = {}
         items = detail.get(HANCHU_STATION_BMS_LIST) if isinstance(detail, dict) else None
         for item in items if isinstance(items, list) else []:
@@ -2796,9 +2803,9 @@ async def _cli_await_settings(client, sn, expected, timeout=120, interval=10):  
         await asyncio.sleep(interval)
 
 
-async def _cli_print_battery_health(client, sn):  # pragma: no cover
+async def _cli_print_battery_health(client, sn, serials=None):  # pragma: no cover
     """Print every battery pack's BMS figures - state of health and full-charge capacity among them."""
-    health = await client.read_battery_health(sn)
+    health = await client.read_battery_health(sn, serials)
     if health is None:
         print("  battery health  no station id reported, so the battery packs cannot be listed")
         return
@@ -2877,7 +2884,7 @@ async def test_hanchu_api(args):  # pragma: no cover
         await _cli_print_coupling(client, sn)
         await _cli_print_menu(client, sn, args.dump_menu)
         if args.battery_health:
-            await _cli_print_battery_health(client, sn)
+            await _cli_print_battery_health(client, sn, args.battery_serial)
     print("\nThe 'Set arg' lines above are what hanchu_automatic: true would put in apps.yaml.")
     await client.final()
     print("Done")
@@ -3051,6 +3058,7 @@ def main():  # pragma: no cover
     parser.add_argument("--no-trace", action="store_true", help="Stop printing every API request and response")
     parser.add_argument("--dump-menu", metavar="FILE", help="With the read-only report, save the device's full settings menu as JSON to FILE")
     parser.add_argument("--battery-health", action="store_true", help="With the read-only report, read each battery pack's BMS figures (state of health, full-charge capacity) through the encrypted battery endpoints - needs the cryptography package")
+    parser.add_argument("--battery-serial", action="append", metavar="SERIAL", help="With --battery-health, read this battery pack (as shown in the Hanchu web portal) instead of listing the station's packs; repeat for each pack")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--write-test", action="store_true", help="Write a charge window three hours from now, read it back, then restore - moves no energy")
     mode.add_argument("--live-window", choices=HANCHU_CLI_SCENARIOS, help="Run this Predbat state on the inverter now, watch the battery, then restore")
