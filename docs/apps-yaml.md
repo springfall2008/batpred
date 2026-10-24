@@ -240,6 +240,8 @@ pred_bat:
   ohme_password: !secret ohme_password  # Ohme account password (if using Ohme direct)
   wallbox_username: !secret wallbox_username  # Wallbox account e-mail (if using Wallbox direct)
   wallbox_password: !secret wallbox_password  # Wallbox account password (if using Wallbox direct)
+  hypervolt_username: !secret hypervolt_username  # Hypervolt account e-mail (if using Hypervolt direct)
+  hypervolt_password: !secret hypervolt_password  # Hypervolt account password (if using Hypervolt direct)
 ```
 
 If a credential-like value (matching a key name containing `_key`, `password`, `secret` or `token`) is found written directly in `apps.yaml` instead of via `!secret`, Predbat logs a warning and lists the affected item(s) on the [web interface](web-interface.md) apps.yaml page. This is a warning rather than a validation error - the configuration still works, but moving the value into `secrets.yaml` keeps it out of `apps.yaml`, which is more likely to end up shared, backed up or attached to a bug report.
@@ -2172,6 +2174,10 @@ whether you are within an Octopus Energy "smart charge" slot
 - **wallbox_automatic** - Register the Wallbox chargers with Predbat as cars (default `True`)
 - **wallbox_control** - Let Predbat pause and resume the Wallbox chargers from its own car charging plan (default `False`)
 - **wallbox_poll_seconds** - How often to poll the Wallbox cloud in seconds (default `120`)
+- **hypervolt_username** - Hypervolt EV charger account email address
+- **hypervolt_password** - Password for the above Hypervolt account
+- **hypervolt_automatic** - Register the Hypervolt chargers with Predbat as cars (default `True`)
+- **hypervolt_control** - Let Predbat stop and start the Hypervolt chargers from its own car charging plan (default `False`)
 
 ## myenergi Integration
 

@@ -274,6 +274,7 @@ giv
 GivEnergy
 givtcp
 gmtime
+gndean
 gnueabihf
 GOELEC
 goldens
@@ -413,6 +414,7 @@ metricmid
 microinverters
 middlebox
 middleboxes
+milli
 minb
 minmax
 minsoc
@@ -517,6 +519,7 @@ pitem
 pkwh
 plenticore
 pload
+plugncharge
 pmeter
 poinv
 popv

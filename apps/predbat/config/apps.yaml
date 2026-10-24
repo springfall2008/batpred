@@ -328,6 +328,15 @@ pred_bat:
   # Requires wallbox_automatic
   #wallbox_control: True
 
+  # Hypervolt EV charger cloud direct integration
+  #hypervolt_username: !secret hypervolt_username
+  #hypervolt_password: !secret hypervolt_password
+  # Register the Hypervolt chargers with Predbat as cars (on by default)
+  #hypervolt_automatic: True
+  # Let Predbat stop and start the chargers according to its own car charging plan.
+  # Requires hypervolt_automatic
+  #hypervolt_control: True
+
   # car_charging_energy defines a daily incrementing sensor which measures the charge added to your car and resets to zero at midnight
   # is used for car_charging_hold feature to filter out car charging from the previous load data
   # Automatically set to detect Wallbox and Zappi, if it doesn't match manually enter your sensor name

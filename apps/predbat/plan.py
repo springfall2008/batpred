@@ -3619,10 +3619,19 @@ class Plan:
         Each active charge/export slot inside the record window is trialled in turn: the slot is
         removed (export -> 100, charge -> 0) and the whole plan re-simulated in the nominal (50%)
         scenario only - one simulation per trial via run_prediction_metric(nominal_only=True). The
-        removal is kept when the nominal metric does not get worse, so slots whose value exists only
-        in the pv10/pv90 branches (or nowhere at all - phantom exports, dead freezes) are dropped.
-        If the pessimistic scenario materialises in reality, the next plan recompute re-creates a
-        genuine slot from actual state, so nothing is permanently lost.
+        removal is kept when the nominal metric does not get worse.
+
+        A removal that leaves the nominal metric unchanged (within eps) means the slot is dead in the
+        central forecast - phantom exports, dead freezes, charges that never charge - and it is
+        dropped on that alone, whatever the pv10/pv90 branches say (the #4453 phantoms only looked
+        valuable through a pv10 modelling quirk).
+
+        A removal that makes the nominal metric better is a trade-off, not a dead slot: the slot moves
+        real energy, and its value lies in the pv10/pv90 branches - a charge that buffers against a
+        load overrun, or an export that makes room for pv90 solar. Such a slot is only dropped when
+        the full blended metric does not get worse either. The window it uses can close before the
+        risk it covers would arrive (a cheap overnight rate ends hours before the evening shortfall),
+        so a later replan cannot be relied on to put it back.
 
         Runs after the pre-clip scoring snapshot (see calculate_plan), so plan selection still
         compares plans as optimised (#4403). Manual windows are preserved. Later removals are
@@ -3639,6 +3648,7 @@ class Plan:
         eps = 0.02
         record_limit = self.end_record + self.minutes_now
         baseline = None
+        blended_baseline = None
         start_metric = None
         pruned = 0
         trials = 0
@@ -3658,13 +3668,42 @@ class Plan:
                 limits[window_n] = off_value
                 trial = self.run_prediction_metric(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record, nominal_only=True)[0]
                 trials += 1
-                if trial <= baseline + eps:
+                if trial > baseline + eps:
+                    limits[window_n] = limit
+                    continue
+
+                if trial < baseline - eps:
+                    # The slot changes the nominal outcome, so it is a trade-off rather than dead -
+                    # only drop it if the blended plan does not pay for it
+                    blended_trial = self.run_prediction_metric(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record)[0]
+                    if blended_baseline is None:
+                        limits[window_n] = limit
+                        blended_baseline = self.run_prediction_metric(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record)[0]
+                        limits[window_n] = off_value
+                    if blended_trial > blended_baseline + eps:
+                        if self.debug_enable:
+                            self.log(
+                                "Prune kept hedge {} slot {} {}-{} limit {} - nominal metric {} vs baseline {} but blended metric {} vs baseline {}".format(
+                                    typ, window_n, self.time_abs_str(window["start"]), self.time_abs_str(window["end"]), limit, dp2(trial), dp2(baseline), dp2(blended_trial), dp2(blended_baseline)
+                                )
+                            )
+                        limits[window_n] = limit
+                        continue
+                    if self.debug_enable:
+                        self.log(
+                            "Prune trade-off {} slot {} {}-{} limit {} - nominal metric {} vs baseline {}, blended metric {} vs baseline {}".format(
+                                typ, window_n, self.time_abs_str(window["start"]), self.time_abs_str(window["end"]), limit, dp2(trial), dp2(baseline), dp2(blended_trial), dp2(blended_baseline)
+                            )
+                        )
+                    blended_baseline = blended_trial
+                else:
+                    # Dead slot - the blended metric may still move, so measure it afresh if needed
+                    blended_baseline = None
                     if self.debug_enable:
                         self.log("Prune dead {} slot {} {}-{} limit {} - nominal metric {} vs baseline {}".format(typ, window_n, self.time_abs_str(window["start"]), self.time_abs_str(window["end"]), limit, dp2(trial), dp2(baseline)))
-                    baseline = trial
-                    pruned += 1
-                else:
-                    limits[window_n] = limit
+
+                baseline = trial
+                pruned += 1
         if pruned:
             # The trials run on the nominal scenario only, so report the full metric and cost of the
             # pruned plan rather than the nominal figure the trials compared on
