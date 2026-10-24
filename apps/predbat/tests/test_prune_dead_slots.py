@@ -32,6 +32,10 @@ def run_prune_dead_slots_tests(my_predbat):
     failed |= test_prune_drops_neutral_charge_freeze(my_predbat)
     failed |= test_prune_ignores_windows_outside_record(my_predbat)
     failed |= test_prune_drops_neutral_export_freeze(my_predbat)
+    failed |= test_prune_keeps_charge_hedge_when_blended_worsens(my_predbat)
+    failed |= test_prune_keeps_export_hedge_when_blended_worsens(my_predbat)
+    failed |= test_prune_drops_trade_off_slot_when_blended_improves(my_predbat)
+    failed |= test_prune_drops_dead_slot_even_when_blended_worsens(my_predbat)
     return failed
 
 
@@ -56,11 +60,15 @@ def make_window(start, end, average=10.0):
     return {"start": start, "end": end, "average": average}
 
 
-def install_metric_stub(my_predbat, table, default=100.0):
+def install_metric_stub(my_predbat, table, default=100.0, blended=None):
     """Replace run_prediction_metric with a stub returning a metric looked up from `table`.
 
     The key is (tuple(charge_limits), tuple(export_limits)); values are the metric. Unknown
     shapes return `default`. Returns the list of keys queried, for call-count assertions.
+
+    `table` answers the nominal-only calls. When `blended` is given it answers the full
+    (pv10/pv90-blended) calls instead, so a test can make the two scenarios disagree; shapes
+    missing from it fall back to `table`.
     """
     calls = []
 
@@ -69,6 +77,8 @@ def install_metric_stub(my_predbat, table, default=100.0):
         key = (tuple(charge_limit_best), tuple(round(export_limit_sort_key(v), 2) for v in export_limits_best))
         calls.append(key)
         metric = table.get(key, default)
+        if blended is not None and not nominal_only:
+            metric = blended.get(key, metric)
         return metric, 0.0, metric, 0.0, 0.0, 0.0, 0.0, 0.0
 
     my_predbat.run_prediction_metric = stub
@@ -382,6 +392,139 @@ def test_prune_drops_neutral_export_freeze(my_predbat):
 
     if export_mode_of(my_predbat.export_limits_best[0]) != EXPORT_MODE_IDLE:
         print("ERROR: Neutral export freeze not pruned, limit is {}".format(my_predbat.export_limits_best[0]))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_prune_keeps_charge_hedge_when_blended_worsens(my_predbat):
+    """A charge slot that buys a buffer against the pv10/load10 scenario is kept: removing it improves
+    the nominal metric (the energy is not needed in the central forecast) but worsens the blended one,
+    and the cheap window it sits in closes before the shortfall would arrive, so a later replan cannot
+    put it back. Seen on a flat 7.6p overnight tariff where the prune cut a 50% charge to 34% and left
+    the battery planned to reach the reserve exactly as the next cheap window opened."""
+    print("**** test_prune_keeps_charge_hedge_when_blended_worsens ****")
+    failed = False
+    setup(my_predbat)
+
+    my_predbat.charge_window_best = [make_window(780, 810)]
+    my_predbat.charge_limit_best = [5.0]
+    nominal = {
+        ((5.0,), ()): 439.74,  # as planned
+        ((0,), ()): 437.36,  # nominal is cheaper without the buffer
+    }
+    blended = {
+        ((5.0,), ()): 436.15,  # as planned
+        ((0,), ()): 442.51,  # but the blended plan is worse without it
+    }
+    install_metric_stub(my_predbat, nominal, blended=blended)
+
+    try:
+        my_predbat.prune_dead_plan_slots()
+    finally:
+        restore_metric(my_predbat)
+
+    if my_predbat.charge_limit_best[0] != 5.0:
+        print("ERROR: Charge hedge slot was pruned although the blended metric got worse, limit is {}".format(my_predbat.charge_limit_best[0]))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_prune_keeps_export_hedge_when_blended_worsens(my_predbat):
+    """The export equivalent: an export that makes room for pv90 solar is nominally not worth it, but
+    without it the pv90 branch clips, so the blended metric gets worse and the slot is kept"""
+    print("**** test_prune_keeps_export_hedge_when_blended_worsens ****")
+    failed = False
+    setup(my_predbat)
+
+    my_predbat.export_window_best = [make_window(780, 810)]
+    my_predbat.export_limits_best = [0.0]
+    nominal = {
+        ((), (0.0,)): 100.0,  # as planned
+        ((), (100.0,)): 98.0,  # nominal prefers to keep the energy
+    }
+    blended = {
+        ((), (0.0,)): 100.0,  # as planned
+        ((), (100.0,)): 103.0,  # pv90 clips without the export
+    }
+    install_metric_stub(my_predbat, nominal, blended=blended)
+
+    try:
+        my_predbat.prune_dead_plan_slots()
+    finally:
+        restore_metric(my_predbat)
+
+    if export_target_of(my_predbat.export_limits_best[0]) != 0:
+        print("ERROR: Export hedge slot was pruned although the blended metric got worse, limit is {}".format(my_predbat.export_limits_best[0]))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_prune_drops_trade_off_slot_when_blended_improves(my_predbat):
+    """A slot whose removal changes the nominal outcome is still pruned when the blended metric does
+    not get worse either - the guard only protects slots the blended plan is paying for"""
+    print("**** test_prune_drops_trade_off_slot_when_blended_improves ****")
+    failed = False
+    setup(my_predbat)
+
+    my_predbat.charge_window_best = [make_window(780, 810)]
+    my_predbat.charge_limit_best = [5.0]
+    nominal = {
+        ((5.0,), ()): 100.0,
+        ((0,), ()): 97.0,
+    }
+    blended = {
+        ((5.0,), ()): 110.0,
+        ((0,), ()): 109.0,
+    }
+    install_metric_stub(my_predbat, nominal, blended=blended)
+
+    try:
+        my_predbat.prune_dead_plan_slots()
+    finally:
+        restore_metric(my_predbat)
+
+    if my_predbat.charge_limit_best[0] != 0:
+        print("ERROR: Trade-off slot was kept although the blended metric also improved, limit is {}".format(my_predbat.charge_limit_best[0]))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_prune_drops_dead_slot_even_when_blended_worsens(my_predbat):
+    """A slot that does nothing in the central forecast is pruned on the nominal metric alone, whatever
+    the blended metric says - this is what keeps the #4453 phantom exports, whose apparent value comes
+    from a pv10 modelling quirk, out of the plan"""
+    print("**** test_prune_drops_dead_slot_even_when_blended_worsens ****")
+    failed = False
+    setup(my_predbat)
+
+    my_predbat.export_window_best = [make_window(780, 810)]
+    my_predbat.export_limits_best = [0.0]
+    nominal = {}  # removal leaves the nominal metric unchanged - the slot is dead
+    blended = {
+        ((), (0.0,)): 100.0,
+        ((), (100.0,)): 101.0,  # pv10 appears to value the phantom
+    }
+    install_metric_stub(my_predbat, nominal, default=100.0, blended=blended)
+
+    try:
+        my_predbat.prune_dead_plan_slots()
+    finally:
+        restore_metric(my_predbat)
+
+    if export_mode_of(my_predbat.export_limits_best[0]) != EXPORT_MODE_IDLE:
+        print("ERROR: Dead export slot was kept because of its blended metric, limit is {}".format(my_predbat.export_limits_best[0]))
         failed = True
 
     if not failed:
