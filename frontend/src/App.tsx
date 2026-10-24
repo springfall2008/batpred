@@ -597,7 +597,7 @@ function App() {
                 <div className="page-loading">Live power data is unavailable.</div>
               )
             ) : currentPage === 'charts' ? (
-              <ChartsPage plan={planData.plan} loadMlEnabled={statusData.load_ml_enabled} />
+              <ChartsPage plan={planData.plan} loadMlEnabled={statusData.load_ml_enabled} predheatEnabled={statusData.predheat_enabled === true} />
             ) : (
               <>
                 {apiWarning && (

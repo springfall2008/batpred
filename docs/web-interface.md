@@ -457,6 +457,8 @@ The modern `apps.yaml` editor validates these settings and suggests entity IDs f
 
 ### Chart controls
 
+When PredHeat is configured and its enable switch is on, the Charts page includes a **PredHeat** tab. It shows indoor and outdoor temperature history alongside predicted temperatures, the thermostat target and PredHeat's heating target. Choose a 12, 24 or 48-hour forecast; dashed lines identify predictions.
+
 All modern Chart.js charts can be explored directly: use the mouse wheel or a pinch gesture to zoom horizontally, drag to pan, and double-click a chart to restore its original range.
 
 ### Tariff helper
