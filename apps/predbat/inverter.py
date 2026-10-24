@@ -3897,7 +3897,9 @@ class Inverter:
                 continue
 
             now_local = datetime.now(local_tz)
-            if (now_local - time_pressed).seconds < 10:
+            # total_seconds(), not .seconds: .seconds is normalised into [0, 86399], so a stamp a
+            # second ahead of our clock read as ~86399s stale and a days-old one read as fresh (batpred#5694).
+            if abs((now_local - time_pressed).total_seconds()) < 10:
                 self.base.log(f"Inverter {self.id} successfully pressed button {entity_id}")
                 # Counted for the same reason as the toggle-button path above (batpred#4712).
                 self.count_register_writes += 1
