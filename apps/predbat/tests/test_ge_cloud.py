@@ -362,7 +362,7 @@ def test_ge_cloud(my_predbat=None):
         ("ac_charge_gate_on_settings_refresh", _test_ac_charge_gate_on_settings_refresh, "Settings refresh re-enables a cleared AC charge gate while force charging"),
         ("inverter_control_setting", _test_inverter_control_setting, "ge_cloud_inverter_control defaults to on"),
         ("inverter_control_off_run", _test_inverter_control_off_run, "Inverter control off skips inverter config and default options"),
-        ("inverter_control_off_writes", _test_inverter_control_off_blocks_writes, "Inverter control off refuses inverter writes"),
+        ("inverter_control_off_user_writes", _test_inverter_control_off_user_writes, "Inverter control off still sends the user's writes, but not Predbat's"),
         ("evc_direct_setting", _test_evc_direct_setting, "ge_cloud_evc_direct starts GE Cloud Direct for the EV charger alone"),
         ("inverter_roles", _test_inverter_roles_from_settings, "ge_cloud_direct monitors the inverter, ge_cloud_inverter_control controls it"),
         ("evc_only_run", _test_evc_only_run, "EV charger only never reads, writes or reports an inverter"),
@@ -3150,7 +3150,7 @@ def _make_rediscovery_ge_cloud(devices, evc_devices=None):
     ge_cloud = MockGECloudDirect()
     ge_cloud.automatic = True
     api = {"devices": devices, "evc": evc_devices or []}
-    calls = {"get_devices": 0, "status": [], "settings": [], "evc_polled": [], "automatic": [], "automatic_evc": 0, "defaults": []}
+    calls = {"get_devices": 0, "status": [], "settings": [], "evc_polled": [], "automatic": [], "automatic_evc": 0, "defaults": [], "site": 0}
 
     async def benign(*args, **kwargs):
         return {}
@@ -3189,8 +3189,11 @@ def _make_rediscovery_ge_cloud(devices, evc_devices=None):
     async def enable_defaults(device, settings):
         calls["defaults"].append(device)
 
+    async def update_site(first):
+        calls["site"] += 1
+
     ge_cloud.update_account = benign
-    ge_cloud.update_site = benign
+    ge_cloud.update_site = update_site
     ge_cloud.async_get_devices = get_devices
     ge_cloud.async_get_evc_devices = get_evc_devices
     ge_cloud.async_get_inverter_status = get_status
@@ -8717,8 +8720,8 @@ def _test_evc_only_run(my_predbat):
         if report["inverters"] or report["automatic"] is not False:
             print("ERROR: no inverter should be reported, got {}".format(report))
             return 1
-        if any("Site details" in message for message in ge_cloud.log_messages):
-            print("ERROR: the inverter site should not be looked up, got {}".format(ge_cloud.log_messages))
+        if calls["site"]:
+            print("ERROR: the inverter site should not be looked up, got {} update_site calls".format(calls["site"]))
             return 1
 
         # The periodic device check does not start reading the inverters either
@@ -8804,39 +8807,36 @@ def _test_inverter_control_off_run(my_predbat):
     return run_async(test())
 
 
-def _test_inverter_control_off_blocks_writes(my_predbat):
-    """With ge_cloud_inverter_control off, no inverter setting is written - not from an entity event, nor to hold the AC charge gate"""
+def _test_inverter_control_off_user_writes(my_predbat):
+    """With ge_cloud_inverter_control off, a change the user makes to a _gecloud_ entity still reaches the inverter, but Predbat adds no write of its own"""
 
     async def test():
         ge_cloud = MockGECloudDirect()
         ge_cloud.inverter_control = False
-        api_calls = []
+        written = []
 
-        async def mock_api(endpoint, *args, **kwargs):
-            api_calls.append(endpoint)
+        async def mock_api(endpoint, serial="", setting_id="", post=False, datain=None, **kwargs):
+            written.append((serial, setting_id, datain.get("value") if datain else None))
             return {"value": True}
 
+        async def mock_publish(*args, **kwargs):
+            pass
+
         ge_cloud.async_get_inverter_data = mock_api
+        ge_cloud.publish_registers = mock_publish
         ge_cloud.pending_writes = {"test123": []}
-
-        result = await ge_cloud.async_write_inverter_setting("test123", 201, True)
-        if result is not None or api_calls:
-            print("ERROR: the write should be refused without calling the API, got result {} calls {}".format(result, api_calls))
-            return 1
-        if not any("ge_cloud_inverter_control" in message for message in ge_cloud.log_messages):
-            print("ERROR: the refused write should say why, got {}".format(ge_cloud.log_messages[-5:]))
-            return 1
-
-        # The AC charge gate is not re-asserted either, so there is no warning about it being off
         force_entity = "switch.predbat_gecloud_test123_enable_force_charge"
+        ge_cloud.register_entity_map[force_entity] = {"key": 201, "device": "test123"}
         ge_cloud.config_args["scheduled_charge_enable"] = [force_entity]
-        ge_cloud.settings = {"test123": _ac_charge_gate_registers(force_charge=True, ac_charge=False)}
-        ge_cloud.log_messages = []
-        if await ge_cloud.ensure_ac_charge_gate("test123"):
-            print("ERROR: ensure_ac_charge_gate should do nothing with inverter control off")
+        # The AC charge gate is off, which with control on would be turned back on alongside the force charge
+        ge_cloud.settings = {"test123": _ac_charge_gate_registers(force_charge=False, ac_charge=False)}
+
+        await ge_cloud.switch_event(force_entity, "turn_on")
+        if written != [("test123", 201, "True")]:
+            print("ERROR: only the user's force charge write should be sent, got {}".format(written))
             return 1
-        if api_calls or ge_cloud.log_messages:
-            print("ERROR: ensure_ac_charge_gate should neither write nor log, got calls {} logs {}".format(api_calls, ge_cloud.log_messages))
+        if any("enable_ac_charge is off" in message for message in ge_cloud.log_messages):
+            print("ERROR: the AC charge gate should not be re-asserted with inverter control off, got {}".format(ge_cloud.log_messages))
             return 1
         return 0
 

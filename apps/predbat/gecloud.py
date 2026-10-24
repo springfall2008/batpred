@@ -619,7 +619,9 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         self.api_key = api_key
         self.automatic = automatic
         # Each role has a monitor switch and a control switch, so neither has to know about the other.
-        # Inverter: ge_cloud_direct monitors it, ge_cloud_inverter_control also lets Predbat write to it.
+        # Inverter: ge_cloud_direct monitors it, ge_cloud_inverter_control also lets Predbat control it -
+        # wire it up with ge_cloud_automatic and write its default settings. Off, a change the user makes
+        # to one of its entities is still sent; Predbat just adds no write of its own.
         # EV charger: ge_cloud_direct or ge_cloud_evc_direct monitors it, ge_cloud_evc_control drives it.
         # ge_cloud_evc_direct alone is for a site whose inverter is run by something else (GivTCP, the
         # GivEnergy app): the inverters are then never read, written or reported.
@@ -2441,7 +2443,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             if self.automatic and not self.inverter_monitor:
                 self.log("GECloud: Warn: ge_cloud_automatic is ignored because ge_cloud_direct is not set, Predbat will not read or write to the inverter")
             elif self.automatic and not self.inverter_control:
-                self.log("GECloud: Warn: ge_cloud_automatic is ignored because ge_cloud_inverter_control is false, Predbat will not configure or write to the inverter")
+                self.log("GECloud: Warn: ge_cloud_automatic is ignored because ge_cloud_inverter_control is false, Predbat will not wire up the inverter's controls or write its default settings")
 
             if not self.device_list and not self.evc_device_list:
                 if self.inverter_monitor:
@@ -2672,9 +2674,6 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         """
         Write a setting to the inverter
         """
-        if not self.inverter_control:
-            self.log("GECloud: Warn: Not writing setting id {} to {} on {} because ge_cloud_inverter_control is false".format(setting_id, value, serial))
-            return None
         data = None
         for retry in range(RETRIES):
             try:

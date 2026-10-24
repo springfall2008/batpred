@@ -680,9 +680,10 @@ Read only mode releases the chargers in the same way.
 See [Components - Charger control](components.md#charger-control-gecloud) for the details.
 
 - **ge_cloud_inverter_control** - Optional, defaults to true. Set it to `false` to monitor your inverter through GE Cloud without
-letting Predbat control it. Predbat still reads the inverters on your account and publishes their entities, but never writes to them:
-the daily pass that sets the inverter's default options (SoC limits, power percentages, clearing charge and discharge slots 2 to 10)
-is skipped, **ge_cloud_automatic** is ignored, and a change to one of the inverter's `_gecloud_` entities is not sent to the inverter.
+letting Predbat control it. Predbat still reads the inverters on your account and publishes their entities, but **ge_cloud_automatic**
+is ignored (with a warning), so Predbat's inverter controls are not wired to GE Cloud, and Predbat writes no settings of its own: the
+daily pass that sets the inverter's default options (SoC limits, power percentages, clearing charge and discharge slots 2 to 10) is
+skipped. A change you make to one of the inverter's `_gecloud_` entities is still sent to the inverter.
 The EV charger settings above are not affected.
 
 - **ge_cloud_evc_direct** - Optional, defaults to false. Set it to `true`, in place of **ge_cloud_direct**, when your inverter is
@@ -1282,7 +1283,7 @@ the controls of your inverter inside home assistant.
 
 - **ge_cloud_direct** - Set to true to enable GE Cloud direct access
 - **ge_cloud_key** - Set to your API Key for the GE Cloud (long string)
-- **ge_cloud_inverter_control** - Optional, defaults to true. Set to false to monitor the inverter without controlling it
+- **ge_cloud_inverter_control** - Optional, defaults to true. Set to false to monitor the inverter without Predbat controlling it
 - **ge_cloud_evc_direct** - Set to true instead of **ge_cloud_direct** to use GE Cloud for a GivEnergy EV charger only, leaving the inverter alone
 
 ## Load filtering
