@@ -298,6 +298,27 @@ def time_in_window(current_time, start_time, end_time):
     return current_time >= start_time or current_time <= end_time
 
 
+def export_power_cid_to_watts(value):
+    """Convert a max export power register (CID 499) read to watts, or None when no limit is configured.
+
+    The register holds 100 W units at every value - the write path in number_event_handler() divides
+    by 100 unconditionally - so a read of 480 is 48,000 W, not 480 W (GH#5385). An unread, non-numeric
+    or zero register is not a configured figure.
+
+    Args:
+        value: Raw register value, usually a string
+
+    Returns: The limit in watts as a float, or None
+    """
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    if value <= 0:
+        return None
+    return value * 100
+
+
 def cid_value_matches(read_back, value):
     """True when a register read-back is the value that was written to it.
 
@@ -2443,19 +2464,11 @@ class SolisAPI(ComponentBase, OAuthMixin):
         """The configured maximum export power (register 499) in watts, or None when there is no configured figure.
 
         Converted exactly as publish_entities() presents the max_export_power number that
-        automatic_config() binds export_limit to: a value under 200 is in 100 W units. publish_entities()
+        automatic_config() binds export_limit to, via export_power_cid_to_watts(). publish_entities()
         shows an unread or 0 register as 99999 W, a "no limit" placeholder rather than a configured
         figure, so neither is reported as a rating.
         """
-        try:
-            value = float(self.cached_values.get(sn, {}).get(SOLIS_CID_MAX_EXPORT_POWER))
-        except (TypeError, ValueError):
-            return None
-        if value <= 0:
-            return None
-        if value < 200:
-            value *= 100
-        return value
+        return export_power_cid_to_watts(self.cached_values.get(sn, {}).get(SOLIS_CID_MAX_EXPORT_POWER))
 
     def build_discovery(self):
         """
@@ -3672,17 +3685,9 @@ class SolisAPI(ComponentBase, OAuthMixin):
             )
 
             entity_id = f"number.{prefix}_solis_{inverter_sn_lower}_max_export_power"
-            max_export_power_value = values.get(SOLIS_CID_MAX_EXPORT_POWER, None)
-            try:
-                max_export_power_value = float(max_export_power_value)
-            except (ValueError, TypeError):
-                max_export_power_value = 0.0
-            if max_export_power_value == 0.0:
+            max_export_power_value = export_power_cid_to_watts(values.get(SOLIS_CID_MAX_EXPORT_POWER, None))
+            if max_export_power_value is None:
                 max_export_power_value = 99999  # Use large number to indicate no limit
-
-            # Export power seems to be in 100w units, so convert to watts if value is small
-            if max_export_power_value < 200:
-                max_export_power_value *= 100
 
             self.dashboard_item(
                 entity_id,
