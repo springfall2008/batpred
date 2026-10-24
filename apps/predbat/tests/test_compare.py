@@ -23,6 +23,7 @@ Covers:
   - a re-plan requested during the comparison survives it, and the state is restored even if the config restore raises
 """
 
+import copy
 import inspect
 import os
 import tempfile
@@ -1199,28 +1200,32 @@ def test_compare(my_predbat):
     cmp.pb = my_predbat
     cmp.log = lambda msg: None
     cmp.live_saving_state = None
-    saved = {key: getattr(my_predbat, key, None) for key in ("minutes_now", "forecast_minutes", "future_energy_rates_import", "future_energy_rates_export", "metric_future_rate_offset_import", "metric_future_rate_offset_export", "io_adjusted")}
-    published = {minute: 15.0 for minute in range(-1440, 1380)}
-    future = {minute: 20.0 for minute in range(1380, 3 * 1440)}
-    other = {minute: 10.0 for minute in range(-1440, 1380)}
-    with patch.object(my_predbat, "get_arg", side_effect=lambda key, default=None, *a, **k: True if key == "futurerate_adjust_import" else (False if key == "futurerate_adjust_export" else default)):
-        my_predbat.minutes_now = 600
-        my_predbat.forecast_minutes = 2880
-        my_predbat.future_energy_rates_import = future
-        my_predbat.future_energy_rates_export = {}
-        my_predbat.metric_future_rate_offset_import = 0
-        my_predbat.metric_future_rate_offset_export = 0
-        my_predbat.io_adjusted = {}
-        live, _ = my_predbat.rate_replicate(dict(published), {}, is_import=True, use_future=True)
-        for label, rates, expected_existing, expected_2000 in [("the live tariff refetched", published, True, 20.0), ("another tariff", other, False, 10.0)]:
-            with patch.object(my_predbat, "basic_rates", side_effect=lambda *a, rates=rates, **k: dict(rates)), patch.object(my_predbat, "find_low_rate_windows", lambda: None), patch.object(my_predbat, "set_rate_thresholds", lambda: None):
-                got = cmp.fetch_rates({"id": "t33", "rates_import": [{"rate": 0}]}, dict(live), {}, {}, rate_import_match=dict(live), rate_export_match={})
-                if got is not expected_existing:
-                    t33_errors.append("{}: existing should be {}, got {}".format(label, expected_existing, got))
-                if my_predbat.rate_import.get(2000) != expected_2000:
-                    t33_errors.append("{}: minute 2000 should be {}, got {}".format(label, expected_2000, my_predbat.rate_import.get(2000)))
-    for key, value in saved.items():
-        setattr(my_predbat, key, value)
+    # fetch_rates() and the real rate_replicate()/rate_scan() rebuild rate tables and scan state on the shared
+    # fixture, so snapshot all of its attributes and put them back even if something in here raises
+    saved = {key: (copy.copy(value) if isinstance(value, (dict, list, set)) else value) for key, value in vars(my_predbat).items()}
+    try:
+        published = {minute: 15.0 for minute in range(-1440, 1380)}
+        future = {minute: 20.0 for minute in range(1380, 3 * 1440)}
+        other = {minute: 10.0 for minute in range(-1440, 1380)}
+        with patch.object(my_predbat, "get_arg", side_effect=lambda key, default=None, *a, **k: True if key == "futurerate_adjust_import" else (False if key == "futurerate_adjust_export" else default)):
+            my_predbat.minutes_now = 600
+            my_predbat.forecast_minutes = 2880
+            my_predbat.future_energy_rates_import = future
+            my_predbat.future_energy_rates_export = {}
+            my_predbat.metric_future_rate_offset_import = 0
+            my_predbat.metric_future_rate_offset_export = 0
+            my_predbat.io_adjusted = {}
+            live, _ = my_predbat.rate_replicate(dict(published), {}, is_import=True, use_future=True)
+            for label, rates, expected_existing, expected_2000 in [("the live tariff refetched", published, True, 20.0), ("another tariff", other, False, 10.0)]:
+                with patch.object(my_predbat, "basic_rates", side_effect=lambda *a, rates=rates, **k: dict(rates)), patch.object(my_predbat, "find_low_rate_windows", lambda: None), patch.object(my_predbat, "set_rate_thresholds", lambda: None):
+                    got = cmp.fetch_rates({"id": "t33", "rates_import": [{"rate": 0}]}, dict(live), {}, {}, rate_import_match=dict(live), rate_export_match={})
+                    if got is not expected_existing:
+                        t33_errors.append("{}: existing should be {}, got {}".format(label, expected_existing, got))
+                    if my_predbat.rate_import.get(2000) != expected_2000:
+                        t33_errors.append("{}: minute 2000 should be {}, got {}".format(label, expected_2000, my_predbat.rate_import.get(2000)))
+    finally:
+        vars(my_predbat).clear()
+        vars(my_predbat).update(saved)
     if t33_errors:
         for error in t33_errors:
             print("ERROR T33: {}".format(error))
