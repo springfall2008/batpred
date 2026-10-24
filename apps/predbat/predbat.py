@@ -35,7 +35,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v9.4.4"
+THIS_VERSION = "v9.5.0"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
 from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, DEFAULT_PREDBAT_REPOSITORY
@@ -554,6 +554,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.discharge_rate_now = 0
         self.car_charging_hold = False
         self.car_charging_manual_soc = []
+        self.car_charging_manual_soc_energy = []
+        # Each manually tracked car's record, also published as a sensor so a restart can read it back - see car_manual_soc_track()
+        self.car_manual_soc_state = {}
         self.car_charging_threshold = 99
         self.car_charging_energy = {}
         self.car_charging_energy_warned = False
@@ -1164,8 +1167,28 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
     def update_car_manual_soc(self):
         """
         Write the predicted next car SoC back to the manual car SoC tracker for cars using car_charging_manual_soc
+
+        A car with a car_charging_energy sensor is skipped: car_manual_soc_track() adds the energy it
+        actually took instead, and adding the plan's prediction as well would count it twice.
+
+        So is a car whose plugged-in sensor (car_charging_plugged, else car_charging_planned) now reads unplugged, or whose
+        car_charging_now sensor reads not charging: it is not charging, so there is nothing to add. A car_charging_now
+        sensor that is unavailable or unknown is no reading, and the plan's prediction is written as before. Unlike the
+        reset on unplug, a car_charging_planned that turns off when a charge finishes is right here: nothing more is added.
+
+        What is written goes into the car's tracking record too, so the next cycle does not take it for a value
+        the user entered.
         """
         for car_n in range(self.num_cars):
+            if car_n < len(self.car_charging_manual_soc_energy) and self.car_charging_manual_soc_energy[car_n]:
+                continue
+            plug_arg = self.car_plug_arg(car_n, planned=True)
+            if plug_arg and self.car_plugged_in_now(car_n, plug_arg) is False:
+                continue
+            if car_n < len(self.car_charging_manual_soc) and self.car_charging_manual_soc[car_n] and self.get_car_charging_now_tristate(car_n) is False:
+                # The car_charging_now sensor says the car is not charging, whatever the plan predicted
+                self.log("Car {} charging Manual SoC held at {} as car_charging_now reports it is not charging".format(car_n, self.car_charging_soc[car_n]))
+                continue
             if car_n < len(self.car_charging_manual_soc) and self.car_charging_manual_soc[car_n]:
                 car_postfix = "" if car_n == 0 else "_" + str(car_n)
                 self.log("Car {} charging Manual SoC current is {} next is {}".format(car_n, self.car_charging_soc[car_n], self.car_charging_soc_next[car_n]))
@@ -1177,6 +1200,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                     if car_n < len(self.car_charging_limit):
                         soc_next = min(soc_next, self.car_charging_limit[car_n])
                     self.expose_config("car_charging_manual_soc_kwh" + car_postfix, dp3(soc_next))
+                    self.car_manual_soc_written(car_n, dp3(soc_next))
 
     def run_comparison(self, status=None, status_extra=""):
         """

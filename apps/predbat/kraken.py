@@ -896,11 +896,17 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                             return all_results, response.status
                         data = await response.json()
 
+                    if not isinstance(data, dict):
+                        # A 200 whose JSON is not an object ([], null, a bare string) would raise at data.get(),
+                        # so treat it like the undecodable body below: a failed fetch, not an exception.
+                        self.log(f"Warn: Kraken: Invalid response fetching rates: expected a JSON object, got {type(data).__name__}")
+                        return None, None
                     all_results.extend(data.get("results", []))
                     url = data.get("next")  # Pagination
                     pages += 1
-        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            self.log(f"Warn: Kraken: Network error fetching rates: {e}")
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as e:
+            # ValueError covers a 200 whose body claims JSON but does not parse (JSONDecodeError).
+            self.log(f"Warn: Kraken: Network error or invalid response fetching rates: {e}")
             return None, None
 
         if url:
@@ -1056,14 +1062,13 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(url) as response:
                     if response.status != 200:
-                        self.log(f"Warn: Kraken: Standing charges HTTP {response.status}")
-                        self.failures_total += 1
                         http_error_status = response.status
                     else:
                         data = await response.json()
 
-        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            self.log(f"Warn: Kraken: Network error fetching standing charges: {e}")
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as e:
+            # ValueError covers a 200 whose body claims JSON but does not parse (JSONDecodeError).
+            self.log(f"Warn: Kraken: Network error or invalid response fetching standing charges: {e}")
             self.failures_total += 1
             return None
 
@@ -1075,7 +1080,22 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             # outage. 400 is deliberately absent: it is a rates-endpoint-only answer.
             if http_error_status in KRAKEN_REST_PRODUCT_NOT_FOUND_STATUSES and self.import_mpan:
                 self.log(f"Kraken: REST standing charges returned HTTP {http_error_status}, falling back to GraphQL applicableStandingCharges for MPAN {self.import_mpan}")
-                return await self.async_fetch_standing_charges_graphql(self.import_mpan)
+                # This 404/410 recurs every cycle for the tariffs it covers, so it is only a failure if the
+                # fallback also comes back empty — and async_graphql_query counts its own failures, so
+                # add one only when it did not (same guard as async_fetch_rates).
+                failures_before = self.failures_total
+                value = await self.async_fetch_standing_charges_graphql(self.import_mpan)
+                if value is None and self.failures_total == failures_before:
+                    self.failures_total += 1
+                return value
+            self.log(f"Warn: Kraken: Standing charges HTTP {http_error_status}")
+            self.failures_total += 1
+            return None
+
+        if not isinstance(data, dict):
+            # A 200 whose JSON is not an object ([], null, a bare string) would raise at data.get() below.
+            self.log(f"Warn: Kraken: Invalid response fetching standing charges: expected a JSON object, got {type(data).__name__}")
+            self.failures_total += 1
             return None
 
         # The REST endpoint returns a DIRECT_DEBIT and a NON_DIRECT_DEBIT row for each period, and
