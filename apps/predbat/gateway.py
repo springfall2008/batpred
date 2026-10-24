@@ -259,6 +259,22 @@ GATEWAY_INTEGRATE_MAX_PV_W = 50000
 GATEWAY_INTEGRATE_PV_STEP_WH = 200
 
 
+def parse_display_flag(name, value):
+    """Parse a display role flag, raising ValueError for anything not clearly true or false.
+
+    These flags decide whether the engine controls an inverter or only feeds a display, so a
+    typo or a stray 0/1 must fail loudly rather than quietly pick a mode.
+    """
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text not in ("true", "false", "1", "0", "yes", "no", "on", "off"):
+            raise ValueError(f"{name} must be a boolean")
+        return text in ("true", "1", "yes", "on")
+    if not isinstance(value, bool):
+        raise ValueError(f"{name} must be a boolean")
+    return value
+
+
 class GatewayMQTT(ComponentBase):
     """ESP32 Gateway MQTT component for PredBat.
 
@@ -279,6 +295,9 @@ class GatewayMQTT(ComponentBase):
     gateway_inverter_serial = ()
     gateway_display_only = False
     gateway_display_enabled = True
+    gateway_display_visibility = None
+    gateway_live_display = False
+    gateway_live_display_binding = None
     _integrated_energy = None
     _unavailable_inverters = ((), ())
     _discovery = {}  # replaced, never changed in place, so this default is not shared state
@@ -334,21 +353,14 @@ class GatewayMQTT(ComponentBase):
             **kwargs: Additional keyword arguments (ignored).
         """
         self.gateway_device_id = gateway_device_id
-        self.gateway_display_enabled = kwargs.get("gateway_display_enabled", True) is not False
+        self.gateway_display_enabled = parse_display_flag("gateway_display_enabled", kwargs.get("gateway_display_enabled", True))
         self.gateway_display_visibility = kwargs.get("gateway_display_visibility")
-        self.gateway_live_display = kwargs.get("gateway_live_display", False) is True
+        self.gateway_live_display = parse_display_flag("gateway_live_display", kwargs.get("gateway_live_display", False))
         self.gateway_live_display_binding = kwargs.get("gateway_live_display_binding")
         self._last_live_display_publish = 0
         self._last_live_binding = None
         self._last_live_binding_publish = 0
-        if isinstance(gateway_display_only, str):
-            value = gateway_display_only.strip().lower()
-            if value not in ("true", "false", "1", "0", "yes", "no", "on", "off"):
-                raise ValueError("gateway_display_only must be a boolean")
-            gateway_display_only = value in ("true", "1", "yes", "on")
-        if not isinstance(gateway_display_only, bool):
-            raise ValueError("gateway_display_only must be a boolean")
-        self.gateway_display_only = gateway_display_only
+        self.gateway_display_only = parse_display_flag("gateway_display_only", gateway_display_only)
         self.gateway_evc_automatic = bool(gateway_evc_automatic)
         self.gateway_evc_control = bool(gateway_evc_control)
         self.gateway_shared_ct = bool(gateway_shared_ct)
@@ -730,12 +742,6 @@ class GatewayMQTT(ComponentBase):
             ticks = await self._startup_wait(0, lambda: self._first_connection_attempted)
             if not self._first_connection_attempted and not self.api_stop:
                 self.log("Warn: GatewayMQTT: First connection attempt not yet complete, continuing startup")
-            if self.gateway_display_only:
-                await self._startup_wait(ticks, lambda: self.api_started)
-                if not self.api_started and not self.api_stop:
-                    self.log("Warn: GatewayMQTT: No display telemetry received, continuing startup")
-                self._update_display_health()
-                return True
             # The auto-config wait runs even when the first attempt failed: the MQTT loop
             # retries with backoff in the background, so a transient broker failure at
             # startup usually still yields telemetry inside the window. Returning early
@@ -2477,7 +2483,7 @@ class GatewayMQTT(ComponentBase):
                 "export_rate": (rate_anchors or {}).get("export_rate"),
             }
 
-            live_enabled = getattr(self, "gateway_display_only", False) and getattr(self, "gateway_live_display", False)
+            live_enabled = self.gateway_display_only and self.gateway_live_display
             if live_enabled:
                 payload["live_display"] = live_display_payload(self.base, self.gateway_device_id, self.gateway_inverter_serial, int(time.time()))
                 if not self._live_display_binding()["enabled"]:
@@ -2727,7 +2733,7 @@ class GatewayMQTT(ComponentBase):
 
     def _live_display_binding(self):
         """Validate only the server-issued binding for this selected display role."""
-        return validated_binding(getattr(self, "gateway_live_display_binding", None), self.gateway_device_id, self.gateway_inverter_serial, getattr(self, "gateway_live_display", False))
+        return validated_binding(self.gateway_live_display_binding, self.gateway_device_id, self.gateway_inverter_serial, self.gateway_live_display)
 
     async def _publish_display_binding(self, force=False):
         """Publish whitelist-only display metadata, never general config or control.
@@ -2741,7 +2747,7 @@ class GatewayMQTT(ComponentBase):
         if not re.fullmatch(r"pbgw_[a-f0-9]{12}", self.gateway_device_id) or self._topic_base != f"predbat/devices/{self.gateway_device_id}":
             return
         now = time.time()
-        visibility = visibility_payload(getattr(self, "gateway_display_visibility", None), self.gateway_device_id, int(now))
+        visibility = visibility_payload(self.gateway_display_visibility, self.gateway_device_id, int(now))
         binding = {"live_display": self._live_display_binding()} if self.gateway_display_only else {}
         if visibility is not None:
             binding["display_visibility"] = visibility

@@ -132,9 +132,6 @@ def live_display_payload(base, device_id, configured_serials, now):
         provider = "givenergy"
         serials = selected_serials(configured_serials)
         result.update(provider=provider, source_id=source_identity(provider, serials))
-        gate = getattr(base, "__dict__", {}).get("control_write_gate")
-        if gate is not None and gate.provider != provider:
-            raise ValueError("selected controller provider differs")
         result.update(gecloud_readings(sources[0][1], serials, now), available=True)
     except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
         # No partial readings or made-up zero. Firmware clears any previous live

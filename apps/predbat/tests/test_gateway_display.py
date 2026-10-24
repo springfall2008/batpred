@@ -110,15 +110,15 @@ class TestGatewayDisplayOnly:
             method.assert_not_awaited()
 
     def test_display_startup_does_not_wait_for_auto_config(self):
-        """Display startup accepts zero-inverter telemetry, using the same bounded budget."""
+        """Display startup returns at once, without waiting for connection or auto-config."""
         gw = self._make_gateway()
-        gw.api_started = True
-        gw._first_connection_attempted = True
-        gw._startup_wait = AsyncMock(side_effect=lambda ticks, ready: ticks if ready() else 999)
+        gw._load_discovery = AsyncMock()
+        gw._startup_wait = AsyncMock(return_value=0)
         gw._mqtt_loop = AsyncMock()
         with patch("gateway.HAS_AIOMQTT", True):
             assert asyncio.run(gw.run(0, True))
-        assert all(call.args[1]() for call in gw._startup_wait.call_args_list)
+        gw._startup_wait.assert_not_awaited()
+        assert gw.api_started
         assert not gw._auto_configured
 
     def test_display_is_not_an_inverter_source(self):
@@ -328,9 +328,26 @@ class TestIndependentVisibility:
         gw._publish_predbat_data.assert_not_awaited()
         gw._mqtt_client.publish.assert_not_awaited()
 
+    def test_explicit_cloud_off_final_raw_sink_cannot_publish_cached_data(self):
+        """With the display turned off, even the predbat_data raw sink publishes nothing."""
+        gw = TestGatewayDisplayOnly()._make_gateway()
+        gw.gateway_display_enabled = False
+        asyncio.run(gw._publish_raw(gw._topic_base + "/predbat_data", b"cached display", retain=True))
+        gw._mqtt_client.publish.assert_not_awaited()
 
-def test_explicit_cloud_off_final_raw_sink_cannot_publish_cached_data():
-    gw = TestGatewayDisplayOnly()._make_gateway()
-    gw.gateway_display_enabled = False
-    asyncio.run(gw._publish_raw(gw._topic_base + "/predbat_data", b"cached display", retain=True))
-    gw._mqtt_client.publish.assert_not_awaited()
+    def test_display_flags_reject_non_boolean_values(self):
+        """Integer or misspelt display flags fail loudly instead of silently picking a mode."""
+        for name in ("gateway_display_enabled", "gateway_live_display"):
+            for value in (0, 1, "typo"):
+                gw = GatewayMQTT.__new__(GatewayMQTT)
+                gw.base = MagicMock()
+                gw.prefix = "predbat"
+                gw.args = {}
+                gw.log = MagicMock()
+                try:
+                    gw.initialize(gateway_device_id="pbgw_test", mqtt_host="mqtt.test", **{name: value})
+                except ValueError:
+                    continue
+                raise AssertionError(f"{name}={value!r} was accepted")
+        gw = TestGatewayDisplayOnly()._make_gateway()
+        assert gw.gateway_display_enabled is True and gw.gateway_live_display is False

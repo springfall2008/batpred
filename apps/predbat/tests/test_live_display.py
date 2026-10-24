@@ -69,9 +69,6 @@ def test_selected_identity_and_topology_must_be_proven():
     base = base_for(component)
     base.components.components["gateway"] = SimpleNamespace(gateway_display_only=False)
     assert not live_display_payload(base, DEVICE, "INV001", NOW)["available"]
-    base = base_for(component)
-    base.control_write_gate = SimpleNamespace(provider="foxess")
-    assert not live_display_payload(base, DEVICE, "INV001", NOW)["available"]
 
 
 def test_explicit_shared_ct_aggregation():
