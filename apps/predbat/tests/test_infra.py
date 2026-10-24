@@ -329,6 +329,12 @@ class TestHAInterface:
                 print("Warn: Service for entity {} not a switch".format(entity_id))
             elif entity_id in self.dummy_items:
                 self.dummy_items[entity_id] = "off"
+        elif service in ["input_boolean/turn_on", "input_boolean/turn_off"]:
+            entity_id = kwargs.get("entity_id", None)
+            if not entity_id.startswith("input_boolean."):
+                print("Warn: Service for entity {} not an input_boolean".format(entity_id))
+            elif entity_id in self.dummy_items:
+                self.dummy_items[entity_id] = "on" if service.endswith("turn_on") else "off"
         elif service == "select/select_option":
             entity_id = kwargs.get("entity_id", None)
             if not entity_id.startswith("select."):
