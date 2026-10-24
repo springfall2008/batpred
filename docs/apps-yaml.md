@@ -433,8 +433,6 @@ Docker users can change the web port for the Predbat web interface by setting **
 
 **web_bind** selects the network address on which the web server listens. It defaults to `0.0.0.0` (all IPv4 interfaces) for compatibility. Set `web_bind: "127.0.0.1"` for access only from the same host, or use a specific private interface address. This restricts network reachability; it does not add authentication. Home Assistant ingress must be able to reach the selected address, so keep the default for the app unless you have verified its ingress networking. Restart Predbat after changing this setting.
 
-Both web interfaces are always available. Use **Try the new interface** or **Classic interface** in the menu to switch; your browser remembers your choice. The `web_ui` setting is no longer needed. See [Use the modern interface](web-interface.md#use-the-modern-interface) for the optional EV and ASHP entities used by Overview.
-
 ### notify_devices
 
 A list of device names to notify when Predbat sends a notification. The default is just 'notify' which contacts all mobile devices
@@ -2998,3 +2996,7 @@ If you want to set days_previous to take an average of the house load over all t
     - 7
     - 8
 ```
+
+## Use the modern interface
+
+Both web interfaces are always available. Use **Try the new interface** or **Classic interface** in the menu to switch; your browser remembers your choice. The `web_ui` setting is no longer needed. See [Use the modern interface](web-interface.md#use-the-modern-interface) for the optional EV and ASHP entities used by Overview.
