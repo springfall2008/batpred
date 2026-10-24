@@ -47,8 +47,9 @@ Stable filenames overwrite older versions during Predbat updates.
 
 ## Working conventions
 
-- Keep API paths relative, for example `./api/plan_data`, so Home Assistant
-  ingress continues to work.
+- From modern UI pages under `./ui/`, use `../api/plan_data` for backend API
+  calls and `../` for POST and download endpoints. Keep page navigation relative
+  to `./`, so it stays within the modern UI and works through Home Assistant ingress.
 - Add or update a fixture when an API field has important display behaviour.
 - Prefer a focused regression test for a reported UI problem.
 - Do not edit the generated `apps/predbat/predbat_ui*` files directly.

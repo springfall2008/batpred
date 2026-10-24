@@ -212,12 +212,12 @@ export default function DebugPanel({ planData, statusData, powerFlowData }: Debu
           <div className="debug-action-description">
             <strong>Debug history</strong>
 
-            <span>Download all retained debug snapshots</span>
+            <span>Download recent debug snapshots</span>
           </div>
 
-          <a className="debug-action-button" href="../debug_history_download_all">
+          <a className="debug-action-button" href="../debug_history_download_recent">
             <FontAwesomeIcon icon={faDownload} />
-            Download all
+            Download recent
           </a>
         </div>
 
