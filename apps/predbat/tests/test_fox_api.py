@@ -5678,6 +5678,57 @@ def test_publish_data_device_info_half_kw_capacity(my_predbat):
     return False
 
 
+def test_publish_data_battery_capacity_duplicate_serials(my_predbat):
+    """
+    Test publish_data does not multiply one pack reported as several bmu entries (GH#4919).
+
+    An AIO ESS with one 10.24 kWh pack reports four bmu entries, each claiming 10240 Wh and all
+    carrying the same batterySN; summing them published 40.96 kWh as soc_max. A repeated serial
+    must use batteryDesignCapacity when Fox provides it (as a number or a string), otherwise count
+    each serial once. Lists without a repeated serial must still be summed as before.
+    """
+    print("  - test_publish_data_battery_capacity_duplicate_serials")
+
+    deviceSN = "BATT001"
+    entity = f"sensor.predbat_fox_{deviceSN.lower()}_battery_capacity"
+    info_entity = f"sensor.predbat_fox_{deviceSN.lower()}_info"
+    distinct_packs = [{"batterySN": "PACK000{}".format(index), "type": "bmu", "capacity": 10240} for index in range(4)]
+    cases = [
+        ("AIO, design capacity as string", FOX_AIO_BATTERY_LIST, "10.24", 10.24),
+        ("AIO, design capacity as number", FOX_AIO_BATTERY_LIST, 10.24, 10.24),
+        ("AIO, no design capacity", FOX_AIO_BATTERY_LIST, None, 10.24),
+        ("AIO, unusable design capacity", FOX_AIO_BATTERY_LIST, "unknown", 10.24),
+        ("single pack with bcu/ivu sharing serial", FOX_SINGLE_PACK_BATTERY_LIST, None, 10.36),
+        ("four distinct packs ignore design capacity", distinct_packs, 10.24, 40.96),
+        ("entries without serial still summed", [{"capacity": 5120}, {"capacity": 5120}], None, 10.24),
+    ]
+    for name, battery_list, design_capacity, expected_kwh in cases:
+        fox = MockFoxAPIWithRequests()
+        fox.device_list = [{"deviceSN": deviceSN}]
+        detail = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {"scheduler": True}, "deviceType": "AIO-H3", "stationName": "Test Home", "batteryList": [dict(entry) for entry in battery_list]}
+        if design_capacity is not None:
+            detail["batteryDesignCapacity"] = design_capacity
+        fox.device_detail[deviceSN] = detail
+        fox.fdpwr_max[deviceSN] = 8000
+        fox.fdsoc_min[deviceSN] = 10
+        fox.device_values[deviceSN] = {}
+        fox.device_settings[deviceSN] = {}
+        fox.local_schedule[deviceSN] = {}
+
+        run_async(fox.publish_data())
+
+        state = fox.dashboard_items[entity]["state"]
+        if abs(state - expected_kwh) > 0.001:
+            print("ERROR: {}: battery capacity {} kWh, expected {} kWh".format(name, state, expected_kwh))
+            return True
+        battery_capacity_attr = fox.dashboard_items[info_entity]["attributes"]["batteryCapacity"]
+        if abs(battery_capacity_attr - expected_kwh * 1000) > 1:
+            print("ERROR: {}: info batteryCapacity {} Wh, expected {} Wh".format(name, battery_capacity_attr, expected_kwh * 1000))
+            return True
+
+    return False
+
+
 def test_publish_data_battery_soh(my_predbat):
     """
     Test publish_data creates battery_soh sensor with correct value and attributes
@@ -7608,13 +7659,14 @@ def _fox_battery_facts(record):
 def test_fox_build_discovery_battery_ratings_tell_the_aio_bug_from_a_healthy_stack(my_predbat):
     """The battery ratings distinguish the GH#4919 AIO from a healthy system, and never report the known-wrong sum.
 
-    publish_data() sums the capacity of every batteryList entry that carries one. GH#4919's AIO
-    reports one 10.24 kWh pack as four bmu entries, each claiming 10240 Wh and all carrying the
-    inverter's own serial, so that sum is 4x the truth. Counting entries is no better evidence: the
-    real list is a bcu plus the four bmu entries, five in all - exactly what a genuine four-module
-    stack reports, whose bmu entries each carry their own serial. Only the serials tell the two
-    apart, so the report carries both how many entries publish_data() sums and how many distinct
-    serials those entries hold: four against one is the GH#4919 signature.
+    Summing the capacity of every batteryList entry that carries one is wrong for GH#4919's AIO,
+    which reports one 10.24 kWh pack as four bmu entries, each claiming 10240 Wh and all carrying
+    the inverter's own serial, so that sum is 4x the truth (battery_capacity_wh() corrects for this
+    when publish_data() publishes soc_max). Counting entries is no better evidence: the real list is
+    a bcu plus the four bmu entries, five in all - exactly what a genuine four-module stack reports,
+    whose bmu entries each carry their own serial. Only the serials tell the two apart, so the report
+    carries both how many entries carry a capacity and how many distinct serials those entries hold:
+    four against one is the GH#4919 signature.
 
     The healthy four-module stack is the AIO's own entries with a serial per module - the repo holds
     no captured multi-pack sample, so it changes only the one field the ratings claim to read.
@@ -8188,6 +8240,7 @@ def run_fox_api_tests(my_predbat):
         # publish_data tests
         failed |= test_publish_data_device_info(my_predbat)
         failed |= test_publish_data_device_info_half_kw_capacity(my_predbat)
+        failed |= test_publish_data_battery_capacity_duplicate_serials(my_predbat)
         failed |= test_publish_data_battery_soh(my_predbat)
         failed |= test_publish_data_device_values(my_predbat)
         failed |= test_publish_data_device_values_dual_soc(my_predbat)
