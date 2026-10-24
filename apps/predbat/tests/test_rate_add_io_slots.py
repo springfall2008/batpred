@@ -962,6 +962,8 @@ def run_shared_cap_tests(my_predbat, midnight_utc, time_format):
         # gets all of it - even though car 0 itself was seen charging in the 13:00 half hour
         print("\n**** Shared cap: another car's short unconfirmed dispatch uses none of it ****")
         my_predbat.dynamic_load_car_confirmed_periods = {0: {midnight_utc + timedelta(minutes=810)}}
+        # A tariff rate unlike rate_max_base and rate_min_base, so car 1's short dispatch is seen to be priced at the tariff
+        my_predbat.rate_import = {**my_predbat.rate_import, **{minute: 7.0 for minute in range(780, 840)}}
         car_slots = [[dispatch((13, 30), (14, 0))], [dispatch((13, 13), (13, 14), 0.1)]]
         expected_rates = rates_for((780, 810, 10.0), (810, 840, 4.0))
         failed |= run_shared_cap_case("shared_cap_short_unconfirmed", my_predbat, car_slots, 1, expected_rates, [[(810, 840, 4)], [(793, 794, 7.0)]])
