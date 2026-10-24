@@ -369,6 +369,7 @@ octoplus_saving_session_query = """query {{
 				startAt
 				endAt
         rewardGivenInOctoPoints
+        eventType
 			}}
       signedUpMeterPoint {{
         regionId
@@ -1471,7 +1472,8 @@ class OctopusAPI(ComponentBase):
             # attempts the API rejects (#4593/#4595) and clutters the join selector with options
             # that cannot be selected. BottleCapDave's integration stopped passing these through in
             # v19.0.1 for the same reason; match that. The reward/code/type maps are populated above
-            # first, because a joined Happy Hour takes its event type from this list.
+            # first, because a joined Happy Hour whose own record has no eventType (an older cached
+            # response) takes its type from this list.
             if event.get("eventType", None) == "WEEKEND_HAPPY_HOUR":
                 # Logged once an hour per event (by id, so events with no code are told apart): the event list is re-read every poll
                 self.log_gate.log(self.log, "happy-hour", (event_id, code), ["OctopusAPI: Not offering Weekend Happy Hour event code {} as available - it cannot be joined through the API".format(code)], None)
@@ -1494,7 +1496,15 @@ class OctopusAPI(ComponentBase):
                 reward = default_octopoints  # Inject default when API doesn't provide reward
             if start and end:
                 return_joined_events.append(
-                    {"start": start, "end": end, "octopoints_per_kwh": reward, "rewarded_octopoints": event.get("rewardGivenInOctoPoints", None), "id": event_id, "code": event_code.get(event_id, None), "event_type": event_type.get(event_id, None)}
+                    {
+                        "start": start,
+                        "end": end,
+                        "octopoints_per_kwh": reward,
+                        "rewarded_octopoints": event.get("rewardGivenInOctoPoints", None),
+                        "id": event_id,
+                        "code": event_code.get(event_id, None),
+                        "event_type": event.get("eventType", None) or event_type.get(event_id, None),
+                    }
                 )
 
         saving_attributes = {"friendly_name": "Octopus Intelligent Saving Sessions", "icon": "mdi:currency-usd", "joined_events": return_joined_events, "available_events": return_available_events}
@@ -1503,10 +1513,11 @@ class OctopusAPI(ComponentBase):
         # Handle both old API keys (start/end) and new API keys (startAt/endAt)
         # A joined Weekend Happy Hour is free electricity, not a turn-down session - the planner prices it as a
         # free slot (fetch_octopus_sessions), so it must not assert the saving session sensor either (#5615).
-        # Events whose type is absent or unresolvable still count, matching the planner's fall-through.
+        # The joined event's own eventType is used, falling back to the events list. Events whose type is
+        # absent or unresolvable still count, matching the planner's fall-through.
         active_event = False
         for event in joined_events:
-            if event_type.get(event.get("eventId", None), None) == "WEEKEND_HAPPY_HOUR":
+            if (event.get("eventType", None) or event_type.get(event.get("eventId", None), None)) == "WEEKEND_HAPPY_HOUR":
                 continue
             start = event.get("startAt", event.get("start", None))
             end = event.get("endAt", event.get("end", None))
