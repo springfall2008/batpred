@@ -444,6 +444,9 @@ class Plan:
         "not charging" reading only counts from DYNAMIC_LOAD_CAR_START_MINUTES into the dispatch, while the
         car and charger wake up; "charging" counts anywhere. The grace is timed on the exact clock.
 
+        Any car's car_charging_now reading "charging" counts as charging for every car (see
+        dynamic_load_any_car_charging_now()), whatever the car's own sensor says.
+
         Without a sensor the low-load test stands in, but only when the car is inside the CT clamp
         (car_energy_reported_load): otherwise its charging never shows in the load at all. load_last_period
         averages the PREDICT_STEP minutes up to minutes_now, so it only counts when that whole window lies
@@ -455,12 +458,12 @@ class Plan:
         The live load has to be low too. Live load that is not low, or has no reading, makes a low window
         no evidence either way - it neither cancels the car nor resumes it.
         """
+        if self.dynamic_load_any_car_charging_now():
+            return False, DYNAMIC_LOAD_CAR_SENSOR_MINUTES, now
         if car_n in self.dynamic_load_car_sensors:
             charging = self.car_charging_now_reading(car_n)
             if charging is None:
                 return None, DYNAMIC_LOAD_CAR_SENSOR_MINUTES, now
-            if charging:
-                return False, DYNAMIC_LOAD_CAR_SENSOR_MINUTES, now
             if minute < dispatch_start + DYNAMIC_LOAD_CAR_START_MINUTES:
                 return None, DYNAMIC_LOAD_CAR_SENSOR_MINUTES, now
             return True, DYNAMIC_LOAD_CAR_SENSOR_MINUTES, now
@@ -485,6 +488,17 @@ class Plan:
                 return None, DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
             return True, DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
         return None, DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
+
+    def dynamic_load_any_car_charging_now(self):
+        """
+        Whether any car's car_charging_now entity reads charging right now.
+
+        Octopus links a dispatch to one car, but with two chargers Predbat cannot tell which one that car
+        is plugged into - myenergi automatic set-up numbers the Zappis by serial - so the car Predbat
+        calls 0 can read idle while the dispatch's car charges on the charger it calls 1. Any car charging
+        is taken as the dispatch running, so it is never cancelled for being on the other charger.
+        """
+        return any(self.car_charging_now_reading(car_n) for car_n in self.dynamic_load_car_sensors)
 
     def car_charging_now_reading(self, car_n):
         """
@@ -684,7 +698,7 @@ class Plan:
                 # from DYNAMIC_LOAD_CAR_CONFIRM_MINUTES into the half hour - the slot is trusted straight away
                 # either way. The load test only needs load that is not low to trust the slot, which a cooker or
                 # hot tub also gives; keeping the cheap rate needs load at the car's own charging rate
-                if car_n in self.dynamic_load_car_sensors:
+                if car_n in self.dynamic_load_car_sensors or self.dynamic_load_any_car_charging_now():
                     seen_minute = minute if minute % 30 >= DYNAMIC_LOAD_CAR_CONFIRM_MINUTES else None
                 elif self.load_last_period >= self.car_charging_threshold_kw():
                     seen_minute = self.minutes_now - 1
