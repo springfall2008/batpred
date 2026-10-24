@@ -32,7 +32,7 @@ from const import PREDICT_STEP, PREDBAT_MAX_CARS, EXPORT_MODE_TARGET, FULL_EXPOR
 from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in_iboost_slot, export_limit_from_stored
 
 # Expected ABI/parity revisions of the shared library (see prediction_kernel.cpp)
-KERNEL_ABI_VERSION = 8
+KERNEL_ABI_VERSION = 9
 KERNEL_PARITY_REVISION = 18
 
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
@@ -209,6 +209,7 @@ class PkBatchJob(ctypes.Structure):
         ("export_start", ctypes.POINTER(ctypes.c_int32)),
         ("export_end", ctypes.POINTER(ctypes.c_int32)),
         ("soc_out", ctypes.POINTER(ctypes.c_double)),
+        ("export_end_soc_out", ctypes.POINTER(ctypes.c_double)),
         ("n_charge", ctypes.c_int32),
         ("n_export", ctypes.c_int32),
         ("pv_scenario", ctypes.c_int32),
@@ -236,15 +237,15 @@ class BatchJob:
 
     run_prediction_kernel_batch reads only the input fields (charge_limit, charge_window,
     export_window, export_limits, pv_scenario, end_record) and the SoC range steps. step, sim_hash,
-    want_range, range_window and result belong to the batch runner in prediction_batch.py, which is
+    want_range, range_window, want_export_end_soc and result belong to the batch runner in prediction_batch.py, which is
     the only thing that creates these; they live here so the ctypes layer can be tested on its own.
     step is deliberately not one of the kernel's inputs - run_prediction_kernel_batch overrides it
     with PREDICT_STEP, so it is only read when a job falls back to the Python engine.
     """
 
-    __slots__ = ("charge_limit", "charge_window", "export_window", "export_limits", "pv_scenario", "end_record", "step", "soc_range_start_step", "soc_range_end_step", "sim_hash", "want_range", "range_window", "result")
+    __slots__ = ("charge_limit", "charge_window", "export_window", "export_limits", "pv_scenario", "end_record", "step", "soc_range_start_step", "soc_range_end_step", "sim_hash", "want_range", "range_window", "want_export_end_soc", "result")
 
-    def __init__(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step, soc_range_start_step=-1, soc_range_end_step=-1, sim_hash=None, want_range=False, range_window=None):
+    def __init__(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step, soc_range_start_step=-1, soc_range_end_step=-1, sim_hash=None, want_range=False, range_window=None, want_export_end_soc=False):
         """Record one job's trial inputs; result stays None until the batch is flushed"""
         self.charge_limit = charge_limit
         self.charge_window = charge_window
@@ -258,6 +259,8 @@ class BatchJob:
         self.sim_hash = sim_hash
         self.want_range = want_range
         self.range_window = range_window
+        # Also report the SoC at the end of each export window (PkBatchJob.export_end_soc_out)
+        self.want_export_end_soc = want_export_end_soc
         self.result = None
 
 
@@ -909,7 +912,8 @@ def reset_kernel_run_state(pred):
 def run_prediction_kernel_batch(pred, jobs, n_threads=1):
     """Run a whole fan-out of prediction scenarios through the kernel in one pk_run_batch call.
 
-    Returns a list of (result_tuple, soc_range_min, soc_range_max) in job order, where result_tuple
+    Returns a list of (result_tuple, soc_range_min, soc_range_max, export_end_soc) in job order, where
+    export_end_soc is the window-end SoC list for a job that asked for one and None otherwise, and result_tuple
     is the same 17-field tuple Prediction.run_prediction() returns, or None for a job the kernel
     refused - the caller re-runs those through the Python engine. Returns None when the batch could
     not be run at all (no kernel, no batch entry point, or a non-zero return code).
@@ -954,6 +958,8 @@ def run_prediction_kernel_batch(pred, jobs, n_threads=1):
     # so their marshalled PkExportLimit buffer is memoised the same way and on the same terms - keyed
     # on identity, with the list retained so an id() cannot be recycled mid-batch.
     limits_cache = {}
+    # One window-end SoC buffer per job that asks for it, None otherwise, in job order
+    export_end_buffers = []
 
     def limit_arrays(export_limits):
         """Marshal an export limit list into its PkExportLimit buffer, reusing an earlier job's where possible"""
@@ -978,6 +984,9 @@ def run_prediction_kernel_batch(pred, jobs, n_threads=1):
         pk_job.export_start = export_start
         pk_job.export_end = export_end
         pk_job.soc_out = None
+        export_end_buffer = (ctypes.c_double * len(job.export_window))() if job.want_export_end_soc and job.export_window else None
+        pk_job.export_end_soc_out = export_end_buffer
+        export_end_buffers.append(export_end_buffer)
         pk_job.n_charge = len(job.charge_window)
         pk_job.n_export = len(job.export_window)
         pk_job.pv_scenario = int(job.pv_scenario)
@@ -996,9 +1005,13 @@ def run_prediction_kernel_batch(pred, jobs, n_threads=1):
     for index in range(n_jobs):
         batch_result = result_array[index]
         if batch_result.status != 0:
-            results.append((None, 0.0, 0.0))
+            results.append((None, 0.0, 0.0, None))
             continue
-        results.append((kernel_result_tuple(pred, batch_result.result, {}), batch_result.soc_range_min, batch_result.soc_range_max))
+        export_end_soc = None
+        if jobs[index].want_export_end_soc:
+            buffer = export_end_buffers[index]
+            export_end_soc = list(buffer) if buffer is not None else []
+        results.append((kernel_result_tuple(pred, batch_result.result, {}), batch_result.soc_range_min, batch_result.soc_range_max, export_end_soc))
     return results
 
 

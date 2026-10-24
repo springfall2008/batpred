@@ -51,7 +51,9 @@
 // three arrays. Same three fields, but one buffer and one stride, with the (99.0, 100.0) gap gone
 // because mode is explicit (GH#4914).
 // ABI 8: io_credit, the bird-in-hand credit per step (prediction.py io_confirmed_credit), follows io_flag.
-#define PK_ABI_VERSION 8
+// ABI 9: PkBatchJob::export_end_soc_out - the rounded SoC at the step each export window ends, so plan
+// scoring can floor pv10 export targets at where nominal reached without materialising the SoC series.
+#define PK_ABI_VERSION 9
 // Parity 14: the explicit (mode, target, power) fields replace the packed double throughout the hot
 // loop (see the ABI 6 note); the floor a target exports to now reads the target field, matching
 // prediction.py.
@@ -329,6 +331,9 @@ struct PkBatchJob {
     const int32_t *export_start;
     const int32_t *export_end;
     double *soc_out; // optional, null to skip
+    // Optional, null to skip: n_export entries, each the rounded SoC at the step its export window ends
+    // (predict_soc[int((end - minutes_now) / 5) * 5]), or -1 when that step is not simulated
+    double *export_end_soc_out;
 
     int32_t n_charge;
     int32_t n_export;
@@ -373,6 +378,7 @@ struct PkScratch {
     std::vector<int32_t> charge_member, export_member;
     std::vector<int32_t> clipped_start, clipped_end;
     std::vector<double> clipped_limit;
+    std::vector<int32_t> export_end_at_step;
 
     PkScratch()
     {
@@ -674,7 +680,7 @@ static const ContextStore *lookup_context(int64_t handle)
 // soc_out may be null (see PkBatchJob). soc_range_min/max are optional out-params: when non-null and
 // soc_range_start_step >= 0, they receive the min/max of the rounded SoC over that inclusive step
 // range, mirroring the predict_soc scan in Prediction.thread_run_prediction_charge_min_max.
-static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResult *out, int32_t soc_range_start_step, int32_t soc_range_end_step, double *soc_range_min_out, double *soc_range_max_out, PkScratch &scratch)
+static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResult *out, int32_t soc_range_start_step, int32_t soc_range_end_step, double *soc_range_min_out, double *soc_range_max_out, double *export_end_soc_out, PkScratch &scratch)
 {
     const PkContext *c = &store->ctx;
     const std::vector<double> &soc_pct_threshold = store->soc_percent_threshold;
@@ -708,6 +714,26 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
 
     build_window_membership(charge_window_optimised, n_charge_clipped, clipped_start.data(), clipped_end.data(), clipped_limit.data(), nullptr, false, c->minutes_now, n_steps);
     build_window_membership(export_window_optimised, s->n_export, s->export_start, s->export_end, nullptr, s->export_limits, true, c->minutes_now, n_steps);
+
+    // The step each export window ends at, for export_end_soc_out - looked up per step rather than
+    // scanning the windows inside the hot loop. The first window to end at a step owns the slot; any
+    // other ending at the same step copies its value after the loop.
+    std::vector<int32_t> &export_end_at_step = scratch.export_end_at_step;
+    const bool want_export_end_soc = export_end_soc_out != nullptr;
+    if (want_export_end_soc) {
+        export_end_at_step.assign(n_steps, -1);
+        for (int32_t i = 0; i < s->n_export; i++) {
+            export_end_soc_out[i] = -1.0;
+            const int32_t rel = s->export_end[i] - c->minutes_now;
+            if (rel < 0) {
+                continue;
+            }
+            const int32_t k = (rel / 5 * 5) / step;
+            if (k < n_steps && export_end_at_step[k] < 0) {
+                export_end_at_step[k] = i;
+            }
+        }
+    }
 
     // Initial state - prediction.py:435-490
     double soc = c->soc_kw;
@@ -850,10 +876,14 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         // result feeds soc_out and the SoC range and nothing else - so skipping it when a batched
         // scenario wants neither cannot change the simulation.
         const bool in_soc_range = want_soc_range && k >= soc_range_start_step && k <= soc_range_end_step;
-        if (s->soc_out || in_soc_range) {
+        const bool at_export_end = want_export_end_soc && export_end_at_step[k] >= 0;
+        if (s->soc_out || in_soc_range || at_export_end) {
             const double soc_rounded = round_py(soc, 3);
             if (s->soc_out) {
                 s->soc_out[k] = soc_rounded;
+            }
+            if (at_export_end) {
+                export_end_soc_out[export_end_at_step[k]] = soc_rounded;
             }
             if (in_soc_range) {
                 if (soc_rounded < soc_range_min) {
@@ -1467,6 +1497,18 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             *soc_range_max_out = 0.0;
         }
     }
+    if (want_export_end_soc) {
+        for (int32_t i = 0; i < s->n_export; i++) {
+            const int32_t rel = s->export_end[i] - c->minutes_now;
+            if (rel < 0) {
+                continue;
+            }
+            const int32_t k = (rel / 5 * 5) / step;
+            if (k < n_steps && export_end_at_step[k] >= 0 && export_end_at_step[k] != i) {
+                export_end_soc_out[i] = export_end_soc_out[export_end_at_step[k]];
+            }
+        }
+    }
     return 0;
 }
 
@@ -1478,7 +1520,7 @@ int32_t pk_run(int64_t handle, const PkScenario *s, PkResult *out)
     if (!c) {
         return 1;
     }
-    return pk_run_one(c, s, out, -1, -1, nullptr, nullptr, thread_scratch());  // c is the store
+    return pk_run_one(c, s, out, -1, -1, nullptr, nullptr, nullptr, thread_scratch());  // c is the store
 }
 
 // Run n_jobs scenarios against one context in a single call.
@@ -1510,7 +1552,7 @@ static void run_batch_job(const ContextStore *c, const PkBatchJob &job, PkBatchR
     out.soc_range_min = 0.0;
     out.soc_range_max = 0.0;
     out.pad = 0;
-    out.status = pk_run_one(c, &scenario, &out.result, job.soc_range_start_step, job.soc_range_end_step, &out.soc_range_min, &out.soc_range_max, scratch);
+    out.status = pk_run_one(c, &scenario, &out.result, job.soc_range_start_step, job.soc_range_end_step, &out.soc_range_min, &out.soc_range_max, job.export_end_soc_out, scratch);
 }
 
 

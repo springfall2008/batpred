@@ -52,12 +52,27 @@ def prediction_cache_key(charge_limit, charge_window, export_limits, export_wind
     )
 
 
-def shape_batch_result(job, result, soc_range_min, soc_range_max):
+def shape_batch_result(job, result, soc_range_min, soc_range_max, export_end_soc=None):
     """Shape a full run_prediction result into what this job's thread_run_prediction_* returned"""
     shaped = tuple(result[:11])
     if job.want_range:
         shaped = shaped + (soc_range_min, soc_range_max)
+    if job.want_export_end_soc:
+        shaped = shaped + (export_end_soc,)
     return shaped
+
+
+def export_end_soc_from_series(predict_soc, export_window, minutes_now):
+    """Return the SoC at the end of each export window, read from a per-minute SoC series.
+
+    Uses the same int((end - minutes_now) / 5) * 5 key the kernel's export_end_soc_out does, so the
+    two agree; a window ending before now, or at a step the series does not hold, reads -1.
+    """
+    out = []
+    for window in export_window:
+        rel = window["end"] - minutes_now
+        out.append(predict_soc.get(int(rel / 5) * 5, -1.0) if rel >= 0 else -1.0)
+    return out
 
 
 class BatchHandle:
@@ -88,7 +103,7 @@ class PredictionBatch:
     owns the kernel context, with no reference cycle between the two.
     """
 
-    def enqueue_prediction(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step, cache, want_range=False, range_window=None):
+    def enqueue_prediction(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step, cache, want_range=False, range_window=None, want_export_end_soc=False):
         """Queue one prediction and return a handle to its eventual result"""
         # A range job is never cached, and that is structural rather than the caller's choice: the
         # SoC range is not part of a cached result, so a hit would answer with (0.0, 0.0) and silently
@@ -120,18 +135,27 @@ class PredictionBatch:
             sim_hash=sim_hash,
             want_range=want_range,
             range_window=range_window,
+            want_export_end_soc=want_export_end_soc,
         )
         self.pending_batch.append(job)
         return BatchHandle(self, job)
 
     def run_batch_job_python(self, job):
         """Run one job through the normal prediction path, for when the kernel cannot take it"""
-        result = self.run_prediction(job.charge_limit, job.charge_window, job.export_window, job.export_limits, job.pv_scenario, end_record=job.end_record, step=job.step, cache=job.sim_hash is not None)
+        # Window-end SoCs are read from the series, which a cached run does not keep
+        result = self.run_prediction(job.charge_limit, job.charge_window, job.export_window, job.export_limits, job.pv_scenario, end_record=job.end_record, step=job.step, cache=job.sim_hash is not None and not job.want_export_end_soc)
         if not job.want_range:
-            return tuple(result[:11])
-        if job.range_window is None:
-            return tuple(result[:11]) + (self.soc_max, 0)
-        return tuple(result[:11]) + self.scan_soc_range(result[11], job.range_window)
+            shaped = tuple(result[:11])
+        elif job.range_window is None:
+            shaped = tuple(result[:11]) + (self.soc_max, 0)
+        else:
+            shaped = tuple(result[:11]) + self.scan_soc_range(result[11], job.range_window)
+        if job.want_export_end_soc:
+            export_end_soc = export_end_soc_from_series(result[11], job.export_window, self.minutes_now)
+            if job.sim_hash is not None:
+                self.prediction_cache_export_end[job.sim_hash] = export_end_soc
+            shaped = shaped + (export_end_soc,)
+        return shaped
 
     def flush_batch(self):
         """Run every pending job: cache hits first, then one kernel call, then any fallbacks"""
@@ -149,8 +173,11 @@ class PredictionBatch:
         for job in pending:
             if job.sim_hash is not None:
                 cached = cache.get(job.sim_hash)
-                if cached is not None:
-                    job.result = shape_batch_result(job, cached, 0.0, 0.0)
+                # The cached result carries no SoC series, so a job wanting window-end SoCs can only use
+                # a hit whose SoCs were kept alongside it
+                cached_export_end = self.prediction_cache_export_end.get(job.sim_hash) if job.want_export_end_soc else None
+                if cached is not None and (not job.want_export_end_soc or cached_export_end is not None):
+                    job.result = shape_batch_result(job, cached, 0.0, 0.0, cached_export_end)
                     continue
                 # Two identical trials in one fan-out used to be a cache hit for the second one; the
                 # batch has to collapse them itself or that hit is lost (~44% of calls are hits)
@@ -172,11 +199,13 @@ class PredictionBatch:
                 if entry is None or entry[0] is None:
                     job.result = self.run_batch_job_python(job)
                     continue
-                result, soc_range_min, soc_range_max = entry
+                result, soc_range_min, soc_range_max, export_end_soc = entry
                 if job.sim_hash is not None:
                     # Stored without the SoC/car data to save memory, mirroring run_prediction
                     cache[job.sim_hash] = result[:11] + ([], []) + result[13:]
-                job.result = shape_batch_result(job, result, soc_range_min, soc_range_max)
+                    if export_end_soc is not None:
+                        self.prediction_cache_export_end[job.sim_hash] = export_end_soc
+                job.result = shape_batch_result(job, result, soc_range_min, soc_range_max, export_end_soc)
 
         for job, first in duplicates:
             job.result = first.result

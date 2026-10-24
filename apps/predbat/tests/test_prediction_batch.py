@@ -608,6 +608,105 @@ def test_batch_thread_count_resolution():
     return failed
 
 
+def test_batch_export_end_soc(my_predbat):
+    """A queued export trial can return the SoC at the end of every export window, returns True on failure.
+
+    optimise_export floors each candidate's pv10 export targets at where its own nominal run reaches,
+    and the batch never keeps the SoC series, so the kernel reports those SoCs itself. Checked against
+    the direct path's series on the kernel, the Python fallback and the cache.
+    """
+    print("**** Running batch window-end SoC tests ****")
+    failed = False
+    prediction, charge_window, export_window, charge_limit, _ = make_batch_prediction(my_predbat)
+    end_record = my_predbat.forecast_minutes
+    # Every window exports, so the SoC moves across them and a value read from the wrong step shows up
+    export_limits = [pack_export_limit(EXPORT_MODE_TARGET, 0)] * len(export_window)
+    trial = pack_export_limit(EXPORT_MODE_TARGET, 0)
+    start = export_window[1]["start"]
+
+    def direct_end_socs():
+        """The window-end SoCs read from a direct run's per-minute series"""
+        trial_window, trial_limits = prediction._prepare_export(trial, start, 1, export_window, export_limits, None)
+        series = prediction.run_prediction(charge_limit, charge_window, trial_window, trial_limits, PV_SCENARIO_NOMINAL, end_record=end_record, cache=False)[11]
+        return prediction_batch.export_end_soc_from_series(series, trial_window, prediction.minutes_now)
+
+    def queued(**kwargs):
+        """One queued nominal export trial"""
+        return prediction.queue_run_prediction_export(trial, start, 1, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, None, end_record, **kwargs).get()
+
+    prediction.prediction_cache = {}
+    expected = direct_end_socs()
+    if len(expected) != len(export_window) or len(set(expected)) < 2:
+        print("ERROR: the direct window-end SoCs {} do not distinguish the windows, so this test proves nothing".format(expected))
+        return True
+
+    # 1. Kernel path: the extra element is the list, the first 11 fields are unchanged
+    prediction.prediction_cache = {}
+    plain = queued()
+    prediction.prediction_cache = {}
+    with_end = queued(want_export_end_soc=True)
+    if len(plain) != 11:
+        print("ERROR: a job that did not ask for window-end SoCs returned {} fields".format(len(plain)))
+        failed = True
+    if len(with_end) != 12 or tuple(with_end[:11]) != tuple(plain):
+        print("ERROR: a window-end SoC job returned {} fields, or changed the result: {} vs {}".format(len(with_end), with_end[:11], plain))
+        failed = True
+    elif with_end[11] != expected:
+        print("ERROR: kernel window-end SoCs {} expected {}".format(with_end[11], expected))
+        failed = True
+
+    # 2. Python fallback, which reads them from the series - agrees with the kernel to the engines' 1e-6
+    handle = prediction.kernel_handle
+    prediction.kernel_handle = 0
+    try:
+        prediction.prediction_cache = {}
+        python_end = queued(want_export_end_soc=True)[11]
+    finally:
+        prediction.kernel_handle = handle
+    if len(python_end) != len(expected) or any(abs(a - b) > 0.002 for a, b in zip(python_end, expected)):
+        print("ERROR: Python fallback window-end SoCs {} expected {}".format(python_end, expected))
+        failed = True
+
+    # 3. Cache: a cached result without window-end SoCs must not answer a job that wants them, and once
+    # they are kept alongside the entry the next such job is a hit that never reaches the kernel
+    calls = []
+    real_batch = prediction_batch.run_prediction_kernel_batch
+
+    def spy(pred, jobs, n_threads):
+        """Record each kernel batch, then run it for real"""
+        calls.append(len(jobs))
+        return real_batch(pred, jobs, n_threads)
+
+    prediction.prediction_cache_enable = True
+    prediction.prediction_cache = {}
+    prediction.prediction_cache_export_end = {}
+    prediction_batch.run_prediction_kernel_batch = spy
+    try:
+        queued()
+        first = queued(want_export_end_soc=True)
+        if calls != [1, 1]:
+            print("ERROR: a window-end SoC job was answered from a cache entry without them: kernel calls {}".format(calls))
+            failed = True
+        if first[11] != expected:
+            print("ERROR: window-end SoCs after a cache miss {} expected {}".format(first[11], expected))
+            failed = True
+        del calls[:]
+        again = queued(want_export_end_soc=True)
+        if calls:
+            print("ERROR: a cached window-end SoC job still reached the kernel: {}".format(calls))
+            failed = True
+        if again != first:
+            print("ERROR: cached window-end SoC result {} differs from the computed one {}".format(again, first))
+            failed = True
+    finally:
+        prediction_batch.run_prediction_kernel_batch = real_batch
+        prediction.prediction_cache_enable = False
+
+    if not failed:
+        print("Batch window-end SoC tests passed")
+    return failed
+
+
 def run_prediction_batch_tests(my_predbat):
     """Run every batched prediction test, returns True on failure"""
     # The module pins the fixture clock (create_predbat already does, so this is belt and braces
@@ -643,6 +742,7 @@ def run_prediction_batch_tests(my_predbat):
                 failed |= test_batch_fallbacks(my_predbat)
                 failed |= test_save_run_drains_pending_batch(my_predbat)
                 failed |= test_batch_results_match_their_own_job(my_predbat)
+                failed |= test_batch_export_end_soc(my_predbat)
             finally:
                 my_predbat.prediction_kernel_enable = False
     finally:

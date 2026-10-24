@@ -227,6 +227,9 @@ class Prediction(PredictionBatch):
         # object and its first enqueue_prediction would otherwise raise AttributeError
         self.pending_batch = []
         self.batch_threads = 1
+        # Window-end SoCs for cached results that were asked for them, keyed on the same hash as
+        # prediction_cache (whose entries drop the SoC series)
+        self.prediction_cache_export_end = {}
 
     def _prepare_single(self, charge_limit, export_limits):
         """Copy the caller's limit lists for a single-scenario trial - shared by thread_run_prediction_single and the batch path.
@@ -474,14 +477,14 @@ class Prediction(PredictionBatch):
         ) = self.run_prediction(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record=end_record, cache=self.prediction_cache_enable)
         return metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g
 
-    def queue_run_prediction_export(self, this_export_limit, start, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
+    def queue_run_prediction_export(self, this_export_limit, start, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record, want_export_end_soc=False):
         """Queue an export-window trial prediction, returning a handle.
 
         The window lists and dicts are read at flush time, not now, so the caller must not mutate
         anything it passed in before calling get() on the returned handle.
         """
         export_window, export_limits = self._prepare_export(this_export_limit, start, window_n, export_window, export_limits, all_n)
-        return self.enqueue_prediction(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, PREDICT_STEP, self.prediction_cache_enable)
+        return self.enqueue_prediction(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, PREDICT_STEP, self.prediction_cache_enable, want_export_end_soc=want_export_end_soc)
 
     def find_charge_window_optimised(self, charge_windows, charge_limit, is_export=False):
         """

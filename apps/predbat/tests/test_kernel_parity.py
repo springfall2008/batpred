@@ -35,6 +35,7 @@ import time
 import prediction_kernel
 from const import PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, MINUTE_WATT
 from prediction import Prediction
+from prediction_batch import export_end_soc_from_series
 from prediction_kernel import create_kernel_context, run_prediction_kernel, load_kernel
 from utils import remove_intersecting_windows, unpack_export_limit
 from tests.test_infra import reset_inverter, reset_rates
@@ -1005,6 +1006,9 @@ def build_batch_jobs(my_predbat, rng, count, window_variants=1):
                 soc_range_end_step=end_step,
                 want_range=range_window is not None,
                 range_window=range_window,
+                # Every other job also asks for the SoC at each export window's end, as optimise_export's
+                # nominal trials do, so both shapes of job share a batch
+                want_export_end_soc=(index % 2) == 1,
             )
         )
     return prediction, jobs
@@ -1014,7 +1018,8 @@ def build_batch_reference(prediction, jobs):
     """Run one pk_run per job to build the reference results run_prediction_kernel_batch is checked against.
 
     The SoC series is materialised (unlike the batch path) so the range can be scanned in Python
-    exactly as thread_run_prediction_charge_min_max does. Returns None if a reference run itself fails.
+    exactly as thread_run_prediction_charge_min_max does, and the window-end SoCs read from it exactly
+    as the Python fallback does. Returns None if a reference run itself fails.
     """
     reference = []
     for job in jobs:
@@ -1026,7 +1031,8 @@ def build_batch_reference(prediction, jobs):
             soc_range = (prediction.soc_max, 0)
         else:
             soc_range = prediction.scan_soc_range(single[11], job.range_window)
-        reference.append((single, soc_range))
+        export_end = export_end_soc_from_series(single[11], job.export_window, prediction.minutes_now) if job.want_export_end_soc else None
+        reference.append((single, soc_range, export_end))
     return reference
 
 
@@ -1037,8 +1043,11 @@ def check_batch_results(jobs, reference, batched, n_threads):
         return True
 
     failed = False
-    for index, (result_tuple, soc_range_min, soc_range_max) in enumerate(batched):
-        single, (expect_min, expect_max) = reference[index]
+    for index, (result_tuple, soc_range_min, soc_range_max, export_end) in enumerate(batched):
+        single, (expect_min, expect_max), expect_export_end = reference[index]
+        if export_end != expect_export_end:
+            print("ERROR: job {} at {} threads window-end SoCs {} expected {}".format(index, n_threads, export_end, expect_export_end))
+            failed = True
         if result_tuple is None:
             print("ERROR: job {} reported a non-zero status at {} threads".format(index, n_threads))
             failed = True
@@ -1296,8 +1305,11 @@ def run_scratch_cross_context_tests(my_predbat, rounds=3):
                 if batched is None:
                     print("ERROR: cross-context batch call failed for {} minutes".format(forecast_minutes))
                     return True
-                for index, (result_tuple, soc_range_min, soc_range_max) in enumerate(batched):
-                    single, (expect_min, expect_max) = reference[index]
+                for index, (result_tuple, soc_range_min, soc_range_max, export_end) in enumerate(batched):
+                    single, (expect_min, expect_max), expect_export_end = reference[index]
+                    if export_end != expect_export_end:
+                        print("ERROR: round {} {} minutes job {} window-end SoCs {} want {}".format(round_n, forecast_minutes, index, export_end, expect_export_end))
+                        failed = True
                     if result_tuple is None:
                         print("ERROR: round {} {} minutes job {} reported a non-zero status".format(round_n, forecast_minutes, index))
                         failed = True
@@ -1361,8 +1373,11 @@ def run_worker_reuse_tests(my_predbat, batches=10, n_threads=4):
 def compare_batch_to_reference(label, batched, reference):
     """Compare a batch's results against a per-job pk_run reference, returns True on failure"""
     failed = False
-    for index, (result_tuple, soc_range_min, soc_range_max) in enumerate(batched):
-        single, (expect_min, expect_max) = reference[index]
+    for index, (result_tuple, soc_range_min, soc_range_max, export_end) in enumerate(batched):
+        single, (expect_min, expect_max), expect_export_end = reference[index]
+        if export_end != expect_export_end:
+            print("ERROR: {} job {} window-end SoCs {} want {}".format(label, index, export_end, expect_export_end))
+            failed = True
         if result_tuple is None:
             print("ERROR: {} job {} reported a non-zero status".format(label, index))
             failed = True

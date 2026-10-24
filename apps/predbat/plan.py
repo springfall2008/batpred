@@ -65,6 +65,7 @@ from config import INVERTER_DEF
 from prediction import Prediction
 from prediction_kernel import kernel_status_summary, set_window_start
 from predbat_metrics import metrics
+import math
 import time
 
 # How many windows the post-settle plan pass revisits when calculate_second_pass is off. The near-term
@@ -1578,13 +1579,13 @@ class Plan:
         """
         return self.prediction.queue_run_prediction_charge_min_max(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record)
 
-    def launch_run_prediction_export(self, this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv_scenario, all_n, end_record):
+    def launch_run_prediction_export(self, this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv_scenario, all_n, end_record, want_export_end_soc=False):
         """Queue a prediction and return a handle to its result.
 
         Nothing runs here: the inputs are read when the batch is flushed, so no list or window dict
         passed in may be mutated until the returned handle's get() has been called.
         """
-        return self.prediction.queue_run_prediction_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv_scenario, all_n, end_record)
+        return self.prediction.queue_run_prediction_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv_scenario, all_n, end_record, want_export_end_soc=want_export_end_soc)
 
     def scenario_summary_title(self, record_time):
         txt = ""
@@ -2322,6 +2323,9 @@ class Plan:
 
                     # Filter out the windows we disabled during clipping
                     self.export_limits_best, self.export_window_best = self.discard_unused_export_slots(self.export_limits_best, self.export_window_best)
+
+                    # Merge the per-slot steps the export floor pins into one export at the end target
+                    self.merge_export_staircase()
                 self.log("Export windows filtered {}".format(self.window_as_text(self.export_window_best, self.export_limits_best)))
 
             # Filter out any unused charge slots
@@ -3013,6 +3017,42 @@ class Plan:
                 )
         return best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep, best_cycle, best_carbon, best_import, best_metric_plan
 
+    def export_limits_floored(self, export_limits, end_socs, shared=None):
+        """Raise each target export's target to the SoC the nominal plan reaches at that window's end.
+
+        end_socs holds one SoC per export window, -1 or None where unknown. The floor is rounded down to
+        a whole percent so it never binds in the nominal run it came from, and only ever raises a target.
+        Freeze and idle windows carry no target and are left alone.
+
+        shared lists windows trialled together as all_n: they carry one target between them, so they get
+        one floor - the lowest end SoC among them.
+        """
+        floored = list(export_limits)
+        if self.soc_max <= 0:
+            return floored
+
+        def floor_percent(soc):
+            """Whole percent at or below soc, or None for an unknown SoC"""
+            if soc is None or soc < 0:
+                return None
+            return min(int(math.floor(soc / self.soc_max * 100.0)), 100)
+
+        floors = {}
+        for window_n in range(len(export_limits)):
+            floors[window_n] = floor_percent(end_socs[window_n]) if window_n < len(end_socs) else None
+        if shared:
+            known = [floors[window_n] for window_n in shared if floors.get(window_n) is not None]
+            for window_n in shared:
+                floors[window_n] = min(known) if known else None
+
+        for window_n, limit in enumerate(export_limits):
+            floor = floors[window_n]
+            if floor is None or export_mode_of(limit) != EXPORT_MODE_TARGET:
+                continue
+            if floor > (export_target_of(limit) or 0):
+                floored[window_n] = pack_export_limit(EXPORT_MODE_TARGET, floor, export_power_of(limit))
+        return floored
+
     def optimise_export(self, window_n, record_charge_windows, try_charge_limit, charge_window, export_window, export_limit, all_n=None, end_record=None, freeze_only=False, allow_freeze=True):
         """
         Optimise a single export window for best export %
@@ -3103,24 +3143,39 @@ class Plan:
                 this_export_limit = pack_export_limit(loop_mode, calc_percent_limit(self.best_soc_min, self.soc_max), loop_power)
                 try_options.append([start, this_export_limit])
 
-                results.append(self.launch_run_prediction_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, PV_SCENARIO_NOMINAL, all_n, end_record))
-                results10.append(self.launch_run_prediction_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, PV_SCENARIO_PV10, all_n, end_record))
+                # Nominal also reports the SoC at the end of every export window, for the pv10 floor below.
+                # pv90 is the upside case - its battery is normally above nominal at the export, and a
+                # replan there would export more, not stop early - so it takes no floor and need not wait.
+                results.append(self.launch_run_prediction_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, PV_SCENARIO_NOMINAL, all_n, end_record, want_export_end_soc=True))
                 if run_pv90:
                     results90.append(self.launch_run_prediction_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, PV_SCENARIO_PV90, all_n, end_record))
 
+        # pv10 runs each candidate with its export targets floored at where that candidate's own nominal
+        # run reaches. That is the target clipping sends the inverter, so in the worse scenario the export
+        # stops there - and a replan shortens it - rather than draining to the 0% trialled here. The floored
+        # limit is also what the candidate is pinned at if selected, so every later optimisation simulates
+        # the realistic target too.
+        nominal_results = [handle.get() for handle in results]
+        pinned_limits = []
+        for (start, this_export_limit), result in zip(try_options, nominal_results):
+            trial_limits = list(try_export)
+            for window_id in all_n if all_n else [window_n]:
+                trial_limits[window_id] = this_export_limit
+            floored = self.export_limits_floored(trial_limits, result[11], shared=all_n)
+            pinned = floored[window_n]
+            pinned_limits.append(pinned)
+            results10.append(self.launch_run_prediction_export(pinned, start, window_n, try_charge_limit, charge_window, try_export_window, floored, PV_SCENARIO_PV10, all_n, end_record))
+
         # Get results from sims
         try_results = []
-        for try_option in try_options:
-            hanres = results.pop(0)
-            hanres10 = results10.pop(0)
-            result = hanres.get()
-            result10 = hanres10.get()
+        for try_option, result, pinned in zip(try_options, nominal_results, pinned_limits):
+            result10 = results10.pop(0).get()
             result90 = results90.pop(0).get() if run_pv90 else None
-            try_results.append(try_option + [result, result10, result90])
+            try_results.append(try_option + [result[:11], result10, result90, pinned])
 
         window_results = {}
         for try_option in try_results:
-            start, this_export_limit, hanres, hanres10, hanres90 = try_option
+            start, this_export_limit, hanres, hanres10, hanres90, pinned_limit = try_option
 
             # Simulate with medium PV
             cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = hanres
@@ -3231,7 +3286,7 @@ class Plan:
             if (metric <= off_metric) and (metric <= best_metric) and ((cost + min_improvement_scaled) <= off_cost):
                 best_metric = metric
                 best_metric_plan = metric_plan
-                best_export = this_export_limit
+                best_export = pinned_limit
                 best_cost = cost
                 best_soc_min = soc_min
                 best_soc_min_minute = soc_min_minute
@@ -3937,6 +3992,67 @@ class Plan:
                     new_enable.append(export_limits_best[window_n])
 
         return new_enable, new_best
+
+    def merge_export_staircase(self):
+        """Merge runs of contiguous target exports that step down into one export at the last step's target.
+
+        The pv10 export floor pins each half-hour export at the SoC nominal reaches by its end, so a long
+        export becomes a staircase of targets. Executing it as one export to the end target behaves the
+        same, because a replan every few minutes shortens the export if the battery is lower than planned,
+        and it keeps the plan reading as one export.
+
+        A step can also be a hold the plan stops at on purpose - exporting to 50% now and the rest in a
+        later, better-paid slot. Merging that would move export earlier, so each merge is kept only if the
+        nominal metric does not move (within eps), the same nominal-only check prune_dead_plan_slots uses.
+        Manual and keep-max windows are never merged, as in discard_unused_export_slots.
+
+        Returns the number of merges made.
+        """
+        eps = 0.02
+        windows = list(self.export_window_best)
+        limits = list(self.export_limits_best)
+        baseline = None
+        merged = 0
+        window_n = 0
+        while window_n + 1 < len(windows):
+            this_window, next_window = windows[window_n], windows[window_n + 1]
+            this_limit, next_limit = limits[window_n], limits[window_n + 1]
+            mergeable = (
+                export_mode_of(this_limit) == EXPORT_MODE_TARGET
+                and export_mode_of(next_limit) == EXPORT_MODE_TARGET
+                and this_window["end"] == next_window["start"]
+                and export_power_of(this_limit) == export_power_of(next_limit)
+                and (export_target_of(next_limit) or 0) <= (export_target_of(this_limit) or 0)
+                and this_window["start"] not in self.manual_all_times
+                and next_window["start"] not in self.manual_all_times
+                and this_window["start"] not in self.all_active_keep_max
+                and next_window["start"] not in self.all_active_keep_max
+            )
+            if not mergeable:
+                window_n += 1
+                continue
+
+            if baseline is None:
+                baseline = self.run_prediction_metric(self.charge_limit_best, self.charge_window_best, windows, limits, end_record=self.end_record, nominal_only=True)[0]
+            combined = dict(this_window, end=next_window["end"], target=next_window.get("target", export_target_of(next_limit)))
+            trial_windows = windows[:window_n] + [combined] + windows[window_n + 2 :]
+            trial_limits = limits[:window_n] + [next_limit] + limits[window_n + 2 :]
+            trial = self.run_prediction_metric(self.charge_limit_best, self.charge_window_best, trial_windows, trial_limits, end_record=self.end_record, nominal_only=True)[0]
+            if abs(trial - baseline) <= eps:
+                if self.debug_enable:
+                    self.log(
+                        "Merge export step {} - {} limit {} into {} - {} limit {}".format(
+                            self.time_abs_str(this_window["start"]), self.time_abs_str(this_window["end"]), this_limit, self.time_abs_str(next_window["start"]), self.time_abs_str(next_window["end"]), next_limit
+                        )
+                    )
+                windows, limits, baseline = trial_windows, trial_limits, trial
+                merged += 1
+            else:
+                window_n += 1
+
+        self.export_window_best = windows
+        self.export_limits_best = limits
+        return merged
 
     def update_target_values(self):
         """
