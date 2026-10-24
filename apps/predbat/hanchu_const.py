@@ -131,7 +131,7 @@ HANCHU_AES_IV = b"9z64Qr8mZH7Pg8d1"
 
 # OBSERVED (DANNY api.py async_discover_batteries): a battery device's id for the battery data call is
 # devId, falling back to sn and then dtuSn. HARDWARE (2026-10-24): devId equals sn, the pack serial the
-# web portal shows (B0073K64E0287); there was no packList, which DANNY also reads.
+# web portal shows (ADR:1, ADR:2 on its Device page); there was no packList, which DANNY also reads.
 HANCHU_BMS_ID_FIELDS = ("devId", "sn", "dtuSn")
 
 # HARDWARE (2026-10-24): queryAllList entry fields worth a line in the report, field -> label. adr is the
