@@ -1637,7 +1637,7 @@ class Fetch:
                 self.log("Octopus Intelligent: dispatch minutes no car needs changed to {}".format(len(self.octopus_surplus)))
                 octopus_surplus_changed = True
             import_rates = self.dynamic_load_car_strip_feed_rates(import_rates)
-            import_rates, self.rate_import_replicated = self.rate_replicate(import_rates, self.io_adjusted, is_import=True)
+            import_rates, self.rate_import_replicated = self.rate_replicate(import_rates, self.io_adjusted, is_import=True, use_future=True)
             self.rate_import_no_io = import_rates.copy()
             for car_n in range(self.num_cars):
                 import_rates = self.rate_add_io_slots(car_n, import_rates, self.octopus_slots[car_n])
@@ -1676,7 +1676,7 @@ class Fetch:
         # Replicate and scan export rates
         if export_rates:
             self.rate_scan_export(export_rates, print=False)
-            export_rates, self.rate_export_replicated = self.rate_replicate(export_rates, is_import=False)
+            export_rates, self.rate_export_replicated = self.rate_replicate(export_rates, is_import=False, use_future=True)
             self.rate_export_base = export_rates.copy()
             # Built here, from the base rates, so the saving session and overrides applied below stay
             # out of it - battery_value_rate needs the tariff's own export price, not an event price
@@ -2607,9 +2607,13 @@ class Fetch:
         self.log("Downloaded {} datapoints from GECloudData going back {} days".format(len(self.load_minutes), self.load_minutes_age))
         return True
 
-    def rate_replicate(self, rates, rate_io=None, is_import=True, is_gas=False):
+    def rate_replicate(self, rates, rate_io=None, is_import=True, is_gas=False, use_future=False):
         """
         We don't get enough hours of data for Octopus, so lets assume it repeats until told others
+
+        use_future fills missing minutes from the predicted future rates (futurerate). Those are
+        predictions for the live import/export tariff only, so other rates replicated through here
+        (gas, and the tariffs compare and annual replay) must leave it off.
         """
         if rate_io is None:
             rate_io = {}
@@ -2643,19 +2647,23 @@ class Fetch:
                     rate_offset = rate_last
                     using_last = True
 
-                # Only offset once not every day
                 futurerate_adjust_import = self.get_arg("futurerate_adjust_import", False)
                 futurerate_adjust_export = self.get_arg("futurerate_adjust_export", False)
-                if minute_mod not in adjusted_rates:
-                    if is_import and futurerate_adjust_import and (minute in self.future_energy_rates_import) and (minute_mod in self.future_energy_rates_import):
-                        rate_offset = self.future_energy_rates_import[minute]
-                        adjust_type = "future"
-                        using_last = False
-                    elif (not is_import) and (not is_gas) and futurerate_adjust_export and (minute in self.future_energy_rates_export) and (minute_mod in self.future_energy_rates_export):
-                        rate_offset = max(self.future_energy_rates_export[minute], 0)
-                        adjust_type = "future"
-                        using_last = False
-                    elif is_import:
+                # A predicted future rate is an absolute price for this minute, so use it whenever there
+                # is one - even where the minute being copied was itself filled, or has no prediction
+                if use_future and is_import and futurerate_adjust_import and (minute in self.future_energy_rates_import):
+                    rate_offset = self.future_energy_rates_import[minute]
+                    adjust_type = "future"
+                    using_last = False
+                    adjusted_rates[minute] = True
+                elif use_future and (not is_import) and (not is_gas) and futurerate_adjust_export and (minute in self.future_energy_rates_export):
+                    rate_offset = max(self.future_energy_rates_export[minute], 0)
+                    adjust_type = "future"
+                    using_last = False
+                    adjusted_rates[minute] = True
+                # Only offset once not every day
+                elif minute_mod not in adjusted_rates:
+                    if is_import:
                         rate_offset = rate_offset + self.metric_future_rate_offset_import
                         if self.metric_future_rate_offset_import:
                             adjust_type = "offset"
@@ -3240,7 +3248,7 @@ class Fetch:
         the tariff's real off-peak price. Mirrors how rate_export_base is already built downstream of
         rate_replicate() on the export side.
         """
-        rate_base, _ = self.rate_replicate(rates.copy(), {}, is_import=True)
+        rate_base, _ = self.rate_replicate(rates.copy(), {}, is_import=True, use_future=True)
         rate_min_base, rate_max_base, _, _, _ = self.rate_minmax(rate_base)
         return rate_base, rate_min_base, rate_max_base
 
