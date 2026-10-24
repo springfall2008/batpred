@@ -1646,6 +1646,16 @@ def test_component_publishes_entities():
     assert "sensor.predbat_myenergi_zappi_12345678_status" in entities
     assert "sensor.predbat_myenergi_zappi_12345678_mode" in entities
     assert "sensor.predbat_myenergi_zappi_12345678_plug_status" in entities
+    # Whether the cable is in, for car_charging_plugged - the mock Zappi is charging
+    assert entities["binary_sensor.predbat_myenergi_zappi_12345678_plugged"]["state"] == "on", entities["binary_sensor.predbat_myenergi_zappi_12345678_plugged"]
+    assert "binary_sensor.predbat_myenergi_eddi_87654321_plugged" not in entities
+    # Every connected pilot state is plugged in, including after a charge finishes; an empty or faulted one is no reading
+    zappi = component.devices["Z12345678"]
+    saved_plug = zappi.plug_status
+    for plug_status, expected in [("EV Disconnected", "off"), ("EV Connected", "on"), ("Waiting for EV", "on"), ("EV ready to charge", "on"), ("Charging", "on"), ("Fault", "unavailable"), ("", "unavailable")]:
+        zappi.plug_status = plug_status
+        assert component.plugged_state(zappi) == expected, (plug_status, component.plugged_state(zappi))
+    zappi.plug_status = saved_plug
     assert "sensor.predbat_myenergi_zappi_12345678_power" in entities
     assert "sensor.predbat_myenergi_zappi_12345678_session_energy" in entities
     assert "binary_sensor.predbat_myenergi_zappi_12345678_charging" in entities
@@ -1799,6 +1809,11 @@ def test_automatic_config():
         "sensor.predbat_myenergi_zappi_12345678_plug_status",
         "sensor.predbat_myenergi_zappi_22223333_plug_status",
     ], component.base.args["car_charging_planned"]
+    # car_charging_plugged too, in the same order, for the manual car SoC's reset on unplug
+    assert component.base.args["car_charging_plugged"] == [
+        "binary_sensor.predbat_myenergi_zappi_12345678_plugged",
+        "binary_sensor.predbat_myenergi_zappi_22223333_plugged",
+    ], component.base.args["car_charging_plugged"]
     # 11112222 sorts before 87654321, so it must be the one picked as "the first Eddi"
     assert component.base.args["iboost_energy_today"] == "sensor.predbat_myenergi_eddi_11112222_session_energy"
     print("  ✓ Automatic configuration wires both energy inputs, deterministically by serial")

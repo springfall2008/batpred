@@ -947,9 +947,10 @@ class Execute:
                             self.log("Car charging from battery is off, next slot for car {} is {} - {}".format(car_n, self.time_abs_str(window["start"]), self.time_abs_str(window["end"])))
                             car_hold = True
                     if car_hold:
-                        # Don't disable discharge during force charge/discharge slots but otherwise turn it off to prevent
-                        # from draining the battery
-                        if not isExporting:
+                        # Don't disable discharge while this inverter is force exporting, but otherwise turn it off to prevent
+                        # draining the battery. Not isExporting: a freeze export sets that too, yet leaves the inverter in
+                        # demand with discharge live, so the hold is all that keeps the battery out of the car (#5612).
+                        if status_per_inverter.get(inverter.id) != RUN_STATE_EXPORTING:
                             # Not while this inverter is actually charging, unless it can pause: the battery is being
                             # filled from the grid, so it cannot be feeding the car. A discharge rate of 0 adds nothing
                             # then, and some GivEnergy inverters will not grid-charge at all with it at 0 and the SoC on
@@ -960,6 +961,7 @@ class Execute:
                             # through the charge, covering the moments the inverter reaches its target before Predbat
                             # sees it. The sibling iBoost hold below already sits out a charge for the same reason.
                             hold_deferred = (not inverter.inv_has_timed_pause) and status_per_inverter.get(inverter.id) == RUN_STATE_CHARGING
+                            hold_applied = True
                             if hold_deferred:
                                 self.log("Inverter {} is charging, so the hold for car {} leaves the discharge rate and reserve alone until charging stops".format(inverter.id, car_n))
                             else:
@@ -968,15 +970,23 @@ class Execute:
                                         inverter.adjust_pause_mode(pause_discharge=True)
                                         pause_discharge_requested = True
                                         resetPause = False
+                                    # The timed pause is a single write per cycle: once a freeze has claimed it to pause
+                                    # charge only, discharge stays live, so don't log or publish a hold that didn't happen
+                                    hold_applied = pause_discharge_requested
                                 else:
                                     if discharge_rate is None:
                                         discharge_rate = 0
                                     if self.set_reserve_enable:
                                         inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
                                         resetReserve = False
-                                self.log("Disabling battery discharge whilst car {} is charging".format(car_n))
+                                if hold_applied:
+                                    self.log("Disabling battery discharge whilst car {} is charging".format(car_n))
+                                else:
+                                    self.log("Inverter {} timed pause is already pausing charge only, so the hold for car {} cannot also pause discharge".format(inverter.id, car_n))
+                            # carHolding still drives the charge freeze/stop service call after the loop, so it is kept even
+                            # when the timed pause could not be applied - only the published status follows hold_applied
                             carHolding = True
-                            if (RUN_STATE_HOLD_FOR_CAR not in status) and (status_hold_car == ""):
+                            if hold_applied and (RUN_STATE_HOLD_FOR_CAR not in status) and (status_hold_car == ""):
                                 if status == RUN_STATE_DEMAND:
                                     status = RUN_STATE_HOLD_FOR_CAR
                                 else:
