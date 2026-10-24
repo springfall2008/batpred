@@ -1173,16 +1173,20 @@ class SolarAPI(ComponentBase):
         """
         Return the power in kW above which this system's PV generation is clipped, or 0 if it is not known.
 
-        A hybrid inverter caps PV at its AC limit (inverter_limit, the total across inverters); it can pass
+        A hybrid inverter caps PV at its AC limit (inverter_limit, summed across inverters); it can pass
         more while charging the battery from DC, but generation at the limit is where clipping starts. An
         AC-coupled array has its own PV inverter, so the battery inverter's limit says nothing about it and
-        only a configured pv_ac_limit applies. Both are held by the base in kWh per minute.
+        only a configured pv_ac_limit applies.
+
+        Only a configured limit counts. Inverter falls back to a standing default when inverter_limit is not
+        set, which is fine for the plan but would be a guess here: a larger unconfigured system would have its
+        real generation above the guess taken as clipped. So with no inverter_limit the ceiling is unknown.
         """
-        if getattr(self.base, "inverter_hybrid", True):
-            limit = getattr(self.base, "inverter_limit", 0) or 0
+        if self.get_arg("inverter_hybrid", True):
+            limit_w = self.get_arg("inverter_limit", 0.0, combine=True, required_unit="W") or 0
         else:
-            limit = getattr(self.base, "pv_ac_limit", 0) or 0
-        return max(limit * 60.0, 0)
+            limit_w = self.get_arg("pv_ac_limit", 0.0) or 0
+        return max(limit_w / 1000.0, 0)
 
     def impute_clipped_pv_history(self, pv_power_hist, pv_forecast):
         """

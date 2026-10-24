@@ -20,10 +20,10 @@ The ratio is multiplicative, not a cap: after a week of 15 kW forecast against 1
 day is calibrated to about 13.8 kW, keeping only about a third of the real excess.
 
 The fix these tests describe: a history sample at (or within a small margin of) the PV ceiling, while the
-forecast was above it, must not pull the ratio down. The ceiling is the inverter limit for a hybrid
-(base.inverter_limit, the total across inverters, kWh per minute) and pv_ac_limit for an AC-coupled system,
-whose battery inverter limit says nothing about the PV inverter. Samples below the ceiling, and samples where
-generation beat the forecast, still calibrate as before.
+forecast was above it, must not pull the ratio down. The ceiling is the configured inverter_limit for a hybrid
+(summed across inverters by get_arg's combine) and pv_ac_limit for an AC-coupled system, whose battery inverter
+limit says nothing about the PV inverter - all read live through get_arg. Samples below the ceiling, and
+samples where generation beat the forecast, still calibrate as before.
 
 A clipped sample is treated as if the forecast had been right - its actual is taken to be the forecast - rather
 than by lowering its forecast to the actual. Both give that sample a ratio of 1, but the slot and day ratios are
@@ -72,17 +72,36 @@ def calibrate(history_forecast, history_actual, future_forecast, inverter_limit_
     history profiles per day: it takes the number of days ago (1 is yesterday) and returns a
     (forecast, actual) pair of profiles. The forecast history is served as the uncalibrated forecast sensor (the
     series calibration learns from, GH#5116) every 30 minutes; the actual is served as the cumulative pv_today
-    counter. inverter_limit_kw None leaves the inverter limit unset on the base, as before the fix read it.
+    counter.
+
+    The inverter settings are served as config through get_arg, as apps.yaml would supply them. inverter_limit_kw
+    is one inverter's limit, or a list with one entry per inverter (inverter_limit is a per-inverter list in
+    APPS_SCHEMA, so it is a list even with one inverter). None leaves inverter_limit unset.
     """
     if history_by_day is None:
         history_by_day = lambda days_ago: (history_forecast, history_actual)  # noqa: E731
     test_api = create_test_solar_api()
     solar = test_api.solar
     base = test_api.mock_base
+    config = {"inverter_hybrid": hybrid, "pv_ac_limit": pv_ac_limit_kw * 1000.0}
     if inverter_limit_kw is not None:
-        base.inverter_limit = inverter_limit_kw / 60.0
-    base.inverter_hybrid = hybrid
-    base.pv_ac_limit = pv_ac_limit_kw / 60.0
+        limits_kw = inverter_limit_kw if isinstance(inverter_limit_kw, list) else [inverter_limit_kw]
+        config["inverter_limit"] = [kw * 1000.0 for kw in limits_kw]
+    base.mock_config = config
+
+    def mock_get_arg(arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None, _config=config):
+        """Serve the scenario config, summing a per-inverter list for combine=True or picking by index, as the real get_arg does."""
+        if arg not in _config:
+            return default
+        value = _config[arg]
+        if isinstance(value, list):
+            if combine:
+                return sum(value)
+            position = index if index is not None else 0
+            return value[position] if position < len(value) else default
+        return value
+
+    base.get_arg = mock_get_arg
 
     # Uncalibrated forecast sensor history, every 30 minutes, at the forecast for that time of day (UTC, as
     # midnight_utc is)
@@ -237,6 +256,13 @@ def test_mixed_week_pv10_band_matches_unclipped_control():
     return check("mixed week PV10/P50 band against the unclipped control", band, control_band, 0.03)
 
 
+def test_two_inverters_clip_at_their_combined_limit():
+    """Two hybrid inverters clip at the sum of their limits: 6 kW + 5.5 kW behaves as one 11.5 kW inverter."""
+    tomorrow, _, _ = calibrate(flat(15.0), flat(11.5), flat(18.0), inverter_limit_kw=[6.0, 5.5])
+    print("  two inverters clipped at 6 + 5.5kW: noon {:.2f}kW".format(tomorrow[720]))
+    return check("noon forecast after clipping at two inverters' combined limit", tomorrow[720], 18.0, 0.03)
+
+
 def test_over_forecast_below_limit_still_learned():
     """A genuine over-forecast that never reaches the limit (cloud) is still corrected."""
     tomorrow, _, _ = calibrate(flat(15.0), flat(9.0), flat(18.0), inverter_limit_kw=11.5)
@@ -285,6 +311,7 @@ def run_pv_calibration_clipping_tests(my_predbat):
     failed |= test_ac_coupled_clipping_at_pv_ac_limit()
     failed |= test_mixed_week_p50_matches_unclipped_control()
     failed |= test_mixed_week_pv10_band_matches_unclipped_control()
+    failed |= test_two_inverters_clip_at_their_combined_limit()
 
     # Everything that is not clipping still calibrates as before
     failed |= test_over_forecast_below_limit_still_learned()
