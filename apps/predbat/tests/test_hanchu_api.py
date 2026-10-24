@@ -1413,10 +1413,10 @@ def test_hanchu_encrypt_payload_matches_the_reference_scheme():
 
 
 def test_hanchu_read_battery_health_lists_every_pack():
-    """The station detail names the battery packs and each pack is then read on its own.
+    """bmsInfo/queryAllList names the battery devices and each is then read on its own - plain JSON first.
 
-    A reply without a success flag still has its body used: these platform calls are unobserved through
-    this component, and a diagnostic is more use showing what came back.
+    Hardware (2026-10-24): the station detail UPTON listed packs with answers "This API has been
+    deprecated."; the list call is DANNY's. A plain body that is accepted needs no encryption at all.
     """
     failed = False
     client = ready_client()
@@ -1425,31 +1425,61 @@ def test_hanchu_read_battery_health_lists_every_pack():
         print("ERROR: with no station id there is nothing to read")
         failed = True
     client.device_detail[sn] = {"station_id": "ST-9001"}
-    station = {"bmsList": [{"sn": "PACK1"}, {"sn": "PACK2"}, {"no_serial": True}]}
+    devices = [{"devId": "PACK1", "sn": "PACK1", "packList": ["PACK1-A"]}, {"sn": "PACK2"}, {"no_id": True}]
     with patch("hanchu.encrypt_payload", side_effect=lambda body: "enc") as encrypt:
-        with patched_session([(200, envelope(data=station)), (200, envelope(data={"sohPack": 96})), (200, envelope(data={"sohPack": 91}, success=False))]):
+        with patched_session([(200, envelope(data=devices)), (200, envelope(data={"sohPack": 96})), (200, envelope(data={"sohPack": 91}))]) as session_cls:
             health = run_async_local(client.read_battery_health(sn))
-    bodies = [call.args[0] for call in encrypt.call_args_list]
-    if bodies != [{"stationId": "ST-9001"}, {"deviceId": "PACK1"}, {"deviceId": "PACK2"}]:
-        print(f"ERROR: expected the station then each pack to be asked for, got {bodies}")
+    bodies = [call.kwargs.get("json") for call in session_cls.return_value.post.call_args_list]
+    if bodies != [{"stationId": "ST-9001"}, {"deviceId": "PACK1"}, {"deviceId": "PACK2"}] or encrypt.called:
+        print(f"ERROR: expected the list then each device, all as plain JSON: {bodies} encrypted={encrypt.called}")
         failed = True
-    if health != {"station": "ST-9001", "packs": {"PACK1": {"sohPack": 96}, "PACK2": {"sohPack": 91}}}:
+    expected = {"station": "ST-9001", "packs": {"PACK1": {"sohPack": 96}, "PACK2": {"sohPack": 91}}, "pack_lists": {"PACK1": ["PACK1-A"], "PACK2": []}, "forms": {"bms_list": "plain JSON", "battery_data": "plain JSON"}}
+    if health != expected:
         print(f"ERROR: unexpected battery health {health}")
         failed = True
-    # Named serials skip the station detail, which has answered "This API has been deprecated."
-    # Hardware (2026-10-24) - and need no station id at all.
+    # Named serials skip the list - and need no station id at all.
     named = ready_client()
-    with patch("hanchu.encrypt_payload", side_effect=lambda body: "enc") as encrypt:
-        with patched_session([(200, envelope(data={"sohPack": 99})), (200, envelope(data={"sohPack": 98}))]):
-            health = run_async_local(named.read_battery_health(sn, ["B0073K64E0287", "B007R658S0587"]))
-    bodies = [call.args[0] for call in encrypt.call_args_list]
+    with patched_session([(200, envelope(data={"sohPack": 99})), (200, envelope(data={"sohPack": 98}))]) as session_cls:
+        health = run_async_local(named.read_battery_health(sn, ["B0073K64E0287", "B007R658S0587"]))
+    bodies = [call.kwargs.get("json") for call in session_cls.return_value.post.call_args_list]
     if bodies != [{"deviceId": "B0073K64E0287"}, {"deviceId": "B007R658S0587"}]:
-        print(f"ERROR: named serials should be read directly, without the station detail: {bodies}")
+        print(f"ERROR: named serials should be read directly, without the list: {bodies}")
         failed = True
-    if (health or {}).get("packs") != {"B0073K64E0287": {"sohPack": 99}, "B007R658S0587": {"sohPack": 98}}:
+    if (health or {}).get("packs") != {"B0073K64E0287": {"sohPack": 99}, "B007R658S0587": {"sohPack": 98}} or "bms_list" in health["forms"]:
         print(f"ERROR: unexpected battery health for named serials {health}")
         failed = True
     assert not failed, "test_hanchu_read_battery_health_lists_every_pack"
+
+
+def test_hanchu_platform_call_falls_back_to_encrypted_and_remembers_it():
+    """A platform endpoint that refuses a plain body is sent encrypted, and later calls go straight to that form."""
+    failed = False
+    client = ready_client()
+    sn = "HC240100001"
+    client.device_detail[sn] = {"station_id": "ST-9001"}
+    refused = envelope(success=False, code=100, msg="decrypt failed")
+    responses = [
+        (200, refused),
+        (200, envelope(data=[{"devId": "PACK1"}, {"devId": "PACK2"}])),
+        (200, refused),
+        (200, envelope(data={"sohPack": 96})),
+        (200, envelope(data={"sohPack": 91})),
+    ]
+    with patch("hanchu.encrypt_payload", side_effect=lambda body: "enc") as encrypt:
+        with patched_session(responses) as session_cls:
+            health = run_async_local(client.read_battery_health(sn))
+    calls = session_cls.return_value.post.call_args_list
+    shapes = ["json" if "json" in call.kwargs else "data" for call in calls]
+    if shapes != ["json", "data", "json", "data", "data"]:
+        print(f"ERROR: expected plain then encrypted for each endpoint, then encrypted only for the second pack: {shapes}")
+        failed = True
+    if encrypt.call_count != 3 or (health or {}).get("forms") != {"bms_list": "encrypted", "battery_data": "encrypted"}:
+        print(f"ERROR: unexpected forms {health and health.get('forms')} after {encrypt.call_count} encryptions")
+        failed = True
+    if (health or {}).get("packs") != {"PACK1": {"sohPack": 96}, "PACK2": {"sohPack": 91}}:
+        print(f"ERROR: unexpected packs {health}")
+        failed = True
+    assert not failed, "test_hanchu_platform_call_falls_back_to_encrypted_and_remembers_it"
 
 
 def test_hanchu_battery_health_lines_label_the_fields_and_imply_capacity():
@@ -1547,6 +1577,7 @@ def run_hanchu_api_tests(my_predbat):
         ("encrypted_endpoint", test_hanchu_encrypted_endpoint_sends_the_body_as_raw_ciphertext),
         ("encrypt_payload", test_hanchu_encrypt_payload_matches_the_reference_scheme),
         ("battery_health", test_hanchu_read_battery_health_lists_every_pack),
+        ("platform_fallback", test_hanchu_platform_call_falls_back_to_encrypted_and_remembers_it),
         ("battery_health_lines", test_hanchu_battery_health_lines_label_the_fields_and_imply_capacity),
         ("api_trace_default", test_hanchu_api_trace_is_on_unless_turned_off),
         ("model_ratings", test_hanchu_model_code_sets_battery_rate_max_and_inverter_limit),

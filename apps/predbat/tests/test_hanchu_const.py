@@ -57,11 +57,11 @@ def test_hanchu_base_url_and_endpoints():
         "iot_get": "/gateway/app/ha/iotGet",
         "iot_set": "/gateway/app/ha/iotSet",
         "fast_charge": "/gateway/app/ha/fastChargeDischarge",
-        # Command-line harness only (--battery-health), AES-encrypted bodies - see HANCHU_ENCRYPTED_ENDPOINTS.
-        "station_detail": "/gateway/platform/station/detail",
+        # Command-line harness only (--battery-health) - see HANCHU_ENCRYPTED_ENDPOINTS.
+        "bms_list": "/gateway/platform/bmsInfo/queryAllList",
         "battery_data": "/gateway/platform/bmsInfo/queryBatteryDataDivisions",
     }
-    if set(HANCHU_ENCRYPTED_ENDPOINTS) != {"station_detail", "battery_data"}:
+    if set(HANCHU_ENCRYPTED_ENDPOINTS) != {"bms_list", "battery_data"}:
         print(f"ERROR: encrypted endpoints {HANCHU_ENCRYPTED_ENDPOINTS}")
         failed = True
     for key, path in expected.items():

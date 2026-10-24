@@ -29,6 +29,9 @@ The sources, and the short names used in the annotations below:
             to a DIFFERENT API surface (the web app's, not the Home Assistant one), so where it
             agrees on a PARAMETER NAME that is strong independent corroboration - the same
             control key reached over a different path.
+  DANNY     https://github.com/dannycrone/hanchu - another integration on the web app's surface,
+            with its own portal login. It carries NO licence, so only wire facts (endpoint paths,
+            field names) are taken from it, never code. Used for the battery endpoints only.
 
 GUOXIA is Hanchu's OWN integration (Guoxiatech is the company trading as Hanchu), so the shared
 login and request layer in GUOXIA and UPTON is the vendor's code, not a third-party guess. It was
@@ -97,17 +100,26 @@ HANCHU_ENDPOINTS = {
     "fast_charge": "/gateway/app/ha/fastChargeDischarge",
 }
 
-# --- Encrypted battery (BMS) endpoints - command-line harness only ---------------------------
-# OBSERVED: UPTON api.py async_get_station_detail and async_get_battery_data. These two live on the
-# /gateway/platform/ surface and take an AES-CBC encrypted, Base64 request body sent as raw data rather
-# than JSON; the response is ordinary JSON. The station detail lists the station's battery packs
-# (data.bmsList[].sn) and the battery data gives one pack's BMS figures - state of health, design and
-# full-charge capacity, voltage, current, temperatures. The component itself never calls them: Predbat
-# plans with none of these figures. They back the harness's --battery-health report, which answers
-# "is the battery smaller than it says" (bmsDesignCap is a design figure, not a measured one).
-HANCHU_ENDPOINTS["station_detail"] = "/gateway/platform/station/detail"
+# --- Battery (BMS) endpoints - command-line harness only -------------------------------------
+# Both live on the /gateway/platform/ surface. They back the harness's --battery-health report, which
+# answers "is the battery smaller than it says" (bmsDesignCap is a design figure, not a measured one);
+# the component itself never calls them, as Predbat plans with none of these figures.
+#
+# OBSERVED (DANNY api.py async_fetch_bms_devices): bmsInfo/queryAllList with {"stationId"} lists the
+# station's battery devices, data[] of {sn, devId, dtuSn, onlineStatus, packList}. The station id is
+# getDeviceStatus's stationId (HANCHU_STATION_FIELD). HARDWARE (2026-10-24): the station/detail call
+# UPTON lists packs with answers code 100 "This API has been deprecated.", so it is not used.
+# OBSERVED (UPTON api.py async_get_battery_data, DANNY api.py) and HARDWARE (2026-10-24): battery data
+# with {"deviceId"} gives one pack's BMS figures - state of health, design and full-charge capacity,
+# voltage, current, temperatures - with the ordinary app/ha token, once the account has signed into
+# the Hanchu web portal at least once (before that it answered HTTP 403 "Permission Denied").
+HANCHU_ENDPOINTS["bms_list"] = "/gateway/platform/bmsInfo/queryAllList"
 HANCHU_ENDPOINTS["battery_data"] = "/gateway/platform/bmsInfo/queryBatteryDataDivisions"
-HANCHU_ENCRYPTED_ENDPOINTS = ("station_detail", "battery_data")
+
+# OBSERVED (UPTON api.py send_as_json=False, DANNY api.py _post): both integrations send these with the
+# body AES-encrypted as raw data, no JSON. HARDWARE (2026-10-24): battery data accepts that. Whether a
+# plain JSON body is accepted too is what --battery-health tries first - see HanchuAPI._post_platform().
+HANCHU_ENCRYPTED_ENDPOINTS = ("bms_list", "battery_data")
 
 # OBSERVED: UPTON const.py AES_SECRET_KEY / AES_IV, crypto.py _encrypt_payload. A FIXED key and IV,
 # the same for every account and published in that open-source integration, so they identify the
@@ -116,9 +128,11 @@ HANCHU_ENCRYPTED_ENDPOINTS = ("station_detail", "battery_data")
 HANCHU_AES_KEY = b"9z64Qr8mZH7Pg8d1"
 HANCHU_AES_IV = b"9z64Qr8mZH7Pg8d1"
 
-# OBSERVED: UPTON battery.py extract_battery_serials reads data.bmsList[].sn from the station detail.
-HANCHU_STATION_BMS_LIST = "bmsList"
-HANCHU_STATION_BMS_SN = "sn"
+# OBSERVED (DANNY api.py async_discover_batteries): a battery device's id for the battery data call is
+# devId, falling back to sn and then dtuSn. HARDWARE (2026-10-24): devId equals the pack serial the web
+# portal shows (B0073K64E0287). packList names the device's packs, as metadata.
+HANCHU_BMS_ID_FIELDS = ("devId", "sn", "dtuSn")
+HANCHU_BMS_PACK_LIST = "packList"
 
 # OBSERVED: UPTON sensor.py BATTERY_SENSORS. Battery data field -> (label, unit), in the order the
 # --battery-health report prints them. Units are UPTON's; capFull and capRemain are amp-hours.
