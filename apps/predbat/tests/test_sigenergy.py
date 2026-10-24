@@ -27,6 +27,7 @@ from sigenergy import (
     SIGENERGY_MODE_MSC,
     SIGENERGY_MODE_NBI,
     SIGENERGY_MODE_VPP,
+    SIGENERGY_MQTT_TOPIC_MODE,
     SIGENERGY_VPP_RECLAIM_INTERVAL,
     SIGENERGY_OPTIONS_TIME,
     _SIGENERGY_OK,
@@ -2768,7 +2769,7 @@ def test_sigenergy_build_tls_context(my_predbat):
 
 
 def test_sigenergy_set_operating_mode(my_predbat):
-    """Test set_operating_mode sends the MQTT and the REST switch, logs each, and succeeds if either is accepted."""
+    """Test set_operating_mode switches over MQTT only - no REST call, which counts against the app key's rate limit."""
     failed = False
     api = MockSigenergyAPI()
 
@@ -2778,61 +2779,40 @@ def test_sigenergy_set_operating_mode(my_predbat):
     api.get_access_token = mock_token
 
     rest_calls = []
+    published = []
 
-    def make_request(result):
-        """Return a _request stub that records the call and returns result."""
-
-        async def mock_request(method, path, params=None, json_data=None, retries=None, log_response=True):
-            rest_calls.append({"method": method, "path": path, "json": json_data, "retries": retries})
-            return result
-
-        return mock_request
+    async def mock_request(method, path, params=None, json_data=None, retries=None, log_response=True):
+        rest_calls.append({"method": method, "path": path, "json": json_data})
+        return _SIGENERGY_OK
 
     async def mock_publish_ok(topic, payload_dict):
+        published.append((topic, payload_dict))
         return True
 
     async def mock_publish_fail(topic, payload_dict):
         return False
 
-    # Both accepted: MQTT publish succeeds and REST returns code 0 (no data)
-    api._publish_mqtt = mock_publish_ok
-    api._request = make_request(_SIGENERGY_OK)
-    ok = run_async(api.set_operating_mode("SIG001", 0))
-    assert ok is True, "set_operating_mode should return True when both switches are accepted"
-    assert len(rest_calls) == 1, "REST switch sent alongside MQTT"
-    assert rest_calls[0]["method"] == "PUT" and rest_calls[0]["path"] == "/openapi/instruction/settings", "REST switch uses PUT /openapi/instruction/settings"
-    assert rest_calls[0]["json"] == {"systemId": "SIG001", "energyStorageOperationMode": 0}, "REST body carries the integer mode"
-    assert rest_calls[0]["retries"] == 1, "REST switch is a single attempt, no retry backoff"
-    assert any("MQTT" in m and "MSC" in m and "SIG001" in m for m in api.log_messages), "MQTT outcome logged"
-    assert any("REST" in m and "accepted" in m and "SIG001" in m for m in api.log_messages), "REST acceptance logged"
-    assert not any("Failed" in m for m in api.log_messages), "No failure logged on success"
+    api._request = mock_request
 
-    # MQTT published, REST refused: still True (MQTT went out) and the refusal is logged
-    api.log_messages = []
-    rest_calls.clear()
-    api._request = make_request(None)
+    # Success: MQTT publish succeeds, and no REST switch is sent
+    api._publish_mqtt = mock_publish_ok
     ok = run_async(api.set_operating_mode("SIG001", 0))
     assert ok is True, "set_operating_mode should return True when the MQTT publish succeeds"
-    assert any("Warn" in m and "REST" in m and "refused" in m for m in api.log_messages), "REST refusal logged as a warning"
+    assert len(published) == 1 and published[0][0] == SIGENERGY_MQTT_TOPIC_MODE, "Mode switch published on the MQTT mode topic, got {}".format(published)
+    assert published[0][1]["systemId"] == "SIG001" and published[0][1]["mode"] == "MSC", "MQTT payload carries the system and mode name, got {}".format(published[0][1])
+    assert rest_calls == [], "No REST mode switch is sent, got {}".format(rest_calls)
+    assert not any("Failed" in m for m in api.log_messages), "No failure logged on success"
 
-    # MQTT fails, REST accepted: True, MQTT failure logged
+    # Failure: MQTT publish fails, and there is no REST fallback
     api.log_messages = []
     api._publish_mqtt = mock_publish_fail
-    api._request = make_request(_SIGENERGY_OK)
     ok = run_async(api.set_operating_mode("SIG001", 0))
-    assert ok is True, "set_operating_mode should return True when the REST switch is accepted"
-    assert any("Warn" in m and "MQTT" in m for m in api.log_messages), "MQTT failure logged"
-
-    # Both fail: False, failure logged
-    api.log_messages = []
-    api._request = make_request(None)
-    ok = run_async(api.set_operating_mode("SIG001", 0))
-    assert ok is False, "set_operating_mode should return False when neither switch is accepted"
-    assert any("Failed" in m for m in api.log_messages), "Failure warning logged when both fail"
+    assert ok is False, "set_operating_mode should return False when the MQTT publish fails"
+    assert any("Failed" in m for m in api.log_messages), "Failure warning logged when the publish fails"
+    assert rest_calls == [], "No REST fallback when MQTT fails, got {}".format(rest_calls)
 
     # Failure: unknown mode int, nothing sent
     api.log_messages = []
-    rest_calls.clear()
     api._publish_mqtt = mock_publish_ok
     ok = run_async(api.set_operating_mode("SIG001", 99))
     assert ok is False, "set_operating_mode should return False for unknown mode int"
