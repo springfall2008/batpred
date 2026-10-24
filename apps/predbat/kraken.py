@@ -1589,22 +1589,21 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                 return str(prop["id"])
         return None
 
-    async def async_fetch_flextras_hours(self):
-        """Fetch the Flextras hours screen and return its booked hours, or None if it could not be read.
+    async def _async_get_flextras_screen(self):
+        """GET the Flextras hours screen, looking up the property id first if it is not known yet.
 
-        Accounts that are not on Flextras, and tokens edfenergy.com does not accept, both come back
-        as a non-200; that is logged when the status changes (not every refresh) and is not counted
-        as a Kraken failure, because it says nothing about the tariff and rate data this component
-        exists for.
+        Returns (status, body): body is the decoded JSON for a 200, otherwise the response text so
+        a caller can show what EDF said. status is None when no request could be made (no property
+        id, no token, or a network error).
         """
         if not self.flextras_property_id:
             self.flextras_property_id = await self.async_find_property_id()
             if not self.flextras_property_id:
-                return None
+                return None, None
 
         token_ok = await self.check_and_refresh_oauth_token()
         if not token_ok or not self.access_token:
-            return None
+            return None, None
 
         url = KRAKEN_FLEXTRAS_HOURS_URL.format(account_id=self.account_id, property_id=self.flextras_property_id)
         headers = {"Authorization": self.access_token, "Accept": "application/json"}
@@ -1614,11 +1613,23 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(url, headers=headers) as response:
                     status = response.status
-                    body = await response.json(content_type=None) if status == 200 else None
+                    body = await response.json(content_type=None) if status == 200 else await response.text()
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as e:
             self.log(f"Warn: Kraken: Flextras hours request failed: {e}")
-            return None
+            return None, None
+        return status, body
 
+    async def async_fetch_flextras_hours(self):
+        """Fetch the Flextras hours screen and return its booked hours, or None if it could not be read.
+
+        Accounts that are not on Flextras, and tokens edfenergy.com does not accept, both come back
+        as a non-200; that is logged when the status changes (not every refresh) and is not counted
+        as a Kraken failure, because it says nothing about the tariff and rate data this component
+        exists for.
+        """
+        status, body = await self._async_get_flextras_screen()
+        if status is None:
+            return None
         if status != 200:
             if status != self.flextras_last_status:
                 self.log(f"Kraken: Flextras hours not available (HTTP {status}) - no booked free hours will be read")
@@ -1820,6 +1831,8 @@ async def test_kraken_api(
     discover=False,
     introspect_type=None,
     dispatches=False,
+    flextras=False,
+    property_id=None,
 ):  # pragma: no cover
     """Run a live Kraken (EDF/E.ON) API test from the command line.
 
@@ -1829,8 +1842,11 @@ async def test_kraken_api(
     user_id + provider and returns a fresh one; token_hash is only an optional dedup echo.
     With --discover the viewer query lists every account and its import/export tariffs
     (useful for debugging missing export rates); with --introspect-type it prints the fields
-    of a schema type (e.g. an applicableRates connection node); otherwise a single run() runs.
+    of a schema type (e.g. an applicableRates connection node); with --flextras it fetches the
+    EDF Flextras hours screen through the same request the component makes and prints the raw
+    response and the booked hours parsed from it; otherwise a single run() runs.
     """
+    import json
     import os
 
     # Supabase env vars must be set before KrakenAPI is constructed so OAuthMixin sees them.
@@ -1872,6 +1888,39 @@ async def test_kraken_api(
         export_mpan=export_mpan,
         base_url=base_url,
     )
+
+    if flextras:
+        print("\n=== EDF Flextras booked free hours ===")
+        if provider != "edf":
+            print(f"Note: Flextras is an EDF scheme - provider is {provider!r}, so the component would never ask for it.")
+        kraken.flextras_property_id = property_id
+        if not property_id:
+            kraken.flextras_property_id = await kraken.async_find_property_id()
+            print(f"Property id (properties query): {kraken.flextras_property_id}")
+            if not kraken.flextras_property_id:
+                print("No property id found - the properties query failed or returned nothing (see log above). Pass --property-id to skip it.")
+                return
+        print(f"GET {KRAKEN_FLEXTRAS_HOURS_URL.format(account_id=account_id, property_id=kraken.flextras_property_id)}")
+        status, body = await kraken._async_get_flextras_screen()
+        if status is None:
+            print("No request was made - auth or network failure (see log above).")
+            return
+        print(f"HTTP {status}")
+        if status != 200:
+            print(f"Body: {str(body)[:2000]}")
+            print("The component treats this as 'Flextras not available' and keeps any booked hours it already holds.")
+            return
+        print(f"Body: {json.dumps(body, indent=2)[:4000]}")
+        booked = kraken.parse_flextras_booked_hours(body)
+        if booked is None:
+            print("\nScreen NOT recognised (no BOOKED_HOURS_LIST component) - the component would keep what it had.")
+        elif not booked:
+            print("\nScreen recognised, no hours booked.")
+        else:
+            print(f"\nBooked free hours ({len(booked)} session(s), UTC) - these would be priced at 0p:")
+            for session in booked:
+                print(f"  {session['start']} -> {session['end']}")
+        return
 
     if dispatches:
         print("\n=== Discovering SmartFlex devices (intelligent dispatch check) ===")
@@ -1938,6 +1987,7 @@ async def test_kraken_api(
     print(f"Export MPAN            : {kraken.export_mpan}")
     print(f"Export account id      : {kraken.export_account_id}")
     print(f"Export rates available : {kraken.export_rates_available}")
+    print(f"Flextras free hours    : {kraken.flextras_sessions} (property {kraken.flextras_property_id})")
     print(f"OAuth failed           : {kraken.oauth_failed}")
     print(f"Requests={kraken.requests_total}  Failures={kraken.failures_total}")
 
@@ -1969,6 +2019,8 @@ def main():  # pragma: no cover
     parser.add_argument("--discover", action="store_true", help="List all accounts and their import/export tariffs instead of a full run")
     parser.add_argument("--introspect-type", help="Print the fields of a schema type (e.g. ApplicableRateConnectionType) instead of a full run")
     parser.add_argument("--dispatches", action="store_true", help="Check for SmartFlex devices and print their planned/completed intelligent dispatches")
+    parser.add_argument("--flextras", action="store_true", help="Fetch the EDF Flextras hours screen, print the raw response and the booked free hours parsed from it")
+    parser.add_argument("--property-id", help="Kraken property id for --flextras (default: looked up with the properties query)")
 
     args = parser.parse_args()
 
@@ -1995,6 +2047,8 @@ def main():  # pragma: no cover
             discover=args.discover,
             introspect_type=args.introspect_type,
             dispatches=args.dispatches,
+            flextras=args.flextras,
+            property_id=args.property_id,
         )
     )
 
