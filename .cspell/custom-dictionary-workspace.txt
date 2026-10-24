@@ -6,6 +6,7 @@ activepower
 adata
 adbase
 afci
+afewyards
 agentic
 AIO
 AIO's
@@ -17,9 +18,11 @@ Alertfeed
 allclose
 alphaess
 am2
+anker
 annualform
 Anson
 antiphase
+antireflux
 apexcharts
 apikey
 appdaemon
@@ -43,6 +46,7 @@ autoflake
 automations
 autopep
 autoupdate
+ax1
 axvline
 axvspan
 Backfeed
@@ -92,6 +96,7 @@ chargelater
 chargelimit
 chargepower
 CHECKCODE
+chg
 Chrg
 citem
 cloudfront
@@ -172,6 +177,7 @@ docstrings
 dschg
 dstamp
 dstart
+dtu
 dtype
 dwindow
 eauth
@@ -214,10 +220,12 @@ epvtoday
 errno
 ESSAPI
 ETIMEDOUT
+eto
 etoday
 etok
 euids
 EVAC
+evc
 EVDC
 evenodd
 evergen
@@ -330,6 +338,7 @@ inva
 invb
 invbatpower
 invname
+iot
 IPPROTO
 isinstance
 isoformat
@@ -374,6 +383,7 @@ linecap
 linejoin
 linestyle
 Liskov
+lmt
 loadml
 loadmlpower
 loadspower
@@ -502,6 +512,7 @@ partlycloudy
 pbat
 pbgw
 pcharging
+pcsenmap
 pdata
 pdetails
 pendings
@@ -550,6 +561,7 @@ PVONLY
 pvpower
 pvwatts
 pwindow
+pwr
 pyjwt
 pylint
 pymyenergi
@@ -646,6 +658,7 @@ solaxmodbus
 Solcast
 soliscloud
 solisx
+solix
 sourcery
 Southwell
 sparkline
@@ -776,6 +789,7 @@ worktree
 writeonly
 wrongsha
 wwxxabcdefyyzz
+x1
 xaxis
 xaxistooltip
 xlabel
