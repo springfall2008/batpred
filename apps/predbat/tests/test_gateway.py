@@ -4950,6 +4950,185 @@ class TestCheckInverterResets:
         assert gw.log.call_count == 2
 
 
+class TestCheckCommandedSerials:
+    """Tests for GatewayMQTT._check_commanded_serials() - declaring the inverters PredBat drives."""
+
+    def _make_gateway(self, read_only=False, alive=True, auto_configured=True, online=True, mode="Control charge & discharge"):
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+        import time as time_mod
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.log = MagicMock()
+        gw.base = MagicMock()
+        gw.base.inverters = []
+        self._set_mode(gw, mode)
+        gw.base.set_read_only = False
+        gw._inverter_slot_serials = ["CH2330G098"]
+        gw._commanded_serials_sent = None
+        gw._commanded_serials_sent_time = 0
+        gw._mqtt_connected = alive
+        gw._gateway_online = online
+        gw._last_telemetry_time = time_mod.time()
+        gw._auto_configured = auto_configured
+        gw._read_only = read_only
+        gw._published = []
+        gw.get_arg = lambda key, default=None: gw._read_only if key == "set_read_only" else default
+
+        async def fake_publish_command(command, **kwargs):
+            gw._published.append((command, kwargs))
+
+        gw.publish_command = fake_publish_command
+        return gw
+
+    def _set_mode(self, gw, mode):
+        gw.base.predbat_mode = mode
+
+    def _inverter(self, slot, inverter_type="GWMQTT"):
+        from unittest.mock import MagicMock
+
+        inverter = MagicMock()
+        inverter.id = slot
+        inverter.inverter_type = inverter_type
+        return inverter
+
+    def _run(self, coro):
+        import asyncio
+
+        return asyncio.run(coro)
+
+    def test_declares_every_driven_inverter_once(self):
+        gw = self._make_gateway()
+        gw._inverter_slot_serials = ["CH2330G098", "FD2321G797"]
+        gw.base.inverters = [self._inverter(1), self._inverter(0), self._inverter(2, inverter_type="GE")]
+        self._run(gw._check_commanded_serials())
+        self._run(gw._check_commanded_serials())
+        assert gw._published == [("set_commanded_serials", {"serials": ["CH2330G098", "FD2321G797"]})]
+
+    def test_resent_when_the_set_changes(self):
+        gw = self._make_gateway()
+        gw.base.inverters = [self._inverter(0)]
+        self._run(gw._check_commanded_serials())
+        gw._inverter_slot_serials = ["CH2330G098", "FD2321G797"]  # the hub found a second inverter
+        gw.base.inverters = [self._inverter(0), self._inverter(1)]
+        self._run(gw._check_commanded_serials())
+        assert [k["serials"] for _, k in gw._published] == [["CH2330G098"], ["CH2330G098", "FD2321G797"]]
+
+    def test_resent_periodically_and_after_the_hub_returns(self):
+        gw = self._make_gateway()
+        gw.base.inverters = [self._inverter(0)]
+        self._run(gw._check_commanded_serials())
+        gw._commanded_serials_sent_time -= 31 * 60
+        self._run(gw._check_commanded_serials())
+        assert len(gw._published) == 2
+        gw._gateway_online = False
+        self._run(gw._check_commanded_serials())
+        gw._gateway_online = True
+        self._run(gw._check_commanded_serials())
+        assert len(gw._published) == 3
+
+    def test_nothing_sent_in_read_only_offline_or_before_auto_config(self):
+        for kwargs in ({"read_only": True}, {"online": False}, {"alive": False}, {"auto_configured": False}):
+            gw = self._make_gateway(**kwargs)
+            gw.base.inverters = [self._inverter(0)]
+            self._run(gw._check_commanded_serials())
+            assert gw._published == [], kwargs
+
+    def test_nothing_sent_when_no_inverter_is_driven(self):
+        gw = self._make_gateway()
+        gw.base.inverters = [self._inverter(0, inverter_type="GE")]
+        self._run(gw._check_commanded_serials())
+        assert gw._published == []
+
+    def test_monitor_mode_sends_nothing(self):
+        """In Monitor mode PredBat controls nothing: no declaration at all, never an empty one."""
+        gw = self._make_gateway(mode="Monitor")
+        gw.base.inverters = [self._inverter(0)]
+        self._run(gw._check_commanded_serials())
+        assert gw._published == []
+
+    def test_soc_only_mode_still_controls(self):
+        gw = self._make_gateway(mode="Control SOC only")
+        gw.base.inverters = [self._inverter(0)]
+        self._run(gw._check_commanded_serials())
+        assert gw._published == [("set_commanded_serials", {"serials": ["CH2330G098"]})]
+
+    def test_switching_to_monitor_stops_and_back_resends(self):
+        gw = self._make_gateway()
+        gw.base.inverters = [self._inverter(0)]
+        self._run(gw._check_commanded_serials())
+        self._set_mode(gw, "Monitor")
+        self._run(gw._check_commanded_serials())
+        self._set_mode(gw, "Control charge")
+        self._run(gw._check_commanded_serials())
+        assert [k["serials"] for _, k in gw._published] == [["CH2330G098"], ["CH2330G098"]]
+
+    def test_startup_state_sends_nothing(self):
+        """PredBat starts in Monitor mode; mid-load (read-only lifted, control flags part set) must not send."""
+        gw = self._make_gateway(mode="Monitor")
+        gw.base.inverters = [self._inverter(0)]
+        gw.base.set_soc_enable = True  # fetch.py sets this before the mode block
+        self._run(gw._check_commanded_serials())
+        assert gw._published == []
+
+    def test_nothing_sent_during_a_read_only_hold(self):
+        """A VPP event holds PredBat read-only without changing the set_read_only setting."""
+        gw = self._make_gateway()
+        gw.base.inverters = [self._inverter(0)]
+        gw.base.set_read_only = True
+        self._run(gw._check_commanded_serials())
+        assert gw._published == []
+
+    def test_nothing_sent_for_an_unknown_mode(self):
+        for mode in (None, "", "Something else"):
+            gw = self._make_gateway(mode=mode)
+            gw.base.inverters = [self._inverter(0)]
+            self._run(gw._check_commanded_serials())
+            assert gw._published == [], mode
+
+    def test_hub_restart_between_cycles_is_told_again(self):
+        """A hub that goes offline and returns between two run() cycles is re-sent the declaration."""
+        from unittest.mock import MagicMock
+
+        gw = self._make_gateway()
+        gw.base.inverters = [self._inverter(0)]
+        gw._rate_caps_sent = {}
+        gw.prefix = "predbat"
+        gw.topic_status = "predbat/devices/pbgw_test/status"
+        gw.topic_online = "predbat/devices/pbgw_test/online"
+        gw.dashboard_item = MagicMock()
+        gw._error_count = 0
+        self._run(gw._check_commanded_serials())
+        assert len(gw._published) == 1
+
+        for payload in (b"0", b"1"):
+            message = MagicMock()
+            message.topic = gw.topic_online
+            message.payload = payload
+            self._run(gw._handle_message(message))
+
+        self._run(gw._check_commanded_serials())
+        assert len(gw._published) == 2
+        assert gw._error_count == 0
+
+    def test_nothing_sent_while_the_inverter_list_is_being_rebuilt(self):
+        """The hub found a new inverter (two slots) but PredBat has rebuilt only one: declaring now would drop a unit."""
+        gw = self._make_gateway()
+        gw._inverter_slot_serials = ["CH2330G098", "FD2321G797"]
+        gw.base.inverters = [self._inverter(0)]
+        self._run(gw._check_commanded_serials())
+        assert gw._published == []
+
+    def test_command_carries_the_serials_list(self):
+        from gateway import GatewayMQTT
+        import json
+
+        cmd = json.loads(GatewayMQTT.build_command("set_commanded_serials", serials=["CH2330G098"]))
+        assert cmd["command"] == "set_commanded_serials"
+        assert cmd["serials"] == ["CH2330G098"]
+        assert cmd["command_id"].startswith("PBAT")
+
+
 class TestCheckRateCaps:
     """Tests for GatewayMQTT._check_rate_caps() - the per-inverter set_rate_cap command (predbat-gateway#424)."""
 
@@ -7789,6 +7968,7 @@ def run_gateway_tests(my_predbat=None):
         TestPublishPredbatData,
         TestIanaToPosixTz,
         TestCheckInverterResets,
+        TestCheckCommandedSerials,
         TestCheckRateCaps,
         TestGatewayOnlineTopic,
         TestCheckReadOnlyState,
