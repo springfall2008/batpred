@@ -71,7 +71,7 @@
   cursor: default;
 }
 
-.apps-editor-monaco {
+.apps-editor-codemirror {
   flex: 1;
   min-height: 32rem;
   overflow: hidden;
@@ -107,4 +107,50 @@
   .apps-editor-actions span {
     flex: 1 0 100%;
   }
+}
+
+.apps-editor-codemirror .cm-editor {
+  height: 100%;
+  min-height: 32rem;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 14px;
+}
+
+.apps-editor-codemirror .cm-scroller {
+  overflow: auto;
+  font-family: monospace;
+}
+
+.apps-editor-codemirror .cm-gutters,
+.apps-editor-codemirror .cm-tooltip,
+.apps-editor-codemirror .cm-panels {
+  border-color: var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.apps-editor-codemirror .cm-cursor {
+  border-left-color: var(--color-text);
+}
+
+.apps-editor-codemirror .cm-tooltip-hover {
+  max-width: min(42rem, calc(100vw - 2rem));
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--color-text-muted);
+  border-radius: 6px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.apps-editor-codemirror .cm-tooltip-hover p {
+  margin: 0;
+}
+
+.apps-editor-codemirror .cm-tooltip-hover .cm-tooltip-section + .cm-tooltip-section {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--color-border);
 }

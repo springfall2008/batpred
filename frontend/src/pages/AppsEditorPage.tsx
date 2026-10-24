@@ -1,9 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 
-import * as monaco from 'monaco-editor'
-import { configureMonacoYaml } from 'monaco-yaml'
-import EditorWorker from '../editor.worker?worker'
-import YamlWorker from '../yaml.worker?worker'
+import { basicSetup } from 'codemirror'
+import { EditorState, Compartment } from '@codemirror/state'
+import { EditorView, hoverTooltip, keymap } from '@codemirror/view'
+import { indentWithTab } from '@codemirror/commands'
+import { yaml, yamlLanguage } from '@codemirror/lang-yaml'
+import { indentUnit } from '@codemirror/language'
+import { oneDark } from '@codemirror/theme-one-dark'
+import { linter } from '@codemirror/lint'
+import { stateExtensions } from '@invopop/codemirror-json-schema'
+import { yamlSchemaHover } from '@invopop/codemirror-json-schema/yaml'
+import { createAppsYamlLinter, createAppsYamlCompletion, appsYamlHoverOptions } from '../utils/appsEditor'
 import { addEntitySuggestions, type HaEntity } from '../utils/appsSchema'
 
 import './AppsEditorPage.css'
@@ -18,16 +25,10 @@ type SaveResponse = {
   error?: string
 }
 
-self.MonacoEnvironment = {
-  getWorker(_moduleId, label) {
-    return label === 'yaml' ? new YamlWorker() : new EditorWorker()
-  }
-}
-
 /** Edit apps.yaml with schema-aware YAML validation and completion. */
 export default function AppsEditorPage() {
   const containerRef = useRef<HTMLDivElement>(null)
-  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
+  const editorRef = useRef<EditorView | null>(null)
   const originalRef = useRef('')
   const [source, setSource] = useState<AppsYamlResponse | null>(null)
   const [schema, setSchema] = useState<Record<string, unknown> | null>(null)
@@ -40,9 +41,9 @@ export default function AppsEditorPage() {
   async function load() {
     try {
       const [yamlResponse, schemaResponse, entitiesResponse] = await Promise.all([
-        fetch('./api/apps_yaml', { cache: 'no-store' }),
-        fetch('./api/apps_schema', { cache: 'no-store' }),
-        fetch('./api/entities?all=1', { cache: 'no-store' })
+        fetch('../api/apps_yaml', { cache: 'no-store' }),
+        fetch('../api/apps_schema', { cache: 'no-store' }),
+        fetch('../api/entities?all=1', { cache: 'no-store' })
       ])
       if (!yamlResponse.ok || !schemaResponse.ok) throw new Error(`HTTP ${yamlResponse.ok ? schemaResponse.status : yamlResponse.status}`)
       const yaml = await yamlResponse.json() as AppsYamlResponse
@@ -66,84 +67,58 @@ export default function AppsEditorPage() {
   useEffect(() => {
     if (!containerRef.current || !source || !schema) return
 
-    const modelUri = monaco.Uri.parse('file:///apps.yaml')
-    const yamlSupport = configureMonacoYaml(monaco, {
-      customTags: ['!secret scalar'],
-      enableSchemaRequest: false,
-      schemas: [
-        {
-          uri: 'predbat://apps.schema.json',
-          fileMatch: ['*'],
-          schema,
-        },
-      ],
-      validate: true,
-      completion: true,
-      hover: true,
-      format: {},
+    const theme = new Compartment()
+    const currentTheme = () => document.documentElement.dataset.theme === 'dark' ? oneDark : EditorView.theme({}, { dark: false })
+    const validate = createAppsYamlLinter()
+    const editor = new EditorView({
+      parent: containerRef.current,
+      state: EditorState.create({
+        doc: source.content,
+        extensions: [
+          basicSetup,
+          yaml(),
+          stateExtensions(schema),
+          yamlLanguage.data.of({ autocomplete: createAppsYamlCompletion() }),
+          hoverTooltip(yamlSchemaHover(appsYamlHoverOptions)),
+          linter(view => {
+            const diagnostics = validate(view)
+            setHasErrors(diagnostics.some(diagnostic => diagnostic.severity === 'error'))
+            return diagnostics
+          }),
+          indentUnit.of('  '),
+          EditorState.tabSize.of(2),
+          keymap.of([indentWithTab]),
+          theme.of(currentTheme()),
+          EditorView.contentAttributes.of({ 'aria-label': 'apps.yaml editor' }),
+          EditorView.updateListener.of(update => {
+            if (update.docChanged) setDirty(update.state.doc.toString() !== originalRef.current)
+          }),
+        ],
+      }),
     })
-    const model = monaco.editor.createModel(source.content, 'yaml', modelUri)
-    const editor = monaco.editor.create(
-      containerRef.current,
-      {
-        model,
-
-        automaticLayout: true,
-        fontSize: 14,
-
-        minimap: {
-          enabled: false,
-        },
-
-        scrollBeyondLastLine: false,
-        tabSize: 2,
-
-        theme:
-          document.documentElement.dataset.theme === 'dark'
-            ? 'vs-dark'
-            : 'vs',
-
-        quickSuggestions: {
-          other: true,
-          comments: false,
-          strings: true,
-        },
-
-        suggestOnTriggerCharacters: true,
-        wordBasedSuggestions: 'off',
-
-        wordWrap: 'off',
-      },
-    )
     editorRef.current = editor
 
-    const updateMarkers = () => setHasErrors(monaco.editor.getModelMarkers({ resource: modelUri }).some((marker) => marker.severity === monaco.MarkerSeverity.Error))
-    const contentListener = editor.onDidChangeModelContent(() => setDirty(editor.getValue() !== originalRef.current))
-    const markerListener = monaco.editor.onDidChangeMarkers((uris) => {
-      if (uris.some((uri) => uri.toString() === modelUri.toString())) updateMarkers()
-    })
-    const themeObserver = new MutationObserver(() => monaco.editor.setTheme(document.documentElement.dataset.theme === 'dark' ? 'vs-dark' : 'vs'))
+    const themeObserver = new MutationObserver(() => editor.dispatch({ effects: theme.reconfigure(currentTheme()) }))
     themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
 
     return () => {
       themeObserver.disconnect()
-      markerListener.dispose()
-      contentListener.dispose()
-      editor.dispose()
-      model.dispose()
-        ; (yamlSupport as unknown as { dispose: () => void }).dispose()
+      editor.destroy()
       editorRef.current = null
     }
   }, [source, schema])
 
   async function save() {
     const editor = editorRef.current
-    if (!editor || !source || hasErrors || !window.confirm('Saving changes will restart Predbat. Continue?')) return
+    if (!editor || !source) return
+    const errors = createAppsYamlLinter()(editor).some(diagnostic => diagnostic.severity === 'error')
+    setHasErrors(errors)
+    if (errors || !window.confirm('Saving changes will restart Predbat. Continue?')) return
     setSaving(true)
     setMessage('')
     try {
-      const content = editor.getValue()
-      const response = await fetch('./api/apps_yaml', {
+      const content = editor.state.doc.toString()
+      const response = await fetch('../api/apps_yaml', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content, checksum: source.checksum })
@@ -184,7 +159,7 @@ export default function AppsEditorPage() {
       ) : !source || !schema ? (
         <div className="apps-editor-message">Loading apps.yaml…</div>
       ) : (
-        <div ref={containerRef} className="apps-editor-monaco" aria-label="apps.yaml editor" />
+        <div ref={containerRef} className="apps-editor-codemirror" aria-label="apps.yaml editor" />
       )}
       {message && <div className="apps-editor-message" role="status">{message}</div>}
     </section>

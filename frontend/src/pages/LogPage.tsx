@@ -55,7 +55,7 @@ export default function LogPage() {
           max_lines: reset ? '1024' : '200'
         })
         if (search.trim()) params.set('search', search.trim())
-        const response = await fetch(`./api/log?${params}`, { cache: 'no-store' })
+        const response = await fetch(`../api/log?${params}`, { cache: 'no-store' })
         if (!response.ok) throw new Error(`HTTP ${response.status}`)
         const data = await response.json() as LogResponse
         if (data.status !== 'success') throw new Error(data.message ?? 'Unable to load the log')
@@ -106,7 +106,7 @@ export default function LogPage() {
             <FontAwesomeIcon icon={faRotate} />
             Refresh
           </button>
-          <a href="./debug_log">
+          <a href="../debug_log">
             <FontAwesomeIcon icon={faDownload} />
             Download
           </a>

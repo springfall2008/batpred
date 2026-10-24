@@ -339,6 +339,7 @@ inva
 invb
 invbatpower
 invname
+invopop
 iot
 IPPROTO
 isinstance
@@ -355,6 +356,7 @@ kaiming
 keepalive
 kellerza
 keydb
+keymap
 khtml
 killall
 Kiritimati
@@ -511,6 +513,7 @@ packettypes
 paho
 parseable
 partlycloudy
+pathlib
 pbat
 pbgw
 pcharging
@@ -630,6 +633,8 @@ setpoints
 setstate
 SFMB
 sg05lp1
+shiki
+shikijs
 SIGALRM
 sigcloud
 sigen

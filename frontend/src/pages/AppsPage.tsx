@@ -453,7 +453,7 @@ export default function AppsPage() {
     if (saveControls && !frameDocument.querySelector('.apps-guide')) {
       const guide = frameDocument.createElement('aside')
       guide.className = 'apps-guide'
-      guide.innerHTML = '<strong>Editing apps.yaml</strong>Use Edit to stage a value, then save all changes together. Suggested fields such as web_ui and timezone offer known choices while still accepting a custom value. Hover over a setting name or read its Description column for guidance.'
+      guide.innerHTML = '<strong>Editing apps.yaml</strong>Use Edit to stage a value, then save all changes together. Suggested fields such as timezone offer known choices while still accepting a custom value. Hover over a setting name or read its Description column for guidance.'
       saveControls.after(guide)
     }
 
@@ -555,9 +555,7 @@ export default function AppsPage() {
         descriptionCell.textContent = description
         body.append(row)
 
-        const options = name === 'web_ui'
-          ? property?.enum?.filter((value): value is string => typeof value === 'string') ?? ['legacy', 'modern']
-          : name === 'timezone' && typeof Intl.supportedValuesOf === 'function'
+        const options = name === 'timezone' && typeof Intl.supportedValuesOf === 'function'
             ? Intl.supportedValuesOf('timeZone')
             : []
         const editButton = row.querySelector<HTMLButtonElement>('.edit-button')
@@ -616,7 +614,7 @@ export default function AppsPage() {
 
   useEffect(() => {
     let active = true
-    fetch('./api/apps_schema', { cache: 'no-store' })
+    fetch('../api/apps_schema', { cache: 'no-store' })
       .then((response) => response.ok ? response.json() as Promise<AppsSchema> : Promise.reject(new Error(`HTTP ${response.status}`)))
       .then((schema) => {
         if (!active) return
@@ -646,7 +644,7 @@ export default function AppsPage() {
           <button type="button" disabled={saveState.discardDisabled} onClick={() => frameRef.current?.contentDocument?.getElementById('discardAllButton')?.click()}>Discard changes</button>
         </div>
       </header>
-      <iframe ref={frameRef} className="apps-frame" src="./legacy_apps" title="Predbat apps.yaml settings" onLoad={styleEmbeddedPage} />
+      <iframe ref={frameRef} className="apps-frame" src="../apps" title="Predbat apps.yaml settings" onLoad={styleEmbeddedPage} />
     </section>
   )
 }

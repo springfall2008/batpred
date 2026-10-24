@@ -21,8 +21,8 @@ export default function EntitiesPage() {
     setLoading(true)
     try {
       const [entitiesResponse, statesResponse] = await Promise.all([
-        fetch(`./api/entities${includeAll ? '?all=1' : ''}`, { cache: 'no-store' }),
-        fetch('./api/state', { cache: 'no-store' })
+        fetch(`../api/entities${includeAll ? '?all=1' : ''}`, { cache: 'no-store' }),
+        fetch('../api/state', { cache: 'no-store' })
       ])
       if (!entitiesResponse.ok || !statesResponse.ok) throw new Error(`HTTP ${entitiesResponse.ok ? statesResponse.status : entitiesResponse.status}`)
       setEntities(await entitiesResponse.json() as EntitySummary[])
@@ -90,7 +90,7 @@ export default function EntitiesPage() {
                       <dl>
                         {Object.entries(attributes).map(([name, attribute]) => <div key={name}><dt>{name}</dt><dd>{typeof attribute === 'object' ? JSON.stringify(attribute) : String(attribute)}</dd></div>)}
                       </dl>
-                      <a href={`./entity?entity_id=${encodeURIComponent(entity.id)}`}>History and controls <FontAwesomeIcon icon={faArrowUpRightFromSquare} /></a>
+                      <a href={`../entity?entity_id=${encodeURIComponent(entity.id)}`}>History and controls <FontAwesomeIcon icon={faArrowUpRightFromSquare} /></a>
                     </div>
                   </details>
                 )

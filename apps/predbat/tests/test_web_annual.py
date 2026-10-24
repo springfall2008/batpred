@@ -2539,7 +2539,6 @@ def test_web_annual_routes_registered(my_predbat):
 
     expected = {
         ("GET", "/annual"),
-        ("GET", "/legacy_annual"),
         ("POST", "/annual"),
         ("POST", "/annual_run"),
         ("GET", "/annual_status"),
@@ -2554,17 +2553,13 @@ def test_web_annual_routes_registered(my_predbat):
         print("  ERROR: missing route registrations: {}".format(missing))
         failed = True
 
-    print("Test: modern mode serves the React shell while retaining the legacy page for the embedded tool")
+    print("Test: the classic What If route remains available")
     modern_interface = WebInterface(my_predbat, web_port=5057)
-    modern_interface.get_web_ui = lambda: "modern"
     modern_app = aiohttp_web.Application()
     modern_interface._register_annual_routes(modern_app)
     modern_routes = {(route.method, route.resource.canonical): route.handler for route in modern_app.router.routes()}
-    if modern_routes[("GET", "/annual")] != modern_interface.html_modern_ui:
-        print("  ERROR: /annual should serve the modern UI when web_ui is modern")
-        failed = True
-    if modern_routes[("GET", "/legacy_annual")] != modern_interface.annual_page.html_annual:
-        print("  ERROR: /legacy_annual should retain the existing What If implementation")
+    if modern_routes[("GET", "/annual")] != modern_interface.annual_page.html_annual:
+        print("  ERROR: /annual should retain the classic page")
         failed = True
 
     return failed

@@ -41,7 +41,7 @@ export default function MetricsPanel({ lastStarted }: { lastStarted: string | nu
 
     async function refresh() {
       try {
-        const response = await fetch('./metrics/json', { cache: 'no-store' })
+        const response = await fetch('../metrics/json', { cache: 'no-store' })
         if (!response.ok) throw new Error(`HTTP ${response.status}`)
         const data = await response.json() as DashboardMetrics
         if (active) {

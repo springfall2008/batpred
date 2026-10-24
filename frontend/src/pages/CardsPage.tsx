@@ -19,8 +19,8 @@ export default function CardsPage() {
 
   useEffect(() => {
     Promise.all([
-      fetch('./api/entities', { cache: 'no-store' }),
-      fetch('./api/state', { cache: 'no-store' })
+      fetch('../api/entities', { cache: 'no-store' }),
+      fetch('../api/state', { cache: 'no-store' })
     ]).then(async ([entitiesResponse, statesResponse]) => {
       if (!entitiesResponse.ok || !statesResponse.ok) throw new Error(`HTTP ${entitiesResponse.ok ? statesResponse.status : entitiesResponse.status}`)
       setEntities(await entitiesResponse.json() as EntitySummary[])

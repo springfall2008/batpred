@@ -39,7 +39,7 @@ type ApiSource = 'plan' | 'status' | 'powerFlow'
 /** Coordinates dashboard polling and refreshes the plan after a calculation completes. */
 function App() {
   const pathPage = window.location.pathname.replace(/\/+$/, '').split('/').pop() ?? 'dash'
-  const currentPage = new URLSearchParams(window.location.search).get('page') ?? pathPage
+  const currentPage = new URLSearchParams(window.location.search).get('page') ?? (pathPage === 'ui' || !pathPage ? 'dash' : pathPage)
 
   const API_FAILURE_THRESHOLD = 2
 
@@ -215,7 +215,7 @@ function App() {
    * Fetch the Predbat plan.
    */
   async function fetchPlan() {
-    const response = await fetchJson<PlanDataResponse>('plan', './api/plan_data')
+    const response = await fetchJson<PlanDataResponse>('plan', '../api/plan_data')
     const data = resolvePlanData(response, planDataRef.current)
 
     if (!data) {
@@ -233,7 +233,7 @@ function App() {
   }
 
   async function fetchStatus() {
-    const data = await fetchJson<PredbatStatus>('status', './api/status')
+    const data = await fetchJson<PredbatStatus>('status', '../api/status')
 
     /*
      * Remember whether Predbat was calculating on the
@@ -269,7 +269,7 @@ function App() {
    * Fetch live Power Flow data.
    */
   async function fetchPowerFlow() {
-    const data = await fetchJson<PowerFlowData>('powerFlow', './api/power_flow')
+    const data = await fetchJson<PowerFlowData>('powerFlow', '../api/power_flow')
 
     setPowerFlowData(data)
     setPowerFlowUpdatedAt(data.updated_at == null ? null : data.updated_at * 1000)
@@ -283,7 +283,7 @@ function App() {
    */
   async function updateControl(control: string, value: string | boolean) {
     try {
-      const response = await fetch('./api/dashboard_control', {
+      const response = await fetch('../api/dashboard_control', {
         method: 'POST',
 
         headers: {
@@ -332,7 +332,7 @@ function App() {
     setUpdateRequested(true)
 
     try {
-      const response = await fetch('./api/service', {
+      const response = await fetch('../api/service', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

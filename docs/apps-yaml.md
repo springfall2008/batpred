@@ -433,14 +433,7 @@ Docker users can change the web port for the Predbat web interface by setting **
 
 **web_bind** selects the network address on which the web server listens. It defaults to `0.0.0.0` (all IPv4 interfaces) for compatibility. Set `web_bind: "127.0.0.1"` for access only from the same host, or use a specific private interface address. This restricts network reachability; it does not add authentication. Home Assistant ingress must be able to reach the selected address, so keep the default for the app unless you have verified its ingress networking. Restart Predbat after changing this setting.
 
-The existing interface remains the default. To use the modern interface, set:
-
-```yaml
-  # Load the modern React interface. Use legacy to select the original UI.
-  web_ui: modern
-```
-
-Set `web_ui: legacy`, or remove the setting, to use the existing interface. See [Use the modern interface](web-interface.md#use-the-modern-interface) for the optional EV and ASHP entities used by Overview.
+Both web interfaces are always available. Use **Try the new interface** or **Classic interface** in the menu to switch; your browser remembers your choice. The `web_ui` setting is no longer needed. See [Use the modern interface](web-interface.md#use-the-modern-interface) for the optional EV and ASHP entities used by Overview.
 
 ### notify_devices
 

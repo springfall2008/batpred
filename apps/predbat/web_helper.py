@@ -9095,6 +9095,7 @@ setTimeout(function() {
 <button class="menu-dropdown-toggle" type="button" data-menu="advanced-menu" onclick="toggleMenuDropdown(event, 'advanced-menu')">Advanced &#9662;</button>
 </div>
 <a href='https://springfall2008.github.io/batpred/'>Docs</a>
+<a href='./ui/'>Try the new interface</a>
 <div class="dark-mode-toggle">
     """
         + THIS_VERSION

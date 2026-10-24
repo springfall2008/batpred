@@ -2,19 +2,13 @@
 
 The Predbat Web Interface provides an easy to use way to see and change different aspects of your Predbat system including viewing the current plan, adjusting the configuration, viewing the charts, checking your apps.yaml and viewing the logfiles.
 
-The existing interface is used by default. Add `web_ui: modern` to the `pred_bat` section of `apps.yaml` to use the new interface, or set `web_ui: legacy` to select the existing interface explicitly.
+Both interfaces are available together. The classic interface is the default; select **Try the new interface** in its menu to open the modern interface at `./ui/`.
 
 ## Use the modern interface
 
-The modern interface includes the Overview, Dashboard, Plan, Charts, Compare, configuration and system pages in one responsive interface. Select it in the `pred_bat` section of `apps.yaml`:
+The modern interface includes the Overview, Dashboard, Plan, Charts, Compare, configuration and system pages in one responsive interface. Its **Classic interface** link returns to the original interface.
 
-```yaml
-pred_bat:
-  # Load the modern React interface. Use legacy to select the original UI.
-  web_ui: modern
-```
-
-Predbat uses the legacy interface when `web_ui` is missing. Saving `apps.yaml` restarts Predbat and applies the selection.
+Your browser remembers the interface you choose for this Predbat installation. Opening the main address uses that preference. No configuration change or restart is needed. If browser storage is unavailable, the main address uses the classic interface. Existing classic page links continue to work.
 
 ### Configure the Overview page
 

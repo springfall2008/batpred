@@ -1,8 +1,8 @@
 # Predbat Modern UI
 
 The Modern UI is a React and TypeScript application built with Vite. It is
-served by Predbat either from the development server or from the bundled
-`apps/predbat/frontend.zip` archive.
+served by the development server or by Predbat from the generated
+`apps/predbat/predbat_ui*` files.
 
 ## Start developing
 
@@ -24,9 +24,14 @@ npm run lint
 npm run build
 ```
 
-`npm run bundle` runs the production build and packages `dist/` as
-`../apps/predbat/frontend.zip`. Run it before testing a change in Home
-Assistant or opening a pull request that changes frontend behaviour.
+`npm run build` writes flat files with stable `predbat_ui` names directly into
+`../apps/predbat/`. It replaces only files with that reserved prefix and preserves
+the backend files beside them. `npm run bundle` is an alias for the same build.
+Run the build and include its generated files before testing in Home Assistant
+or opening a pull request. CI rebuilds them and checks for differences.
+
+Assets are served with conditional caching and compression for text files.
+Stable filenames overwrite older versions during Predbat updates.
 
 ## Useful project locations
 
@@ -46,6 +51,6 @@ Assistant or opening a pull request that changes frontend behaviour.
   ingress continues to work.
 - Add or update a fixture when an API field has important display behaviour.
 - Prefer a focused regression test for a reported UI problem.
-- Do not edit the generated `dist/` directory directly.
+- Do not edit the generated `apps/predbat/predbat_ui*` files directly.
 - Read [the API contract](docs/api-contract.md) and
   [UI conventions](docs/ui-conventions.md) before changing a page.

@@ -54,7 +54,7 @@ export default function ChartsPage({ plan, loadMlEnabled }: ChartsPageProps) {
 
   const fetchChart = useCallback(async (signal?: AbortSignal) => {
     try {
-      const response = await fetch(`./api/chart_data?chart=${selectedChart}`, {
+      const response = await fetch(`../api/chart_data?chart=${selectedChart}`, {
         cache: 'no-store',
         signal
       })

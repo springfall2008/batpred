@@ -315,7 +315,7 @@ function RateCell({
     formData.append('rate', String(overrideRate))
 
     try {
-      const response = await fetch('./rate_override', {
+      const response = await fetch('../rate_override', {
         method: 'POST',
         body: formData
       })
@@ -572,7 +572,7 @@ function LoadCell({
     formData.append('rate', String(adjustment))
 
     try {
-      const response = await fetch('./rate_override', {
+      const response = await fetch('../rate_override', {
         method: 'POST',
         body: formData
       })
@@ -757,7 +757,7 @@ function TargetCell({
     formData.append('rate', String(target))
 
     try {
-      const response = await fetch('./rate_override', {
+      const response = await fetch('../rate_override', {
         method: 'POST',
         body: formData
       })
@@ -1485,7 +1485,7 @@ export default function PlanTable({
     formData.append('action', action)
 
     try {
-      const response = await fetch('./plan_override', {
+      const response = await fetch('../plan_override', {
         method: 'POST',
         body: formData
       })
