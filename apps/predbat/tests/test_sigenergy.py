@@ -703,6 +703,133 @@ def test_sigenergy_export_limit_survives_restart(my_predbat):
     return failed
 
 
+def _published_battery_reserve_min(api, system_id):
+    """Publish a system's entities and return its battery reserve min sensor, or None when it was not published."""
+    run_async(api.publish_system_entities(system_id))
+    return api.dashboard_items.get("sensor.predbat_sigenergy_{}_battery_reserve_min".format(api._system_slug(system_id)))
+
+
+def test_sigenergy_automatic_config_battery_min_soc(my_predbat):
+    """automatic_config() binds battery_min_soc to the backup cut-off sensors, so the plan's floor is the device's own."""
+    failed = False
+    api = MockSigenergyAPI()
+    api.automatic = True
+    api.systems = {"SIG001": {"systemName": "Home"}, "SIG002": {"systemName": "Office"}}
+
+    run_async(api.automatic_config())
+
+    assert api.set_args.get("battery_min_soc") == [
+        "sensor.predbat_sigenergy_sig001_battery_reserve_min",
+        "sensor.predbat_sigenergy_sig002_battery_reserve_min",
+    ], "battery_min_soc wired to the backup cut-off sensors, got {}".format(api.set_args.get("battery_min_soc"))
+
+    return failed
+
+
+def test_sigenergy_automatic_config_keeps_user_battery_min_soc(my_predbat):
+    """A battery_min_soc the user set in apps.yaml survives automatic_config() rather than being replaced by the sensor."""
+    failed = False
+    api = MockSigenergyAPI()
+    api.automatic = True
+    api.systems = {"SIG001": {"systemName": "Home"}}
+    api.base.args_from_apps_yaml = {"battery_min_soc": 5}
+    api.args["battery_min_soc"] = 5
+
+    run_async(api.automatic_config())
+
+    assert "battery_min_soc" not in api.set_args, "automatic_config must not set battery_min_soc over the user's own, got {}".format(api.set_args.get("battery_min_soc"))
+    assert api.args["battery_min_soc"] == 5, "The user's 5% battery_min_soc is kept, got {}".format(api.args["battery_min_soc"])
+
+    return failed
+
+
+def test_sigenergy_battery_reserve_min_live_change_message(my_predbat):
+    """The live change message's backupCutOffSOC% (16%) is published as the battery reserve min sensor in %."""
+    failed = False
+    api = _make_export_limit_api()
+
+    api._handle_mqtt_change("SIG12345", dict(SIGENERGY_LIVE_CHANGE_MESSAGE))
+
+    item = _published_battery_reserve_min(api, "SIG12345")
+    assert item is not None, "Battery reserve min entity published once the backup cut-off is known"
+    assert item["state"] == 16, "backupCutOffSOC% 16.0 publishes 16, got {}".format(item["state"])
+    assert item["attributes"].get("unit_of_measurement") == "%", "Battery reserve min is in % so get_arg(required_unit='%') accepts it"
+
+    return failed
+
+
+def test_sigenergy_battery_reserve_min_zero(my_predbat):
+    """A 0% backup cut-off is a real floor of 0%, published as 0 rather than dropped as falsy."""
+    failed = False
+    api = _make_export_limit_api()
+
+    api._handle_mqtt_change("SIG12345", dict(SIGENERGY_LIVE_CHANGE_MESSAGE, **{"backupCutOffSOC%": "0.0"}))
+
+    item = _published_battery_reserve_min(api, "SIG12345")
+    assert item is not None, "A 0% backup cut-off is published"
+    assert item["state"] == 0, "backupCutOffSOC% 0.0 publishes 0, got {}".format(item["state"])
+
+    return failed
+
+
+def test_sigenergy_battery_reserve_min_unknown(my_predbat):
+    """Until the plant reports its backup cut-off the sensor is not published, so battery_min_soc keeps Predbat's own default."""
+    failed = False
+    api = _make_export_limit_api()
+
+    item = _published_battery_reserve_min(api, "SIG12345")
+    assert item is None, "No battery reserve min entity before the backup cut-off is known, got {}".format(item)
+
+    return failed
+
+
+def test_sigenergy_battery_reserve_min_partial_change_keeps_value(my_predbat):
+    """A later change message without backupCutOffSOC% leaves the reported cut-off in place."""
+    failed = False
+    api = _make_export_limit_api()
+
+    api._handle_mqtt_change("SIG12345", dict(SIGENERGY_LIVE_CHANGE_MESSAGE))
+    api._handle_mqtt_change("SIG12345", {"gridMaxBackfeedPowerW": "5000.0"})
+
+    item = _published_battery_reserve_min(api, "SIG12345")
+    assert item is not None and item["state"] == 16, "A change message without the cut-off keeps 16%, got {}".format(item)
+
+    return failed
+
+
+def test_sigenergy_battery_reserve_min_survives_restart(my_predbat):
+    """run() persists the backup cut-off and load_cached_data() restores it, so a restart doesn't fall back to the 4% default."""
+    failed = False
+    sid = "SIG12345"
+    storage = FakeStorage()
+
+    api = _make_export_limit_api(sid)
+    api._mock_storage = storage
+    api.current_mode = {sid: SIGENERGY_MODE_VPP}
+    api.system_id_filter = {sid}
+    task = MagicMock()
+    task.done = MagicMock(return_value=False)
+    api._mqtt_task = task
+    api._manage_vpp_registration = AsyncMock(return_value=True)
+    api.fetch_inverter_realtime = AsyncMock(return_value=True)
+    api.fetch_energy_flow = AsyncMock(return_value=True)
+    api.fetch_daily_summary = AsyncMock(return_value=True)
+    api.fetch_history_totals = AsyncMock(return_value=True)
+    api.apply_controls = AsyncMock()
+    api._handle_mqtt_change(sid, dict(SIGENERGY_LIVE_CHANGE_MESSAGE, **{"backupCutOffSOC%": "0.0"}))
+
+    run_async(api.run(seconds=300, first=False))
+
+    restarted = _make_export_limit_api(sid)
+    restarted._mock_storage = storage
+    run_async(restarted.load_cached_data())
+
+    item = _published_battery_reserve_min(restarted, sid)
+    assert item is not None and item["state"] == 0, "The 0% cut-off is restored from the cache after a restart, got {}".format(item)
+
+    return failed
+
+
 def test_sigenergy_fetch_controls(my_predbat):
     """Test fetch_controls reads default values when entities have no state."""
     failed = False
@@ -4533,6 +4660,13 @@ def run_sigenergy_tests(my_predbat):
         ("export_limit_zero_without_anti_reflux", test_sigenergy_export_limit_zero_without_anti_reflux),
         ("export_limit_partial_change_keeps_limit", test_sigenergy_export_limit_partial_change_keeps_limit),
         ("export_limit_survives_restart", test_sigenergy_export_limit_survives_restart),
+        ("automatic_config_battery_min_soc", test_sigenergy_automatic_config_battery_min_soc),
+        ("automatic_config_keeps_user_battery_min_soc", test_sigenergy_automatic_config_keeps_user_battery_min_soc),
+        ("battery_reserve_min_live_change_message", test_sigenergy_battery_reserve_min_live_change_message),
+        ("battery_reserve_min_zero", test_sigenergy_battery_reserve_min_zero),
+        ("battery_reserve_min_unknown", test_sigenergy_battery_reserve_min_unknown),
+        ("battery_reserve_min_partial_change_keeps_value", test_sigenergy_battery_reserve_min_partial_change_keeps_value),
+        ("battery_reserve_min_survives_restart", test_sigenergy_battery_reserve_min_survives_restart),
         ("fetch_controls", test_sigenergy_fetch_controls),
         ("publish_controls", test_sigenergy_publish_controls),
         ("parse_entity_system", test_sigenergy_parse_entity_system),
