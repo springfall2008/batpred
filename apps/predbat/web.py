@@ -36,9 +36,6 @@ import io
 from io import StringIO
 import hashlib
 import copy
-import mimetypes
-import zipfile
-from pathlib import PurePosixPath
 from ruamel.yaml import YAML
 from ruamel.yaml.scalarstring import DoubleQuotedScalarString
 
@@ -1065,9 +1062,7 @@ class WebInterface(ComponentBase):
         app.router.add_get("/metrics_dashboard", self.html_metrics_dashboard)
         if modern_ui:
             app.router.add_get("/docs", self.html_modern_ui)
-            app.router.add_get("/assets/{filename:.*}", self.html_modern_ui_asset)
-            app.router.add_get("/favicon.svg", self.html_modern_ui_asset)
-            app.router.add_get("/icons.svg", self.html_modern_ui_asset)
+            app.router.add_get("/{filename:predbat_ui[^/]*}", self.html_modern_ui_asset)
 
         # Notify plugin system that web interface is ready
         if hasattr(self.base, "plugin_system") and self.base.plugin_system:
@@ -3955,35 +3950,24 @@ chart.render();
         )
 
     async def html_modern_ui(self, request):
-        """Serve the bundled React entry point for a modern UI page."""
-        return await self.html_modern_ui_asset(request, "index.html")
+        """Serve the built React entry point for a modern UI page."""
+        return await self.html_modern_ui_asset(request, "predbat_ui.html")
 
     async def html_modern_ui_asset(self, request, filename=None):
-        """Serve one file from the bundled React archive."""
-        if filename is None:
-            filename = request.match_info.get("filename")
-            if filename:
-                filename = "assets/" + filename
-            else:
-                filename = request.path.rsplit("/", 1)[-1]
-
-        path = PurePosixPath(filename)
-        if path.is_absolute() or ".." in path.parts:
+        """Serve only flat, prefixed UI assets from the installation directory."""
+        filename = filename if filename is not None else request.match_info.get("filename", "")
+        if not re.fullmatch(r"predbat_ui(?:_[A-Za-z0-9_.-]+)?\.(?:html|js|css|webp|svg|png)", filename):
             raise web.HTTPNotFound()
-
-        archive_path = os.path.join(os.path.dirname(__file__), "frontend.zip")
-        try:
-            with zipfile.ZipFile(archive_path) as archive:
-                body = archive.read("dist/" + str(path))
-        except KeyError:
-            raise web.HTTPNotFound() from None
-        except (OSError, zipfile.BadZipFile) as error:
-            self.log("Warn: Modern web interface bundle is unavailable: {}".format(error))
-            return web.Response(status=503, text="Modern web interface bundle is unavailable")
-
-        content_type = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
-        cache_control = "no-store" if str(path) == "index.html" else "public, max-age=31536000, immutable"
-        return web.Response(body=body, content_type=content_type, headers={"Cache-Control": cache_control})
+        asset_path = os.path.join(os.path.dirname(__file__), filename)
+        if os.path.islink(asset_path) or not os.path.isfile(asset_path):
+            if filename == "predbat_ui.html":
+                return web.Response(status=503, text="Modern web interface files are unavailable")
+            raise web.HTTPNotFound()
+        response = web.FileResponse(asset_path, headers={"Cache-Control": "no-cache"})
+        if filename.endswith((".html", ".js", ".css", ".svg")):
+            response.headers["Vary"] = "Accept-Encoding"
+            response.enable_compression()
+        return response
 
     async def html_dash_content(self, request):
         """

@@ -10,6 +10,8 @@
 
 import asyncio
 import os
+from aiohttp.web import FileResponse
+from tests.test_web_modern_ui import run_web_modern_ui_tests
 from unittest.mock import MagicMock, patch
 
 from web import WebInterface, is_data_numerical
@@ -36,6 +38,7 @@ def run_web_functions_tests(my_predbat):
 
     web = make_web(my_predbat)
     prefix = my_predbat.prefix
+    failed += run_web_modern_ui_tests()
 
     print("Test: legacy UI is the default and the bundled modern UI is selectable")
     had_web_ui = "web_ui" in my_predbat.args
@@ -46,7 +49,7 @@ def run_web_functions_tests(my_predbat):
         failed += 1
     my_predbat.args["web_ui"] = "modern"
     modern_response = asyncio.run(web.html_plan(None))
-    if modern_response.status != 200 or '<div id="root"></div>' not in modern_response.text:
+    if modern_response.status != 200 or not isinstance(modern_response, FileResponse):
         print("  ERROR: web_ui modern did not serve the bundled React interface")
         failed += 1
     if had_web_ui:

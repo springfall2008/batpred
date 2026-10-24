@@ -17,10 +17,11 @@ try {
     export * from ${JSON.stringify(fileURLToPath(new URL('../src/utils/appsEditor.ts', import.meta.url)))};
     export * from ${JSON.stringify(fileURLToPath(new URL('../src/utils/appsSchema.ts', import.meta.url)))};
     export { stateExtensions } from '@invopop/codemirror-json-schema';
+    export * from ${JSON.stringify(fileURLToPath(new URL('../src/utils/editorMarkdown.ts', import.meta.url)))};
     export { yamlSchemaHover } from '@invopop/codemirror-json-schema/yaml';
   `)
   const result = await build({
-    configFile: false,
+    configFile: fileURLToPath(new URL('../vite.config.ts', import.meta.url)),
     logLevel: 'silent',
     build: {
       write: false,
@@ -31,6 +32,7 @@ try {
       },
     },
   })
+  assert.ok(!result[0].output.some(item => item.type === 'chunk' && Object.keys(item.modules).some(id => /[\\/]node_modules[\\/](?:shiki|@shikijs)[\\/]/.test(id))), 'schema help must not bundle Shiki')
   const output = `${directory}/support.mjs`
   await writeFile(output, result[0].output.find(item => item.type === 'chunk').code)
   support = await import(pathToFileURL(output).href)
@@ -62,6 +64,7 @@ const schema = support.addEntitySuggestions({
       type: 'object',
       properties: {
         threads: { type: 'integer', minimum: 0 },
+        prefix: { type: 'string', pattern: '^[a-z][a-z0-9_]*$', description: 'Prefix added to every Home Assistant entity Predbat creates.' },
         ...stringListSchema,
         module: { type: 'string', const: 'predbat' },
         ha_key: { type: 'string' },
@@ -110,7 +113,7 @@ test('schema hover describes the selected field', async () => {
   const doc = 'pred_bat:\n  grid_power: sensor.grid_power'
   const state = stateFor(doc)
   let description
-  const tooltip = await support.yamlSchemaHover({ formatHover: texts => {
+  const tooltip = await support.yamlSchemaHover({ ...support.appsYamlHoverOptions, formatHover: texts => {
     description = texts.message
     return {}
   } })({ state }, doc.indexOf('grid_power') + 2, 0)
@@ -142,4 +145,24 @@ test('backend string-list schemas accept scalar and list values without overlapp
   for (const value of ['123', '[GE, 123]', '{type: GE}']) {
     assert.ok(diagnostics(`pred_bat:\n  inverter_type: ${value}`).length, value)
   }
+})
+
+test('schema help preserves Markdown and escapes HTML without syntax-highlighter assets', () => {
+  assert.equal(support.renderMarkdown('Use `sensor.grid` and **power**.'), 'Use <code>sensor.grid</code> and <strong>power</strong>.')
+  const rendered = support.renderMarkdown('<img src=x onerror=alert(1)> [bad](javascript:alert(1))')
+  assert.ok(rendered.includes('&lt;img'))
+  assert.doesNotMatch(rendered, /<img|href="javascript:/)
+  assert.match(support.renderMarkdown('```yaml\ngrid_power: sensor.grid\n```', false), /<pre><code class="language-yaml">grid_power: sensor.grid/)
+})
+
+test('prefix validation gives a concise correction without technical schema details', () => {
+  const errors = diagnostics('pred_bat:\n  prefix: predbat-dev')
+  assert.equal(errors.length, 1)
+  assert.equal(errors[0].message, 'Prefix must start with a lowercase letter and contain only lowercase letters, numbers or underscores. Use predbat_dev instead of predbat-dev.')
+  assert.equal(errors[0].renderMessage, undefined)
+  assert.equal(errors[0].source, undefined)
+  assert.deepEqual(diagnostics('pred_bat:\n  prefix: predbat_dev'), [])
+  const hover = support.appsYamlHoverOptions.getHoverTexts({ schema: { description: 'Prefix help', type: 'string', pattern: '^[a-z][a-z0-9_]*$' }, pointer: '/pred_bat/prefix' })
+  assert.deepEqual(hover, { message: 'Prefix help', typeInfo: '' })
+  assert.ok(diagnostics('pred_bat:\n  threads: invalid').length)
 })

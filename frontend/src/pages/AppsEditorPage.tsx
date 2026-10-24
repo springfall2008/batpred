@@ -10,7 +10,7 @@ import { oneDark } from '@codemirror/theme-one-dark'
 import { linter } from '@codemirror/lint'
 import { stateExtensions } from '@invopop/codemirror-json-schema'
 import { yamlSchemaHover } from '@invopop/codemirror-json-schema/yaml'
-import { createAppsYamlLinter, createAppsYamlCompletion } from '../utils/appsEditor'
+import { createAppsYamlLinter, createAppsYamlCompletion, appsYamlHoverOptions } from '../utils/appsEditor'
 import { addEntitySuggestions, type HaEntity } from '../utils/appsSchema'
 
 import './AppsEditorPage.css'
@@ -79,7 +79,7 @@ export default function AppsEditorPage() {
           yaml(),
           stateExtensions(schema),
           yamlLanguage.data.of({ autocomplete: createAppsYamlCompletion() }),
-          hoverTooltip(yamlSchemaHover()),
+          hoverTooltip(yamlSchemaHover(appsYamlHoverOptions)),
           linter(view => {
             const diagnostics = validate(view)
             setHasErrors(diagnostics.some(diagnostic => diagnostic.severity === 'error'))

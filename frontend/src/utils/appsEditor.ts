@@ -2,10 +2,15 @@ import { type EditorState } from '@codemirror/state'
 import { type EditorView } from '@codemirror/view'
 import { type Diagnostic } from '@codemirror/lint'
 import { type CompletionContext, type Completion } from '@codemirror/autocomplete'
-import { getJSONSchema, getJsonPointers, jsonPointerForPosition } from '@invopop/codemirror-json-schema'
+import { getJSONSchema, getJsonPointers, jsonPointerForPosition, type FoundCursorData } from '@invopop/codemirror-json-schema'
 import { yamlCompletion, yamlSchemaLinter } from '@invopop/codemirror-json-schema/yaml'
 import { syntaxTree } from '@codemirror/language'
 import { parseDocument, stringify } from 'yaml'
+
+/** Keep setting descriptions in hovers without exposing JSON Schema internals. */
+export const appsYamlHoverOptions = {
+  getHoverTexts: ({ schema }: FoundCursorData) => ({ message: schema.description ?? '', typeInfo: '' }),
+}
 
 /** Parse Home Assistant's secret references without resolving or exposing secrets. */
 function parseAppsYaml(text: string) {
@@ -38,7 +43,18 @@ export function createAppsYamlLinter() {
     }))
     if (errors.length) return errors
     try {
-      return validate(view)
+      const prefix = getJsonPointers(view.state, 'yaml').get('/pred_bat/prefix')
+      return validate(view).map(diagnostic => {
+        if (prefix && 'valueFrom' in prefix && diagnostic.from === prefix.valueFrom && diagnostic.message.includes('^[a-z][a-z0-9_]*$')) {
+          return {
+            ...diagnostic,
+            message: 'Prefix must start with a lowercase letter and contain only lowercase letters, numbers or underscores. Use predbat_dev instead of predbat-dev.',
+            renderMessage: undefined,
+            source: undefined,
+          }
+        }
+        return diagnostic
+      })
     } catch (error) {
       return [{ from: 0, to: 0, severity: 'error', message: error instanceof Error ? error.message : 'Unable to validate YAML' }]
     }

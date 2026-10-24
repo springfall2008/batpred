@@ -72,5 +72,6 @@ repos:
     - "@cspell/dict-en-gb"
     exclude: ^docs/superpowers/ # internal planning artifacts, not published docs
 exclude: |
+  ^apps/predbat/predbat_ui[^/]*$|
   ^\.venv/|
   \.backup$

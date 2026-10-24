@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "bundle": "npm run build && python3 -m zipfile -c ../apps/predbat/frontend.zip dist",
+    "bundle": "npm run build",
     "lint": "oxlint",
     "test": "node --test tests/*.test.mjs",
     "preview": "vite preview"
@@ -28,12 +28,14 @@
     "chart.js": "^4.5.1",
     "chartjs-plugin-zoom": "^2.2.0",
     "codemirror": "^6.0.2",
+    "markdown-it": "^14.3.3",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "yaml": "^2.9.1"
   },
   "devDependencies": {
     "@types/json-schema": "^7.0.15",
+    "@types/markdown-it": "^14.2.0",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",

@@ -90,6 +90,7 @@ plan_*.html
 *.png
 !apps/predbat/bat_logo_light.png
 !apps/predbat/bat_logo_dark.png
+!apps/predbat/predbat_ui*.png
 
 # Build artifacts
 a.out
