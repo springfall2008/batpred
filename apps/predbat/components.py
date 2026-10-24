@@ -326,6 +326,19 @@ COMPONENT_LIST = {
         "phase": 1,
         "can_restart": True,
     },
+    "hypervolt": {
+        "class": "hypervolt.HypervoltAPI",
+        "name": "Hypervolt Charger",
+        "event_filter": "predbat_hypervolt_",
+        "args": {
+            "username": {"required": True, "secret": True, "config": "hypervolt_username"},
+            "password": {"required": True, "secret": True, "config": "hypervolt_password"},
+            "automatic": {"required": False, "config": "hypervolt_automatic", "default": True},
+            "hypervolt_control": {"required": False, "config": "hypervolt_control", "default": False},
+        },
+        "phase": 1,
+        "can_restart": True,
+    },
     "fox": {
         "class": "fox.FoxAPI",
         "name": "Fox API",
