@@ -345,6 +345,31 @@ def test_hanchu_discovery_returns_none_before_discovery():
     assert not failed, "test_hanchu_discovery_returns_none_before_discovery"
 
 
+def test_hanchu_discovery_record_names_a_known_model():
+    """A devModel in HANCHU_MODELS is reported as info.model; an unknown one reports no name (batpred#5664)."""
+    failed = False
+    client = MockHanchu()
+    client.device_list = [SN]
+    record = (client.build_discovery() or {}).get("inverters", [{}])[0]
+    if "info" in record:
+        print(f"ERROR: no model has been seen, so no info should be reported: {record.get('info')}")
+        failed = True
+    client._apply_model(SN, 5)
+    record = (client.build_discovery() or {}).get("inverters", [{}])[0]
+    if (record.get("info") or {}).get("model") != "HESS-HY-S-6.0K":
+        print(f"ERROR: devModel 5 should be reported as HESS-HY-S-6.0K: {record.get('info')}")
+        failed = True
+    if (record.get("ratings") or {}).get("inverter_limit") != 6000.0:
+        print(f"ERROR: the record's inverter_limit should be the model's 6000 W: {record.get('ratings')}")
+        failed = True
+    client._apply_model(SN, 99)
+    record = (client.build_discovery() or {}).get("inverters", [{}])[0]
+    if "info" in record:
+        print(f"ERROR: an unknown devModel should report no model name: {record.get('info')}")
+        failed = True
+    assert not failed, "test_hanchu_discovery_record_names_a_known_model"
+
+
 def run_hanchu_publish_tests(my_predbat):
     """Run all Hanchu publish, automatic_config and discovery tests."""
     failed = False
@@ -360,6 +385,7 @@ def run_hanchu_publish_tests(my_predbat):
         ("capabilities", test_hanchu_capabilities_match_the_inverter_def_row),
         ("discovery_record", test_hanchu_discovery_record_is_complete_and_agrees_with_automatic_config),
         ("discovery_none", test_hanchu_discovery_returns_none_before_discovery),
+        ("discovery_model", test_hanchu_discovery_record_names_a_known_model),
     ]:
         try:
             if fn():
