@@ -162,6 +162,22 @@ async def test_planned_dispatches_follow_device_state(my_predbat):
     else:
         print("PASS: The last known state is kept through a failed dispatch query")
 
+    # An answer without the device's state is unknown - the car might be plugged in - so a stale
+    # SMART_CONTROL_NOT_AVAILABLE from an earlier poll must not go on dropping the plan
+    clock["now"] = ref_now
+    api = make_api()
+    api.async_graphql_query = AsyncMock(side_effect=mock_query)
+    answer.update({"state": "SMART_CONTROL_NOT_AVAILABLE", "planned": planned_answer, "fail": False})
+    await poll(api)
+    answer["state"] = None
+    clock["now"] = ref_now + timedelta(minutes=2)
+    device = await poll(api)
+    if device.get("planned_dispatches") != planned_kept or device.get("current_state") is not None:
+        print(f"ERROR: Expected an answer with no state taken as unknown and its plan kept, got state {device.get('current_state')} planned {device.get('planned_dispatches')}")
+        failed += 1
+    else:
+        print("PASS: An answer with no state is unknown, and its planned dispatches are kept")
+
     # With no smart charge running, an empty answer still means no dispatches
     clock["now"] = ref_now
     api = make_api()
