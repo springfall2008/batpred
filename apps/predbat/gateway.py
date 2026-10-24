@@ -334,9 +334,9 @@ class GatewayMQTT(ComponentBase):
                 PredBat car so the optimizer plans for it. Off by default so existing gateway users are
                 unaffected. Set to ``true`` in apps.yaml to enable.
             gateway_evc_control: When True (requires gateway_evc_automatic), reconcile the charger once per
-                minute against the planned car-charging windows: inside a window with a car plugged in and
-                no session, send SetChargingProfile plus RemoteStartTransaction; outside every window with
-                a session active, send RemoteStopTransaction - whoever started that session.
+                minute against the planned car-charging windows: inside a window with no session, when the
+                charger is not Unavailable/Faulted/Offline, send SetChargingProfile plus RemoteStartTransaction;
+                outside every window with a session active, send RemoteStopTransaction - whoever started that session.
             gateway_shared_ct: When True (the default), several inverters are taken to share one grid CT
                 clamp, so each reports the same grid and load. Only the first inverter's grid and load
                 readings are then used, so the house's grid and load are not counted once per inverter.
@@ -442,6 +442,7 @@ class GatewayMQTT(ComponentBase):
         self._discovery_save_retry_at = 0
         self._unavailable_inverters = ((), ())
         self._configured_ev_chargers = frozenset()  # EV charge point ids registered at the last auto-config
+        self._ev_control_cp_id = None  # charge point id _register_ev_car() registered as car 1, the one gateway_evc_control drives
         self._ev_last_soc = {}  # EV charge point id -> the last SoC the charger reported for the car
         self._last_published_plan = None
         self._pending_plan = None
@@ -678,10 +679,11 @@ class GatewayMQTT(ComponentBase):
         apart, until the window state next changes; then a warning is logged once, and for a stop
         also recorded in the Predbat status as an error (a refused start is normal with no car plugged in). An attempt only counts once it was actually published. When the charger's
         state is unknown (no fresh EV telemetry, or the charger offline) nothing is sent and, once the
-        hub has reported EV chargers at least once, a warning is logged once per window state. Only the lowest charge point id is controlled - the same single
-        charger auto-config registers as the car.
+        hub has reported EV chargers at least once, a warning is logged once per window state. Only the charger
+        _register_ev_car() registered as car 1 is controlled, so the plan being enforced is that charger's own.
         """
-        if not self._configured_ev_chargers:
+        cp_id = self._ev_control_cp_id
+        if not cp_id:
             return
         should_charge = self._should_ev_charge_now()
         if should_charge != self._ev_desired:
@@ -689,8 +691,6 @@ class GatewayMQTT(ComponentBase):
             self._ev_attempts = {"start": 0, "stop": 0}
             self._ev_last_attempt = 0.0
             self._ev_unknown_warned = False
-        # min() gives a deterministic choice when multiple chargers are present
-        cp_id = min(self._configured_ev_chargers)
         ev = self._ev_charger_status(cp_id)
         if ev is None:
             # Silent until the first EV status has arrived: at startup the hub simply has not reported yet
@@ -712,9 +712,8 @@ class GatewayMQTT(ComponentBase):
                 self.log(message)
                 # A start that does not take is normal - nobody plugged a car in for the window. A session
                 # that will not stop is a fault: the charger keeps drawing outside the plan
-                base = getattr(self, "base", None)
-                if direction == "stop" and getattr(base, "record_status", None):
-                    base.record_status(message, had_errors=True)
+                if direction == "stop":
+                    self.base.record_status(message, had_errors=True)
                 self._ev_attempts[direction] += 1  # warn once
             return
         if time.time() - self._ev_last_attempt < _EV_COMMAND_RETRY_SECONDS:
@@ -2370,6 +2369,8 @@ class GatewayMQTT(ComponentBase):
 
         # For now we overwrite the first charger only; multi-charger support needs work
         ev = next((c for c in chargers if c.connected), chargers[0])
+        # gateway_evc_control drives this charger and no other, so it enforces the plan made for it
+        self._ev_control_cp_id = ev.charge_point_id or None
         pfx = f"{self.prefix}_gateway_{self._ev_suffix(ev, multi=False)}"
         self.set_arg("num_cars", 1)
         # Entity-reference args (resolved by get_arg indirect lookup at fetch time).

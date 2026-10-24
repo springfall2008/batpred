@@ -5863,6 +5863,8 @@ class TestEvAutoConfig:
         gw._register_ev_car(status)
 
         assert gw._args["car_charging_planned"] == ["binary_sensor.predbat_gateway_ev_cp0001_connected"]
+        # gateway_evc_control drives the registered charger, not the lower id min() would pick
+        assert gw._ev_control_cp_id == "CP0001"
 
     def test_registers_offline_charger_when_none_connected(self):
         """A charger that is merely offline right now still registers, so it reappears."""
@@ -6060,6 +6062,7 @@ class TestEvControl:
         gw.gateway_evc_control = evc_control
         gw.gateway_evc_automatic = evc_automatic
         gw._configured_ev_chargers = frozenset(configured_chargers or ["CP10000001"])
+        gw._ev_control_cp_id = (configured_chargers or ["CP10000001"])[0]
         gw._ev_max_current = ev_max_current if ev_max_current is not None else {"CP10000001": 32}
         gw._ev_windows = []
         gw._ev_desired = None
@@ -6232,7 +6235,7 @@ class TestEvControl:
 
         published = gw.published
         assert len(published) == 2
-        cp_id = min(gw._configured_ev_chargers)
+        cp_id = gw._ev_control_cp_id
         assert published[0]["command_id"] != published[1]["command_id"]
         assert all(p["command_id"].startswith("PBAT") for p in published)
         for p in published:
@@ -6249,7 +6252,7 @@ class TestEvControl:
 
         assert len(gw.published) == 1
         assert gw.published[0].pop("command_id").startswith("PBAT")
-        assert gw.published[0] == {"command": "ev", "charge_point_id": min(gw._configured_ev_chargers), "action": "RemoteStopTransaction"}
+        assert gw.published[0] == {"command": "ev", "charge_point_id": gw._ev_control_cp_id, "action": "RemoteStopTransaction"}
 
     def test_apply_no_command_when_state_matches(self):
         """Desired state already matches the charger: nothing is sent, cycle after cycle."""
@@ -6265,6 +6268,38 @@ class TestEvControl:
         self._set_charger(gw, session_active=True, status="SuspendedEV")
         self._apply(gw)
         assert gw.published == []
+
+    def test_apply_drives_registered_charger_not_lowest_id(self):
+        """With two chargers, the reconcile drives the one registered as car 1, even when another has a lower id."""
+        import time
+
+        gw = self._make_gateway(configured_chargers=["CP_B", "CP_A"], ev_max_current={"CP_B": 16})
+        assert gw._ev_control_cp_id == "CP_B"
+        self._in_window(gw)
+        gw._last_ev_status = pb.GatewayStatus(
+            ev_chargers=[
+                pb.EvCharger(charge_point_id="CP_B", connected=True, session_active=False, status="Preparing"),
+                pb.EvCharger(charge_point_id="CP_A", connected=True, session_active=False, status="Preparing"),
+            ]
+        )
+        gw._last_ev_status_time = time.time()
+
+        self._apply(gw)
+
+        assert [p["charge_point_id"] for p in gw.published] == ["CP_B", "CP_B"]
+        assert gw.published[0]["current_a"] == 16
+
+    def test_apply_nothing_without_registered_charger(self):
+        """No charger registered as the car (gateway_evc_automatic off, or none reported): nothing is sent."""
+        gw = self._make_gateway()
+        gw._ev_control_cp_id = None
+        self._in_window(gw)
+        self._set_charger(gw, session_active=False, status="Preparing")
+
+        self._apply(gw)
+
+        assert gw.published == []
+        gw.log.assert_not_called()
 
     def test_apply_no_start_when_charger_unusable(self):
         """Inside a window a Faulted or Unavailable charger is not sent a start."""
