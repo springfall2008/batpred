@@ -713,16 +713,41 @@ class GatewayMQTT(ComponentBase):
         Args:
             message: The ``Warn:`` status text.
         """
-        base = getattr(self, "base", None)
-        record_status = getattr(base, "record_status", None)
-        if not record_status:
-            return
-        shown = getattr(base, "status_state", None)
-        if shown == message or getattr(base, "had_errors", False) is True:
+        base = self.base  # PredBat: status_state, had_errors and record_status come from its Output status path
+        shown = base.status_state
+        if shown == message or base.had_errors is True:
             return
         if isinstance(shown, str) and shown.startswith("Error"):
             return
-        record_status(message, had_errors=False)
+        base.record_status(message, had_errors=False)
+
+    def _ev_telemetry_confirms(self, state, should_charge):
+        """Return True if the charger's telemetry shows the desired session state and is fresh enough to trust.
+
+        After a send only a report received since that send counts, so a stale report cannot confirm it;
+        before any send the report must be recent. An offline charger confirms nothing.
+        """
+        if state is None or not state["online"]:
+            return False
+        if self._ev_attempts:
+            fresh = state["time"] > self._ev_last_send_time
+        else:
+            fresh = (time.time() - state["time"]) < _TELEMETRY_STALE_THRESHOLD
+        return fresh and state["session_active"] == should_charge
+
+    def _ev_session_lost(self, state, should_charge):
+        """Return True if a confirmed start has since been lost: fresh telemetry shows a plugged car with no session.
+
+        Only a start is ever re-driven. A session the user starts after a confirmed stop is left alone,
+        and a charger that is offline, reports no OCPP status or has gone quiet is unknown, not lost.
+        """
+        if not should_charge or state is None:
+            return False
+        if not state["online"] or not state["has_status"] or not state["car_connected"]:
+            return False
+        if (time.time() - state["time"]) >= _TELEMETRY_STALE_THRESHOLD:
+            return False
+        return not state["session_active"]
 
     async def _apply_ev_charging_state(self):
         """Drive the charger towards the desired start/stop state and confirm it from telemetry.
@@ -741,13 +766,22 @@ class GatewayMQTT(ComponentBase):
         changing. The planner moves the in-progress window's end on every replan while the car gains no
         charge, so the window's own boundaries must not refill the budget.
 
+        A latch is released as soon as fresh telemetry shows the desired state (the charger got there on
+        its own, or late), which also stops the warning being re-asserted.
+
+        A confirmed start is re-checked every cycle: if fresh telemetry shows the car still plugged in but
+        the session gone (an OCPP transaction timeout, a charger restart) the start is driven again with a
+        fresh attempt budget, still within the per-window start cap. A confirmed stop is not re-checked.
+
         A charger reported offline is unknown: nothing is confirmed, sent or counted until it is back.
-        A charger that reports no OCPP status cannot show plug state, so it gets the previous behaviour:
-        one send per transition with no confirmation or retry. With gateway_evc_schedule_control off, a
-        stop is only ever sent after PredBat wanted the car charging, so a session the user started
-        outside a window is never stopped. With it on, a session running with no planned charge inside
-        the charge window PredBat manages on the hub (see _ev_unplanned_session) is stopped too, at most
-        _EV_MAX_UNPLANNED_STOPS times between windows; outside that window the hub holds it at 0 A.
+        A charger that reports no OCPP status cannot show plug state, so at a transition it gets the
+        previous behaviour: one send with no confirmation or retry. Once a send has gone out under an OCPP
+        status, a later empty status is not taken as success: the confirm/retry path carries on, confirming
+        from the session state. With gateway_evc_schedule_control off, a stop is only ever sent after
+        PredBat wanted the car charging, so a session the user started outside a window is never stopped.
+        With it on, a session running with no planned charge inside the charge window PredBat manages on
+        the hub (see _ev_unplanned_session) is stopped too, at most _EV_MAX_UNPLANNED_STOPS times between
+        windows; outside that window the hub holds it at 0 A.
 
         A plug reading "unplugged" is not trusted to hold the start: hub firmware up to 1.0.39 writes
         "Available" on every charger reconnect and on StopTransaction with the car still plugged in. So
@@ -798,8 +832,21 @@ class GatewayMQTT(ComponentBase):
             return
 
         if self._ev_confirmed:
-            return
+            if not self._ev_session_lost(state, should_charge):
+                return
+            # The confirmed session has dropped with the car still plugged in: drive it again. The per-window
+            # start cap still applies, so a charger that keeps dropping the session cannot be flapped.
+            self.log(f"Warn: GatewayMQTT: EVC '{cp_id}' charging session ended part-way through the window with the car still plugged in, sending start again ({self._ev_window_starts}/{_EV_MAX_STARTS_PER_WINDOW} starts used this window)")
+            self._ev_confirmed = False
+            self._reset_ev_budget()
+
         if self._ev_latched:
+            if self._ev_telemetry_confirms(state, should_charge):
+                # The charger has reached the desired state after all: release the latch and stop the warning.
+                self.log(f"Info: GatewayMQTT: EVC '{cp_id}' now reports the session {'started' if should_charge else 'stopped'}, clearing the start/stop latch")
+                self._reset_ev_budget()
+                self._ev_confirmed = True
+                return
             self._report_ev_latch()
             return
 
@@ -807,21 +854,15 @@ class GatewayMQTT(ComponentBase):
             # The hub cannot reach the charger, and its session fields are forced idle while offline: unknown.
             return
 
-        if state is not None and not has_status:
-            # No OCPP status: plug state is unknowable, so send once per transition as before and do not retry.
-            if not self._ev_attempts:
-                await self._send_ev_action(cp_id, should_charge)
+        if state is not None and not has_status and not self._ev_attempts and not self._ev_unplugged_start_sent:
+            # No OCPP status at the transition: plug state is unknowable, so send once as before and do not
+            # retry. After a send has gone out an empty status is not success, so the path below carries on.
+            await self._send_ev_action(cp_id, should_charge)
             self._ev_confirmed = True
             return
 
         if state is not None:
-            # Confirmed: after a send, only telemetry received since that send counts, so a stale report
-            # cannot confirm it; before any send it must be fresh.
-            if self._ev_attempts:
-                fresh = state["time"] > self._ev_last_send_time
-            else:
-                fresh = (time.time() - state["time"]) < _TELEMETRY_STALE_THRESHOLD
-            if fresh and state["session_active"] == should_charge:
+            if self._ev_telemetry_confirms(state, should_charge):
                 if self._ev_attempts:
                     self.log(f"Info: GatewayMQTT: EVC {'start' if should_charge else 'stop'} confirmed by telemetry for '{cp_id}' after {self._ev_attempts} attempt(s)")
                 self._ev_confirmed = True

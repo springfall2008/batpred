@@ -6013,6 +6013,7 @@ class TestEvControl:
         gw._command_id = 0
         gw.topic_command = "predbat/devices/test/command"
         gw.local_tz = pytz.timezone("Europe/London")
+        gw.base = _FakeStatusBase()  # the latch warning reads PredBat's status attributes directly
         return gw
 
     def _planned(self, windows):
@@ -6648,6 +6649,148 @@ class TestEvCommandConfirm:
         _ev_cycle(gw)
         assert published == []
         assert gw._ev_confirmed is True
+
+    def test_latch_released_when_telemetry_shows_desired_state(self):
+        """A latched stop is released once fresh telemetry shows the session stopped, and the warning is no longer re-asserted."""
+        gw, published = self._gateway()
+        gw._ev_windows = []
+        gw._ev_charging_active = True  # a window PredBat drove has just ended; the charger ignores the stops
+        for _ in range(8):
+            _ev_set_telemetry(gw, car_connected=True, session_active=True)
+            _ev_cycle(gw)
+        assert gw._ev_latched is True
+        assert gw.base.record_status.call_count == 1
+        sent = len(published)
+
+        _ev_set_telemetry(gw, car_connected=True, session_active=False)  # the car finishes its session on its own
+        _ev_cycle(gw)
+        assert gw._ev_latched is False
+        assert gw._ev_confirmed is True
+
+        gw.base.status_state = "Idle"  # the main loop's next status write replaces the warning
+        for _ in range(5):
+            _ev_set_telemetry(gw, car_connected=True, session_active=False)
+            _ev_cycle(gw)
+        assert gw.base.record_status.call_count == 1  # not re-asserted
+        assert gw.base.status_state == "Idle"
+        assert len(published) == sent
+
+    def test_latched_start_released_when_session_starts_late(self):
+        """A latched start is released when the session later starts, so the warning does not stay up for the window."""
+        gw, published = self._gateway()
+        _ev_set_window(gw, inside=True)
+        for _ in range(8):
+            _ev_set_telemetry(gw, car_connected=True, session_active=False)
+            _ev_cycle(gw)
+        assert gw._ev_latched is True
+
+        _ev_set_telemetry(gw, car_connected=True, session_active=True)
+        _ev_cycle(gw)
+        assert gw._ev_latched is False
+        assert gw._ev_confirmed is True
+        gw.base.status_state = "Idle"
+        _ev_set_telemetry(gw, car_connected=True, session_active=True)
+        _ev_cycle(gw)
+        assert gw.base.record_status.call_count == 1
+
+    def test_empty_status_after_send_keeps_retrying(self):
+        """An empty OCPP status after a start has been sent is not success: the start is retried and confirmed from the session state."""
+        gw, published = self._gateway()
+        _ev_set_window(gw, inside=True)
+        _ev_set_telemetry(gw, car_connected=True, session_active=False)
+        _ev_cycle(gw)  # attempt 1, sent under an OCPP status
+        assert gw._ev_attempts == 1
+
+        for _ in range(2):  # the charger reconnects and reports no status yet; no session running
+            _ev_set_telemetry(gw, car_connected=False, session_active=False, has_status=False)
+            _ev_cycle(gw)
+        assert gw._ev_confirmed is False
+        assert gw._ev_attempts == 2  # re-sent after two unconfirmed cycles
+        assert len([p for _, p in published if p["action"] == "RemoteStartTransaction"]) == 2
+
+        _ev_set_telemetry(gw, car_connected=False, session_active=True, has_status=False)  # session now running
+        _ev_cycle(gw)
+        assert gw._ev_confirmed is True
+        assert gw._ev_latched is False
+
+    def test_empty_status_after_send_latches_when_never_started(self):
+        """With an empty status after a send and no session ever running, the budget runs out and the latch warns."""
+        gw, published = self._gateway()
+        _ev_set_window(gw, inside=True)
+        _ev_set_telemetry(gw, car_connected=True, session_active=False)
+        _ev_cycle(gw)
+        for _ in range(10):
+            _ev_set_telemetry(gw, car_connected=False, session_active=False, has_status=False)
+            _ev_cycle(gw)
+        assert len([p for _, p in published if p["action"] == "RemoteStartTransaction"]) == 3
+        assert gw._ev_latched is True
+        assert gw.base.status_state.startswith("Warn:")
+        assert gw.base.had_errors is False
+
+    def test_dropped_session_is_started_again(self):
+        """A confirmed session that drops part-way through the window with the car still plugged in is started again."""
+        gw, published = self._gateway()
+        _ev_set_window(gw, inside=True)
+        _ev_set_telemetry(gw, car_connected=True, session_active=False)
+        _ev_cycle(gw)
+        _ev_set_telemetry(gw, car_connected=True, session_active=True)
+        _ev_cycle(gw)
+        assert gw._ev_confirmed is True
+        assert len(published) == 2
+
+        _ev_set_telemetry(gw, car_connected=True, session_active=False)  # transaction timed out on the charger
+        _ev_cycle(gw)
+        assert [p["action"] for _, p in published][2:] == ["SetChargingProfile", "RemoteStartTransaction"]
+        assert gw._ev_confirmed is False
+        assert gw._ev_attempts == 1
+        assert any("part-way through the window" in str(call) for call in gw.log.call_args_list)
+
+        _ev_set_telemetry(gw, car_connected=True, session_active=True)
+        _ev_cycle(gw)
+        assert gw._ev_confirmed is True
+
+    def test_repeatedly_dropping_session_respects_window_start_cap(self):
+        """A charger that keeps dropping the session is re-driven only up to the per-window start cap, then warns."""
+        from gateway import _EV_MAX_STARTS_PER_WINDOW
+
+        gw, published = self._gateway()
+        _ev_set_window(gw, inside=True)
+        for cycle in range(60):
+            _ev_set_telemetry(gw, car_connected=True, session_active=(cycle % 2 == 1))  # starts, then drops, every other cycle
+            _ev_cycle(gw)
+        starts = [p for _, p in published if p["action"] == "RemoteStartTransaction"]
+        assert len(starts) == _EV_MAX_STARTS_PER_WINDOW
+        assert gw.base.had_errors is False
+
+    def test_confirmed_stop_left_alone_when_user_starts_session(self):
+        """After a confirmed stop, a session the user starts is left alone."""
+        gw, published = self._gateway()
+        gw._ev_windows = []
+        gw._ev_charging_active = True
+        _ev_set_telemetry(gw, car_connected=True, session_active=True)
+        _ev_cycle(gw)
+        _ev_set_telemetry(gw, car_connected=True, session_active=False)
+        _ev_cycle(gw)
+        assert gw._ev_confirmed is True
+        sent = len(published)
+        for _ in range(6):
+            _ev_set_telemetry(gw, car_connected=True, session_active=True)
+            _ev_cycle(gw)
+        assert len(published) == sent
+
+    def test_unplugged_after_confirmed_start_keeps_one_start_behaviour(self):
+        """Unplugging after a confirmed start is not a dropped session: the one-start-while-unplugged rule applies."""
+        gw, published = self._gateway()
+        _ev_set_window(gw, inside=True)
+        _ev_set_telemetry(gw, car_connected=True, session_active=False)
+        _ev_cycle(gw)
+        _ev_set_telemetry(gw, car_connected=True, session_active=True)
+        _ev_cycle(gw)
+        for _ in range(5):
+            _ev_set_telemetry(gw, car_connected=False, session_active=False)
+            _ev_cycle(gw)
+        assert len([p for _, p in published if p["action"] == "RemoteStartTransaction"]) == 2  # the first + the one unplugged start
+        assert not any("part-way through the window" in str(call) for call in gw.log.call_args_list)
 
     def test_inject_ev_entities_records_telemetry(self):
         """_inject_ev_entities stores the plug and session state that confirmation reads."""
@@ -7500,6 +7643,26 @@ def test_ev_soc_battery_size_through_get_arg(my_predbat):
             my_predbat.ha_interface.dummy_items.pop(entity_id, None)
         my_predbat.had_errors = original_had_errors
         my_predbat.current_status = original_status
+
+
+def test_ev_latch_status_on_real_predbat(my_predbat):
+    """The latch warning reads and writes PredBat's real status attributes (status_state, had_errors, record_status)."""
+    gw = TestEvControl()._make_gateway()
+    gw.base = my_predbat
+    original = (my_predbat.status_state, my_predbat.status_detail, my_predbat.current_status, my_predbat.had_errors)
+    try:
+        my_predbat.had_errors = False
+        my_predbat.status_state = "Idle"
+        gw._ev_latch_message = "Warn: GatewayMQTT: EV charger 'CP10000001' did not start after 3 attempts, giving up until the car is unplugged or the window ends"
+        gw._report_ev_latch()
+        assert my_predbat.status_state == gw._ev_latch_message
+        assert my_predbat.had_errors is False
+
+        my_predbat.status_state = "Error: a real error"
+        gw._report_ev_latch()
+        assert my_predbat.status_state == "Error: a real error"
+    finally:
+        my_predbat.status_state, my_predbat.status_detail, my_predbat.current_status, my_predbat.had_errors = original
 
 
 class TestCommandAck:
@@ -8797,4 +8960,13 @@ def run_gateway_tests(my_predbat=None):
             traceback.print_exc()
             return True
         print("  OK: test_ev_soc_battery_size_through_get_arg")
+        try:
+            test_ev_latch_status_on_real_predbat(my_predbat)
+        except Exception as e:
+            print(f"  FAIL: test_ev_latch_status_on_real_predbat: {e}")
+            import traceback
+
+            traceback.print_exc()
+            return True
+        print("  OK: test_ev_latch_status_on_real_predbat")
     return False
