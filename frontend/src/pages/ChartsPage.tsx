@@ -8,6 +8,7 @@ import InDayChart from '../components/InDayChart'
 import MarginalCostsChart from '../components/MarginalCostsChart'
 import LoadMlChart from '../components/LoadMlChart'
 import PowerChart from '../components/PowerChart'
+import PredheatChart from '../components/PredheatChart'
 import RatesChart from '../components/RatesChart'
 import SavingsChart from '../components/SavingsChart'
 import SolarChart from '../components/SolarChart'
@@ -21,9 +22,10 @@ import './ChartsPage.css'
 type ChartsPageProps = {
   plan: Plan
   loadMlEnabled: boolean
+  predheatEnabled: boolean
 }
 
-const chartNames = ['battery', 'power', 'cost', 'rates', 'inday', 'solar', 'savings', 'degradation', 'marginal', 'carbon', 'loadml'] as const
+const chartNames = ['battery', 'power', 'cost', 'rates', 'inday', 'solar', 'savings', 'degradation', 'marginal', 'carbon', 'loadml', 'predheat'] as const
 type ChartName = typeof chartNames[number]
 
 const chartLabels: Record<ChartName, string> = {
@@ -37,12 +39,13 @@ const chartLabels: Record<ChartName, string> = {
   degradation: 'Degradation',
   marginal: 'Marginal costs',
   carbon: 'CO₂',
-  loadml: 'Load ML'
+  loadml: 'Load ML',
+  predheat: 'PredHeat'
 }
 
 /** Fetch and display Predbat's modern charts. */
-export default function ChartsPage({ plan, loadMlEnabled }: ChartsPageProps) {
-  const visibleChartNames = chartNames.filter((chart) => (chart !== 'carbon' || plan.carbon_enable) && (chart !== 'loadml' || loadMlEnabled))
+export default function ChartsPage({ plan, loadMlEnabled, predheatEnabled }: ChartsPageProps) {
+  const visibleChartNames = chartNames.filter((chart) => (chart !== 'carbon' || plan.carbon_enable) && (chart !== 'loadml' || loadMlEnabled) && (chart !== 'predheat' || predheatEnabled))
   const [storedSelectedChart, setSelectedChart] = useStoredState<ChartName>(
     'predbat-chart-selected',
     'battery',
@@ -141,6 +144,7 @@ export default function ChartsPage({ plan, loadMlEnabled }: ChartsPageProps) {
       {data?.ready && data.chart === 'marginal' && <MarginalCostsChart data={data} />}
       {plan.carbon_enable && data?.ready && data.chart === 'carbon' && <CarbonChart data={data} />}
       {loadMlEnabled && data?.ready && data.chart === 'loadml' && <LoadMlChart data={data} />}
+      {predheatEnabled && data?.ready && data.chart === 'predheat' && <PredheatChart data={data} />}
     </div>
   )
 }

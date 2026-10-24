@@ -196,4 +196,19 @@ export type LoadMlChartData = {
   }
 }
 
-export type ChartData = BatteryChartData | PowerChartData | CostChartData | RatesChartData | InDayChartData | SolarChartData | SavingsChartData | BatteryDegradationChartData | MarginalCostsChartData | CarbonChartData | LoadMlChartData
+export type PredheatChartData = {
+  chart: 'predheat'
+  ready: boolean
+  enabled: boolean
+  generated_at: string
+  series: {
+    internal_actual: TimestampSeries
+    external_actual: TimestampSeries
+    internal_forecast: TimestampSeries
+    external_forecast: TimestampSeries
+    target: TimestampSeries
+    heat_to: TimestampSeries
+  }
+}
+
+export type ChartData = BatteryChartData | PowerChartData | CostChartData | RatesChartData | InDayChartData | SolarChartData | SavingsChartData | BatteryDegradationChartData | MarginalCostsChartData | CarbonChartData | LoadMlChartData | PredheatChartData

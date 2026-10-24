@@ -9,7 +9,11 @@
 # pylint: disable=attribute-defined-outside-init
 
 import re
+import asyncio
+import json
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from const import TIME_FORMAT
 from web import WebInterface
@@ -103,6 +107,30 @@ def run_web_charts_tests(my_predbat):
     print("**** Running web charts tests ****")
 
     web = make_web(my_predbat)
+    print("Test: PredHeat chart respects its enable switch and custom entity prefix")
+    stamp = my_predbat.now_utc.strftime(TIME_FORMAT)
+    forecast = {stamp: 21.5}
+    entities = {"heating_test." + name: {"attributes": {"results": forecast}} for name in ("internal_temp", "external_temp", "target_temp", "heat_to_temp")}
+    with patch.object(my_predbat, "predheat", SimpleNamespace(prefix="heating_test")), patch.object(my_predbat, "dashboard_values", {}), patch.object(my_predbat, "get_arg", return_value=True), patch.object(
+        web, "get_state_wrapper", side_effect=lambda entity, attribute=None, default=None: entities.get(entity, {}).get("attributes", {}).get(attribute, default)
+    ):
+        with patch.object(web, "get_history_wrapper", return_value=[[{"last_updated": stamp, "state": "20.5"}]]):
+            data = web.get_predheat_chart_data()
+            assert data["enabled"] and data["ready"]
+            assert data["series"]["internal_forecast"] == forecast
+            assert data["series"]["target"] == forecast and data["series"]["heat_to"] == forecast
+            assert 20.5 in data["series"]["internal_actual"].values()
+            response = asyncio.run(web.html_api_chart_data(SimpleNamespace(query={"chart": "predheat"})))
+            assert response.status == 200 and json.loads(response.text) == data
+        with patch.object(my_predbat, "get_arg", return_value=False), patch.object(web, "get_history_wrapper") as history:
+            data = web.get_predheat_chart_data()
+            assert not data["enabled"] and not data["ready"] and not any(data["series"].values())
+            history.assert_not_called()
+        with patch.object(web, "get_state_wrapper", return_value={}), patch.object(web, "get_history_wrapper", return_value=[]):
+            data = web.get_predheat_chart_data()
+            assert data["enabled"] and not data["ready"]
+    with patch.object(my_predbat, "predheat", None), patch.object(my_predbat, "get_arg", return_value=True):
+        assert not web.get_predheat_chart_data()["enabled"]
     now_str = my_predbat.now_utc.strftime("%Y-%m-%dT%H:%M:%S%z")
     series_data = [{"name": "SoC", "data": {"2026-07-23T10:00:00+00:00": 45.0}, "chart_type": "line"}]
 

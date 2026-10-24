@@ -19,6 +19,7 @@ export type PredbatStatus = {
   active: boolean
   chat_enabled: boolean
   load_ml_enabled: boolean
+  predheat_enabled?: boolean
 
   config_ok: boolean
   config_errors: number

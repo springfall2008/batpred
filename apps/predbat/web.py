@@ -3057,6 +3057,7 @@ chart.render();
                 "active": predbat_active,
                 "chat_enabled": self.chat_enabled(),
                 "load_ml_enabled": bool(self.base.get_arg("load_ml_enable", False)),
+                "predheat_enabled": bool(getattr(self.base, "predheat", None) and self.base.get_arg("predheat_enable", False)),
                 # Configuration health
                 "config_ok": config_errors == 0,
                 "config_errors": config_errors,
@@ -4430,6 +4431,27 @@ chart.render();
             "series": series,
         }
 
+    def get_predheat_chart_data(self):
+        """Return PredHeat temperature history and its current heating forecast."""
+        predheat = getattr(self.base, "predheat", None)
+        enabled = bool(predheat and self.base.get_arg("predheat_enable", False))
+        series = {name: {} for name in ("internal_actual", "external_actual", "internal_forecast", "external_forecast", "target", "heat_to")}
+        if enabled:
+            for name in ("internal", "external"):
+                entity = predheat.prefix + "." + name + "_temp"
+                series[name + "_actual"] = prune_today(history_attribute(self.get_history_wrapper(entity, 1, required=False)), self.now_utc, self.midnight_utc, prune=True, prune_past_days=1)
+                # PredHeat publishes directly to entity state, not the Predbat dashboard cache.
+                series[name + "_forecast"] = self.get_state_wrapper(entity, attribute="results", default={}) or {}
+            series["target"] = self.get_state_wrapper(predheat.prefix + ".target_temp", attribute="results", default={}) or {}
+            series["heat_to"] = self.get_state_wrapper(predheat.prefix + ".heat_to_temp", attribute="results", default={}) or {}
+        return {
+            "chart": "predheat",
+            "ready": any(series.values()),
+            "enabled": enabled,
+            "generated_at": self.now_utc.strftime(TIME_FORMAT),
+            "series": series,
+        }
+
     async def html_api_chart_data(self, request):
         """Return chart data for the modern interface as JSON."""
         chart = request.query.get("chart", "battery").strip().lower()
@@ -4455,6 +4477,8 @@ chart.render();
             return web.json_response(self.get_carbon_chart_data())
         if chart == "loadml":
             return web.json_response(self.get_load_ml_chart_data())
+        if chart == "predheat":
+            return web.json_response(self.get_predheat_chart_data())
         return web.json_response({"error": "Unknown chart type"}, status=400)
 
     def get_chart(self, chart):
