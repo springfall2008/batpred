@@ -200,10 +200,29 @@ class AnnualJob:
         counter has no such window - it is bumped synchronously as the very
         first thing `start()` does - so it is the only reliable guard.
         """
+        readers = [asyncio.create_task(process.stdout.read()), asyncio.create_task(self._read_progress(generation, process.stderr))]
         try:
-            stdout_data, _ = await asyncio.gather(process.stdout.read(), self._read_progress(generation, process.stderr))
+            stdout_data, _ = await asyncio.gather(*readers)
             await process.wait()
         except Exception as exception:  # noqa: BLE001 - a supervisor must never die silently, see _on_task_done
+            for reader in readers:
+                reader.cancel()
+            await asyncio.gather(*readers, return_exceptions=True)
+            if process.returncode is None:
+                try:
+                    process.terminate()
+                except ProcessLookupError:
+                    pass
+                try:
+                    await asyncio.wait_for(process.communicate(), timeout=CANCEL_GRACE_SECONDS)
+                except asyncio.TimeoutError:
+                    try:
+                        process.kill()
+                    except ProcessLookupError:
+                        pass
+                    await asyncio.wait_for(process.communicate(), timeout=CANCEL_GRACE_SECONDS)
+            else:
+                await asyncio.wait_for(process.communicate(), timeout=CANCEL_GRACE_SECONDS)
             if self._generation == generation:
                 self.state = "failed"
                 self.finished_at = time.time()

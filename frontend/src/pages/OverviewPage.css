@@ -11,6 +11,7 @@
   overflow: hidden;
   min-height: calc(100dvh - 56px);
   padding: clamp(0.75rem, 1.5vw, 1.5rem);
+  padding-bottom: 3rem;
   color: var(--color-text);
   background:
     radial-gradient(circle at 50% 42%, rgb(255 255 255 / 82%) 0, rgb(255 255 255 / 36%) 34%, transparent 62%),
@@ -213,6 +214,16 @@
   background: rgb(255 255 255 / 78%);
   box-shadow: 0 8px 28px rgb(34 46 58 / 12%);
   backdrop-filter: blur(14px);
+}
+
+.overview-updated {
+  position: absolute;
+  right: clamp(0.75rem, 1.5vw, 1.5rem);
+  bottom: 0.75rem;
+  color: var(--color-text-muted);
+  font-size: 0.65rem;
+  line-height: 1.4;
+  text-align: right;
 }
 
 [data-theme='dark'] .overview-card {

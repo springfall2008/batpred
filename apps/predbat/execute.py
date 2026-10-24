@@ -1510,6 +1510,7 @@ class Execute:
         self.publish_inverter_data()
         self.publish_inverter_config()
         self.observe_control_failures()
+        self.power_flow_updated_at = datetime.now().timestamp()
         return True
 
     def is_template_mode(self):

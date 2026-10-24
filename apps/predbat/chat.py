@@ -36,6 +36,7 @@ import functools
 import hashlib
 import ipaddress
 import json
+import secrets
 import traceback
 import threading
 import time
@@ -46,7 +47,7 @@ from agent_tools import TOOL_DEFS, PredbatTools, openai_tool_list
 from component_base import ComponentBase
 from chat_store import APPROVAL_APPROVED, APPROVAL_REJECTED, ConversationStore, NEW_CONVERSATION_TITLE, derive_title, extract_cached_tokens, trim_history
 from chat_tools import APPS_YAML_RESTART_WARNING, CHAT_TOOL_DEFS, DEFAULT_FETCH_ALLOWLIST, fetch_url, read_docs, read_source, search_docs, search_source, set_apps_config
-from utils import SECRET_MASK, is_secret_key, parse_yaml_path, resolve_nested_yaml_value
+from utils import SECRET_MASK, is_secret_key, mask_secret_args, parse_yaml_path, resolve_nested_yaml_value
 
 # Shown when a turn is attempted with no model chosen anywhere. A provider's own 'model' is
 # optional, so this is the ordinary state of a fresh install rather than a misconfiguration - the
@@ -1742,12 +1743,8 @@ class ChatAgent(ComponentBase):
             return await read_docs(self.storage, arguments.get("section"), offset=arguments.get("offset", 0))
         # read_source is bounded work on this loop, which is fine: the component loop's only
         # other job is a five-second tick, and the web server is a different loop in a different
-        # thread. search_source is different - it runs a MODEL-SUPPLIED regular expression, and
-        # Python's re engine backtracks with no timeout, so a pattern like (.*)*x can hang inside
-        # a single search() call that no elapsed-time check can interrupt. Run it on a worker
-        # thread so a pathological pattern burns that thread rather than killing the component's
-        # only event loop: the component stays alive, other turns still run, and this turn dies on
-        # its own deadline. Containment, not latency.
+        # thread. A source search scans multiple files, so run its bounded literal matching on a
+        # worker thread to keep file I/O off the component loop.
         #
         # Never pass `root` to either function. It is deliberately absent from both tool schemas -
         # a model that could set it would point the search at /config and walk straight past the
@@ -1988,6 +1985,8 @@ class ChatAgent(ComponentBase):
         if isinstance(key, str) and any(is_secret_key(segment) for segment in parse_yaml_path(key) if not segment.startswith("[")):
             current = SECRET_MASK
 
+        current = mask_secret_args({"value": current})["value"]
+
         return {"key": key, "current_value": current, "proposed_value": arguments.get("value"), "warning": APPS_YAML_RESTART_WARNING}
 
     def select_provider(self, name):
@@ -2198,21 +2197,23 @@ class ChatAgent(ComponentBase):
 
         definition = self.tool_defs_by_name.get(name) or {}
         if definition.get("writes") and self.confirm_writes_enabled():
+            # Provider call IDs may repeat; each human decision needs its own one-use identity.
+            approval_id = secrets.token_hex(16)
             with self.lock:
                 # The card is kept, not just the fact that something is pending: a client that
                 # reconnects or reloads has no other way to get it back, and without it the user
                 # is left with a turn that waits for an answer to a question no longer on screen.
-                card = {"call_id": call_id, "name": name, "arguments": self._confirmation_card_arguments(name, arguments)}
-                self.pending_confirm[call_id] = {"conversation_id": conversation_id, "turn_id": turn_id, "approved": None, "card": card}
+                card = {"call_id": approval_id, "name": name, "arguments": self._confirmation_card_arguments(name, arguments)}
+                self.pending_confirm[approval_id] = {"conversation_id": conversation_id, "turn_id": turn_id, "approved": None, "card": card}
             # Persisted as a record of the decision, so it survives a reconnect or a restart and
             # the transcript shows what was asked. Never enters `messages`, so it is never
             # replayed to the model - which learns the outcome from the tool result instead.
             self.store.add_approval(conversation_id, card)
             self.emit(conversation_id, "confirm", card)
-            approved = await self.await_confirmation(call_id)
+            approved = await self.await_confirmation(approval_id)
             with self.lock:
-                self.pending_confirm.pop(call_id, None)
-            self.store.resolve_approval(conversation_id, call_id, APPROVAL_APPROVED if approved else APPROVAL_REJECTED)
+                self.pending_confirm.pop(approval_id, None)
+            self.store.resolve_approval(conversation_id, approval_id, APPROVAL_APPROVED if approved else APPROVAL_REJECTED)
             if not approved:
                 # An ordinary tool result rather than aborting the turn: the model acknowledges the
                 # decline and can offer an alternative, which is what a user expects from a refusal.
@@ -2266,7 +2267,7 @@ class ChatAgent(ComponentBase):
         """Record a user's answer to a pending write confirmation."""
         with self.lock:
             pending = self.pending_confirm.get(call_id)
-            if pending is None or pending.get("conversation_id") != conversation_id:
+            if pending is None or pending.get("conversation_id") != conversation_id or pending.get("approved") is not None:
                 return False
             pending["approved"] = bool(approved)
         self.emit(conversation_id, "confirm_result", {"call_id": call_id, "approved": bool(approved)})

@@ -340,7 +340,7 @@ def run_overview_api_tests(my_predbat, web_interface):
     print("**** Running Overview API tests ****")
     original_args = my_predbat.args.copy()
     original_predheat = my_predbat.predheat
-    original_values = {name: getattr(my_predbat, name) for name in ("load_minutes_now", "pv_today_now", "import_today_now", "export_today_now", "cost_today_sofar")}
+    original_values = {name: getattr(my_predbat, name) for name in ("load_minutes_now", "pv_today_now", "import_today_now", "export_today_now", "cost_today_sofar", "power_flow_updated_at")}
     added_entities = [
         "weather.forecast_home",
         "weather.overview_test",
@@ -394,8 +394,18 @@ def run_overview_api_tests(my_predbat, web_interface):
         my_predbat.export_today_now = 1.4
         my_predbat.cost_today_sofar = 87.5
 
+        my_predbat.power_flow_updated_at = None
+        if json.loads(asyncio.run(web_interface.html_api_power_flow(None)).text).get("updated_at") is not None:
+            print("  ERROR: power-flow data without a completed refresh should have no timestamp")
+            failed += 1
+        my_predbat.power_flow_updated_at = 1792663200.0
+
         response = asyncio.run(web_interface.html_api_power_flow(None))
         data = json.loads(response.text)
+        repeated_data = json.loads(asyncio.run(web_interface.html_api_power_flow(None)).text)
+        if data.get("updated_at") != 1792663200.0 or repeated_data.get("updated_at") != data.get("updated_at"):
+            print("  ERROR: API requests must retain the timestamp of the last completed power refresh")
+            failed += 1
         if data.get("weather") != {"state": "sunny", "temperature": 17.5, "temperature_unit": "C"}:
             print("  ERROR: weather data was not returned from the standalone Overview weather setting: " f"{data.get('weather')!r}, configured={web_interface.get_arg('weather', default=None, indirect=False)!r}")
             failed += 1

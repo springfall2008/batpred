@@ -47,11 +47,14 @@ import { useStoredState } from '../hooks/useStoredState'
 import { formatMajorCurrency, formatRate, resolveCurrencySymbols } from '../utils/currency'
 import { formatCarStatus, formatOverviewStatus, formatWeatherStatus, getOverviewActions, getOverviewCarbonValues, getOverviewPowerTone, getOverviewSceneKey, getOverviewWeatherEffect, mapOverviewImagePoint, type OverviewWeatherEffect } from '../utils/overview'
 
+import { formatMetricAge } from '../utils/metrics'
+
 import './OverviewPage.css'
 
 type OverviewPageProps = {
   plan: Plan
   powerFlow: PowerFlowData
+  updatedAt: number | null
 }
 
 type CardConnectorName = 'grid' | 'solar' | 'home' | 'battery' | 'car' | 'heatPump'
@@ -198,8 +201,8 @@ function useCurrentTime() {
 
       interval = window.setInterval(() => {
         setNow(new Date())
-      }, 60_000)
-    }, 60_000 - Date.now() % 60_000)
+      }, 1000)
+    }, 1000 - Date.now() % 1000)
 
     return () => {
       window.clearTimeout(timeout)
@@ -223,6 +226,7 @@ function OverviewCard({ className, icon, title, main, mainTone = '', mainSubvalu
       {main && <strong className={`overview-card-main ${mainTone}`}>{main}</strong>}
       {mainSubvalue && <small className="overview-card-main-subvalue">{mainSubvalue}</small>}
       <div className="overview-card-details">{children}</div>
+
     </article>
   )
 }
@@ -302,7 +306,7 @@ function Detail({ label, value, tone = '', subvalue }: { label: string; value: s
   )
 }
 
-export default function OverviewPage({ plan, powerFlow }: OverviewPageProps) {
+export default function OverviewPage({ plan, powerFlow, updatedAt }: OverviewPageProps) {
   const stageRef = useRef<HTMLElement>(null)
   const sceneImageRef = useRef<HTMLImageElement>(null)
   const [connectorGeometry, setConnectorGeometry] = useState<Partial<Record<CardConnectorName, CardConnectorGeometry>>>({})
@@ -611,6 +615,11 @@ export default function OverviewPage({ plan, powerFlow }: OverviewPageProps) {
           )}
         </div>
       </section>
+      {updatedAt !== null && (
+        <time className="overview-updated" dateTime={new Date(updatedAt).toISOString()} title="Last completed power-data refresh">
+          Updated {formatMetricAge(updatedAt / 1000, now.getTime() / 1000)}
+        </time>
+      )}
     </div>
   )
 }

@@ -162,6 +162,7 @@ APPS_SCHEMA_DESCRIPTIONS = {
     "ha_url": "Base URL of the Home Assistant instance used when Predbat runs outside the add-on environment.",
     "ha_key": "Home Assistant long-lived access token used to read entities and call services when Predbat connects remotely.",
     "load_filter_threshold": "Maximum number of consecutive minutes with zero household load that Predbat fills from surrounding history. Set 1440 to disable gap filling.",
+    "web_bind": "Network address used by the built-in web server; defaults to all interfaces (0.0.0.0).",
     "web_port": "TCP port used by Predbat's built-in web server and modern dashboard.",
     "web_ui": "Selects the dashboard served by Predbat: 'legacy' for the original interface or 'modern' for the new responsive interface.",
     "chat": "Chat assistant configuration, including named providers, API endpoints, credentials, model selection and request timeout.",
@@ -1082,7 +1083,7 @@ class WebInterface(ComponentBase):
 
         runner = web.AppRunner(app)
         await runner.setup()
-        site = web.TCPSite(runner, "0.0.0.0", self.web_port)
+        site = web.TCPSite(runner, self.get_arg("web_bind", default="0.0.0.0", indirect=False), self.web_port)
         await site.start()
 
         print("Web interface started")
@@ -3213,6 +3214,7 @@ chart.render();
             return web.json_response(
                 {
                     "grid_power": grid_power,
+                    "updated_at": self.base.power_flow_updated_at,
                     "battery_power": battery_power,
                     "pv_power": pv_power,
                     "load_power": load_power,
@@ -3750,7 +3752,7 @@ chart.render();
             if "{" in value:
                 text = self.base.resolve_arg(arg, value, indirect=False, quiet=True)
                 if text is None:
-                    text = '<span style="background-color:#FFAAAA"> {} </p>'.format(value)
+                    text = '<span style="background-color:#FFAAAA"> {} </p>'.format(html_module.escape(value))
                 else:
                     text = self.render_type(arg, text, parent_path, row_counter)
             elif pat and (arg != "service") and not is_pure_string:
@@ -3764,13 +3766,13 @@ chart.render();
                     unit_of_measurement = self.get_state_wrapper(entity_id=entity_id, attribute="unit_of_measurement", default="")
 
                 if state is not None:
-                    text = '<a href="./entity?entity_id={}">{}</a> = {}{}'.format(entity_id, value, state, unit_of_measurement)
+                    text = '<a href="./entity?entity_id={}">{}</a> = {}{}'.format(urllib.parse.quote(entity_id, safe=""), html_module.escape(value), html_module.escape(str(state)), html_module.escape(str(unit_of_measurement)))
                 else:
-                    text = '<span style="background-color:#FFAAAA"> {} = ?{} </span>'.format(value, unit_of_measurement)
+                    text = '<span style="background-color:#FFAAAA"> {} = ?{} </span>'.format(html_module.escape(value), html_module.escape(str(unit_of_measurement)))
             else:
-                text = str(value)
+                text = html_module.escape(str(value))
         else:
-            text = str(value)
+            text = html_module.escape(str(value))
         return text
 
     async def html_file(self, filename, data):
@@ -3900,11 +3902,15 @@ chart.render();
         if data:
             try:
                 data = mask_secret_yaml_text(data)
-            except Exception as e:
+            except Exception:
                 # Fail closed - serving the raw file because the parse failed is the leak this
                 # route exists to avoid. The unmasked download is still one click away.
-                self.log("Warn: Unable to redact apps.yaml for download: {}".format(e))
-                data = "# Predbat could not parse apps.yaml to redact it, so it has not been served.\n" "# Fix the YAML error, or use the unmasked download if you intend to share credentials.\n" "# Error: {}\n".format(e)
+                self.log("Warn: Unable to redact apps.yaml for download: invalid YAML")
+                data = (
+                    "# Predbat could not parse apps.yaml to redact it, so it has not been served.\n"
+                    "# Fix the YAML error, or use the unmasked download if you intend to share credentials.\n"
+                    "# Parser details were omitted because they may contain credentials.\n"
+                )
         return await self.html_file("apps_masked.yaml.txt", data)
 
     async def html_debug_apps_live(self, request):
@@ -7201,11 +7207,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
         # Security check - prevent directory traversal attacks
         # Normalize the path and ensure it's within the current working directory
-        base_dir = os.getcwd()
-        safe_path = os.path.abspath(os.path.join(base_dir, current_path))
+        base_dir = os.path.realpath(os.getcwd())
+        safe_path = os.path.realpath(os.path.join(base_dir, current_path))
 
         # Ensure the path is within the base directory
-        if not safe_path.startswith(base_dir):
+        if os.path.commonpath([base_dir, safe_path]) != base_dir:
             safe_path = base_dir
             current_path = "."
 
@@ -7241,8 +7247,8 @@ document.addEventListener('DOMContentLoaded', function() {
             file_path = os.path.join(safe_path, view_file) if current_path != "." else view_file
             try:
                 # Security check for file path
-                file_abs_path = os.path.abspath(file_path)
-                if not file_abs_path.startswith(base_dir):
+                file_abs_path = os.path.realpath(file_path)
+                if os.path.commonpath([base_dir, file_abs_path]) != base_dir:
                     raise PermissionError("Access denied")
 
                 if os.path.isfile(file_abs_path):
@@ -7300,7 +7306,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
                 # List directory contents
                 for item in os.listdir(safe_path):
-                    item_path = os.path.join(safe_path, item)
+                    item_path = os.path.realpath(os.path.join(safe_path, item))
+                    if os.path.commonpath([base_dir, item_path]) != base_dir:
+                        continue
 
                     # Skip hidden files and directories
                     if item.startswith(".") and item not in [".."]:
@@ -7400,19 +7408,19 @@ document.addEventListener('DOMContentLoaded', function() {
             return web.Response(text="File not specified", status=400)
 
         # Security check - prevent directory traversal attacks
-        base_dir = os.getcwd()
-        safe_path = os.path.abspath(os.path.join(base_dir, current_path))
+        base_dir = os.path.realpath(os.getcwd())
+        safe_path = os.path.realpath(os.path.join(base_dir, current_path))
 
         # Ensure the path is within the base directory
-        if not safe_path.startswith(base_dir):
+        if os.path.commonpath([base_dir, safe_path]) != base_dir:
             return web.Response(text="Access denied", status=403)
 
         file_path = os.path.join(safe_path, download_file)
 
         try:
             # Security check for file path
-            file_abs_path = os.path.abspath(file_path)
-            if not file_abs_path.startswith(base_dir):
+            file_abs_path = os.path.realpath(file_path)
+            if os.path.commonpath([base_dir, file_abs_path]) != base_dir:
                 return web.Response(text="Access denied", status=403)
 
             if os.path.isfile(file_abs_path):
