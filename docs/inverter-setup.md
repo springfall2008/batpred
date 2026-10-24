@@ -664,8 +664,8 @@ You are prompted for the password (or set `HANCHU_PASSWORD`, or use `--config ap
 
 - `--serial <sn>` - pick one inverter when the account has several
 - `--dump-menu FILE` - save the device's full settings menu as JSON
-- `--battery-health` - also read each battery pack's BMS figures - state of health, design and full-charge capacity, pack voltage, current and temperatures - through Hanchu's battery endpoints, which Predbat itself never uses. Useful when the battery seems smaller than its rated capacity. Sign into the Hanchu web portal once first: until an account has, these endpoints answer "Permission Denied". If Hanchu refuses a plain request it is sent encrypted, which needs the `cryptography` Python package (`pip install cryptography`)
-- `--battery-serial SERIAL` - with `--battery-health`, read the named battery pack (as shown on the web portal's Device page) instead of listing the station's packs; repeat for each pack
+- `--battery-health` - also read each battery pack's BMS figures - state of health, design and full-charge capacity, pack voltage, current and temperatures - through Hanchu's battery endpoints, which Predbat itself never uses. Useful when the battery seems smaller than its rated capacity. Sign into the Hanchu web portal once first: until an account has, these endpoints answer "Permission Denied". Hanchu insists these requests are encrypted, so this needs the `cryptography` Python package (`pip install cryptography`)
+- `--battery-serial SERIAL` - with `--battery-health`, read the named battery pack (as shown on the web portal's Device page) instead of listing the station's packs, for an account where the list is refused; repeat for each pack
 - `--write-test` - write a charge window three hours ahead, read it back and restore it; no energy moves
 - `--live-window charge|export|freeze-charge|freeze-export|hold` - run that Predbat state on the inverter now, watch the battery, then restore the previous settings
 - `--restore SNAPSHOT` - write back a snapshot that a test saved

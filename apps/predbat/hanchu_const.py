@@ -117,8 +117,9 @@ HANCHU_ENDPOINTS["bms_list"] = "/gateway/platform/bmsInfo/queryAllList"
 HANCHU_ENDPOINTS["battery_data"] = "/gateway/platform/bmsInfo/queryBatteryDataDivisions"
 
 # OBSERVED (UPTON api.py send_as_json=False, DANNY api.py _post): both integrations send these with the
-# body AES-encrypted as raw data, no JSON. HARDWARE (2026-10-24): battery data accepts that. Whether a
-# plain JSON body is accepted too is what --battery-health tries first - see HanchuAPI._post_platform().
+# body AES-encrypted as raw data, no JSON. HARDWARE (2026-10-24): that is REQUIRED - a plain JSON body
+# to either is refused with HTTP 403 {"code":433,"msg":"Json Request Forbidden Under Crypto Mode On"},
+# and the encrypted one is accepted with the ordinary app/ha token.
 HANCHU_ENCRYPTED_ENDPOINTS = ("bms_list", "battery_data")
 
 # OBSERVED: UPTON const.py AES_SECRET_KEY / AES_IV, crypto.py _encrypt_payload. A FIXED key and IV,
@@ -129,10 +130,25 @@ HANCHU_AES_KEY = b"9z64Qr8mZH7Pg8d1"
 HANCHU_AES_IV = b"9z64Qr8mZH7Pg8d1"
 
 # OBSERVED (DANNY api.py async_discover_batteries): a battery device's id for the battery data call is
-# devId, falling back to sn and then dtuSn. HARDWARE (2026-10-24): devId equals the pack serial the web
-# portal shows (B0073K64E0287). packList names the device's packs, as metadata.
+# devId, falling back to sn and then dtuSn. HARDWARE (2026-10-24): devId equals sn, the pack serial the
+# web portal shows (B0073K64E0287); there was no packList, which DANNY also reads.
 HANCHU_BMS_ID_FIELDS = ("devId", "sn", "dtuSn")
-HANCHU_BMS_PACK_LIST = "packList"
+
+# HARDWARE (2026-10-24): queryAllList entry fields worth a line in the report, field -> label. adr is the
+# pack's position on the bus (the portal's ADR:1, ADR:2), dtuSn the pack's own cloud logger.
+HANCHU_BMS_DEVICE_FIELDS = {
+    "adr": "slot",
+    "dtuSn": "logger",
+    "softwareVer": "firmware",
+    "onlineStatus": "online",
+}
+
+# HARDWARE (2026-10-24): numbered per-cell series in the battery data, prefix -> (label, unit), gathered
+# onto one line each - vBat1..vBat16 for a 16-cell pack, tBat1..tBat<numBatT>.
+HANCHU_BMS_SERIES_FIELDS = {
+    "vBat": ("Cell voltages", "V"),
+    "tBat": ("Cell temperatures", "C"),
+}
 
 # OBSERVED: UPTON sensor.py BATTERY_SENSORS. Battery data field -> (label, unit), in the order the
 # --battery-health report prints them. Units are UPTON's; capFull and capRemain are amp-hours.
@@ -147,6 +163,13 @@ HANCHU_BATTERY_FIELDS = {
     "tPack": ("Pack temperature", "C"),
     "tEnv": ("Ambient temperature", "C"),
     "tMos": ("MOSFET temperature", "C"),
+    # HARDWARE (2026-10-24) rather than UPTON: the cell figures a Home-ESS-LV-9.4K-H pack reports.
+    "numBat": ("Cells", ""),
+    "maxVoltage": ("Highest cell", "V"),
+    "minVoltage": ("Lowest cell", "V"),
+    "maxVoltageDifference": ("Cell spread", "V"),
+    "numBatT": ("Temperature sensors", ""),
+    "stateHeatmembrane": ("Heater on", ""),
 }
 
 # --- Request/response envelope ----------------------------------------------------------------

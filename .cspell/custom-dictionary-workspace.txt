@@ -306,6 +306,7 @@ hassio
 heartbeating
 heatingactive
 heatingtemp
+Heatmembrane
 heatpump
 heatsink
 holdout
