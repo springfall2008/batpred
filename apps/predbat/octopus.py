@@ -2817,16 +2817,17 @@ class OctopusAPI(ComponentBase):
         """
         The device's currentState from a dispatch query answer, e.g. SMART_CONTROL_IN_PROGRESS.
 
-        A failed query, or an answer without the device, keeps the last known state, as a failed
-        query keeps the last known planned dispatches.
+        A failed query keeps the last known state, as it keeps the last known planned dispatches. An
+        answer without the state is None, unknown: the car might be plugged in, so its planned list is
+        taken as it is rather than judged by a state from an earlier poll - a stale
+        SMART_CONTROL_NOT_AVAILABLE would otherwise drop every plan until a state came back.
         """
-        if dispatch_result:
-            for device in dispatch_result.get("devices") or []:
-                if device.get("id") == device_id:
-                    state = (device.get("status") or {}).get("currentState")
-                    if state:
-                        return state
-        return self.intelligent_devices.get(device_id, {}).get("current_state")
+        if not dispatch_result or dispatch_result.get("flexPlannedDispatches") is None:
+            return self.intelligent_devices.get(device_id, {}).get("current_state")
+        for device in dispatch_result.get("devices") or []:
+            if device.get("id") == device_id:
+                return (device.get("status") or {}).get("currentState") or None
+        return None
 
     def cached_planned_dispatches(self, device_id):
         """
@@ -4429,10 +4430,18 @@ class Octopus:
         A car with no octopus_intelligent_slot entry of its own is never read: fetch_sensor_data_cars() only
         records the planned dispatches of a car that has one, and a single entity would otherwise resolve to
         car 0's sensor at any index - with a warning from get_arg() every cycle and 15 second poll.
+
+        The car_charging_now sensor is read live, as octopus_held_update() also runs from the 15 second
+        poll: the snapshot taken at the last cycle can still say charging after the car has stopped, and
+        a half hour held from it is not let go. The snapshot decides only when the sensor gives no
+        evidence (see car_charging_now_reading()).
         """
-        if car_n >= len(self.car_charging_now) or not self.car_charging_now[car_n]:
-            return False
         if car_n not in self.octopus_slots_planned:
+            return False
+        charging = self.car_charging_now_reading(car_n)
+        if charging is None:
+            charging = car_n < len(self.car_charging_now) and self.car_charging_now[car_n]
+        if not charging:
             return False
         entity_id = self.get_arg("octopus_intelligent_slot", None, index=car_n, indirect=False)
         if not entity_id or not isinstance(entity_id, str) or entity_id.startswith("re:"):
