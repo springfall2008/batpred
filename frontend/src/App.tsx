@@ -61,6 +61,7 @@ function App() {
   const [statusData, setStatusData] = useState<PredbatStatus | null>(null)
 
   const [powerFlowData, setPowerFlowData] = useState<PowerFlowData | null>(null)
+  const [powerFlowUpdatedAt, setPowerFlowUpdatedAt] = useState<number | null>(null)
 
   const [navigationCollapsed, setNavigationCollapsed] = useState<boolean>(() => {
     try {
@@ -271,6 +272,7 @@ function App() {
     const data = await fetchJson<PowerFlowData>('powerFlow', './api/power_flow')
 
     setPowerFlowData(data)
+    setPowerFlowUpdatedAt(data.updated_at == null ? null : data.updated_at * 1000)
   }
 
   /*
@@ -589,7 +591,7 @@ function App() {
             ) : currentPage === 'overview' ? (
               powerFlowData ? (
                 <Suspense fallback={<div className="page-loading">Loading overview…</div>}>
-                  <OverviewPage plan={planData.plan} powerFlow={powerFlowData} />
+                  <OverviewPage plan={planData.plan} powerFlow={powerFlowData} updatedAt={powerFlowUpdatedAt} />
                 </Suspense>
               ) : (
                 <div className="page-loading">Live power data is unavailable.</div>

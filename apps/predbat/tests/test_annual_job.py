@@ -250,4 +250,27 @@ def test_annual_job(my_predbat):
         print("  ERROR: the second run should also complete, got {}".format(reused_job.state))
         failed = True
 
+    print("Test: an oversized progress line terminates and reaps the child")
+
+    async def oversized_progress():
+        """A broken child stream must not leave an unowned process running."""
+        job = AnnualJob(log=messages.append)
+        command = [sys.executable, "-c", "import sys,time,signal;signal.signal(signal.SIGTERM,signal.SIG_IGN);sys.stderr.write('x'*70000+'\\n');sys.stderr.flush();time.sleep(10)"]
+        assert await job.start(command)
+        process = job._process
+        try:
+            await asyncio.wait_for(job._task, timeout=8)
+            assert job.state == "failed"
+            assert process.returncode is not None
+            assert await job.start(stub_command("ok"))
+            await asyncio.wait_for(job._task, timeout=8)
+            assert job.state == "complete"
+        finally:
+            if process.returncode is None:
+                process.kill()
+                await process.wait()
+            await job.cancel()
+
+    asyncio.run(oversized_progress())
+
     return failed

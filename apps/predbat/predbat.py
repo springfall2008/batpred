@@ -512,6 +512,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.load_power = 0
         self.battery_power = 0
         self.grid_power = 0
+        self.power_flow_updated_at = None
         self.car_charging_power = 0
         self.car_charging_power_configured = False
         self.io_adjusted = {}

@@ -252,7 +252,7 @@ def test_search_source(my_predbat):
 
 
 def test_search_source_rejects_bad_patterns(my_predbat):
-    """An over-long or uncompilable pattern is a clean error, never an exception."""
+    """Searches reject excessive length and treat regex syntax as literal text."""
     failed = False
     print("**** Testing search_source pattern validation ****")
     root = _make_source_tree()
@@ -262,9 +262,18 @@ def test_search_source_rejects_bad_patterns(my_predbat):
             print("ERROR: an over-long pattern was accepted")
             failed = True
 
-        broken = search_source("marker_symbol[", root=root)
-        if broken.get("success") or "regular expression" not in str(broken.get("error", "")).lower():
-            print("ERROR: an uncompilable pattern did not report cleanly: {}".format(broken))
+        literal_file = os.path.join(root, "literal.py")
+        with open(literal_file, "w", encoding="utf-8") as handle:
+            handle.write("MARKER_SYMBOL[\n^(a+)+$\n(a|aa)+$\nordinary text\n")
+        for pattern in ("marker_symbol[", "^(a+)+$", "(a|aa)+$", ".*"):
+            result = search_source(pattern, file="literal.py", root=root)
+            expected = 0 if pattern == ".*" else 1
+            if not result.get("success") or result.get("total_matches") != expected:
+                print("ERROR: source search interpreted literal {!r} as regex: {}".format(pattern, result))
+                failed = True
+        definition = next(entry for entry in CHAT_TOOL_DEFS if entry["name"] == "search_source")
+        if "literal" not in definition["parameters"]["properties"]["pattern"]["description"].lower():
+            print("ERROR: source search schema did not advertise literal matching")
             failed = True
     finally:
         shutil.rmtree(root, ignore_errors=True)
@@ -1097,7 +1106,7 @@ def _nested_path_checks(my_predbat):
   num_inverters: 1
   forecast_solar:
   - postcode: 'SW1A 1AA'
-    azimuth: 180
+    azimuth: 180  # retain this setting comment
     api_key: REAL-FORECAST-SOLAR-KEY
 """
     real_key = "REAL-FORECAST-SOLAR-KEY"
@@ -1179,6 +1188,76 @@ def _nested_path_checks(my_predbat):
         result = set_apps_config(my_predbat, "forecast_solar", intact, apps_yaml_path=apps_path, backup_path=apps_path + ".backup")
         if not result.get("success"):
             print("ERROR: a container write carrying the real credential was refused: {}".format(result))
+            failed = True
+        if real_key in str(result):
+            print("ERROR: a successful container write returned the real credential")
+            failed = True
+        if "# retain this setting comment" not in open(apps_path, "r", encoding="utf-8").read():
+            print("ERROR: a container write dropped the unchanged YAML comments")
+            failed = True
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+    # Parent replacements must protect descendants just as direct writes do, including removals.
+    replacements = [
+        [],
+        [{"azimuth": 90}],
+        [{"azimuth": 90, "api_key": "replacement-dummy"}],
+        [{"azimuth": 90, "api_key": real_key, "url": "https://dummy.invalid"}],
+    ]
+    for replacement in replacements:
+        root, apps_path = _fixture()
+        try:
+            my_predbat.args = _live_args()
+            result = set_apps_config(my_predbat, "forecast_solar", replacement, apps_yaml_path=apps_path, backup_path=apps_path + ".backup")
+            if result.get("success") or open(apps_path, "r", encoding="utf-8").read() != nested_yaml or os.path.exists(apps_path + ".backup"):
+                print("ERROR: a protected descendant replacement was not refused before mutation")
+                failed = True
+            if real_key in str(result):
+                print("ERROR: a refused container write exposed the previous credential")
+                failed = True
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+    # Dict replacements cover endpoint removal/change, secret addition and unchanged values.
+    for replacement, allowed in (
+        ({"model": "new"}, False),
+        ({"model": "new", "url": "https://changed.invalid"}, False),
+        ({"model": "new", "url": "https://dummy.invalid", "api_key": "dummy"}, False),
+        ({"model": "new", "url": "https://dummy.invalid"}, True),
+    ):
+        root = tempfile.mkdtemp(prefix="predbat_apps_")
+        try:
+            apps_path = os.path.join(root, "apps.yaml")
+            original = "pred_bat:\n  chat:\n    model: old\n    url: https://dummy.invalid\n"
+            with open(apps_path, "w", encoding="utf-8") as handle:
+                handle.write(original)
+            result = set_apps_config(my_predbat, "chat", replacement, apps_yaml_path=apps_path, backup_path=apps_path + ".backup")
+            if bool(result.get("success")) != allowed:
+                print("ERROR: dict replacement protected descendant decision was incorrect")
+                failed = True
+            if not allowed and (open(apps_path, "r", encoding="utf-8").read() != original or os.path.exists(apps_path + ".backup")):
+                print("ERROR: refused dict replacement mutated configuration")
+                failed = True
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+    # A resolved live credential must not replace a raw YAML !secret reference.
+    root = tempfile.mkdtemp(prefix="predbat_apps_")
+    try:
+        apps_path = os.path.join(root, "apps.yaml")
+        tagged_yaml = nested_yaml.replace(real_key, "!secret dummy_forecast_key")
+        with open(apps_path, "w", encoding="utf-8") as handle:
+            handle.write(tagged_yaml)
+        my_predbat.args = _live_args()
+        result = set_apps_config(my_predbat, "forecast_solar", _live_args()["forecast_solar"], apps_yaml_path=apps_path, backup_path=apps_path + ".backup")
+        if result.get("success") or open(apps_path, "r", encoding="utf-8").read() != tagged_yaml:
+            print("ERROR: a container replacement overwrote a YAML secret reference")
+            failed = True
+        result = set_apps_config(my_predbat, "forecast_solar[0].azimuth", 90, apps_yaml_path=apps_path, backup_path=apps_path + ".backup")
+        written = open(apps_path, "r", encoding="utf-8").read()
+        if not result.get("success") or "!secret dummy_forecast_key" not in written or "# retain this setting comment" not in written:
+            print("ERROR: a scalar edit damaged a sibling YAML secret tag or comment")
             failed = True
     finally:
         shutil.rmtree(root, ignore_errors=True)

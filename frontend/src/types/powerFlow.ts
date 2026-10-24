@@ -1,4 +1,5 @@
 export type PowerFlowData = {
+  updated_at?: number | null
   grid_power: number
   battery_power: number
   pv_power: number

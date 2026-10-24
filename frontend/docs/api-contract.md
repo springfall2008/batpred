@@ -49,3 +49,8 @@ when changing this behaviour.
 | `GET/POST ./api/apps_yaml` | Raw `apps.yaml` editor. |
 | `GET ./api/apps_schema` | Editor completion, validation and hover descriptions. |
 | `GET ./api/entities?all=1` | Home Assistant entity completion. |
+
+The power-flow response includes `updated_at`, a Unix timestamp in seconds marking the last completed
+inverter-data refresh. It stays unchanged between refreshes and is `null` before the first one.
+Overview uses it for the age of the power snapshot; it does not represent individual sensor timestamps
+or the freshness of independently updated weather and daily totals.

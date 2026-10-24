@@ -865,7 +865,7 @@ let pendingChanges = {{}};
 
 // All Home Assistant states for entity dropdown
 const allStates = """
-        + all_states_json
+        + all_states_json.replace("<", "\\u003c")
         + """;
 function showMessage(message, type) {
     const container = document.getElementById('messageContainer');
@@ -1180,8 +1180,8 @@ function populateEntityDropdown(rowId, currentValue, filterText = '') {
         }
 
         option.innerHTML = `
-            <div class="entity-name">${entityId}</div>
-            <div class="entity-value">${entityValue}${unit_of_measurement}</div>
+            <div class="entity-name">${escapeHtml(entityId)}</div>
+            <div class="entity-value">${escapeHtml(entityValue)}${escapeHtml(unit_of_measurement)}</div>
         `;
 
         option.addEventListener('click', () => {
@@ -1399,8 +1399,8 @@ function populateNestedEntityDropdown(rowId, currentValue, filterText = '') {
         }
 
         option.innerHTML = `
-            <div class="entity-name">${entityId}</div>
-            <div class="entity-value">${entityValue}${unit_of_measurement}</div>
+            <div class="entity-name">${escapeHtml(entityId)}</div>
+            <div class="entity-value">${escapeHtml(entityValue)}${escapeHtml(unit_of_measurement)}</div>
         `;
 
         option.addEventListener('click', () => {
