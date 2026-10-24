@@ -253,8 +253,8 @@ def run_test_web_if(my_predbat):
         if properties.get("active", {}).get("default") is not False or not properties.get("load_today", {}).get("description"):
             print("ERROR: /api/apps_schema did not enrich settings with defaults and descriptions")
             failed = 1
-        load_today_options = properties.get("load_today", {}).get("oneOf", [])
-        grid_power_options = properties.get("grid_power", {}).get("oneOf", [])
+        load_today_options = properties.get("load_today", {}).get("anyOf", [])
+        grid_power_options = properties.get("grid_power", {}).get("anyOf", [])
         if not all(any(option.get("x-ha-entity") or option.get("items", {}).get("x-ha-entity") for option in options) for options in (load_today_options, grid_power_options)):
             print("ERROR: /api/apps_schema did not identify Home Assistant entity fields")
             failed = 1

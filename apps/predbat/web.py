@@ -112,6 +112,16 @@ from marginal import MARGINAL_EXTRA_KWH_LEVEL_NAMES, MARGINAL_EXTRA_KWH_LEVELS, 
 DEBUG_HISTORY_DOWNLOAD_MAX = 16
 
 
+class UIFileResponse(web.FileResponse):
+    """Keep compressed UI files safe for persistent ingress connections."""
+
+    async def _start_compression(self, request):
+        """Avoid compressed trailers on responses that must have no body."""
+        # aiohttp otherwise writes an empty compressed stream after the 304/HEAD headers.
+        if request.method != "HEAD" and self.status != 304:
+            await super()._start_compression(request)
+
+
 def _optional_float(value):
     """Return a finite float for an optional Home Assistant value, otherwise None."""
     try:
@@ -130,21 +140,30 @@ def _apps_schema_value(spec):
         "string": {"type": "string"},
         "boolean": {"type": "boolean"},
         "dict": {"type": "object"},
-        "sensor": {"type": "string", "x-ha-entity": True},
-        "integer_list": {"type": "array", "items": {"type": "integer"}},
-        "float_list": {"type": "array", "items": {"type": "number"}},
+        "sensor": {"type": ["string", "array"], "x-ha-entity": True, "items": {"type": ["string", "number", "boolean"], "x-ha-entity": True}},
+        "integer_list": {"type": ["integer", "array"], "items": {"type": "integer"}},
+        "float_list": {"type": ["number", "array"], "items": {"type": "number"}},
         "string_list": {"type": ["string", "array"], "items": {"type": "string"}},
-        "boolean_list": {"type": "array", "items": {"type": "boolean"}},
-        "dict_list": {"type": "array", "items": {"type": "object"}},
-        "sensor_list": {"type": "array", "items": {"type": ["string", "number", "boolean"], "x-ha-entity": True}},
+        "boolean_list": {"type": ["boolean", "array"], "items": {"type": "boolean"}},
+        "dict_list": {"type": ["object", "array"], "items": {"type": "object"}},
+        "sensor_list": {"type": ["string", "number", "boolean", "array"], "x-ha-entity": True, "items": {"type": ["string", "number", "boolean"], "x-ha-entity": True}},
         "int_float_dict": {"type": "object", "additionalProperties": {"type": "number"}},
     }
     choices = [copy.deepcopy(scalar_types[item]) for item in spec.get("type", "string").split("|") if item in scalar_types]
+    if "entries" in spec:
+        for choice in choices:
+            if "items" not in choice:
+                choice["items"] = copy.deepcopy(choice)
+                choice["type"] = [choice["type"], "array"]
     if spec.get("or_auto"):
         choices.append({"const": "auto"})
     schema = choices[0] if len(choices) == 1 else {"anyOf": choices}
     if spec.get("allowed"):
         schema = {"enum": spec["allowed"]}
+    if "min" in spec:
+        schema["minimum"] = spec["min"]
+    if "max" in spec:
+        schema["maximum"] = spec["max"]
     return schema
 
 
@@ -404,7 +423,7 @@ def _apps_schema_description(name, spec):
 
 
 def build_apps_json_schema():
-    """Build the Monaco JSON Schema for a Predbat apps.yaml file."""
+    """Build the editor JSON Schema for a Predbat apps.yaml file."""
     properties = {
         "module": {"type": "string", "const": "predbat", "description": "AppDaemon module to load for this app. Predbat must use the value 'predbat'."},
         "class": {"type": "string", "const": "PredBat", "description": "Python application class AppDaemon starts. Predbat must use the value 'PredBat'."},
@@ -514,12 +533,14 @@ def build_apps_json_schema():
             if "max" in item:
                 value_schema["maximum"] = item["max"]
             if isinstance(item.get("options"), list):
-                value_schema["enum"] = item["options"]
+                value_schema["enum"] = list(item["options"])
+                if "default" in item and item["default"] not in value_schema["enum"]:
+                    value_schema["enum"].append(item["default"])
             if isinstance(item.get("default"), (str, int, float, bool, list, dict)):
                 value_schema["default"] = item["default"]
 
     # PredHeat already owns these entity mappings. Describing the nested keys
-    # here lets Monaco offer the same Home Assistant entity autocomplete inside
+    # here lets the editor offer the same Home Assistant entity autocomplete inside
     # the predheat block instead of encouraging duplicate Overview settings.
     properties["predheat"].update(
         {
@@ -3944,7 +3965,7 @@ chart.render();
             if filename == "predbat_ui.html":
                 return web.Response(status=503, text="Modern web interface files are unavailable")
             raise web.HTTPNotFound()
-        response = web.FileResponse(asset_path, headers={"Cache-Control": "no-cache"})
+        response = UIFileResponse(asset_path, headers={"Cache-Control": "no-cache"})
         if filename.endswith((".html", ".js", ".css", ".svg")):
             response.headers["Vary"] = "Accept-Encoding"
             response.enable_compression()

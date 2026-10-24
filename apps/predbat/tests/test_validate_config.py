@@ -329,6 +329,20 @@ def test_validate_config(my_predbat):
     print("  [sensor] entity_id without a dot fails")
     _run(my_predbat, {"pv_forecast_today": "no_dot_entity"}, expect_errors=["pv_forecast_today"])
 
+    print("  [per-inverter integer] scalar and list forms pass")
+    for name in ("inverter_battery_rate_min", "inverter_reserve_max"):
+        _run(my_predbat, {name: 10, "num_inverters": 1}, expect_clean=[name])
+        _run(my_predbat, {name: [10, 20], "num_inverters": 2}, expect_clean=[name])
+
+    print("  [per-car sensor] sensor and literal lists pass")
+    _run(
+        my_predbat,
+        {"car_charging_limit": ["sensor.test_car_limit_one", "sensor.test_car_limit_two"], "num_cars": 2},
+        extra_states={"sensor.test_car_limit_one": 80, "sensor.test_car_limit_two": 90},
+        expect_clean=["car_charging_limit"],
+    )
+    _run(my_predbat, {"car_charging_limit": [80, 90], "num_cars": 2}, expect_clean=["car_charging_limit"])
+
     # ==========================================================================
     # SENSOR_LIST with sensor_type "none|string"
     # (pause_start_time: {"type": "sensor_list", "sensor_type": "none|string",
