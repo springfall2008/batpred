@@ -305,6 +305,10 @@ Full details of what to configure are given in the [component documentation](com
 If you have an EV on a smart-charging tariff with Eon.Next (such as Next Drive Smart), Eon bills every half hour of a planned charging dispatch at the cheap rate whether or not the car charged in it, unlike Octopus Intelligent.
 With `kraken_provider: eon` Predbat prices dispatches that way automatically; see **intelligent_dispatch_billing** in the [car charging documentation](car-charging.md) to change it.
 
+With `kraken_provider: edf`, free hours you have booked through EDF Flextras are read from EDF every 30 minutes and priced at 0p in the plan, in the same way as [Octopus free electricity sessions](#octopus-free-power-up-events).
+They are published on `sensor.predbat_kraken_<account>_free_electricity`.
+EDF Power Perks sessions are announced by text message only and are not available from EDF's API, so they are not picked up automatically - use the [manual rate overrides](#manually-over-riding-energy-rates) to add one.
+
 ## Energidataservice Integration
 
 <https://github.com/MTrab/energidataservice>

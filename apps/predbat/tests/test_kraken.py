@@ -70,6 +70,9 @@ def make_kraken_api(provider="edf", account_id="A-TEST123", auth_method="api_key
     api.count_errors = 0
     api.run_timeout = 3600
     api.initialize(provider=provider, account_id=account_id, key=key, auth_method=auth_method, **kwargs)
+    # Not on Flextras by default, so run() tests never reach edfenergy.com; Flextras tests
+    # delete this to get the real method back.
+    api.async_fetch_flextras_hours = AsyncMock(return_value=None)
     return api
 
 
@@ -2689,3 +2692,221 @@ def test_discover_smart_devices_keeps_dispatches_fetched_at():
     asyncio.run(api.async_discover_smart_devices())
 
     assert api.intelligent_devices["dev-1"]["dispatches_fetched_at"] == "2026-10-16T09:00:00+00:00"
+
+
+# ── EDF Flextras booked free hours ───────────────────────────────────────────
+
+
+def _flextras_screen(items):
+    """A Flextras hours screen in the shape EDF serve it, with the given BOOKED_HOURS_LIST items."""
+    return {
+        "screen": "REWARD_HOURS",
+        "version": "1.0",
+        "components": [
+            {"id": "reward_hours_banner_1", "type": "REWARD_HOURS_BANNER", "props": {"title": "x"}},
+            {"id": "booked_hours_list_1", "type": "BOOKED_HOURS_LIST", "props": {"bonusHours": 4, "totalRemainingHours": 0, "items": items}},
+        ],
+    }
+
+
+def _flextras_slot(date, start, end):
+    """One booked hourly slot as it appears in rawTimeSlots."""
+    return {"slotId": f"SLOT-{date}-{start[:2]}-{end[:2]}", "date": date, "startTime": start, "endTime": end, "status": "SELECTED"}
+
+
+def _flextras_api():
+    """An EDF api with the real Flextras fetch restored, a known tariff and mocked publishing."""
+    api = make_kraken_api(provider="edf")
+    del api.async_fetch_flextras_hours
+    api.current_tariff = {"tariff_code": "E-1R-VAR-01", "product_code": "VAR-01"}
+    api.import_rates = [{"value_inc_vat": 24.5}]
+    api.tariff_fetched_at = datetime.now()
+    api.rates_fetched_at = datetime.now()
+    api.dashboard_item = MagicMock()
+    api.set_arg = MagicMock()
+    api.update_success_timestamp = MagicMock()
+    return api
+
+
+def test_flextras_parse_joins_adjacent_hours_and_keeps_gaps():
+    """Back-to-back hours become one window; hours with a gap between them stay separate."""
+    from kraken import KrakenAPI
+
+    body = _flextras_screen(
+        [
+            {"rawTimeSlots": [_flextras_slot("2026-10-10", "09:00", "10:00"), _flextras_slot("2026-10-10", "10:00", "11:00")]},
+            {"rawTimeSlots": [_flextras_slot("2026-11-01", "00:00", "01:00"), _flextras_slot("2026-11-01", "02:00", "03:00")]},
+        ]
+    )
+    assert KrakenAPI.parse_flextras_booked_hours(body) == [
+        {"start": "2026-10-10T08:00:00+0000", "end": "2026-10-10T10:00:00+0000"},
+        {"start": "2026-11-01T00:00:00+0000", "end": "2026-11-01T01:00:00+0000"},
+        {"start": "2026-11-01T02:00:00+0000", "end": "2026-11-01T03:00:00+0000"},
+    ]
+
+
+def test_flextras_parse_reads_uk_local_time_across_the_clock_change():
+    """The same wall-clock hour maps to 08:00 UTC in BST and 09:00 UTC in GMT."""
+    from kraken import KrakenAPI
+
+    bst = KrakenAPI.parse_flextras_booked_hours(_flextras_screen([{"rawTimeSlots": [_flextras_slot("2026-10-24", "09:00", "10:00")]}]))
+    gmt = KrakenAPI.parse_flextras_booked_hours(_flextras_screen([{"rawTimeSlots": [_flextras_slot("2026-10-26", "09:00", "10:00")]}]))
+    assert bst[0]["start"] == "2026-10-24T08:00:00+0000"
+    assert gmt[0]["start"] == "2026-10-26T09:00:00+0000"
+
+
+def test_flextras_parse_hour_over_midnight_ends_next_day():
+    """An 11pm-midnight hour is dated by the day it starts."""
+    from kraken import KrakenAPI
+
+    parsed = KrakenAPI.parse_flextras_booked_hours(_flextras_screen([{"rawTimeSlots": [_flextras_slot("2026-11-07", "23:00", "00:00")]}]))
+    assert parsed == [{"start": "2026-11-07T23:00:00+0000", "end": "2026-11-08T00:00:00+0000"}]
+
+
+def test_flextras_parse_distinguishes_nothing_booked_from_unrecognised():
+    """A recognised screen with no bookings is [], anything else is None so the caller keeps what it had."""
+    from kraken import KrakenAPI
+
+    assert KrakenAPI.parse_flextras_booked_hours(_flextras_screen([])) == []
+    assert KrakenAPI.parse_flextras_booked_hours({"components": [{"type": "FAQ_LIST", "props": {}}]}) is None
+    assert KrakenAPI.parse_flextras_booked_hours({"error": "nope"}) is None
+    assert KrakenAPI.parse_flextras_booked_hours(None) is None
+
+
+def test_flextras_parse_skips_malformed_slots():
+    """A slot with a missing or unparseable time is dropped, not raised on."""
+    from kraken import KrakenAPI
+
+    body = _flextras_screen([{"rawTimeSlots": [{"date": "2026-10-10", "startTime": None}, {"date": "bad", "startTime": "09:00", "endTime": "10:00"}, "junk", _flextras_slot("2026-10-10", "12:00", "13:00")]}, "junk"])
+    assert KrakenAPI.parse_flextras_booked_hours(body) == [{"start": "2026-10-10T11:00:00+0000", "end": "2026-10-10T12:00:00+0000"}]
+
+
+def test_flextras_run_publishes_booked_hours_and_wires_free_electricity():
+    """An EDF account with booked hours gets a free electricity sensor wired into octopus_free_electricity."""
+    api = _flextras_api()
+    api.async_find_property_id = AsyncMock(return_value="12345")
+    api.check_and_refresh_oauth_token = AsyncMock(return_value=True)
+    api.access_token = "jwt-token"
+
+    future = (datetime.now(timezone.utc) + timedelta(days=2)).strftime("%Y-%m-%d")
+    body = _flextras_screen([{"rawTimeSlots": [_flextras_slot(future, "09:00", "10:00"), _flextras_slot(future, "10:00", "11:00")]}])
+    response = AsyncMock(status=200)
+    response.json = AsyncMock(return_value=body)
+    session = AsyncMock()
+    session.get = MagicMock(return_value=AsyncMock(__aenter__=AsyncMock(return_value=response), __aexit__=AsyncMock(return_value=None)))
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=session):
+        asyncio.run(api.run(120, False))
+
+    url = session.get.call_args.args[0]
+    assert url == "https://www.edfenergy.com/support/energyhub/api/weekend-saver/v1/A-TEST123/12345/ui/hours"
+    assert session.get.call_args.kwargs["headers"]["Authorization"] == "jwt-token"
+
+    entity = api.get_entity_name("sensor", "free_electricity")
+    api.set_arg.assert_any_call("octopus_free_electricity", entity)
+    call = [c for c in api.dashboard_item.call_args_list if c.args[0] == entity][0]
+    events = call.kwargs["attributes"]["events"]
+    assert len(events) == 1, "two back-to-back hours are one session"
+    assert events[0]["rate"] == 0
+    # fetch_octopus_sessions() parses these with str2time
+    from utils import str2time
+
+    assert (str2time(events[0]["end"]) - str2time(events[0]["start"])) == timedelta(hours=2)
+    assert api.flextras_property_id == "12345"
+
+
+def test_flextras_not_fetched_for_eon():
+    """E.ON Next has no Flextras, so it is never asked."""
+    api = make_kraken_api(provider="eon")
+    api.current_tariff = {"tariff_code": "E-1R-VAR-01", "product_code": "VAR-01"}
+    api.import_rates = [{"value_inc_vat": 24.5}]
+    api.tariff_fetched_at = datetime.now()
+    api.rates_fetched_at = datetime.now()
+    api.dashboard_item = MagicMock()
+    api.set_arg = MagicMock()
+    api.update_success_timestamp = MagicMock()
+
+    asyncio.run(api.run(120, False))
+
+    api.async_fetch_flextras_hours.assert_not_called()
+    assert not [c for c in api.set_arg.call_args_list if c.args[0] == "octopus_free_electricity"]
+
+
+def test_flextras_unavailable_is_asked_once_per_refresh_and_not_wired():
+    """A non-200 (not on Flextras) is not retried every cycle, not a Kraken failure, and wires nothing."""
+    api = _flextras_api()
+    api.async_find_property_id = AsyncMock(return_value="12345")
+    api.check_and_refresh_oauth_token = AsyncMock(return_value=True)
+    api.access_token = "jwt-token"
+
+    response = AsyncMock(status=403)
+    session = AsyncMock()
+    session.get = MagicMock(return_value=AsyncMock(__aenter__=AsyncMock(return_value=response), __aexit__=AsyncMock(return_value=None)))
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=session):
+        asyncio.run(api.run(120, False))
+        asyncio.run(api.run(180, False))
+
+    assert session.get.call_count == 1, "a second cycle inside the refresh period must not ask again"
+    assert api.failures_total == 0
+    assert not [c for c in api.set_arg.call_args_list if c.args[0] == "octopus_free_electricity"]
+    assert len([c for c in api.log.call_args_list if "Flextras hours not available" in str(c)]) == 1
+
+
+def test_flextras_failed_fetch_keeps_held_sessions():
+    """A fetch that fails leaves the booked hours already held untouched."""
+    api = _flextras_api()
+    held = [{"start": "2030-01-05T09:00:00+0000", "end": "2030-01-05T10:00:00+0000"}]
+    api.flextras_sessions = list(held)
+    api.async_fetch_flextras_hours = AsyncMock(return_value=None)
+
+    asyncio.run(api.run(120, False))
+
+    assert api.flextras_sessions == held
+
+
+def test_flextras_merge_drops_withdrawn_future_hours_but_keeps_started_ones():
+    """A future hour handed back disappears; an hour already under way stays even if the screen drops it."""
+    api = _flextras_api()
+    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    started = {"start": (now - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%S+0000"), "end": (now + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%S+0000")}
+    withdrawn = {"start": (now + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S+0000"), "end": (now + timedelta(days=1, hours=1)).strftime("%Y-%m-%dT%H:%M:%S+0000")}
+    old = {"start": (now - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%S+0000"), "end": (now - timedelta(days=3) + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S+0000")}
+    fresh = {"start": (now + timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%S+0000"), "end": (now + timedelta(days=2, hours=1)).strftime("%Y-%m-%dT%H:%M:%S+0000")}
+    api.flextras_sessions = [old, started, withdrawn]
+
+    assert api._merge_flextras_sessions([fresh]) == [started, fresh]
+
+
+def test_flextras_cache_round_trip():
+    """Property id, sessions and the attempt stamp survive a restart, and cached sessions publish on the first run."""
+    api = _flextras_api()
+    storage = attach_fake_storage(api)
+    api.flextras_property_id = "12345"
+    api.flextras_sessions = [{"start": "2030-01-05T09:00:00+0000", "end": "2030-01-05T10:00:00+0000"}]
+    api.flextras_fetched_at = datetime.now()
+    asyncio.run(api.save_kraken_cache())
+
+    restored = _flextras_api()
+    restored.base.components = api.base.components
+    assert storage.data
+    restored.async_fetch_flextras_hours = AsyncMock(return_value=None)
+    asyncio.run(restored.run(0, True))
+
+    assert restored.flextras_property_id == "12345"
+    assert restored.flextras_sessions == api.flextras_sessions
+    restored.async_fetch_flextras_hours.assert_not_called()
+    restored.set_arg.assert_any_call("octopus_free_electricity", restored.get_entity_name("sensor", "free_electricity"))
+
+
+def test_find_property_id_reads_first_property():
+    """The properties query's first id is the one the Flextras URL needs; a failed query is None."""
+    api = make_kraken_api()
+    api.async_graphql_query = AsyncMock(return_value={"properties": [{"id": 987}, {"id": 654}]})
+    assert asyncio.run(api.async_find_property_id()) == "987"
+    api.async_graphql_query = AsyncMock(return_value=None)
+    assert asyncio.run(api.async_find_property_id()) is None

@@ -17,8 +17,10 @@ import aiohttp
 import asyncio
 import types as _types
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from component_base import ComponentBase
+from const import TIME_FORMAT
 from utils import filter_payment_method
 from mock_base import MockBase as KrakenMockBase
 from utils import str2time
@@ -252,6 +254,21 @@ KRAKEN_DISPATCH_REFRESH_MINUTES = 2
 # Drop completed dispatches older than this many days when merging history.
 KRAKEN_DISPATCH_HISTORY_DAYS = 5
 
+# EDF Flextras: free hours the customer books in the EDF app, an hour at a time, and can change
+# up to the Thursday before. They are not in the Kraken API; EDF serve them on an edfenergy.com
+# server-driven UI screen that accepts the same Kraken token, and that screen carries a
+# machine-readable list of the booked slots (BOOKED_HOURS_LIST). The property id in the URL
+# comes from the Kraken properties query. EDF only - E.ON Next has no Flextras.
+KRAKEN_PROPERTIES_QUERY = """{{
+  properties(accountNumber: "{account_number}") {{
+    id
+  }}
+}}"""
+KRAKEN_FLEXTRAS_HOURS_URL = "https://www.edfenergy.com/support/energyhub/api/weekend-saver/v1/{account_id}/{property_id}/ui/hours"
+KRAKEN_FLEXTRAS_REFRESH_MINUTES = 30
+# Booked slot times are UK wall-clock, although the booking call labels them UTC.
+KRAKEN_FLEXTRAS_TZ = ZoneInfo("Europe/London")
+
 
 class KrakenAPI(ComponentBase, _AUTH_BASE):
     """Kraken GraphQL component for EDF/E.ON tariff discovery and rate fetching."""
@@ -305,6 +322,14 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         # case of an account with no connected EV/charger. Cached to storage so it survives restart.
         self.intelligent_devices = {}
         self.dispatch_fetched_at = None
+
+        # EDF Flextras booked free hours, published as free electricity sessions. flextras_sessions
+        # is a list of {"start", "end"} UTC strings; flextras_fetched_at stamps every attempt, so an
+        # account that is not on Flextras is asked once per refresh period rather than every cycle.
+        self.flextras_property_id = None
+        self.flextras_sessions = []
+        self.flextras_fetched_at = None
+        self.flextras_last_status = None
 
         # Export account/MPAN from SaaS config (matched by address at onboarding time).
         # Tariff is always discovered dynamically via GraphQL so changes are detected.
@@ -1158,6 +1183,10 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         if isinstance(data.get("intelligent_devices"), dict):
             self.intelligent_devices = data.get("intelligent_devices")
         self.dispatch_fetched_at = data.get("dispatch_fetched_at")
+        self.flextras_property_id = data.get("flextras_property_id")
+        if isinstance(data.get("flextras_sessions"), list):
+            self.flextras_sessions = data.get("flextras_sessions")
+        self.flextras_fetched_at = data.get("flextras_fetched_at")
 
         if self.current_tariff:
             self.log(
@@ -1188,6 +1217,9 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             "rates_fetched_at": self.rates_fetched_at,
             "intelligent_devices": self.intelligent_devices,
             "dispatch_fetched_at": self.dispatch_fetched_at,
+            "flextras_property_id": self.flextras_property_id,
+            "flextras_sessions": self.flextras_sessions,
+            "flextras_fetched_at": self.flextras_fetched_at,
         }
         await self.storage.save("kraken", self._cache_filename(), cache, format="yaml", expiry=datetime.now(timezone.utc) + timedelta(days=7))
 
@@ -1470,6 +1502,156 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         if self.get_arg("num_cars", 0) < len(slot_list):
             self.set_arg("num_cars", len(slot_list))
 
+    # ------------------------------------------------------------------
+    # EDF Flextras booked free hours
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _flextras_slot_utc(date_str, time_str):
+        """Convert a Flextras slot's date + UK wall-clock time ("2026-10-10", "09:00") to an aware UTC datetime, or None."""
+        if not isinstance(date_str, str) or not isinstance(time_str, str):
+            return None
+        try:
+            naive = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
+        except ValueError:
+            return None
+        return naive.replace(tzinfo=KRAKEN_FLEXTRAS_TZ).astimezone(timezone.utc)
+
+    @staticmethod
+    def parse_flextras_booked_hours(body):
+        """Extract the booked free hours from the Flextras hours screen as merged UTC windows.
+
+        Returns a list of {"start", "end"} strings in TIME_FORMAT, sorted, with back-to-back
+        hours joined into one window. Returns None when the payload is not the hours screen at
+        all, so the caller keeps what it had rather than treating a bad response as "nothing
+        booked"; a recognised screen with no bookings returns [].
+        """
+        if not isinstance(body, dict) or not isinstance(body.get("components"), list):
+            return None
+        booked = None
+        for component in body["components"]:
+            if isinstance(component, dict) and component.get("type") == "BOOKED_HOURS_LIST" and isinstance(component.get("props"), dict):
+                booked = component["props"]
+                break
+        if booked is None:
+            return None
+
+        windows = []
+        for item in booked.get("items") or []:
+            if not isinstance(item, dict):
+                continue
+            for slot in item.get("rawTimeSlots") or []:
+                if not isinstance(slot, dict):
+                    continue
+                start = KrakenAPI._flextras_slot_utc(slot.get("date"), slot.get("startTime"))
+                end = KrakenAPI._flextras_slot_utc(slot.get("date"), slot.get("endTime"))
+                if start is None or end is None:
+                    continue
+                if end <= start:
+                    # An hour that runs over midnight is dated by the day it starts
+                    end += timedelta(days=1)
+                windows.append((start, end))
+
+        merged = []
+        for start, end in sorted(windows):
+            if merged and start <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        return [{"start": start.strftime(TIME_FORMAT), "end": end.strftime(TIME_FORMAT)} for start, end in merged]
+
+    def _merge_flextras_sessions(self, booked):
+        """Combine freshly fetched booked hours with the sessions already held.
+
+        The screen is authoritative for hours that have not started: a customer can move or hand
+        back an hour until the Thursday before, so a future hour that is no longer listed is
+        dropped. A session that has already started is kept until the day after it ends even if the
+        screen stops listing it, so the plan and today's cost do not re-price an hour that was free.
+        """
+        now = datetime.now(timezone.utc)
+        keep_after = self.midnight_utc - timedelta(days=1)
+        by_start = {session["start"]: session for session in booked}
+        for session in self.flextras_sessions or []:
+            try:
+                start = str2time(session["start"])
+                end = str2time(session["end"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if start <= now and end >= keep_after and session["start"] not in by_start:
+                by_start[session["start"]] = session
+        return sorted(by_start.values(), key=lambda session: session["start"])
+
+    async def async_find_property_id(self):
+        """Return the account's first property id (needed by the Flextras URL), or None if it cannot be read."""
+        data = await self.async_graphql_query(KRAKEN_PROPERTIES_QUERY.format(account_number=self.account_id), "properties")
+        for prop in (data or {}).get("properties") or []:
+            if isinstance(prop, dict) and prop.get("id"):
+                return str(prop["id"])
+        return None
+
+    async def async_fetch_flextras_hours(self):
+        """Fetch the Flextras hours screen and return its booked hours, or None if it could not be read.
+
+        Accounts that are not on Flextras, and tokens edfenergy.com does not accept, both come back
+        as a non-200; that is logged when the status changes (not every refresh) and is not counted
+        as a Kraken failure, because it says nothing about the tariff and rate data this component
+        exists for.
+        """
+        if not self.flextras_property_id:
+            self.flextras_property_id = await self.async_find_property_id()
+            if not self.flextras_property_id:
+                return None
+
+        token_ok = await self.check_and_refresh_oauth_token()
+        if not token_ok or not self.access_token:
+            return None
+
+        url = KRAKEN_FLEXTRAS_HOURS_URL.format(account_id=self.account_id, property_id=self.flextras_property_id)
+        headers = {"Authorization": self.access_token, "Accept": "application/json"}
+        try:
+            self.requests_total += 1
+            timeout = aiohttp.ClientTimeout(total=30)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url, headers=headers) as response:
+                    status = response.status
+                    body = await response.json(content_type=None) if status == 200 else None
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as e:
+            self.log(f"Warn: Kraken: Flextras hours request failed: {e}")
+            return None
+
+        if status != 200:
+            if status != self.flextras_last_status:
+                self.log(f"Kraken: Flextras hours not available (HTTP {status}) - no booked free hours will be read")
+            self.flextras_last_status = status
+            return None
+        self.flextras_last_status = status
+
+        booked = self.parse_flextras_booked_hours(body)
+        if booked is None:
+            self.log("Warn: Kraken: Flextras hours screen not recognised, keeping the booked hours already held")
+        return booked
+
+    def _publish_free_electricity_sensor(self):
+        """Publish the Flextras sessions as a free electricity sensor and wire octopus_free_electricity.
+
+        The sensor matches OctopusAPI's free_electricity sensor (state on/off, an events attribute of
+        {start, end, code, rate: 0}), so fetch_octopus_sessions() prices the booked hours at 0p exactly
+        as it does Octopus free electricity sessions.
+        """
+        now = datetime.now(timezone.utc)
+        events = []
+        active = False
+        for session in self.flextras_sessions:
+            events.append({"start": session["start"], "end": session["end"], "code": "flextras_" + session["start"][:16], "rate": 0})
+            try:
+                if str2time(session["start"]) <= now < str2time(session["end"]):
+                    active = True
+            except (KeyError, TypeError, ValueError):
+                pass
+        entity = self.get_entity_name("sensor", "free_electricity")
+        self.dashboard_item(entity, "on" if active else "off", attributes={"friendly_name": "EDF Flextras Free Hours", "icon": "mdi:flash", "events": events}, app="kraken")
+        self.set_arg("octopus_free_electricity", entity)
+
     async def run(self, seconds, first):
         """Component run method — called by ComponentBase.start() every 60s.
 
@@ -1479,6 +1661,8 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         - Rates + standing charges: when the cached rates are >= KRAKEN_RATES_REFRESH_MINUTES old (or never fetched)
         - Intelligent dispatches: when >= KRAKEN_DISPATCH_REFRESH_MINUTES old, for accounts with a
           SmartFlex EV device (discovered on the tariff cycle); wired to octopus_intelligent_slot.
+        - EDF Flextras booked free hours: attempted every KRAKEN_FLEXTRAS_REFRESH_MINUTES (EDF only);
+          published as a free electricity sensor wired to octopus_free_electricity.
         Sensors are always (re)published on the first run so HA is populated immediately from cache.
         """
         if first:
@@ -1554,6 +1738,20 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         if self.intelligent_devices and (first or dispatch_due):
             self._publish_dispatch_sensors()
 
+        # EDF Flextras booked free hours. Every attempt is stamped, so an account that is not on
+        # Flextras (or whose token edfenergy.com rejects) is asked once per refresh period, not every cycle.
+        flextras_refreshed = False
+        if self.provider == "edf" and self.current_tariff and self._data_age_minutes(self.flextras_fetched_at) >= KRAKEN_FLEXTRAS_REFRESH_MINUTES:
+            self.flextras_fetched_at = datetime.now()
+            booked = await self.async_fetch_flextras_hours()
+            if booked is not None:
+                if booked != self.flextras_sessions:
+                    self.log(f"Kraken: Flextras booked free hours: {booked}")
+                self.flextras_sessions = self._merge_flextras_sessions(booked)
+                flextras_refreshed = True
+        if self.provider == "edf" and (flextras_refreshed or (first and self.flextras_sessions)):
+            self._publish_free_electricity_sensor()
+
         # Wire import into fetch.py once tariff is discovered (retries until successful)
         if not self.wired and self.current_tariff:
             self.set_arg("metric_octopus_import", self.get_entity_name("sensor", "import_rates"))
@@ -1590,7 +1788,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
 
         # Persist to storage whenever we refreshed something, so the next restart restores it.
         # (Not every cycle — if the cache is lost it is simply re-fetched on the next due check.)
-        if tariff_due or rates_due or dispatches_refreshed:
+        if tariff_due or rates_due or dispatches_refreshed or flextras_refreshed:
             await self.save_kraken_cache()
 
         # Update liveness timestamp if we got data OR tariff is known (prevents
