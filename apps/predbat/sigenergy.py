@@ -2457,8 +2457,10 @@ class SigenergyAPI(ComponentBase):
         self.set_arg("inverter_limit", ["sensor.{}_sigenergy_{}_inverter_limit".format(self.prefix, s) for s in slugs])
         # An export_limit the user wrote in apps.yaml wins - the sensor reads 99999 until the plant has reported its limit
         self.set_arg_auto("export_limit", ["sensor.{}_sigenergy_{}_export_limit".format(self.prefix, s) for s in slugs], overwrite=False)
-        # The plan's floor is the plant's backup cut-off - forced exports already stop there (apply_controls) - rather
-        # than Predbat's 4% default, which a plant set to 0% never needs. A battery_min_soc in apps.yaml still wins.
+        # The plan's floor is the plant's backup cut-off, its hard low limit, rather than Predbat's 4% default, which a
+        # plant set to 0% never needs. Forced exports stop at it or at the discharge cut-off (the reserve), whichever is
+        # higher (apply_controls); the planner has no separate export floor, so a discharge cut-off above the backup
+        # cut-off is honoured at execution only. A battery_min_soc in apps.yaml still wins.
         self.set_arg_auto("battery_min_soc", ["sensor.{}_sigenergy_{}_battery_reserve_min".format(self.prefix, s) for s in slugs], overwrite=False)
         self.set_arg("pv_power", ["sensor.{}_sigenergy_{}_pv_power".format(self.prefix, s) for s in slugs])
         self.set_arg("grid_power", ["sensor.{}_sigenergy_{}_grid_power".format(self.prefix, s) for s in slugs])
