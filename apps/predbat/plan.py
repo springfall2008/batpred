@@ -2368,7 +2368,12 @@ class Plan:
                     self.log("Unfiltered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, calc_percent_limit(self.charge_limit_best, self.soc_max)), self.reserve))
 
             # Plan comparison
-            if charge_window_best_prev is not None and not debug_mode:
+            if charge_window_best_prev is not None and not debug_mode and self.plan_made_by_version != self.running_version:
+                # An incumbent made by another version (typically restored after an upgrade) carries that code's
+                # clip and prune decisions, while its pre-clip snapshot can tie with the new plan's - so comparing
+                # would keep the old decisions in force. Always replace it.
+                self.log("Previous plan was made by Predbat {}, now running {} - using new plan".format(self.plan_made_by_version or "(unknown version)", self.running_version))
+            elif charge_window_best_prev is not None and not debug_mode:
                 # Score the plans as optimised rather than as clipped - see plan_scoring_pair()
                 score_new, score_prev = self.plan_scoring_pair(
                     (self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best),
@@ -2402,6 +2407,8 @@ class Plan:
 
             # Carry the pre-clip snapshot of whichever plan we kept into the next cycle
             self.plan_preclip = preclip_new
+            # Either way the plan in force was made, or kept, by the version running now
+            self.plan_made_by_version = self.running_version
             # The plan now in force has been weighed with the bird-in-hand credit, so its one-off tie-break is spent
             self.io_confirmed_tiebreak = False
 
