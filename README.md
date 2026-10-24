@@ -6,7 +6,7 @@
 
 ## Test UI
 
-**Latest version has been moved to a new repo for pull request into official predbat: https://github.com/calvind80/batpred**
+**Latest version has been moved to a new repo for pull request into official predbat: <https://github.com/calvind80/batpred>**
 
 It's possible to replace the existing ui in Predbat with this test version. Disable auto update then edit apps.yaml as follows
 
