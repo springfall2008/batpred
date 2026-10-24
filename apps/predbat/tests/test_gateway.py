@@ -6727,8 +6727,8 @@ class TestEvCommandConfirm:
         assert gw.base.status_state.startswith("Warn:")
         assert gw.base.had_errors is False
 
-    def test_dropped_session_is_started_again(self):
-        """A confirmed session that drops part-way through the window with the car still plugged in is started again."""
+    def _confirmed_start(self):
+        """A gateway inside a window whose start has been sent and confirmed by telemetry."""
         gw, published = self._gateway()
         _ev_set_window(gw, inside=True)
         _ev_set_telemetry(gw, car_connected=True, session_active=False)
@@ -6737,30 +6737,67 @@ class TestEvCommandConfirm:
         _ev_cycle(gw)
         assert gw._ev_confirmed is True
         assert len(published) == 2
+        return gw, published
 
-        _ev_set_telemetry(gw, car_connected=True, session_active=False)  # transaction timed out on the charger
+    @staticmethod
+    def _session_end_logs(gw):
+        """The log lines recording a confirmed session ending mid-window."""
+        return [call for call in gw.log.call_args_list if "part-way through the window" in str(call)]
+
+    def test_session_ended_mid_window_left_alone_and_logged_once(self):
+        """A confirmed session that ends mid-window (a user stop looks the same as a drop) is not restarted; it is logged once, as info."""
+        gw, published = self._confirmed_start()
+        for _ in range(10):
+            _ev_set_telemetry(gw, car_connected=True, session_active=False)
+            _ev_cycle(gw)
+        assert len(published) == 2  # nothing restarted
+        logs = self._session_end_logs(gw)
+        assert len(logs) == 1
+        assert "Info:" in str(logs[0])
+        assert not any("sending start again" in str(call) for call in gw.log.call_args_list)
+        gw.base.record_status.assert_not_called()
+
+    def test_session_end_not_logged_while_offline_or_stale(self):
+        """An offline charger or a stale report says nothing about the session, so nothing is logged until fresh telemetry shows it ended."""
+        gw, published = self._confirmed_start()
+        _ev_set_telemetry(gw, car_connected=False, session_active=False, online=False)
         _ev_cycle(gw)
-        assert [p["action"] for _, p in published][2:] == ["SetChargingProfile", "RemoteStartTransaction"]
-        assert gw._ev_confirmed is False
-        assert gw._ev_attempts == 1
-        assert any("part-way through the window" in str(call) for call in gw.log.call_args_list)
+        assert self._session_end_logs(gw) == []
 
-        _ev_set_telemetry(gw, car_connected=True, session_active=True)
+        gw._ev_telemetry["CP10000001"] = {"online": True, "has_status": True, "car_connected": True, "session_active": False, "time": time.time() - 600}
         _ev_cycle(gw)
-        assert gw._ev_confirmed is True
+        assert self._session_end_logs(gw) == []
 
-    def test_repeatedly_dropping_session_respects_window_start_cap(self):
-        """A charger that keeps dropping the session is re-driven only up to the per-window start cap, then warns."""
-        from gateway import _EV_MAX_STARTS_PER_WINDOW
+        _ev_set_telemetry(gw, car_connected=True, session_active=False)
+        _ev_cycle(gw)
+        assert len(self._session_end_logs(gw)) == 1
+        assert len(published) == 2
 
+    def test_confirmed_start_without_telemetry_does_not_log(self):
+        """A confirmed start with no telemetry for the charger neither fails nor logs a session end."""
         gw, published = self._gateway()
         _ev_set_window(gw, inside=True)
-        for cycle in range(60):
-            _ev_set_telemetry(gw, car_connected=True, session_active=(cycle % 2 == 1))  # starts, then drops, every other cycle
+        gw._ev_charging_active = True
+        gw._ev_confirmed = True
+        _ev_cycle(gw)
+        assert self._session_end_logs(gw) == []
+        assert published == []
+
+    def test_offline_charger_does_not_release_stop_latch(self):
+        """An offline charger reads session_active=False (forced idle), which must not release a stop latch."""
+        gw, published = self._gateway()
+        gw._ev_windows = []
+        gw._ev_charging_active = True
+        for _ in range(8):
+            _ev_set_telemetry(gw, car_connected=True, session_active=True)
             _ev_cycle(gw)
-        starts = [p for _, p in published if p["action"] == "RemoteStartTransaction"]
-        assert len(starts) == _EV_MAX_STARTS_PER_WINDOW
-        assert gw.base.had_errors is False
+        assert gw._ev_latched is True
+
+        for _ in range(3):
+            _ev_set_telemetry(gw, car_connected=False, session_active=False, online=False)
+            _ev_cycle(gw)
+        assert gw._ev_latched is True
+        assert gw._ev_confirmed is False
 
     def test_confirmed_stop_left_alone_when_user_starts_session(self):
         """After a confirmed stop, a session the user starts is left alone."""
@@ -6777,6 +6814,10 @@ class TestEvCommandConfirm:
             _ev_set_telemetry(gw, car_connected=True, session_active=True)
             _ev_cycle(gw)
         assert len(published) == sent
+        for _ in range(3):  # a confirmed stop with no session is not a session ending mid-window
+            _ev_set_telemetry(gw, car_connected=True, session_active=False)
+            _ev_cycle(gw)
+        assert self._session_end_logs(gw) == []
 
     def test_unplugged_after_confirmed_start_keeps_one_start_behaviour(self):
         """Unplugging after a confirmed start is not a dropped session: the one-start-while-unplugged rule applies."""

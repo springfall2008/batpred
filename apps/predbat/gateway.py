@@ -690,6 +690,7 @@ class GatewayMQTT(ComponentBase):
         self._ev_window_starts = 0  # start sends in this window, capped at _EV_MAX_STARTS_PER_WINDOW
         self._ev_unplugged_start_sent = False  # the one start sent while the plug read unplugged this window
         self._ev_unplanned_stops = 0  # unplanned sessions stopped since the last change of desired state
+        self._ev_session_end_logged = False  # a confirmed session ending mid-window has been logged this window
 
     def _reset_ev_budget(self):
         """Give the current desired state a fresh attempt budget and clear any latch."""
@@ -735,15 +736,12 @@ class GatewayMQTT(ComponentBase):
             fresh = (time.time() - state["time"]) < _TELEMETRY_STALE_THRESHOLD
         return fresh and state["session_active"] == should_charge
 
-    def _ev_session_lost(self, state, should_charge):
-        """Return True if a confirmed start has since been lost: fresh telemetry shows a plugged car with no session.
+    def _ev_session_ended(self, state, should_charge):
+        """Return True if fresh telemetry shows no session inside a window whose start was confirmed.
 
-        Only a start is ever re-driven. A session the user starts after a confirmed stop is left alone,
-        and a charger that is offline, reports no OCPP status or has gone quiet is unknown, not lost.
+        Used only to log it: an offline or quiet charger is unknown, not ended.
         """
-        if not should_charge or state is None:
-            return False
-        if not state["online"] or not state["has_status"] or not state["car_connected"]:
+        if not should_charge or state is None or not state["online"]:
             return False
         if (time.time() - state["time"]) >= _TELEMETRY_STALE_THRESHOLD:
             return False
@@ -767,11 +765,13 @@ class GatewayMQTT(ComponentBase):
         charge, so the window's own boundaries must not refill the budget.
 
         A latch is released as soon as fresh telemetry shows the desired state (the charger got there on
-        its own, or late), which also stops the warning being re-asserted.
+        its own, or late), which stops the warning being re-asserted; the main loop's next status write
+        then replaces it.
 
-        A confirmed start is re-checked every cycle: if fresh telemetry shows the car still plugged in but
-        the session gone (an OCPP transaction timeout, a charger restart) the start is driven again with a
-        fresh attempt budget, still within the per-window start cap. A confirmed stop is not re-checked.
+        Once a start is confirmed, a session that ends part-way through the window is left alone and
+        logged once per window. A user stopping the charge from the charger's own app, car still plugged
+        in, reports the same plug and session state as a dropped transaction, so restarting it would
+        override a deliberate stop.
 
         A charger reported offline is unknown: nothing is confirmed, sent or counted until it is back.
         A charger that reports no OCPP status cannot show plug state, so at a transition it gets the
@@ -832,13 +832,12 @@ class GatewayMQTT(ComponentBase):
             return
 
         if self._ev_confirmed:
-            if not self._ev_session_lost(state, should_charge):
-                return
-            # The confirmed session has dropped with the car still plugged in: drive it again. The per-window
-            # start cap still applies, so a charger that keeps dropping the session cannot be flapped.
-            self.log(f"Warn: GatewayMQTT: EVC '{cp_id}' charging session ended part-way through the window with the car still plugged in, sending start again ({self._ev_window_starts}/{_EV_MAX_STARTS_PER_WINDOW} starts used this window)")
-            self._ev_confirmed = False
-            self._reset_ev_budget()
+            # A confirmed session that ends mid-window is deliberately not restarted: a user stop from the
+            # charger's app (car still plugged in) cannot be told apart from a dropped transaction.
+            if not self._ev_session_end_logged and self._ev_session_ended(state, should_charge):
+                self._ev_session_end_logged = True
+                self.log(f"Info: GatewayMQTT: EVC '{cp_id}' charging session ended part-way through the window; not restarting it, as a stop from the charger itself looks the same")
+            return
 
         if self._ev_latched:
             if self._ev_telemetry_confirms(state, should_charge):
