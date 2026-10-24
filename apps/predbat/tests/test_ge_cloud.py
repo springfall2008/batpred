@@ -48,6 +48,7 @@ class MockGECloudDirect(GECloudDirect):
         self.register_list = {}
         self.settings = {}
         self.status = {}
+        self.live_display_samples = {}
         self.meter = {}
         self.info = {}
         self.device_list = []

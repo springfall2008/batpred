@@ -3230,8 +3230,6 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         # Display provenance must retain neither missing fields nor an old
         # field under a new timestamp. The ordinary merged control cache stays
         # unchanged; the optional display adapter consumes only this raw sample.
-        if not hasattr(self, "live_display_samples"):
-            self.live_display_samples = {}
         self.live_display_samples[serial.lower()] = result
         if result is None:
             return previous
