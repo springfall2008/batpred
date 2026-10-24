@@ -41,6 +41,16 @@ import os
 from coordinator import Coordinator
 
 
+def serves_inverter(component):
+    """
+    Whether a component tagged "inverter" is supplying inverter state in this configuration.
+
+    The tag says a component can; a gateway in display only mode, or a GE Cloud Direct set up for
+    the EV charger alone (inverter_source False), does not, so must not make the engine wait for it.
+    """
+    return getattr(component, "gateway_display_only", False) is not True and getattr(component, "inverter_source", True) is not False
+
+
 def load_component_class(component_info):
     """Import a registry entry's module and return its component class.
 
@@ -146,8 +156,14 @@ COMPONENT_LIST = {
         "event_filter": "predbat_gecloud_",
         "args": {
             "ge_cloud_direct": {
-                "required_true": True,
+                "required": False,
+                "default": False,
                 "config": "ge_cloud_direct",
+            },
+            "evc_direct": {
+                "required": False,
+                "default": False,
+                "config": "ge_cloud_evc_direct",
             },
             "api_key": {
                 "required": True,
@@ -169,7 +185,14 @@ COMPONENT_LIST = {
                 "default": False,
                 "config": "ge_cloud_evc_control",
             },
+            "inverter_control": {
+                "required": False,
+                "default": True,
+                "config": "ge_cloud_inverter_control",
+            },
         },
+        # ge_cloud_direct monitors the inverter (and EV charger), ge_cloud_evc_direct the EV charger alone
+        "required_or": ["ge_cloud_direct", "evc_direct"],
         "phase": 1,
     },
     "gecloud_data": {
@@ -1094,11 +1117,11 @@ class Components:
         question rather than a per-inverter one: a component serves whichever inverters it
         discovered, and Inverter only needs to know whether to keep waiting.
         """
-        return any(COMPONENT_LIST.get(name, {}).get("inverter", False) and component and getattr(component, "gateway_display_only", False) is not True for name, component in self.components.items())
+        return any(COMPONENT_LIST.get(name, {}).get("inverter", False) and component and serves_inverter(component) for name, component in self.components.items())
 
     def inverter_source_names(self):
         """The display names of every active inverter component, for user-facing messages."""
-        return [COMPONENT_LIST[name]["name"] for name, component in self.components.items() if component and COMPONENT_LIST.get(name, {}).get("inverter", False) and getattr(component, "gateway_display_only", False) is not True]
+        return [COMPONENT_LIST[name]["name"] for name, component in self.components.items() if component and COMPONENT_LIST.get(name, {}).get("inverter", False) and serves_inverter(component)]
 
     def inverter_source_status(self):
         """
@@ -1131,7 +1154,7 @@ class Components:
                 continue
             load_error = self.load_error(name)
             component = self.components.get(name, None)
-            if component and getattr(component, "gateway_display_only", False) is True:
+            if component and not serves_inverter(component):
                 continue
             if load_error is not None:
                 state = "failed to start: {}".format(load_error)

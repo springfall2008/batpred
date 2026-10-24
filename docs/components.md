@@ -510,11 +510,13 @@ Connects directly to the GivEnergy Cloud to control your GivEnergy inverter and 
 
 | Option | Type | Required | Default | Config Key | Description |
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
-| `ge_cloud_direct` | Boolean | Yes | - | `ge_cloud_direct` | Set to `true` to enable GivEnergy Cloud control |
+| `ge_cloud_direct` | Boolean | One of | false | `ge_cloud_direct` | Set to `true` to enable GivEnergy Cloud for your inverter and EV charger — see [Monitoring and control](#monitoring-and-control-gecloud) |
+| `evc_direct` | Boolean | One of | false | `ge_cloud_evc_direct` | Set to `true`, without `ge_cloud_direct`, to use GivEnergy Cloud for your EV charger only — the inverters are not read or written |
 | `api_key` | String | Yes | - | `ge_cloud_key` | Your GivEnergy Cloud API key |
 | `automatic` | Boolean | No | false | `ge_cloud_automatic` | Set to `true` to automatically configured Predbat to use GivEnergy Cloud direct (no additional apps.yaml changes required) |
 | `automatic_evc` | Boolean | No | false | `ge_cloud_automatic_evc` | Set to `true` to wire your GivEnergy EV chargers into `car_charging_energy`, `car_charging_planned`, `car_charging_plugged` and `num_cars` — see [EV chargers](#ev-chargers-gecloud). Separate from `ge_cloud_automatic` because it registers a car |
 | `evc_control` | Boolean | No | false | `ge_cloud_evc_control` | Set to `true` to let Predbat start and stop your EV charger from its car charging plan — see [Charger control](#charger-control-gecloud). Needs `ge_cloud_automatic_evc` |
+| `inverter_control` | Boolean | No | true | `ge_cloud_inverter_control` | Set to `false` to monitor the inverter without Predbat controlling it — see [Monitoring and control](#monitoring-and-control-gecloud). Predbat writes no default settings and `ge_cloud_automatic` is ignored; changes you make to the `_gecloud_` entities are still sent |
 | `load_today_ignore` | Boolean | No | false | `ge_cloud_load_today_ignore` | Set to `true` to ignore GE Cloud load_today data and use the `load_today` sensor from `apps.yaml` instead |
 | `automatic_shared_ct` | Boolean | No | false | `ge_cloud_automatic_shared_ct` | Set to `true` to force shared CT clamp mode — only the first inverter's grid and load readings are used, preventing double-counting on multi-inverter systems with a single shared CT |
 | `automatic_split_ct` | Boolean | No | false | `ge_cloud_automatic_split_ct` | Set to `true` to force split CT clamp mode — each inverter's readings are summed independently. Takes priority over `ge_cloud_automatic_shared_ct` if both are set |
@@ -595,6 +597,41 @@ purpose: it answers `on`, which the default **car_charging_planned_response** al
 matches, so this works without you having to add GivEnergy's status words to that list.
 If your charger reports a status Predbat does not recognise it is treated as no car
 connected and logged once, so please report the value from the log so it can be added.
+
+#### Monitoring and control (gecloud)
+
+GE Cloud Direct can serve your inverter, your EV charger, or both. Each has one setting to
+monitor it and one to let Predbat control it:
+
+| | Monitor | Control |
+| - | ------- | ------- |
+| Inverter | `ge_cloud_direct` | `ge_cloud_inverter_control` (default `true`) |
+| EV charger | `ge_cloud_direct` or `ge_cloud_evc_direct` | `ge_cloud_evc_control` (default `false`) |
+
+**EV charger only.** If your inverter is controlled by something else, such as GivTCP or the
+GivEnergy app, leave `ge_cloud_direct` out and set `ge_cloud_evc_direct` instead. The
+inverters on your account are then never read, written to or reported, and only the EV
+charger is served:
+
+```yaml
+  ge_cloud_evc_direct: true
+  ge_cloud_key: !secret ge_cloud_key
+  ge_cloud_automatic_evc: true
+  ge_cloud_evc_control: true
+```
+
+**Monitor the inverter without controlling it.** With `ge_cloud_direct: true` and
+`ge_cloud_inverter_control: false`, the inverters are read and their `_gecloud_` entities
+published, but Predbat does not control them: `ge_cloud_automatic` is ignored (with a warning
+in the log), so Predbat's inverter controls are not wired to GE Cloud, and Predbat writes no
+settings of its own. A change you make to one of the `_gecloud_` entities is still sent to
+the inverter.
+
+With it on, Predbat writes its default options to every inverter on the account once a day,
+even with `ge_cloud_automatic` off: SoC limits to 4% and 100%, power percentages to 100%,
+charge and discharge slots 2 to 10 cleared, and AC charge and real-time control turned on.
+While a force charge is running it also turns the AC charge switch back on if something
+else clears it.
 
 #### Charger control (gecloud)
 

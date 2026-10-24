@@ -2725,6 +2725,8 @@ APPS_SCHEMA = {
     "ge_cloud_load_today_ignore": {"type": "boolean"},
     "ge_cloud_automatic_evc": {"type": "boolean"},
     "ge_cloud_evc_control": {"type": "boolean"},
+    "ge_cloud_evc_direct": {"type": "boolean"},
+    "ge_cloud_inverter_control": {"type": "boolean"},
     "ge_cloud_automatic_shared_ct": {"type": "boolean"},
     "ge_cloud_automatic_split_ct": {"type": "boolean"},
     "ge_cloud_automatic_split_pv": {"type": "boolean"},
