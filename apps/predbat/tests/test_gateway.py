@@ -7611,6 +7611,146 @@ class TestIntegratePower:
         assert self._today(gw, "import_today") == 0.5
 
 
+class TestGatewayOnlineTopic:
+    """The hub's retained online topic, as the firmware publishes it: 'online', and 'offline' as its LWT (predbat-gateway#510)."""
+
+    def _make_gateway(self):
+        """Build a minimal GatewayMQTT stub that _handle_message() can route an online message through."""
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+        import time as time_mod
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.log = MagicMock()
+        gw.base = MagicMock()
+        gw.base.inverters = []
+        gw.prefix = "predbat"
+        gw.topic_status = "predbat/devices/pbgw_test/status"
+        gw.topic_online = "predbat/devices/pbgw_test/online"
+        gw.dashboard_item = MagicMock()
+        gw.gateway_display_only = False
+        gw._error_count = 0
+        gw._rate_caps_sent = {}
+        gw._mqtt_connected = True
+        gw._gateway_online = False
+        gw._last_telemetry_time = time_mod.time()
+        return gw
+
+    def _online(self, gw, payload):
+        """Deliver one message on the online topic."""
+        from unittest.mock import MagicMock
+
+        message = MagicMock()
+        message.topic = gw.topic_online
+        message.payload = payload
+        asyncio.run(gw._handle_message(message))
+
+    def test_firmware_payloads_set_the_flag(self):
+        """The firmware publishes 'online' on connect and 'offline' as its LWT, not '1' / '0'."""
+        gw = self._make_gateway()
+        self._online(gw, b"online")
+        assert gw._gateway_online is True
+        self._online(gw, b"offline")
+        assert gw._gateway_online is False
+        assert gw._error_count == 0
+
+    def test_numeric_payloads_still_accepted(self):
+        """'1' / '0', the payloads this code used to expect, are still accepted."""
+        gw = self._make_gateway()
+        self._online(gw, b"1")
+        assert gw._gateway_online is True
+        self._online(gw, b"0")
+        assert gw._gateway_online is False
+
+    def test_transition_is_logged_and_published(self):
+        """Going online logs the change and publishes the online sensor."""
+        gw = self._make_gateway()
+        self._online(gw, b"online")
+        gw.log.assert_any_call("Info: GatewayMQTT: Gateway is online")
+        entity, state = gw.dashboard_item.call_args[0][:2]
+        assert entity == "binary_sensor.predbat_gateway_online"
+        assert state is True
+
+    def test_stale_telemetry_is_not_alive_while_online(self):
+        """A hub that says it is online but has sent no telemetry for over two minutes is a frozen feed."""
+        import time as time_mod
+
+        gw = self._make_gateway()
+        self._online(gw, b"online")
+        assert gw.is_alive() is True
+        gw._last_telemetry_time = time_mod.time() - 300
+        assert gw.is_alive() is False
+
+    def _make_control_gateway(self):
+        """A control-mode gateway built through initialize(), with housekeeping's outbound calls stubbed."""
+        from gateway import GatewayMQTT
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.base = MagicMock()
+        gw.prefix = "predbat"
+        gw.args = {}
+        gw.log = MagicMock()
+        gw.initialize(gateway_device_id="pbgw_test", mqtt_host="mqtt.test")
+        gw._mqtt_connected = True
+        gw._mqtt_client = SimpleNamespace(publish=AsyncMock())
+        gw.api_started = True
+        gw.api_stop = False
+        for name in ("_check_read_only_state", "_check_inverter_resets", "_check_rate_caps", "_publish_predbat_data", "_check_token_refresh", "_republish_plan_if_stale"):
+            setattr(gw, name, AsyncMock())
+        return gw
+
+    def test_silent_hub_goes_unhealthy_even_when_offline(self):
+        """Housekeeping is not a success: a hub that has sent nothing for two hours is unhealthy, whatever its LWT says."""
+        import datetime
+        import time as time_mod
+        from components import Components
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        gw = self._make_control_gateway()
+        comps = Components.__new__(Components)
+        comps.components = {"gateway": gw}
+        comps.component_tasks = {"gateway": SimpleNamespace(is_alive=lambda: True)}
+        comps.component_errors = {}
+
+        gw._gateway_online = False
+        gw._last_telemetry_time = time_mod.time() - 7200
+        gw.last_success_timestamp = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=2)
+        with patch("gateway.HAS_AIOMQTT", True):
+            assert asyncio.run(gw.run(60, False))
+
+        # Connected to the broker with the hub offline is a known state for the component itself...
+        assert gw.is_alive() is True
+        # ...but nothing has been read for two hours, so the site must not report healthy
+        assert comps.is_alive("gateway") is False
+
+        # Telemetry arriving is what makes it healthy again
+        gw.update_success_timestamp()
+        assert comps.is_alive("gateway") is True
+
+    def test_rate_caps_sent_once_online(self):
+        """set_rate_cap is held while the hub is offline, so it must go out once the firmware says 'online'."""
+        helper = TestCheckRateCaps()
+        gw = helper._make_gateway()
+        gw._gateway_online = False
+        gw._inverter_slot_serials = ["CH2330G098"]
+        gw.base.inverters = [helper._inverter(0, 3000, 3600)]
+        gw.prefix = "predbat"
+        gw.topic_status = "predbat/devices/pbgw_test/status"
+        gw.topic_online = "predbat/devices/pbgw_test/online"
+        gw.dashboard_item = lambda *args, **kwargs: None
+        gw._error_count = 0
+
+        asyncio.run(gw._check_rate_caps())
+        assert gw._published == []
+
+        self._online(gw, b"online")
+        asyncio.run(gw._check_rate_caps())
+        assert [command for command, _ in gw._published] == ["set_rate_cap"]
+
+
 def run_gateway_tests(my_predbat=None):
     """Run all GatewayMQTT tests. Returns True on failure, False on success."""
     from tests.test_gateway_token_refresh import TestIsAuthFailure, TestApplyRefreshResponse, TestMaybeRefreshOnAuthError
@@ -7650,6 +7790,7 @@ def run_gateway_tests(my_predbat=None):
         TestIanaToPosixTz,
         TestCheckInverterResets,
         TestCheckRateCaps,
+        TestGatewayOnlineTopic,
         TestCheckReadOnlyState,
         TestRunStartupWait,
         TestSetChargeSlotPayload,

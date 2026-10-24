@@ -2825,7 +2825,7 @@ class Fetch:
 
         pv_light_dark, when scanning for charge (not find_high) windows, is a minute-indexed dict of 0/1
         marking whether PV forecast is at/after dawn ("light") or not ("dark") - see calc_dawn and
-        calc_pv_light_dark. A transition between the two forces a window split, so a charge window
+        calc_pv_light_dark. A dark -> light transition (dawn) forces a window split, so a charge window
         that would otherwise span sunrise (e.g. a single long cheap-rate period) is instead built as
         separate dark and light windows. Originally added (#4557) so low power charging wasn't
         defeated for the whole window, including the still-dark hours, just because the window's tail
@@ -2857,11 +2857,13 @@ class Fetch:
                 # Create alternate rate boundary if the rate is different
                 alternate_rate_boundary = True
             pv_state = pv_light_dark.get(minute, None)
-            if (rate_low_start >= 0) and (pv_state is not None) and (pv_light_dark_last is not None) and (pv_state != pv_light_dark_last):
-                # Create a PV boundary when the light/dark classification changes since the window
-                # started. Gated on rate_low_start so a transition crossed only during the pre-window
-                # search phase (e.g. scanning past last night's sunset before this window is even
-                # found) doesn't leave a stale boundary that breaks the window the moment it starts.
+            if (rate_low_start >= 0) and (pv_state == 1) and (pv_light_dark_last == 0):
+                # Create a PV boundary at dawn (dark -> light) since the window started. Gated on
+                # rate_low_start so a transition crossed only during the pre-window search phase
+                # doesn't leave a stale boundary that breaks the window the moment it starts.
+                # Light -> dark is not split on: calc_dawn latches each day light from dawn until
+                # midnight, so that step falls at 00:00 in the dark and would cut an overnight
+                # cheap window (e.g. 23:30-05:30) in two despite combine_charge_slots.
                 pv_boundary = True
             if minute in rates:
                 rate = rates[minute]

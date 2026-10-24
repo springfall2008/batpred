@@ -778,8 +778,9 @@ class GatewayMQTT(ComponentBase):
             # Re-publish the plan periodically so its embedded timestamp stays fresh
             await self._republish_plan_if_stale()
 
-            # Mark component as alive on successful housekeeping
-            self.update_success_timestamp()
+            # Housekeeping is deliberately not a success: only telemetry from the hub records one
+            # (_process_telemetry), so a hub that has sent nothing for an hour reads as unhealthy
+            # in the components check even while its LWT says it is offline
 
         except Exception as e:
             self.log(f"Warn: GatewayMQTT: housekeeping error: {e}")
@@ -898,7 +899,8 @@ class GatewayMQTT(ComponentBase):
             elif topic == self.topic_online:
                 payload = message.payload.decode("utf-8", errors="replace").strip()
                 was_online = self._gateway_online
-                self._gateway_online = payload == "1"
+                # The firmware publishes "online", and "offline" as its LWT. "1" was what this code expected; still accepted
+                self._gateway_online = payload in ("online", "1")
                 if self._gateway_online != was_online:
                     self.log(f"Info: GatewayMQTT: Gateway is {'online' if self._gateway_online else 'offline'}")
                     # A hub that has been away may be on new firmware or have lost its stored
@@ -2744,7 +2746,8 @@ class GatewayMQTT(ComponentBase):
             return False
 
         if not self._gateway_online:
-            # Gateway is offline but we're connected to broker — that's OK
+            # Gateway is offline but we're connected to broker — that's OK here. How long it may stay
+            # away is bounded by the components check, as only telemetry records a success
             return True
 
         # Gateway is online — check telemetry freshness
