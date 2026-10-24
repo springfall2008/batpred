@@ -48,7 +48,7 @@ def _rotate(args):
     """
     max_logs = predbat_log_count(args) - 1
     rotate_predbat_logs(max_logs)
-    os.rename("predbat.log", predbat_log_name(1))
+    os.replace("predbat.log", predbat_log_name(1))
     _touch("predbat.log", "live")
 
 
@@ -60,8 +60,8 @@ def run_log_rotation_tests(my_predbat):
     print("**** Running log_rotation tests ****")
 
     saved_cwd = os.getcwd()
-    try:
-        with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        try:
             os.chdir(tmpdir)
 
             print("Test 1: log_count defaults and clamps")
@@ -205,8 +205,8 @@ def run_log_rotation_tests(my_predbat):
             if read_predbat_log().strip() != "only-line":
                 print("  ERROR: expected just the live log, got {!r}".format(read_predbat_log()))
                 failed = True
-    finally:
-        os.chdir(saved_cwd)
+        finally:
+            os.chdir(saved_cwd)
 
     if failed:
         print("\n**** log_rotation tests: FAILED ****")

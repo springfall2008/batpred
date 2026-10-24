@@ -107,7 +107,7 @@ def test_fetch_pv_forecast_with_relative_time():
     )
 
     # Call fetch_pv_forecast
-    pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90 = fetch.fetch_pv_forecast()
+    pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, _, _ = fetch.fetch_pv_forecast()
 
     # With the corrected formula (target = stored_minute - offset), a +120 min offset
     # (relative_time is 2 hours before midnight_utc) shifts data BACK by 120 minutes:
@@ -177,7 +177,7 @@ def test_fetch_pv_forecast_no_relative_time():
     )
 
     # Call fetch_pv_forecast
-    pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90 = fetch.fetch_pv_forecast()
+    pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, _, _ = fetch.fetch_pv_forecast()
 
     # With no relative_time, it should fall back to midnight_utc
     # minute_offset = 0, so forecast data should map directly
@@ -237,7 +237,7 @@ def test_fetch_pv_forecast_invalid_relative_time():
     )
 
     # Call fetch_pv_forecast
-    pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90 = fetch.fetch_pv_forecast()
+    pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, _, _ = fetch.fetch_pv_forecast()
 
     # With invalid relative_time, it should fall back to midnight_utc
     # minute_offset = 0
@@ -294,7 +294,7 @@ def test_fetch_pv_forecast_relative_time_same_as_midnight():
     )
 
     # Call fetch_pv_forecast
-    pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90 = fetch.fetch_pv_forecast()
+    pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, _, _ = fetch.fetch_pv_forecast()
 
     # minute_offset = 0 (same time), so data maps directly
     assert pv_forecast_minute[0] == 0.0, f"Expected minute 0 to be 0.0, got {pv_forecast_minute[0]}"
@@ -358,7 +358,7 @@ def test_fetch_pv_forecast_previous_day():
     )
 
     # Call fetch_pv_forecast
-    pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90 = fetch.fetch_pv_forecast()
+    pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, _, _ = fetch.fetch_pv_forecast()
 
     # With the corrected formula (target = stored_minute - offset), a +1440 min offset
     # maps yesterday's stored minutes to today-relative minutes:
@@ -431,7 +431,7 @@ def test_fetch_pv_forecast_negative_offset():
     )
 
     # Call fetch_pv_forecast
-    pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90 = fetch.fetch_pv_forecast()
+    pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, _, _ = fetch.fetch_pv_forecast()
 
     # With the corrected formula (target = stored_minute - offset), a -60 min offset
     # (relative_time is 1 hour AFTER midnight_utc) shifts data FORWARD by 60 minutes:
@@ -504,7 +504,7 @@ def test_fetch_pv_forecast_with_published_p90():
     )
 
     # Call fetch_pv_forecast
-    pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90 = fetch.fetch_pv_forecast()
+    pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, _, _ = fetch.fetch_pv_forecast()
 
     # The published p90 values must be used verbatim, not a copy of the p50 series
     assert pv_forecast_minute90[60] == 0.7, f"Expected forecast90 minute 60 to be 0.7, got {pv_forecast_minute90.get(60)}"
