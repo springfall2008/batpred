@@ -183,6 +183,17 @@ Example usage in VSCode
 }
 ```
 
+#### OAuth-based MCP clients (mcp)
+
+Clients that connect through OAuth instead of a fixed `Authorization` header, such as a claude.ai custom connector, only need the server URL (for example `http://homeassistant.local:8199/mcp`). The client discovers the rest itself:
+
+- Discovery documents: `/.well-known/oauth-protected-resource` (also at `/.well-known/oauth-protected-resource/mcp`) and `/.well-known/oauth-authorization-server` (also at `/.well-known/oauth-authorization-server/mcp`)
+- Dynamic client registration at `/oauth/register`, authorization at `/oauth/authorize` and tokens at `/oauth/token`
+
+When the client opens the authorization page, enter your `mcp_secret` to approve it. A cloud-hosted client such as claude.ai connects from the internet rather than your home network, so read the security note above before you expose the port.
+
+The discovery documents name the server's base URL (`http://<host>:<port>`) as the protected resource, not `<base>/mcp`. Clients that insist the two match, such as Codex, are tracked in [#4799](https://github.com/springfall2008/batpred/issues/4799).
+
 #### Available commands (mcp)
 
 | Tool | What it returns or does |
