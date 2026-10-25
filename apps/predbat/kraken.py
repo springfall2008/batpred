@@ -714,6 +714,51 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         return [edge.get("node", {}) for edge in edges if edge and edge.get("node")]
 
     @staticmethod
+    def _standing_charge_covering(rows, now, from_key, to_key):
+        """Pick the standing charge row in force at now (GH#5573).
+
+        Neither the REST /standing-charges/ list nor the GraphQL applicableStandingCharges window
+        promises an order, and both can hold a row that starts after now (a price change published
+        ahead of time) or one that has already ended, so the first row is not necessarily today's.
+        Same rule as OctopusAPI._get_rate_for_time: a row applies when valid_from <= now < valid_to,
+        a null or unparseable bound is open, and the latest valid_from wins if several rows cover
+        now (the first of equals). Rows that are not dicts are ignored, like filter_payment_method().
+
+        Args:
+            rows: Standing charge rows, as dicts.
+            now: Timezone-aware datetime to select for.
+            from_key: Name of the validity start field in each row (REST valid_from, GraphQL validFrom).
+            to_key: Name of the validity end field in each row (REST valid_to, GraphQL validTo).
+
+        Returns the covering row, or None if no row covers now.
+        """
+
+        def bound(row, key):
+            """Parse one validity timestamp, or None when it is missing or unparseable."""
+            text = row.get(key)
+            if not text:
+                return None
+            try:
+                return str2time(text)
+            except (ValueError, TypeError):
+                return None
+
+        open_start = datetime.min.replace(tzinfo=timezone.utc)
+        best_row = None
+        best_start = None
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            start = bound(row, from_key) or open_start
+            end = bound(row, to_key)
+            if start > now or (end is not None and end <= now):
+                continue
+            if best_row is None or start > best_start:
+                best_row = row
+                best_start = start
+        return best_row
+
+    @staticmethod
     def _normalize_rate_timestamps(results):
         """Normalize Kraken rate results so downstream minute_data() can parse them.
 
@@ -1032,9 +1077,13 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             self.log("Warn: Kraken: applicableStandingCharges GraphQL returned no results")
             return None
 
-        # Take the first (most applicable) standing charge entry; value is pence/day inc VAT.
+        # The window spans several days, so it can hold both sides of a price change: take the entry
+        # in force now, not the first one listed (GH#5573). value is pence/day inc VAT.
         # Divide by 100 to match the units expected by the caller (pounds/day).
-        charge = applicable_charges[0]
+        charge = self._standing_charge_covering(applicable_charges, now, "validFrom", "validTo")
+        if charge is None:
+            self.log("Warn: Kraken: applicableStandingCharges GraphQL returned no standing charge covering now")
+            return None
         value = charge.get("value")
         if value is None:
             return None
@@ -1102,8 +1151,14 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         # EDF lists the NON_DIRECT_DEBIT one first, so keep the Direct Debit row (GH#5502).
         results = filter_payment_method(data.get("results", []))
         if results:
+            # The list also holds past periods and any change already published, so take the row
+            # in force now rather than the first one (GH#5573).
+            charge = self._standing_charge_covering(results, datetime.now(timezone.utc), "valid_from", "valid_to")
+            if charge is None:
+                self.log("Warn: Kraken: REST standing charges returned no standing charge covering now")
+                return None
             # API returns pence/day; fetch.py multiplies by 100 expecting pounds/day
-            value = results[0].get("value_inc_vat")
+            value = charge.get("value_inc_vat")
             return value / 100.0 if value is not None else None
         return None
 
