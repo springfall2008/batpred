@@ -997,7 +997,7 @@ def test_gap_and_tail_slots_are_logged_separately(my_predbat=None):
 
     run_async(component.run(seconds=0, first=True))
 
-    gap =[m for m in messages if m.startswith("Warn: GivTCP: no inverter has answered yet")]
+    gap = [m for m in messages if m.startswith("Warn: GivTCP: no inverter has answered yet")]
     tail = [m for m in messages if "leaving inverter(s)" in m]
     if len(gap) != 1 or "http://dead:6345" not in gap[0] or "inverter(s) 0 keep their own slot" not in gap[0]:
         print("ERROR: expected one warning naming gap slot 0 and its URL, got {}".format(gap))
@@ -1645,6 +1645,29 @@ def test_gen2_hybrid_suppresses_its_export_target(my_predbat=None):
     assert not _publishes_discharge_target(invertor_type="Gen2 Hybrid"), "a Gen2 Hybrid must not publish the export target control"
     assert not _publishes_discharge_target(invertor_type="Gen2 Hybrid", raw_model="Hybrid_gen2"), "an explicit Hybrid_gen2 raw model must still suppress it"
     print("PASS: Gen2 Hybrid suppresses its export target")
+    return 0
+
+
+def test_discharge_target_not_claimed_for_unsupported_models(my_predbat=None):
+    """
+    automatic_config() leaves discharge_target_soc alone for a model with no working register (#5679).
+
+    The entity is never published for such a model, so claiming it would bind the setting to an entity
+    that does not exist, and Inverter would log "No current discharge target to read" on every export
+    cycle. Left unclaimed, the discovery record agrees with what automatic_config() bound. Uses the real
+    Gen2 Hybrid capture as recorded.
+    """
+    component, record = _v3_capture_record(invertor_type=None)
+    assert "discharge_target_soc" not in record["entities"], "the Gen2 capture must not list a discharge target entity"
+    captured = capture_automatic_config(component)
+    assert "discharge_target_soc" not in captured, "an unsupported model must not have discharge_target_soc claimed, got {}".format(captured.get("discharge_target_soc"))
+    assert_record_agrees(record, captured, index=0)
+
+    # a model that does have the register is still claimed, as the relabelled capture shows
+    component, record = _v3_capture_record()
+    assert "discharge_target_soc" in record["entities"], "a supported model must list the discharge target entity"
+    assert "discharge_target_soc" in capture_automatic_config(component), "a supported model must have discharge_target_soc claimed"
+    print("PASS: discharge_target_soc is claimed only for models that have the register")
     return 0
 
 
@@ -2673,9 +2696,9 @@ def test_build_discovery_round_trips_through_the_coordinator(my_predbat=None):
     return 0
 
 
-def _v3_capture_record():
-    """The real rest_v3.json capture published by a component, and the one validated inverter record build_discovery() makes of it."""
-    base, component = _rest_from_fixture("cases/rest_v3.json", invertor_type=SUPPORTED_DISCHARGE_TARGET_TYPE)
+def _v3_capture_record(invertor_type=SUPPORTED_DISCHARGE_TARGET_TYPE):
+    """The real rest_v3.json capture (relabelled as invertor_type, or as recorded with None) published by a component, and the one validated inverter record build_discovery() makes of it."""
+    base, component = _rest_from_fixture("cases/rest_v3.json", invertor_type=invertor_type)
     _mark_discovered(component)
     run_async(component.publish_data())
     records = validated_inverters(component.build_discovery())
@@ -3006,6 +3029,7 @@ def test_givtcp_component(my_predbat=None):
         ("dt_mixed_fleet", test_discharge_target_needs_v3_on_every_inverter, "discharge target needs v3 everywhere"),
         ("dt_type_match", test_unsupported_model_detected_from_invertor_type, "unsupported model from Invertor_Type"),
         ("dt_gen2_suppressed", test_gen2_hybrid_suppresses_its_export_target, "Gen2 Hybrid suppresses its export target"),
+        ("dt_not_claimed", test_discharge_target_not_claimed_for_unsupported_models, "discharge target not claimed for unsupported models"),
         ("dt_raw_model", test_raw_model_matching_is_unchanged, "raw.invertor.model matching unchanged"),
         ("reserve_min_default", test_reserve_entity_min_defaults_to_the_ge_floor, "reserve entity min defaults to 4"),
         ("reserve_min_lower", test_reserve_entity_min_respects_a_lower_battery_min_soc, "lower battery_min_soc respected"),
