@@ -1573,30 +1573,50 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         return naive.replace(tzinfo=KRAKEN_FLEXTRAS_TZ).astimezone(timezone.utc)
 
     @staticmethod
-    def parse_flextras_booked_hours(body):
+    def parse_flextras_booked_hours(body, log=None):
         """Extract the booked free hours from the Flextras hours screen as merged UTC windows.
 
         Returns a list of {"start", "end"} strings in TIME_FORMAT, sorted, with back-to-back
         hours joined into one window. Returns None when the payload is not the hours screen at
-        all, so the caller keeps what it had rather than treating a bad response as "nothing
-        booked"; a recognised screen with no bookings returns [].
+        all - or its booked list is the wrong shape, or EDF mark that component as failed - so
+        the caller keeps what it had rather than treating a bad response as "nothing booked";
+        a recognised screen with no bookings returns [].
+
+        Only a slot with status SELECTED (or no status) is a booking. Unbooked entitlement is not
+        listed as slots (it is a count elsewhere on the screen), so any other status is skipped
+        rather than priced at 0p, and reported once per status through log when one is given.
         """
         if not isinstance(body, dict) or not isinstance(body.get("components"), list):
             return None
         booked = None
         for component in body["components"]:
             if isinstance(component, dict) and component.get("type") == "BOOKED_HOURS_LIST" and isinstance(component.get("props"), dict):
+                if component.get("status", "SUCCESS") != "SUCCESS":
+                    return None
                 booked = component["props"]
                 break
         if booked is None:
             return None
 
+        items = booked.get("items") or []
+        if not isinstance(items, list):
+            return None
         windows = []
-        for item in booked.get("items") or []:
+        skipped_statuses = set()
+        for item in items:
             if not isinstance(item, dict):
                 continue
-            for slot in item.get("rawTimeSlots") or []:
+            slots = item.get("rawTimeSlots") or []
+            if not isinstance(slots, list):
+                return None
+            for slot in slots:
                 if not isinstance(slot, dict):
+                    continue
+                status = slot.get("status", "SELECTED")
+                if status != "SELECTED":
+                    if log and status not in skipped_statuses:
+                        log(f"Warn: Kraken: Flextras slot {slot.get('date')} {slot.get('startTime')} has status {status!r}, not SELECTED - not treated as a booked free hour")
+                    skipped_statuses.add(status)
                     continue
                 start = KrakenAPI._flextras_slot_utc(slot.get("date"), slot.get("startTime"))
                 end = KrakenAPI._flextras_slot_utc(slot.get("date"), slot.get("endTime"))
@@ -1692,7 +1712,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             return None
         self.flextras_last_status = status
 
-        booked = self.parse_flextras_booked_hours(body)
+        booked = self.parse_flextras_booked_hours(body, log=self.log)
         if booked is None:
             self.log("Warn: Kraken: Flextras hours screen not recognised, keeping the booked hours already held")
         return booked
@@ -1969,10 +1989,10 @@ async def test_kraken_api(
             print(f"Body: {str(body)[:2000]}")
             print("The component treats this as 'Flextras not available' and keeps any booked hours it already holds.")
             return
-        print(f"Body: {json.dumps(body, indent=2)[:4000]}")
-        booked = kraken.parse_flextras_booked_hours(body)
+        print(f"Body: {json.dumps(body, indent=2)}")
+        booked = kraken.parse_flextras_booked_hours(body, log=print)
         if booked is None:
-            print("\nScreen NOT recognised (no BOOKED_HOURS_LIST component) - the component would keep what it had.")
+            print("\nScreen NOT recognised (no usable BOOKED_HOURS_LIST component) - the component would keep what it had.")
         elif not booked:
             print("\nScreen recognised, no hours booked.")
         else:

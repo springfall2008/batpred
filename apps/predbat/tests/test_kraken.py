@@ -2891,6 +2891,87 @@ def test_flextras_parse_skips_malformed_slots():
     assert KrakenAPI.parse_flextras_booked_hours(body) == [{"start": "2026-10-10T11:00:00+0000", "end": "2026-10-10T12:00:00+0000"}]
 
 
+def test_flextras_parse_reads_the_live_screen_shape():
+    """The BOOKED_HOURS_LIST component as EDF served it live on 25 Oct 2026 (identifiers replaced): one booked weekend morning."""
+    from kraken import KrakenAPI
+
+    slots = [{"slotId": f"SLOT-2026-10-31-0{hour}-0{hour + 1}", "date": "2026-10-31", "startTime": f"0{hour}:00", "endTime": f"0{hour + 1}:00", "status": "SELECTED"} for hour in range(4)]
+    body = {
+        "screen": "REWARD_HOURS",
+        "version": "1.0",
+        "components": [
+            {"id": "reward_hours_banner_1", "type": "REWARD_HOURS_BANNER", "order": 1, "status": "SUCCESS", "props": {"title": "No electricity hours"}},
+            {
+                "id": "booked_hours_list_1",
+                "type": "BOOKED_HOURS_LIST",
+                "order": 2,
+                "status": "SUCCESS",
+                "props": {
+                    "title": "Booked hours",
+                    "bonusHours": 4,
+                    "bonusHoursRemaining": 0,
+                    "totalRemainingHours": 0,
+                    "items": [{"id": "booked-1-20261031", "date": "2026-10-31T00:00:00.000Z", "dateInText": "Saturday, 31 October", "rawTimeSlots": slots, "isAfterCutOff": False}],
+                },
+            },
+            # Unbooked entitlement is a count in its own component, never a slot in the booked list
+            {"id": "hours_to_use_1", "type": "HOURS_TO_USE_LIST", "order": 3, "status": "SUCCESS", "props": {"hoursLeft": 0, "items": [{"id": "x", "type": "bonus"}]}},
+        ],
+    }
+    assert KrakenAPI.parse_flextras_booked_hours(body) == [{"start": "2026-10-31T00:00:00+0000", "end": "2026-10-31T04:00:00+0000"}]
+
+
+def test_flextras_parse_prices_only_selected_slots():
+    """Only a SELECTED slot (or one with no status) is a booking; any other status is skipped and logged once per parse."""
+    from kraken import KrakenAPI
+
+    available = dict(_flextras_slot("2026-10-10", "09:00", "10:00"), status="AVAILABLE")
+    released = dict(_flextras_slot("2026-10-10", "10:00", "11:00"), status="RELEASED")
+    released_again = dict(_flextras_slot("2026-10-10", "11:00", "12:00"), status="RELEASED")
+    no_status = {key: value for key, value in _flextras_slot("2026-10-10", "14:00", "15:00").items() if key != "status"}
+    body = _flextras_screen([{"rawTimeSlots": [available, released, released_again, _flextras_slot("2026-10-10", "12:00", "13:00"), no_status]}])
+
+    messages = []
+    assert KrakenAPI.parse_flextras_booked_hours(body, log=messages.append) == [
+        {"start": "2026-10-10T11:00:00+0000", "end": "2026-10-10T12:00:00+0000"},
+        {"start": "2026-10-10T13:00:00+0000", "end": "2026-10-10T14:00:00+0000"},
+    ]
+    assert len(messages) == 2, messages
+    assert any("AVAILABLE" in message for message in messages) and any("RELEASED" in message for message in messages), messages
+    # The log is optional, so existing callers are unchanged
+    assert KrakenAPI.parse_flextras_booked_hours(body) == [
+        {"start": "2026-10-10T11:00:00+0000", "end": "2026-10-10T12:00:00+0000"},
+        {"start": "2026-10-10T13:00:00+0000", "end": "2026-10-10T14:00:00+0000"},
+    ]
+
+
+def test_flextras_parse_wrong_shape_is_unrecognised_not_empty():
+    """A booked list of the wrong type, or one EDF mark as failed, is None (keep what is held), never [] and never raised on."""
+    from kraken import KrakenAPI
+
+    def screen_with_props(props, status=None):
+        """A screen whose BOOKED_HOURS_LIST carries the given props and component status."""
+        component = {"type": "BOOKED_HOURS_LIST", "props": props}
+        if status is not None:
+            component["status"] = status
+        return {"components": [component]}
+
+    slot = _flextras_slot("2026-10-10", "09:00", "10:00")
+    # items that are not a list: a dict would iterate its keys and read as "nothing booked"; a scalar would raise
+    assert KrakenAPI.parse_flextras_booked_hours(screen_with_props({"items": {"booked-1": {"rawTimeSlots": [slot]}}})) is None
+    assert KrakenAPI.parse_flextras_booked_hours(screen_with_props({"items": 5})) is None
+    assert KrakenAPI.parse_flextras_booked_hours(screen_with_props({"items": True})) is None
+    # rawTimeSlots that are not a list
+    assert KrakenAPI.parse_flextras_booked_hours(screen_with_props({"items": [{"rawTimeSlots": 3}]})) is None
+    assert KrakenAPI.parse_flextras_booked_hours(screen_with_props({"items": [{"rawTimeSlots": {"0": slot}}]})) is None
+    # A component EDF report as failed says nothing about what is booked
+    assert KrakenAPI.parse_flextras_booked_hours(screen_with_props({"items": []}, status="ERROR")) is None
+    # A successful component, or one with no status, is still read; absent items mean nothing booked
+    assert KrakenAPI.parse_flextras_booked_hours(screen_with_props({"items": [{"rawTimeSlots": [slot]}]}, status="SUCCESS")) == [{"start": "2026-10-10T08:00:00+0000", "end": "2026-10-10T09:00:00+0000"}]
+    assert KrakenAPI.parse_flextras_booked_hours(screen_with_props({})) == []
+    assert KrakenAPI.parse_flextras_booked_hours(screen_with_props({"items": [{"rawTimeSlots": None}]})) == []
+
+
 def test_flextras_run_publishes_booked_hours_and_wires_free_electricity():
     """An EDF account with booked hours gets a free electricity sensor wired into octopus_free_electricity."""
     api = _flextras_api()
