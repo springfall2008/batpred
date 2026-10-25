@@ -2368,7 +2368,12 @@ class Plan:
                     self.log("Unfiltered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, calc_percent_limit(self.charge_limit_best, self.soc_max)), self.reserve))
 
             # Plan comparison
-            if charge_window_best_prev is not None and not debug_mode:
+            if charge_window_best_prev is not None and not debug_mode and self.plan_made_by_version != self.running_version:
+                # An incumbent made by another version (typically restored after an upgrade) carries that code's
+                # clip and prune decisions, while its pre-clip snapshot can tie with the new plan's - so comparing
+                # would keep the old decisions in force. Always replace it.
+                self.log("Previous plan was made by Predbat {}, now running {} - using new plan".format(self.plan_made_by_version or "(unknown version)", self.running_version))
+            elif charge_window_best_prev is not None and not debug_mode:
                 # Score the plans as optimised rather than as clipped - see plan_scoring_pair()
                 score_new, score_prev = self.plan_scoring_pair(
                     (self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best),
@@ -2402,6 +2407,8 @@ class Plan:
 
             # Carry the pre-clip snapshot of whichever plan we kept into the next cycle
             self.plan_preclip = preclip_new
+            # Either way the plan in force was made, or kept, by the version running now
+            self.plan_made_by_version = self.running_version
             # The plan now in force has been weighed with the bird-in-hand credit, so its one-off tie-break is spent
             self.io_confirmed_tiebreak = False
 
@@ -3635,10 +3642,12 @@ class Plan:
         scenario only - one simulation per trial via run_prediction_metric(nominal_only=True). The
         removal is kept when the nominal metric does not get worse.
 
-        A removal that leaves the nominal metric unchanged (within eps) means the slot is dead in the
-        central forecast - phantom exports, dead freezes, charges that never charge - and it is
-        dropped on that alone, whatever the pv10/pv90 branches say (the #4453 phantoms only looked
-        valuable through a pv10 modelling quirk).
+        A removal that leaves the nominal metric unchanged (within eps), from a slot that does not do
+        its own job in its own window (see below), means the slot is dead in the central forecast -
+        phantom exports, dead freezes, charges that never charge, a charge to 50% while nominal sits at
+        55%, a hold that only limits discharge - and it is dropped on that alone, whatever the pv10/pv90
+        branches say (the #4453 phantoms only looked valuable through a pv10 modelling quirk). If the
+        battery really is lower than nominal when such a slot comes round, the replan then puts it back.
 
         A removal that makes the nominal metric better is a trade-off, not a dead slot: the slot moves
         real energy, and its value lies in the pv10/pv90 branches - a charge that buffers against a
@@ -3646,6 +3655,13 @@ class Plan:
         the full blended metric does not get worse either. The window it uses can close before the
         risk it covers would arrive (a cheap overnight rate ends hours before the evening shortfall),
         so a later replan cannot be relied on to put it back.
+
+        A slot that does its own job in its own window is a trade-off too, even when the nominal metric
+        does not move: in nominal, a charge raises the SoC across its window and an export lowers it,
+        each by more than soc_eps and by more than the SoC would move there without the slot. That is
+        a charge that charges, but whose energy a later limit cuts off the end of the same night. A
+        replan when the slot comes round sees the same battery as now, so it would not put the slot
+        back either.
 
         Runs after the pre-clip scoring snapshot (see calculate_plan), so plan selection still
         compares plans as optimised (#4403). Manual windows are preserved. Later removals are
@@ -3660,8 +3676,10 @@ class Plan:
         trial uses. An in-progress export worth anything at all fails the gate and is kept.
         """
         eps = 0.02
+        soc_eps = 0.1
         record_limit = self.end_record + self.minutes_now
         baseline = None
+        baseline_soc = {}
         blended_baseline = None
         start_metric = None
         pruned = 0
@@ -3678,15 +3696,35 @@ class Plan:
                     continue
                 if baseline is None:
                     baseline = self.run_prediction_metric(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record, nominal_only=True)[0]
+                    baseline_soc = dict(self.predict_soc)
                     start_metric = baseline
                 limits[window_n] = off_value
                 trial = self.run_prediction_metric(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record, nominal_only=True)[0]
+                trial_soc = dict(self.predict_soc)
                 trials += 1
                 if trial > baseline + eps:
                     limits[window_n] = limit
                     continue
 
-                if trial < baseline - eps:
+                # Does the slot do its own job in its own window in nominal - a charge that raises the
+                # SoC across it, or an export that lowers it, by more than it would move without the
+                # slot? A hold that only limits discharge does neither.
+                window_start_minute = int((max(window["start"], self.minutes_now) - self.minutes_now) / 5) * 5
+                window_end_minute = int((min(window["end"], record_limit) - self.minutes_now) / 5) * 5
+                # predict_soc stops one step short of the forecast, so a window reaching the end of it
+                # (end_record is the whole forecast when the plan has no charge windows) reads the last step
+                window_end_minute = min(window_end_minute, self.forecast_minutes - PREDICT_STEP)
+                soc_start = baseline_soc.get(window_start_minute)
+                soc_with = baseline_soc.get(window_end_minute)
+                soc_without = trial_soc.get(window_end_minute)
+                moves_soc = False
+                if soc_start is not None and soc_with is not None and soc_without is not None:
+                    if typ == "charge":
+                        moves_soc = (soc_with - soc_start) > soc_eps and (soc_with - soc_without) > soc_eps
+                    else:
+                        moves_soc = (soc_start - soc_with) > soc_eps and (soc_without - soc_with) > soc_eps
+
+                if trial < baseline - eps or moves_soc:
                     # The slot changes the nominal outcome, so it is a trade-off rather than dead -
                     # only drop it if the blended plan does not pay for it
                     blended_trial = self.run_prediction_metric(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record)[0]
@@ -3717,6 +3755,7 @@ class Plan:
                         self.log("Prune dead {} slot {} {}-{} limit {} - nominal metric {} vs baseline {}".format(typ, window_n, self.time_abs_str(window["start"]), self.time_abs_str(window["end"]), limit, dp2(trial), dp2(baseline)))
 
                 baseline = trial
+                baseline_soc = trial_soc
                 pruned += 1
         if pruned:
             # The trials run on the nominal scenario only, so report the full metric and cost of the
