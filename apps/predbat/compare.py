@@ -96,6 +96,7 @@ COMPARE_PLAN_STATE = (
     "export_window_best",
     "export_limits_best",
     "plan_preclip",
+    "plan_made_by_version",
     "end_record",
     "plan_valid",
     "plan_last_updated",

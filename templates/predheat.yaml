@@ -43,6 +43,9 @@ predbat:
     # When true models a smart thermostat that turns the heating ahead of the target temperature so it reaches it just in time
     smart_thermostat: True
 
+    # Longest lead time in minutes that Predheat models before a setpoint rise, set to the longest early start your thermostat makes (uncapped when not set)
+    # smart_thermostat_max_minutes: 60
+
     # Past energy consumption of heating in KWh, scaled with heating_energy_scaling
     heating_energy: sensor.boiler_nrgheat
     heating_energy_scaling: 1.4

@@ -60,7 +60,9 @@ GIVTCP_PAUSE_MODES = ["Disabled", "PauseCharge", "PauseDischarge", "PauseBoth"]
 #
 # These inverters accept the write and report success, but it never persists, so the caller sees a
 # permanent mismatch and rewrites every cycle. Not publishing the entity at all is what stops that:
-# Inverter.adjust_force_export already leaves a target it cannot read alone.
+# Inverter.adjust_force_export already leaves a target it cannot read alone. automatic_config() also
+# leaves discharge_target_soc unclaimed for these models, so nothing is bound to an entity that is
+# never published.
 DISCHARGE_TARGET_UNSUPPORTED_MODELS = ("Ac", "Hybrid_gen1", "Hybrid_gen2")
 
 # The same inverters identified from Invertor_Type, which is what GivTCP v3 actually reports in
@@ -78,6 +80,23 @@ DISCHARGE_TARGET_UNSUPPORTED_TYPES = (
     frozenset({"gen", "1", "hybrid"}),
     frozenset({"gen", "2", "hybrid"}),
 )
+
+
+def discharge_target_unsupported(rest):
+    """
+    Whether this inverter has no working Discharge_Target_SOC_1 register (#4517, #5679).
+
+    Matches both the raw GivTCP model code and the readable Invertor_Type, using the two tables
+    above. publish_data() uses it to withhold the entity, and automatic_config() to leave
+    discharge_target_soc unclaimed, so the two cannot disagree about which inverters have it.
+    """
+    rest_data = rest.inverter.rest_data
+    if not rest_data:
+        return False
+    inverter_model = rest_data.get("raw", {}).get("invertor", {}).get("model", "")
+    inverter_type_tokens = frozenset(re.findall(r"[a-z]+|\d+", rest.inverter_type().lower()))
+    return inverter_model in DISCHARGE_TARGET_UNSUPPORTED_MODELS or inverter_type_tokens in DISCHARGE_TARGET_UNSUPPORTED_TYPES
+
 
 # Control.Mode values. Predbat only ever writes Eco or Timed Export, but the inverter reports the
 # others, and an option list that omitted them could not represent the mode the inverter is in.
@@ -665,8 +684,7 @@ class GivTCPComponent(ComponentBase):
                 # Publishing one would restart the every-cycle rewrite loop of #4517, because the write
                 # reports success and then silently fails to persist.
                 inverter_model = rest.inverter.rest_data.get("raw", {}).get("invertor", {}).get("model", "")
-                inverter_type_tokens = frozenset(re.findall(r"[a-z]+|\d+", rest.inverter_type().lower()))
-                model_unsupported = inverter_model in DISCHARGE_TARGET_UNSUPPORTED_MODELS or inverter_type_tokens in DISCHARGE_TARGET_UNSUPPORTED_TYPES
+                model_unsupported = discharge_target_unsupported(rest)
                 if not rest.rest_v3:
                     # v2 has no /setDischargeTarget - see GIVTCP_AUTO_CONFIG_DISCHARGE_TARGET_KEYS
                     pass
@@ -958,10 +976,10 @@ class GivTCPComponent(ComponentBase):
         else:
             self.log("Info: GivTCP: Enable_Charge_Target is not reported by every inverter - leaving charge_limit_enable to your apps.yaml config")
 
-        if all(self.rest[n].rest_v3 for n in discovered):
+        if all(self.rest[n].rest_v3 and not discharge_target_unsupported(self.rest[n]) for n in discovered):
             keys += GIVTCP_AUTO_CONFIG_DISCHARGE_TARGET_KEYS
         else:
-            self.log("Info: GivTCP: the export target register needs GivTCP v3 on every inverter - leaving discharge_target_soc to your apps.yaml config")
+            self.log("Info: GivTCP: the export target register needs GivTCP v3 and a model that supports it on every inverter - leaving discharge_target_soc to your apps.yaml config")
 
         if not all(self.rest[n].rest_v3 for n in discovered):
             self.log("Info: GivTCP: pause control needs GivTCP v3 on every inverter - leaving pause_mode/pause_start_time/pause_end_time to your apps.yaml config")
