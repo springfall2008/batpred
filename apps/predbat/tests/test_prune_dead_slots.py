@@ -45,6 +45,7 @@ def run_prune_dead_slots_tests(my_predbat):
     failed |= test_prune_drops_slot_moving_trivial_soc_as_dead(my_predbat)
     failed |= test_prune_drops_hold_that_only_limits_discharge(my_predbat)
     failed |= test_prune_keeps_export_that_exports_in_its_window(my_predbat)
+    failed |= test_prune_keeps_export_ending_at_forecast_horizon(my_predbat)
     return failed
 
 
@@ -860,6 +861,42 @@ def test_prune_keeps_export_that_exports_in_its_window(my_predbat):
 
     if export_mode_of(my_predbat.export_limits_best[0]) == EXPORT_MODE_IDLE:
         print("ERROR: Export that exports in its own window was pruned as dead although the blended metric got worse")
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_prune_keeps_export_ending_at_forecast_horizon(my_predbat):
+    """An export that reaches the end of the forecast is judged on its SoC like any other.
+
+    Both engines record predict_soc from 0 to forecast_minutes - 5, so when end_record is the whole
+    forecast (a plan with no charge windows) there is no key at the window's clipped end. The check
+    must read the last simulated step instead of finding nothing and calling the slot dead.
+    """
+    print("**** test_prune_keeps_export_ending_at_forecast_horizon ****")
+    failed = False
+    setup(my_predbat)
+    my_predbat.forecast_minutes = 24 * 60
+    my_predbat.end_record = 24 * 60
+
+    my_predbat.export_window_best = [make_window(720 + 1380, 720 + 1440)]
+    my_predbat.export_limits_best = [0.0]
+    blended = {((), (0.0,)): 100.0, ((), (100.0,)): 101.0}
+    soc = {
+        ((), (0.0,)): {1380: 5.0, 1435: 4.1},  # exports in its window, up to the last simulated step
+        ((), (100.0,)): {1380: 5.0, 1435: 5.0},
+    }
+    install_metric_stub(my_predbat, {}, default=100.0, blended=blended, soc=soc)
+
+    try:
+        my_predbat.prune_dead_plan_slots()
+    finally:
+        restore_metric(my_predbat)
+
+    if export_mode_of(my_predbat.export_limits_best[0]) == EXPORT_MODE_IDLE:
+        print("ERROR: Export ending at the forecast horizon was pruned as dead although it exports in its window and the blended metric got worse")
         failed = True
 
     if not failed:

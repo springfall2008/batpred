@@ -3711,6 +3711,9 @@ class Plan:
                 # slot? A hold that only limits discharge does neither.
                 window_start_minute = int((max(window["start"], self.minutes_now) - self.minutes_now) / 5) * 5
                 window_end_minute = int((min(window["end"], record_limit) - self.minutes_now) / 5) * 5
+                # predict_soc stops one step short of the forecast, so a window reaching the end of it
+                # (end_record is the whole forecast when the plan has no charge windows) reads the last step
+                window_end_minute = min(window_end_minute, self.forecast_minutes - PREDICT_STEP)
                 soc_start = baseline_soc.get(window_start_minute)
                 soc_with = baseline_soc.get(window_end_minute)
                 soc_without = trial_soc.get(window_end_minute)
