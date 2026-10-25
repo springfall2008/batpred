@@ -199,8 +199,12 @@ def apply_session(charger, result):
         charger.session_energy_kwh = 0.0
     watt_hours = _to_float(result.get("watt_hours"))
     if watt_hours is not None:
+        kwh = round(watt_hours / 1000.0, 3)
+        if charger.api_version >= 3 and "session" not in result and kwh < charger.session_energy_kwh:
+            # The V3 API sends no session id, and its watt_hours drops to 0 when a session ends
+            charger.session_energy_kwh = 0.0
         # The session's maximum, so the sensor only ever rises within a session
-        charger.session_energy_kwh = max(charger.session_energy_kwh, round(watt_hours / 1000.0, 3))
+        charger.session_energy_kwh = max(charger.session_energy_kwh, kwh)
 
 
 def apply_pilot(charger, result):
