@@ -515,7 +515,6 @@ class PredHeat:
         Work out energy costs today (approx)
         """
         day_cost = 0
-        day_cost_import = 0
         day_energy = 0
         day_cost_time = {}
 
