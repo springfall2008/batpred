@@ -713,7 +713,8 @@ def mark_pr_opened(issue_number, cleanup=False):
 
     cleanup also queues BOT_CLEANUP. Only process_bot_pr_issue() passes it, and only for a
     PR its own create_pr() just opened: a PR found already open on entry may be someone's
-    own branch, and BOT_CLEANUP is the label that commits and pushes to it.
+    own branch, and BOT_CLEANUP is the label that commits and pushes to it. The same flag
+    marks the PR as the bot's and assigns it to the requester (link_bot_pr()).
     """
     subprocess.run(
         ["gh", "issue", "edit", str(issue_number), "--repo", REPO, "--remove-label", "BOT_PR", "--add-label", "BOT_PR_OPENED"],
@@ -722,6 +723,48 @@ def mark_pr_opened(issue_number, cleanup=False):
     pr_number = find_pr_number_for_issue(issue_number)
     if pr_number is not None:
         flag_pr_for_review(pr_number, cleanup=cleanup)
+        if cleanup:
+            link_bot_pr(pr_number, issue_number)
+
+
+def find_bot_pr_requester(issue_number):
+    """Return the login of whoever last added BOT_PR to the issue, or None if it can't be found.
+
+    The PR is always authored by the bot's credential, so the issue's label event is the only
+    record of who asked for it. Read after mark_pr_opened() has swapped BOT_PR off: the
+    labeled event stays in the issue's history either way.
+    """
+    result = subprocess.run(
+        ["gh", "api", "--paginate", f"repos/{REPO}/issues/{issue_number}/events", "--jq", '.[] | select(.event == "labeled" and .label.name == "BOT_PR") | .actor.login'],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    logins = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+    return logins[-1] if logins else None
+
+
+def link_bot_pr(pr_number, issue_number):
+    """Mark a PR the BOT_PR flow just opened as a bot PR, and assign it to whoever requested it.
+
+    BOT_PR_OPENED on the PR (not just the issue) makes bot PRs listable by label, and the
+    requester as assignee makes them show up under that person's assigned PRs, since the PR's
+    author is always the bot's credential. Best effort: the PR is already open and flagged
+    for review, so a failure here is logged and must not fail the flow. The assignee is a
+    separate edit so an unassignable login can't also drop the label.
+    """
+    label = subprocess.run(["gh", "pr", "edit", str(pr_number), "--repo", REPO, "--add-label", "BOT_PR_OPENED"], capture_output=True, text=True, check=False)
+    if label.returncode != 0:
+        print(f"[pr] PR #{pr_number}: could not add BOT_PR_OPENED: {(label.stderr or '').strip()}", flush=True)
+    requester = find_bot_pr_requester(issue_number)
+    if requester is None:
+        print(f"[pr] PR #{pr_number}: no BOT_PR requester found on issue #{issue_number}, not assigning", flush=True)
+        return
+    assign = subprocess.run(["gh", "pr", "edit", str(pr_number), "--repo", REPO, "--add-assignee", requester], capture_output=True, text=True, check=False)
+    if assign.returncode != 0:
+        print(f"[pr] PR #{pr_number}: could not assign requester {requester}: {(assign.stderr or '').strip()}", flush=True)
 
 
 class FlowFailed(subprocess.CalledProcessError):

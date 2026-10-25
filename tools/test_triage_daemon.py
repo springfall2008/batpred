@@ -376,6 +376,58 @@ class LabelSwapTests(unittest.TestCase):
         calls = [call.args[0] for call in mock_run.call_args_list]
         self.assertFalse(any(call[:3] == ["gh", "pr", "edit"] for call in calls))
 
+    @staticmethod
+    def _bot_pr_gh(requester_stdout="latest-requester\n", requester_rc=0):
+        """A subprocess.run stand-in: the PR search finds #4742, the events lookup prints
+        requester_stdout, and every other gh call succeeds."""
+
+        def fake_run(cmd, *args, **kwargs):
+            if cmd[:3] == ["gh", "pr", "list"]:
+                return MagicMock(stdout=json.dumps([{"number": 4742}]), returncode=0)
+            if cmd[:2] == ["gh", "api"]:
+                return MagicMock(stdout=requester_stdout, returncode=requester_rc, stderr="")
+            return MagicMock(stdout="", returncode=0, stderr="")
+
+        return fake_run
+
+    @patch("triage_daemon.subprocess.run")
+    def test_mark_pr_opened_with_cleanup_labels_and_assigns_the_requester(self, mock_run):
+        """A PR the bot just opened gets BOT_PR_OPENED itself and is assigned to whoever added
+        BOT_PR, since its author is always the bot's credential."""
+        mock_run.side_effect = self._bot_pr_gh()
+        triage_daemon.mark_pr_opened(4720, cleanup=True)
+        calls = [call.args[0] for call in mock_run.call_args_list]
+        self.assertIn(["gh", "pr", "edit", "4742", "--repo", "springfall2008/batpred", "--add-label", "BOT_PR_OPENED"], calls)
+        self.assertIn(["gh", "pr", "edit", "4742", "--repo", "springfall2008/batpred", "--add-assignee", "latest-requester"], calls)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_mark_pr_opened_without_cleanup_does_not_claim_the_pr(self, mock_run):
+        """A PR found already open may be a person's own - it is neither labelled as the bot's
+        nor reassigned."""
+        mock_run.side_effect = self._bot_pr_gh()
+        triage_daemon.mark_pr_opened(4720)
+        calls = [call.args[0] for call in mock_run.call_args_list]
+        self.assertFalse(any(call[:3] == ["gh", "pr", "edit"] and ("BOT_PR_OPENED" in call or "--add-assignee" in call) for call in calls))
+
+    @patch("triage_daemon.subprocess.run")
+    def test_link_bot_pr_skips_assignee_when_requester_lookup_fails(self, mock_run):
+        """The PR is already open by now, so a failed events lookup still labels it, skips the
+        assignee, and does not raise."""
+        mock_run.side_effect = self._bot_pr_gh(requester_stdout="", requester_rc=1)
+        triage_daemon.link_bot_pr(4742, 4720)
+        calls = [call.args[0] for call in mock_run.call_args_list]
+        self.assertIn(["gh", "pr", "edit", "4742", "--repo", "springfall2008/batpred", "--add-label", "BOT_PR_OPENED"], calls)
+        self.assertFalse(any("--add-assignee" in call for call in calls))
+
+    @patch("triage_daemon.subprocess.run")
+    def test_find_bot_pr_requester_takes_the_latest_label_event(self, mock_run):
+        """BOT_PR re-added after a failure has several labeled events, one line each across
+        pages; the most recent one is the person who asked this time."""
+        mock_run.side_effect = self._bot_pr_gh(requester_stdout="earlier-requester\n\nlatest-requester\n")
+        self.assertEqual(triage_daemon.find_bot_pr_requester(4720), "latest-requester")
+        cmd = mock_run.call_args_list[0].args[0]
+        self.assertEqual(cmd[:4], ["gh", "api", "--paginate", "repos/springfall2008/batpred/issues/4720/events"])
+
     @patch("triage_daemon.subprocess.run")
     def test_mark_pr_failed_swaps_labels(self, mock_run):
         """Removes BOT_PR and adds BOT_PR_FAILED, scoped to the configured repo."""
