@@ -175,10 +175,11 @@ KRAKEN_INTROSPECT_TYPE_QUERY = """{{
 # SmartFlex device discovery — a connected EV / charge point the customer enrolled for provider-
 # managed smart charging (Octopus Intelligent Go, E.ON NextDrive, EDF GoElectric SmartFlex, …).
 # Schema matches the reference EDF/E.ON HA integration. Also used by the CLI --dispatches check.
+# The device provider field is not requested: Kraken deprecated it (removal on or after 2027-04-15)
+# and nothing reads it, so the stored provider is filled from make, as the Octopus component does.
 KRAKEN_DEVICES_QUERY = """{{
   devices(accountNumber: "{account_number}") {{
     id
-    provider
     deviceType
     status {{ current }}
     __typename
@@ -1417,7 +1418,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             existing = self.intelligent_devices.get(device_id, {})
             live[device_id] = {
                 "device_id": device_id,
-                "provider": dev.get("provider"),
+                "provider": dev.get("make"),
                 "make": dev.get("make"),
                 "model": dev.get("model"),
                 "is_charger": dev.get("__typename") == "SmartFlexChargePoint",

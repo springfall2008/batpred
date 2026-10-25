@@ -2177,7 +2177,7 @@ def test_discover_smart_devices_filters_live_ev():
     api.async_graphql_query = AsyncMock(
         return_value={
             "devices": [
-                {"id": "dev-ev-1", "deviceType": "ELECTRIC_VEHICLES", "status": {"current": "LIVE"}, "__typename": "SmartFlexVehicle", "make": "Tesla", "model": "M3", "provider": "JEDLIX"},
+                {"id": "dev-ev-1", "deviceType": "ELECTRIC_VEHICLES", "status": {"current": "LIVE"}, "__typename": "SmartFlexVehicle", "make": "Tesla", "model": "M3"},
                 {"id": "dev-meter", "deviceType": "ELECTRICITY_METERS", "status": {"current": "LIVE"}, "__typename": "SmartFlexDevice"},
                 {"id": "dev-ev-suspended", "deviceType": "ELECTRIC_VEHICLES", "status": {"current": "SUSPENDED"}, "__typename": "SmartFlexVehicle"},
             ]
@@ -2188,6 +2188,17 @@ def test_discover_smart_devices_filters_live_ev():
     dev = api.intelligent_devices["dev-ev-1"]
     assert dev["make"] == "Tesla" and dev["is_charger"] is False
     assert dev["planned_dispatches"] == [] and dev["completed_dispatches"] == []
+    # provider is filled from make, as the Octopus component does (#5754)
+    assert dev["provider"] == "Tesla"
+
+
+def test_devices_query_does_not_request_deprecated_provider():
+    """Kraken deprecated the SmartFlex device provider field (removal on or after 2027-04-15); asking for it would fail every devices query (#5754)."""
+    from kraken import KRAKEN_DEVICES_QUERY
+
+    fields = KRAKEN_DEVICES_QUERY.format(account_number="A-1234ABCD").split()
+    assert "provider" not in fields, KRAKEN_DEVICES_QUERY
+    assert "make" in fields and "deviceType" in fields
 
 
 def test_normalize_dispatches_field_mapping():
