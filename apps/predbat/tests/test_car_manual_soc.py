@@ -902,6 +902,88 @@ def _run_late_history(my_predbat):
     for bad in (-1.0, True):
         dummy[sensor]["counted"] = bad
         failed |= _check("t61 read {}".format(bad), my_predbat.car_manual_soc_read(0)["counted"] == 0.0, "sensor {}".format(dummy[sensor]))
+
+    print("Test 62: a cycle with no history while energy is counted leaves the time and the count alone, so nothing is added twice")
+    _one_car(my_predbat, args, kwh=10.0)
+    _plug(my_predbat, "on")
+    my_predbat.car_manual_soc_track()
+    _since(my_predbat, 120)
+    my_predbat.car_charging_energy = _history([(100, 1.0), (5, 0.5)])
+    my_predbat.car_manual_soc_track()
+    record = dict(my_predbat.car_manual_soc_state[0])
+    my_predbat.car_manual_soc_energy_history = lambda car_n, minutes: None
+    try:
+        my_predbat.car_manual_soc_track()
+    finally:
+        del my_predbat.car_manual_soc_energy_history
+    kept = my_predbat.car_manual_soc_state[0]
+    failed |= _check("t62 kept", kept["since"] == record["since"] and kept["counted"] == 1.5, "record {} was {}".format(kept, record))
+    my_predbat.car_manual_soc_track()
+    failed |= _check("t62 not twice", abs(_manual_kwh(my_predbat) - 11.5) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+
+    print("Test 63: a cycle with nothing new reads the history once, for the total and the window the time moves up to")
+    _one_car(my_predbat, args, kwh=10.0)
+    _plug(my_predbat, "on")
+    my_predbat.car_manual_soc_track()
+    _since(my_predbat, 120)
+    my_predbat.car_charging_energy = _history([(100, 1.0), (5, 0.5)])
+    my_predbat.car_manual_soc_track()
+    reads = []
+    read = my_predbat.car_manual_soc_energy_history
+    my_predbat.car_manual_soc_energy_history = lambda car_n, minutes: reads.append(minutes) or read(car_n, minutes)
+    try:
+        my_predbat.car_manual_soc_track()
+    finally:
+        del my_predbat.car_manual_soc_energy_history
+    record = my_predbat.car_manual_soc_state[0]
+    failed |= _check("t63 one read", len(reads) == 1, "reads {}".format(reads))
+    failed |= _check("t63 moved up", record["since"] == (my_predbat.now_utc - timedelta(minutes=CAR_MANUAL_SOC_LATE_MINUTES)).isoformat() and record["counted"] == 0.5, "record {}".format(record))
+    failed |= _check("t63 kwh", abs(_manual_kwh(my_predbat) - 11.5) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+
+    print("Test 64: a read that shows less than is already counted leaves the time alone, so a full read after it adds nothing twice")
+    _one_car(my_predbat, args, kwh=10.0)
+    _plug(my_predbat, "on")
+    my_predbat.car_manual_soc_track()
+    _since(my_predbat, 180)
+    my_predbat.car_charging_energy = _history([(170, 3.5), (50, 1.5), (10, 1.0)])
+    my_predbat.car_manual_soc_track()
+    my_predbat.car_charging_energy = _history([(10, 1.0)])
+    my_predbat.car_manual_soc_track()
+    my_predbat.car_charging_energy = _history([(170, 3.5), (50, 1.5), (10, 1.0)])
+    my_predbat.car_manual_soc_track()
+    failed |= _check("t64 not twice", abs(_manual_kwh(my_predbat) - 16.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+
+    print("Test 65: when the cap bites counting starts again from now, so a counter glitch is not let through cycle by cycle")
+    _one_car(my_predbat, args, kwh=10.0)
+    _plug(my_predbat, "on")
+    my_predbat.car_manual_soc_track()
+    _since(my_predbat, 60)
+    start = my_predbat.now_utc
+    points = [(minute, 7.0 / 60) for minute in range(1, 61)] + [(30, 20.0)]
+    my_predbat.car_charging_energy = _history(points)
+    my_predbat.car_manual_soc_track()
+    capped = _manual_kwh(my_predbat)
+    my_predbat.now_utc = start + timedelta(minutes=5)
+    my_predbat.car_charging_energy = _history([(ago + 5, kwh) for ago, kwh in points])
+    my_predbat.car_manual_soc_track()
+    my_predbat.now_utc = start
+    failed |= _check("t65 capped", abs(capped - (10.0 + 7.4 * 1.1 + 0.1)) < 0.001, "kwh {}".format(capped))
+    failed |= _check("t65 glitch gone", abs(_manual_kwh(my_predbat) - capped) < 0.001, "kwh {} after the cap was {}".format(_manual_kwh(my_predbat), capped))
+
+    print("Test 66: a quiet cycle that changes what is counted publishes it, so a restart after the history has moved on still counts the next charge")
+    _one_car(my_predbat, args, kwh=10.0)
+    _plug(my_predbat, "on")
+    my_predbat.car_manual_soc_track()
+    _since(my_predbat, 120)
+    my_predbat.car_charging_energy = _history([(100, 1.0)])
+    my_predbat.car_manual_soc_track()
+    my_predbat.car_manual_soc_track()
+    record = my_predbat.car_manual_soc_state[0]
+    failed |= _check("t66 published", dummy.get(sensor, {}).get("counted") == 0.0 and dummy[sensor].get("since") == record["since"], "sensor {} record {}".format(dummy.get(sensor), record))
+    _restart(my_predbat)
+    my_predbat.car_charging_energy = _history([(5, 2.0)])
+    my_predbat.car_manual_soc_track()
+    failed |= _check("t66 next charge", abs(_manual_kwh(my_predbat) - 13.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
     return failed
 
 
