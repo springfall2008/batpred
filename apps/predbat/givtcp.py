@@ -618,9 +618,15 @@ class GivTCPComponent(ComponentBase):
                 # comparing a stale clock. Unavailable clears that reading. It is recorded in
                 # published_discovery only when a real clock was seen first: an endpoint that
                 # has never supplied one must not gain the capability from the placeholder.
+                # A block that resolves but carries no usable Invertor_Time (absent, null, or a
+                # truthy non-dict from the serial-named path) leaves the clock just as stale, so the
+                # unavailable publish below keys on the clock itself, not on the block resolving.
                 inverter_details = rest.inverter_details()
+                inverter_time = inverter_details.get("Invertor_Time") if isinstance(inverter_details, dict) else None
                 if not inverter_details:
                     self.log("Warn: GivTCP: inverter {} at {} - REST data lacked identifiable inverter details".format(n, rest.inverter.rest_api))
+                elif not inverter_time:
+                    self.log("Warn: GivTCP: inverter {} at {} - inverter details carried no usable Invertor_Time".format(n, rest.inverter.rest_api))
 
                 # The rate entities carry the inverter's real maximum rate as their "max" attribute, not
                 # the generic ceiling in GIVTCP_CONTROLS. Inverter.__init__ derives battery_rate_max_raw
@@ -788,11 +794,10 @@ class GivTCPComponent(ComponentBase):
                     self.dashboard_item(self._entity_id("sensor", n, "battery_temperature"), state=battery_temperature, attributes=self._attributes(n, "battery_temperature"), app="givtcp")
                     published.add("battery_temperature")
 
-                inverter_time = inverter_details.get("Invertor_Time") if isinstance(inverter_details, dict) else None
                 if inverter_time:
                     self.dashboard_item(self._entity_id("sensor", n, "inverter_time"), state=inverter_time, attributes=self._attributes(n, "inverter_time"), app="givtcp")
                     published.add("inverter_time")
-                elif not inverter_details and "inverter_time" in published:
+                elif "inverter_time" in published:
                     self.dashboard_item(self._entity_id("sensor", n, "inverter_time"), state="unavailable", attributes=self._attributes(n, "inverter_time"), app="givtcp")
 
                 if max_battery_rate:

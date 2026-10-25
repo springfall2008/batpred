@@ -3087,6 +3087,58 @@ def test_unresolved_details_do_not_discover_inverter_time(my_predbat=None):
     return 0
 
 
+def _clock_warnings(messages):
+    """Log lines from one publish pass that report a details block with no usable clock."""
+    return [message for message in messages if "no usable Invertor_Time" in message]
+
+
+def test_resolved_details_without_a_clock_clear_a_stale_clock(my_predbat=None):
+    """
+    A details block that resolves but has no usable Invertor_Time must not keep the previous clock.
+
+    Covers an absent and a null Invertor_Time on the named block. The warning names the missing
+    clock rather than missing details, once per pass. An endpoint that never reported a clock
+    publishes nothing and gains no inverter_time discovery from the placeholder.
+    """
+    for label in ("absent", "null"):
+        base, component = _make_component()
+        good = _rest_data_blob(version="3.0.4")
+        good["Invertor_Details"] = {"Invertor_Serial_Number": "EA1", "Invertor_Time": "2024-12-30T13:07:22+00:00", "Battery_Capacity_kWh": 9.52}
+        component.rest[0].inverter.rest_data = good
+        run_async(component.publish_data())
+        assert base.entities["sensor.predbat_givtcp_0_inverter_time"]["state"] == "2024-12-30T13:07:22+00:00", label
+
+        no_clock = _rest_data_blob(version="3.0.4")
+        no_clock["Invertor_Details"] = {"Invertor_Serial_Number": "EA1", "Battery_Capacity_kWh": 9.52}
+        if label == "null":
+            no_clock["Invertor_Details"]["Invertor_Time"] = None
+        component.rest[0].inverter.rest_data = no_clock
+        messages = _watch_logs(base, component)
+        run_async(component.publish_data())
+
+        assert base.entities["sensor.predbat_givtcp_0_inverter_time"]["state"] == "unavailable", label
+        assert base.entities["sensor.predbat_givtcp_0_soc_max"]["state"] == 9.52, label
+        assert _details_warnings(messages) == [], f"{label} reported missing details {_details_warnings(messages)}"
+        warnings = _clock_warnings(messages)
+        assert len(warnings) == 1, f"{label}: expected one missing-clock warning, got {warnings}"
+        assert "inverter 0" in warnings[0] and "http://givtcp:6345" in warnings[0], warnings[0]
+
+        component.rest[0].inverter.rest_data = good
+        run_async(component.publish_data())
+        assert base.entities["sensor.predbat_givtcp_0_inverter_time"]["state"] == "2024-12-30T13:07:22+00:00", label
+
+    base, component = _make_component()
+    _mark_discovered(component)
+    no_clock = _rest_data_blob(version="3.0.4")
+    no_clock["Invertor_Details"] = {"Invertor_Serial_Number": "EA1", "Battery_Capacity_kWh": 9.52}
+    component.rest[0].inverter.rest_data = no_clock
+    run_async(component.publish_data())
+    assert "sensor.predbat_givtcp_0_inverter_time" not in base.entities
+    assert "inverter_time" not in component.published_discovery.get(0, set())
+    print("PASS: a resolved details block with no clock clears a stale clock")
+    return 0
+
+
 def test_givtcp_component(my_predbat=None):
     """
     ======================================================================
@@ -3126,6 +3178,7 @@ def test_givtcp_component(my_predbat=None):
         ("details_recovered", test_recovered_details_publish_without_a_missing_details_warning, "null raw serial still publishes inverter details"),
         ("details_stale_clock", test_unresolved_details_clear_a_stale_clock, "unresolved details clear a stale inverter clock"),
         ("details_no_clock_discovery", test_unresolved_details_do_not_discover_inverter_time, "unresolved details do not discover inverter_time"),
+        ("details_no_clock_value", test_resolved_details_without_a_clock_clear_a_stale_clock, "resolved details without a clock clear a stale clock"),
         ("slot_no_status", test_slot_write_before_any_status_is_refused_not_fabricated, "slot write refused with no status"),
         ("slot_with_status", test_slot_write_still_works_once_status_is_known, "slot write preserves the other end"),
         ("dt_not_v2", test_discharge_target_not_published_on_v2, "no discharge target on v2"),
