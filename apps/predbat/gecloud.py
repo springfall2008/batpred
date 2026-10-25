@@ -614,10 +614,20 @@ class GECloudDirect(ComponentBase, CarChargerControl):
     # GivEnergy's cloud applies a write some seconds after accepting it; the GEC and GEE rows wait 10
     WRITE_AND_POLL_SLEEP = 10
 
-    def initialize(self, ge_cloud_direct, api_key, automatic, automatic_evc=False, evc_control=False):
+    def initialize(self, ge_cloud_direct, api_key, automatic, automatic_evc=False, evc_control=False, inverter_control=True, evc_direct=False):
         """Initialise the GE Cloud Direct component"""
         self.api_key = api_key
         self.automatic = automatic
+        # Each role has a monitor switch and a control switch, so neither has to know about the other.
+        # Inverter: ge_cloud_direct monitors it, ge_cloud_inverter_control also lets Predbat control it -
+        # wire it up with ge_cloud_automatic and write its default settings. Off, a change the user makes
+        # to one of its entities is still sent; Predbat just adds no write of its own.
+        # EV charger: ge_cloud_direct or ge_cloud_evc_direct monitors it, ge_cloud_evc_control drives it.
+        # ge_cloud_evc_direct alone is for a site whose inverter is run by something else (GivTCP, the
+        # GivEnergy app): the inverters are then never read, written or reported.
+        self.inverter_monitor = bool(ge_cloud_direct)
+        self.inverter_control = bool(inverter_control) and self.inverter_monitor
+        # evc_direct needs nothing further here: it is one of the settings that start this component at all
         # Kept apart from automatic, which existing users already have on: wiring the
         # chargers into the car planning registers a car and moves num_cars, so it has to
         # be something a user turns on rather than something an upgrade does to them.
@@ -629,6 +639,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         self.register_list = {}
         self.settings = {}
         self.status = {}
+        self.live_display_samples = {}  # unmerged measured samples, never sensor defaults
         self.meter = {}
         self.info = {}
         self.register_entity_map = {}
@@ -842,7 +853,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         Uses the live read only attribute, not just the switch, because an active Axle VPP event
         forces read only through the attribute alone and the gate must be left to Axle then.
         """
-        if self.read_only_now() or not self.force_charge_is_charge_control(device):
+        if not self.inverter_control or self.read_only_now() or not self.force_charge_is_charge_control(device):
             return False
         registers = self.settings.get(device, {})
         changed = False
@@ -1114,6 +1125,21 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             self.log("GECloud: Warn: Unrecognised EV charger status '{}', treating it as no car connected - please report it so it can be added".format(status))
         return False
 
+    def evc_car_plugged(self, status):
+        """
+        binary_sensor.<prefix>_evc_car_plugged, for car_charging_plugged: on with a car connected, off only when the
+        status positively says nothing is plugged in, and unavailable otherwise (offline, faulted, a status not known).
+
+        Unlike _evc_car_connected, a charger dropping offline is no reading rather than an unplug, so it does not reset
+        the manual car SoC.
+        """
+        key = evc_status_key(status)
+        if key in EVC_CONNECTED_STATUSES:
+            return "on"
+        if key in EVC_EMPTY_STATUSES:
+            return "off"
+        return "unavailable"
+
     async def publish_evc_device(self, serial, evc_device):
         """Publish the charger's own status, and whether a car is connected.
 
@@ -1133,6 +1159,12 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             "binary_sensor." + entity_name + "_evc_car_connected",
             state="on" if self.evc_car_connected(status) else "off",
             attributes={"friendly_name": "EV Charger Car Connected", "icon": "mdi:ev-plug-type2"},
+            app="gecloud",
+        )
+        self.dashboard_item(
+            "binary_sensor." + entity_name + "_evc_car_plugged",
+            state=self.evc_car_plugged(status),
+            attributes={"friendly_name": "EV Charger Car Plugged In", "icon": "mdi:ev-plug-type2"},
             app="gecloud",
         )
 
@@ -2129,7 +2161,23 @@ class GECloudDirect(ComponentBase, CarChargerControl):
 
         # Always empty - see _meter_cross_link for why a CT clamp does not become a
         # fabricated meters record.
-        return {"automatic": self.automatic, "inverters": inverters, "meters": []}
+        return {"automatic": self.automatic and self.inverter_control, "inverters": inverters, "meters": []}
+
+    @property
+    def inverter_source(self):
+        """Whether this component supplies inverter state, for Components.inverter_source_active() - not when it only serves the EV charger"""
+        return self.inverter_monitor
+
+    async def async_get_inverter_devices(self):
+        """
+        The inverter device list, or an empty one without asking the API when ge_cloud_direct is not set.
+
+        Every inverter poll, write and report works from the list this returns, so leaving it empty is
+        what keeps an EV charger only setup off the inverters entirely.
+        """
+        if not self.inverter_monitor:
+            return {"gateway": None, "ems": None, "battery": [], "battery_meters": {}, "pv": [], "site_ids": {}}
+        return await self.async_get_devices()
 
     def evc_control_enable(self):
         """Decide whether Predbat-led charger control should run, and say why when it will not.
@@ -2217,12 +2265,14 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         devices in a different order. car_charging_energy lets car_charging_hold subtract
         the charging precisely instead of falling back to the car_charging_threshold
         heuristic; car_charging_planned tells Predbat when there is actually a car to plan
-        for; car_charging_power is display-only and drives the web power flow diagram. Both go through set_arg_auto so an apps.yaml entry that auto-discovery is
+        for; car_charging_plugged whether the cable is in, for the manual car SoC's reset on
+        unplug (see evc_car_plugged()); car_charging_power is display-only and drives the web power flow diagram. Both go through set_arg_auto so an apps.yaml entry that auto-discovery is
         about to override is logged rather than silently discarded.
         """
         energy_entities = []
         power_entities = []
         connected_entities = []
+        plugged_entities = []
         for uuid in sorted(self.evc_device_list, key=lambda item: str(self.evc_device.get(item, {}).get("serial_number", "") or "")):
             serial = self.evc_device.get(uuid, {}).get("serial_number", None)
             if not serial:
@@ -2235,6 +2285,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             energy_entities.append("sensor." + entity_name + "_evc_energy_active_import_register")
             power_entities.append("sensor." + entity_name + "_evc_power_active_import")
             connected_entities.append("binary_sensor." + entity_name + "_evc_car_connected")
+            plugged_entities.append("binary_sensor." + entity_name + "_evc_car_plugged")
 
         if not energy_entities:
             return
@@ -2249,6 +2300,9 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         self.set_arg_auto("car_charging_energy", energy_entities)
         self.log("GECloud: Setting car_charging_planned to {}".format(connected_entities))
         self.set_arg_auto("car_charging_planned", connected_entities)
+        # The cable alone, for the manual car SoC's reset on unplug - unavailable while the charger is offline
+        self.log("GECloud: Setting car_charging_plugged to {}".format(plugged_entities))
+        self.set_arg_auto("car_charging_plugged", plugged_entities)
         self.log("GECloud: Setting car_charging_power to {}".format(power_entities))
         self.set_arg_auto("car_charging_power", power_entities)
 
@@ -2339,7 +2393,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         plant with no batteries, so the configuration would still name the removed ones. The warning
         says to restart in that case.
         """
-        devices = await self.async_get_devices()
+        devices = await self.async_get_inverter_devices()
         evc_devices = await self.async_get_evc_devices(previous=self.evc_devices_dict)
         if not self.device_serials(devices) or (self.devices_dict.get("battery") and not devices["battery"]):
             if self.device_list:
@@ -2377,7 +2431,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         new_devices = []
 
         if first:
-            devices = await self.async_get_devices()
+            devices = await self.async_get_inverter_devices()
             evc_devices = await self.async_get_evc_devices()
             self.apply_devices(devices, evc_devices)
             self.log("GECloud: Starting up, found devices {}, evc_devices {}".format(self.device_list, self.evc_device_list))
@@ -2387,9 +2441,16 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             # for a cycle and then hand it over again
             await self.charger_control_load_enabled()
             self.evc_control_enable()
+            if self.automatic and not self.inverter_monitor:
+                self.log("GECloud: Warn: ge_cloud_automatic is ignored because ge_cloud_direct is not set, Predbat will not read or write to the inverter")
+            elif self.automatic and not self.inverter_control:
+                self.log("GECloud: Warn: ge_cloud_automatic is ignored because ge_cloud_inverter_control is false, Predbat will not wire up the inverter's controls or write its default settings")
 
             if not self.device_list and not self.evc_device_list:
-                self.log("GECloud: Error: No devices found, check your GE Cloud credentials")
+                if self.inverter_monitor:
+                    self.log("GECloud: Error: No devices found, check your GE Cloud credentials")
+                else:
+                    self.log("GECloud: Error: No EV chargers found, check your GE Cloud credentials (ge_cloud_direct is not set, so inverters are not looked for)")
                 self.api_fatal = True
                 return False
 
@@ -2415,8 +2476,10 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                 new_devices = refreshed
                 self.pending_default_options.update(refreshed)
 
-        # The site details change rarely, so they are cached in storage and only re-fetched every 12 hours
-        await self.update_site(first)
+        # The site details change rarely, so they are cached in storage and only re-fetched every 12 hours.
+        # They describe the inverters, so are not wanted when the inverters are not monitored.
+        if self.inverter_monitor:
+            await self.update_site(first)
 
         if first or devices_changed or (seconds % 120 == 0):
             inverter_auth_denied = False
@@ -2496,7 +2559,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
 
             # Run at startup, and again whenever the periodic device check finds the hardware has changed
             if first or devices_changed:
-                if self.automatic:
+                if self.automatic and self.inverter_control:
                     await self.async_automatic_config(self.devices_dict)
                 if self.automatic_evc:
                     await self.async_automatic_config_evc()
@@ -2514,7 +2577,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             options_due = self.default_options_stamp is None or (now_utc - self.default_options_stamp) >= timedelta(hours=24)
             # read_only_now() rather than the switch alone, so an active Axle event (which forces read only
             # through the attribute) defers the pass instead of writing over Axle's control (GH#5269)
-            if not self.read_only_now():
+            if self.inverter_control and not self.read_only_now():
                 if options_due:
                     self.default_options_stamp = now_utc
                     option_devices = self.device_list
@@ -3199,6 +3262,10 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         if previous is None:
             previous = {}
         result = await self.async_get_inverter_data_retry(GE_API_INVERTER_STATUS, serial)
+        # Display provenance must retain neither missing fields nor an old
+        # field under a new timestamp. The ordinary merged control cache stays
+        # unchanged; the optional display adapter consumes only this raw sample.
+        self.live_display_samples[serial.lower()] = result
         if result is None:
             return previous
         return merge_non_null(result, previous)

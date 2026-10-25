@@ -44,6 +44,7 @@ from tests.test_debug_enable_auto_scope import test_debug_enable_auto_scope
 from tests.test_charge_hold import run_charge_hold_tests
 from tests.test_octopus_slots import run_load_octopus_slots_tests, run_octopus_slot_max_default_tests
 from tests.test_multi_car_iog import run_multi_car_iog_tests
+from tests.test_car_manual_soc import run_car_manual_soc_tests
 from tests.test_fetch_config_options import test_fetch_config_options
 from tests.test_multi_inverter import run_inverter_multi_tests
 from tests.test_window2minutes import test_window2minutes
@@ -83,6 +84,7 @@ from tests.test_optimise_levels import run_optimise_levels_tests
 from tests.test_trim_export import run_trim_export_tests
 from tests.test_plan_tiebreak import run_plan_tiebreak_tests
 from tests.test_plan_preclip import run_plan_preclip_tests
+from tests.test_pv_calibration_clipping import run_pv_calibration_clipping_tests
 from tests.test_export_commitment import run_export_commitment_tests
 from tests.test_optimise_export_copy import run_optimise_export_copy_tests
 from tests.test_energydataservice import run_energydataservice_tests
@@ -286,6 +288,7 @@ from tests.test_metrics_dashboard_control_conflicts import test_control_conflict
 from tests.test_metrics_dashboard_control_failures import test_control_failures_metrics_round_trip, test_control_failures_dashboard_renders_section
 from tests.test_validate_config import test_validate_config, test_validate_config_retry, test_validate_config_secrets
 from tests.test_get_arg_missing_index import test_get_arg_missing_index_uses_default_quietly
+from tests.test_get_arg_combine_units import test_get_arg_combine_units
 from tests.test_plan_json_rate_adjust import run_test_plan_json_rate_adjust
 from tests.test_plan_why_reason import run_test_plan_why_reason
 from tests.test_plan_scenario_summary import run_test_plan_scenario_summary
@@ -308,6 +311,7 @@ from tests.test_inverter_write_poll import run_inverter_write_poll_tests
 from tests.test_givtcp_rest import run_givtcp_rest_tests
 from tests.test_myenergi import test_myenergi
 from tests.test_wallbox import test_wallbox
+from tests.test_hypervolt import test_hypervolt
 from tests.test_car_charger_control import run_car_charger_control_tests
 from tests.test_component_base import test_component_base_all
 from tests.test_components import test_components_all
@@ -332,6 +336,7 @@ from tests.test_clip_export_slots import run_clip_export_slots_tests
 from tests.test_manual_overrides import run_manual_overrides_tests
 from tests.test_charge_freeze_only import run_charge_freeze_only_tests
 from tests.test_prune_dead_slots import run_prune_dead_slots_tests
+from tests.test_plan_pv10_hedge import run_plan_pv10_hedge_tests
 from tests.test_clip_charge_slots import run_clip_charge_slots_tests
 from tests.test_discard_unused_charge_slots import run_discard_unused_charge_slots_tests
 from tests.test_discard_unused_export_slots import run_discard_unused_export_slots_tests
@@ -615,6 +620,7 @@ def main():
         ("octopus_slots", run_load_octopus_slots_tests, "Load Octopus slots tests", False),
         ("octopus_slot_max_default", run_octopus_slot_max_default_tests, "Octopus slot max auto-detection from IOG-SMB tariff code", False),
         ("multi_car_iog", run_multi_car_iog_tests, "Multi-car IOG tests", False),
+        ("car_manual_soc", run_car_manual_soc_tests, "Manual car SoC: automatic enable, reset on unplug, energy-sensor tracking", False),
         ("rate_add_io_slots", run_rate_add_io_slots_tests, "Rate add IO slots tests", False),
         ("iog_car_need_gate", run_iog_car_need_gate_tests, "IOG car-need gate: no cheap rate for dispatch minutes no car needs", False),
         ("iog_charge_skew", run_iog_charge_skew_tests, "IOG earlier-charge skew characterisation tests", False),
@@ -716,6 +722,7 @@ def main():
         ("integer_config", test_integer_config_entities, "Integer config entities tests", False),
         ("validate_config", test_validate_config, "APPS_SCHEMA validator tests (string types, sensor boolean states)", False),
         ("get_arg_missing_index", test_get_arg_missing_index_uses_default_quietly, "get_arg missing (out-of-range index) vs malformed numeric coercion tests", False),
+        ("get_arg_combine_units", test_get_arg_combine_units, "get_arg combine=True converts each entry to required_unit", False),
         ("validate_config_retry", test_validate_config_retry, "Config validation retry-after-failure tests (#4379)", False),
         ("validate_config_secrets", test_validate_config_secrets, "check_apps_yaml_secrets() unmasked-credential detection tests (#4787)", False),
         ("expose_config_integer", test_expose_config_preserves_integer, "Expose config preserves integer tests", False),
@@ -772,6 +779,7 @@ def main():
         # myenergi Zappi and Eddi unit tests
         ("myenergi", test_myenergi, "myenergi Zappi and Eddi comprehensive tests (normalisation, transports, publishing, auto-config, controls)", False),
         ("wallbox", test_wallbox, "Wallbox EV charger tests (transport, normalisation, publishing, auto-config, controls, plan-led charging)", False),
+        ("hypervolt", test_hypervolt, "Hypervolt EV charger tests (auth, sockets, state, publishing, auto-config, controls, plan-led charging)", False),
         # ComponentBase lifecycle tests
         ("component_base", test_component_base_all, "ComponentBase tests (all)", False),
         ("components", test_components_all, "Components registry tests (all)", False),
@@ -797,6 +805,7 @@ def main():
         ("manual_overrides", run_manual_overrides_tests, "Manual window override tests", False),
         ("charge_freeze_only", run_charge_freeze_only_tests, "set_charge_freeze_only (no grid charging) tests", False),
         ("prune_dead_slots", run_prune_dead_slots_tests, "Prune dead plan slots tests", False),
+        ("plan_pv10_hedge", run_plan_pv10_hedge_tests, "End to end: a bad PV10 forecast makes the overnight charge bigger", False),
         ("clip_charge_slots", run_clip_charge_slots_tests, "Clip charge slots tests", False),
         ("discard_unused_charge_slots", run_discard_unused_charge_slots_tests, "Discard unused charge slots tests", False),
         ("discard_unused_export_slots", run_discard_unused_export_slots_tests, "Discard unused export slots tests", False),
@@ -811,6 +820,7 @@ def main():
         ("trim_export", run_trim_export_tests, "Export trim ordering (buffer from cheapest slot) tests", False),
         ("plan_tiebreak", run_plan_tiebreak_tests, "Plan fragmentation near-tie tie-break tests", False),
         ("plan_preclip", run_plan_preclip_tests, "Plan selection scores the pre-clip plan", True),
+        ("pv_calibration_clipping", run_pv_calibration_clipping_tests, "PV calibration does not learn inverter clipping as forecast error", False),
         ("export_commitment", run_export_commitment_tests, "Forced-export commitment / anti-flapping tests", False),
         ("optimise_solar", run_optimise_solar_tests, "Optimise export more solar tests", False),
         ("optimise_windows_kernel", run_optimise_all_windows_kernel_tests, "Optimise all windows tests with the C++ kernel", False),
