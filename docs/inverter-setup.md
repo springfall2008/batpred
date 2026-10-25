@@ -2755,7 +2755,7 @@ max: 10
 The fix was to enable the hidden HA entity 'VPP Exit Idle Enable' and then change the entity value from Disabled to Enabled. Once this was Enabled the inverter responded correctly to Predbat commands.
 
 - When you first start Predbat, check the [Predbat log](output-data.md#predbat-logfile) to confirm that the correct sensor names are identified by the regular expressions in `apps.yaml`. Any non-matching expressions should be investigated and resolved.
-- You may well get a warning message in the logs that Predbat [cannot create battery charge/discharge curves](faq.md#info-cannot-find-battery-charge-curve). Either configure [battery charge and discharge rates](apps-yaml.md#battery-chargedischarge-curves) in `apps.yaml` using appropriate inverter sensors (if available) or create a dummy default curve based on manufacturers information.
+- You may well get a warning message in the logs that Predbat [cannot create battery charge/discharge curves](faq.md#warn-cannot-find-battery-charge-curve). Either configure [battery charge and discharge rates](apps-yaml.md#battery-chargedischarge-curves) in `apps.yaml` using appropriate inverter sensors (if available) or create a dummy default curve based on manufacturers information.
 
 Please see this ticket in Github for ongoing discussion: <https://github.com/springfall2008/batpred/issues/259>
 
