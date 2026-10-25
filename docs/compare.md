@@ -139,6 +139,10 @@ The metric includes the value of the contents of your battery and iBoost that ha
 
 The predicted cost is also shown, but keep in mind ending the day with an empty battery may be cheaper today but cost more tomorrow.
 
+A tariff whose rates match the ones you are on now is marked **Existing**. The match is made against your underlying tariff, so a saving session,
+free electricity session, Axle event or Intelligent dispatch does not stop your own tariff being recognised, and neither does a
+`rates_import_override`/`rates_export_override` or manual rate override on the live rates.
+
 ![image](images/web-interface-compare-view.png)
 
 ## Comparison sensors

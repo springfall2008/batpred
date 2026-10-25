@@ -14,6 +14,8 @@ If more than one car uses the same charger, see [One charger shared by more than
 
 ## Hypervolt
 
+Predbat can talk to a Hypervolt directly, without Home Assistant or the automation below: see [Hypervolt direct integration](car-charging.md#hypervolt-car-charger-direct-integration). This section is for the Home Assistant integration.
+
 <https://github.com/gndean/home-assistant-hypervolt-charger>
 
 Can be used both for the Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in (only V3 models).

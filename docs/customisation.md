@@ -282,7 +282,10 @@ The history is scaled by `pv_scaling` before the comparison, so both sides are o
 (equivalently, divide your actual-over-raw ratio by `pv_scaling`); comparing against the raw figure on its own leaves your answer out by a factor of `pv_scaling`.<BR>
 Do not use if you are using the [Solcast integration and have turned on the integration's auto dampening](https://github.com/BJReplay/ha-solcast-solar?tab=readme-ov-file#dampening-configuration).<BR>
 PV production calibration relies upon your actual solar generation reflecting the maximum your panels could produce. If your inverter can curtail or clip your solar generation, either through export limits (including zero-export setups) where generation is throttled because your battery is full and there is nowhere for the excess to go, or under instruction from your electricity supplier in periods when there is excess electricity in the grid,
-then you must turn PV calibration Off. Otherwise, Predbat will model the chopped solar generation as a PV calibration factor and will significantly reduce your forecast PV generation, leading to a very inaccurate plan.
+then you must turn PV calibration Off. Otherwise, Predbat will model the chopped solar generation as a PV calibration factor and will significantly reduce your forecast PV generation, leading to a very inaccurate plan.<BR>
+Clipping at your inverter's own limit, where your panels can produce more than the inverter can pass, is handled automatically and does not need calibration turned off:
+generation at the inverter limit (`inverter_limit` for a hybrid inverter, or `pv_ac_limit` for an AC-coupled system) under a higher forecast is taken as the forecast having been right, rather than as the forecast being too high,
+so the forecast keeps the excess and Predbat can plan to make room in the battery for it. This relies on `inverter_limit` and `pv_ac_limit` being set correctly for your system.
 
 Note: If you change the PV calibration enable switch (to On or Off), you will need to restart Predbat for the change to take effect.
 

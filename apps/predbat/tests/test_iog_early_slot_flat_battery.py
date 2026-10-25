@@ -26,6 +26,7 @@ _CAR_ATTRS = [
     "car_charging_loss",
     "car_charging_from_battery",
     "car_energy_reported_load",
+    "octopus_slots",
 ]
 
 # Shape taken from a real debug dump (28 Sep 2026, 22:30): battery at reserve, an Intelligent Octopus
@@ -108,6 +109,7 @@ def _setup(my_predbat, source, sc):
         my_predbat.args["octopus_slot_low_rate"] = True
         my_predbat.args["octopus_slot_max"] = 12
         my_predbat.dynamic_load_car_effective = {}
+        my_predbat.octopus_slots = [[]]  # No other car's dispatches share the cap (#5215)
         dispatch_start = my_predbat.midnight_utc + timedelta(minutes=sc["iog_start"])
         dispatch_end = my_predbat.midnight_utc + timedelta(minutes=sc["night_start"] + 90)
         dispatch = {"start": dispatch_start.strftime(TIME_FORMAT), "end": dispatch_end.strftime(TIME_FORMAT), "charge_in_kwh": 20.0, "source": "smart-charge", "location": "AT_HOME"}

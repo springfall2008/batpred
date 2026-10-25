@@ -87,6 +87,47 @@ class PredbatMCPServer(ComponentBase):
         # Authorization codes storage (code -> user/client info)
         self.authorization_codes = {}
 
+    def add_routes(self, app):
+        """Register the OAuth discovery, OAuth and MCP routes on an aiohttp application"""
+        # OAuth metadata endpoints (for OAuth discovery)
+        app.router.add_get("/.well-known/oauth-authorization-server", self.oauth_metadata)
+        app.router.add_options("/.well-known/oauth-authorization-server", self.handle_options)
+        app.router.add_get("/.well-known/oauth-authorization-server/mcp", self.oauth_metadata_mcp)
+        app.router.add_options("/.well-known/oauth-authorization-server/mcp", self.handle_options)
+        # Protected Resource Metadata (REQUIRED by MCP spec - RFC 9728)
+        app.router.add_get("/.well-known/oauth-protected-resource", self.oauth_protected_resource_metadata)
+        app.router.add_options("/.well-known/oauth-protected-resource", self.handle_options)
+        # Path-aware discovery for the /mcp resource (RFC 9728), probed by claude.ai (#3807)
+        app.router.add_get("/.well-known/oauth-protected-resource/mcp", self.oauth_protected_resource_metadata)
+        app.router.add_options("/.well-known/oauth-protected-resource/mcp", self.handle_options)
+
+        # OAuth endpoints
+        app.router.add_get("/oauth/authorize", self.oauth_authorize)
+        app.router.add_post("/oauth/authorize", self.oauth_authorize)  # Handle form submission
+        app.router.add_get("/authorize", self.oauth_authorize)  # VSCode compatibility
+        app.router.add_post("/authorize", self.oauth_authorize)  # VSCode compatibility
+        app.router.add_post("/oauth/token", self.oauth_token)
+        app.router.add_post("/token", self.oauth_token)  # VSCode compatibility
+        app.router.add_post("/oauth/register", self.oauth_register)  # Dynamic client registration
+        app.router.add_post("/register", self.oauth_register)  # Fallback path
+        # CORS preflight for browser-based clients, otherwise OPTIONS falls through to the 404 default route (#3807)
+        app.router.add_options("/oauth/token", self.handle_options)
+        app.router.add_options("/token", self.handle_options)
+        app.router.add_options("/oauth/register", self.handle_options)
+        app.router.add_options("/register", self.handle_options)
+
+        # MCP endpoints (OAuth protected)
+        app.router.add_get("/mcp", self.html_mcp_get)
+        app.router.add_post("/mcp", self.html_mcp_post)
+        app.router.add_get("/", self.html_mcp_get)
+        app.router.add_post("/", self.html_mcp_post)
+
+        # Favicon
+        app.router.add_get("/favicon.ico", self.favicon)
+
+        # Add default route for any other paths (MUST BE LAST)
+        app.router.add_route("*", "/{tail:.*}", self.default_route)
+
     async def start(self):
         """Start the MCP server if enabled"""
         if self.mcp_enable:
@@ -95,37 +136,7 @@ class PredbatMCPServer(ComponentBase):
 
             # Now create Web UI on port self.mcp_port
             app = web.Application()
-
-            # OAuth metadata endpoints (for OAuth discovery)
-            app.router.add_get("/.well-known/oauth-authorization-server", self.oauth_metadata)
-            app.router.add_options("/.well-known/oauth-authorization-server", self.handle_options)
-            app.router.add_get("/.well-known/oauth-authorization-server/mcp", self.oauth_metadata_mcp)
-            app.router.add_options("/.well-known/oauth-authorization-server/mcp", self.handle_options)
-            # Protected Resource Metadata (REQUIRED by MCP spec - RFC 9728)
-            app.router.add_get("/.well-known/oauth-protected-resource", self.oauth_protected_resource_metadata)
-            app.router.add_options("/.well-known/oauth-protected-resource", self.handle_options)
-
-            # OAuth endpoints
-            app.router.add_get("/oauth/authorize", self.oauth_authorize)
-            app.router.add_post("/oauth/authorize", self.oauth_authorize)  # Handle form submission
-            app.router.add_get("/authorize", self.oauth_authorize)  # VSCode compatibility
-            app.router.add_post("/authorize", self.oauth_authorize)  # VSCode compatibility
-            app.router.add_post("/oauth/token", self.oauth_token)
-            app.router.add_post("/token", self.oauth_token)  # VSCode compatibility
-            app.router.add_post("/oauth/register", self.oauth_register)  # Dynamic client registration
-            app.router.add_post("/register", self.oauth_register)  # Fallback path
-
-            # MCP endpoints (OAuth protected)
-            app.router.add_get("/mcp", self.html_mcp_get)
-            app.router.add_post("/mcp", self.html_mcp_post)
-            app.router.add_get("/", self.html_mcp_get)
-            app.router.add_post("/", self.html_mcp_post)
-
-            # Favicon
-            app.router.add_get("/favicon.ico", self.favicon)
-
-            # Add default route for any other paths (MUST BE LAST)
-            app.router.add_route("*", "/{tail:.*}", self.default_route)
+            self.add_routes(app)
 
             runner = web.AppRunner(app)
             await runner.setup()

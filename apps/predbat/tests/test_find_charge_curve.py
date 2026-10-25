@@ -335,6 +335,61 @@ def test_find_charge_curve_no_data(my_predbat):
     return failed
 
 
+def test_find_charge_curve_names_missing_entity(my_predbat):
+    """
+    The missing history / missing setting warnings name the entity at fault rather than listing every candidate (#4009)
+    """
+    print("*** Running test: find_charge_curve_names_missing_entity ***")
+    failed = False
+
+    inv = Inverter(my_predbat, 0)
+    inv.battery_rate_max_charge = 2600 / 60000  # Watts / MINUTE_WATT
+    inv.battery_rate_max_discharge = 2600 / 60000
+    inv.soc_max = 10.0
+    inv.battery_scaling = 1.0
+    log_messages = []
+    inv.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
+
+    setup_predbat(my_predbat)
+
+    # Only battery_power has no history, the other three sensors do
+    create_test_history_data(my_predbat, num_days=2)
+    full_history = my_predbat.ha_interface.get_history
+    my_predbat.ha_interface.get_history = lambda entity_id, now=None, days=30: None if entity_id == "sensor.battery_power" else full_history(entity_id, now=now, days=days)
+
+    for discharge, rate_setting, rate_entity in [(False, "charge_rate", "number.charge_rate"), (True, "discharge_rate", "number.discharge_rate")]:
+        log_messages.clear()
+        if inv.find_charge_curve(discharge=discharge):
+            print("ERROR: Expected no curve when battery_power has no history")
+            failed = True
+        warnings = [msg for msg in log_messages if "missing history" in msg]
+        if len(warnings) != 1 or "battery_power (sensor.battery_power)" not in warnings[0]:
+            print("ERROR: Expected one missing history warning naming battery_power, got {}".format(log_messages))
+            failed = True
+        elif "soc_percent" in warnings[0] or rate_entity in warnings[0] or "predbat.status" in warnings[0]:
+            print("ERROR: Missing history warning should only name the entity without history, got {}".format(warnings[0]))
+            failed = True
+        counts = [msg for msg in log_messages if "history record counts" in msg]
+        if len(counts) != 1 or "battery_power 0" not in counts[0] or "soc_percent 0" in counts[0] or "{} 0".format(rate_setting) in counts[0]:
+            print("ERROR: Expected record counts with only battery_power at 0, got {}".format(counts))
+            failed = True
+
+    # battery_power not configured at all
+    saved_battery_power = my_predbat.args.pop("battery_power")
+    try:
+        log_messages.clear()
+        inv.find_charge_curve(discharge=False)
+        warnings = [msg for msg in log_messages if "settings missing" in msg]
+        if len(warnings) != 1 or "battery_power not set in apps.yaml" not in warnings[0] or "soc_percent" in warnings[0] or "charge_rate" in warnings[0]:
+            print("ERROR: Expected settings missing warning naming only battery_power, got {}".format(log_messages))
+            failed = True
+    finally:
+        my_predbat.args["battery_power"] = saved_battery_power
+        remove_test_history_data(my_predbat)
+
+    return failed
+
+
 def test_find_charge_curve_inverted_battery_power(my_predbat):
     """
     Test find_charge_curve with inverted battery power - smoke test
@@ -676,6 +731,7 @@ def run_find_charge_curve_tests(my_predbat):
         return failed
 
     failed |= test_find_charge_curve_no_data(my_predbat)
+    failed |= test_find_charge_curve_names_missing_entity(my_predbat)
     if failed:
         return failed
 
