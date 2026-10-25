@@ -230,41 +230,6 @@ class Prediction(PredictionBatch):
         # Window-end SoCs for cached results that were asked for them, keyed on the same hash as
         # prediction_cache (whose entries drop the SoC series)
         self.prediction_cache_export_end = {}
-        # EXPERIMENT: the levels phase runs pv10 without the charge slowdown (see levels_mode)
-        self.levels_active = False
-        self.levels_kernel_handle = None
-        self.levels_prediction_cache = {}
-        self.levels_prediction_cache_export_end = {}
-        self.levels_saved_state = None
-
-    def levels_mode(self, enable):
-        """EXPERIMENT: switch pv10 to charging at the full rate (charge_scaling10 1.0) for the levels phase.
-
-        The slowdown combines badly with the export floor in a coarse seeding pass: nominal charges
-        faster than pv10, so the floor taken from nominal strands energy in pv10 and discourages
-        charging to export. The kernel bakes charge_scaling10 into its context, so the levels phase gets
-        its own context, built once per plan; and the prediction cache key does not include the
-        setting, so it gets its own cache and window-end memo too. Pending jobs are flushed first so
-        each runs under the settings it was queued with.
-        """
-        if bool(enable) == self.levels_active:
-            return
-        if enable and self.charge_scaling10 == 1.0:
-            # Nothing to switch - pv10 already charges at the full rate
-            return
-        self.flush_batch()
-        if enable:
-            self.levels_saved_state = (self.charge_scaling10, self.kernel_handle, self.prediction_cache, self.prediction_cache_export_end)
-            self.charge_scaling10 = 1.0
-            if self.levels_kernel_handle is None:
-                self.levels_kernel_handle = create_kernel_context(self) if self.kernel_handle else 0
-            self.kernel_handle = self.levels_kernel_handle
-            self.prediction_cache = self.levels_prediction_cache
-            self.prediction_cache_export_end = self.levels_prediction_cache_export_end
-        else:
-            self.charge_scaling10, self.kernel_handle, self.prediction_cache, self.prediction_cache_export_end = self.levels_saved_state
-            self.levels_saved_state = None
-        self.levels_active = bool(enable)
 
     def _prepare_single(self, charge_limit, export_limits):
         """Copy the caller's limit lists for a single-scenario trial - shared by thread_run_prediction_single and the batch path.

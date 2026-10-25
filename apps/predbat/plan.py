@@ -1090,18 +1090,7 @@ class Plan:
 
         return highest_price_charge, lowest_price_export, highest_price_charge_level, lowest_price_export_level
 
-    def optimise_charge_limit_price_threads(self, *args, **kwargs):
-        """EXPERIMENT: run the levels engine with pv10 charging at the full rate - see Prediction.levels_mode"""
-        prediction = getattr(self, "prediction", None)
-        if prediction is None or not hasattr(prediction, "levels_mode"):
-            return self.optimise_charge_limit_price_threads_inner(*args, **kwargs)
-        prediction.levels_mode(True)
-        try:
-            return self.optimise_charge_limit_price_threads_inner(*args, **kwargs)
-        finally:
-            prediction.levels_mode(False)
-
-    def optimise_charge_limit_price_threads_inner(
+    def optimise_charge_limit_price_threads(
         self,
         price_set,
         price_links,
