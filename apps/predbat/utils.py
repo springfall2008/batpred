@@ -1375,8 +1375,9 @@ def filter_payment_method(rates, preferred="DIRECT_DEBIT"):
     (Agile, day/night) are left untouched, and so is a response that never mentions the preferred
     method, which keeps single-variant tariffs behaving exactly as before.
 
-    The Kraken component (EDF, E.ON) also relies on this to pick its standing charge from the first
-    remaining row, because EDF lists the NON_DIRECT_DEBIT row first (GH#5502).
+    The Kraken component (EDF, E.ON) also relies on this when it picks its standing charge: the
+    DIRECT_DEBIT and NON_DIRECT_DEBIT rows of a period tie on valid_from, the first one listed wins
+    a tie, and EDF lists the NON_DIRECT_DEBIT row first (GH#5502).
     """
     if not rates:
         return rates
