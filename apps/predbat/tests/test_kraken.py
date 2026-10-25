@@ -634,6 +634,78 @@ def test_standing_charge_null_payment_method_unchanged():
     assert _fetch_standing_charge_with_rows(rows) == 48.0 / 100.0
 
 
+def _days_from_now(days):
+    """ISO timestamp the given number of days from the real clock (negative for the past)."""
+    return (datetime.now(timezone.utc) + timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _both_orders(rows):
+    """The rows as listed and reversed: neither Kraken endpoint promises an order (GH#5573)."""
+    return [rows, list(reversed(rows))]
+
+
+def test_standing_charge_skips_row_that_has_not_started():
+    """GH#5573: a price change published ahead of time must not be used before it starts."""
+    rows = [
+        {"value_inc_vat": 55.0, "valid_from": _days_from_now(10), "valid_to": None, "payment_method": "DIRECT_DEBIT"},
+        {"value_inc_vat": 52.0, "valid_from": _days_from_now(-30), "valid_to": _days_from_now(10), "payment_method": "DIRECT_DEBIT"},
+        {"value_inc_vat": 50.0, "valid_from": _days_from_now(-90), "valid_to": _days_from_now(-30), "payment_method": "DIRECT_DEBIT"},
+    ]
+    for ordered in _both_orders(rows):
+        assert _fetch_standing_charge_with_rows(ordered) == 52.0 / 100.0
+
+
+def test_standing_charge_skips_row_that_has_ended():
+    """GH#5573: a row whose valid_to has passed is history, even when it is listed first."""
+    rows = [
+        {"value_inc_vat": 50.0, "valid_from": _days_from_now(-90), "valid_to": _days_from_now(-30), "payment_method": None},
+        {"value_inc_vat": 52.0, "valid_from": _days_from_now(-30), "valid_to": None, "payment_method": None},
+    ]
+    for ordered in _both_orders(rows):
+        assert _fetch_standing_charge_with_rows(ordered) == 52.0 / 100.0
+
+
+def test_standing_charge_latest_start_wins_when_rows_overlap():
+    """When more than one row covers now the most recent valid_from wins, and an open start is the oldest."""
+    rows = [
+        {"value_inc_vat": 40.0, "valid_from": None, "valid_to": None},
+        {"value_inc_vat": 48.0, "valid_from": _days_from_now(-60), "valid_to": None},
+        {"value_inc_vat": 52.0, "valid_from": _days_from_now(-5), "valid_to": _days_from_now(5)},
+    ]
+    for ordered in _both_orders(rows):
+        assert _fetch_standing_charge_with_rows(ordered) == 52.0 / 100.0
+
+
+def test_standing_charge_keeps_direct_debit_row_among_rows_covering_now():
+    """Choosing the row in force still leaves the GH#5502 Direct Debit preference in charge of a tie."""
+    rows = [
+        {"value_inc_vat": 61.0, "valid_from": _days_from_now(-30), "valid_to": None, "payment_method": "NON_DIRECT_DEBIT"},
+        {"value_inc_vat": 52.0, "valid_from": _days_from_now(-30), "valid_to": None, "payment_method": "DIRECT_DEBIT"},
+        {"value_inc_vat": 65.0, "valid_from": _days_from_now(10), "valid_to": None, "payment_method": "NON_DIRECT_DEBIT"},
+        {"value_inc_vat": 56.0, "valid_from": _days_from_now(10), "valid_to": None, "payment_method": "DIRECT_DEBIT"},
+    ]
+    for ordered in _both_orders(rows):
+        assert _fetch_standing_charge_with_rows(ordered) == 52.0 / 100.0
+
+
+def test_standing_charge_none_when_no_row_covers_now():
+    """With nothing in force the charge is None, so run() keeps the value it already had."""
+    only_ended = [{"value_inc_vat": 50.0, "valid_from": _days_from_now(-90), "valid_to": _days_from_now(-1)}]
+    only_future = [{"value_inc_vat": 55.0, "valid_from": _days_from_now(1), "valid_to": None}]
+    assert _fetch_standing_charge_with_rows(only_ended) is None
+    assert _fetch_standing_charge_with_rows(only_future) is None
+
+
+def test_standing_charge_ignores_rows_it_cannot_read():
+    """A row that is not an object is skipped, and an unparseable bound counts as open."""
+    rows = [
+        None,
+        "not a row",
+        {"value_inc_vat": 50.0, "valid_from": "not a timestamp", "valid_to": None},
+    ]
+    assert _fetch_standing_charge_with_rows(rows) == 50.0 / 100.0
+
+
 def test_fetch_standing_charges_rest_404_falls_back_to_graphql():
     """async_fetch_standing_charges() falls back to GraphQL when REST returns 404.
 
@@ -1965,6 +2037,44 @@ def test_fetch_standing_charges_graphql_parses_connection_edges():
     result = asyncio.run(api.async_fetch_standing_charges_graphql("1170001829927"))
     assert result is not None
     assert abs(result - 0.6195) < 1e-6
+
+
+def _fetch_standing_charge_graphql_with_nodes(nodes):
+    """Run async_fetch_standing_charges_graphql() against an applicableStandingCharges window holding the given nodes."""
+    api = make_kraken_api()
+    api.account_id = "A-AA8A473C"
+    api.async_graphql_query = AsyncMock(return_value={"applicableStandingCharges": {"edges": [{"node": node} for node in nodes]}})
+    return asyncio.run(api.async_fetch_standing_charges_graphql("1170001829927"))
+
+
+def test_fetch_standing_charges_graphql_picks_row_covering_now():
+    """GH#5573: the 3-day window can span a price change, so the charge in force now is used, not the first listed."""
+    nodes = [
+        {"value": 63.0, "validFrom": _days_from_now(1), "validTo": None},
+        {"value": 61.0, "validFrom": _days_from_now(-30), "validTo": _days_from_now(1)},
+    ]
+    for ordered in _both_orders(nodes):
+        result = _fetch_standing_charge_graphql_with_nodes(ordered)
+        assert result is not None
+        assert abs(result - 0.61) < 1e-6
+
+
+def test_fetch_standing_charges_graphql_latest_start_wins_when_rows_overlap():
+    """GH#5573: of two rows covering now the one that started most recently is the current charge."""
+    nodes = [
+        {"value": 60.0, "validFrom": _days_from_now(-60), "validTo": None},
+        {"value": 62.0, "validFrom": _days_from_now(-2), "validTo": None},
+    ]
+    for ordered in _both_orders(nodes):
+        result = _fetch_standing_charge_graphql_with_nodes(ordered)
+        assert result is not None
+        assert abs(result - 0.62) < 1e-6
+
+
+def test_fetch_standing_charges_graphql_none_when_no_row_covers_now():
+    """GH#5573: a window holding only a row that has not started (or has ended) gives no standing charge."""
+    assert _fetch_standing_charge_graphql_with_nodes([{"value": 63.0, "validFrom": _days_from_now(1), "validTo": None}]) is None
+    assert _fetch_standing_charge_graphql_with_nodes([{"value": 61.0, "validFrom": _days_from_now(-30), "validTo": _days_from_now(-1)}]) is None
 
 
 def test_save_and_load_kraken_cache_round_trip():
