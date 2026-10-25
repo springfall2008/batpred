@@ -4299,6 +4299,45 @@ def run_execute_tests(my_predbat):
         assert_immediate_soc_target=90,
         has_timed_pause=False,
     )
+    # Freeze exporting is not a force export: discharge stays live in demand, so a car slot must
+    # still hold the battery (discharge rate 0, reserve pinned at SoC+1) rather than drain into the car (#5612)
+    failed |= run_execute_test(
+        my_predbat,
+        "discharge_freeze_car",
+        export_window_best=export_window_best2,
+        export_limits_best=export_limits_best_frz,
+        car_slot=charge_window_best_slot,
+        assert_force_export=False,
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=9,
+        assert_status="Freeze exporting, Hold for car",
+        assert_pause_charge=False,
+        assert_charge_rate=0,
+        assert_discharge_rate=0,
+        assert_reserve=91,
+        assert_immediate_soc_target=90,
+        assert_immediate_discharge_soc_target_array=[90] * len(my_predbat.inverters),
+        has_timed_pause=False,
+    )
+    # On a timed-pause inverter the freeze has already claimed the single pause write for charge only, so the
+    # car hold cannot also pause discharge - the status must not claim a hold that never reached the inverter
+    failed |= run_execute_test(
+        my_predbat,
+        "discharge_freeze_car_timed_pause",
+        export_window_best=export_window_best2,
+        export_limits_best=export_limits_best_frz,
+        car_slot=charge_window_best_slot,
+        assert_force_export=False,
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=9,
+        assert_status="Freeze exporting",
+        assert_pause_charge=True,
+        assert_pause_discharge=False,
+        assert_charge_rate=1000,
+        assert_immediate_soc_target=90,
+    )
     failed |= run_execute_test(my_predbat, "no_charge5", set_charge_window=True, set_export_window=True)
     failed |= run_execute_test(
         my_predbat, "car", car_slot=charge_window_best_slot, set_charge_window=True, set_export_window=True, assert_status="Hold for car", assert_pause_discharge=True, assert_discharge_rate=1000, soc_kw=1, assert_immediate_soc_target=10
@@ -4523,6 +4562,26 @@ def run_execute_tests(my_predbat):
         assert_charge_rate=1000,
         assert_pause_charge=True,
         assert_discharge_rate=1000,
+    )
+    if failed:
+        return failed
+
+    # The same single pause write leaves a car hold unable to pause discharge here too, so no hold is published;
+    # the charge freeze service call the hold drives (immediate target = current SoC) still goes out
+    failed |= run_execute_test(
+        my_predbat,
+        "freeze_export_demand_timed_pause_car",
+        car_slot=charge_window_best_slot,
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=1,
+        assert_status="Demand [Freeze exporting]",
+        assert_charge_rate=1000,
+        assert_pause_charge=True,
+        assert_pause_discharge=False,
+        assert_discharge_rate=1000,
+        assert_immediate_soc_target=10,
+        assert_immediate_charge_soc_target_array=[10] * len(my_predbat.inverters),
     )
     if failed:
         return failed
