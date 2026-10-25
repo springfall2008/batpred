@@ -330,6 +330,7 @@ from tests.test_fox_oauth import run_fox_oauth_tests
 from tests.test_band_rate_text import test_band_rate_text
 from tests.test_rate_text_scan import test_rate_text_scan
 from tests.test_kraken import run_kraken_tests
+from tests.test_spotprice import run_spotprice_tests
 from tests.test_kraken_auth_mixin import run_kraken_auth_mixin_tests
 from tests.test_kraken_key import run_kraken_key_tests
 from tests.test_clip_export_slots import run_clip_export_slots_tests
@@ -800,6 +801,7 @@ def main():
         # Kraken Energy (EDF/E.ON) tests
         ("kraken", run_kraken_tests, "Kraken API tests (init, GraphQL, tariff discovery, rate fetching, run lifecycle)", False),
         ("kraken_auth", run_kraken_auth_mixin_tests, "Kraken auth mixin tests (API key, email, refresh, 401 handling)", False),
+        ("spotprice", run_spotprice_tests, "Day-ahead spot price tariff tests (ENTSO-E A44 parsing, Energy-Charts, Tibber, price formula, charge zones, export rules, fallback, back-off)", False),
         ("kraken_key", run_kraken_key_tests, "Kraken API key generator page tests (token check, key generation, Advanced menu)", False),
         ("clip_export_slots", run_clip_export_slots_tests, "Clip export slots tests", False),
         ("manual_overrides", run_manual_overrides_tests, "Manual window override tests", False),

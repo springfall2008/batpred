@@ -1,6 +1,7 @@
 # Custom Dictionary Words
 3hy
 aaaabbbbccccdddd
+acknowledgementdocument
 acks
 activepower
 adata
@@ -46,6 +47,7 @@ autoflake
 automations
 autopep
 autoupdate
+awattar
 ax1
 axvline
 axvspan
@@ -55,6 +57,7 @@ Backpropagate
 backpropagation
 backsteps
 backtest
+baltics
 Basepath
 bathighcap
 Batpred
@@ -71,6 +74,7 @@ boostable
 Bottlecap
 brickatius
 britkat1980
+bundesnetzagentur
 bwignore
 byok
 cadata
@@ -177,6 +181,7 @@ dstart
 dtu
 dtype
 dwindow
+Dynamisch
 eauth
 echargingpile
 ECONNRESET
@@ -184,6 +189,7 @@ ecosmart
 Eddi
 eddis
 efgh
+Elektrizitätswerke
 elif
 elinter
 eload
@@ -200,6 +206,7 @@ endt
 Energi
 Energidata
 Energidataservice
+energycharts
 energydataservice
 energythroughput
 enho
@@ -212,6 +219,8 @@ enphaseenergy
 Enpower
 entityfilter
 entrez
+entso
+entsoe
 epod
 epvtoday
 errno
@@ -395,7 +404,11 @@ luxpowertek
 luxpython
 malloc
 mallopt
+malo
+malos
 markdownlint
+marketdata
+marketprice
 matplotlib
 maximise
 maxrss
@@ -411,6 +424,7 @@ meterpoint
 meterpower
 metricb
 metricmid
+mibel
 microinverters
 middlebox
 middleboxes
@@ -494,6 +508,7 @@ openapi
 openrouter
 openweathermap
 Opticaster
+ostrom
 overclaim
 overfitting
 oversizing
@@ -548,6 +563,7 @@ pseudonymises
 psum
 pthread
 puback
+publicationdocument
 pvbat
 pvenergytotal
 pvlib
@@ -607,6 +623,8 @@ saverestore
 savez
 scalarstring
 scalings
+schoenau
+Schönau
 searr
 securetoken
 Segoe
@@ -634,6 +652,7 @@ slugified
 slugifies
 slugify
 slugifying
+smard
 smartflex
 snakeviz
 snprintf
@@ -645,6 +664,7 @@ sofar
 SolarEdge
 solarman
 solarnet
+solarspitzengesetz
 solarsynk
 solarsynkv
 Solax
@@ -658,6 +678,7 @@ sourcery
 Southwell
 sparkline
 spki
+spotprice
 springfall
 starthour
 startminute
@@ -685,6 +706,7 @@ syscmd
 sysdn
 syssn
 tabindex
+tado
 tasmota
 TCWORLD
 tdata
@@ -695,6 +717,7 @@ testname
 thirdparty
 threadpool
 threadpoolctl
+tibber
 timea
 timeb
 timec
@@ -708,6 +731,7 @@ timekey
 timelapse
 timenow
 timeobj
+timespec
 timestep
 timestr
 timezone
@@ -801,3 +825,4 @@ zappis
 zcat
 zigbee
 zoneinfo
+Ökostrom
