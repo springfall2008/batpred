@@ -311,7 +311,6 @@ recorder:
       - predheat.heating_energy
       - predheat.internal_temperature
       - predheat.target_temperature
-    entity_globs:
       # The history of these entities are used by Predbat's Compare tab (list the actual entity IDs from Developer Tools > States, filter "predbat.compare_tariff")
       - predbat.compare_tariff_current
       - predbat.compare_tariff_<name1>
