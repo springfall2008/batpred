@@ -1,6 +1,7 @@
 # Custom Dictionary Words
 3hy
 aaaabbbbccccdddd
+ABCDEFGHJKLMNP
 acks
 activepower
 adata
@@ -8,6 +9,7 @@ adbase
 afci
 afewyards
 agentic
+agilepredict
 AIO
 AIO's
 aiofiles

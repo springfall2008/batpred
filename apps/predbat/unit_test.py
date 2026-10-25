@@ -65,6 +65,7 @@ from tests.test_optimise_swap_charge import run_optimise_swap_charge_tests
 from tests.test_optimise_swap_export import run_optimise_swap_export_tests
 from tests.test_nordpool import run_nordpool_test
 from tests.test_futurerate_auto import test_futurerate_auto
+from tests.test_futurerate_agilepredict import test_futurerate_agilepredict
 from tests.test_car_charging_smart import run_car_charging_smart_tests
 from tests.test_battery_accuracy import run_battery_accuracy_tests
 from tests.test_plugin_startup import test_plugin_startup_order
@@ -619,6 +620,7 @@ def main():
         ("web_entity_unit_resolution", run_web_entity_unit_resolution_tests, "Web /entity chart unit/name resolution tests", False),
         ("nordpool", run_nordpool_test, "Nordpool tests", False),
         ("futurerate_auto", test_futurerate_auto, "FutureRate auto Agile detection tests", False),
+        ("futurerate_agilepredict", test_futurerate_agilepredict, "FutureRate AgilePredict forecast tests", False),
         ("octopus_slots", run_load_octopus_slots_tests, "Load Octopus slots tests", False),
         ("octopus_slot_max_default", run_octopus_slot_max_default_tests, "Octopus slot max auto-detection from IOG-SMB tariff code", False),
         ("multi_car_iog", run_multi_car_iog_tests, "Multi-car IOG tests", False),
