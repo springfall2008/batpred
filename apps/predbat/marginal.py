@@ -140,8 +140,10 @@ class Marginal:
     def marginal_plan_cost(self, result, value_rate):
         """Return a run_prediction result's cost less the value of what the plan leaves stored.
 
-        Mirrors the battery_value term of compute_metric: the battery's end SoC and any iBoost
-        energy, each scaled as the planner scales them, valued at value_rate.
+        Mirrors the battery_value term of compute_metric (plan.py) - keep the two in step: the
+        battery's end SoC and any iBoost energy, each scaled as the planner scales them, valued at
+        value_rate. Only that term is applied; metric_keep, battery cycle and carbon are planner
+        steering penalties rather than money, so a marginal cost leaves them out.
         """
         cost, soc, final_iboost = result[0], result[5], result[9]
         return cost - (soc * self.metric_battery_value_scaling + final_iboost * self.iboost_value_scaling) * value_rate

@@ -666,7 +666,7 @@ is valued the same way the planner values it, so extra load the battery covers i
     - `grid_export` - Dict of actual grid export rate (p/kWh) at each time window label
     - `grid_import_now` - Current grid import rate (p/kWh)
     - `grid_export_now` - Current grid export rate (p/kWh)
-    - `baseline_metric` - Internal baseline cost used to compute deltas (standing charge excluded)
+    - `baseline_metric` - Internal baseline used to compute deltas: the plan's cost less the value of the energy left in the battery at the end (standing charge excluded), so it can be negative
     - `rate_now_low_consumption` - Marginal cost now for the 'low' (1 kWh) load level
     - `rate_now_med_consumption` - Marginal cost now for the 'medium' (2 kWh) load level
     - `rate_now_high_consumption` - Marginal cost now for the 'high' (4 kWh) load level

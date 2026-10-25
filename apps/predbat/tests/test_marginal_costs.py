@@ -211,8 +211,8 @@ def marginal_costs_battery_value(my_predbat):
 
     The battery starts half full and the base load is small, so it never empties over the plan and
     every extra kWh in the now window comes out of energy that would otherwise still be stored at
-    end_record. Before the fix that cost nothing - the sensor read 0p and flagged 'cheap' - whereas
-    the planner values that energy at battery_value_rate.
+    end_record. Before the fix that cost next to nothing - 2.4p for the 1 kWh cell, flagged 'cheap' -
+    whereas the planner values that energy at battery_value_rate.
     """
     failed = False
     print("*** Running test: marginal_costs battery value")
@@ -253,6 +253,10 @@ def marginal_costs_battery_value(my_predbat):
         # Losses mean a kWh of load takes at least a kWh out of the battery, so never less than the value
         if cost < expected_min - 0.01:
             print("ERROR: battery-covered marginal cost for {} kWh is {} but stored energy is worth {} per kWh".format(kwh, cost, dp2(expected_min)))
+            failed = True
+        # Never dearer than importing it - catches the value being counted twice
+        if cost > 20.0 + 0.01:
+            print("ERROR: battery-covered marginal cost for {} kWh is {}, above the 20p import rate".format(kwh, cost))
             failed = True
 
     my_predbat.soc_kw = 0.0
