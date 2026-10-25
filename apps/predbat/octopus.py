@@ -1783,14 +1783,22 @@ class OctopusAPI(ComponentBase):
         response_data = await self.async_graphql_query(octoplus_saving_session_query.format(account_id=self.account_id), "get-saving-sessions", ignore_errors=True, use_backend=True)
         if response_data is None:
             return self.saving_sessions
-        else:
-            savingSessions = response_data.get("savingSessions", {})
-            if savingSessions is None:
-                savingSessions = {}
-            if "account" in savingSessions:
-                if savingSessions["account"] is None:
-                    savingSessions["account"] = {}
-            return savingSessions
+        # With ignore_errors an answer carrying errors still returns its data, the failed part null - Octopus
+        # answers account null with OE-0003 ("Temporary service error"). Null is not "nothing joined": an
+        # account with nothing joined comes back with an empty joinedEvents list. Read as empty it dropped a
+        # joined Weekend Happy Hour while it ran, and the emptied account outlived the failures that
+        # followed (#5745), so keep the last known part instead.
+        savingSessions = response_data.get("savingSessions", None)
+        if savingSessions is None:
+            if self.saving_sessions:
+                self.log("Warn: OctopusAPI: Saving sessions not returned, keeping the last known ones")
+            return self.saving_sessions
+        if "account" in savingSessions and savingSessions["account"] is None:
+            cached_account = (self.saving_sessions or {}).get("account") or {}
+            if cached_account:
+                self.log("Warn: OctopusAPI: Saving session account not returned, keeping the last known joined events")
+            savingSessions["account"] = cached_account
+        return savingSessions
 
     async def async_get_flexibility_events(self, account_id):
         """
@@ -1824,8 +1832,8 @@ class OctopusAPI(ComponentBase):
         # Query free electricity sessions
         free_events = []
         response_data = await self.async_graphql_query(flexibility_campaign_query.format(account_id=account_id, mpan=self.mpan, campaign_slug="free_electricity"), "get-flexibility-free-electricity", ignore_errors=True)
-        if response_data is not None:
-            campaign_data = response_data.get("customerFlexibilityCampaignEvents", {})
+        campaign_data = (response_data or {}).get("customerFlexibilityCampaignEvents", None)
+        if campaign_data is not None:
             if campaign_data:
                 edges = campaign_data.get("edges", [])
                 for edge in edges:
@@ -1840,8 +1848,13 @@ class OctopusAPI(ComponentBase):
                         )
                 self.log("OctopusAPI: Found {} free electricity events via flexibility API".format(len(free_events)))
 
-        # Store free electricity events for use by fetch_octopus_sessions
-        self.free_electricity_events = free_events
+        # Store free electricity events for use by fetch_octopus_sessions. This API is their only source, so
+        # a failed query - whole, or the events null beside an error - keeps the last known ones rather than
+        # dropping the free sessions until the next poll (#5745). An answer with no events still clears them.
+        if campaign_data is not None:
+            self.free_electricity_events = free_events
+        elif self.free_electricity_events:
+            self.log("Warn: OctopusAPI: Free electricity events not returned, keeping the last known ones")
 
         # If no saving session events from new API, fall back to legacy query
         # The new flexibility API may not have events populated yet for all accounts
