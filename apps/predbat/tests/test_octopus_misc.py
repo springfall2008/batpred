@@ -679,6 +679,7 @@ async def test_octopus_saving_sessions_partial_errors(my_predbat):
 
     - account null keeps the last known account, with the events list from the same answer
     - savingSessions null keeps the last known saving sessions
+    - events null, or joinedEvents null inside an answered account, keeps the last known list
     - a real account with joinedEvents [] still clears the joined events
     - the free electricity events are kept when their query fails, whole or in part, and still clear
       when Octopus answers that there are none
@@ -739,6 +740,48 @@ async def test_octopus_saving_sessions_partial_errors(my_predbat):
         failed += 1
     else:
         print("PASS: savingSessions null keeps the last known saving sessions")
+
+    # ------------------------------------------------------------------
+    # events null, or joinedEvents null inside an answered account, keep the last known list: joined sessions
+    # are found by walking the events list, so either one read as [] drops them as account null did, and
+    # left as None the session data loops over it and raises
+    # ------------------------------------------------------------------
+    print("\n*** events or joinedEvents null keep the last known list ***")
+    api = make_api()
+    api.async_graphql_query = AsyncMock(return_value={"savingSessions": {"events": None, "account": {"hasJoinedCampaign": True, "joinedEvents": [happy_hour]}}})
+    result = await api.async_get_saving_sessions("test-account")
+    if result.get("events") != events or result.get("account") != {"hasJoinedCampaign": True, "joinedEvents": [happy_hour]}:
+        print(f"ERROR: Expected the last known events with the answered account, got {result}")
+        failed += 1
+    else:
+        print("PASS: events null keeps the last known events, with the answered account")
+
+    api = make_api()
+    api.async_graphql_query = AsyncMock(return_value={"savingSessions": {"events": fresh_events, "account": {"hasJoinedCampaign": True, "joinedEvents": None}}})
+    result = await api.async_get_saving_sessions("test-account")
+    if result.get("events") != fresh_events or result.get("account") != cached_account:
+        print(f"ERROR: Expected the last known joined events with the fresh events list, got {result}")
+        failed += 1
+    else:
+        print("PASS: joinedEvents null keeps the last known joined events, with the fresh events list")
+
+    # With nothing known both come back empty, and the session data reads them without raising
+    api = make_api()
+    api.saving_sessions = {}
+    api.async_graphql_query = AsyncMock(return_value={"savingSessions": {"events": None, "account": {"hasJoinedCampaign": True, "joinedEvents": None}}})
+    result = await api.async_get_saving_sessions("test-account")
+    api.saving_sessions = result
+    try:
+        api.get_saving_session_data()
+    except TypeError as error:
+        print(f"ERROR: Session data raised on null events with nothing known: {error}")
+        failed += 1
+    else:
+        if result.get("events") != [] or result.get("account", {}).get("joinedEvents") != []:
+            print(f"ERROR: Expected empty events and joined events with nothing known, got {result}")
+            failed += 1
+        else:
+            print("PASS: Null events and joined events with nothing known read as empty, without raising")
 
     # ------------------------------------------------------------------
     # A real account with nothing joined still clears the joined events

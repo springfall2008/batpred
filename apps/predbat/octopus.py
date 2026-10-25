@@ -1793,11 +1793,23 @@ class OctopusAPI(ComponentBase):
             if self.saving_sessions:
                 self.log("Warn: OctopusAPI: Saving sessions not returned, keeping the last known ones")
             return self.saving_sessions
+        cached = self.saving_sessions or {}
         if "account" in savingSessions and savingSessions["account"] is None:
-            cached_account = (self.saving_sessions or {}).get("account") or {}
+            cached_account = cached.get("account") or {}
             if cached_account:
                 self.log("Warn: OctopusAPI: Saving session account not returned, keeping the last known joined events")
             savingSessions["account"] = cached_account
+        # The lists inside can be nulled the same way. Joined sessions are found by walking the events list, so
+        # either one read as empty would drop them too, and left as None the session data cannot loop over it.
+        if "events" in savingSessions and savingSessions["events"] is None:
+            savingSessions["events"] = cached.get("events") or []
+            if savingSessions["events"]:
+                self.log("Warn: OctopusAPI: Saving session events not returned, keeping the last known ones")
+        account = savingSessions.get("account")
+        if account and "joinedEvents" in account and account["joinedEvents"] is None:
+            account["joinedEvents"] = (cached.get("account") or {}).get("joinedEvents") or []
+            if account["joinedEvents"]:
+                self.log("Warn: OctopusAPI: Saving session joined events not returned, keeping the last known ones")
         return savingSessions
 
     async def async_get_flexibility_events(self, account_id):
