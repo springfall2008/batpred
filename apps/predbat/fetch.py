@@ -1938,18 +1938,20 @@ class Fetch:
         days = min(self.max_days_previous, minutes // (24 * 60) + 1)
         return self.minute_data_import_export(days, self.now_utc, entities[car_n], scale=self.car_charging_energy_scale, required_unit="kWh") or None
 
-    def car_manual_soc_energy_since(self, car_n, since):
+    def car_manual_soc_energy_since(self, car_n, since, history):
         """
         kWh the car's charger energy sensor recorded between since and now, or None when it has no history.
 
         The history's cumulative series already counts on through the sensor resetting at midnight or at
         the start of a session. Before the history starts it reads zero, which is right - no energy was
         recorded then - but past its end it has no value, so a time older than that is taken as its start.
+
+        history is the series car_manual_soc_energy_history() returned for a window covering since, so one
+        read serves every window in a cycle.
         """
         minutes = int((self.now_utc - since).total_seconds() / 60)
         if minutes <= 0:
             return 0.0
-        history = self.car_manual_soc_energy_history(car_n, minutes)
         if not history:
             return None
         oldest = len(history) - 1 if isinstance(history, MinuteArray) else max(history.keys())
@@ -2015,7 +2017,8 @@ class Fetch:
         Update the manual SoC of each manually tracked car for what has happened since the last cycle.
 
         Each car has a record in car_manual_soc_state: the value Predbat last saw or wrote, the time charger energy
-        has been counted up to, the plugged-in sensor's last reading and when the car was last active. It is published as
+        is counted from and how much of it since then has been added already, the plugged-in sensor's last reading and
+        when the car was last active. It is published as
         sensor.predbat_car_manual_soc_tracked[_N] (see car_manual_soc_publish()), which a restart reads back, so
         tracking picks up where it left off. The entities' own change times are not used - Home Assistant only
         moves them when the state changes, while Predbat's own database moves them on every write.
@@ -2024,6 +2027,12 @@ class Fetch:
           again from now, so no energy is added on top of it.
         - Otherwise the energy the car_charging_energy sensor recorded since the record's time is added, less
           charging losses - but no more than the car could have taken at car_charging_rate (car_manual_soc_energy_cap()).
+          The history reaches Predbat up to a couple of minutes late and is smoothed back over those minutes when it does, so
+          the time is not moved to now while energy is coming in: each cycle adds what the history now shows since that
+          time less what is already counted. The cap therefore covers the whole charge so far until it bites. With nothing
+          new the time moves up to CAR_MANUAL_SOC_LATE_MINUTES ago, if that is later, and the counted energy is worked out
+          again for it from the same read. A read that is missing, or shows less than is already counted, leaves both
+          alone. When the cap bites, counting starts again from now, so a counter glitch cannot keep feeding the window.
           The value kept is not limited to the battery size: that is not known until Octopus Intelligent has reported
           its own, later in the cycle, and the plan reads it clamped anyway (car_manual_soc_kwh()).
         - A car whose car_charging_plugged sensor has gone from plugged in to unplugged, and stayed unplugged for
@@ -2051,6 +2060,7 @@ class Fetch:
             since = self.car_manual_soc_time(record.get("since")) if isinstance(record, dict) else None
             unplugged_since = None
             active = self.now_utc
+            counted = 0.0
             if since is None:
                 record = None
 
@@ -2063,21 +2073,42 @@ class Fetch:
                 if not (car_n < len(self.car_charging_now) and self.car_charging_now[car_n]):
                     active = self.car_manual_soc_time(record.get("active")) or self.now_utc
                 if car_n < len(self.car_charging_manual_soc_energy) and self.car_charging_manual_soc_energy[car_n]:
-                    energy_added = self.car_manual_soc_energy_since(car_n, since)
-                    if energy_added:
-                        energy_added = self.car_manual_soc_energy_cap(car_n, since, energy_added)
+                    # The time stays put while energy comes in, and only what is new since the last cycle is added: history
+                    # arrives late and is smoothed back over the minutes before it, so restarting from now each cycle lost that
+                    counted = record.get("counted") or 0.0
+                    # One read of the history serves the total and, with nothing new, the window the time moves up to
+                    minutes = int((self.now_utc - since).total_seconds() / 60)
+                    history = (self.car_manual_soc_energy_history(car_n, minutes) or {}) if minutes > 0 else {}
+                    energy_total = self.car_manual_soc_energy_since(car_n, since, history)
+                    capped = False
+                    if energy_total:
+                        energy_capped = self.car_manual_soc_energy_cap(car_n, since, energy_total)
+                        capped = energy_capped < energy_total
+                        energy_total = energy_capped
+                    energy_added = (energy_total or 0.0) - counted
+                    if energy_added >= 0.001:
                         soc_new = soc_new + energy_added * self.car_charging_loss
-                        self.log("Car {} manual SoC {} kWh plus {} kWh charged since {} is {} kWh".format(car_n, dp3(soc), dp3(energy_added), since.strftime(TIME_FORMAT), dp3(soc_new)))
-                        since = self.now_utc
+                        self.log("Car {} manual SoC {} kWh plus {} kWh charged is {} kWh ({} kWh since {})".format(car_n, dp3(soc), dp3(energy_added), dp3(soc_new), dp3(energy_total), since.strftime(TIME_FORMAT)))
+                        counted = energy_total
                         active = self.now_utc
-                    else:
-                        # Kept back a little, for energy the history records late - but not so far that every cycle reads days of it
-                        since = max(since, self.now_utc - timedelta(minutes=CAR_MANUAL_SOC_LATE_MINUTES))
+                        if capped:
+                            # A counter glitch would stay in the window and keep the cap biting, so count on from now
+                            since = self.now_utc
+                            counted = 0.0
+                    elif not counted or (energy_total is not None and energy_total >= counted - 0.001):
+                        # Kept back a little, for energy the history records late - but not so far that every cycle reads days of it.
+                        # A read that is missing or shows less than is already counted says nothing about it, so then both wait
+                        late = self.now_utc - timedelta(minutes=CAR_MANUAL_SOC_LATE_MINUTES)
+                        if late > since:
+                            since = late
+                            rebased = self.car_manual_soc_energy_since(car_n, since, history)
+                            counted = self.car_manual_soc_energy_cap(car_n, since, rebased) if rebased else 0.0
                 if plug_arg is None and soc_new > 0 and (self.now_utc - active).total_seconds() / 60 >= CAR_MANUAL_SOC_IDLE_MINUTES:
                     # Nothing says when the car is unplugged, so a car left idle this long is taken to have been driven since
                     self.log("Car {} has been idle since {}, resetting its manual SoC from {} kWh to 0".format(car_n, active.strftime(TIME_FORMAT), dp3(soc_new)))
                     soc_new = 0.0
                     since = self.now_utc
+                    counted = 0.0
                     active = self.now_utc
                 if record.get("plugged") is True and plugged is False:
                     # An unplug only counts once it has lasted: a charger reconnecting can read unplugged for a few minutes
@@ -2090,6 +2121,7 @@ class Fetch:
                         self.log("Car {} has been unplugged, resetting its manual SoC from {} kWh to 0".format(car_n, dp3(soc_new)))
                         soc_new = 0.0
                         since = self.now_utc
+                        counted = 0.0
                         unplugged_since = None
                     else:
                         # Still plugged in, until the unplug has lasted
@@ -2103,11 +2135,12 @@ class Fetch:
                 self.expose_config(name, soc_new)
             if plugged is None and record is not None:
                 plugged = record.get("plugged")
-            record_new = {"soc": soc_new, "since": since.isoformat(), "plugged": plugged, "unplugged_since": unplugged_since, "active": active.isoformat()}
-            # Published when the SoC or the plug changes. A time that only moved on is kept in memory: it moved with nothing
-            # charged, so after a restart the published, older time gives the same SoC. The active time moves with the SoC,
+            record_new = {"soc": soc_new, "since": since.isoformat(), "counted": dp3(counted), "plugged": plugged, "unplugged_since": unplugged_since, "active": active.isoformat()}
+            # Published when the SoC, the counted energy or the plug changes. A time that moved on with the counted energy unchanged is
+            # kept in memory, as after a restart the published, older pair gives the same SoC. The counted energy is published as it
+            # changes, so a restart never pairs it with a time the history has since moved past. The active time moves with the SoC,
             # except while car_charging_now reads charging, where a restart only brings an idle reset forward
-            publish = record is None or record.get("soc") != soc_new or record.get("plugged") != plugged or record.get("unplugged_since") != unplugged_since
+            publish = record is None or record.get("soc") != soc_new or record.get("counted") != record_new["counted"] or record.get("plugged") != plugged or record.get("unplugged_since") != unplugged_since
             self.car_manual_soc_state[car_n] = record_new
             if publish:
                 self.car_manual_soc_publish(car_n)
@@ -2133,7 +2166,7 @@ class Fetch:
 
     def car_manual_soc_publish(self, car_n):
         """
-        Publish car_n's tracking record: the SoC as the state, with the time energy is counted from, the last plug reading,
+        Publish car_n's tracking record: the SoC as the state, with the time energy is counted from, the kWh already counted since then, the last plug reading,
         when a pending unplug was first read and when the car was last active as attributes.
         """
         record = self.car_manual_soc_state.get(car_n, {})
@@ -2142,6 +2175,7 @@ class Fetch:
             state=record.get("soc"),
             attributes={
                 "since": record.get("since"),
+                "counted": record.get("counted"),
                 "plugged": record.get("plugged"),
                 "unplugged_since": record.get("unplugged_since"),
                 "active": record.get("active"),
@@ -2161,6 +2195,7 @@ class Fetch:
         except (ValueError, TypeError):
             return None
         since = self.get_state_wrapper(entity_id=entity_id, attribute="since", default=None)
+        counted = self.get_state_wrapper(entity_id=entity_id, attribute="counted", default=None)
         plugged = self.get_state_wrapper(entity_id=entity_id, attribute="plugged", default=None)
         unplugged_since = self.get_state_wrapper(entity_id=entity_id, attribute="unplugged_since", default=None)
         active = self.get_state_wrapper(entity_id=entity_id, attribute="active", default=None)
@@ -2169,6 +2204,7 @@ class Fetch:
         return {
             "soc": dp3(soc),
             "since": since,
+            "counted": float(counted) if isinstance(counted, (int, float)) and not isinstance(counted, bool) and counted >= 0 else 0.0,
             "plugged": plugged if isinstance(plugged, bool) else None,
             "unplugged_since": unplugged_since if isinstance(unplugged_since, str) and unplugged_since else None,
             "active": active if isinstance(active, str) and active else None,
