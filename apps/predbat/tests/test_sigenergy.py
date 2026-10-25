@@ -11,6 +11,7 @@
 """Unit tests for the Sigenergy Cloud API integration component."""
 
 import asyncio
+import time
 from datetime import datetime, timezone, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -2413,6 +2414,150 @@ def test_sigenergy_mqtt_listener_loop_ignores_other_systems(my_predbat):
     return failed
 
 
+def _run_listener_with_messages(api, messages):
+    """Run _mqtt_listener_loop over one fake connection that delivers (topic, payload) pairs, then stops."""
+
+    class FakeMessage:
+        """Minimal stand-in for an aiomqtt message."""
+
+        def __init__(self, topic, payload):
+            self.topic = topic
+            self.payload = payload
+            self.qos = 0
+            self.retain = False
+
+    class _Messages:
+        """Async iterator that yields the messages and then stops the listener."""
+
+        def __init__(self, msgs):
+            self._msgs = iter(msgs)
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._msgs)
+            except StopIteration:
+                api.api_stop = True
+                raise StopAsyncIteration
+
+    class FakeMQTTClient:
+        """Async context manager standing in for aiomqtt.Client."""
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def subscribe(self, topic):
+            pass
+
+        async def publish(self, topic, payload=None, qos=0, **kwargs):
+            pass
+
+        @property
+        def messages(self):
+            return _Messages([FakeMessage(topic, payload) for topic, payload in messages])
+
+    with patch("sigenergy.aiomqtt.Client", return_value=FakeMQTTClient()):
+        with patch("sigenergy.ssl.create_default_context", return_value=MagicMock()):
+            run_async(api._mqtt_listener_loop())
+
+
+def _period_payload(sid, soc, statistics_time=None):
+    """Build an MQTT period payload as the broker sends it, optionally with its statisticsTime envelope field."""
+    import json as _json
+
+    entry = {"deviceType": "system", "systemId": sid, "snCode": sid, "value": {"storageSOC%": str(soc), "storageChargeDischargePowerW": "-8804.0", "PV power": "0.0", "gridActivePowerW": "-4861.0"}}
+    if statistics_time is not None:
+        entry["statisticsTime"] = statistics_time
+    return _json.dumps([entry]).encode()
+
+
+def test_sigenergy_mqtt_listener_ignores_stale_period(my_predbat):
+    """A period message whose reading (statisticsTime) is over 5 minutes old on arrival must not overwrite live data.
+
+    Live on 2026-10-25 the broker's period feed fell up to 2h behind: a message arriving at 19:16:56 UTC carried
+    statisticsTime 17:20:00 and SOC 61.3%, while energyFlow said 7%. Applying it made Predbat plan from the old SOC.
+    """
+    failed = False
+    sid = "SIG001"
+    api = MockSigenergyAPI()
+    api.access_token = "tok"
+    api.token_expires_at = 9_999_999_999
+    api.systems[sid] = {"systemName": "Test"}
+    api.api_stop = False
+    # Current reading from the REST energyFlow poll
+    api.energy_flow[sid] = {"batterySoc": 7.0, "batteryPower": 0.6, "pvPower": 0.0, "gridPower": 0.0, "loadPower": 0.6, "evPower": 0.0}
+
+    _run_listener_with_messages(api, [("openapi/period/test_app_key/{}".format(sid), _period_payload(sid, 61.3, statistics_time=int(time.time()) - 7020))])
+
+    assert api.energy_flow[sid]["batterySoc"] == 7.0, "stale MQTT SOC must not replace the REST reading, got {}".format(api.energy_flow[sid]["batterySoc"])
+    assert api.mqtt_data_lag.get(sid, 0) >= 7000, "lag between statisticsTime and arrival recorded, got {}".format(api.mqtt_data_lag.get(sid))
+    assert api.last_mqtt_update.get(sid, 0) > 0, "arrival still recorded - it drives inverter_time, which must not look skewed"
+    warnings = [m for m in api.log_messages if m.startswith("Warn:") and "MQTT" in m and "117 minutes" in m]
+    assert warnings, "a warning gives the MQTT data age: {}".format([m for m in api.log_messages if m.startswith("Warn:")])
+    # The broker only sends changed fields, so the stale values must still be merged for later deltas
+    assert api.mqtt_period_raw.get(sid, {}).get("storageSOC%") == "61.3", "stale fields merged into the raw state"
+    return failed
+
+
+def test_sigenergy_mqtt_listener_applies_fresh_period(my_predbat):
+    """A period message whose statisticsTime is recent is applied as before, and its small lag recorded."""
+    failed = False
+    sid = "SIG001"
+    api = MockSigenergyAPI()
+    api.access_token = "tok"
+    api.token_expires_at = 9_999_999_999
+    api.systems[sid] = {"systemName": "Test"}
+    api.api_stop = False
+    api.energy_flow[sid] = {"batterySoc": 7.0, "batteryPower": 0.6, "pvPower": 0.0, "gridPower": 0.0, "loadPower": 0.6, "evPower": 0.0}
+
+    _run_listener_with_messages(api, [("openapi/period/test_app_key/{}".format(sid), _period_payload(sid, 61.3, statistics_time=int(time.time()) - 20))])
+
+    assert abs(api.energy_flow[sid]["batterySoc"] - 61.3) < 0.01, "fresh MQTT SOC applied, got {}".format(api.energy_flow[sid]["batterySoc"])
+    assert api.mqtt_data_lag.get(sid, 999) < 60, "small lag recorded, got {}".format(api.mqtt_data_lag.get(sid))
+    assert not [m for m in api.log_messages if "minutes old" in m], "no staleness warning for fresh data"
+    return failed
+
+
+def test_sigenergy_run_polls_rest_when_mqtt_lagging(my_predbat):
+    """MQTT arriving on time but carrying old readings is not fresh - run() polls energyFlow instead."""
+    failed = False
+    sid = "SIG001"
+
+    def _make_api(lag_seconds):
+        """Build an API whose last MQTT message arrived just now, carrying a reading lag_seconds old."""
+        api = MockSigenergyAPI()
+        api.systems = {sid: {"deviceList": []}}
+        api.current_mode = {sid: SIGENERGY_MODE_VPP}
+        api.system_id_filter = {sid}
+        task = MagicMock()
+        task.done = MagicMock(return_value=False)
+        api._mqtt_task = task
+        api._manage_vpp_registration = AsyncMock(return_value=True)
+        api.fetch_energy_flow = AsyncMock(return_value=True)
+        api.fetch_inverter_realtime = AsyncMock(return_value=True)
+        api.fetch_daily_summary = AsyncMock(return_value=True)
+        api.fetch_history_totals = AsyncMock(return_value=True)
+        api.publish_system_entities = AsyncMock()
+        api.apply_controls = AsyncMock()
+        api.last_mqtt_update[sid] = time.time() - 30
+        api.mqtt_data_lag[sid] = lag_seconds
+        return api
+
+    api = _make_api(lag_seconds=7020)
+    run_async(api.run(seconds=300, first=False))
+    api.fetch_energy_flow.assert_called_once_with(sid)
+
+    api = _make_api(lag_seconds=20)
+    run_async(api.run(seconds=300, first=False))
+    api.fetch_energy_flow.assert_not_called()
+    return failed
+
+
 def test_sigenergy_fetch_inverter_realtime(my_predbat):
     """Test fetch_inverter_realtime maps realtimeInfo fields to energy_flow correctly."""
     failed = False
@@ -4759,6 +4904,9 @@ def run_sigenergy_tests(my_predbat):
         ("handle_mqtt_alarm", test_sigenergy_handle_mqtt_alarm),
         ("mqtt_listener_loop", test_sigenergy_mqtt_listener_loop),
         ("mqtt_listener_loop_ignores_other_systems", test_sigenergy_mqtt_listener_loop_ignores_other_systems),
+        ("mqtt_listener_ignores_stale_period", test_sigenergy_mqtt_listener_ignores_stale_period),
+        ("mqtt_listener_applies_fresh_period", test_sigenergy_mqtt_listener_applies_fresh_period),
+        ("run_polls_rest_when_mqtt_lagging", test_sigenergy_run_polls_rest_when_mqtt_lagging),
         ("fetch_inverter_realtime", test_sigenergy_fetch_inverter_realtime),
         ("fetch_inverter_realtime_pv_power_key_fallback", test_sigenergy_fetch_inverter_realtime_pv_power_key_fallback),
         ("fetch_energy_flow", test_sigenergy_fetch_energy_flow),
