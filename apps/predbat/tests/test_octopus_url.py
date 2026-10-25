@@ -11,7 +11,8 @@
 import asyncio
 import json
 from datetime import datetime, timezone, timedelta
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, PropertyMock
+import pytz
 from octopus import OctopusAPI, DATE_TIME_STR_FORMAT
 from const import TIME_FORMAT_OCTOPUS
 from utils import dp4
@@ -211,8 +212,13 @@ async def test_download_octopus_url(my_predbat):
 def _test_async_get_day_night_rates_wrapper(my_predbat):
     """
     Wrapper to run the async test function for day/night rates
+
+    The clock is pinned clear of a DST change: the 8-day schedule is built from the component's own
+    now_utc_exact, so an unpinned run inside a week of the clocks changing sees a different shape.
     """
-    return asyncio.run(test_async_get_day_night_rates(my_predbat))
+    pinned_now = pytz.timezone("Europe/London").localize(datetime(2024, 7, 1, 12, 0, 0))
+    with patch.object(OctopusAPI, "now_utc_exact", new_callable=PropertyMock, return_value=pinned_now):
+        return asyncio.run(test_async_get_day_night_rates(my_predbat))
 
 
 async def test_async_get_day_night_rates(my_predbat):
@@ -234,9 +240,7 @@ async def test_async_get_day_night_rates(my_predbat):
     # Create API instance
     api = OctopusAPI(my_predbat, key="", account_id="", automatic=False)
 
-    # Set a fixed current time for predictable testing via my_predbat mock
-    fixed_time = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
-    my_predbat.now_utc_exact = fixed_time
+    # The clock is pinned by the wrapper, _test_async_get_day_night_rates_wrapper
 
     # Test 1: Successful fetch with valid day and night rates
     print("\n*** Test 1: Successful fetch with valid day and night rates ***")
@@ -457,6 +461,7 @@ def _test_get_saving_session_data(my_predbat):
     - Test 4: Mix of available and joined events
     - Test 5: Expired available events (should be filtered out)
     - Test 6: Active event (currently running)
+    - Test 6b: Active joined Weekend Happy Hour leaves the sensor off; a typed TURN_DOWN still sets it on
     - Test 7: Events with all data fields (rewards, codes, IDs)
     """
     print("**** Running get_saving_session_data tests ****")
@@ -606,6 +611,34 @@ def _test_get_saving_session_data(my_predbat):
         failed = True
     else:
         print("PASS: Active event correctly detected and sensor set to 'on'")
+
+    # Test 6b: An active joined Weekend Happy Hour is free electricity, not a saving session (issue #5615) -
+    # the planner prices it as a free slot, so the saving session sensor must stay off. The same active
+    # event typed as TURN_DOWN must still assert it.
+    print("\n*** Test 6b: Active joined Weekend Happy Hour does not assert the saving session sensor ***")
+    for event_type_name, expected_state in [("WEEKEND_HAPPY_HOUR", "off"), ("TURN_DOWN", "on")]:
+        api.saving_sessions = {
+            "account": {
+                "hasJoinedCampaign": True,
+                "joinedEvents": [{"eventId": "typed_event", "startAt": active_start_str, "endAt": active_end_str, "rewardGivenInOctoPoints": None}],
+            },
+            "events": [{"id": "typed_event", "code": "TYPED", "startAt": active_start_str, "endAt": active_end_str, "rewardPerKwhInOctoPoints": 0, "eventType": event_type_name}],
+        }
+        dashboard_calls = []
+        api.dashboard_item = mock_dashboard_item
+
+        with patch.object(type(api), "now_utc_exact", new_callable=lambda: property(lambda self: fixed_time)):
+            available, joined = api.get_saving_session_data()
+
+        sensor_call = [c for c in dashboard_calls if "saving_session" in c["entity"] and "join" not in c["entity"]]
+        if len(sensor_call) != 1 or sensor_call[0]["state"] != expected_state:
+            print("ERROR: Expected saving_session sensor '{}' for active joined {} event, got: {}".format(expected_state, event_type_name, sensor_call))
+            failed = True
+        elif len(joined) != 1 or joined[0]["event_type"] != event_type_name:
+            print("ERROR: Expected the joined {} event to still be published in joined_events, got: {}".format(event_type_name, joined))
+            failed = True
+        else:
+            print("PASS: Active joined {} event sets saving_session sensor to '{}'".format(event_type_name, expected_state))
 
     # Test 7: Events with all data fields
     print("\n*** Test 7: Events with all data fields (rewards, codes, IDs) ***")

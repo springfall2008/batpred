@@ -47,6 +47,7 @@ Once you get everything working please share the configuration as a GitHub issue
    | [Fox Cloud](#fox-cloud) | Predbat | [fox_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/fox_cloud.yaml) |
    | [Fronius GEN24](#fronius-gen24) | [Fronius](https://www.home-assistant.io/integrations/fronius/) + [fronius-modbus-control](https://github.com/knackerbrot/fronius-modbus-control) | [fronius.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fronius.yaml) |
    | [Growatt with Solar Assistant](#growatt-with-solar-assistant) | [Solar Assistant](https://solar-assistant.io/help/home-assistant/setup) | [spa.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt_spa.yaml) or [sph.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt_sph.yaml) |
+   | [Hanchu ESS Cloud](#hanchu-ess-cloud) | Predbat | [hanchu.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/hanchu.yaml) |
    | [Hanchu iESS](#hanchu-iess) | [hanchu-ess-ha](https://github.com/upton68/hanchu-ess-ha) | [hanchu_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/hanchu_cloud.yaml) |
    | [Huawei](#huawei) | [Huawei Solar](https://github.com/wlcrs/huawei_solar) | [huawei.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/huawei.yaml) |
    | [Kostal Plenticore](#kostal-plenticore) | [Kostal Plenticore](https://www.home-assistant.io/integrations/kostal_plenticore) | [kostal.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/kostal.yaml) |
@@ -625,9 +626,51 @@ You need to have a Solar Assistant installation <https://solar-assistant.io>
 
 Growatt has two popular series of inverters, SPA and SPH. Copy the template that matches your model from templates over the top of your `apps.yaml`, and edit inverter and battery settings as required. Yours may have different entity IDs on Home Assistant.
 
+## Hanchu ESS Cloud
+
+**Experimental**
+
+Predbat has a built-in Hanchu ESS Cloud integration that talks to the Hanchu cloud directly, using the e-mail address and password you sign into the Hanchu phone app with. It needs no Home Assistant integration and no bridge script. It is an alternative to the [Hanchu iESS](#hanchu-iess) Service API setup below, not a layer on top of it - use one or the other.
+
+Hanchu publish no API specification, so this integration was built by reading open-source Home Assistant integrations and has so far been tested on only a couple of units. Please report what you see. Every request and response is traced to the log by default, which is what an issue report needs; once everything works you can set `hanchu_api_debug: False` to quieten the log, and turn it back on before reporting a problem.
+
+Copy the template [hanchu.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/hanchu.yaml) over your `apps.yaml` and set `hanchu_account` and `hanchu_password` (keep them in `secrets.yaml` - see [Storing secrets](apps-yaml.md#storing-secrets)). With `hanchu_automatic: True` Predbat finds your inverter and wires up its sensors and controls for you. Set `hanchu_control_enable: False` to monitor only.
+
+### Hanchu ESS Cloud inverter control
+
+- **Timed slots in User-defined mode.** Predbat drives the inverter through its three charge and three discharge time slots, and sets the User-defined work mode (3) whenever it writes a window. If your inverter accepts the windows but ignores them, set `hanchu_work_mode_control: False`, choose the mode that does honour them yourself, and please report it.
+- **Your Hanchu app schedule is cleared.** At its first write Predbat writes all six slots, and sets the ones its plan does not use to 00:00-00:00. In User-defined mode every enabled slot runs, so a slot left over from the app would run alongside Predbat's plan and fight it. Nothing is cleared while Predbat is only monitoring.
+- **No Freeze Export.** The charge power limit only limits charging from the grid, so a zero charge rate cannot stop solar charging the battery. Predbat turns Freeze Export off and does not plan it, logging *Inverter 0 does not support discharge freeze - disabled*; forced export is not affected. If any inverter in a multi-inverter system does not support Freeze Export then it is turned off for all of them.
+- **Holds.** Freeze charge and other holds are written as a charge slot at zero power. During a hold the grid-charge limit is also capped at the current SoC, so the battery cannot charge from the grid even if the zero-power setting does not take.
+- **SoC limits.** This hardware accepts a charge target of only 20-100% and a discharge floor of only 5-45%. Predbat clamps anything outside those ranges and says so in the log. The app's "Maximum Charge SOC" is never changed, because it limits solar charging too.
+- **Write pacing.** All of Predbat's settings changes go to the cloud in one call per cycle, at most once per `hanchu_min_write_interval` seconds (default 60). A setting changed in the Hanchu app is noticed when Predbat next reads the settings back (every 30 minutes) and is put back.
+
+### Hanchu ESS Cloud power ratings
+
+Predbat looks your model up from the model code the inverter reports, and logs what it found, for example `Hanchu ... is a HESS-HY-S-5.0K (devModel 4): battery limit 5000 W, AC rating 5000 W`. The battery limit becomes `battery_rate_max` and the AC rating becomes `inverter_limit`, which is what Predbat plans with. What Predbat *writes* as a charge or discharge power limit stays within what the inverter is known to accept - the settings menu's maximum (0-5000 W on every unit seen so far), or a higher limit the inverter has been seen holding - and never above the model's battery limit, since a higher setting moves no more power (a HESS-HY-S-6.0K set to 6000 W still exports at 5000 W). On a larger unit Predbat logs that gap once, and forced charge and export windows run at that lower limit until the inverter is seen holding more. For a model Predbat does not know, it logs the code and falls back to the power limits the settings menu reports and the device holds - please report the code and your model so it can be added. Set `hanchu_battery_rate_max` or `hanchu_inverter_limit` to override either figure.
+
+The API does not report a grid export limit, so if your connection is capped below the inverter rating (G98/G99) set `export_limit` yourself.
+
+### Verifying with the Hanchu diagnostics CLI
+
+A standalone CLI is included so you can check the integration against your own system before giving it control. Run it from the `apps/predbat` directory; with no mode option it is read-only:
+
+```bash
+cd apps/predbat
+python3 hanchu.py --account you@example.com
+```
+
+You are prompted for the password (or set `HANCHU_PASSWORD`, or use `--config apps.yaml`). Useful options:
+
+- `--serial <sn>` - pick one inverter when the account has several
+- `--dump-menu FILE` - save the device's full settings menu as JSON
+- `--write-test` - write a charge window three hours ahead, read it back and restore it; no energy moves
+- `--live-window charge|export|freeze-charge|freeze-export|hold` - run that Predbat state on the inverter now, watch the battery, then restore the previous settings
+- `--restore SNAPSHOT` - write back a snapshot that a test saved
+
 ## Hanchu iESS
 
-The Hanchu iESS has no native Predbat integration. Control is implemented via Predbat's generic Service API: Predbat calls four service hooks (`charge_start_service`, `charge_stop_service`, `discharge_start_service`, `discharge_stop_service`), all of which point at a single Home Assistant script that writes the corresponding time slots directly to the device via `hanchuess.device_control`.
+The Hanchu iESS can also be driven through Home Assistant with the [hanchu-ess-ha](https://github.com/upton68/hanchu-ess-ha) integration instead of the native [Hanchu ESS Cloud](#hanchu-ess-cloud) integration above. Control is implemented via Predbat's generic Service API: Predbat calls four service hooks (`charge_start_service`, `charge_stop_service`, `discharge_start_service`, `discharge_stop_service`), all of which point at a single Home Assistant script that writes the corresponding time slots directly to the device via `hanchuess.device_control`.
 
 Copy the template [hanchu_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/hanchu_cloud.yaml) over your `apps.yaml` and follow the steps below.
 
@@ -2712,7 +2755,7 @@ max: 10
 The fix was to enable the hidden HA entity 'VPP Exit Idle Enable' and then change the entity value from Disabled to Enabled. Once this was Enabled the inverter responded correctly to Predbat commands.
 
 - When you first start Predbat, check the [Predbat log](output-data.md#predbat-logfile) to confirm that the correct sensor names are identified by the regular expressions in `apps.yaml`. Any non-matching expressions should be investigated and resolved.
-- You may well get a warning message in the logs that Predbat [cannot create battery charge/discharge curves](faq.md#info-cannot-find-battery-charge-curve). Either configure [battery charge and discharge rates](apps-yaml.md#battery-chargedischarge-curves) in `apps.yaml` using appropriate inverter sensors (if available) or create a dummy default curve based on manufacturers information.
+- You may well get a warning message in the logs that Predbat [cannot create battery charge/discharge curves](faq.md#warn-cannot-find-battery-charge-curve). Either configure [battery charge and discharge rates](apps-yaml.md#battery-chargedischarge-curves) in `apps.yaml` using appropriate inverter sensors (if available) or create a dummy default curve based on manufacturers information.
 
 Please see this ticket in Github for ongoing discussion: <https://github.com/springfall2008/batpred/issues/259>
 

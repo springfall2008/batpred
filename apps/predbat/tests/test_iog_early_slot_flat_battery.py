@@ -26,6 +26,7 @@ _CAR_ATTRS = [
     "car_charging_loss",
     "car_charging_from_battery",
     "car_energy_reported_load",
+    "octopus_slots",
 ]
 
 # Shape taken from a real debug dump (28 Sep 2026, 22:30): battery at reserve, an Intelligent Octopus
@@ -45,7 +46,7 @@ DEFAULT_SCENARIO = {
     "inverter_loss": 0.95,
     "battery_loss": 0.96,
     "metric_battery_cycle": 0.0,
-    "kernel": False,
+    "kernel": True,  # the C++ kernel, for speed; the car case below also runs on the Python engine
     "car_kw": 0.0,
 }
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
@@ -108,6 +109,7 @@ def _setup(my_predbat, source, sc):
         my_predbat.args["octopus_slot_low_rate"] = True
         my_predbat.args["octopus_slot_max"] = 12
         my_predbat.dynamic_load_car_effective = {}
+        my_predbat.octopus_slots = [[]]  # No other car's dispatches share the cap (#5215)
         dispatch_start = my_predbat.midnight_utc + timedelta(minutes=sc["iog_start"])
         dispatch_end = my_predbat.midnight_utc + timedelta(minutes=sc["night_start"] + 90)
         dispatch = {"start": dispatch_start.strftime(TIME_FORMAT), "end": dispatch_end.strftime(TIME_FORMAT), "charge_in_kwh": 20.0, "source": "smart-charge", "location": "AT_HOME"}
@@ -248,7 +250,7 @@ def run_iog_early_slot_flat_battery_tests(my_predbat):
         )
 
         car_hold = {"car_kw": 7.0}
-        _, car_python, _, _ = _run_case(my_predbat, "slot path, 7 kW car in the dispatch, car_charging_from_battery off", "slot", 0.15, car_hold)
+        _, car_python, _, _ = _run_case(my_predbat, "slot path, 7 kW car in the dispatch, car_charging_from_battery off", "slot", 0.15, dict(car_hold, kernel=False))
         _, car_kernel, _, _ = _run_case(my_predbat, "same with the C++ kernel", "slot", 0.15, dict(car_hold, kernel=True))
 
         if slot_path < load_to_night:

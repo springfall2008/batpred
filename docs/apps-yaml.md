@@ -240,6 +240,8 @@ pred_bat:
   ohme_password: !secret ohme_password  # Ohme account password (if using Ohme direct)
   wallbox_username: !secret wallbox_username  # Wallbox account e-mail (if using Wallbox direct)
   wallbox_password: !secret wallbox_password  # Wallbox account password (if using Wallbox direct)
+  hypervolt_username: !secret hypervolt_username  # Hypervolt account e-mail (if using Hypervolt direct)
+  hypervolt_password: !secret hypervolt_password  # Hypervolt account password (if using Hypervolt direct)
 ```
 
 If a credential-like value (matching a key name containing `_key`, `password`, `secret` or `token`) is found written directly in `apps.yaml` instead of via `!secret`, Predbat logs a warning and lists the affected item(s) on the [web interface](web-interface.md) apps.yaml page. This is a warning rather than a validation error - the configuration still works, but moving the value into `secrets.yaml` keeps it out of `apps.yaml`, which is more likely to end up shared, backed up or attached to a bug report.
@@ -676,6 +678,18 @@ A `switch.predbat_gecloud_evc_control` entity appears when control is on, on by 
 `apps.yaml`; releasing sends a start command if Predbat had stopped the charger, so a car is never left unable to charge.
 Read only mode releases the chargers in the same way.
 See [Components - Charger control](components.md#charger-control-gecloud) for the details.
+
+- **ge_cloud_inverter_control** - Optional, defaults to true. Set it to `false` to monitor your inverter through GE Cloud without
+letting Predbat control it. Predbat still reads the inverters on your account and publishes their entities, but **ge_cloud_automatic**
+is ignored (with a warning), so Predbat's inverter controls are not wired to GE Cloud, and Predbat writes no settings of its own: the
+daily pass that sets the inverter's default options (SoC limits, power percentages, clearing charge and discharge slots 2 to 10) is
+skipped. A change you make to one of the inverter's `_gecloud_` entities is still sent to the inverter.
+The EV charger settings above are not affected.
+
+- **ge_cloud_evc_direct** - Optional, defaults to false. Set it to `true`, in place of **ge_cloud_direct**, when your inverter is
+controlled by something else, such as GivTCP or the GivEnergy app, and you only want GE Cloud for your EV charger.
+The inverters on your account are then never read, written to or reported; **ge_cloud_automatic_evc** and **ge_cloud_evc_control**
+work as above. See [Components - Monitoring and control](components.md#monitoring-and-control-gecloud).
 
 ### SolaX Cloud Direct
 
@@ -1269,6 +1283,8 @@ the controls of your inverter inside home assistant.
 
 - **ge_cloud_direct** - Set to true to enable GE Cloud direct access
 - **ge_cloud_key** - Set to your API Key for the GE Cloud (long string)
+- **ge_cloud_inverter_control** - Optional, defaults to true. Set to false to monitor the inverter without Predbat controlling it
+- **ge_cloud_evc_direct** - Set to true instead of **ge_cloud_direct** to use GE Cloud for a GivEnergy EV charger only, leaving the inverter alone
 
 ## Load filtering
 
@@ -1283,12 +1299,12 @@ To disable, set it to 1440.
 out load_today sensors that update infrequently (e.g., sensors that increment in kWh units may only update every hour). This preprocessing happens before
 the main load data analysis and can significantly improve prediction accuracy, especially for systems with coarse-grained energy sensors. Set to 'false' to turn this feature off.
 
-- **load_history_fill_enable** (default true) fills gaps in the load_today history from the history of Predbat's own `predbat.load_energy_h0` sensor, which records
-today's measured load every cycle and keeps its name when your load sensor changes. This helps when you switch load_today to a different sensor (for example after
-changing inverter), where the new sensor has no history for the days before the switch, or when you cut over to another sensor and back again, leaving a stretch where
-load_today did not count. Any stretch of at least **load_filter_threshold** minutes where load_today did not move is filled with the load predbat.load_energy_h0 recorded
-at the time, and the days before load_today's own history started are counted as available history again. Stretches where predbat.load_energy_h0 did not move either
-are left for load_power_fill_enable and the average gap filling above. How far back this can reach depends on how long Home Assistant keeps history (10 days by default).
+- **load_history_fill_enable** (default true) fills the days before your load_today sensor's history starts from the history of Predbat's own `predbat.load_energy_h0`
+sensor, which records today's load every cycle and keeps its name when your load sensor changes. This helps when you switch load_today to a different sensor (for example
+after changing inverter), where the new sensor has no history for the days before the switch. Where load_today has no history for at least a day back from the oldest day
+Predbat looks at, that stretch is filled with the load predbat.load_energy_h0 recorded at the time, and those days are counted as available history again. Stretches inside
+load_today's own history where it did not move are not filled this way, because predbat.load_energy_h0 was recorded from the same sensor then; they are left for
+load_power_fill_enable and the average gap filling above. How far back this can reach depends on how long Home Assistant keeps history (10 days by default).
 Set to 'false' to turn this feature off.
 
 e.g.
@@ -2153,11 +2169,12 @@ whether you are within an Octopus Energy "smart charge" slot
 - **octopus_ready_time** - Octopus Energy integration sensor for when the car charging will be completed by
 - **octopus_charge_limit** - Octopus Energy integration sensor for car charging limit
 - **octopus_slot_low_rate** - Whether Octopus Intelligent Slots reported will be at the lowest rate if at home
-- **octopus_slot_max** - Maximum cheap rate dispatch time per 24-hour period, set in 30-minute slots (12 is 6 hours). It is counted in the minutes of each dispatch, so a 10-minute dispatch uses 10 minutes of it
+- **octopus_slot_max** - Maximum cheap rate dispatch time per 24-hour period, set in 30-minute slots (12 is 6 hours). It is counted in the minutes of each dispatch, so a 10-minute dispatch uses 10 minutes of it. It is per Octopus account, so with more than one car it is shared between all the cars with an `octopus_intelligent_slot` entry, in clock time (see [Multiple cars with Octopus Intelligent Go](car-charging.md#multiple-cars-with-octopus-intelligent-go-iog))
 - **intelligent_dispatch_billing** - `auto` (default), `octopus` or `window`: whether a planned dispatch half hour is billed cheap only when the car charges in it (`octopus`) or whenever the dispatch was in force (`window`, E.ON Next Drive Smart). `auto` picks `window` for the Kraken component on `kraken_provider: eon`
 (see [car charging documentation](car-charging.md))
 - **car_charging_planned** - Indicates when your EV is plugged in and planned to charge during low-rate slots.
 - **car_charging_planned_response** - Values for the car_charging_planned sensor that indicate that the car is plugged in and will charge in the next low rate slot.
+- **car_charging_plugged** - Optional, indicates only whether your EV is plugged in, even after its charge has finished. Used to reset the manual car SoC when the car is unplugged; **car_charging_planned** is not used for this, as many chargers turn it off when a charge finishes.
 - **car_charging_now** - Sensor to indicate when the EV is charging, used to hold the house battery for the car. Either an on/off sensor or a charging power sensor (W or kW, 200W or more counts as charging)
 - **car_charging_now_response** - Responses for car_charging_now to indicate that the car is charging (default `yes`, `on`, `enable`, `true` and `charging`). The sensor state must match one of them, ignoring case
 - **car_charging_battery_size** - Car battery size in kWh
@@ -2171,6 +2188,10 @@ whether you are within an Octopus Energy "smart charge" slot
 - **wallbox_automatic** - Register the Wallbox chargers with Predbat as cars (default `True`)
 - **wallbox_control** - Let Predbat pause and resume the Wallbox chargers from its own car charging plan (default `False`)
 - **wallbox_poll_seconds** - How often to poll the Wallbox cloud in seconds (default `120`)
+- **hypervolt_username** - Hypervolt EV charger account email address
+- **hypervolt_password** - Password for the above Hypervolt account
+- **hypervolt_automatic** - Register the Hypervolt chargers with Predbat as cars (default `True`)
+- **hypervolt_control** - Let Predbat stop and start the Hypervolt chargers from its own car charging plan (default `False`)
 
 ## myenergi Integration
 
