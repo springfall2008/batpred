@@ -200,7 +200,7 @@ def apply_session(charger, result):
     watt_hours = _to_float(result.get("watt_hours"))
     if watt_hours is not None:
         kwh = round(watt_hours / 1000.0, 3)
-        if "session" not in result and kwh < charger.session_energy_kwh:
+        if charger.api_version >= 3 and "session" not in result and kwh < charger.session_energy_kwh:
             # The V3 API sends no session id, and its watt_hours drops to 0 when a session ends
             charger.session_energy_kwh = 0.0
         # The session's maximum, so the sensor only ever rises within a session

@@ -625,16 +625,24 @@ def test_session_energy_holds_and_resets():
 
 def test_session_energy_v3_without_session_id():
     """V3 sends no session id and watt_hours drops to 0 at a stop, so a lower value starts a new session."""
-    charger = HypervoltCharger(V3_ID)
+    charger = HypervoltCharger(V3_ID, api_version=3)
     for watt_hours, expected in ((0, 0.0), (3343, 3.343), (0, 0.0), (1000, 1.0), (17836, 17.836), (0, 0.0), (1664, 1.664)):
         apply_session(charger, {"charging": watt_hours > 0, "watt_hours": watt_hours})
         assert charger.session_energy_kwh == expected
     apply_session(charger, {"charging": False, "ct_current": 30100})
     assert charger.session_energy_kwh == 1.664
+    # A lower reading other than 0 also starts a new session, so a lost 0 at a stop does not freeze the sensor
+    apply_session(charger, {"charging": True, "watt_hours": 500})
+    assert charger.session_energy_kwh == 0.5
     # With a session id a lower value in the same session is still ignored
     apply_session(charger, {"charging": True, "session": 9, "watt_hours": 5000})
     apply_session(charger, {"charging": True, "session": 9, "watt_hours": 0})
     assert charger.session_energy_kwh == 5.0
+    # A V2 charger keeps its session maximum even for a message without a session id
+    v2 = HypervoltCharger(V2_ID)
+    apply_session(v2, {"charging": True, "session": 9, "watt_hours": 5000})
+    apply_session(v2, {"charging": True, "watt_hours": 4000})
+    assert v2.session_energy_kwh == 5.0
     print("  ✓ Session energy on V3 without a session id")
 
 
