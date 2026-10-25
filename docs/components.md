@@ -1938,6 +1938,7 @@ All entities use the pattern `sensor.predbat_kraken_{account_id}_{suffix}` (acco
 | `sensor.predbat_kraken_a_12345678_import_standing` | Daily standing charge in £/day |
 | `sensor.predbat_kraken_a_12345678_export_rates` | Export rate periods — only present when an export tariff is found |
 | `binary_sensor.predbat_kraken_a_12345678_intelligent_dispatch[_N]` | On when a SmartFlex dispatch slot is active for device `N` — only present for accounts with a SmartFlex-managed EV device. The `dispatches_fetched_at` attribute is when the dispatches were last fetched successfully |
+| `sensor.predbat_kraken_a_12345678_free_electricity` | EDF Flextras free hours you have booked: `on` during a booked hour, `off` otherwise, with the booked hours in the `events` attribute - consumed by Predbat automatically and priced at 0p (see [EDF Flextras](energy-rates.md#kraken-integration-for-edf-or-eonnext)). EDF accounts only |
 
 Predbat is automatically configured to use these energy rates once Kraken is enabled.
 

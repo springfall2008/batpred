@@ -183,6 +183,7 @@ ECONNRESET
 ecosmart
 Eddi
 eddis
+edfenergy
 efgh
 elif
 elinter
@@ -239,6 +240,7 @@ figsize
 finaliser
 Fingerbot
 firstparty
+flextras
 fline
 FLOMASTA
 fontsize
