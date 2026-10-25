@@ -364,7 +364,7 @@ This alternative plan is only kept if it does not increase the overall plan metr
 
 ## Battery margins and metrics options
 
-_Warning_: All the **input_number.predbat_metric_xxx' configuration options are expressed in currency minor unit (pence, cents, etc), and have default values scaled to be roughly suitable to a UK/European/American market.  If your currency minor unit has a significantly larger or smaller exchange rate to GBP/EUR/USD then these defaults will not be suitable and you will need to adjust them accordingly.
+_Warning_: All the **input_number.predbat_metric_xxx** configuration options are expressed in currency minor unit (pence, cents, etc), and have default values scaled to be roughly suitable to a UK/European/American market.  If your currency minor unit has a significantly larger or smaller exchange rate to GBP/EUR/USD then these defaults will not be suitable and you will need to adjust them accordingly.
 
 For example, there are roughly 9 Danish Crowns to the pound, so the metric_min_improvement's will need to be increased by a factor of 9 to give equivalent results for a Danish Predbat user.
 
