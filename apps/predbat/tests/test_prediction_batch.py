@@ -611,9 +611,9 @@ def test_batch_thread_count_resolution():
 def test_batch_export_end_soc(my_predbat):
     """A queued export trial can return the SoC at the end of every export window, returns True on failure.
 
-    optimise_export floors each candidate's pv10 export targets at where its own nominal run reaches,
-    and the batch never keeps the SoC series, so the kernel reports those SoCs itself. Checked against
-    the direct path's series on the kernel, the Python fallback and the cache.
+    pv10 floors each target export at where the same plan's nominal run ends, and the batch never keeps
+    the SoC series, so the kernel reports those SoCs itself. Checked against the direct path's series on
+    the kernel, the Python fallback and the cache, and for two identical trials of which only one asks.
     """
     print("**** Running batch window-end SoC tests ****")
     failed = False
@@ -655,7 +655,8 @@ def test_batch_export_end_soc(my_predbat):
         print("ERROR: kernel window-end SoCs {} expected {}".format(with_end[11], expected))
         failed = True
 
-    # 2. Python fallback, which reads them from the series - agrees with the kernel to the engines' 1e-6
+    # 2. Python fallback, which reads them from the series. Both engines snapshot the SoC rounded to 3dp,
+    # so a ~1e-6 drift between them can flip the last digit: allow 0.002 kWh rather than the usual 1e-6
     handle = prediction.kernel_handle
     prediction.kernel_handle = 0
     try:
@@ -700,6 +701,24 @@ def test_batch_export_end_soc(my_predbat):
             failed = True
     finally:
         prediction_batch.run_prediction_kernel_batch = real_batch
+        prediction.prediction_cache_enable = False
+
+    # 4. Two identical trials in one fan-out, only one asking for window-end SoCs: the batch collapses
+    # duplicates, but each must still get the result shape it asked for
+    prediction.prediction_cache_enable = True
+    prediction.prediction_cache = {}
+    prediction.prediction_cache_export_end = {}
+    try:
+        for order in ((False, True), (True, False)):
+            handles = [prediction.queue_run_prediction_export(trial, start, 1, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, None, end_record, want_export_end_soc=want) for want in order]
+            for want, handle in zip(order, handles):
+                got = handle.get()
+                if len(got) != (12 if want else 11) or tuple(got[:11]) != tuple(plain) or (want and got[11] != expected):
+                    print("ERROR: duplicate trials queued as want_export_end_soc {} got {} fields for want {}: {}".format(order, len(got), want, got))
+                    failed = True
+            prediction.prediction_cache = {}
+            prediction.prediction_cache_export_end = {}
+    finally:
         prediction.prediction_cache_enable = False
 
     if not failed:

@@ -261,12 +261,14 @@ class PredictionBatch:
                     job.result = shape_batch_result(job, cached, 0.0, 0.0, cached_export_end)
                     continue
                 # Two identical trials in one fan-out used to be a cache hit for the second one; the
-                # batch has to collapse them itself or that hit is lost (~44% of calls are hits)
-                first = first_by_hash.get(job.sim_hash)
+                # batch has to collapse them itself or that hit is lost (~44% of calls are hits). Keyed on
+                # want_export_end_soc too, because the copied result carries the window-end SoCs or not
+                duplicate_key = (job.sim_hash, job.want_export_end_soc)
+                first = first_by_hash.get(duplicate_key)
                 if first is not None:
                     duplicates.append((job, first))
                     continue
-                first_by_hash[job.sim_hash] = job
+                first_by_hash[duplicate_key] = job
             kernel_jobs.append(job)
 
         if kernel_jobs:
