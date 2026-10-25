@@ -18,7 +18,7 @@ plans and select the one with the lowest cost metric.
 """
 
 from datetime import timedelta
-from const import PREDICT_STEP, PV_SCENARIO_PV10, PV_SCENARIO_PV90, RUN_EVERY, TIME_FORMAT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
+from const import PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, RUN_EVERY, TIME_FORMAT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
 
 from utils import (
     remove_intersecting_windows,
@@ -34,7 +34,7 @@ from utils import (
     export_target_of,
     pack_export_limit,
 )
-from prediction_batch import PredictionBatch, prediction_cache_key
+from prediction_batch import EXPORT_FLOOR_SCENARIOS, PredictionBatch, export_end_soc_from_series, floor_export_limits, prediction_cache_key
 from prediction_kernel import create_kernel_context, kernel_supported, run_prediction_kernel
 
 # The limit an inactive export window reads as. Built once at import rather than per minute:
@@ -230,6 +230,41 @@ class Prediction(PredictionBatch):
         # Window-end SoCs for cached results that were asked for them, keyed on the same hash as
         # prediction_cache (whose entries drop the SoC series)
         self.prediction_cache_export_end = {}
+        # EXPERIMENT: the levels phase runs pv10 without the charge slowdown (see levels_mode)
+        self.levels_active = False
+        self.levels_kernel_handle = None
+        self.levels_prediction_cache = {}
+        self.levels_prediction_cache_export_end = {}
+        self.levels_saved_state = None
+
+    def levels_mode(self, enable):
+        """EXPERIMENT: switch pv10 to charging at the full rate (charge_scaling10 1.0) for the levels phase.
+
+        The slowdown combines badly with the export floor in a coarse seeding pass: nominal charges
+        faster than pv10, so the floor taken from nominal strands energy in pv10 and discourages
+        charging to export. The kernel bakes charge_scaling10 into its context, so the levels phase gets
+        its own context, built once per plan; and the prediction cache key does not include the
+        setting, so it gets its own cache and window-end memo too. Pending jobs are flushed first so
+        each runs under the settings it was queued with.
+        """
+        if bool(enable) == self.levels_active:
+            return
+        if enable and self.charge_scaling10 == 1.0:
+            # Nothing to switch - pv10 already charges at the full rate
+            return
+        self.flush_batch()
+        if enable:
+            self.levels_saved_state = (self.charge_scaling10, self.kernel_handle, self.prediction_cache, self.prediction_cache_export_end)
+            self.charge_scaling10 = 1.0
+            if self.levels_kernel_handle is None:
+                self.levels_kernel_handle = create_kernel_context(self) if self.kernel_handle else 0
+            self.kernel_handle = self.levels_kernel_handle
+            self.prediction_cache = self.levels_prediction_cache
+            self.prediction_cache_export_end = self.levels_prediction_cache_export_end
+        else:
+            self.charge_scaling10, self.kernel_handle, self.prediction_cache, self.prediction_cache_export_end = self.levels_saved_state
+            self.levels_saved_state = None
+        self.levels_active = bool(enable)
 
     def _prepare_single(self, charge_limit, export_limits):
         """Copy the caller's limit lists for a single-scenario trial - shared by thread_run_prediction_single and the batch path.
@@ -505,7 +540,17 @@ class Prediction(PredictionBatch):
                 charge_window_optimised[minute] = window_n
         return charge_window_optimised
 
-    def run_prediction(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, save=None, step=PREDICT_STEP, cache=False):
+    def nominal_export_end_socs(self, charge_limit, charge_window, export_window, export_limits, end_record, step):
+        """The SoC at the end of each export window in this plan's nominal run, from the memo or by running it"""
+        key = prediction_cache_key(charge_limit, charge_window, export_limits, export_window, PV_SCENARIO_NOMINAL, end_record, step)
+        end_socs = self.prediction_cache_export_end.get(key)
+        if end_socs is None:
+            predict_soc = self.run_prediction(charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, end_record, step=step)[11]
+            end_socs = export_end_soc_from_series(predict_soc, export_window, self.minutes_now, export_limits)
+            self.prediction_cache_export_end[key] = end_socs
+        return end_socs
+
+    def run_prediction(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, save=None, step=PREDICT_STEP, cache=False, export_floor=True):
         """
         Run a prediction scenario given a charge limit, return the results
 
@@ -524,6 +569,13 @@ class Prediction(PredictionBatch):
         if save and self.pending_batch:
             self.flush_batch()
 
+        # pv10 simulates each target export stopping where this plan's nominal run ends - the target
+        # clipping sends the inverter - rather than at the trialled target. The kernel applies the floor
+        # itself from the window-end SoCs; the Python engine floors the limits (floor_export_limits).
+        export_floor_soc = None
+        if pv_scenario in EXPORT_FLOOR_SCENARIOS and export_floor and export_window:
+            export_floor_soc = self.nominal_export_end_socs(charge_limit, charge_window, export_window, export_limits, end_record, step)
+
         # The cache key is only wanted when the cache is actually in play - a saving run always
         # simulates - so it is not computed otherwise. Building it as one tuple hash keeps the
         # per-window hashing in C rather than looping in Python, which matters because this runs on
@@ -539,12 +591,15 @@ class Prediction(PredictionBatch):
         # Try the C++ prediction kernel first; unsupported scenarios fall through to the Python engine.
         # The kernel understands all three pv_scenario values (see PkScenario.pv_scenario, ABI 3).
         if kernel_supported(self, save, step):
-            kernel_result = run_prediction_kernel(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step, cache)
+            kernel_result = run_prediction_kernel(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step, cache, export_floor_soc=export_floor_soc)
             if kernel_result is not None:
                 if sim_hash is not None:
                     # Store in cache without the SoC/car data to save memory, mirroring the Python engine
                     self.prediction_cache[sim_hash] = kernel_result[:11] + ([], []) + kernel_result[13:]
                 return kernel_result
+
+        if export_floor_soc is not None:
+            export_limits = floor_export_limits(export_limits, export_floor_soc, self.soc_max)
 
         # Fetch data from globals, optimised away from class to avoid passing it between threads
         if pv_scenario == PV_SCENARIO_PV10:

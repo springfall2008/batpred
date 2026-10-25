@@ -1015,11 +1015,11 @@ def test_pv90_weight_zero_skips_simulation(my_predbat):
             calls["charge_min_max"] += 1
         return original_charge_min_max(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record)
 
-    def counting_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv_scenario, all_n, end_record, want_export_end_soc=False):
+    def counting_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv_scenario, all_n, end_record):
         """Count pv90 launches from the export optimiser so the skip can be asserted."""
         if pv_scenario == PV_SCENARIO_PV90:
             calls["export"] += 1
-        return original_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv_scenario, all_n, end_record, want_export_end_soc=want_export_end_soc)
+        return original_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv_scenario, all_n, end_record)
 
     def counting_single(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step):
         """Count pv90 launches from the levels optimiser so the skip can be asserted."""
@@ -1128,11 +1128,11 @@ def test_pv90_switch_off_skips_all_launch_paths(my_predbat):
             calls["charge_min_max"] += 1
         return original_charge_min_max(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record)
 
-    def counting_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv_scenario, all_n, end_record, want_export_end_soc=False):
+    def counting_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv_scenario, all_n, end_record):
         """Count pv90 launches from the export optimiser so the skip can be asserted."""
         if pv_scenario == PV_SCENARIO_PV90:
             calls["export"] += 1
-        return original_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv_scenario, all_n, end_record, want_export_end_soc=want_export_end_soc)
+        return original_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv_scenario, all_n, end_record)
 
     def counting_single(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step):
         """Count pv90 launches from the levels optimiser so the skip can be asserted."""
@@ -1333,11 +1333,11 @@ def test_pv90_weight_nonzero_runs_export_simulation(my_predbat):
     calls = {"count": 0}
     original = my_predbat.launch_run_prediction_export
 
-    def counting(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv_scenario, all_n, end_record, want_export_end_soc=False):
+    def counting(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv_scenario, all_n, end_record):
         """Count pv90 launches from optimise_export so the wiring can be asserted."""
         if pv_scenario == PV_SCENARIO_PV90:
             calls["count"] += 1
-        return original(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv_scenario, all_n, end_record, want_export_end_soc=want_export_end_soc)
+        return original(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv_scenario, all_n, end_record)
 
     my_predbat.launch_run_prediction_export = counting
     snapshot = _setup_calculate_plan_with_real_windows(my_predbat)

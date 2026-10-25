@@ -10,27 +10,28 @@
 """Tests for the realistic pv10 export floor.
 
 A target export is sent to the inverter at the SoC the nominal plan reaches, so in a worse scenario it
-stops there - and a replan shortens it - rather than draining to the 0% the optimiser trials. These
-tests pin how a candidate's pv10 trial is floored, how the winner is pinned into the plan, and how the
-resulting per-slot steps are merged back into one export at the end.
+stops there - and a replan shortens it - rather than draining to the target the optimiser trials. Every
+pv10 simulation floors each target export at where the same plan's nominal run ends. These tests pin the
+floor rule, how run_prediction_metric feeds it the nominal run it has already made, and how the per-slot
+steps clipping leaves are merged back into one export at the end. The prediction-layer behaviour (direct
+runs, the batch and its fallbacks) is pinned in test_prediction_batch.
 """
 from tests.test_infra import reset_inverter
-from const import EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, EXPORT_MODE_TARGET, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90
-from utils import export_mode_of, export_power_of, export_target_of, pack_export_limit
+from const import EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, EXPORT_MODE_TARGET, PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90
+from prediction_batch import export_end_soc_from_series, floor_export_limits, prediction_cache_key
+from utils import export_power_of, export_target_of, pack_export_limit
 
 
 def run_export_floor_tests(my_predbat):
     """Run all export floor tests, returns True on failure"""
     failed = False
-    failed |= test_floor_raises_target_to_nominal_end(my_predbat)
-    failed |= test_floor_never_lowers_a_target(my_predbat)
-    failed |= test_floor_only_applies_to_target_exports(my_predbat)
-    failed |= test_floor_ignores_unknown_socs(my_predbat)
-    failed |= test_floor_keeps_export_power(my_predbat)
-    failed |= test_floor_without_battery_size(my_predbat)
-    failed |= test_floor_shared_across_all_n(my_predbat)
-    failed |= test_optimise_export_floors_pv10_and_pins_winner(my_predbat)
-    failed |= test_optimise_export_all_n_uses_shared_floor(my_predbat)
+    failed |= test_floor_raises_target_to_nominal_end()
+    failed |= test_floor_never_lowers_a_target()
+    failed |= test_floor_only_applies_to_target_exports()
+    failed |= test_floor_ignores_unknown_socs()
+    failed |= test_floor_keeps_export_power()
+    failed |= test_floor_without_battery_size()
+    failed |= test_metric_runs_nominal_first_and_feeds_the_floor(my_predbat)
     failed |= test_merge_staircase_into_one_export(my_predbat)
     failed |= test_merge_keeps_a_binding_hold(my_predbat)
     failed |= test_merge_needs_contiguous_falling_same_power_steps(my_predbat)
@@ -69,11 +70,10 @@ def check(failed, condition, message):
     return failed
 
 
-def test_floor_raises_target_to_nominal_end(my_predbat):
+def test_floor_raises_target_to_nominal_end():
     """A 0% target is raised to the whole percent nominal reaches at the window's end, rounded down"""
     print("**** test_floor_raises_target_to_nominal_end ****")
-    setup(my_predbat)
-    floored = my_predbat.export_limits_floored([target(0), target(0)], [6.66, 2.0])
+    floored = floor_export_limits([target(0), target(0)], [6.66, 2.0], 10.0)
     failed = check(False, export_target_of(floored[0]) == 66, "66.6% should floor to 66, got {}".format(floored[0]))
     failed = check(failed, export_target_of(floored[1]) == 20, "20.0% should floor to 20, got {}".format(floored[1]))
     if not failed:
@@ -81,191 +81,105 @@ def test_floor_raises_target_to_nominal_end(my_predbat):
     return failed
 
 
-def test_floor_never_lowers_a_target(my_predbat):
+def test_floor_never_lowers_a_target():
     """A target already above where nominal ends is left alone - the floor only ever raises"""
     print("**** test_floor_never_lowers_a_target ****")
-    setup(my_predbat)
-    floored = my_predbat.export_limits_floored([target(50)], [3.0])
+    floored = floor_export_limits([target(50)], [3.0], 10.0)
     failed = check(False, floored[0] == target(50), "a 50% target was lowered to {}".format(floored[0]))
     if not failed:
         print("PASS")
     return failed
 
 
-def test_floor_only_applies_to_target_exports(my_predbat):
+def test_floor_only_applies_to_target_exports():
     """Freeze and idle windows carry no target, so they are passed through unchanged"""
     print("**** test_floor_only_applies_to_target_exports ****")
-    setup(my_predbat)
     limits = [pack_export_limit(EXPORT_MODE_FREEZE), pack_export_limit(EXPORT_MODE_IDLE)]
-    floored = my_predbat.export_limits_floored(limits, [6.0, 6.0])
+    floored = floor_export_limits(limits, [6.0, 6.0], 10.0)
     failed = check(False, floored == limits, "freeze/idle windows were changed to {}".format(floored))
     if not failed:
         print("PASS")
     return failed
 
 
-def test_floor_ignores_unknown_socs(my_predbat):
+def test_floor_ignores_unknown_socs():
     """A window whose end SoC is unknown (-1, None or missing) keeps its target"""
     print("**** test_floor_ignores_unknown_socs ****")
-    setup(my_predbat)
-    floored = my_predbat.export_limits_floored([target(0), target(0), target(0)], [-1.0, None])
+    floored = floor_export_limits([target(0), target(0), target(0)], [-1.0, None], 10.0)
     failed = check(False, floored == [target(0), target(0), target(0)], "unknown end SoCs changed the limits to {}".format(floored))
     if not failed:
         print("PASS")
     return failed
 
 
-def test_floor_keeps_export_power(my_predbat):
+def test_floor_keeps_export_power():
     """Raising the target keeps the window's export power"""
     print("**** test_floor_keeps_export_power ****")
-    setup(my_predbat)
-    floored = my_predbat.export_limits_floored([target(0, 0.5)], [4.0])
+    floored = floor_export_limits([target(0, 0.5)], [4.0], 10.0)
     failed = check(False, export_target_of(floored[0]) == 40 and export_power_of(floored[0]) == 0.5, "expected 40% at half power, got {}".format(floored[0]))
     if not failed:
         print("PASS")
     return failed
 
 
-def test_floor_without_battery_size(my_predbat):
+def test_floor_without_battery_size():
     """With no battery size there is no percentage to floor at, so the limits are returned unchanged"""
     print("**** test_floor_without_battery_size ****")
-    setup(my_predbat)
-    my_predbat.soc_max = 0.0
-    floored = my_predbat.export_limits_floored([target(0)], [4.0])
+    floored = floor_export_limits([target(0)], [4.0], 0.0)
     failed = check(False, floored == [target(0)], "limits changed with soc_max 0: {}".format(floored))
     if not failed:
         print("PASS")
     return failed
 
 
-def test_floor_shared_across_all_n(my_predbat):
-    """Windows trialled together as all_n share one target, so they share one floor - the lowest end SoC"""
-    print("**** test_floor_shared_across_all_n ****")
+class RecordingPrediction:
+    """Just enough of a Prediction for run_prediction_metric: the window-end SoC memo"""
+
+    def __init__(self):
+        """Start with an empty memo"""
+        self.prediction_cache_export_end = {}
+
+
+def test_metric_runs_nominal_first_and_feeds_the_floor(my_predbat):
+    """run_prediction_metric runs nominal first and records its window-end SoCs for the plan, so the pv10
+    run floors from it instead of simulating nominal again - and the nominal run's predict_soc and
+    friends are what the caller is left holding afterwards"""
+    print("**** test_metric_runs_nominal_first_and_feeds_the_floor ****")
     setup(my_predbat)
-    floored = my_predbat.export_limits_floored([target(0), target(0), target(0)], [6.0, 3.5, 8.0], shared=[0, 1])
-    failed = check(False, export_target_of(floored[0]) == 35 and export_target_of(floored[1]) == 35, "shared windows should both floor at 35%, got {}".format(floored[:2]))
-    failed = check(failed, export_target_of(floored[2]) == 80, "a window outside the shared set keeps its own floor, got {}".format(floored[2]))
-    if not failed:
-        print("PASS")
-    return failed
-
-
-class FakeHandle:
-    """A stand-in prediction handle"""
-
-    def __init__(self, result):
-        """Hold the result get() will return"""
-        self.result = result
-
-    def get(self):
-        """Return the canned result"""
-        return self.result
-
-
-def install_export_stubs(my_predbat, end_socs, cost_of):
-    """Replace the export trial launcher and compute_metric with stubs, returning the recorded launches.
-
-    cost_of(scenario, limit, start) gives each trial's cost; the nominal trial reports end_socs as the
-    SoC at the end of each export window, as the batch does when asked.
-    """
-    calls = []
-
-    def launch(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv_scenario, all_n, end_record, want_export_end_soc=False):
-        """Record the trial and answer it with a canned result"""
-        calls.append({"scenario": pv_scenario, "limit": this_export_limit, "others": list(try_export), "start": start, "want": want_export_end_soc})
-        cost = cost_of(pv_scenario, this_export_limit, start)
-        result = (cost, 0.0, 0.0, 0.0, 1.0, 5.0, 0, 0.0, 0.0, 0.0, 0.0)
-        if want_export_end_soc:
-            result = result + (list(end_socs),)
-        return FakeHandle(result)
-
-    def compute_metric(end_record, soc, soc10, cost, cost10, *args, **kwargs):
-        """Blend nominal and pv10 cost the way the real metric weights them"""
-        return round(0.85 * cost + 0.15 * cost10, 4), 0.0
-
-    my_predbat.launch_run_prediction_export = launch
-    my_predbat.compute_metric = compute_metric
-    my_predbat.set_export_freeze = False
-    my_predbat.set_export_freeze_only = False
-    my_predbat.set_export_low_power = False
     my_predbat.pv_metric90_weight = 0.15
-    my_predbat.metric_min_improvement_export = 0.0
-    my_predbat.metric_min_improvement_export_freeze = 0.0
-    my_predbat.isExporting = False
-    my_predbat.export_window = []
-    return calls
+    charge_limit = [5.0]
+    charge_window = [{"start": 700, "end": 760}]
+    export_window = [{"start": 780, "end": 810}, {"start": 900, "end": 930}]
+    export_limits = [target(0), target(0)]
+    nominal_soc = {0: 6.0, 90: 4.0, 210: 2.5}
+    order = []
+    held = {}
 
+    def run_prediction(cl, cw, ew, el, pv_scenario, end_record, save=None, step=PREDICT_STEP):
+        """Record the scenario order and leave a per-scenario SoC series behind, as the real one does"""
+        order.append(pv_scenario)
+        if pv_scenario == PV_SCENARIO_PV10:
+            held["memo_at_pv10"] = dict(my_predbat.prediction.prediction_cache_export_end)
+        my_predbat.predict_soc = dict(nominal_soc) if pv_scenario == PV_SCENARIO_NOMINAL else {0: float(pv_scenario)}
+        my_predbat.iboost_next = pv_scenario
+        return (10.0, 0.0, 0.0, 0.0, 1.0, 5.0, 0, 0.0, 0.0, 0.0, 0.0)
 
-def restore_export_stubs(my_predbat):
-    """Remove the instance-level stubs"""
-    for name in ("launch_run_prediction_export", "compute_metric"):
-        if name in my_predbat.__dict__:
-            del my_predbat.__dict__[name]
-
-
-def test_optimise_export_floors_pv10_and_pins_winner(my_predbat):
-    """Each candidate's pv10 trial is floored at its own nominal window-end SoCs, pv90 is not, and the
-    winning target export comes back pinned at its floor rather than at 0%"""
-    print("**** test_optimise_export_floors_pv10_and_pins_winner ****")
-    setup(my_predbat)
-    export_window = [{"start": 780, "end": 810, "average": 20.0}, {"start": 900, "end": 930, "average": 18.0}]
-    export_limit = [pack_export_limit(EXPORT_MODE_IDLE), target(0)]
-
-    def cost_of(scenario, limit, start):
-        """Exporting the full window is cheapest, idle the most expensive"""
-        if export_mode_of(limit) == EXPORT_MODE_IDLE:
-            return 100.0
-        return 90.0 if start == 780 else 95.0
-
-    calls = install_export_stubs(my_predbat, [5.0, 3.0], cost_of)
+    real_prediction = getattr(my_predbat, "prediction", None)
+    my_predbat.prediction = RecordingPrediction()
+    my_predbat.run_prediction = run_prediction
     try:
-        result = my_predbat.optimise_export(0, 2, [], [], export_window, export_limit, end_record=my_predbat.end_record)
+        my_predbat.run_prediction_metric(charge_limit, charge_window, export_window, export_limits, end_record=my_predbat.end_record)
     finally:
-        restore_export_stubs(my_predbat)
+        del my_predbat.__dict__["run_prediction"]
+        my_predbat.prediction = real_prediction
 
-    failed = False
-    nominal = [c for c in calls if c["scenario"] == PV_SCENARIO_NOMINAL]
-    pv10 = [c for c in calls if c["scenario"] == PV_SCENARIO_PV10]
-    pv90 = [c for c in calls if c["scenario"] == PV_SCENARIO_PV90]
-    failed = check(failed, nominal and all(c["want"] for c in nominal), "every nominal trial should ask for window-end SoCs")
-    failed = check(failed, len(pv10) == len(nominal) == len(pv90), "expected one pv10 and one pv90 trial per nominal trial, got {} {} {}".format(len(nominal), len(pv10), len(pv90)))
-    for c in pv10:
-        if export_mode_of(c["limit"]) == EXPORT_MODE_TARGET:
-            failed = check(failed, export_target_of(c["limit"]) == 50, "a pv10 target trial should be floored at 50%, got {}".format(c["limit"]))
-        failed = check(failed, export_target_of(c["others"][1]) == 30, "the other export window in a pv10 trial should be floored at 30%, got {}".format(c["others"][1]))
-    for c in pv90:
-        if export_mode_of(c["limit"]) == EXPORT_MODE_TARGET:
-            failed = check(failed, export_target_of(c["limit"]) == 0, "pv90 trials take no floor, got {}".format(c["limit"]))
-        failed = check(failed, export_target_of(c["others"][1]) == 0, "pv90 should see the other window without a floor, got {}".format(c["others"][1]))
-    failed = check(failed, result[0] == target(50), "the winning export should be pinned at 50%, got {}".format(result[0]))
-    failed = check(failed, result[1] == 780, "the full-window export should win, got start {}".format(result[1]))
-    if not failed:
-        print("PASS")
-    return failed
-
-
-def test_optimise_export_all_n_uses_shared_floor(my_predbat):
-    """An all_n trial writes one target into every window it covers, so its pv10 trial and its pinned
-    result use the lowest window-end SoC among them"""
-    print("**** test_optimise_export_all_n_uses_shared_floor ****")
-    setup(my_predbat)
-    export_window = [{"start": 780, "end": 810, "average": 20.0}, {"start": 810, "end": 840, "average": 20.0}]
-    export_limit = [target(0), target(0)]
-
-    def cost_of(scenario, limit, start):
-        """Exporting beats idle"""
-        return 100.0 if export_mode_of(limit) == EXPORT_MODE_IDLE else 90.0
-
-    calls = install_export_stubs(my_predbat, [6.0, 3.5], cost_of)
-    try:
-        result = my_predbat.optimise_export(0, 2, [], [], export_window, export_limit, all_n=[0, 1], end_record=my_predbat.end_record)
-    finally:
-        restore_export_stubs(my_predbat)
-
-    failed = False
-    pv10_targets = [c for c in calls if c["scenario"] == PV_SCENARIO_PV10 and export_mode_of(c["limit"]) == EXPORT_MODE_TARGET]
-    failed = check(failed, pv10_targets and all(export_target_of(c["limit"]) == 35 for c in pv10_targets), "all_n pv10 trials should use the shared 35% floor, got {}".format([c["limit"] for c in pv10_targets]))
-    failed = check(failed, result[0] == target(35), "the all_n winner should be pinned at 35%, got {}".format(result[0]))
+    failed = check(False, order[:1] == [PV_SCENARIO_NOMINAL], "nominal should run first, ran {}".format(order))
+    failed = check(failed, sorted(order) == sorted([PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90]), "expected one run per scenario, ran {}".format(order))
+    key = prediction_cache_key(charge_limit, charge_window, export_limits, export_window, PV_SCENARIO_NOMINAL, my_predbat.end_record, PREDICT_STEP)
+    expected = export_end_soc_from_series(nominal_soc, export_window, my_predbat.minutes_now, export_limits)
+    failed = check(failed, held.get("memo_at_pv10", {}).get(key) == expected, "pv10 should find the nominal window-end SoCs {} in the memo, found {}".format(expected, held.get("memo_at_pv10")))
+    failed = check(failed, my_predbat.predict_soc == nominal_soc and my_predbat.iboost_next == PV_SCENARIO_NOMINAL, "the nominal run's state should be left in place, got predict_soc {} iboost_next {}".format(my_predbat.predict_soc, my_predbat.iboost_next))
+    my_predbat.pv_metric90_weight = 0.0
     if not failed:
         print("PASS")
     return failed

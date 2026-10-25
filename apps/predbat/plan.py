@@ -63,9 +63,9 @@ from utils import (
 )
 from config import INVERTER_DEF
 from prediction import Prediction
+from prediction_batch import export_end_soc_from_series, prediction_cache_key
 from prediction_kernel import kernel_status_summary, set_window_start
 from predbat_metrics import metrics
-import math
 import time
 
 # How many windows the post-settle plan pass revisits when calculate_second_pass is off. The near-term
@@ -1090,7 +1090,18 @@ class Plan:
 
         return highest_price_charge, lowest_price_export, highest_price_charge_level, lowest_price_export_level
 
-    def optimise_charge_limit_price_threads(
+    def optimise_charge_limit_price_threads(self, *args, **kwargs):
+        """EXPERIMENT: run the levels engine with pv10 charging at the full rate - see Prediction.levels_mode"""
+        prediction = getattr(self, "prediction", None)
+        if prediction is None or not hasattr(prediction, "levels_mode"):
+            return self.optimise_charge_limit_price_threads_inner(*args, **kwargs)
+        prediction.levels_mode(True)
+        try:
+            return self.optimise_charge_limit_price_threads_inner(*args, **kwargs)
+        finally:
+            prediction.levels_mode(False)
+
+    def optimise_charge_limit_price_threads_inner(
         self,
         price_set,
         price_links,
@@ -1579,13 +1590,13 @@ class Plan:
         """
         return self.prediction.queue_run_prediction_charge_min_max(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record)
 
-    def launch_run_prediction_export(self, this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv_scenario, all_n, end_record, want_export_end_soc=False):
+    def launch_run_prediction_export(self, this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv_scenario, all_n, end_record):
         """Queue a prediction and return a handle to its result.
 
         Nothing runs here: the inputs are read when the batch is flushed, so no list or window dict
         passed in may be mutated until the returned handle's get() has been called.
         """
-        return self.prediction.queue_run_prediction_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv_scenario, all_n, end_record, want_export_end_soc=want_export_end_soc)
+        return self.prediction.queue_run_prediction_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv_scenario, all_n, end_record)
 
     def scenario_summary_title(self, record_time):
         txt = ""
@@ -1762,47 +1773,11 @@ class Plan:
         if end_record is None:
             end_record = self.forecast_minutes
 
-        # Run pv90 first (when active), and the nominal scenario last. Plan.run_prediction
-        # unconditionally overwrites self.predict_soc, self.car_charging_soc_next, self.iboost_next
-        # and self.iboost_running* on every call - so whichever scenario runs last is the one those
-        # attributes are left holding. Every traced consumer only reads them after this function's
-        # final (nominal, save=save) run anyway, so this ordering does not change any output; it just
-        # removes the latent trap of pv90 being the one left behind when pv_metric90_weight > 0.
-        soc90 = None
-        cost90 = None
-        final_iboost90 = 0.0
-        if self.pv_metric90_weight > 0 and not nominal_only:
-            (cost90, _, _, _, _, soc90, _, _, _, final_iboost90, _) = self.run_prediction(
-                charge_limit_best,
-                charge_window_best,
-                export_window_best,
-                export_limits_best,
-                PV_SCENARIO_PV90,
-                end_record=end_record,
-            )
-
-        if not nominal_only:
-            (
-                cost10,
-                import_kwh_battery10,
-                import_kwh_house10,
-                export_kwh10,
-                soc_min10,
-                soc10,
-                soc_min_minute10,
-                battery_cycle10,
-                metric_keep10,
-                final_iboost10,
-                final_carbon_g10,
-            ) = self.run_prediction(
-                charge_limit_best,
-                charge_window_best,
-                export_window_best,
-                export_limits_best,
-                True,
-                end_record=end_record,
-            )
-        # Run new plan
+        # The nominal scenario runs first: pv10 floors each target export at where this plan's nominal
+        # run ends (Prediction.run_prediction / floor_export_limits), so the nominal window-end SoCs are
+        # recorded for it here rather than simulated a second time. Plan.run_prediction overwrites
+        # self.predict_soc, car_charging_soc_next, iboost_next and iboost_running* on every call, and
+        # every consumer reads the nominal run's, so those are put back after the other scenarios.
         (
             cost,
             import_kwh_battery,
@@ -1824,6 +1799,44 @@ class Plan:
             end_record=end_record,
             save=save,
         )
+        soc90 = None
+        cost90 = None
+        final_iboost90 = 0.0
+        if not nominal_only:
+            nominal_state = (self.predict_soc, self.car_charging_soc_next, self.iboost_next, self.iboost_running, self.iboost_running_solar, self.iboost_running_full)
+            if export_window_best:
+                key = prediction_cache_key(charge_limit_best, charge_window_best, export_limits_best, export_window_best, PV_SCENARIO_NOMINAL, end_record, PREDICT_STEP)
+                self.prediction.prediction_cache_export_end[key] = export_end_soc_from_series(self.predict_soc, export_window_best, self.minutes_now, export_limits_best)
+            if self.pv_metric90_weight > 0:
+                (cost90, _, _, _, _, soc90, _, _, _, final_iboost90, _) = self.run_prediction(
+                    charge_limit_best,
+                    charge_window_best,
+                    export_window_best,
+                    export_limits_best,
+                    PV_SCENARIO_PV90,
+                    end_record=end_record,
+                )
+            (
+                cost10,
+                import_kwh_battery10,
+                import_kwh_house10,
+                export_kwh10,
+                soc_min10,
+                soc10,
+                soc_min_minute10,
+                battery_cycle10,
+                metric_keep10,
+                final_iboost10,
+                final_carbon_g10,
+            ) = self.run_prediction(
+                charge_limit_best,
+                charge_window_best,
+                export_window_best,
+                export_limits_best,
+                True,
+                end_record=end_record,
+            )
+            self.predict_soc, self.car_charging_soc_next, self.iboost_next, self.iboost_running, self.iboost_running_solar, self.iboost_running_full = nominal_state
         if nominal_only:
             # Mirror the nominal outputs into the pv10 slots so the pv10 adjustment cancels to zero
             cost10 = cost
@@ -3017,42 +3030,6 @@ class Plan:
                 )
         return best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep, best_cycle, best_carbon, best_import, best_metric_plan
 
-    def export_limits_floored(self, export_limits, end_socs, shared=None):
-        """Raise each target export's target to the SoC the nominal plan reaches at that window's end.
-
-        end_socs holds one SoC per export window, -1 or None where unknown. The floor is rounded down to
-        a whole percent so it never binds in the nominal run it came from, and only ever raises a target.
-        Freeze and idle windows carry no target and are left alone.
-
-        shared lists windows trialled together as all_n: they carry one target between them, so they get
-        one floor - the lowest end SoC among them.
-        """
-        floored = list(export_limits)
-        if self.soc_max <= 0:
-            return floored
-
-        def floor_percent(soc):
-            """Whole percent at or below soc, or None for an unknown SoC"""
-            if soc is None or soc < 0:
-                return None
-            return min(int(math.floor(soc / self.soc_max * 100.0)), 100)
-
-        floors = {}
-        for window_n in range(len(export_limits)):
-            floors[window_n] = floor_percent(end_socs[window_n]) if window_n < len(end_socs) else None
-        if shared:
-            known = [floors[window_n] for window_n in shared if floors.get(window_n) is not None]
-            for window_n in shared:
-                floors[window_n] = min(known) if known else None
-
-        for window_n, limit in enumerate(export_limits):
-            floor = floors[window_n]
-            if floor is None or export_mode_of(limit) != EXPORT_MODE_TARGET:
-                continue
-            if floor > (export_target_of(limit) or 0):
-                floored[window_n] = pack_export_limit(EXPORT_MODE_TARGET, floor, export_power_of(limit))
-        return floored
-
     def optimise_export(self, window_n, record_charge_windows, try_charge_limit, charge_window, export_window, export_limit, all_n=None, end_record=None, freeze_only=False, allow_freeze=True):
         """
         Optimise a single export window for best export %
@@ -3143,39 +3120,24 @@ class Plan:
                 this_export_limit = pack_export_limit(loop_mode, calc_percent_limit(self.best_soc_min, self.soc_max), loop_power)
                 try_options.append([start, this_export_limit])
 
-                # Nominal also reports the SoC at the end of every export window, for the pv10 floor below.
-                # pv90 is the upside case - its battery is normally above nominal at the export, and a
-                # replan there would export more, not stop early - so it takes no floor and need not wait.
-                results.append(self.launch_run_prediction_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, PV_SCENARIO_NOMINAL, all_n, end_record, want_export_end_soc=True))
+                results.append(self.launch_run_prediction_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, PV_SCENARIO_NOMINAL, all_n, end_record))
+                results10.append(self.launch_run_prediction_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, PV_SCENARIO_PV10, all_n, end_record))
                 if run_pv90:
                     results90.append(self.launch_run_prediction_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, PV_SCENARIO_PV90, all_n, end_record))
 
-        # pv10 runs each candidate with its export targets floored at where that candidate's own nominal
-        # run reaches. That is the target clipping sends the inverter, so in the worse scenario the export
-        # stops there - and a replan shortens it - rather than draining to the 0% trialled here. The floored
-        # limit is also what the candidate is pinned at if selected, so every later optimisation simulates
-        # the realistic target too.
-        nominal_results = [handle.get() for handle in results]
-        pinned_limits = []
-        for (start, this_export_limit), result in zip(try_options, nominal_results):
-            trial_limits = list(try_export)
-            for window_id in all_n if all_n else [window_n]:
-                trial_limits[window_id] = this_export_limit
-            floored = self.export_limits_floored(trial_limits, result[11], shared=all_n)
-            pinned = floored[window_n]
-            pinned_limits.append(pinned)
-            results10.append(self.launch_run_prediction_export(pinned, start, window_n, try_charge_limit, charge_window, try_export_window, floored, PV_SCENARIO_PV10, all_n, end_record))
-
         # Get results from sims
         try_results = []
-        for try_option, result, pinned in zip(try_options, nominal_results, pinned_limits):
-            result10 = results10.pop(0).get()
+        for try_option in try_options:
+            hanres = results.pop(0)
+            hanres10 = results10.pop(0)
+            result = hanres.get()
+            result10 = hanres10.get()
             result90 = results90.pop(0).get() if run_pv90 else None
-            try_results.append(try_option + [result[:11], result10, result90, pinned])
+            try_results.append(try_option + [result, result10, result90])
 
         window_results = {}
         for try_option in try_results:
-            start, this_export_limit, hanres, hanres10, hanres90, pinned_limit = try_option
+            start, this_export_limit, hanres, hanres10, hanres90 = try_option
 
             # Simulate with medium PV
             cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = hanres
@@ -3286,7 +3248,7 @@ class Plan:
             if (metric <= off_metric) and (metric <= best_metric) and ((cost + min_improvement_scaled) <= off_cost):
                 best_metric = metric
                 best_metric_plan = metric_plan
-                best_export = pinned_limit
+                best_export = this_export_limit
                 best_cost = cost
                 best_soc_min = soc_min
                 best_soc_min_minute = soc_min_minute

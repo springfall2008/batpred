@@ -27,7 +27,7 @@ import io
 
 import plan
 import prediction_batch
-from const import PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10
+from const import PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90
 from const import EXPORT_MODE_IDLE, EXPORT_MODE_TARGET
 from utils import pack_export_limit
 from plan import resolve_batch_threads
@@ -628,7 +628,7 @@ def test_batch_export_end_soc(my_predbat):
         """The window-end SoCs read from a direct run's per-minute series"""
         trial_window, trial_limits = prediction._prepare_export(trial, start, 1, export_window, export_limits, None)
         series = prediction.run_prediction(charge_limit, charge_window, trial_window, trial_limits, PV_SCENARIO_NOMINAL, end_record=end_record, cache=False)[11]
-        return prediction_batch.export_end_soc_from_series(series, trial_window, prediction.minutes_now)
+        return prediction_batch.export_end_soc_from_series(series, trial_window, prediction.minutes_now, trial_limits)
 
     def queued(**kwargs):
         """One queued nominal export trial"""
@@ -707,6 +707,107 @@ def test_batch_export_end_soc(my_predbat):
     return failed
 
 
+def test_pv10_export_floor(my_predbat):
+    """pv10 simulates each target export stopping where the same plan's nominal run ends, returns True on failure.
+
+    That is the target clipping sends the inverter, so in a worse scenario the export stops there rather
+    than draining to the trialled target. Checked on the direct path, on the batch with and without the
+    plan's nominal twin queued alongside, on the Python fallback (which must not floor twice), and that
+    pv90 is left alone.
+    """
+    print("**** Running pv10 export floor tests ****")
+    failed = False
+    prediction, charge_window, export_window, charge_limit, _ = make_batch_prediction(my_predbat)
+    end_record = my_predbat.forecast_minutes
+    export_limits = [pack_export_limit(EXPORT_MODE_TARGET, 0)] * len(export_window)
+    trial = pack_export_limit(EXPORT_MODE_TARGET, 0)
+    start = export_window[1]["start"]
+    trial_window, trial_limits = prediction._prepare_export(trial, start, 1, export_window, export_limits, None)
+
+    # The floor by hand: nominal's window-end SoCs applied to the trial's limits
+    prediction.prediction_cache = {}
+    prediction.prediction_cache_export_end = {}
+    series = prediction.run_prediction(charge_limit, charge_window, trial_window, trial_limits, PV_SCENARIO_NOMINAL, end_record=end_record, cache=False)[11]
+    floored = prediction_batch.floor_export_limits(trial_limits, prediction_batch.export_end_soc_from_series(series, trial_window, prediction.minutes_now, trial_limits), prediction.soc_max)
+    if floored == trial_limits:
+        print("ERROR: no window was floored in this scenario, so the test proves nothing: {}".format(floored))
+        return True
+    expected = prediction.run_prediction(charge_limit, charge_window, trial_window, floored, PV_SCENARIO_PV10, end_record=end_record, cache=False, export_floor=False)[:11]
+
+    # 1. Direct path
+    prediction.prediction_cache_export_end = {}
+    direct = prediction.run_prediction(charge_limit, charge_window, trial_window, trial_limits, PV_SCENARIO_PV10, end_record=end_record, cache=False)[:11]
+    if direct != expected:
+        print("ERROR: direct pv10 run {} differs from the hand-floored run {}".format(direct, expected))
+        failed = True
+
+    # 2. Batch, pv10 queued on its own: the batch adds the nominal twin itself
+    calls = []
+    real_batch = prediction_batch.run_prediction_kernel_batch
+
+    def spy(pred, jobs, n_threads):
+        """Record each kernel batch's scenarios, then run it for real"""
+        calls.append(sorted(job.pv_scenario for job in jobs))
+        return real_batch(pred, jobs, n_threads)
+
+    prediction_batch.run_prediction_kernel_batch = spy
+    try:
+        prediction.prediction_cache = {}
+        prediction.prediction_cache_export_end = {}
+        alone = prediction.queue_run_prediction_export(trial, start, 1, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_PV10, None, end_record).get()
+        if calls != [[PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10]]:
+            print("ERROR: a lone pv10 job should add its nominal twin to the same kernel call, kernel calls were {}".format(calls))
+            failed = True
+        if tuple(alone) != tuple(expected):
+            print("ERROR: lone queued pv10 {} differs from the hand-floored run {}".format(alone, expected))
+            failed = True
+
+        # 3. Batch with the nominal twin queued alongside: no extra simulation
+        del calls[:]
+        prediction.prediction_cache = {}
+        prediction.prediction_cache_export_end = {}
+        nominal_handle = prediction.queue_run_prediction_export(trial, start, 1, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, None, end_record)
+        pv10_handle = prediction.queue_run_prediction_export(trial, start, 1, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_PV10, None, end_record)
+        paired = pv10_handle.get()
+        nominal_handle.get()
+        if calls != [[PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10]]:
+            print("ERROR: a pv10 job with its twin queued should reuse it in one kernel call, kernel calls were {}".format(calls))
+            failed = True
+        if tuple(paired) != tuple(expected):
+            print("ERROR: paired queued pv10 {} differs from the hand-floored run {}".format(paired, expected))
+            failed = True
+    finally:
+        prediction_batch.run_prediction_kernel_batch = real_batch
+
+    # 4. Python fallback: the batch has already floored the job, so the fallback must not floor again
+    def refuse_each(pred, jobs, n_threads):
+        """Stand in for a kernel that ran the batch but rejected every job"""
+        return [(None, 0.0, 0.0, None)] * len(jobs)
+
+    prediction_batch.run_prediction_kernel_batch = refuse_each
+    try:
+        prediction.prediction_cache = {}
+        prediction.prediction_cache_export_end = {}
+        fallback = prediction.queue_run_prediction_export(trial, start, 1, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_PV10, None, end_record).get()
+    finally:
+        prediction_batch.run_prediction_kernel_batch = real_batch
+    if tuple(fallback) != tuple(expected):
+        print("ERROR: fallback pv10 {} differs from the hand-floored run {}".format(fallback, expected))
+        failed = True
+
+    # 5. pv90 is the upside case and is never floored
+    prediction.prediction_cache_export_end = {}
+    pv90 = prediction.run_prediction(charge_limit, charge_window, trial_window, trial_limits, PV_SCENARIO_PV90, end_record=end_record, cache=False)[:11]
+    pv90_raw = prediction.run_prediction(charge_limit, charge_window, trial_window, trial_limits, PV_SCENARIO_PV90, end_record=end_record, cache=False, export_floor=False)[:11]
+    if pv90 != pv90_raw:
+        print("ERROR: pv90 was floored: {} vs {}".format(pv90, pv90_raw))
+        failed = True
+
+    if not failed:
+        print("pv10 export floor tests passed")
+    return failed
+
+
 def run_prediction_batch_tests(my_predbat):
     """Run every batched prediction test, returns True on failure"""
     # The module pins the fixture clock (create_predbat already does, so this is belt and braces
@@ -743,6 +844,7 @@ def run_prediction_batch_tests(my_predbat):
                 failed |= test_save_run_drains_pending_batch(my_predbat)
                 failed |= test_batch_results_match_their_own_job(my_predbat)
                 failed |= test_batch_export_end_soc(my_predbat)
+                failed |= test_pv10_export_floor(my_predbat)
             finally:
                 my_predbat.prediction_kernel_enable = False
     finally:
