@@ -444,6 +444,9 @@ class Plan:
         "not charging" reading only counts from DYNAMIC_LOAD_CAR_START_MINUTES into the dispatch, while the
         car and charger wake up; "charging" counts anywhere. The grace is timed on the exact clock.
 
+        Any car's car_charging_now reading "charging" counts as charging for every car (see
+        dynamic_load_any_car_charging_now()), whatever the car's own sensor says.
+
         Without a sensor the low-load test stands in, but only when the car is inside the CT clamp
         (car_energy_reported_load): otherwise its charging never shows in the load at all. load_last_period
         averages the PREDICT_STEP minutes up to minutes_now, so it only counts when that whole window lies
@@ -455,12 +458,12 @@ class Plan:
         The live load has to be low too. Live load that is not low, or has no reading, makes a low window
         no evidence either way - it neither cancels the car nor resumes it.
         """
+        if self.dynamic_load_any_car_charging_now():
+            return False, DYNAMIC_LOAD_CAR_SENSOR_MINUTES, now
         if car_n in self.dynamic_load_car_sensors:
             charging = self.car_charging_now_reading(car_n)
             if charging is None:
                 return None, DYNAMIC_LOAD_CAR_SENSOR_MINUTES, now
-            if charging:
-                return False, DYNAMIC_LOAD_CAR_SENSOR_MINUTES, now
             if minute < dispatch_start + DYNAMIC_LOAD_CAR_START_MINUTES:
                 return None, DYNAMIC_LOAD_CAR_SENSOR_MINUTES, now
             return True, DYNAMIC_LOAD_CAR_SENSOR_MINUTES, now
@@ -485,6 +488,17 @@ class Plan:
                 return None, DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
             return True, DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
         return None, DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
+
+    def dynamic_load_any_car_charging_now(self):
+        """
+        Whether any car's car_charging_now entity reads charging right now.
+
+        Octopus links a dispatch to one car, but with two chargers Predbat cannot tell which one that car
+        is plugged into - myenergi automatic set-up numbers the Zappis by serial - so the car Predbat
+        calls 0 can read idle while the dispatch's car charges on the charger it calls 1. Any car charging
+        is taken as the dispatch running, so it is never cancelled for being on the other charger.
+        """
+        return any(self.car_charging_now_reading(car_n) for car_n in self.dynamic_load_car_sensors)
 
     def car_charging_now_reading(self, car_n):
         """
@@ -684,7 +698,7 @@ class Plan:
                 # from DYNAMIC_LOAD_CAR_CONFIRM_MINUTES into the half hour - the slot is trusted straight away
                 # either way. The load test only needs load that is not low to trust the slot, which a cooker or
                 # hot tub also gives; keeping the cheap rate needs load at the car's own charging rate
-                if car_n in self.dynamic_load_car_sensors:
+                if car_n in self.dynamic_load_car_sensors or self.dynamic_load_any_car_charging_now():
                     seen_minute = minute if minute % 30 >= DYNAMIC_LOAD_CAR_CONFIRM_MINUTES else None
                 elif self.load_last_period >= self.car_charging_threshold_kw():
                     seen_minute = self.minutes_now - 1
@@ -4222,10 +4236,19 @@ class Plan:
         Each active charge/export slot inside the record window is trialled in turn: the slot is
         removed (export -> 100, charge -> 0) and the whole plan re-simulated in the nominal (50%)
         scenario only - one simulation per trial via run_prediction_metric(nominal_only=True). The
-        removal is kept when the nominal metric does not get worse, so slots whose value exists only
-        in the pv10/pv90 branches (or nowhere at all - phantom exports, dead freezes) are dropped.
-        If the pessimistic scenario materialises in reality, the next plan recompute re-creates a
-        genuine slot from actual state, so nothing is permanently lost.
+        removal is kept when the nominal metric does not get worse.
+
+        A removal that leaves the nominal metric unchanged (within eps) means the slot is dead in the
+        central forecast - phantom exports, dead freezes, charges that never charge - and it is
+        dropped on that alone, whatever the pv10/pv90 branches say (the #4453 phantoms only looked
+        valuable through a pv10 modelling quirk).
+
+        A removal that makes the nominal metric better is a trade-off, not a dead slot: the slot moves
+        real energy, and its value lies in the pv10/pv90 branches - a charge that buffers against a
+        load overrun, or an export that makes room for pv90 solar. Such a slot is only dropped when
+        the full blended metric does not get worse either. The window it uses can close before the
+        risk it covers would arrive (a cheap overnight rate ends hours before the evening shortfall),
+        so a later replan cannot be relied on to put it back.
 
         Runs after the pre-clip scoring snapshot (see calculate_plan), so plan selection still
         compares plans as optimised (#4403). Manual windows are preserved. Later removals are
@@ -4242,6 +4265,7 @@ class Plan:
         eps = 0.02
         record_limit = self.end_record + self.minutes_now
         baseline = None
+        blended_baseline = None
         start_metric = None
         pruned = 0
         trials = 0
@@ -4263,13 +4287,42 @@ class Plan:
                 limits[window_n] = off_value
                 trial = self.run_prediction_metric(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record, nominal_only=True)[0]
                 trials += 1
-                if trial <= baseline + eps:
+                if trial > baseline + eps:
+                    limits[window_n] = limit
+                    continue
+
+                if trial < baseline - eps:
+                    # The slot changes the nominal outcome, so it is a trade-off rather than dead -
+                    # only drop it if the blended plan does not pay for it
+                    blended_trial = self.run_prediction_metric(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record)[0]
+                    if blended_baseline is None:
+                        limits[window_n] = limit
+                        blended_baseline = self.run_prediction_metric(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record)[0]
+                        limits[window_n] = off_value
+                    if blended_trial > blended_baseline + eps:
+                        if self.debug_enable:
+                            self.log(
+                                "Prune kept hedge {} slot {} {}-{} limit {} - nominal metric {} vs baseline {} but blended metric {} vs baseline {}".format(
+                                    typ, window_n, self.time_abs_str(window["start"]), self.time_abs_str(window["end"]), limit, dp2(trial), dp2(baseline), dp2(blended_trial), dp2(blended_baseline)
+                                )
+                            )
+                        limits[window_n] = limit
+                        continue
+                    if self.debug_enable:
+                        self.log(
+                            "Prune trade-off {} slot {} {}-{} limit {} - nominal metric {} vs baseline {}, blended metric {} vs baseline {}".format(
+                                typ, window_n, self.time_abs_str(window["start"]), self.time_abs_str(window["end"]), limit, dp2(trial), dp2(baseline), dp2(blended_trial), dp2(blended_baseline)
+                            )
+                        )
+                    blended_baseline = blended_trial
+                else:
+                    # Dead slot - the blended metric may still move, so measure it afresh if needed
+                    blended_baseline = None
                     if self.debug_enable:
                         self.log("Prune dead {} slot {} {}-{} limit {} - nominal metric {} vs baseline {}".format(typ, window_n, self.time_abs_str(window["start"]), self.time_abs_str(window["end"]), limit, dp2(trial), dp2(baseline)))
-                    baseline = trial
-                    pruned += 1
-                else:
-                    limits[window_n] = limit
+
+                baseline = trial
+                pruned += 1
         if pruned:
             # The trials run on the nominal scenario only, so report the full metric and cost of the
             # pruned plan rather than the nominal figure the trials compared on
