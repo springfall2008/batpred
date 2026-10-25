@@ -352,7 +352,7 @@ class LabelSwapTests(unittest.TestCase):
     def test_mark_pr_opened_with_cleanup_flags_review_and_cleanup_together(self, mock_run):
         """A PR this run just opened gets BOT_REVIEW and BOT_CLEANUP in one edit, so the
         review's findings are acted on without anyone relabelling it by hand."""
-        mock_run.return_value = MagicMock(stdout=json.dumps([{"number": 4742}]))
+        mock_run.side_effect = self._bot_pr_gh()
         triage_daemon.mark_pr_opened(4720, cleanup=True)
         calls = [call.args[0] for call in mock_run.call_args_list]
         self.assertIn(["gh", "pr", "edit", "4742", "--repo", "springfall2008/batpred", "--add-label", "BOT_REVIEW", "--add-label", "BOT_CLEANUP"], calls)
