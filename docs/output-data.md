@@ -654,6 +654,9 @@ because without Predbat the baseline assumes charging to 100% in the cheapest wi
 After each plan calculation Predbat runs a set of what-if simulations to determine the marginal cost (in pence per kWh) of consuming extra electricity at different
 levels and at different times in the upcoming forecast window. The results are published as a matrix sensor and a set of binary sensors.
 
+The cost is worked out against the current plan, so it includes any planned export the extra load would displace. Energy the battery would otherwise still hold at the end of the plan
+is valued the same way the planner values it, so extra load the battery covers is not shown as free.
+
 ### Main matrix sensor
 
 - **sensor.predbat_marginal_energy_costs** - The primary marginal cost sensor. State is the 1 kWh marginal cost for the current time window.
