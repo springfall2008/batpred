@@ -642,7 +642,7 @@ class HAInterface(ComponentBase):
                                                 if new_state:
                                                     entity_id = new_state.get("entity_id", None)
                                                     if entity_id:
-                                                        self.update_state_item(new_state, entity_id)
+                                                        self.update_state_item(new_state, entity_id, old_state=old_state)
                                                         # Only trigger on value change or you get too many updates
                                                         if not old_state or (new_state.get("state", None) != old_state.get("state", None)):
                                                             await self.base.trigger_watch_list(entity_id, event_data.get("attribute", None), event_data.get("old_state", None), new_state)
@@ -874,7 +874,7 @@ class HAInterface(ComponentBase):
         if item:
             self.update_state_item(item, entity_id)
 
-    def update_state_item(self, item, entity_id, nodb=False):
+    def update_state_item(self, item, entity_id, nodb=False, *, old_state=None, prior_snapshot=None):
         """
         Update state table for item
         """
@@ -883,7 +883,12 @@ class HAInterface(ComponentBase):
         last_changed = item.get("last_changed", item.get("last_updated", None))
         if "state" in item:
             state = item["state"]
-            self.state_data[entity_id] = {"state": state, "attributes": attributes, "last_changed": last_changed}
+            prior = prior_snapshot if prior_snapshot is not None else self.state_data.get(entity_id)
+            last_updated = item.get("last_updated", last_changed)
+            transition, history = HAInterface._value_transition(prior, item, old_state)
+            # Raw observation times are never rewritten. The additional metadata
+            # distinguishes proven same-state continuity from a lost event chain.
+            self.state_data[entity_id] = {"state": state, "attributes": attributes, "last_changed": last_changed, "last_updated": last_updated, "value_last_changed": transition, "value_history": history}
             if not nodb and self.db_enable and ((self.db_mirror_ha and (entity_id in self.db_mirror_list)) or self.db_primary):
                 # Instead of appending to a local mirror_updates list, call the database manager to schedule the update
                 if last_changed:
@@ -900,6 +905,22 @@ class HAInterface(ComponentBase):
                     last_changed = datetime.now(timezone.utc)
 
                 self.db_manager.set_state_db(entity_id, state, attributes, timestamp=last_changed)
+
+    @staticmethod
+    def _value_transition(prior, item, old_state):
+        """Keep bounded real-value transitions only across an exactly adjacent HA event chain."""
+        state, stamp = item.get("state"), item.get("last_changed", item.get("last_updated"))
+        entry = {"state": state, "at": stamp}
+        if not isinstance(prior, dict):
+            return stamp, [entry]
+        chained = isinstance(old_state, dict) and all(isinstance(prior.get(key), str) and old_state.get(key) == prior[key] for key in ("state", "last_changed", "last_updated"))
+        identical = old_state is None and all(item.get(key) == prior.get(key) for key in ("state", "last_changed", "last_updated"))
+        if chained or identical:
+            history = list(prior.get("value_history", [{"state": prior.get("state"), "at": prior.get("last_changed")}]))
+            if state != prior.get("state"):
+                return stamp, (history + [entry])[-16:]
+            return prior.get("value_last_changed") or prior.get("last_changed"), history
+        return None, [entry]
 
     def update_states_db(self):
         """
@@ -929,11 +950,12 @@ class HAInterface(ComponentBase):
 
         res = self.api_call("/api/states")
         if res:
+            prior = self.state_data
             self.state_data = {}
             for item in res:
                 entity_id = item.get("entity_id", None)
                 if entity_id:
-                    self.update_state_item(item, entity_id)
+                    self.update_state_item(item, entity_id, prior_snapshot=prior.get(entity_id.lower()))
                 else:
                     self.log("Warn: Failed to update state data from HA, item has no entity_id {}".format(item))
         else:

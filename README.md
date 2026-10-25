@@ -1,5 +1,9 @@
 # Predbat
 
+> [EV and battery planning](docs/car-battery-planning.md) is off by default.
+> Shadow is isolated; explicit apply requires independent execution and safety checks.
+> Physical commissioning and sustained delivery remain separately unverified.
+
 ![image](https://github.com/springfall2008/batpred/actions/workflows/code-quality.yml/badge.svg)
 ![image](https://github.com/springfall2008/batpred/actions/workflows/publish-docs.yml/badge.svg)
 ![image](https://github.com/springfall2008/batpred/actions/workflows/pages/pages-build-deployment/badge.svg)

@@ -7040,6 +7040,13 @@ def get_plan_renderer_js():
             // absolute minutes for next-day slots (e.g., tomorrow 00:00 = 1440 min,
             // not 0 which is what a plain hours*60+minutes calculation would return).
             window.planMidnightRef = jsonData.time || null;
+            const combined = jsonData.plan_simulation === true;
+            const applied = jsonData.plan_execution === true;
+            // An executed plan and a simulated plan are both read-only: the
+            // table may never edit the native controls, and an executed row
+            // must not be editable in case it is the actual applied schedule.
+            if (combined || applied) editable = false;
+            if ((combined || applied) && (jsonData.plan_unavailable || jsonData.execution_blocked)) return '<p>No fresh validated combined candidate is available. Previous simulation hidden.</p>';
 
             // Reason templates come from the dataset being rendered, not from window.planData -
             // the History/Yesterday views publish their own copy alongside their own rows.
@@ -7134,6 +7141,7 @@ def get_plan_renderer_js():
                 // aren't part of that clickable-override mechanism, so they keep their marker as-is.
                 const importBold = row.state && (row.state === 'Chrg' || row.state === 'HoldChrg' || row.state === 'FrzChrg');
                 let importText = row.import_rate.toFixed(2);
+                if (combined && row.plan_rates_unavailable) importText = '—';
                 if (showDebug && row.import_rate_adjusted !== undefined) {
                     importText += ` (${row.import_rate_adjusted.toFixed(2)})`;
                 }
@@ -7165,6 +7173,7 @@ def get_plan_renderer_js():
                 // Export rate - italic with symbol if estimated (see import rate comment above for
                 // why 'manual' is excluded in editable mode)
                 let exportText = row.export_rate.toFixed(2);
+                if (combined && row.plan_rates_unavailable) exportText = '—';
                 if (showDebug && row.export_rate_adjusted !== undefined) {
                     exportText += ` (${row.export_rate_adjusted.toFixed(2)})`;
                 }
@@ -7238,8 +7247,8 @@ def get_plan_renderer_js():
                 // Car charging (conditional)
                 if (jsonData.num_cars > 0) {
                     // A slot dynamic load cancelled (car not charging) still shows its kWh, with a "?"
-                    const carCancelled = row.car_charging_cancelled > 0 ? `${row.car_charging_cancelled}?` : '';
-                    const carVal = row.car_charging > 0 ? (carCancelled ? `${row.car_charging} +${carCancelled}` : row.car_charging) : (carCancelled || '&#9866;');
+                    const carCancelled = row.car_charging_cancelled > 0 ? `${row.car_charging_cancelled.toFixed(2)}?` : '';
+                    const carVal = row.car_charging > 0 ? (carCancelled ? `${row.car_charging.toFixed(2)} +${carCancelled}` : row.car_charging.toFixed(2)) : (carCancelled || '&#9866;');
                     html += `<td id=car bgcolor=${row.car_color || '#FFFFFF'}>${carVal}</td>`;
                 }
 
@@ -7254,7 +7263,11 @@ def get_plan_renderer_js():
                 if (editable) {
                     html += renderSocCell(row.time, timeDisplay, row.soc_percent, row.soc_color, socSym, overrides, row.slot_minute);
                 } else {
-                    html += `<td id=soc bgcolor=${row.soc_color || '#FFFFFF'}>${row.soc_percent}${socSym}</td>`;
+                    // Round at render time: native SoC is already integer (no-op), and the
+                    // combined solver can emit fractional battery_start_percent values
+                    // (e.g. 29.999377993406732) that must not appear in the rendered table.
+                    // Raw planning SOC/math is unchanged upstream — only this cell rounds.
+                    html += `<td id=soc bgcolor=${row.soc_color || '#FFFFFF'}>${Math.round(row.soc_percent)}${socSym}</td>`;
                 }
 
                 // Cost change
@@ -7267,7 +7280,7 @@ def get_plan_renderer_js():
                 } else {
                     costStr = '&rarr;';
                 }
-                html += `<td id=cost bgcolor=${row.cost_color || '#FFFFFF'}>${costStr}</td>`;
+                html += `<td id=cost bgcolor=${row.cost_color || '#FFFFFF'}>${combined && !Number.isFinite(row.cost_change) ? '—' : costStr}</td>`;
 
                 // Total cost
                 const totalCost = row.total_cost ? `${jsonData.currency_symbols[0]}${row.total_cost.toFixed(2)}` : '';
@@ -7320,7 +7333,7 @@ def get_plan_renderer_js():
 
                 // Car charging (if enabled)
                 if (jsonData.num_cars > 0 && totals.car_charging !== undefined) {
-                    html += `<td bgcolor=#FFFFFF><b>${totals.car_charging}</b></td>`;
+                    html += `<td bgcolor=#FFFFFF><b>${totals.car_charging.toFixed(2)}</b></td>`;
                 }
 
                 // iBoost (if enabled)
@@ -7329,8 +7342,13 @@ def get_plan_renderer_js():
                     html += `<td bgcolor=#FFFFFF><b>${iboostVal}</b></td>`;
                 }
 
-                // SOC percent
-                html += `<td bgcolor=#FFFFFF><b>${totals.soc_percent || ''}</b></td>`;
+                // SOC percent — round at render time (totals are integer for native via
+                // calc_percent_limit and for combined via the preview module's own
+                // round(), so the displayed value is unchanged in both cases).
+                // The ``|| ''`` preserves the empty-cell semantics when totals
+                // are missing.
+                const totalsSocStr = totals.soc_percent ? Math.round(totals.soc_percent) : '';
+                html += `<td bgcolor=#FFFFFF><b>${totalsSocStr}</b></td>`;
 
                 // Empty cell for SOC change
                 html += '<td></td>';
@@ -7847,8 +7865,9 @@ def get_plan_renderer_js():
         const debugToggle = document.getElementById('debugToggle');
         // Only allow debug mode for the plan view
         const showDebug = (currentView === 'plan' && debugToggle) ? debugToggle.checked : false;
+        document.querySelectorAll('#carChargingPreview .car-charging-preview-debug').forEach(el => {el.style.display = showDebug ? '' : 'none';});
 
-        const data = currentViewData();
+        let data = currentViewData();
         const overrides = currentView === 'plan' ? (window.overridesData || {}) : {};
 
         if (!data) {
@@ -7872,9 +7891,13 @@ def get_plan_renderer_js():
 
         // Check for stale data
         checkStaleness(data);
+        if (data.plan_simulation === true || data.plan_execution === true) {
+            const age = Date.now() - Date.parse(data.timestamp);
+            if (!Number.isFinite(age) || age > 900000 || age < -60000) data = {...data, rows: [], plan_unavailable: true};
+        }
 
         // Render table
-        const editable = (currentView === 'plan');
+        const editable = (currentView === 'plan' && data.plan_simulation !== true && data.plan_execution !== true);
         // Debug-history download links only make sense on the History/Yesterday view -
         // its rows are entirely in the past, unlike the live Plan view which is mostly
         // future predictions with no corresponding capture.
@@ -7920,7 +7943,12 @@ def get_plan_renderer_js():
     }
 
     // Fetch and render plan data
+    let planFetchInFlight = false;
     async function fetchAndRenderPlan() {
+        if (planFetchInFlight) return;
+        planFetchInFlight = true;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 30000);
         try {
             // Build query string with newest data timestamp for conditional fetch
             const params = new URLSearchParams();
@@ -7930,9 +7958,10 @@ def get_plan_renderer_js():
             if (window.overridesHash) {
                 params.append('overrides_hash', window.overridesHash);
             }
+            if (window.planData && (window.planData.plan_simulation === true || window.planData.plan_execution === true)) params.append('plan_simulation', '1');
 
             const url = './api/plan_data' + (params.toString() ? '?' + params.toString() : '');
-            const response = await fetch(url);
+            const response = await fetch(url, {cache: 'no-store', signal: controller.signal});
             if (!response.ok) {
                 throw new Error(`HTTP error ${response.status}`);
             }
@@ -7959,6 +7988,8 @@ def get_plan_renderer_js():
             window.baselineData = data.baseline;
             window.overridesData = data.overrides;
             window.overridesHash = data.overrides_hash;
+            const planBanner = document.getElementById('carChargingPreview');
+            if (planBanner && typeof data.car_charging_view === 'string') planBanner.innerHTML = data.car_charging_view;
 
             // Update newestDataTimestamp to the newest timestamp from the data we just received
             const timestamps = [];
@@ -7982,11 +8013,20 @@ def get_plan_renderer_js():
             refreshPlan();
         } catch (error) {
             console.error('Error fetching plan data:', error);
+            if (window.planData && (window.planData.plan_simulation === true || window.planData.plan_execution === true)) {
+                window.planData = {...window.planData, rows: [], plan_unavailable: true};
+                const planBanner = document.getElementById('carChargingPreview');
+                if (planBanner) planBanner.textContent = 'EV simulation outdated: refresh failed. Previous candidate hidden.';
+                refreshPlan();
+            }
             const errorDiv = document.getElementById('planError');
             if (errorDiv) {
                 errorDiv.textContent = `Error fetching plan data: ${error.message}`;
                 errorDiv.style.display = 'block';
             }
+        } finally {
+            clearTimeout(timeoutId);
+            planFetchInFlight = false;
         }
     }
 

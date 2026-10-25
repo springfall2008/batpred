@@ -439,6 +439,14 @@ class Execute:
                 self.log(format_failure(event, self.local_tz))
 
     def execute_plan(self):
+        # EV apply owns this cycle only after an explicit opt-in. It dispatches
+        # exact current intents through the same Inverter entry point, rather than
+        # allowing legacy window merging to erase hold/charge transitions.
+        from car_charging_execute import execute_car_charging_plan
+
+        plan_status = execute_car_charging_plan(self)
+        if plan_status is not None:
+            return plan_status
         # Per-inverter detail segments, assembled into the status text after the headline status is
         # resolved - see build_status_extra() for why they can't be concatenated inline.
         status_extra_parts = []

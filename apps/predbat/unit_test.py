@@ -14,6 +14,7 @@ import sys
 import glob
 import argparse
 import random
+import unittest
 from datetime import timedelta
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -45,6 +46,7 @@ from tests.test_octopus_slots import run_load_octopus_slots_tests, run_octopus_s
 from tests.test_multi_car_iog import run_multi_car_iog_tests
 from tests.test_car_manual_soc import run_car_manual_soc_tests
 from tests.test_car_max_rate import run_car_max_rate_tests
+from tests.test_car_manual_soc_planning import run_car_manual_soc_car_planning_tests
 from tests.test_fetch_config_options import test_fetch_config_options
 from tests.test_multi_inverter import run_inverter_multi_tests
 from tests.test_heterogeneous_fleet import test_heterogeneous_fleet
@@ -57,6 +59,37 @@ from tests.test_config_json_format import test_config_json_format
 from tests.test_history_attribute import test_history_attribute
 from tests.test_previous_value_provider import test_previous_value_provider
 from tests.test_inverter import run_inverter_tests
+from tests.test_service_sequences import run_service_sequence_tests
+from tests.test_deye_solarman_template import run_deye_solarman_template_tests
+from tests import test_car_planning_core
+from tests.test_car_planning_native import run_car_planning_native_tests
+from tests.test_car_planning_limited import run_car_planning_limited_tests
+from tests.test_car_planning_apply import run_car_planning_apply_tests
+from tests.test_car_planning_entrypoints import run_car_planning_entrypoint_tests
+from tests.test_car_planning_capabilities import run_car_planning_capabilities_tests
+from tests.test_car_planning_template import run_car_planning_template_tests
+from tests.test_car_planning_combined import run_car_planning_combined_tests
+from tests.test_car_planning_preview import run_car_planning_preview_tests
+from tests.test_car_planning_preview_integration import run_car_planning_preview_integration_tests
+from tests.test_car_planning_single_table import run_car_planning_single_table_tests
+from tests.test_car_planning_targets import run_car_planning_targets_tests
+from tests.test_car_planning_economic import run_car_planning_economic_tests
+from tests.test_car_planning_partial import run_car_planning_partial_tests
+from tests.test_car_planning_grid_support import run_car_planning_grid_support_tests
+from tests.test_prediction_grid_support import run_prediction_grid_support_tests
+from tests.test_car_planning_actual import run_car_planning_actual_tests
+from tests.test_car_planning_session import run_car_planning_session_tests
+from tests.test_car_planning_recurring import run_car_planning_recurring_tests
+from tests.test_car_planning_arrival import run_car_planning_arrival_tests
+from tests.test_car_planning_priority import run_car_planning_priority_tests
+from tests.test_car_planning_battery_windows import run_car_planning_battery_windows_tests
+from tests.test_car_planning_partial_apply import run_car_planning_partial_apply_tests
+from tests.test_car_planning_applied_view import run_car_planning_applied_view_tests
+from tests.test_car_planning_config import run_car_planning_config_tests
+from tests.test_car_planning_storage import run_car_planning_storage_tests
+from tests.test_car_planning_migration import run_car_planning_migration_tests
+from tests.test_car_planning_measurements import run_car_planning_measurements_tests
+from tests.test_car_planning_publication import run_car_planning_publication_tests
 from tests.test_basic_rates import test_basic_rates
 from tests.test_clock import run_clock_tests
 from tests.test_rate_export_max_forward_calc import test_rate_export_max_forward_calc
@@ -93,6 +126,7 @@ from tests.test_plan_version_replace import run_plan_version_replace_tests
 from tests.test_pv_calibration_clipping import run_pv_calibration_clipping_tests
 from tests.test_pv_calibration_day_scaling import run_pv_calibration_day_scaling_tests
 from tests.test_export_commitment import run_export_commitment_tests
+from tests.test_import_limit import run_import_limit_tests
 from tests.test_optimise_export_copy import run_optimise_export_copy_tests
 from tests.test_energydataservice import run_energydataservice_tests
 from tests.test_iboost import run_iboost_smart_tests
@@ -455,6 +489,53 @@ def run_window_cache_tests_isolated(my_predbat):
     return run_window_cache_tests(create_predbat())
 
 
+def run_import_limit_tests_isolated(my_predbat):
+    """Keep diagnostic fixtures independent of the shared suite's configuration and clock."""
+    return run_import_limit_tests(create_predbat())
+
+
+def run_car_planning_native_tests_isolated(my_predbat):
+    """Keep synthetic combined forecasts out of the shared suite state."""
+    return run_car_planning_native_tests(create_predbat())
+
+
+def run_car_planning_apply_tests_isolated(my_predbat):
+    """Run opt-in execution checks without contaminating shared native fixtures."""
+    return run_car_planning_apply_tests(create_predbat())
+
+
+def run_car_planning_entrypoint_tests_isolated(my_predbat):
+    """Check actual publication/execution hooks with a fresh native fixture."""
+    return run_car_planning_entrypoint_tests(create_predbat())
+
+
+def run_car_planning_core_tests(my_predbat):
+    """Run the pure scheduler's independent unittest suite."""
+    suite = unittest.defaultTestLoader.loadTestsFromModule(test_car_planning_core)
+    return not unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful()
+
+
+def run_car_planning_grid_support_tests_isolated(my_predbat):
+    """Keep shadow support settings and entity fixtures out of unrelated native tests."""
+    return run_car_planning_grid_support_tests(create_predbat())
+
+
+def run_car_planning_battery_windows_core_tests(my_predbat):
+    """Run the pure minimum-window state-machine tests without a Home Assistant backend."""
+    suite = unittest.defaultTestLoader.loadTestsFromName("tests.test_car_planning_battery_windows_core")
+    return not unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful()
+
+
+def run_prediction_grid_support_tests_isolated(my_predbat):
+    """Validate optional replay physics without contaminating the shared suite state."""
+    return run_prediction_grid_support_tests(create_predbat())
+
+
+def run_car_planning_actual_tests_isolated(my_predbat):
+    """Exercise actual combined dispatch without leaving session fixtures in other tests."""
+    return run_car_planning_actual_tests(create_predbat())
+
+
 def create_predbat():
     my_predbat = PredBat()
     my_predbat.states = {}
@@ -501,6 +582,38 @@ def main():
         ("kernel_parity", run_kernel_parity_tests, "C++ prediction kernel vs Python engine parity tests", False),
         ("prediction_batch", run_prediction_batch_tests, "Batched prediction fan-out tests", False),
         ("inverter", run_inverter_tests, "Inverter tests", False),
+        ("service_sequences", run_service_sequence_tests, "Observed custom inverter service sequences", False),
+        ("deye_solarman_template", run_deye_solarman_template_tests, "Shared Deye/Solarman template through native controls", False),
+        ("car_planning_config", run_car_planning_config_tests, "Native flat car argument contract", False),
+        ("car_planning_storage", run_car_planning_storage_tests, "Retained physical evidence migration", False),
+        ("car_planning_migration", run_car_planning_migration_tests, "Offline native configuration migration", False),
+        ("car_planning_measurements", run_car_planning_measurements_tests, "Native meter normalisation and device policy", False),
+        ("car_planning_publication", run_car_planning_publication_tests, "Native car diagnostics without execution authority", False),
+        ("car_planning_core", run_car_planning_core_tests, "EV site pure solver", False),
+        ("car_planning_native", run_car_planning_native_tests_isolated, "EV site native shadow adapter", False),
+        ("car_planning_limited", run_car_planning_limited_tests, "Limited battery discharge and native step replay", False),
+        ("car_planning_apply", run_car_planning_apply_tests_isolated, "EV site gated native execution", False),
+        ("car_planning_entrypoints", run_car_planning_entrypoint_tests_isolated, "EV site actual native entry points", False),
+        ("car_planning_capabilities", run_car_planning_capabilities_tests, "EV solver capability subsets", False),
+        ("car_planning_template", run_car_planning_template_tests, "Verified service-template dispatch", False),
+        ("car_planning_combined", run_car_planning_combined_tests, "Native integration through the real template", False),
+        ("car_planning_preview", run_car_planning_preview_tests, "Read-only combined replay presentation", False),
+        ("car_planning_preview_integration", run_car_planning_preview_integration_tests, "EV preview actual replay and web routes", False),
+        ("car_planning_single_table", run_car_planning_single_table_tests, "EV candidate in the existing read-only web table", False),
+        ("car_planning_targets", run_car_planning_targets_tests, "Real replay-derived charge ceilings and rejection reasons", False),
+        ("car_planning_economic", run_car_planning_economic_tests, "Bounded economic search diversity and exact short-horizon comparison", False),
+        ("car_planning_partial", run_car_planning_partial_tests, "Truthful paired-safe partial EV shadow plan with unchanged requested target", False),
+        ("car_planning_grid_support", run_car_planning_grid_support_tests_isolated, "Opt-in grid charge support without actuator authority", False),
+        ("prediction_grid_support", run_prediction_grid_support_tests_isolated, "Independent charge-request grid support replay", False),
+        ("car_planning_actual", run_car_planning_actual_tests_isolated, "Confirmed sessions and exact native charge ceilings", False),
+        ("car_planning_session", run_car_planning_session_tests, "Native domestic handback and durable session evidence", False),
+        ("car_planning_recurring", run_car_planning_recurring_tests, "Standing EV policy and durable sensor-derived sessions", False),
+        ("car_planning_arrival", run_car_planning_arrival_tests, "Absent EV demand in the native model without execution authority", False),
+        ("car_planning_priority", run_car_planning_priority_tests, "HA charging priority dropdown and immediate plan invalidation", False),
+        ("car_planning_battery_windows", run_car_planning_battery_windows_tests, "Configurable battery minimum windows and observed continuity", False),
+        ("car_planning_battery_windows_core", run_car_planning_battery_windows_core_tests, "Pure minimum battery window state and physical constraints", False),
+        ("car_planning_partial_apply", run_car_planning_partial_apply_tests, "Authorised partial targets through paired replay and dispatch", False),
+        ("car_planning_applied_view", run_car_planning_applied_view_tests, "Truthful applied plan and execution receipt presentation", False),
         ("execute", run_execute_tests, "Execute tests", False),
         ("multi_inverter_status", test_multi_inverter_status, "Multi-inverter headline status resolution tests (#4446)", False),
         ("load_car_energy", test_load_car_energy_warns_when_configured_entity_has_no_data, "car_charging_energy configured-but-empty warning tests (#4458 follow-up)", False),
@@ -645,6 +758,7 @@ def main():
         ("multi_car_iog", run_multi_car_iog_tests, "Multi-car IOG tests", False),
         ("car_manual_soc", run_car_manual_soc_tests, "Manual car SoC: automatic enable, reset on unplug, energy-sensor tracking", False),
         ("car_max_rate", run_car_max_rate_tests, "car_charging_max_rate caps each car's charge rate, per car, held through sensor drop-outs, and against the Octopus raise", False),
+        ("car_manual_soc_planning", run_car_manual_soc_car_planning_tests, "EV session integration guards for the manual car SoC", False),
         ("rate_add_io_slots", run_rate_add_io_slots_tests, "Rate add IO slots tests", False),
         ("iog_car_need_gate", run_iog_car_need_gate_tests, "IOG car-need gate: no cheap rate for dispatch minutes no car needs", False),
         ("iog_charge_skew", run_iog_charge_skew_tests, "IOG earlier-charge skew characterisation tests", False),
@@ -852,6 +966,7 @@ def main():
         ("pv_calibration_clipping", run_pv_calibration_clipping_tests, "PV calibration does not learn inverter clipping as forecast error", False),
         ("pv_calibration_day_scaling", run_pv_calibration_day_scaling_tests, "PV calibration per-day scaling keeps dull days at raw x adjustment", False),
         ("export_commitment", run_export_commitment_tests, "Forced-export commitment / anti-flapping tests", False),
+        ("import_limit", run_import_limit_tests_isolated, "Whole-site grid import diagnostics (no enforcement)", False),
         ("optimise_solar", run_optimise_solar_tests, "Optimise export more solar tests", False),
         ("optimise_windows_kernel", run_optimise_all_windows_kernel_tests, "Optimise all windows tests with the C++ kernel", False),
         ("optimise_swap_charge", run_optimise_swap_charge_tests, "Optimise pairwise charge-window swap tests", False),

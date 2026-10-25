@@ -366,6 +366,17 @@ class StorageLocalFiles(StorageBase):
             self.log("Storage: Warn: Failed to deserialise {}: {}".format(data_path, e))
             return None
 
+    async def load_checked(self, module, filename):
+        """Distinguish first use from an unreadable, expired or orphaned durable record.
+
+        Ordinary caches retain their existing permissive ``load`` behaviour.
+        Authority records must not silently turn corruption into a new session.
+        """
+        value = await self.load(module, filename)
+        if value is None and (os.path.exists(self._meta_path(module, filename)) or any(os.path.exists(self._data_path(module, filename, fmt)) for fmt in STORAGE_FORMATS)):
+            raise ValueError("Stored record exists but cannot be loaded")
+        return value
+
     async def age(self, module, filename):
         """Return the age of stored data in minutes since it was created.
 
@@ -545,6 +556,10 @@ class StorageComponent(ComponentBase):
             Deserialised data, or None if missing or expired
         """
         return await self.backend.load(module, filename)
+
+    async def load_checked(self, module, filename):
+        """Load a durable record without treating existing unreadable data as first use."""
+        return await self.backend.load_checked(module, filename)
 
     async def age(self, module, filename):
         """Return the age of stored data in minutes since it was created.

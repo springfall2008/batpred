@@ -221,6 +221,13 @@ class Output:
         """
         Publish the car charging plan
         """
+        # Fetch calls this before execution. Explicit combined apply must not leak
+        # the independently optimised legacy EV plan to the existing HA executor.
+        from car_charging_execute import publish_car_charging_slot
+        from car_charging_publish import car_plan_attributes
+
+        if publish_car_charging_slot(self):
+            return
         postfix = ""
         for car_n in range(self.num_cars):
             # A list of its own per car - shared, every car after the first also carried the windows of
@@ -232,7 +239,14 @@ class Output:
                 self.dashboard_item(
                     "binary_sensor." + self.prefix + "_car_charging_slot" + postfix,
                     state="off",
-                    attributes={"planned": plan, "cost": None, "kWh": None, "friendly_name": "Predbat car charging slot" + postfix, "icon": "mdi:home-lightning-bolt-outline"},
+                    attributes={
+                        **(car_plan_attributes(getattr(self, "car_charging_report", None)) if car_n == 0 else {}),
+                        "planned": plan,
+                        "cost": None,
+                        "kWh": None,
+                        "friendly_name": "Predbat car charging slot" + postfix,
+                        "icon": "mdi:home-lightning-bolt-outline",
+                    },
                 )
                 self.dashboard_item(
                     self.prefix + ".car_charging_start" + postfix,
@@ -303,6 +317,7 @@ class Output:
                     "binary_sensor." + self.prefix + "_car_charging_slot" + postfix,
                     state="on" if slot else "off",
                     attributes={
+                        **(car_plan_attributes(getattr(self, "car_charging_report", None)) if car_n == 0 else {}),
                         "planned": plan,
                         "cost": dp2(total_cost),
                         "kwh": dp2(total_kwh),
@@ -1760,13 +1775,13 @@ class Output:
                 # charging in the same step, not only when no car is charging
                 car_charging_cancelled = self.car_charge_slot_kwh_cancelled(minute_start, minute_end)
                 if car_charging_kwh > 0.0:
-                    car_charging_str = str(car_charging_kwh)
+                    car_charging_str = "{:.2f}".format(car_charging_kwh)
                     if car_charging_cancelled > 0.0:
-                        car_charging_str += " +" + str(car_charging_cancelled) + "?"
+                        car_charging_str += " +{:.2f}?".format(car_charging_cancelled)
                     car_color = "FFFF00"
                     car_rate = self.car_charge_slot_rate(minute_start, minute_end)
                 elif car_charging_cancelled > 0.0:
-                    car_charging_str = str(car_charging_cancelled) + "?"
+                    car_charging_str = "{:.2f}?".format(car_charging_cancelled)
                     car_color = "#FFFFCC"
                 else:
                     car_charging_str = "&#9866;"
@@ -2013,7 +2028,7 @@ class Output:
         if plan_debug and self.load_forecast:
             html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(xload_total))
         if self.num_cars > 0:
-            html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(car_total))
+            html += "<td bgcolor=#FFFFFF><b>{:.2f}</b></td>".format(car_total)
         if self.iboost_enable:
             iboost_amount_str = "&#9866;"
             iboost_amount_end = self.predict_iboost_best.get(minute_relative_slot_end, 0)
