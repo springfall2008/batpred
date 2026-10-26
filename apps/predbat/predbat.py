@@ -1,3 +1,6 @@
+Warning: truncated output (original token count: 30569)
+Total output lines: 2438
+
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
 # Copyright Trefor Southwell 2025-2026 - All Rights Reserved
@@ -1265,56 +1268,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         # Fetch inverter data
         if not self.fetch_inverter_data():
             self.log("Error: Failed to fetch inverter data, not able to compute a plan")
-            self.record_status("Error: Failed to fetch inverter data, not able to compute a plan", had_errors=True)
-            return
-        self.check_export_more_solar_effective()
-        self.log_replay_state()
-        self.log_replay_inverter()
-
-        # Check if we have valid import rates
-        if self.rate_min == self.rate_max == 0:
-            self.log("Error: Import rates are all zero, not able to compute a plan")
-            self.record_status("Error: Import rates are all zero, not able to compute a plan", had_errors=True)
-            return
-
-        if self.dynamic_load():
-            self.log("Dynamic load adjustment changed, will recompute the plan")
-            recompute = True
-
-        if not scheduled or not self.plan_valid or recompute:
-            self.log("Will recompute the plan as it is invalid")
-            recompute = True
-        else:
-            plan_age = self.now_utc - self.plan_last_updated
-            plan_age_minutes = plan_age.seconds / 60.0
-            self.log("Plan was last updated on {} and is now {} minutes old".format(self.plan_last_updated, dp1(plan_age_minutes)))
-
-        # Calculate the new plan (or re-use existing)
-        recompute = self.calculate_plan(recompute=recompute)
-
-        # Persist the plan so it can be restored immediately on next startup
-        if recompute and self.plan_valid:
-            self.save_plan()
-
-        # Publish rate data
-        self.publish_rate_and_threshold()
-
-        # Execute the plan, re-read the inverter first if we had to calculate (as time passes during calculations)
-        if recompute:
-            if not self.fetch_inverter_data():
-                self.log("Error: Failed to fetch inverter data, not able to execute the plan")
-                self.record_status("Error: Failed to fetch inverter data, not able to execute the plan", had_errors=True)
-                return
-        status, status_extra = self.execute_plan()
-
-        # If the plan was not updated, and the time has expired lets update it now
-        if not recompute:
-            plan_age = self.now_utc - self.plan_last_updated
-            plan_age_minutes = plan_age.seconds / 60.0
-
-            if (plan_age_minutes + RUN_EVERY) > self.calculate_plan_every:
-                recompute = True
-                self.log("Will recompute the plan as it is now {} minutes old and will exceed the max age of {} minutes before the next run".format(dp1(plan_age_minutes), self.calculate_plan_every))
+            self.record_status("Error: Failed to fe…569 tokens truncated…is now {} minutes old and will exceed the max age of {} minutes before the next run".format(dp1(plan_age_minutes), self.calculate_plan_every))
                 plan_random_delay = self.get_arg("plan_random_delay", 0)
                 if plan_random_delay > 0:
                     delay = random.uniform(0, plan_random_delay)
@@ -2191,6 +2145,12 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.components = Components(self)
             self.components.initialize(phase=0)
 
+            # Do not start phase-0 dependents (notably HAHistory) when HA interface
+            # construction failed. They cannot recover without it, and their startup
+            # wait would delay the standalone runner's retry by up to ten minutes.
+            if not self.ha_interface:
+                raise ValueError("HA interface not found")
+
             # Initialise plugin system early so plugins can register web endpoints
             # before the web server starts
             try:
@@ -2205,9 +2165,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             if not self.components.start(phase=0):
                 self.log("Error: Some components failed to start (phase0)")
                 self.record_status("Error: Some components failed to start (phase0)", had_errors=True)
-
-            if not self.ha_interface:
-                raise ValueError("HA interface not found")
 
             # Call plugin initialisation hooks after components are ready
             if self.plugin_system:
