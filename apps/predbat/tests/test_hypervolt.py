@@ -121,7 +121,8 @@ MOCK_V3_SESSION_UNPLUGGED = {"carbon_saved_grams": 0, "charging": False, "ct_cur
 # The first messages of a charge: current is flowing but ev_power has not caught up
 MOCK_V3_SESSION_STARTING = {"carbon_saved_grams": 2, "charging": True, "ct_current": 32700, "energy_flow": ["grid_to_ev", "grid_to_house"], "ev_power": 3, "generation_power": 0, "grid_power": 7716, "house_power": 7713, "true_milli_amps": 30400, "voltage": 231, "watt_hours": 7}
 MOCK_V3_SESSION_CHARGING = {"carbon_saved_grams": 19, "charging": True, "ct_current": 33000, "energy_flow": ["grid_to_ev", "grid_to_house"], "ev_power": 7087, "generation_power": 0, "grid_power": 7692, "house_power": 605, "true_milli_amps": 30800, "voltage": 231, "watt_hours": 44}
-MOCK_V3_REFUSED_PILOT = {"code": -32601, "data": None, "message": "get.pilot_status not allowed"}
+# The shape of a V3 error reply, as the charger sent it when refusing get.pilot_status
+MOCK_V3_ERROR = {"code": -32601, "data": None, "message": "get.pilot_status not allowed"}
 
 MOCK_CHARGERS = {"chargers": [{"id": V3_ID, "model": "Home 3 Pro", "adopted_at": "2024-01-01T00:00:00.000Z"}]}
 
@@ -459,7 +460,7 @@ def test_request_error_reply_v3_shape():
         await _logged_in(transport, socket)
         task = asyncio.ensure_future(transport.request(V3_ID, "sync.apply", {"max_current": 16000}))
         await _settle()
-        socket.queue({"jsonrpc": "2.0", "id": socket.last("sync.apply")["id"], "error": MOCK_V3_REFUSED_PILOT})
+        socket.queue({"jsonrpc": "2.0", "id": socket.last("sync.apply")["id"], "error": MOCK_V3_ERROR})
         try:
             await task
             raise AssertionError("Expected HypervoltRefusedError")
@@ -632,7 +633,7 @@ def test_apply_snapshot_ignores_bad_items():
 
 
 def test_apply_session_power():
-    """Power is ev_power when sent, else amps times volts, and zero when not charging."""
+    """Power is ev_power when sent (unless it is stale-low against amps times volts), else amps times volts, and zero when not charging."""
     charger = HypervoltCharger(V3_ID)
     apply_session(charger, {"charging": True, "ev_power": 7100, "true_milli_amps": 16000, "voltage": 240})
     assert charger.charging is True and charger.power_w == 7100.0
@@ -765,7 +766,13 @@ def test_captured_v3_payloads():
     assert status_text(charger) == "charging" and abs(charger.power_w - 30.4 * 231) < 0.5, charger.power_w
     apply_session(charger, MOCK_V3_SESSION_CHARGING)
     assert charger.power_w == 7087.0 and charger.session_energy_kwh == 0.044
-    # Unplug and plug back in: watt_hours starts again from 0 with no session id, so the energy resets
+    # A message with no power fields keeps the last power rather than reading 0 mid-charge
+    apply_session(charger, {"charging": True, "watt_hours": 45})
+    assert charger.power_w == 7087.0
+    # A noisy trickle of current with ev_power 0 is not invented into power
+    apply_session(charger, dict(MOCK_V3_SESSION_CHARGING, ev_power=0, true_milli_amps=300))
+    assert charger.power_w == 0.0
+    # Stopping (or unplugging) ends the session: watt_hours starts again from 0 with no session id, so the energy resets
     apply_session(charger, dict(MOCK_V3_SESSION_CHARGING, watt_hours=0))
     assert charger.session_energy_kwh == 0.0
     print("  ✓ Captured V3 payloads give their states")
