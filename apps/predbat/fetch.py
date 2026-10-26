@@ -3771,7 +3771,7 @@ class Fetch:
             return
         self.car_charging_max_rate_logged[car_n] = cap
         if cap > 0:
-            self.log("Car {} charge rate capped at the car's maximum of {}kW (car_charging_max_rate)".format(car_n, cap))
+            self.log("Car {} maximum charge rate is {}kW (car_charging_max_rate); it plans at the lower of this and the charger rate".format(car_n, cap))
         else:
             self.log("Car {} charge rate no longer capped by car_charging_max_rate".format(car_n))
 
