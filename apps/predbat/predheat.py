@@ -27,6 +27,8 @@ from const import TIME_FORMAT
 
 MAX_INCREMENT = 100
 PREDICT_STEP = 5
+# Target setpoint used when no target-temperature history is available.
+DEFAULT_TARGET_TEMPERATURE = 21.5
 
 
 """
@@ -317,10 +319,10 @@ class PredHeat:
         if last_predict_minute:
             forecast_minutes = self.forecast_days * 24 * 60
             max_minutes = self.smart_thermostat_max_minutes
-            last_target_temp = self.get_historical(self.target_temperature, 0, default=20.0)
+            last_target_temp = self.get_historical(self.target_temperature, 0, default=DEFAULT_TARGET_TEMPERATURE)
             last_adjust_end = 0
             for minute in range(0, forecast_minutes, PREDICT_STEP):
-                target_temp = self.get_historical(self.target_temperature, minute, default=20.0)
+                target_temp = self.get_historical(self.target_temperature, minute, default=DEFAULT_TARGET_TEMPERATURE)
                 if target_temp > last_target_temp:
                     adjust = {}
                     adjust["from"] = last_target_temp
@@ -331,7 +333,7 @@ class PredHeat:
                     # The heating period lasts until the setpoint drops below the new target
                     period_end = forecast_minutes
                     for next_minute in range(minute + PREDICT_STEP, forecast_minutes, PREDICT_STEP):
-                        if self.get_historical(self.target_temperature, next_minute, default=20.0) < target_temp:
+                        if self.get_historical(self.target_temperature, next_minute, default=DEFAULT_TARGET_TEMPERATURE) < target_temp:
                             period_end = next_minute
                             break
 
@@ -361,7 +363,7 @@ class PredHeat:
             minute_absolute = minute + self.minutes_now
             external_temp = self.temperatures.get(minute, external_temp)
 
-            target_temp = self.get_historical(self.target_temperature, minute, default=20.0)
+            target_temp = self.get_historical(self.target_temperature, minute, default=DEFAULT_TARGET_TEMPERATURE)
 
             # Find the next temperature adjustment
             next_adjust = None
