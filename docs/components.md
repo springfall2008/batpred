@@ -1233,7 +1233,7 @@ Hypervolt publishes no API. This component uses the one the community [Home Assi
 
     - **Monitoring only** (the default). Predbat sees the charger and removes car charging from its house load, but the Hypervolt app's schedule, your car or your energy supplier decides when the car charges.
     - **Predbat-led charging.** Add `hypervolt_control: True` and Predbat stops and starts the charger from its own car charging plan. See [Predbat-led charging](#predbat-led-charging-hypervolt) below.
-    - **Octopus Intelligent Go.** Leave `hypervolt_control` off. Octopus controls the charger, and Predbat takes the car's charging slots from the Octopus integration as usual.
+    - **Octopus Intelligent Go.** What `hypervolt_control` does depends on whether Octopus drives your Hypervolt or your car. If the Hypervolt is your Intelligent device, Predbat leaves it to Octopus. If your car is (a Volkswagen or BMW linked to Octopus, say), Predbat leaves the Hypervolt alone by default, and in expert mode **switch.predbat_octopus_intelligent_charger_follows_car** has it let the car charge only during Octopus's dispatches. See [Octopus Intelligent and charger control](car-charging.md#octopus-intelligent-and-charger-control).
 
 If you previously pointed **car_charging_energy**, **car_charging_planned** or **car_charging_now** at the Home Assistant Hypervolt integration's sensors, you can remove those lines and the start/stop automation: with `hypervolt_automatic` on, Predbat uses its own Hypervolt entities and logs a note when it replaces a setting of yours.
 
@@ -1284,6 +1284,8 @@ Set `hypervolt_control: True` to let Predbat stop and start each charger from it
 - Inside a planned car charging slot, a stopped charger is let charge again.
 - Outside a slot, a charger with a car plugged in is stopped, whether or not the car has started charging, so a car plugged in outside a slot is stopped within a minute.
 - When control is released, every charger Predbat stopped is let charge again, which hands it back to its own charge mode and schedule. A charger Predbat stopped is also let charge again when the car is unplugged, so the next car is not held.
+- `switch.predbat_hypervolt_guest_charging` hands the chargers back so a visitor's car can charge - see [Guest charging](car-charging.md#guest-charging).
+- Keep the Hypervolt app closed while Predbat is in control. Opening it re-applies the charger's settings and can stop or start a charge, which Predbat then puts back.
 - A charger Predbat has stopped reads as connected until it reports otherwise, so its car keeps its plan and is started in the next slot.
 
 Things to know:
