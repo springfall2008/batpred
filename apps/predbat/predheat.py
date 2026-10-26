@@ -268,9 +268,9 @@ class PredHeat:
         total_weight = 0
         this_point = 0
 
-        # No data?
+        # No data? Use the caller's fallback when history is missing.
         if not data:
-            return 0
+            return default
 
         for days in self.days_previous:
             use_days = min(days, self.minute_data_age)
@@ -387,9 +387,9 @@ class PredHeat:
             # Thermostat model, override with current state also
             if minute == 0:
                 heating_on = heating_active
-            elif heating_on and temp_diff_inside <= -self.hysteresis_on:
+            elif heating_on and temp_diff_inside <= -self.hysteresis_off:
                 heating_on = False
-            elif not heating_on and temp_diff_inside >= self.hysteresis_off:
+            elif not heating_on and temp_diff_inside >= self.hysteresis_on:
                 heating_on = True
 
             heat_loss_current = self.heat_loss_watts * temp_diff_outside * PREDICT_STEP / 60.0
@@ -580,11 +580,11 @@ class PredHeat:
         self.max_days_previous = max(self.days_previous) + 1
         self.heating_energy_scaling = self.get_arg("heating_energy_scaling", 1.0, domain="predheat")
 
-        self.external_temperature, age_external = self.minute_data_entity(now_utc, "external_temperature", smoothing=True)
-        self.internal_temperature, age_internal = self.minute_data_entity(now_utc, "internal_temperature", smoothing=True)
-        self.target_temperature, age_target = self.minute_data_entity(now_utc, "target_temperature")
-        self.heating_energy, age_energy = self.minute_data_entity(now_utc, "heating_energy", incrementing=True, smoothing=True, scaling=self.heating_energy_scaling)
-        self.minute_data_age = min(age_external, age_internal, age_target, age_energy)
+        self.external_temperature, _ = self.minute_data_entity(now_utc, "external_temperature", smoothing=True)
+        self.internal_temperature, _ = self.minute_data_entity(now_utc, "internal_temperature", smoothing=True)
+        # Historical lookups use the target schedule, so its history alone sets the lookback.
+        self.target_temperature, self.minute_data_age = self.minute_data_entity(now_utc, "target_temperature")
+        self.heating_energy, _ = self.minute_data_entity(now_utc, "heating_energy", incrementing=True, smoothing=True, scaling=self.heating_energy_scaling)
 
         self.heat_energy_today = self.heating_energy.get(0, 0) - self.heating_energy.get(self.minutes_now, 0)
 
@@ -603,7 +603,10 @@ class PredHeat:
         self.heat_volume = self.get_arg("heat_volume", 200, domain="predheat")
         self.heat_max_power = self.get_arg("heat_max_power", 30000, domain="predheat")
         self.heat_min_power = self.get_arg("heat_min_power", 7000, domain="predheat")
-        self.heat_cop = self.get_arg("heat_cop", 0.9, domain="predheat")
+        # heating_cop is the documented setting; keep heat_cop for existing configs.
+        self.heat_cop = self.get_arg("heating_cop", None, domain="predheat")
+        if self.heat_cop is None:
+            self.heat_cop = self.get_arg("heat_cop", 0.9, domain="predheat")
         self.smart_thermostat = self.get_arg("smart_thermostat", False, domain="predheat")
         self.smart_thermostat_max_minutes = self.get_smart_thermostat_max_minutes()
         self.heating_active = self.get_arg("heating_active", False, domain="predheat")
