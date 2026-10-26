@@ -34,6 +34,273 @@ def test_octopus_intelligent_devices_wrapper(my_predbat):
     failed += asyncio.run(test_intelligent_devices_ambiguous_catalogue(my_predbat))
     failed += test_ambiguous_charger_plans_at_configured_rate(my_predbat)
     failed += asyncio.run(test_planned_dispatches_follow_device_state(my_predbat))
+    failed += asyncio.run(test_devices_list_failure_refreshes_known_devices(my_predbat))
+    return failed
+
+
+async def test_devices_list_failure_refreshes_known_devices(my_predbat):
+    """
+    A failed devices list must not stop the known devices being refreshed.
+
+    Octopus can fail the devices list on one device's status alone - KT-CT-4360, "Device status could
+    not be fetched", seen for a Wallbox charger seconds after the same query had answered. status is
+    non-null in the schema, so the error nulls the whole list: {"devices": None}. Returning there kept
+    the cache as it was - no fresh dispatches or settings for the poll, even though those queries still
+    answered, and the running dispatch was not re-trimmed, so its energy was counted again until the
+    list came back.
+
+    - The known devices are refreshed from the cache when the list fails
+    - The poll prunes nothing, as a failed list says nothing about which devices are still there
+    - With the dispatch query failing too, the last plan is kept, ended dropped and running re-trimmed
+    - With nothing cached a failed list is still a failed poll (None)
+    - A device answered without a status does not crash the poll
+    - An empty list is a failed list, and a cached vehicle is refreshed under its cache key
+    - The devices list does not ask for the deprecated provider field
+    """
+    print("**** Running Octopus devices list failure tests ****")
+    failed = 0
+    ref_now = datetime(2026, 10, 25, 13, 12, 0, tzinfo=timezone.utc)
+
+    class FixedTimeOctopusAPI(OctopusAPI):
+        """OctopusAPI subclass that pins now_utc_exact to the test reference time."""
+
+        @property
+        def now_utc_exact(self):
+            """Return the fixed test reference time."""
+            return ref_now
+
+    def make_api():
+        """Create a fresh OctopusAPI instance on an Intelligent tariff with the log captured."""
+        api = FixedTimeOctopusAPI(my_predbat, key="test-key", account_id="test-account", automatic=False)
+        api.get_intelligent_completed_dispatches = MagicMock(return_value=[])
+        api.get_state_wrapper = MagicMock(return_value=[])
+        api.fetch_previous_dispatch = AsyncMock()
+        api.log = MagicMock()
+        api.tariffs = {"import": {"tariffCode": "E-1R-IOG-SMB-VAR-24-10-29-L", "deviceID": "meter-1"}}
+        return api
+
+    def slot_at(start_offset, end_offset, kwh):
+        """A planned dispatch start_offset to end_offset minutes from ref_now."""
+        return {
+            "start": (ref_now + timedelta(minutes=start_offset)).strftime(DATE_TIME_STR_FORMAT),
+            "end": (ref_now + timedelta(minutes=end_offset)).strftime(DATE_TIME_STR_FORMAT),
+            "charge_in_kwh": kwh,
+            "source": "SMART",
+            "location": None,
+        }
+
+    def cached_charger(device_id, planned, **extra):
+        """A charger as a previous successful poll left it in the cache."""
+        device = {
+            "deviceType": "ELECTRIC_VEHICLES",
+            "status": "LIVE",
+            "provider": "Wallbox",
+            "model": "Pulsar Max",
+            "is_charger": True,
+            "charge_point_power_in_kw": 7.4,
+            "vehicle_battery_size_in_kwh": None,
+            "device_id": device_id,
+            "suspended": False,
+            "current_state": "SMART_CONTROL_IN_PROGRESS",
+            "planned_dispatches": planned,
+            "completed_dispatches": [],
+        }
+        device.update(extra)
+        return device
+
+    def warned(api, text):
+        """Did the API log a warning containing text."""
+        return any(str(call.args[0]).startswith("Warn:") and text in str(call.args[0]) for call in api.log.call_args_list if call.args)
+
+    # Octopus's answer when one device's status could not be fetched (KT-CT-4360), as the GraphQL layer
+    # hands it back with ignore_errors: the data, with the errors dropped
+    list_failed = {"devices": None}
+    settings_ok = {"devices": [{"id": "charger-1", "status": {"isSuspended": False}, "chargingPreferences": {}}]}
+    fresh_slot = slot_at(600, 930, -38.698)
+
+    def make_query(dispatches, settings=settings_ok, devices=list_failed):
+        """A mock async_graphql_query answering each query from the given data, recording the contexts asked."""
+        asked = []
+
+        async def query(query, context, ignore_errors=False, returns_data=True):
+            asked.append(context)
+            if "get-intelligent-devices" in context:
+                return devices
+            if "get-intelligent-dispatches" in context:
+                return dispatches
+            if "get-intelligent-settings" in context:
+                return settings
+            return None
+
+        return query, asked
+
+    # ------------------------------------------------------------------
+    # The known charger is refreshed from Octopus although the list failed
+    # ------------------------------------------------------------------
+    print("\n*** The known devices are refreshed when the devices list fails ***")
+    api = make_api()
+    api.intelligent_devices = {"charger-1": cached_charger("charger-1", [slot_at(60, 90, 3.7)])}
+    dispatches = {
+        "devices": [{"id": "charger-1", "status": {"currentState": "SMART_CONTROL_IN_PROGRESS"}}],
+        "flexPlannedDispatches": [{"start": fresh_slot["start"], "end": fresh_slot["end"], "type": "SMART", "energyAddedKwh": "-38.698"}],
+        "completedDispatches": [],
+    }
+    query, asked = make_query(dispatches)
+    api.async_graphql_query = AsyncMock(side_effect=query)
+    result = await api.async_get_intelligent_devices("test-account", "meter-1")
+    device = (result or {}).get("charger-1", {})
+    if "get-intelligent-dispatches" not in asked:
+        print(f"ERROR: Expected the known charger's dispatches fetched when the devices list fails, asked {asked}")
+        failed += 1
+    elif device.get("planned_dispatches") != [fresh_slot]:
+        print(f"ERROR: Expected the fresh planned dispatches {[fresh_slot]}, got {device.get('planned_dispatches')}")
+        failed += 1
+    elif (device.get("is_charger"), device.get("provider"), device.get("model"), device.get("status"), device.get("deviceType")) != (True, "Wallbox", "Pulsar Max", "LIVE", "ELECTRIC_VEHICLES"):
+        print(f"ERROR: Expected the charger's identity carried over from the cache, got {device}")
+        failed += 1
+    elif not warned(api, "known device"):
+        print(f"ERROR: Expected a warning that the devices list failed, logged {api.log.call_args_list}")
+        failed += 1
+    else:
+        print("PASS: A failed devices list still refreshes the known charger's dispatches")
+
+    # ------------------------------------------------------------------
+    # The poll prunes nothing: a known device the poll could not refresh stays cached
+    # ------------------------------------------------------------------
+    print("\n*** A failed devices list prunes nothing ***")
+    api = make_api()
+    # charger-2 has never had its settings read, so a failed settings query skips it this poll
+    api.intelligent_devices = {"charger-1": cached_charger("charger-1", []), "charger-2": {"device_id": "charger-2", "deviceType": "ELECTRIC_VEHICLES", "status": "LIVE", "is_charger": True, "planned_dispatches": [], "completed_dispatches": []}}
+
+    async def query_settings_by_device(query, context, ignore_errors=False, returns_data=True):
+        if "get-intelligent-devices" in context:
+            return list_failed
+        if "get-intelligent-dispatches" in context:
+            return {"flexPlannedDispatches": [], "completedDispatches": []}
+        if "get-intelligent-settings" in context:
+            return settings_ok if "charger-1" in query else None
+        return None
+
+    api.async_graphql_query = AsyncMock(side_effect=query_settings_by_device)
+    await api.async_update_intelligent_devices("test-account")
+    if sorted(api.intelligent_devices) != ["charger-1", "charger-2"]:
+        print(f"ERROR: Expected both known devices kept after a failed devices list, got {sorted(api.intelligent_devices)}")
+        failed += 1
+    else:
+        print("PASS: A failed devices list leaves every known device cached")
+
+    # Once the list answers again it is the record, and a device missing from it is pruned
+    api.async_graphql_query = AsyncMock(
+        side_effect=make_query(
+            {"flexPlannedDispatches": [], "completedDispatches": []},
+            devices={"devices": [{"id": "charger-1", "deviceType": "ELECTRIC_VEHICLES", "status": {"current": "LIVE"}, "__typename": "SmartFlexChargePoint", "make": "Wallbox", "model": "Pulsar Max"}]},
+        )[0]
+    )
+    await api.async_update_intelligent_devices("test-account")
+    if sorted(api.intelligent_devices) != ["charger-1"]:
+        print(f"ERROR: Expected a device missing from a successful list pruned, got {sorted(api.intelligent_devices)}")
+        failed += 1
+    else:
+        print("PASS: The next successful list prunes as before")
+
+    # ------------------------------------------------------------------
+    # The dispatch query failing too keeps the last plan, re-trimmed
+    # ------------------------------------------------------------------
+    print("\n*** A failed devices list and dispatch query keep the last plan, re-trimmed ***")
+    api = make_api()
+    # The previous poll, 2 minutes ago, left the running slot with 20 minutes and 2.0 kWh to go
+    cached_planned = [slot_at(-60, -30, 3.5), slot_at(-2, 18, 2.0), slot_at(120, 180, 7.0)]
+    api.intelligent_devices = {"charger-1": cached_charger("charger-1", cached_planned)}
+    query, asked = make_query(None)
+    api.async_graphql_query = AsyncMock(side_effect=query)
+    result = await api.async_get_intelligent_devices("test-account", "meter-1")
+    planned = (result or {}).get("charger-1", {}).get("planned_dispatches")
+    if planned != [slot_at(0, 18, 1.8), slot_at(120, 180, 7.0)]:
+        print(f"ERROR: Expected the ended slot dropped and the running one re-trimmed, got {planned}")
+        failed += 1
+    else:
+        print("PASS: The last plan is kept with the ended slot dropped and the running one re-trimmed")
+
+    # ------------------------------------------------------------------
+    # With nothing cached there is nothing to refresh, and the poll has failed
+    # ------------------------------------------------------------------
+    print("\n*** A failed devices list with nothing cached is a failed poll ***")
+    api = make_api()
+    api.intelligent_devices = {}
+    query, asked = make_query(None)
+    api.async_graphql_query = AsyncMock(side_effect=query)
+    result = await api.async_get_intelligent_devices("test-account", "meter-1")
+    if result is not None:
+        print(f"ERROR: Expected None for a failed devices list with nothing cached, got {result!r}")
+        failed += 1
+    else:
+        print("PASS: A failed devices list with nothing cached reports a failed poll")
+
+    # ------------------------------------------------------------------
+    # A device without a status is not live, and does not crash the poll
+    # ------------------------------------------------------------------
+    print("\n*** A device answered without a status does not crash the poll ***")
+    api = make_api()
+    api.intelligent_devices = {}
+    no_status = {"devices": [{"id": "charger-1", "deviceType": "ELECTRIC_VEHICLES", "status": None, "__typename": "SmartFlexChargePoint", "make": "Wallbox", "model": "Pulsar Max"}]}
+    query, asked = make_query(None, devices=no_status)
+    api.async_graphql_query = AsyncMock(side_effect=query)
+    try:
+        result = await api.async_get_intelligent_devices("test-account", "meter-1")
+    except AttributeError as error:
+        print(f"ERROR: A device with a null status crashed the poll: {error}")
+        failed += 1
+    else:
+        if result != {}:
+            print(f"ERROR: Expected a device with no status left out, got {result!r}")
+            failed += 1
+        else:
+            print("PASS: A device with a null status is left out without a crash")
+
+    # ------------------------------------------------------------------
+    # An empty list is a failed list too - the meter is always listed - and a cached vehicle is refreshed
+    # as a vehicle, under its cache key even where the entry does not repeat it
+    # ------------------------------------------------------------------
+    print("\n*** An empty devices list refreshes a known vehicle under its cache key ***")
+    api = make_api()
+    api.intelligent_devices = {"car-1": {"deviceType": "ELECTRIC_VEHICLES", "status": "LIVE", "provider": "Tesla", "model": "Model 3", "is_charger": False, "suspended": False, "planned_dispatches": [], "completed_dispatches": []}}
+    queries = []
+
+    async def query_empty_list(query, context, ignore_errors=False, returns_data=True):
+        queries.append((context, query))
+        if "get-intelligent-devices" in context:
+            return {"devices": []}
+        if "get-intelligent-dispatches" in context:
+            return {"flexPlannedDispatches": [], "completedDispatches": []}
+        if "get-intelligent-settings" in context:
+            return {"devices": [{"id": "car-1", "status": {"isSuspended": False}, "chargingPreferences": {}}]}
+        return None
+
+    api.async_graphql_query = AsyncMock(side_effect=query_empty_list)
+    await api.async_update_intelligent_devices("test-account")
+    device = api.intelligent_devices.get("car-1", {})
+    dispatch_queries = [query for context, query in queries if "get-intelligent-dispatches" in context]
+    if len(dispatch_queries) != 1 or 'deviceId: "car-1"' not in dispatch_queries[0]:
+        print(f"ERROR: Expected one dispatch query for car-1 after an empty devices list, got {dispatch_queries}")
+        failed += 1
+    elif sorted(api.intelligent_devices) != ["car-1"] or (device.get("device_id"), device.get("is_charger"), device.get("provider"), device.get("model")) != ("car-1", False, "Tesla", "Model 3"):
+        print(f"ERROR: Expected car-1 refreshed as the same vehicle under its cache key, got {api.intelligent_devices}")
+        failed += 1
+    else:
+        print("PASS: An empty devices list refreshes a known vehicle under its cache key")
+
+    # ------------------------------------------------------------------
+    # The deprecated provider field is not asked for: Octopus deprecated it on 2026-10-15 for removal on or
+    # after 2027-04-15, and asking for a removed field fails the whole query
+    # ------------------------------------------------------------------
+    print("\n*** The devices list does not ask for the deprecated provider field ***")
+    list_queries = [query for context, query in queries if "get-intelligent-devices" in context]
+    if not list_queries or any(line.strip() == "provider" for line in list_queries[0].split("\n")):
+        print(f"ERROR: Expected the devices list query without provider, got {list_queries}")
+        failed += 1
+    else:
+        print("PASS: The devices list query does not ask for provider")
+
     return failed
 
 

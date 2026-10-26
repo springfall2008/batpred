@@ -81,7 +81,7 @@ except ImportError:
     aiomqtt = None
     HAS_AIOMQTT = False
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from axle import fetch_axle_active
 from component_base import ComponentBase
 from mock_base import MockBase as SharedMockBase
@@ -133,6 +133,7 @@ SIGENERGY_CODE_DEVELOPER_NOT_APPROVED = 1604
 SIGENERGY_TOKEN_EXPIRY_BUFFER = 600   # refresh token 10 min before expiry
 SIGENERGY_MIN_REQUEST_INTERVAL = 6.0  # enforce ≥10 req/min API limit
 SIGENERGY_POLL_INTERVAL = 300         # realtime data poll every 5 minutes
+SIGENERGY_MQTT_STALE_SECONDS = 300    # an MQTT period reading older than this on arrival is stale - poll REST instead
 SIGENERGY_VPP_RECLAIM_INTERVAL = 60   # re-assert VPP ownership every minute (see _manage_vpp_registration)
 SIGENERGY_DEVICE_POLL_INTERVAL = 1800  # device list refresh every 30 minutes
 SIGENERGY_RATE_LIMIT_BACKOFF = [15, 30, 60, 120, 480]  # seconds to wait after code 1201
@@ -515,6 +516,7 @@ class SigenergyAPI(ComponentBase):
         # Background MQTT listener task
         self._mqtt_task = None
         self.last_mqtt_update = {}  # UNIX timestamp of last MQTT message received, keyed by system_id
+        self.mqtt_data_lag = {}  # seconds between the last MQTT period reading (statisticsTime) and its arrival, keyed by system_id
         self._tls_context = None  # cached SSLContext built once on first use
 
         self.log("SigenergyAPI: Initialised, base_url={}".format(self.base_url))
@@ -2105,6 +2107,21 @@ class SigenergyAPI(ComponentBase):
                             value_dict = entry.get("value", {})
                             self.log("SigenergyAPI: MQTT message on {} for system {}: type={} value={}".format(safe_topic, entry_sid, msg_type, value_dict))
                             if msg_type == "period":
+                                # statisticsTime is when the reading was taken. The broker can fall far behind
+                                # (2h on 2026-10-25) while still delivering on time, so arrival alone says nothing
+                                # A message without it cannot be judged, so it is taken as current, as before
+                                statistics_time = _safe_float(entry.get("statisticsTime", 0))
+                                lag = self.last_mqtt_update[entry_sid] - statistics_time if statistics_time > 0 else 0
+                                self.mqtt_data_lag[entry_sid] = lag
+                                if lag > SIGENERGY_MQTT_STALE_SECONDS:
+                                    # Keep the fields for later delta messages, but leave energy_flow to the REST poll
+                                    self.mqtt_period_raw.setdefault(entry_sid, {}).update(value_dict)
+                                    self.log(
+                                        "Warn: SigenergyAPI: MQTT period data for {} is {:.0f} minutes old (reading taken {}), ignoring it and using REST energyFlow instead".format(
+                                            entry_sid, lag / 60, datetime.fromtimestamp(statistics_time, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+                                        )
+                                    )
+                                    continue
                                 self._handle_mqtt_period(entry_sid, value_dict)
                                 if self.api_started:
                                     await self.publish_system_entities(entry_sid)
@@ -3372,7 +3389,8 @@ class SigenergyAPI(ComponentBase):
             for sid in list(self.systems.keys()):
                 last_update = self.last_mqtt_update.get(sid, 0)
                 mqtt_age = now_ts - last_update
-                mqtt_fresh = last_update > 0 and mqtt_age < SIGENERGY_POLL_INTERVAL
+                # Arriving recently is not enough - the reading it carried must be recent too
+                mqtt_fresh = last_update > 0 and mqtt_age < SIGENERGY_POLL_INTERVAL and self.mqtt_data_lag.get(sid, 0) <= SIGENERGY_MQTT_STALE_SECONDS
                 if mqtt_fresh:
                     # MQTT is genuinely keeping energy_flow live — worth persisting/re-timestamping.
                     self.log("SigenergyAPI: Skipping REST energy poll for {} (MQTT data {:.0f}s old)".format(sid, mqtt_age))

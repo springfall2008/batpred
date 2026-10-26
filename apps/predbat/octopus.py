@@ -278,7 +278,6 @@ intelligent_catalogue_query = """query {
 intelligent_device_query = """query {{
   devices(accountNumber: "{account_id}") {{
 		id
-		provider
 		deviceType
     status {{
       current
@@ -719,6 +718,9 @@ class OctopusAPI(ComponentBase):
         self.saving_sessions = {}
         self.saving_sessions_to_join = []
         self.intelligent_devices = {}
+        # Set by async_get_intelligent_devices() when the devices list failed and the known devices were
+        # refreshed from the cache instead, so async_update_intelligent_devices() prunes nothing that poll
+        self.intelligent_device_list_failed = False
         # Per device, when Octopus first answered an empty planned list while a smart charge was in progress -
         # the last known plan is kept through those for OCTOPUS_PLANNED_EMPTY_HOLD_MINUTES (see planned_dispatches_for_state())
         self.intelligent_planned_empty_since = {}
@@ -1157,7 +1159,9 @@ class OctopusAPI(ComponentBase):
                 # behind - invisible in the Octopus app but still present via the API at some point
                 # in the past) stays cached and republished forever, permanently occupying a car
                 # slot and holding num_cars up even though only one real device remains.
-                removed = sorted(set(self.intelligent_devices) - set(intelligent_devices))
+                # Not when the devices list failed and the known devices were refreshed instead: that
+                # says nothing about which are still there.
+                removed = [] if self.intelligent_device_list_failed else sorted(set(self.intelligent_devices) - set(intelligent_devices))
                 for device_id in removed:
                     self.log("OctopusAPI: Intelligent device {} no longer live, removing".format(device_id))
                     del self.intelligent_devices[device_id]
@@ -1779,14 +1783,34 @@ class OctopusAPI(ComponentBase):
         response_data = await self.async_graphql_query(octoplus_saving_session_query.format(account_id=self.account_id), "get-saving-sessions", ignore_errors=True, use_backend=True)
         if response_data is None:
             return self.saving_sessions
-        else:
-            savingSessions = response_data.get("savingSessions", {})
-            if savingSessions is None:
-                savingSessions = {}
-            if "account" in savingSessions:
-                if savingSessions["account"] is None:
-                    savingSessions["account"] = {}
-            return savingSessions
+        # With ignore_errors an answer carrying errors still returns its data, the failed part null - Octopus
+        # answers account null with OE-0003 ("Temporary service error"). Null is not "nothing joined": an
+        # account with nothing joined comes back with an empty joinedEvents list. Read as empty it dropped a
+        # joined Weekend Happy Hour while it ran, and the emptied account outlived the failures that
+        # followed (#5745), so keep the last known part instead.
+        savingSessions = response_data.get("savingSessions", None)
+        if savingSessions is None:
+            if self.saving_sessions:
+                self.log("Warn: OctopusAPI: Saving sessions not returned, keeping the last known ones")
+            return self.saving_sessions
+        cached = self.saving_sessions or {}
+        if "account" in savingSessions and savingSessions["account"] is None:
+            cached_account = cached.get("account") or {}
+            if cached_account:
+                self.log("Warn: OctopusAPI: Saving session account not returned, keeping the last known joined events")
+            savingSessions["account"] = cached_account
+        # The lists inside can be nulled the same way. Joined sessions are found by walking the events list, so
+        # either one read as empty would drop them too, and left as None the session data cannot loop over it.
+        if "events" in savingSessions and savingSessions["events"] is None:
+            savingSessions["events"] = cached.get("events") or []
+            if savingSessions["events"]:
+                self.log("Warn: OctopusAPI: Saving session events not returned, keeping the last known ones")
+        account = savingSessions.get("account")
+        if account and "joinedEvents" in account and account["joinedEvents"] is None:
+            account["joinedEvents"] = (cached.get("account") or {}).get("joinedEvents") or []
+            if account["joinedEvents"]:
+                self.log("Warn: OctopusAPI: Saving session joined events not returned, keeping the last known ones")
+        return savingSessions
 
     async def async_get_flexibility_events(self, account_id):
         """
@@ -1820,8 +1844,8 @@ class OctopusAPI(ComponentBase):
         # Query free electricity sessions
         free_events = []
         response_data = await self.async_graphql_query(flexibility_campaign_query.format(account_id=account_id, mpan=self.mpan, campaign_slug="free_electricity"), "get-flexibility-free-electricity", ignore_errors=True)
-        if response_data is not None:
-            campaign_data = response_data.get("customerFlexibilityCampaignEvents", {})
+        campaign_data = (response_data or {}).get("customerFlexibilityCampaignEvents", None)
+        if campaign_data is not None:
             if campaign_data:
                 edges = campaign_data.get("edges", [])
                 for edge in edges:
@@ -1836,8 +1860,13 @@ class OctopusAPI(ComponentBase):
                         )
                 self.log("OctopusAPI: Found {} free electricity events via flexibility API".format(len(free_events)))
 
-        # Store free electricity events for use by fetch_octopus_sessions
-        self.free_electricity_events = free_events
+        # Store free electricity events for use by fetch_octopus_sessions. This API is their only source, so
+        # a failed query - whole, or the events null beside an error - keeps the last known ones rather than
+        # dropping the free sessions until the next poll (#5745). An answer with no events still clears them.
+        if campaign_data is not None:
+            self.free_electricity_events = free_events
+        elif self.free_electricity_events:
+            self.log("Warn: OctopusAPI: Free electricity events not returned, keeping the last known ones")
 
         # If no saving session events from new API, fall back to legacy query
         # The new flexibility API may not have events populated yet for all accounts
@@ -2676,158 +2705,188 @@ class OctopusAPI(ComponentBase):
             ]
             """
 
-            if device_result:
-                catalogue = await self.async_get_vehicle_catalogue()
-                chargePointVariants = catalogue.get("chargePointVariants", [])
-                electricVehicles = catalogue.get("electricVehicles", [])
-                devices = device_result.get("devices", [])
-                if not devices:
+            devices = self.live_ev_devices(device_result)
+            self.intelligent_device_list_failed = devices is None
+            if devices is None:
+                if not self.intelligent_devices:
+                    # The devices query failed with no device known to refresh. Returning {} here would be
+                    # indistinguishable from an account that genuinely has no EVs left on it, and the caller
+                    # would prune the cache on every blip - report the failure so it can leave the cache alone.
                     return None
-                for device in device_result["devices"]:
-                    deviceType = device.get("deviceType", None)
-                    status = device.get("status", {}).get("current", None)
-                    deviceTypeName = device.get("__typename", None)
-                    if status == "LIVE" and deviceType == "ELECTRIC_VEHICLES":
-                        isCharger = deviceTypeName == "SmartFlexChargePoint"
-                        make = device.get("make", None)
-                        model = device.get("model", None)
-                        vehicleBatterySizeInKwh = None
-                        chargePointPowerInKw = None
-                        IntelligentdeviceID = device.get("id", None)
-                        device_setting_result = {}
-                        planned = []
-                        # Get previously completed dispatches, as we want to keep the old ones and merge
-                        completed = self.get_intelligent_completed_dispatches(IntelligentdeviceID)
+                # Octopus can fail the list on one device's status alone (KT-CT-4360, "Device status could
+                # not be fetched"), and as status is non-null that nulls the whole list. The dispatch and
+                # settings queries for each device are separate and still answer, so refresh the devices
+                # already known rather than keeping last poll's plan, with its running dispatch untrimmed.
+                devices = [{**device, "device_id": known_id} for known_id, device in self.intelligent_devices.items()]
+                self.log("Warn: OctopusAPI: Could not list intelligent devices, refreshing the {} known device(s) instead".format(len(devices)))
+            catalogue = await self.async_get_vehicle_catalogue()
+            chargePointVariants = catalogue.get("chargePointVariants", [])
+            electricVehicles = catalogue.get("electricVehicles", [])
+            for device in devices:
+                deviceType = device.get("deviceType", None)
+                status = device.get("status", None)
+                isCharger = device.get("is_charger", False)
+                make = device.get("provider", None)
+                model = device.get("model", None)
+                vehicleBatterySizeInKwh = None
+                chargePointPowerInKw = None
+                IntelligentdeviceID = device.get("device_id", None)
+                device_setting_result = {}
+                planned = []
+                # Get previously completed dispatches, as we want to keep the old ones and merge
+                completed = self.get_intelligent_completed_dispatches(IntelligentdeviceID)
 
-                        dispatch_result = await self.async_graphql_query(intelligent_dispatches_query.format(account_id=account_id, device_id=IntelligentdeviceID), "get-intelligent-dispatches", ignore_errors=True)
-                        if IntelligentdeviceID:
-                            device_setting_data = await self.async_graphql_query(intelligent_settings_query.format(account_id=account_id, device_id=IntelligentdeviceID), "get-intelligent-settings")
-                            if device_setting_data:
-                                for setting in device_setting_data.get("devices", []):
-                                    if setting.get("id", None) == IntelligentdeviceID:
-                                        device_setting_result["suspended"] = setting.get("status", {}).get("isSuspended", None)
-                                        chargingPreferences = setting.get("chargingPreferences", {})
-                                        device_setting_result["weekday_target_time"] = chargingPreferences.get("weekdayTargetTime", None)
-                                        device_setting_result["weekday_target_soc"] = chargingPreferences.get("weekdayTargetSoc", None)
-                                        device_setting_result["weekend_target_time"] = chargingPreferences.get("weekendTargetTime", None)
-                                        device_setting_result["weekend_target_soc"] = chargingPreferences.get("weekendTargetSoc", None)
-                                        device_setting_result["minimum_soc"] = chargingPreferences.get("minimumSoc", None)
-                                        device_setting_result["maximum_soc"] = chargingPreferences.get("maximumSoc", None)
-                            else:
-                                # Dropping the device here would make async_update_intelligent_devices
-                                # treat it as no longer LIVE and evict it from the cache, so one flaky
-                                # settings query would un-register a real car - and with the device set
-                                # driving car slot re-wiring (issue #4648) that flaps the slots on every
-                                # blip. Carry the last known settings forward instead, so the suspended
-                                # flag only moves when Octopus actually says it has.
-                                cached_device = self.intelligent_devices.get(IntelligentdeviceID, {})
-                                if "suspended" not in cached_device:
-                                    self.log("Warn: OctopusAPI: No settings for intelligent device {} and none cached, skipping it this poll".format(IntelligentdeviceID))
-                                    continue
-                                self.log("Warn: OctopusAPI: Settings fetch failed for intelligent device {}, reusing the last known settings".format(IntelligentdeviceID))
-                                for setting_key in INTELLIGENT_DEVICE_SETTING_KEYS:
-                                    if setting_key in cached_device:
-                                        device_setting_result[setting_key] = cached_device[setting_key]
+                dispatch_result = await self.async_graphql_query(intelligent_dispatches_query.format(account_id=account_id, device_id=IntelligentdeviceID), "get-intelligent-dispatches", ignore_errors=True)
+                if IntelligentdeviceID:
+                    device_setting_data = await self.async_graphql_query(intelligent_settings_query.format(account_id=account_id, device_id=IntelligentdeviceID), "get-intelligent-settings")
+                    if device_setting_data:
+                        for setting in device_setting_data.get("devices", []):
+                            if setting.get("id", None) == IntelligentdeviceID:
+                                device_setting_result["suspended"] = setting.get("status", {}).get("isSuspended", None)
+                                chargingPreferences = setting.get("chargingPreferences", {})
+                                device_setting_result["weekday_target_time"] = chargingPreferences.get("weekdayTargetTime", None)
+                                device_setting_result["weekday_target_soc"] = chargingPreferences.get("weekdayTargetSoc", None)
+                                device_setting_result["weekend_target_time"] = chargingPreferences.get("weekendTargetTime", None)
+                                device_setting_result["weekend_target_soc"] = chargingPreferences.get("weekendTargetSoc", None)
+                                device_setting_result["minimum_soc"] = chargingPreferences.get("minimumSoc", None)
+                                device_setting_result["maximum_soc"] = chargingPreferences.get("maximumSoc", None)
+                    else:
+                        # Dropping the device here would make async_update_intelligent_devices
+                        # treat it as no longer LIVE and evict it from the cache, so one flaky
+                        # settings query would un-register a real car - and with the device set
+                        # driving car slot re-wiring (issue #4648) that flaps the slots on every
+                        # blip. Carry the last known settings forward instead, so the suspended
+                        # flag only moves when Octopus actually says it has.
+                        cached_device = self.intelligent_devices.get(IntelligentdeviceID, {})
+                        if "suspended" not in cached_device:
+                            self.log("Warn: OctopusAPI: No settings for intelligent device {} and none cached, skipping it this poll".format(IntelligentdeviceID))
+                            continue
+                        self.log("Warn: OctopusAPI: Settings fetch failed for intelligent device {}, reusing the last known settings".format(IntelligentdeviceID))
+                        for setting_key in INTELLIGENT_DEVICE_SETTING_KEYS:
+                            if setting_key in cached_device:
+                                device_setting_result[setting_key] = cached_device[setting_key]
 
-                        if isCharger:
-                            chargePointPowerInKw, values = catalogue_value(chargePointVariants, make, model, "powerInKw", min)
-                            self.log_catalogue_ambiguity(CATALOGUE_AMBIGUOUS_CHARGER, make, model, values, chargePointPowerInKw, "kW")
-                        else:
-                            vehicleBatterySizeInKwh, values = catalogue_value(electricVehicles, make, model, "batterySize", max)
-                            self.log_catalogue_ambiguity(CATALOGUE_AMBIGUOUS_VEHICLE, make, model, values, vehicleBatterySizeInKwh, "kWh")
+                if isCharger:
+                    chargePointPowerInKw, values = catalogue_value(chargePointVariants, make, model, "powerInKw", min)
+                    self.log_catalogue_ambiguity(CATALOGUE_AMBIGUOUS_CHARGER, make, model, values, chargePointPowerInKw, "kW")
+                else:
+                    vehicleBatterySizeInKwh, values = catalogue_value(electricVehicles, make, model, "batterySize", max)
+                    self.log_catalogue_ambiguity(CATALOGUE_AMBIGUOUS_VEHICLE, make, model, values, vehicleBatterySizeInKwh, "kWh")
 
-                        intelligent_device = {
-                            "deviceType": deviceType,
-                            "status": status,
-                            "provider": make,
-                            "model": model,
-                            "is_charger": isCharger,
-                            "charge_point_power_in_kw": chargePointPowerInKw,
-                            "vehicle_battery_size_in_kwh": vehicleBatterySizeInKwh,
-                            "device_id": IntelligentdeviceID,
-                        }
-                        if dispatch_result:
-                            plannedDispatches = dispatch_result.get("flexPlannedDispatches") or []
-                            completedDispatches = dispatch_result.get("completedDispatches") or []
-                            for plannedDispatch in plannedDispatches:
-                                start = plannedDispatch.get("start", None)
-                                end = plannedDispatch.get("end", None)
-                                if not (start and end):
-                                    self.log("Warn: OctopusAPI: Planned dispatch missing start or end time, skipping: {}".format(plannedDispatch))
-                                    continue
-                                delta = plannedDispatch.get("energyAddedKwh", plannedDispatch.get("delta", None))
-                                dispatch_type = plannedDispatch.get("type", "")
-                                meta = plannedDispatch.get("meta", {})
-                                try:
-                                    delta = dp4(float(delta))
-                                except (ValueError, TypeError):
-                                    delta = None
+                intelligent_device = {
+                    "deviceType": deviceType,
+                    "status": status,
+                    "provider": make,
+                    "model": model,
+                    "is_charger": isCharger,
+                    "charge_point_power_in_kw": chargePointPowerInKw,
+                    "vehicle_battery_size_in_kwh": vehicleBatterySizeInKwh,
+                    "device_id": IntelligentdeviceID,
+                }
+                if dispatch_result:
+                    plannedDispatches = dispatch_result.get("flexPlannedDispatches") or []
+                    completedDispatches = dispatch_result.get("completedDispatches") or []
+                    for plannedDispatch in plannedDispatches:
+                        start = plannedDispatch.get("start", None)
+                        end = plannedDispatch.get("end", None)
+                        if not (start and end):
+                            self.log("Warn: OctopusAPI: Planned dispatch missing start or end time, skipping: {}".format(plannedDispatch))
+                            continue
+                        delta = plannedDispatch.get("energyAddedKwh", plannedDispatch.get("delta", None))
+                        dispatch_type = plannedDispatch.get("type", "")
+                        meta = plannedDispatch.get("meta", {})
+                        try:
+                            delta = dp4(float(delta))
+                        except (ValueError, TypeError):
+                            delta = None
 
-                                dispatch = {"start": start, "end": end, "charge_in_kwh": delta, "source": meta.get("source", dispatch_type), "location": meta.get("location", None)}
-                                # Keep planned (flexPlannedDispatches) entries in the planned list only - do NOT promote
-                                # in-progress slots into completed_dispatches (see issue #4114). flexPlannedDispatches is
-                                # Octopus's optimiser schedule and includes plug-independent SMART grid-flex events that
-                                # Octopus routinely withdraws on its next re-plan. Promoting them immortalised provisional
-                                # slots as permanent cheap "completed" slots that never had a matching real dispatch.
-                                # Genuine charging is still cached below via the metered completedDispatches feed
-                                # (location=AT_HOME).
-                                #
-                                self.trim_started_dispatch(dispatch, self.now_utc_exact)
-                                planned.append(dispatch)
-                            for completedDispatch in completedDispatches:
-                                start = completedDispatch.get("start", None)
-                                end = completedDispatch.get("end", None)
-                                if not (start and end):
-                                    self.log("Warn: OctopusAPI: Completed dispatch missing start or end time, skipping: {}".format(completedDispatch))
-                                    continue
-                                delta = completedDispatch.get("delta", None)
-                                meta = completedDispatch.get("meta", {})
-                                try:
-                                    delta = dp4(float(delta))
-                                except (ValueError, TypeError):
-                                    delta = None
+                        dispatch = {"start": start, "end": end, "charge_in_kwh": delta, "source": meta.get("source", dispatch_type), "location": meta.get("location", None)}
+                        # Keep planned (flexPlannedDispatches) entries in the planned list only - do NOT promote
+                        # in-progress slots into completed_dispatches (see issue #4114). flexPlannedDispatches is
+                        # Octopus's optimiser schedule and includes plug-independent SMART grid-flex events that
+                        # Octopus routinely withdraws on its next re-plan. Promoting them immortalised provisional
+                        # slots as permanent cheap "completed" slots that never had a matching real dispatch.
+                        # Genuine charging is still cached below via the metered completedDispatches feed
+                        # (location=AT_HOME).
+                        #
+                        self.trim_started_dispatch(dispatch, self.now_utc_exact)
+                        planned.append(dispatch)
+                    for completedDispatch in completedDispatches:
+                        start = completedDispatch.get("start", None)
+                        end = completedDispatch.get("end", None)
+                        if not (start and end):
+                            self.log("Warn: OctopusAPI: Completed dispatch missing start or end time, skipping: {}".format(completedDispatch))
+                            continue
+                        delta = completedDispatch.get("delta", None)
+                        meta = completedDispatch.get("meta", {})
+                        try:
+                            delta = dp4(float(delta))
+                        except (ValueError, TypeError):
+                            delta = None
 
-                                dispatch = {"start": start, "end": end, "charge_in_kwh": delta, "source": meta.get("source", None), "location": meta.get("location", None)}
-                                # Check if the dispatch is already in the completed list, if its already there then don't add it again
-                                found = False
-                                for cached in completed:
-                                    if cached.get("start") == start:
-                                        cached.update(dispatch)
-                                        found = True
-                                        break
-                                if not found:
-                                    completed.append(dispatch)
-                        current_state = self.dispatch_current_state(dispatch_result, IntelligentdeviceID)
-                        if not dispatch_result or dispatch_result.get("flexPlannedDispatches") is None:
-                            # The dispatch query failed (e.g. rate limited), or Octopus answered it without the planned
-                            # dispatches: an error on that field (KT-CT-4340, "Unable to fetch planned dispatches") comes
-                            # back as null beside the rest of the data, where no dispatches is an empty list (#5492).
-                            # Keep the last known planned dispatches,
-                            # as a failed settings query keeps its settings: publishing an empty list dropped the car's
-                            # slots and dispatch rates until the next poll, and the change requested a replan without them.
-                            # Planned dispatches are never pruned, so drop any that have ended since, and re-trim the one
-                            # in progress so the energy delivered since the last poll is not counted again.
-                            planned = self.cached_planned_dispatches(IntelligentdeviceID)
-                            if planned:
-                                self.log("Warn: OctopusAPI: Dispatch fetch failed for intelligent device {}, reusing the last known planned dispatches".format(IntelligentdeviceID))
-                        else:
-                            planned = self.planned_dispatches_for_state(IntelligentdeviceID, planned, current_state)
+                        dispatch = {"start": start, "end": end, "charge_in_kwh": delta, "source": meta.get("source", None), "location": meta.get("location", None)}
+                        # Check if the dispatch is already in the completed list, if its already there then don't add it again
+                        found = False
+                        for cached in completed:
+                            if cached.get("start") == start:
+                                cached.update(dispatch)
+                                found = True
+                                break
+                        if not found:
+                            completed.append(dispatch)
+                current_state = self.dispatch_current_state(dispatch_result, IntelligentdeviceID)
+                if not dispatch_result or dispatch_result.get("flexPlannedDispatches") is None:
+                    # The dispatch query failed (e.g. rate limited), or Octopus answered it without the planned
+                    # dispatches: an error on that field (KT-CT-4340, "Unable to fetch planned dispatches") comes
+                    # back as null beside the rest of the data, where no dispatches is an empty list (#5492).
+                    # Keep the last known planned dispatches,
+                    # as a failed settings query keeps its settings: publishing an empty list dropped the car's
+                    # slots and dispatch rates until the next poll, and the change requested a replan without them.
+                    # Planned dispatches are never pruned, so drop any that have ended since, and re-trim the one
+                    # in progress so the energy delivered since the last poll is not counted again.
+                    planned = self.cached_planned_dispatches(IntelligentdeviceID)
+                    if planned:
+                        self.log("Warn: OctopusAPI: Dispatch fetch failed for intelligent device {}, reusing the last known planned dispatches".format(IntelligentdeviceID))
+                else:
+                    planned = self.planned_dispatches_for_state(IntelligentdeviceID, planned, current_state)
 
-                        # Sort by start time
-                        planned = sorted([x for x in planned if x.get("start")], key=lambda x: parse_date_time(x.get("start")))
-                        completed = sorted([x for x in completed if x.get("start")], key=lambda x: parse_date_time(x.get("start")))
+                # Sort by start time
+                planned = sorted([x for x in planned if x.get("start")], key=lambda x: parse_date_time(x.get("start")))
+                completed = sorted([x for x in completed if x.get("start")], key=lambda x: parse_date_time(x.get("start")))
 
-                        # Prune completed dispatches for results older than 5 days
-                        completed = [x for x in completed if x.get("start") and parse_date_time(x.get("start")) > self.now_utc_exact - timedelta(days=5)]
-                        # Store results
-                        result = {**intelligent_device, **device_setting_result, "current_state": current_state, "planned_dispatches": planned, "completed_dispatches": completed}
-                        results[IntelligentdeviceID] = result
-            else:
-                # The devices query failed. Returning {} here would be indistinguishable from an
-                # account that genuinely has no EVs left on it, and the caller would prune the
-                # cache on every blip - report the failure so it can leave the cache alone.
-                return None
+                # Prune completed dispatches for results older than 5 days
+                completed = [x for x in completed if x.get("start") and parse_date_time(x.get("start")) > self.now_utc_exact - timedelta(days=5)]
+                # Store results
+                result = {**intelligent_device, **device_setting_result, "current_state": current_state, "planned_dispatches": planned, "completed_dispatches": completed}
+                results[IntelligentdeviceID] = result
         return results
+
+    def live_ev_devices(self, device_result):
+        """
+        The live EV devices in a devices list answer, each as the identity the cache keeps for it, or None
+        when the list failed.
+
+        The electricity meter is listed too, and stays listed after the last EV is deregistered, so an
+        answer with no live EV in it is [] - the account has none - where no answer, or a null or empty
+        list, is None: the list failed.
+        """
+        devices = (device_result or {}).get("devices")
+        if not devices:
+            return None
+        live = []
+        for device in devices:
+            if (device.get("status") or {}).get("current") == "LIVE" and device.get("deviceType") == "ELECTRIC_VEHICLES":
+                live.append(
+                    {
+                        "device_id": device.get("id"),
+                        "deviceType": "ELECTRIC_VEHICLES",
+                        "status": "LIVE",
+                        "is_charger": device.get("__typename") == "SmartFlexChargePoint",
+                        "provider": device.get("make"),
+                        "model": device.get("model"),
+                    }
+                )
+        return live
 
     def dispatch_current_state(self, dispatch_result, device_id):
         """

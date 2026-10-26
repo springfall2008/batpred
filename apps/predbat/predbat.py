@@ -35,7 +35,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v9.5.1"
+THIS_VERSION = "v9.5.2"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
 from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, DEFAULT_PREDBAT_REPOSITORY
@@ -383,6 +383,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.status_lock = threading.RLock()
         self.plan_valid = False
         self.plan_preclip = None
+        # The version running now, including the deployed git hash, and the version that made the plan in
+        # force - see calculate_plan(), which always replaces a plan made by another version
+        self.running_version = THIS_VERSION_DISPLAY
+        self.plan_made_by_version = None
         self.plan_last_updated = None
         self.plan_last_updated_minutes = 0
         self.plugin_system = None
@@ -923,6 +927,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             "plan_preclip": self.plan_preclip,
             "plan_last_updated": self.plan_last_updated.isoformat() if self.plan_last_updated else None,
             "plan_last_updated_minutes": self.plan_last_updated_minutes,
+            "predbat_version": self.plan_made_by_version,
         }
         try:
             # storage.load() checks expiry against real wall-clock time (datetime.now(timezone.utc)),
@@ -992,6 +997,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.plan_preclip = None
         self.plan_last_updated = saved_dt
         self.plan_last_updated_minutes = plan_data.get("plan_last_updated_minutes", 0)
+        # Saves from before the version was recorded come back as made by an unknown version
+        self.plan_made_by_version = plan_data.get("predbat_version")
         self.plan_valid = True
         self.log("Restored saved plan from {:.0f} minutes ago: {} charge windows, {} export windows".format(age_minutes, len(self.charge_window_best), len(self.export_window_best)))
 
