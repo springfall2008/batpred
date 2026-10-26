@@ -117,7 +117,7 @@ and not the maximum input energy. E.g. a heat pump with a COP of 4 might output 
 Set **hysteresis** To the amount of hysteresis in degrees applied by your thermostat when turning it on, the default is 0.5
 Set **hysteresis_off** To the amount of hysteresis in degrees applied by your thermostat when turning it off, the default is 0.1
 
-Set **heating_cop** to the nominal COP of your system. For a gas boiler use 1.0 (as the efficiency will be based on flow temperature) or for a heat pump set it to the best value which is likely around 4.0 (it will be scaled down for cold weather).
+Set **heating_cop** to the nominal COP of your system. For a gas boiler use 1.0 (as the efficiency will be based on flow temperature) or for a heat pump set it to the best value which is likely around 4.0 (it will be scaled down for cold weather). Existing configurations using **heat_cop** are still supported.
 
 Set **flow_temp** To the target flow temperature of your system, either via a sensor or as a fixed value. E.g. gas boilers are often set to say 60 or 70 degrees while heat pumps are much lower e.g. 30 or 40.
 
