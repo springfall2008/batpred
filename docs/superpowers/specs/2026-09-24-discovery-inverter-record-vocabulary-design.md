@@ -146,6 +146,7 @@ One descriptor per Predbat setting that automatic configuration binds for this d
 | `entity_id` | one of these two | The HA entity bound to the setting. |
 | `value` | one of these two | A fixed stand-in where no entity exists (Fox's `pv_power: 0` for a device with no PV; SolaX's constant `battery_min_soc`). Number, bool or short string. |
 | `domain`, `unit`, `device_class`, `min`, `max`, `step`, `precision`, `options`, `format` | no | As today. |
+| `step_percent_of_capacity` | no | On `charge_rate`: the inverter stores both rates in steps of this percent of nominal battery capacity (GivEnergy: 1). Absent means no coarser step than `step`. |
 | `invert` | no | `true` when the entity's sign is the opposite of Predbat's convention. Replaces the `grid_power_invert`, `battery_power_invert` and `load_power_invert` settings. |
 
 A descriptor with both `entity_id` and `value`, or neither, is dropped.
@@ -219,6 +220,7 @@ The definition is built from four sources:
    | `soc_units` | which state-of-charge setting is bound: `soc_percent` -> `%`, `soc_kw` -> `kWh` |
    | `output_charge_control` | `charge_rate`'s `unit`: W -> `power`, A -> `current`; no `charge_rate` but a bound `charge_rate_percent` (GE Cloud's percentage-rate models) -> `power`; neither -> `none` |
    | `current_dp` | the decimal places of `charge_rate`'s `step`, when its unit is A |
+   | `rate_step_percent_of_capacity` | `charge_rate`'s `step_percent_of_capacity`. Not a gap when absent or `charge_rate` is unbound: base's value stands, else 0 |
    | `time_button_press` | whether a `schedule_write_button` entity is present |
    | `num_load_entities` | 1 plus the number of consecutive `load_power_1`, `load_power_2`, ... entities bound (`inverter.py:1523` adds them into the load reading) |
 

@@ -25,6 +25,7 @@ import traceback
 import gc
 import random
 import time
+import threading
 
 # from memory_profiler import profile
 
@@ -34,7 +35,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v9.3.1"
+THIS_VERSION = "v9.5.3"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
 from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, DEFAULT_PREDBAT_REPOSITORY
@@ -65,6 +66,9 @@ else:
     print("Running in compiled mode; skipping local file checks and auto-update.")
 
 from const import (
+    COMPONENT_ERROR_STATUS_PREFIX,
+    COMPONENT_ERROR_STATUS_SUFFIX,
+    REPEAT_FULL_LOG_SECONDS,
     TIME_FORMAT,
     PREDICT_STEP,
     RUN_EVERY,
@@ -77,6 +81,8 @@ from const import (
 from config import APPS_SCHEMA, CONFIG_ITEMS
 import debug_history
 from utils import (
+    strptime_aware,
+    RepeatLogGate,
     minutes_since_yesterday,
     minutes_since_midnight,
     dp1,
@@ -107,6 +113,7 @@ from plugin_system import PluginSystem
 from github import GitHub
 from ha import run_async
 from control_ledger import ControlLedger
+from control_monitor import ControlMonitor
 
 
 class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, Marginal, Execute, Output, UserInterface, GitHub):
@@ -344,6 +351,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.clock_skew_warn_time = {}  # Per-inverter time the moderate clock-skew warning was last logged, so it repeats hourly rather than every cycle
         self.control_ledger = ControlLedger()
         self.control_ledger_restored = False
+        self.control_monitor = ControlMonitor()
         self.inverter_needs_reset = False
         self.inverter_needs_reset_force = ""
         self.inverters = []
@@ -363,10 +371,22 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.dashboard_values = {}
         self.prefix = self.args.get("prefix", "predbat")
         self.current_status = None
+        # The status sensor's state (unclamped) and detail as last written, so a repeated warning can keep both
+        self.status_state = None
+        self.status_detail = ""
+        # The state the last completed run carried out, with no warning text - the sensor's run_state attribute
+        self.status_run_state = None
         self.previous_status = None
         self.had_errors = False
+        self.status_warning = None
+        self.status_warning_debug = ""
+        self.status_lock = threading.RLock()
         self.plan_valid = False
         self.plan_preclip = None
+        # The version running now, including the deployed git hash, and the version that made the plan in
+        # force - see calculate_plan(), which always replaces a plan made by another version
+        self.running_version = THIS_VERSION_DISPLAY
+        self.plan_made_by_version = None
         self.plan_last_updated = None
         self.plan_last_updated_minutes = 0
         self.plugin_system = None
@@ -391,6 +411,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.predict_soc = {}
         self.predict_soc_best = {}
         self.predict_iboost_best = {}
+        self.predict_car_hold_best = {}
         self.predict_metric_best = {}
         self.metric_min_improvement = 0.0
         self.metric_min_improvement_export = 0.1
@@ -407,7 +428,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         # DC array size in kWp, capping the p90 cloud model's extrapolation. Auto-detected from the
         # forecast provider (see resolve_pv_array_kwp); 0 leaves the cap inert.
         self.pv_array_kwp = 0.0
-        self.load_scaling90 = 0.7
+        self.load_scaling90 = 0.9
         self.metric_future_rate_offset_import = 0.0
         self.metric_future_rate_offset_export = 0.0
         self.metric_inday_adjust_damping = 1.0
@@ -425,6 +446,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.rate_gas = {}
         self.rate_slots = []
         self.low_rates = []
+        self.low_rates_tariff = []
         self.high_export_rates = []
         self.cost_today_sofar = 0
         self.carbon_today_sofar = 0
@@ -455,8 +477,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.rate_max = 0
         self.rate_max_minute = 0
         self.rate_max_base = 0
+        self.rate_import_tariff_max = 0
         self.rate_export_cost_threshold = 99
         self.rate_import_cost_threshold = 99
+        self.rate_import_pre_event_end = None
+        self.rate_import_pre_event_threshold = None
         self.rate_best_cost_threshold_charge = None
         self.rate_best_cost_threshold_export = None
         self.rate_average = 0
@@ -490,6 +515,13 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.car_charging_power = 0
         self.car_charging_power_configured = False
         self.io_adjusted = {}
+        # Bird-in-hand credit for a confirmed dispatch run and whether one is in force (io_confirmed_credit_update)
+        self.io_confirmed_credit = {}
+        self.io_confirmed_active = False
+        # One replan may take a same-cost plan once a run becomes boosted (should_replace_plan)
+        self.io_confirmed_tiebreak = False
+        # Repeated Intelligent slot lists are logged briefly between full logs (rate_add_io_slots)
+        self.io_slot_log_gate = RepeatLogGate(REPEAT_FULL_LOG_SECONDS)
         self.current_charge_limit = 0.0
         self.current_charge_limit_kwh = 0.0
         self.inverter_limit = 0.0
@@ -523,13 +555,18 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.discharge_rate_now = 0
         self.car_charging_hold = False
         self.car_charging_manual_soc = []
+        self.car_charging_manual_soc_energy = []
+        # Each manually tracked car's record, also published as a sensor so a restart can read it back - see car_manual_soc_track()
+        self.car_manual_soc_state = {}
         self.car_charging_threshold = 99
         self.car_charging_energy = {}
         self.car_charging_energy_warned = False
-        # Which component's automatic_config() owns octopus_intelligent_slot/ready_time/charge_limit.
-        # Both OctopusAPI and OhmeAPI can wire the car slots, and Octopus re-runs its automatic_config
+        # Which component's automatic_config() owns octopus_ready_time/octopus_charge_limit.
+        # Both OctopusAPI and OhmeAPI can wire them, and Octopus re-runs its automatic_config
         # whenever the tariff or intelligent device set moves - without a claim it silently takes the
-        # args back off Ohme part way through a run. None means nobody has claimed them.
+        # args back off Ohme part way through a run. None means nobody has claimed them. The claim
+        # does not cover octopus_intelligent_slot: Octopus goes on wiring its dispatch sensor there
+        # as the record of completed dispatches, and Ohme adds octopus_intelligent_planned_slot (#5413).
         self.car_slot_owner = None
         self.octopus_intelligent_charging = False
         self.octopus_intelligent_ignore_unplugged = False
@@ -546,6 +583,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.load_minutes = {}
         self.load_minutes_now = 0
         self.load_minutes_age = 0
+        self.load_minutes_source = None
         self.load_last_period = 0
         self.load_last_status = "baseline"
         self.dynamic_load_car_since = {}
@@ -554,9 +592,17 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.dynamic_load_car_warned_iog_off = False
         self.dynamic_load_car_warned_dynamic_off = False
         self.dynamic_load_car_run = {}
+        self.dynamic_load_car_confirmed = {}
+        self.dynamic_load_car_confirmed_periods = {}
+        self.dynamic_load_car_saved = {}
         self.dynamic_load_car_sensors = {}
         self.dynamic_load_car_effective = {}
         self.dynamic_load_car_stripped = 0
+        self.octopus_surplus = set()
+        self.octopus_slots_planned = {}
+        self.octopus_slots_held = {}
+        self.octopus_slots_held_saved = {}
+        self.dispatch_billing_warned = None
         self.battery_capacity_nominal = False
         self.battery_scaling_auto = False
         self.releases = {}
@@ -598,10 +644,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.carbon_yesterday = 0.0
         self.rate_import = {}
         self.rate_import_replicated = {}
+        self.rate_import_saving_minutes = set()
+        self.rate_import_pre_saving = {}
         self.rate_export = {}
         self.rate_export_replicated = {}
+        self.rate_export_saving_minutes = set()
+        self.rate_export_pre_saving = {}
         self.rate_slots = []
         self.low_rates = []
+        self.low_rates_tariff = []
         self.high_export_rates = []
         self.axle_sessions = []
         self.cost_today_sofar = 0
@@ -611,6 +662,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.pv_today = {}
         self.load_minutes = {}
         self.load_minutes_age = 0
+        self.load_minutes_source = None
         self.load_forecast = {}
         self.load_forecast_array = []
         self.pv_forecast_minute = {}
@@ -645,6 +697,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.count_inverter_writes = {}
         self.rate_slots = []
         self.low_rates = []
+        self.low_rates_tariff = []
         self.high_export_rates = []
         self.octopus_slots = [[] for _ in range(8)]
         self.cost_today_sofar = 0
@@ -654,6 +707,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.pv_today = {}
         self.load_minutes = {}
         self.load_minutes_age = 0
+        self.load_minutes_source = None
         self.battery_temperature_charge_curve = {}
         self.battery_temperature_discharge_curve = {}
         self.battery_temperature_history = {}
@@ -773,6 +827,72 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         m.control_conflicts_events = self.control_ledger.newest_events(20)
         m.control_conflicts_sustained_controls = sustained
 
+        # Control failure monitor
+        m.control_failures_24h.set(len(self.control_monitor.recent_events(time.time())))
+        m.control_failures_total.set(self.control_monitor.total)
+        m.control_failures_events = self.control_monitor.newest_events(20)
+
+    def publish_control_failures(self, now):
+        """
+        Publish the control-failure sensors, restoring their history first if not yet done.
+
+        The two entities ARE the durable store: the events attribute and the total's state are what
+        restore() reads back after a restart. The restore is retried every cycle until the total
+        reads back as a number, and while it is unresolved a total of 0 is not written - publishing
+        0 over a total that merely could not be read yet would register as a reset in HA long-term
+        statistics. Only the first attempt and every 12th after it fall back to history; the rest
+        read current state only, so an install that has never failed does not search 30 days of
+        history every cycle.
+
+        Args:
+            now (float): epoch seconds
+        """
+        monitor = self.control_monitor
+        if not monitor.restored:
+            if monitor.history_read_due():
+                read = self.load_previous_value_from_ha
+            else:
+
+                def read(entity, attribute=None):
+                    """Current state only, filtered the way load_previous_value_from_ha filters it."""
+                    value = self.get_state_wrapper(entity, attribute=attribute)
+                    return None if value in ("unavailable", "unknown") else value
+
+            monitor.restore(
+                read(self.prefix + ".control_failures", attribute="events"),
+                read(self.prefix + ".control_failures_total"),
+            )
+        monitor.prune(now)
+        recent = monitor.recent_events(now)
+        by_mode = monitor.by_mode(recent)
+        self.dashboard_item(
+            self.prefix + ".control_failures",
+            state=len(recent),
+            attributes={
+                "friendly_name": "Control failures (24h)",
+                "state_class": "measurement",
+                "unit_of_measurement": "failures",
+                "icon": "mdi:battery-alert",
+                "events": monitor.newest_events(20),
+                "by_mode": by_mode,
+            },
+        )
+        if monitor.restored or monitor.total > 0:
+            self.dashboard_item(
+                self.prefix + ".control_failures_total",
+                state=monitor.total,
+                attributes={
+                    "friendly_name": "Control failures (total)",
+                    "state_class": "total_increasing",
+                    "unit_of_measurement": "failures",
+                    "icon": "mdi:battery-alert",
+                },
+            )
+            # Once written, the entity holds our own value, so there is nothing left to restore
+            monitor.restored = True
+        if recent:
+            self.log("Control failures: {} slot(s) in the last 24h {}".format(len(recent), by_mode))
+
     def save_plan(self):
         """Save the current best plan via the storage component so it can be restored on next startup."""
         storage = self.components.get_component("storage") if self.components else None
@@ -787,6 +907,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             "plan_preclip": self.plan_preclip,
             "plan_last_updated": self.plan_last_updated.isoformat() if self.plan_last_updated else None,
             "plan_last_updated_minutes": self.plan_last_updated_minutes,
+            "predbat_version": self.plan_made_by_version,
         }
         try:
             # storage.load() checks expiry against real wall-clock time (datetime.now(timezone.utc)),
@@ -856,6 +977,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.plan_preclip = None
         self.plan_last_updated = saved_dt
         self.plan_last_updated_minutes = plan_data.get("plan_last_updated_minutes", 0)
+        # Saves from before the version was recorded come back as made by an unknown version
+        self.plan_made_by_version = plan_data.get("predbat_version")
         self.plan_valid = True
         self.log("Restored saved plan from {:.0f} minutes ago: {} charge windows, {} export windows".format(age_minutes, len(self.charge_window_best), len(self.export_window_best)))
 
@@ -1019,10 +1142,16 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 },
             )
 
+        # Published as the sensor's run_state attribute by whichever status write follows, and kept until the
+        # next run completes: a run that stops early, or a warning part way through one, leaves the inverter
+        # on this state.
+        self.status_run_state = status
+
         if self.had_errors:
             self.log("Error: Completed run status {} with Errors reported (check log)".format(status))
+            self.record_status_under_warning(status, status_extra)
         elif failed_components:
-            error_status = "Error: Complete run status {} with component errors: {}".format(status, ", ".join(failed_components))
+            error_status = COMPONENT_ERROR_STATUS_PREFIX + status + COMPONENT_ERROR_STATUS_SUFFIX + ", ".join(failed_components)
             self.log(error_status)
             self.record_status(
                 error_status,
@@ -1042,8 +1171,28 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
     def update_car_manual_soc(self):
         """
         Write the predicted next car SoC back to the manual car SoC tracker for cars using car_charging_manual_soc
+
+        A car with a car_charging_energy sensor is skipped: car_manual_soc_track() adds the energy it
+        actually took instead, and adding the plan's prediction as well would count it twice.
+
+        So is a car whose plugged-in sensor (car_charging_plugged, else car_charging_planned) now reads unplugged, or whose
+        car_charging_now sensor reads not charging: it is not charging, so there is nothing to add. A car_charging_now
+        sensor that is unavailable or unknown is no reading, and the plan's prediction is written as before. Unlike the
+        reset on unplug, a car_charging_planned that turns off when a charge finishes is right here: nothing more is added.
+
+        What is written goes into the car's tracking record too, so the next cycle does not take it for a value
+        the user entered.
         """
         for car_n in range(self.num_cars):
+            if car_n < len(self.car_charging_manual_soc_energy) and self.car_charging_manual_soc_energy[car_n]:
+                continue
+            plug_arg = self.car_plug_arg(car_n, planned=True)
+            if plug_arg and self.car_plugged_in_now(car_n, plug_arg) is False:
+                continue
+            if car_n < len(self.car_charging_manual_soc) and self.car_charging_manual_soc[car_n] and self.get_car_charging_now_tristate(car_n) is False:
+                # The car_charging_now sensor says the car is not charging, whatever the plan predicted
+                self.log("Car {} charging Manual SoC held at {} as car_charging_now reports it is not charging".format(car_n, self.car_charging_soc[car_n]))
+                continue
             if car_n < len(self.car_charging_manual_soc) and self.car_charging_manual_soc[car_n]:
                 car_postfix = "" if car_n == 0 else "_" + str(car_n)
                 self.log("Car {} charging Manual SoC current is {} next is {}".format(car_n, self.car_charging_soc[car_n], self.car_charging_soc_next[car_n]))
@@ -1055,6 +1204,26 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                     if car_n < len(self.car_charging_limit):
                         soc_next = min(soc_next, self.car_charging_limit[car_n])
                     self.expose_config("car_charging_manual_soc_kwh" + car_postfix, dp3(soc_next))
+                    self.car_manual_soc_written(car_n, dp3(soc_next))
+
+    def run_comparison(self, status=None, status_extra=""):
+        """
+        Run the tariff comparison, clearing compare_active afterwards even if it raises (#5472).
+
+        status and status_extra are the run's final status, already recorded. The comparison runs after
+        that and re-reads sensors and rates, so it can record a warning that takes over the status
+        sensor; when it does, the run's state is added after it, as for a warning raised
+        during the run itself.
+        """
+        status_before = self.current_status
+        # Without the finally, a crashed comparison leaves compare_active on and re-triggers itself every cycle
+        self.expose_config("compare_active", True)
+        try:
+            self.comparison.run_all()
+        finally:
+            self.expose_config("compare_active", False)
+        if status is not None and self.current_status != status_before:
+            self.record_status_under_warning(status, status_extra)
 
     def update_pred(self, scheduled=True):
         """
@@ -1062,7 +1231,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         """
         recompute = False
         status_extra = ""
-        self.had_errors = False
+        self.reset_run_status()
 
         self.update_time()
         self.save_current_config()
@@ -1099,6 +1268,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.record_status("Error: Failed to fetch inverter data, not able to compute a plan", had_errors=True)
             return
         self.check_export_more_solar_effective()
+        self.log_replay_state()
+        self.log_replay_inverter()
 
         # Check if we have valid import rates
         if self.rate_min == self.rate_max == 0:
@@ -1244,6 +1415,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         )
         if conflict_events:
             self.log("Control interference: {} change(s) in the last 24h, sustained on {}".format(len(conflict_events), sustained or "nothing"))
+
+        self.publish_control_failures(now_ts)
 
         if self.calculate_savings:
             # Get current totals
@@ -1417,9 +1590,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         if self.comparison:
             if (scheduled and self.minutes_now < RUN_EVERY) or self.get_arg("compare_active", False):
                 # Compare tariffs either when triggered or daily at midnight
-                self.expose_config("compare_active", True)
-                self.comparison.run_all()
-                self.expose_config("compare_active", False)
+                self.run_comparison(status, status_extra)
             else:
                 # Otherwise just update HA sensors to prevent then expiring
                 self.comparison.publish_only()
@@ -2080,6 +2251,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
             # Restore the last saved plan so it is immediately active before the first calculation
             self.load_plan()
+            # And the Octopus Intelligent dispatch state, so a restart part-way through a dispatch carries on from it
+            self.dynamic_load_car_load()
+            # And the half hours Octopus Intelligent dispatches ran in, so they keep the dispatch rate
+            self.octopus_held_load()
 
         except Exception as e:
             self.log("Error: Exception raised {}".format(e))
@@ -2200,7 +2375,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         config_refresh_stamp = None
         if config_refresh:
             try:
-                config_refresh_stamp = datetime.strptime(config_refresh, TIME_FORMAT)
+                config_refresh_stamp = strptime_aware(config_refresh, TIME_FORMAT)
             except (ValueError, TypeError):
                 config_refresh_stamp = None
 

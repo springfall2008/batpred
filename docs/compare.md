@@ -15,6 +15,11 @@ It's recommended to watch the [YouTube video on Energy tariff comparison](https:
 
 Keep in mind this is an approximation of costs for the following 24-hour period and the reality could be different. In particular, car charging costs are unlikely to reflect the true picture as it will only be planned after you plug in.
 Smart tariffs like Octopus Intelligent Go can give you extra cheap car slots, and Octopus Intelligent Flux where Octopus controls the charging/discharging, mean these tariffs cannot be predicted as accurately.
+
+Solar Generation and House Load are by their nature forecast predictions and whilst Predbat tries to allow for the unknown variability in those predictions, the actual generation and house load will vary and so Predbat's plan for that day will in all likelihood be different.
+
+Standing charge is by design not included in the comparison amd nor is there a mechanism to include the standing charge for each tariff in the [comparison configuration](#configuring-the-tariffs-to-compare). In most cases standing charges are usually quite similar across tariffs and will make little difference to the comparison anyway.
+
 When changing tariffs, you should use your judgment, the Predbat Compare data is only a helpful guide.
 
 ## Configuring the tariff's to compare
@@ -134,6 +139,10 @@ The metric includes the value of the contents of your battery and iBoost that ha
 
 The predicted cost is also shown, but keep in mind ending the day with an empty battery may be cheaper today but cost more tomorrow.
 
+A tariff whose rates match the ones you are on now is marked **Existing**. The match is made against your underlying tariff, so a saving session,
+free electricity session, Axle event or Intelligent dispatch does not stop your own tariff being recognised, and neither does a
+`rates_import_override`/`rates_export_override` or manual rate override on the live rates.
+
 ![image](images/web-interface-compare-view.png)
 
 ## Comparison sensors
@@ -141,6 +150,10 @@ The predicted cost is also shown, but keep in mind ending the day with an empty 
 For each tariff a new sensor is created in Home Assistant called **predbat.compare_tariff_id** where **id** is the ID name you entered above in `apps.yaml`. This sensor will track the cost as its main value and many details about the prediction in its attributes.
 
 You can create charts from these sensors to show how the different tariffs compare on a daily basis.
+
+The day-by-day history on the Compare tab is read back from Home Assistant's recorded history of these sensors, so they must be kept by the recorder.
+If you have added a `recorder:` filter that excludes the `predbat` domain, include them again with an `entity_globs` entry of `predbat.compare_tariff_*`
+(see the [recorder example in the FAQ](faq.md#predbat-is-causing-exceed-maximum-size-warning-messages-in-the-home-assistant-core-log)), otherwise the Compare tab will only ever show the most recent run.
 
 ![image](https://github.com/user-attachments/assets/6d5c30f6-822f-4d9c-b4a6-701c0b676c61)
 

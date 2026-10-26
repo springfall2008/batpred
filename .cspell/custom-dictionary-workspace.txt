@@ -1,12 +1,15 @@
 # Custom Dictionary Words
 3hy
 aaaabbbbccccdddd
+ABCDEFGHJKLMNP
 acks
 activepower
 adata
 adbase
 afci
+afewyards
 agentic
+agilepredict
 AIO
 AIO's
 aiofiles
@@ -17,9 +20,11 @@ Alertfeed
 allclose
 alphaess
 am2
+anker
 annualform
 Anson
 antiphase
+antireflux
 apexcharts
 apikey
 appdaemon
@@ -33,6 +38,7 @@ armhf
 armv
 ASHP
 asn
+astimezone
 asyncio
 atfork
 atleast
@@ -42,6 +48,7 @@ autoflake
 automations
 autopep
 autoupdate
+ax1
 axvline
 axvspan
 Backfeed
@@ -65,6 +72,7 @@ BLAS
 boostable
 Bottlecap
 brickatius
+britkat1980
 bwignore
 byok
 cadata
@@ -88,6 +96,7 @@ chargelater
 chargelimit
 chargepower
 CHECKCODE
+chg
 Chrg
 citem
 cloudfront
@@ -144,6 +153,7 @@ denorm
 derate
 derated
 derating
+dess
 desync
 desynced
 devcontainer
@@ -163,14 +173,19 @@ dlimit
 dlopen
 dnoregion
 docstrings
+dschg
 dstamp
 dstart
+dtu
 dtype
 dwindow
 eauth
 echargingpile
+ECONNRESET
+ecosmart
 Eddi
 eddis
+edfenergy
 efgh
 elif
 elinter
@@ -193,19 +208,24 @@ energythroughput
 enho
 Enlighten
 enlm
+ENOTFOUND
 enph
 enphase
 enphaseenergy
 Enpower
+entityfilter
 entrez
 epod
 epvtoday
 errno
 ESSAPI
+ETIMEDOUT
+eto
 etoday
 etok
 euids
 EVAC
+evc
 EVDC
 evergen
 evilspringfall
@@ -222,6 +242,7 @@ figsize
 finaliser
 Fingerbot
 firstparty
+flextras
 fline
 FLOMASTA
 fontsize
@@ -251,11 +272,13 @@ getall
 getattr
 getrusage
 Ginlong
+githubusercontent
 gitnexus
 giv
 GivEnergy
 givtcp
 gmtime
+gndean
 gnueabihf
 GOELEC
 goldens
@@ -266,6 +289,8 @@ gridconsumptionpower
 Groq
 growatt
 growattsph
+guoxia
+guoxiatech
 GWMQTT
 HACS
 hadashboard
@@ -299,9 +324,12 @@ idag
 idef
 idetails
 idxs
+iess
 iflux
 importlimit
 inday
+Indevolt
+indra
 inteless
 INTELLI
 intelligentdevice
@@ -312,6 +340,7 @@ inva
 invb
 invbatpower
 invname
+iot
 IPPROTO
 isinstance
 isoformat
@@ -325,6 +354,7 @@ jstatus
 jsyaml
 kaiming
 keepalive
+kellerza
 keydb
 khtml
 killall
@@ -344,6 +374,7 @@ labelcolor
 labelledby
 labelnames
 ladybugdb
+Lanmate
 larr
 libbi
 libc
@@ -351,6 +382,8 @@ libyaml
 LIFEPO
 linebreak
 linestyle
+Liskov
+lmt
 loadml
 loadmlpower
 loadspower
@@ -363,6 +396,8 @@ lookback
 lpignore
 lstrip
 luxpower
+luxpowertek
+luxpython
 malloc
 mallopt
 markdownlint
@@ -384,6 +419,7 @@ metricmid
 microinverters
 middlebox
 middleboxes
+milli
 minb
 minmax
 minsoc
@@ -468,10 +504,14 @@ overfitting
 oversizing
 overvoltage
 ownerapi
+pac
+packettypes
+paho
 parseable
 pbat
 pbgw
 pcharging
+pcsenmap
 pdata
 pdetails
 pendings
@@ -484,6 +524,7 @@ pitem
 pkwh
 plenticore
 pload
+plugncharge
 pmeter
 poinv
 popv
@@ -498,6 +539,7 @@ preclip
 pred
 predai
 predbat
+predbatsolcast
 predbatt
 predheat
 preseed
@@ -510,6 +552,7 @@ pseudonymised
 pseudonymises
 psum
 pthread
+puback
 pvbat
 pvenergytotal
 pvlib
@@ -518,6 +561,7 @@ PVONLY
 pvpower
 pvwatts
 pwindow
+pwr
 pyjwt
 pylint
 pymyenergi
@@ -526,12 +570,15 @@ pyproject
 pytest
 pythonhashseed
 pytz
+Quattro
 Qwen
 randn
+rany2
 rarr
 reactivepower
 readback
 readbacks
+reasoncodes
 recp
 redownload
 Referer
@@ -592,6 +639,7 @@ slugified
 slugifies
 slugify
 slugifying
+smartflex
 snakeviz
 snprintf
 socb
@@ -610,6 +658,7 @@ solaxmodbus
 Solcast
 soliscloud
 solisx
+solix
 sourcery
 Southwell
 sparkline
@@ -621,11 +670,13 @@ startswith
 startt
 stdlib
 stepline
+stevekirtley
 Storion
 Stromligning
 strptime
 strtod
 Strømligning
+suback
 subclassing
 submessage
 substep
@@ -676,6 +727,7 @@ Trefor
 treforsiphone
 treforsouthwell
 triggerable
+trydan
 tunables
 twinx
 typecode
@@ -692,6 +744,7 @@ undriven
 unencodable
 unfetchable
 unflushed
+unhashable
 unindexed
 unnormalised
 unparseable
@@ -711,6 +764,7 @@ urlsafe
 uscapacity
 useid
 userinterface
+utcoffset
 Vallery
 varh
 venv
@@ -732,12 +786,14 @@ worktree
 writeonly
 wrongsha
 wwxxabcdefyyzz
+x1
 xaxis
 xaxistooltip
 xlabel
 xlim
 xload
 xrtkq
+xtest
 xticks
 xxabcdefyy
 yaxis
@@ -751,3 +807,4 @@ zappi
 zappis
 zcat
 zigbee
+zoneinfo

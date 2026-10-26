@@ -39,7 +39,9 @@ from const import (
     FULL_EXPORT_POWER,
 )
 import copy
+import hashlib
 import json
+import time as time_module
 
 DAY_OF_WEEK_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
@@ -175,6 +177,50 @@ SECRET_MASK = "xxx"
 STR2TIME_USE_FROMISOFORMAT = True
 
 
+class RepeatLogGate:
+    """Decide whether a text that tends to repeat (an API response, a slot list) should be logged in full again.
+
+    A text is logged in full the first time it is seen for a key, and again once interval_seconds have passed, so
+    the full text is never only in a rotated-out log file; in between, the caller logs one short line instead.
+    Only a hash of each text is kept, per key, so several texts can alternate under one key (one request context
+    serving several devices, or tariff comparison runs) without each one forcing the others out, and entries older
+    than the interval are dropped so the memory used stays bounded. Expiry runs on a monotonic clock, so a clock
+    change cannot stretch or shorten it; the time reported is local wall-clock time, matching the log's own stamps.
+    """
+
+    def __init__(self, interval_seconds):
+        """Create an empty gate that logs each text in full again at most every interval_seconds."""
+        self.interval_seconds = interval_seconds
+        self.logged = {}
+
+    def last_full(self, key, text, always_full=False):
+        """Return when text was last logged in full for key, or None when it should be logged in full now (recorded as such).
+
+        always_full forces a full log, e.g. for an error response. text may be any value; it is compared as str().
+        """
+        now = time_module.monotonic()
+        for entry in [entry for entry, (logged_at, _wall) in self.logged.items() if now - logged_at >= self.interval_seconds]:
+            del self.logged[entry]
+        entry = (key, hashlib.sha1(str(text).encode("utf-8", "replace")).hexdigest())
+        previous = self.logged.get(entry)
+        if previous is not None and not always_full:
+            return previous[1]
+        self.logged[entry] = (now, datetime.now())
+        return None
+
+    def log(self, log, key, text, full_lines, brief_line, always_full=False):
+        """Log full_lines through log when text is new for key or due again, else the one line brief_line(time of the
+        last full log) returns, or nothing when brief_line is None. Returns True when logged in full."""
+        last = self.last_full(key, text, always_full=always_full)
+        if last is None:
+            for line in full_lines:
+                log(line)
+            return True
+        if brief_line is not None:
+            log(brief_line(last.strftime("%H:%M:%S")))
+        return False
+
+
 class MinuteArray:
     """Dense array-backed replacement for dict[int, float] keyed by contiguous minute indices.
 
@@ -231,7 +277,10 @@ class MinuteArray:
 
 
 # Predbat member variables never included in a debug dump or served over MCP - live object
-# graphs, the HA interface, loaded secrets and the URL caches. Shared with is_debug_excluded_key().
+# graphs, the HA interface, loaded secrets, the URL caches, locks (which can't be serialised) and
+# log-repeat bookkeeping. Shared with is_debug_excluded_key(). io_slot_log_gate keys its history by
+# tuples, which a dump writes as YAML sequences that cannot be loaded back as dict keys, so a dump
+# carrying it cannot be replayed (#5569) - and a replay has no use for which log lines were already written.
 DEBUG_EXCLUDE_LIST = [
     "ha_interface",
     "components",
@@ -252,6 +301,8 @@ DEBUG_EXCLUDE_LIST = [
     "github_url_cache",
     "octopus_url_cache",
     "secrets",
+    "status_lock",
+    "io_slot_log_gate",
 ]
 
 
@@ -866,6 +917,10 @@ def get_now_from_cumulative(data, minutes_now, backwards):
 def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=False, prune_future_days=0, prune_past_days=0, intermediate=False, offset_minutes=0):
     """
     Remove data from before today
+
+    offset_minutes shifts each point forward (a prediction recorded at 10:00 about 11:00 is plotted at
+    11:00), and pruning judges a point by that shifted time, so a prediction made yesterday that lands
+    today is kept.
     """
     results = {}
     last_time = None
@@ -881,10 +936,10 @@ def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=
             for i in range(1, seconds_gap // int(group * 60)):
                 new_time = last_time + timedelta(seconds=i * group * 60) + timedelta(minutes=offset_minutes)
                 results[new_time.isoformat()] = prev_value
-        if not prune or (timekey > (midnight_utc - timedelta(days=prune_past_days))):
+        new_time = timekey + timedelta(minutes=offset_minutes)
+        if not prune or (new_time > (midnight_utc - timedelta(days=prune_past_days))):
             if prune_future and (timekey > (now_utc + timedelta(days=prune_future_days))):
                 continue
-            new_time = timekey + timedelta(minutes=offset_minutes)
             results[new_time.isoformat()] = data[key]
             last_time = timekey
             prev_value = data[key]
@@ -1312,13 +1367,17 @@ def history_attribute_to_minute_data(now_utc, data, backwards=True):
 
 def filter_payment_method(rates, preferred="DIRECT_DEBIT"):
     """
-    Keep one payment method variant when Octopus returns overlapping rows for the same window.
+    Keep one payment method variant when an Octopus or Kraken REST endpoint returns overlapping rows for the same window.
 
     The REST tariff endpoints return a DIRECT_DEBIT row and a NON_DIRECT_DEBIT row covering the
     same validity window. minute_data() writes each row over its range, so whichever row comes last
     in the response wins, and that order is not stable across periods. Rows with no payment_method
     (Agile, day/night) are left untouched, and so is a response that never mentions the preferred
     method, which keeps single-variant tariffs behaving exactly as before.
+
+    The Kraken component (EDF, E.ON) also relies on this when it picks its standing charge: the
+    DIRECT_DEBIT and NON_DIRECT_DEBIT rows of a period tie on valid_from, the first one listed wins
+    a tie, and EDF lists the NON_DIRECT_DEBIT row first (GH#5502).
     """
     if not rates:
         return rates
@@ -1513,7 +1572,10 @@ def minute_data(
             minutes_to = int(timed_to.total_seconds() / 60)
             minutes_delta = (timed_to.total_seconds() - timed.total_seconds()) / 60.0
 
-        if minutes < newest_age:
+        # Backwards history is oldest first, so on a tie (several changes in the same minute) the later item is the
+        # newest and wins. Forward data is left alone: with smoothing the first two items always share a minute
+        # (each item's start is the previous item's time), and a tie there must not change the tail fill.
+        if minutes < newest_age or (backwards and minutes == newest_age):
             newest_age = minutes
             newest_state = state
 
@@ -1767,8 +1829,8 @@ CAR_PLAN_YEAR_MARGIN = timedelta(days=180)
 def parse_car_plan_windows(planned, now, local_tz):
     """Turn one car's published charging plan into a list of localised (start, end) pairs.
 
-    Shared by the components that drive a charger from the plan (myenergi, GivEnergy EVC)
-    so the awkward parts stay in one place: the plan carries no year, so each window is
+    Shared by the components that drive a charger from the plan (myenergi, GivEnergy EVC,
+    Ohme, Wallbox, the gateway EVC) so the awkward parts stay in one place: the plan carries no year, so each window is
     rebuilt around now - without that, a plan read either side of New Year lands eleven
     months out - and a malformed entry is skipped rather than costing the rest of the plan.
 
@@ -1787,20 +1849,23 @@ def parse_car_plan_windows(planned, now, local_tz):
     parsed = []
     for window in planned or []:
         try:
-            start = local_tz.localize(datetime.strptime(window["start"], CAR_PLAN_TIME_FORMAT).replace(year=now.year))
-            end = local_tz.localize(datetime.strptime(window["end"], CAR_PLAN_TIME_FORMAT).replace(year=now.year))
+            # Parsed with now's year in the string, not stamped on afterwards: strptime without a
+            # year assumes 1900, which has no 29 February, so a leap-day window was dropped
+            start = local_tz.localize(datetime.strptime("{}-{}".format(now.year, window["start"]), "%Y-" + CAR_PLAN_TIME_FORMAT))
+            end = local_tz.localize(datetime.strptime("{}-{}".format(now.year, window["end"]), "%Y-" + CAR_PLAN_TIME_FORMAT))
+            # Shift both ends together so their spacing survives, then close a window whose
+            # end is in January while its start is still in December. Inside the try, as a stale
+            # 29 February entry has no counterpart in the neighbouring year.
+            if start > now + CAR_PLAN_YEAR_MARGIN:
+                start = start.replace(year=start.year - 1)
+                end = end.replace(year=end.year - 1)
+            elif start < now - CAR_PLAN_YEAR_MARGIN:
+                start = start.replace(year=start.year + 1)
+                end = end.replace(year=end.year + 1)
+            if end < start:
+                end = end.replace(year=end.year + 1)
         except (KeyError, TypeError, ValueError):
             continue
-        # Shift both ends together so their spacing survives, then close a window whose
-        # end is in January while its start is still in December
-        if start > now + CAR_PLAN_YEAR_MARGIN:
-            start = start.replace(year=start.year - 1)
-            end = end.replace(year=end.year - 1)
-        elif start < now - CAR_PLAN_YEAR_MARGIN:
-            start = start.replace(year=start.year + 1)
-            end = end.replace(year=end.year + 1)
-        if end < start:
-            end = end.replace(year=end.year + 1)
         parsed.append((start, end))
     return parsed
 
@@ -1829,6 +1894,14 @@ def in_iboost_slot(minute, iboost_plan):
                 load_amount = abs(kwh / slot_hours)
                 break
     return load_amount
+
+
+def round_out_to_period(start_minutes, end_minutes, period=30):
+    """
+    Round a span of minutes out to whole periods: the start down and the end up, so any overlap with a
+    period takes the whole of it. Octopus prices and bills a dispatch by whole half hours.
+    """
+    return (start_minutes // period) * period, ((end_minutes + period - 1) // period) * period
 
 
 def in_car_slot(minute, num_cars, car_charging_slots, slot_cap=None, slot_cap_period=None):
@@ -1993,16 +2066,31 @@ def minutes_to_time(updated, now):
     return minutes
 
 
+def strptime_aware(time_str, time_format):
+    """
+    Parse a time string with a format that ends in a UTC offset (%z), raising ValueError when the
+    string has no offset.
+
+    Up to Python 3.14 strptime raises for a missing %z offset; from 3.15 it returns a naive
+    datetime instead, which then fails later when compared with an aware one. Checking the result
+    keeps the same behaviour on every version.
+    """
+    tdata = datetime.strptime(time_str, time_format)
+    if tdata.tzinfo is None:
+        raise ValueError("time data {!r} has no UTC offset for format {!r}".format(time_str, time_format))
+    return tdata
+
+
 def str2time_strptime(time_str):
     """
     Parse a timezone-aware time string into a datetime using strptime (legacy implementation)
     """
     if "." in time_str:
-        tdata = datetime.strptime(time_str, TIME_FORMAT_SECONDS)
+        tdata = strptime_aware(time_str, TIME_FORMAT_SECONDS)
     elif "T" in time_str:
-        tdata = datetime.strptime(time_str, TIME_FORMAT)
+        tdata = strptime_aware(time_str, TIME_FORMAT)
     else:
-        tdata = datetime.strptime(time_str, TIME_FORMAT_OCTOPUS)
+        tdata = strptime_aware(time_str, TIME_FORMAT_OCTOPUS)
     return tdata
 
 
