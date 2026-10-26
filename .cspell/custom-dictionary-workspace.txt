@@ -328,6 +328,7 @@ iess
 iflux
 importlimit
 inday
+Indevolt
 indra
 inteless
 INTELLI
@@ -763,6 +764,7 @@ urlsafe
 uscapacity
 useid
 userinterface
+utcoffset
 Vallery
 varh
 venv
