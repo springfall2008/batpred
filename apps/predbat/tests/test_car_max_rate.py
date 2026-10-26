@@ -38,6 +38,8 @@ STATE_FIELDS = (
     "car_charging_max_rate",
     "car_charging_max_rate_held",
     "car_charging_max_rate_warned",
+    "car_charging_max_rate_bad_warned",
+    "car_charging_max_rate_logged",
     "car_charging_slots",
     "car_charging_exclusive",
     "car_charging_manual_soc",
@@ -181,6 +183,102 @@ def _run_sensor(my_predbat):
     warnings = [line for line in lines if line.startswith("Warn:") and MISSING_SENSOR in line]
     failed |= _check("t9 no cap", first == [7.4] and second == [7.4], "rates {} {}".format(first, second))
     failed |= _check("t9 warned once", len(warnings) == 1, "warnings {}".format(warnings))
+
+    print("Test 9b: a missing entity that comes back and goes away again warns again")
+    lines = _capture_logs(my_predbat)
+    try:
+        my_predbat.ha_interface.dummy_items[MISSING_SENSOR] = "3.6"
+        back = _rates(my_predbat)
+        my_predbat.ha_interface.dummy_items.pop(MISSING_SENSOR, None)
+        gone = _rates(my_predbat)
+    finally:
+        del my_predbat.log
+        my_predbat.ha_interface.dummy_items.pop(MISSING_SENSOR, None)
+    warnings = [line for line in lines if line.startswith("Warn:") and MISSING_SENSOR in line]
+    failed |= _check("t9b rates", back == [3.6] and gone == [7.4], "rates {} {}".format(back, gone))
+    failed |= _check("t9b warned again", len(warnings) == 1, "warnings {}".format(warnings))
+    return failed
+
+
+def _run_states(my_predbat):
+    """
+    Every non-numeric sensor state holds the last cap; text other than the transient states warns once per car.
+    """
+    failed = False
+    print("Test 14: 'none' in any case holds the last cap, like unknown/unavailable, without a warning")
+    _setup(my_predbat, 1, [CAP_SENSOR])
+    my_predbat.ha_interface.dummy_items[CAP_SENSOR] = "3.6"
+    _rates(my_predbat)
+    lines = _capture_logs(my_predbat)
+    try:
+        for state in ("none", "None", "NONE"):
+            my_predbat.ha_interface.dummy_items[CAP_SENSOR] = state
+            failed |= _check("t14 {!r} holds".format(state), _rates(my_predbat) == [3.6], "rates {}".format(my_predbat.car_charging_rate))
+    finally:
+        del my_predbat.log
+    failed |= _check("t14 no warning", not [line for line in lines if line.startswith("Warn:")], "lines {}".format(lines))
+
+    print("Test 15: other text holds the last cap and warns once per car, and again after a good reading")
+    lines = _capture_logs(my_predbat)
+    try:
+        my_predbat.ha_interface.dummy_items[CAP_SENSOR] = "fast"
+        first = _rates(my_predbat)
+        second = _rates(my_predbat)
+        my_predbat.ha_interface.dummy_items[CAP_SENSOR] = "3.6"
+        _rates(my_predbat)
+        my_predbat.ha_interface.dummy_items[CAP_SENSOR] = "slow"
+        third = _rates(my_predbat)
+    finally:
+        del my_predbat.log
+    warnings = [line for line in lines if line.startswith("Warn:") and CAP_SENSOR in line]
+    failed |= _check("t15 holds", first == [3.6] and second == [3.6] and third == [3.6], "rates {} {} {}".format(first, second, third))
+    failed |= _check("t15 warned once per spell", len(warnings) == 2, "warnings {}".format(warnings))
+    return failed
+
+
+def _run_logging(my_predbat):
+    """
+    The cap is logged when it changes, not every cycle; a short list logs no out-of-range warning; a single
+    value applies to every car.
+    """
+    failed = False
+    print("Test 16: a steady cap is logged once over several cycles, and again when it changes")
+    _setup(my_predbat, 1, [3.6])
+    my_predbat.car_charging_max_rate_logged = {}
+    lines = _capture_logs(my_predbat)
+    try:
+        for _cycle in range(3):
+            _rates(my_predbat)
+        steady = [line for line in lines if "car_charging_max_rate" in line]
+        my_predbat.args["car_charging_max_rate"] = [3.3]
+        _rates(my_predbat)
+        _rates(my_predbat)
+        changed = [line for line in lines if "car_charging_max_rate" in line]
+    finally:
+        del my_predbat.log
+    failed |= _check("t16 steady logs once", len(steady) == 1, "lines {}".format(steady))
+    failed |= _check("t16 change logs once more", len(changed) == 2, "lines {}".format(changed))
+
+    print("Test 17: a list shorter than num_cars logs no out-of-range warning")
+    _setup(my_predbat, 2, [3.6])
+    lines = _capture_logs(my_predbat)
+    try:
+        rates = _rates(my_predbat)
+    finally:
+        del my_predbat.log
+    failed |= _check("t17 rates", rates == [3.6, 7.4], "rates {}".format(rates))
+    failed |= _check("t17 no out-of-range warning", not [line for line in lines if "Out of range index" in line and "car_charging_max_rate" in line], "lines {}".format(lines))
+
+    print("Test 18: a single entity (not a list) applies to every car")
+    _setup(my_predbat, 2, CAP_SENSOR)
+    my_predbat.ha_interface.dummy_items[CAP_SENSOR] = "3.6"
+    lines = _capture_logs(my_predbat)
+    try:
+        rates = _rates(my_predbat)
+    finally:
+        del my_predbat.log
+    failed |= _check("t18 every car", rates == [3.6, 3.6], "rates {}".format(rates))
+    failed |= _check("t18 no setup warning", not [line for line in lines if "incorrectly setup" in line and "car_charging_max_rate" in line], "lines {}".format(lines))
     return failed
 
 
@@ -217,8 +315,13 @@ def _run_octopus(my_predbat):
                     "charge_point_power_in_kw": 7.4,
                 },
             )
-            my_predbat.fetch_sensor_data_cars(save=False)
+            lines = _capture_logs(my_predbat)
+            try:
+                my_predbat.fetch_sensor_data_cars(save=False)
+            finally:
+                del my_predbat.log
             failed |= _check("t10 cap {}".format(cap), my_predbat.car_charging_rate[0] == expected, "rate {}".format(my_predbat.car_charging_rate))
+            failed |= _check("t10 Octopus re-cap logs nothing", not [line for line in lines if "car_charging_max_rate" in line], "lines {}".format(lines))
     finally:
         restore_test_clock(my_predbat, saved_clock)
     return failed
@@ -282,6 +385,8 @@ def run_car_max_rate_tests(my_predbat):
     try:
         failed |= _run_per_car(my_predbat)
         failed |= _run_sensor(my_predbat)
+        failed |= _run_states(my_predbat)
+        failed |= _run_logging(my_predbat)
         failed |= _run_octopus(my_predbat)
         failed |= _run_validation(my_predbat)
     finally:

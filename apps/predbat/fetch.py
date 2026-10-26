@@ -3675,6 +3675,7 @@ class Fetch:
             car_postfix = "" if car_n == 0 else "_" + str(car_n)
             self.car_charging_rate[car_n] = float(self.get_arg("car_charging_rate" + car_postfix))
             self.car_charging_max_rate[car_n] = self.car_max_rate_cap(car_n)
+            self.car_max_rate_log_change(car_n, self.car_charging_max_rate[car_n])
             self.car_charging_rate[car_n] = self.car_rate_capped(car_n, self.car_charging_rate[car_n])
             self.car_charging_limit[car_n] = dp3((float(self.get_arg("car_charging_limit", 100.0, index=car_n)) * self.car_charging_battery_size[car_n]) / 100.0)
             self.car_charging_exclusive[car_n] = self.get_arg("car_charging_exclusive", False, index=car_n)
@@ -3699,17 +3700,33 @@ class Fetch:
                 )
             )
 
+    def car_max_rate_entry(self, car_n):
+        """
+        Return car car_n's raw car_charging_max_rate entry (a number, an entity id, or None).
+
+        A list is one entry per car, and a list shorter than num_cars is normal (the cars past its end
+        are not capped), so only entries that exist are read - get_arg's index lookup would log an
+        "Out of range index" warning every cycle for them. A single value, not a list, applies to
+        every car.
+        """
+        entries = self.get_arg("car_charging_max_rate", None, indirect=False)
+        if isinstance(entries, list):
+            return entries[car_n] if car_n < len(entries) else None
+        return entries
+
     def car_max_rate_cap(self, car_n):
         """
         Return car car_n's own maximum charge rate in kW from car_charging_max_rate, or 0.0 for no cap.
 
-        Each entry is a number or an entity pointer. Absent, blank, 0, negative or non-numeric means
-        no cap. A pointed-to entity that is unknown/unavailable (a car integration dropping out, a
-        restart) holds the last usable cap for that car, so a sensor drop-out can not briefly put the
-        car back on the charger's rate. A pointer to an entity that does not exist is warned about
-        once and means no cap.
+        Each entry is a number or an entity pointer. Absent, blank, 0, negative or a non-numeric fixed
+        value means no cap. A pointed-to entity whose state is not a usable number - unknown,
+        unavailable, none, blank (the states apps.yaml validation lets through) or any other text -
+        holds the last usable cap for that car, so a sensor drop-out can not briefly put the car back
+        on the charger's rate; text other than those states is warned about once per car. A pointer
+        to an entity that does not exist is warned about once (again if it comes back and then goes
+        away) and means no cap.
         """
-        value = self.get_arg("car_charging_max_rate", None, index=car_n, indirect=False)
+        value = self.car_max_rate_entry(car_n)
         if isinstance(value, str) and is_entity_id(value):
             entity_id = value
             value = self.get_state_wrapper(entity_id, required_unit="kW")
@@ -3719,8 +3736,18 @@ class Fetch:
                     self.log("Warn: car_charging_max_rate for car {} points to {} which does not exist, so the car's charge rate is not capped".format(car_n, entity_id))
                 self.car_charging_max_rate_held.pop(car_n, None)
                 return 0.0
-            if isinstance(value, str) and value.strip().lower() in ("unknown", "unavailable", ""):
+            self.car_charging_max_rate_warned.discard(entity_id)
+            if isinstance(value, str) and value.strip().lower() in ("unknown", "unavailable", "none", ""):
                 return self.car_charging_max_rate_held.get(car_n, 0.0)
+            if not isinstance(value, bool):
+                try:
+                    float(value)
+                except (ValueError, TypeError):
+                    if car_n not in self.car_charging_max_rate_bad_warned:
+                        self.car_charging_max_rate_bad_warned.add(car_n)
+                        self.log("Warn: car_charging_max_rate for car {} reads {} = {}, which is not a number in kW, so the last cap is kept".format(car_n, entity_id, value))
+                    return self.car_charging_max_rate_held.get(car_n, 0.0)
+            self.car_charging_max_rate_bad_warned.discard(car_n)
         if value is None or isinstance(value, bool):
             cap = 0.0
         else:
@@ -3736,6 +3763,18 @@ class Fetch:
             self.car_charging_max_rate_held.pop(car_n, None)
         return cap
 
+    def car_max_rate_log_change(self, car_n, cap):
+        """
+        Log car car_n's car_charging_max_rate cap when it changes, rather than on every cycle.
+        """
+        if cap == self.car_charging_max_rate_logged.get(car_n, 0.0):
+            return
+        self.car_charging_max_rate_logged[car_n] = cap
+        if cap > 0:
+            self.log("Car {} charge rate capped at the car's maximum of {}kW (car_charging_max_rate)".format(car_n, cap))
+        else:
+            self.log("Car {} charge rate no longer capped by car_charging_max_rate".format(car_n))
+
     def car_rate_capped(self, car_n, rate):
         """
         Return rate (kW) limited to car car_n's own maximum charge rate (car_charging_max_rate[car_n]).
@@ -3745,7 +3784,6 @@ class Fetch:
         """
         cap = self.car_charging_max_rate[car_n] if car_n < len(self.car_charging_max_rate) else 0.0
         if cap > 0 and rate > cap:
-            self.log("Car {} charge rate {}kW capped at the car's maximum of {}kW (car_charging_max_rate)".format(car_n, rate, cap))
             return cap
         return rate
 

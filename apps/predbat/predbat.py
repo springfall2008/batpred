@@ -542,6 +542,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.car_charging_max_rate = []
         self.car_charging_max_rate_held = {}  # car index -> last usable cap, held while its sensor is unknown/unavailable
         self.car_charging_max_rate_warned = set()  # missing entities already warned about, so each is logged once
+        self.car_charging_max_rate_bad_warned = set()  # car indexes whose cap sensor read as non-numeric text, warned once
+        self.car_charging_max_rate_logged = {}  # car index -> the cap last logged, so a change is logged once
         self.car_charging_loss = 1.0
         self.export_window = []
         self.export_limits = []

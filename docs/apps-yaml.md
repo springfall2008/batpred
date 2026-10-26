@@ -2181,7 +2181,7 @@ whether you are within an Octopus Energy "smart charge" slot
 - **car_charging_battery_size** - Car battery size in kWh
 - **car_charging_limit** - Percentage limit the car is set to charge to
 - **car_charging_soc** - Car's current charge level expressed as a percentage
-- **car_charging_max_rate** - Optional, one entry per car: the car's own maximum charge rate in kW (a number or a sensor). The car is planned at whichever is lower, this or its charging rate, for every charger integration. A blank entry or 0 means no cap; a briefly unknown/unavailable sensor keeps the last cap
+- **car_charging_max_rate** - Optional, one entry per car: the car's own maximum charge rate in kW (a number or a sensor). The car is planned at whichever is lower, this or its charging rate, for every charger integration. A blank entry, 0, or a list shorter than the number of cars means no cap for those cars; a sensor that is briefly unknown/unavailable/none keeps the last cap. A single sensor rather than a list applies to every car
 - **ohme_login** - Ohme EV charger account login
 - **ohme_password** - Password for above Ohme account
 - **ohme_automatic_octopus_intelligent** - Controls whether Predbat talks directly to the above Ohme account

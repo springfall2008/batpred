@@ -273,9 +273,11 @@ With this set, each car is planned at whichever is lower, its charging rate or i
 
 Each entry is either a number or a sensor holding the car's rate (in kW, or in W with a `W` unit), and is read again every plan cycle, so a change of car takes effect without a restart.
 A blank entry, 0, or leaving a car off the end of the list means no cap for that car.
-If the sensor is briefly `unknown` or `unavailable`, for example while Home Assistant restarts, Predbat keeps the last cap it read for that car rather than dropping it.
+If the sensor is briefly `unknown`, `unavailable` or `none`, for example while Home Assistant restarts, Predbat keeps the last cap it read for that car rather than dropping it.
+Any other reading that is not a number also keeps the last cap, with a warning logged once.
 A sensor that does not exist is reported by `apps.yaml` validation and logged once as a warning, and that car is then not capped.
 As with **car_charging_battery_size**, write it as a list: a number on the same line as the key fails `apps.yaml` validation.
+A single sensor on the same line as the key (`car_charging_max_rate: sensor.my_car_max_charge_kw`) is accepted, but applies that one sensor to every car; with more than one car, use the list form so each car has its own entry.
 
 If you have [multiple electric cars](#multiple-electric-cars) then car_charging_soc should be set to a list of sensors, e.g.:
 
