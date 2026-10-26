@@ -34,6 +34,9 @@ class MockGECloudDirect(GECloudDirect):
         # Don't call parent __init__ to avoid ComponentBase
         self.api_key = "test_api_key"
         self.automatic = True
+        # ge_cloud_direct set, and ge_cloud_inverter_control on, the components.py default when apps.yaml does not mention it
+        self.inverter_monitor = True
+        self.inverter_control = True
         self.mock_api_responses = {}
         self.dashboard_items = {}
         self.log_messages = []
@@ -48,6 +51,7 @@ class MockGECloudDirect(GECloudDirect):
         self.register_list = {}
         self.settings = {}
         self.status = {}
+        self.live_display_samples = {}
         self.meter = {}
         self.info = {}
         self.device_list = []
@@ -357,6 +361,13 @@ def test_ge_cloud(my_predbat=None):
         ("force_charge_control", _test_force_charge_control, "Force charge is the scheduled charge control when both charge switches exist"),
         ("ac_charge_gate_on_force_charge", _test_ac_charge_gate_on_force_charge, "Force charge turn on re-enables a cleared AC charge gate"),
         ("ac_charge_gate_on_settings_refresh", _test_ac_charge_gate_on_settings_refresh, "Settings refresh re-enables a cleared AC charge gate while force charging"),
+        ("inverter_control_setting", _test_inverter_control_setting, "ge_cloud_inverter_control defaults to on"),
+        ("inverter_control_off_run", _test_inverter_control_off_run, "Inverter control off skips inverter config and default options"),
+        ("inverter_control_off_user_writes", _test_inverter_control_off_user_writes, "Inverter control off still sends the user's writes, but not Predbat's"),
+        ("evc_direct_setting", _test_evc_direct_setting, "ge_cloud_evc_direct starts GE Cloud Direct for the EV charger alone"),
+        ("inverter_roles", _test_inverter_roles_from_settings, "ge_cloud_direct monitors the inverter, ge_cloud_inverter_control controls it"),
+        ("evc_only_run", _test_evc_only_run, "EV charger only never reads, writes or reports an inverter"),
+        ("evc_only_not_inverter_source", _test_evc_only_not_inverter_source, "EV charger only is not an inverter source"),
         ("enable_defaults_read_only", _test_run_read_only_skips_reset, "Enable defaults skipped in read-only mode"),
         ("enable_defaults_after_read_only", _test_run_enables_reset_after_read_only, "Enable defaults on first non-read-only run"),
         ("enable_defaults_24h", _test_run_enables_reset_after_24h, "Enable defaults re-runs after 24 hours"),
@@ -3140,7 +3151,7 @@ def _make_rediscovery_ge_cloud(devices, evc_devices=None):
     ge_cloud = MockGECloudDirect()
     ge_cloud.automatic = True
     api = {"devices": devices, "evc": evc_devices or []}
-    calls = {"get_devices": 0, "status": [], "settings": [], "evc_polled": [], "automatic": [], "automatic_evc": 0, "defaults": []}
+    calls = {"get_devices": 0, "status": [], "settings": [], "evc_polled": [], "automatic": [], "automatic_evc": 0, "defaults": [], "site": 0}
 
     async def benign(*args, **kwargs):
         return {}
@@ -3179,8 +3190,11 @@ def _make_rediscovery_ge_cloud(devices, evc_devices=None):
     async def enable_defaults(device, settings):
         calls["defaults"].append(device)
 
+    async def update_site(first):
+        calls["site"] += 1
+
     ge_cloud.update_account = benign
-    ge_cloud.update_site = benign
+    ge_cloud.update_site = update_site
     ge_cloud.async_get_devices = get_devices
     ge_cloud.async_get_evc_devices = get_evc_devices
     ge_cloud.async_get_inverter_status = get_status
@@ -6289,27 +6303,35 @@ def _test_publish_evc_device(my_predbat):
         await ge.publish_evc_device("EVC123456", {"serial_number": "EVC123456", "status": "charging"})
         status_entity = "sensor.predbat_gecloud_evc123456_evc_status"
         connected_entity = "binary_sensor.predbat_gecloud_evc123456_evc_car_connected"
+        plugged_entity = "binary_sensor.predbat_gecloud_evc123456_evc_car_plugged"
         assert ge.dashboard_items.get(status_entity, {}).get("state") == "charging", "EVC status should be published raw"
         assert ge.dashboard_items.get(connected_entity, {}).get("state") == "on", "A charging EVC should read as a car connected"
+        assert ge.dashboard_items.get(plugged_entity, {}).get("state") == "on", "A charging EVC should read as a car plugged in"
 
         # Test 2: idle means nothing is plugged in
         await ge.publish_evc_device("EVC123456", {"status": "idle"})
         assert ge.dashboard_items[connected_entity]["state"] == "off", "An idle EVC should read as no car connected"
+        assert ge.dashboard_items[plugged_entity]["state"] == "off", "An idle EVC should read as no car plugged in"
 
         # Test 3: the OCPP session stages count as connected, whatever their casing
         for status in ["Preparing", "SuspendedEV", "SuspendedEVSE", "Finishing", "Charging"]:
             await ge.publish_evc_device("EVC123456", {"status": status})
             assert ge.dashboard_items[connected_entity]["state"] == "on", "{} should read as a car connected".format(status)
+            assert ge.dashboard_items[plugged_entity]["state"] == "on", "{} should read as a car plugged in".format(status)
 
         # Test 4: the disconnected statuses, including a charger that has gone offline
         for status in ["Available", "offline", "Unavailable", "Faulted", "Reserved"]:
             await ge.publish_evc_device("EVC123456", {"status": status})
             assert ge.dashboard_items[connected_entity]["state"] == "off", "{} should read as no car connected".format(status)
+            # Only Available positively says nothing is plugged in - an offline or faulted charger is no reading, not an unplug
+            expected = "off" if status == "Available" else "unavailable"
+            assert ge.dashboard_items[plugged_entity]["state"] == expected, "{} should read {} for the plug, got {}".format(status, expected, ge.dashboard_items[plugged_entity]["state"])
 
         # Test 5: an unrecognised status is safe (no car) but says so once, not every poll
         ge.log_messages = []
         await ge.publish_evc_device("EVC123456", {"status": "not_a_real_status"})
         assert ge.dashboard_items[connected_entity]["state"] == "off", "An unknown status should read as no car connected"
+        assert ge.dashboard_items[plugged_entity]["state"] == "unavailable", "An unknown status is no reading for the plug"
         warnings = [message for message in ge.log_messages if "not_a_real_status" in message]
         assert len(warnings) == 1, "An unknown EVC status should be reported once, got {}".format(len(warnings))
         await ge.publish_evc_device("EVC123456", {"status": "not_a_real_status"})
@@ -6350,6 +6372,10 @@ def _test_async_automatic_config_evc(my_predbat):
             "binary_sensor.predbat_gecloud_evc100_evc_car_connected",
             "binary_sensor.predbat_gecloud_evc200_evc_car_connected",
         ], "car_charging_planned should list both chargers in serial order, got {}".format(ge.config_args.get("car_charging_planned"))
+        assert ge.config_args.get("car_charging_plugged") == [
+            "binary_sensor.predbat_gecloud_evc100_evc_car_plugged",
+            "binary_sensor.predbat_gecloud_evc200_evc_car_plugged",
+        ], "car_charging_plugged should list both chargers in serial order, got {}".format(ge.config_args.get("car_charging_plugged"))
         # Display-only live power, wired in the same serial order so it describes the same chargers
         assert ge.config_args.get("car_charging_power") == [
             "sensor.predbat_gecloud_evc100_evc_power_active_import",
@@ -8602,3 +8628,217 @@ def _test_site_export_limit(my_predbat):
         return await check() + await check_storage() + await check_auth()
 
     return run_async(run_all())
+
+
+def _test_inverter_control_setting(my_predbat):
+    """ge_cloud_inverter_control is a GE Cloud Direct arg that defaults to on, so existing installs keep their inverter control"""
+    import inspect
+    from components import COMPONENT_LIST
+
+    arg = COMPONENT_LIST["gecloud"]["args"].get("inverter_control")
+    if arg != {"required": False, "default": True, "config": "ge_cloud_inverter_control"}:
+        print("ERROR: gecloud should take inverter_control from ge_cloud_inverter_control, default True, got {}".format(arg))
+        return 1
+    default = inspect.signature(GECloudDirect.initialize).parameters.get("inverter_control")
+    if default is None or default.default is not True:
+        print("ERROR: GECloudDirect.initialize should default inverter_control to True, got {}".format(default))
+        return 1
+    from config import APPS_SCHEMA
+
+    if APPS_SCHEMA.get("ge_cloud_inverter_control") != {"type": "boolean"}:
+        print("ERROR: APPS_SCHEMA should validate ge_cloud_inverter_control as a boolean, got {}".format(APPS_SCHEMA.get("ge_cloud_inverter_control")))
+        return 1
+    return 0
+
+
+def _test_evc_direct_setting(my_predbat):
+    """ge_cloud_evc_direct starts GE Cloud Direct for the EV charger alone, so ge_cloud_direct is no longer the only switch that does"""
+    import inspect
+    from components import COMPONENT_LIST
+    from config import APPS_SCHEMA
+
+    entry = COMPONENT_LIST["gecloud"]
+    if entry["args"].get("evc_direct") != {"required": False, "default": False, "config": "ge_cloud_evc_direct"}:
+        print("ERROR: gecloud should take evc_direct from ge_cloud_evc_direct, default False, got {}".format(entry["args"].get("evc_direct")))
+        return 1
+    if entry["args"].get("ge_cloud_direct") != {"required": False, "default": False, "config": "ge_cloud_direct"}:
+        print("ERROR: ge_cloud_direct should be optional now ge_cloud_evc_direct can start the component, got {}".format(entry["args"].get("ge_cloud_direct")))
+        return 1
+    if sorted(entry.get("required_or", [])) != ["evc_direct", "ge_cloud_direct"]:
+        print("ERROR: gecloud should need ge_cloud_direct or ge_cloud_evc_direct, got {}".format(entry.get("required_or")))
+        return 1
+    default = inspect.signature(GECloudDirect.initialize).parameters.get("evc_direct")
+    if default is None or default.default is not False:
+        print("ERROR: GECloudDirect.initialize should default evc_direct to False, got {}".format(default))
+        return 1
+    if APPS_SCHEMA.get("ge_cloud_evc_direct") != {"type": "boolean"}:
+        print("ERROR: APPS_SCHEMA should validate ge_cloud_evc_direct as a boolean, got {}".format(APPS_SCHEMA.get("ge_cloud_evc_direct")))
+        return 1
+    return 0
+
+
+def _test_inverter_roles_from_settings(my_predbat):
+    """ge_cloud_direct decides whether the inverter is monitored, ge_cloud_inverter_control whether it is also controlled"""
+    cases = [
+        # (ge_cloud_direct, inverter_control, evc_direct) -> (monitored, controlled)
+        ((True, True, False), (True, True)),
+        ((True, False, False), (True, False)),
+        ((True, True, True), (True, True)),
+        ((False, True, True), (False, False)),
+        ((False, False, True), (False, False)),
+    ]
+    for (direct, control, evc_direct), (monitored, controlled) in cases:
+        ge_cloud = MockGECloudDirect()
+        GECloudDirect.initialize(ge_cloud, direct, "key", False, inverter_control=control, evc_direct=evc_direct)
+        got = (ge_cloud.inverter_monitor, ge_cloud.inverter_control, ge_cloud.inverter_source)
+        if got != (monitored, controlled, monitored):
+            print("ERROR: ge_cloud_direct={} ge_cloud_inverter_control={} ge_cloud_evc_direct={} should give monitor/control/source {}, got {}".format(direct, control, evc_direct, (monitored, controlled, monitored), got))
+            return 1
+    return 0
+
+
+def _test_evc_only_run(my_predbat):
+    """With ge_cloud_evc_direct and no ge_cloud_direct, run() never reads, writes or reports an inverter, but still serves the EV charger"""
+
+    async def test():
+        ge_cloud, api, calls = _make_rediscovery_ge_cloud(_gec_devices(battery=["inv001"]), evc_devices=[{"uuid": "evc-1"}])
+        GECloudDirect.initialize(ge_cloud, False, "key", True, automatic_evc=True, evc_direct=True)
+        ge_cloud.log_messages = []
+
+        if not await ge_cloud.run(seconds=0, first=True):
+            print("ERROR: run() should succeed with an EV charger and no inverter monitoring, got {}".format(ge_cloud.log_messages[-5:]))
+            return 1
+        if calls["get_devices"] or ge_cloud.device_list or calls["status"] or calls["settings"]:
+            print("ERROR: the inverters must not be read, got get_devices {} device_list {} status {} settings {}".format(calls["get_devices"], ge_cloud.device_list, calls["status"], calls["settings"]))
+            return 1
+        if calls["defaults"] or calls["automatic"]:
+            print("ERROR: the inverters must not be configured, got defaults {} automatic {}".format(calls["defaults"], calls["automatic"]))
+            return 1
+        if calls["evc_polled"] != ["evc-1"] or calls["automatic_evc"] != 1:
+            print("ERROR: the EV charger should still be polled and configured, got polled {} automatic_evc {}".format(calls["evc_polled"], calls["automatic_evc"]))
+            return 1
+        report = ge_cloud.build_discovery()
+        if report["inverters"] or report["automatic"] is not False:
+            print("ERROR: no inverter should be reported, got {}".format(report))
+            return 1
+        if calls["site"]:
+            print("ERROR: the inverter site should not be looked up, got {} update_site calls".format(calls["site"]))
+            return 1
+
+        # The periodic device check does not start reading the inverters either
+        _reset_rediscovery_calls(calls)
+        await ge_cloud.run(seconds=DEVICE_REFRESH_SECONDS, first=False)
+        if calls["get_devices"] or ge_cloud.device_list or calls["status"]:
+            print("ERROR: a later device check must not read the inverters, got get_devices {} device_list {} status {}".format(calls["get_devices"], ge_cloud.device_list, calls["status"]))
+            return 1
+
+        # No EV charger on the account is the fatal case here, and says so in charger terms
+        ge_cloud, api, calls = _make_rediscovery_ge_cloud(_gec_devices(battery=["inv001"]), evc_devices=[])
+        GECloudDirect.initialize(ge_cloud, False, "key", False, evc_direct=True)
+        ge_cloud.log_messages = []
+        if await ge_cloud.run(seconds=0, first=True) or not ge_cloud.api_fatal:
+            print("ERROR: no EV charger with only ge_cloud_evc_direct should be fatal")
+            return 1
+        if not any("No EV chargers found" in message for message in ge_cloud.log_messages):
+            print("ERROR: the fatal error should be about EV chargers, got {}".format(ge_cloud.log_messages))
+            return 1
+        return 0
+
+    return run_async(test())
+
+
+def _test_evc_only_not_inverter_source(my_predbat):
+    """A GE Cloud Direct that only serves the EV charger cannot make the engine wait for inverter readings it will never supply"""
+    from components import Components
+
+    ge_cloud = MockGECloudDirect()
+    GECloudDirect.initialize(ge_cloud, False, "key", False, evc_direct=True)
+    comps = Components.__new__(Components)
+    comps.components = {"gecloud": ge_cloud}
+    comps.load_error = lambda name: None
+    comps.is_alive = lambda name: True
+    if comps.inverter_source_active() or comps.inverter_source_names() or comps.inverter_source_status():
+        print("ERROR: an EV charger only GE Cloud should not be an inverter source, got {} {} {}".format(comps.inverter_source_active(), comps.inverter_source_names(), comps.inverter_source_status()))
+        return 1
+    GECloudDirect.initialize(ge_cloud, True, "key", False)
+    if not comps.inverter_source_active() or comps.inverter_source_names() != ["GivEnergy Cloud Direct"]:
+        print("ERROR: GE Cloud with ge_cloud_direct should be an inverter source, got {} {}".format(comps.inverter_source_active(), comps.inverter_source_names()))
+        return 1
+    return 0
+
+
+def _test_inverter_control_off_run(my_predbat):
+    """With ge_cloud_inverter_control off, run() still reads the inverters and sets up the EV charger, but never configures or writes to an inverter"""
+
+    async def test():
+        ge_cloud, api, calls = _make_rediscovery_ge_cloud(_gec_devices(battery=["inv001"]))
+        ge_cloud.inverter_control = False
+        ge_cloud.automatic_evc = True
+
+        await ge_cloud.run(seconds=0, first=True)
+        if calls["status"] != ["inv001"] or calls["settings"] != ["inv001"]:
+            print("ERROR: the inverter should still be read, got status {} settings {}".format(calls["status"], calls["settings"]))
+            return 1
+        if calls["defaults"]:
+            print("ERROR: default options must not be written with inverter control off, got {}".format(calls["defaults"]))
+            return 1
+        if calls["automatic"]:
+            print("ERROR: inverter automatic config must not run with inverter control off, got {}".format(calls["automatic"]))
+            return 1
+        if calls["automatic_evc"] != 1:
+            print("ERROR: EV charger automatic config should still run, got {}".format(calls["automatic_evc"]))
+            return 1
+        if not any("ge_cloud_inverter_control" in message for message in ge_cloud.log_messages):
+            print("ERROR: ge_cloud_automatic being ignored should be logged, got {}".format(ge_cloud.log_messages[-10:]))
+            return 1
+        if ge_cloud.build_discovery()["automatic"] is not False:
+            print("ERROR: the discovery report should not claim automatic config with inverter control off")
+            return 1
+
+        # Nor does the 24 hour pass or a newly found inverter bring the writes back
+        api["devices"] = _gec_devices(battery=["inv001", "inv002"])
+        ge_cloud.default_options_stamp = None
+        _reset_rediscovery_calls(calls)
+        await ge_cloud.run(seconds=DEVICE_REFRESH_SECONDS, first=False)
+        if calls["defaults"] or calls["automatic"]:
+            print("ERROR: a later cycle must not configure the inverters either, got defaults {} automatic {}".format(calls["defaults"], calls["automatic"]))
+            return 1
+        return 0
+
+    return run_async(test())
+
+
+def _test_inverter_control_off_user_writes(my_predbat):
+    """With ge_cloud_inverter_control off, a change the user makes to a _gecloud_ entity still reaches the inverter, but Predbat adds no write of its own"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        ge_cloud.inverter_control = False
+        written = []
+
+        async def mock_api(endpoint, serial="", setting_id="", post=False, datain=None, **kwargs):
+            written.append((serial, setting_id, datain.get("value") if datain else None))
+            return {"value": True}
+
+        async def mock_publish(*args, **kwargs):
+            pass
+
+        ge_cloud.async_get_inverter_data = mock_api
+        ge_cloud.publish_registers = mock_publish
+        ge_cloud.pending_writes = {"test123": []}
+        force_entity = "switch.predbat_gecloud_test123_enable_force_charge"
+        ge_cloud.register_entity_map[force_entity] = {"key": 201, "device": "test123"}
+        ge_cloud.config_args["scheduled_charge_enable"] = [force_entity]
+        # The AC charge gate is off, which with control on would be turned back on alongside the force charge
+        ge_cloud.settings = {"test123": _ac_charge_gate_registers(force_charge=False, ac_charge=False)}
+
+        await ge_cloud.switch_event(force_entity, "turn_on")
+        if written != [("test123", 201, "True")]:
+            print("ERROR: only the user's force charge write should be sent, got {}".format(written))
+            return 1
+        if any("enable_ac_charge is off" in message for message in ge_cloud.log_messages):
+            print("ERROR: the AC charge gate should not be re-asserted with inverter control off, got {}".format(ge_cloud.log_messages))
+            return 1
+        return 0
+
+    return run_async(test())

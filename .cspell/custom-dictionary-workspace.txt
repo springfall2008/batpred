@@ -1,12 +1,15 @@
 # Custom Dictionary Words
 3hy
 aaaabbbbccccdddd
+ABCDEFGHJKLMNP
 acks
 activepower
 adata
 adbase
 afci
+afewyards
 agentic
+agilepredict
 AIO
 AIO's
 aiofiles
@@ -17,9 +20,11 @@ Alertfeed
 allclose
 alphaess
 am2
+anker
 annualform
 Anson
 antiphase
+antireflux
 apexcharts
 apikey
 appdaemon
@@ -43,6 +48,7 @@ autoflake
 automations
 autopep
 autoupdate
+ax1
 axvline
 axvspan
 Backfeed
@@ -90,6 +96,7 @@ chargelater
 chargelimit
 chargepower
 CHECKCODE
+chg
 Chrg
 citem
 cloudfront
@@ -169,6 +176,7 @@ docstrings
 dschg
 dstamp
 dstart
+dtu
 dtype
 dwindow
 eauth
@@ -177,6 +185,7 @@ ECONNRESET
 ecosmart
 Eddi
 eddis
+edfenergy
 efgh
 elif
 elinter
@@ -211,10 +220,12 @@ epvtoday
 errno
 ESSAPI
 ETIMEDOUT
+eto
 etoday
 etok
 euids
 EVAC
+evc
 EVDC
 evergen
 evilspringfall
@@ -231,6 +242,7 @@ figsize
 finaliser
 Fingerbot
 firstparty
+flextras
 fline
 FLOMASTA
 fontsize
@@ -266,6 +278,7 @@ giv
 GivEnergy
 givtcp
 gmtime
+gndean
 gnueabihf
 GOELEC
 goldens
@@ -315,6 +328,8 @@ iess
 iflux
 importlimit
 inday
+Indevolt
+indra
 inteless
 INTELLI
 intelligentdevice
@@ -325,6 +340,7 @@ inva
 invb
 invbatpower
 invname
+iot
 IPPROTO
 isinstance
 isoformat
@@ -367,6 +383,7 @@ LIFEPO
 linebreak
 linestyle
 Liskov
+lmt
 loadml
 loadmlpower
 loadspower
@@ -379,6 +396,8 @@ lookback
 lpignore
 lstrip
 luxpower
+luxpowertek
+luxpython
 malloc
 mallopt
 markdownlint
@@ -400,6 +419,7 @@ metricmid
 microinverters
 middlebox
 middleboxes
+milli
 minb
 minmax
 minsoc
@@ -491,6 +511,7 @@ parseable
 pbat
 pbgw
 pcharging
+pcsenmap
 pdata
 pdetails
 pendings
@@ -503,6 +524,7 @@ pitem
 pkwh
 plenticore
 pload
+plugncharge
 pmeter
 poinv
 popv
@@ -539,6 +561,7 @@ PVONLY
 pvpower
 pvwatts
 pwindow
+pwr
 pyjwt
 pylint
 pymyenergi
@@ -635,6 +658,7 @@ solaxmodbus
 Solcast
 soliscloud
 solisx
+solix
 sourcery
 Southwell
 sparkline
@@ -740,6 +764,7 @@ urlsafe
 uscapacity
 useid
 userinterface
+utcoffset
 Vallery
 varh
 venv
@@ -761,6 +786,7 @@ worktree
 writeonly
 wrongsha
 wwxxabcdefyyzz
+x1
 xaxis
 xaxistooltip
 xlabel
@@ -780,3 +806,4 @@ zappi
 zappis
 zcat
 zigbee
+zoneinfo
