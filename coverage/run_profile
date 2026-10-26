@@ -18,13 +18,13 @@ if [ $# -eq 0 ]; then
     echo ""
     echo "Options:"
     echo "  --view    Open results in snakeviz automatically"
-    echo "  --time    Sort by total time instead of cumulative"
+    echo "  --sort KEY  Sort by cumulative (default), time, calls or ncalls"
     echo "  --top N   Show top N functions (default: 30)"
     echo ""
     echo "Examples:"
     echo "  ./run_profile cases/predbat_debug_agile1.yaml"
     echo "  ./run_profile cases/predbat_debug_agile1.yaml --view"
-    echo "  ./run_profile cases/predbat_debug_pre_saving1.yaml --time --top 50"
+    echo "  ./run_profile cases/predbat_debug_pre_saving1.yaml --sort time --top 50"
     exit 1
 fi
 
