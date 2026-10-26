@@ -37,7 +37,7 @@ The whole cycle for one change, from reopening your environment to a pushed bran
 | 8. Run the pre-commit checks and the quick tests | `./run_pre_commit > /tmp/pre.txt 2>&1`, then `tail -5 /tmp/pre.txt`. This takes a few minutes. See [running the checks locally](#running-the-checks-locally) |
 | 9. Check what will be committed | `git status`, or the Source Control view. See [check what you are about to commit](#check-what-you-are-about-to-commit) |
 | 10. Commit | In the Source Control view, click `+` beside each file, type a message and click Commit. Or: `git add file1 file2`, then `git commit -m "message"` |
-| 11. Push the new branch (first time only) | Click Publish Branch in the Source Control view and choose `origin` when asked, or `git push -u origin my-change-name` |
+| 11. Push the new branch (first time only) | Source Control view: `...` menu, then Branch, then Publish Branch..., and choose `origin`. Or in the terminal: `git push -u origin my-change-name`. Don't use the Sync Changes button for the first push |
 | 12. Open the pull request | Use the link that the push prints. Check that base is `springfall2008/batpred` `main`, compare is your branch, and the Commits and Files changed tabs list only your own work. First run `git log --oneline upstream/main..HEAD`, which lists the commits the PR will contain. See [raising the pull request](#raising-the-pull-request) |
 | 13. Later pushes to the same branch | The Sync Changes button in the Source Control view, or `git push` |
 | 14. If the pull request has conflicts | `git fetch upstream`, then `git merge upstream/main`, fix the clashes, run the tests again, then `git push`. See [if there are conflicts](#if-there-are-conflicts) |
@@ -393,19 +393,25 @@ The result is the same, so use whichever you prefer.
    results files, or copies of config files that you made while testing, should not be committed.
 3. Type a commit message, and click Commit. Mention any related GitHub issues in the message using `#1234`.
    (If nothing is staged, VS Code offers to stage *all* your changes and commit them. That includes any stray files, so check the list first.)
-4. Push the commit to your fork. For the **first** push of a new branch, the Source Control view shows a **Publish Branch** button. Click it, and VS Code asks "Pick a remote to publish the branch to".
-   It lists `origin` (your fork, at `https://github.com/<your-user>/batpred`) and `upstream` (Predbat's repository), with `origin` highlighted.
-   Choose **`origin`**, not `upstream`, which you can't push to. This is the same as the terminal command
-   below, and it sets the branch up to follow your fork:
+4. Push the commit to your fork. For the **first** push of a new branch, use the Publish Branch menu: click the three dots (`...`) at the top of the Source Control view,
+   choose **Branch**, then **Publish Branch...**. VS Code asks "Pick a remote to publish the branch to". It lists `origin` (your fork, at `https://github.com/<your-user>/batpred`)
+   and `upstream` (Predbat's repository). Choose **`origin`**. This pushes the branch and makes it follow your fork, the same as the terminal command:
 
     ```bash
     git push -u origin my-change-name
     ```
 
-    A branch created from `upstream/main` starts out following Predbat's repository, which is why the remote matters on the first push. The terminal command always pushes to your fork.
-    After the first push, the button becomes Sync Changes (which pulls any changes from GitHub and then pushes yours) and is safe to use.
-    The exact button labels vary a little between versions of VS Code.
-    To check where the branch went, run `git branch -vv`. It should show `[origin/my-change-name]` beside your branch.
+    **Don't use the Sync Changes button for the first push.** A branch created with `git switch -c my-change-name upstream/main` will follow Predbat's repository (`upstream/main`),
+    so the button appears as Sync Changes (not Publish Branch), and clicking it tries to push to Predbat's repository. VS Code then says "You don't have permissions to push to
+    springfall2008/batpred" and offers to **Create Fork**. If you see that message, choose Cancel (or No). Nothing has been pushed, and the branch is fine.
+
+    To check where the branch went, run `git branch -vv`. It should show `[origin/my-change-name]` beside your branch, like this:
+
+    ```text
+    * my-change-name   8afe508e [origin/my-change-name] docs: restructure the development guide
+    ```
+
+    After the first push, Sync Changes is safe to use. The exact menu and button labels vary a little between versions of VS Code.
 
 #### Using the terminal
 
@@ -478,6 +484,8 @@ The easiest way to raise one:
 4. Fill in the title and the description (see below). You can choose **Create draft pull request** if you want early feedback before it is ready to merge.
 5. Before you submit, open the **Commits** and **Files changed** tabs and check that they only list your own commits and the files that you meant to change. If they show
    other work - for example another change of yours - the branch was started from the wrong place.
+
+VS Code may also offer to create the pull request when you publish the branch. You can use that, but the page on GitHub makes it easier to check the base and compare branches.
 
 If you don't see the banner, go to your fork's page, use the branch drop-down to select your branch, then click Contribute and Open pull request.
 Alternatively, go to the Pull requests tab of `springfall2008/batpred`, click New pull request, then "compare across forks" and choose
