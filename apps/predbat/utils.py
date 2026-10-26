@@ -39,6 +39,7 @@ from const import (
     FULL_EXPORT_POWER,
 )
 import copy
+import pytz
 import hashlib
 import json
 import time as time_module
@@ -1236,7 +1237,10 @@ def history_attribute(history, state_key="state", last_updated_key="last_updated
 
 def get_override_time_from_string(now_utc, time_str, plan_interval_minutes):
     """
-    Convert a time string like "Sun 13:00" into a datetime object
+    Resolve a manual slot in the configured timezone on its target calendar date.
+
+    Match the tariff wall-clock policy: select the first occurrence of a repeated autumn
+    time, and advance a skipped spring time to the first valid minute after the jump.
     """
     # Parse the time string into a datetime object
     # Format is Sun 13:00
@@ -1256,7 +1260,9 @@ def get_override_time_from_string(now_utc, time_str, plan_interval_minutes):
     # Convert day of week text to a number (0=Monday, 6=Sunday)
     day_of_week_today = now_utc.weekday()
 
-    override_time = now_utc.replace(hour=override_time.hour, minute=override_time.minute, second=0, microsecond=0)
+    # Work in calendar dates first. Adding days to a pytz datetime retains today's offset.
+    local_now = now_utc.replace(tzinfo=None)
+    override_time = local_now.replace(hour=override_time.hour, minute=override_time.minute, second=0, microsecond=0)
 
     # Ensure minutes are rounded down to the nearest plan_interval_minutes (e.g., 15 or 10)
     minute = (override_time.minute // plan_interval_minutes) * plan_interval_minutes
@@ -1268,10 +1274,10 @@ def get_override_time_from_string(now_utc, time_str, plan_interval_minutes):
     # If the day has passed this week then use next week
     if add_days < 0:
         add_days += 7
-    elif not has_day and override_time <= now_utc:
+    elif not has_day and override_time <= local_now:
         # Check if override_time is within the current active time slot
         # A slot is active if it started within plan_interval_minutes ago
-        minutes_since_override = (now_utc - override_time).total_seconds() / 60
+        minutes_since_override = (local_now - override_time).total_seconds() / 60
         is_outside_current_slot = minutes_since_override >= plan_interval_minutes
         if is_outside_current_slot:
             # Not in current slot, use tomorrow
@@ -1279,8 +1285,24 @@ def get_override_time_from_string(now_utc, time_str, plan_interval_minutes):
         # else: override_time is within current active slot, use today (add_days stays 0)
 
     override_time += timedelta(days=add_days)
+    local_tz = now_utc.tzinfo
+    if local_tz is None:
+        return override_time
 
-    return override_time
+    while True:
+        if hasattr(local_tz, "localize"):
+            try:
+                return local_tz.localize(override_time, is_dst=None)
+            except pytz.AmbiguousTimeError:
+                return min(local_tz.localize(override_time, is_dst=True), local_tz.localize(override_time, is_dst=False))
+            except pytz.NonExistentTimeError:
+                pass
+        else:
+            # fold=0 chooses the first occurrence for zoneinfo. A UTC round trip detects gaps.
+            local_time = override_time.replace(tzinfo=local_tz, fold=0)
+            if local_time.astimezone(timezone.utc).astimezone(local_tz).replace(tzinfo=None) == override_time:
+                return local_time
+        override_time += timedelta(minutes=1)
 
 
 def minute_data_state(history, days, now, state_key, last_updated_key, prev_last_updated_time=None):
