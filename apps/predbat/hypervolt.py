@@ -1217,9 +1217,10 @@ class HypervoltAPI(ComponentBase, CarChargerControl):
 
         Read with get_arg: the base's set_read_only attribute is True from reset() until the first
         update_pred(), which comes after this component's first run, so reading it would release
-        every charger Predbat had stopped on each restart.
+        every charger Predbat had stopped on each restart. Axle's VPP read only sets only the
+        attribute, so its own flag is read as well.
         """
-        return bool(self.get_arg("set_read_only", False))
+        return bool(self.get_arg("set_read_only", False)) or bool(getattr(self.base, "set_read_only_axle", False))
 
     def charger_control_chargers(self):
         """The chargers in car order, keyed by charger id, so charger N follows car N."""
@@ -1272,14 +1273,19 @@ class HypervoltAPI(ComponentBase, CarChargerControl):
     async def charger_control_release_one(self, charger, charge):
         """Hand a charger back: let it charge again if Predbat stopped it, and forget it once nothing is owed.
 
-        A charger not heard from recently is skipped and stays owed, so a later cycle releases it.
+        A charger owed a release that cannot be acted on yet - not heard from recently, or its
+        release state not reported since a restart - raises, so the shared loop keeps it held and
+        tries again next cycle rather than recording a release that never happened.
         """
-        if charger.release_state == "released" and charger.charger_id in self.released_by_predbat:
+        if charger.charger_id in self.released_by_predbat:
             if is_stale(charger, time.time()):
-                return
-            # Even when unplugged: whether a stop survives the cable coming out is not known
-            self.log("Info: hypervolt: releasing {}".format(charger.name or charger.charger_id))
-            await self.send_command(charger, release_command(True))
+                raise HypervoltApiError("charger {} has not been heard from, releasing it later".format(charger.charger_id))
+            if charger.release_state == "released":
+                # Even when unplugged: whether a stop survives the cable coming out is not known
+                self.log("Info: hypervolt: releasing {}".format(charger.name or charger.charger_id))
+                await self.send_command(charger, release_command(True))
+            elif charger.release_state is None and charger.pilot_status != "A":
+                raise HypervoltApiError("charger {} has not reported whether it is stopped yet, releasing it later".format(charger.charger_id))
         self.forget(charger)
 
     async def charger_control_hand_to_octopus(self, charger, charge):
@@ -1326,15 +1332,10 @@ class HypervoltAPI(ComponentBase, CarChargerControl):
             if charger.release_state == "default":
                 self.forget(charger)
             elif charger.pilot_status == "A" and charger.release_state == "released":
-                self.log("Info: hypervolt: releasing {} as the car was unplugged".format(charger.name or charger.charger_id))
-                await self.guarded(self.send_and_forget(charger), charger)
+                self.log("Info: hypervolt: the car was unplugged from {}".format(charger.name or charger.charger_id))
+                await self.guarded(self.charger_control_release_one(charger, False), charger)
             elif charger.pilot_status == "A":
                 self.forget(charger)
-
-    async def send_and_forget(self, charger):
-        """Let a charger charge again, then forget it - after, so a refused command is retried."""
-        await self.send_command(charger, release_command(True))
-        self.forget(charger)
 
     async def guarded(self, action, charger=None):
         """Run a control step so that a refused or failed command is reported rather than failing the run.

@@ -1854,6 +1854,44 @@ def test_drift_is_reapplied():
     print("  ✓ A charger changed from the app outside a window is stopped again")
 
 
+def test_release_retried_after_stale_charger():
+    """A charger that is stale when guest charging releases is not dropped: once it is heard from, it is released."""
+    component = _control_component({0: PLAN_OUTSIDE}, [_charger(release_state="released", pilot_status="B", last_message=time.time() - 600)])
+    component.released_by_predbat.add(V3_ID)
+    run_async(component.switch_event_handler("switch.predbat_hypervolt_guest_charging", "turn_on"))
+    run_async(component.control_tick(CONTROL_NOW))
+    assert _requests(component) == [] and component.released_by_predbat == {V3_ID}
+    component.transport.chargers[V3_ID].last_message = time.time()
+    run_async(component.control_tick(CONTROL_NOW))
+    assert _requests(component) == [(V3_ID, "sync.apply", {"release": False})]
+    assert component.released_by_predbat == set()
+    print("  ✓ A release missed while a charger was stale is retried")
+
+
+def test_release_waits_for_release_state():
+    """After a restart, a charger whose release state has not been reported is kept owed rather than forgotten."""
+    component = _control_component({0: PLAN_OUTSIDE}, [_charger(release_state=None, pilot_status="B")])
+    component.released_by_predbat.add(V3_ID)
+    component.base.args["set_read_only"] = True
+    run_async(component.control_tick(CONTROL_NOW))
+    assert _requests(component) == [] and component.released_by_predbat == {V3_ID}
+    component.transport.chargers[V3_ID].release_state = "released"
+    run_async(component.control_tick(CONTROL_NOW))
+    assert _requests(component) == [(V3_ID, "sync.apply", {"release": False})]
+    assert component.released_by_predbat == set()
+    print("  ✓ A release waits for the charger to report its state")
+
+
+def test_axle_read_only_releases():
+    """Axle's VPP read only, which sets only the base flag, releases the chargers too."""
+    component = _control_component({0: PLAN_OUTSIDE}, [_charger(release_state="released", pilot_status="B")])
+    component.released_by_predbat.add(V3_ID)
+    component.base.set_read_only_axle = True
+    run_async(component.control_tick(CONTROL_NOW))
+    assert _requests(component) == [(V3_ID, "sync.apply", {"release": False})]
+    print("  ✓ Axle read only releases")
+
+
 def test_string_error_reply_fails_caller_and_reader_survives():
     """An error that is a bare string fails its caller at once and the reader carries on."""
     socket = FakeSocket()
@@ -2207,6 +2245,9 @@ def test_hypervolt(my_predbat=None):
     test_octopus_cannot_tell_drives_charger_with_control_true()
     test_guest_charging_releases_and_publishes()
     test_drift_is_reapplied()
+    test_release_retried_after_stale_charger()
+    test_release_waits_for_release_state()
+    test_axle_read_only_releases()
     test_string_error_reply_fails_caller_and_reader_survives()
     test_reader_survives_a_handler_exception()
     test_link_alive_and_dead_link_restarted()
