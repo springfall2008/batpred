@@ -2804,11 +2804,11 @@ APPS_SCHEMA = {
     "car_charging_soc": {"type": "sensor", "sensor_type": "float", "entries": "num_cars"},
     "car_charging_limit": {"type": "sensor", "sensor_type": "float", "entries": "num_cars"},
     "car_charging_exclusive": {"type": "boolean_list", "entries": "num_cars"},
-    # The car's own on-board charger limit in kW, per car. Caps the charger-derived car_charging_rate
-    # that charger auto-registration (gateway_evc_automatic) exposes; 0 or unset means unknown.
-    # A list with a number or an entity pointer per car, like car_charging_battery_size. A missing,
-    # unknown or unavailable entity just means no cap, so it is not a validation error.
-    "car_charging_max_rate": {"type": "sensor", "sensor_type": "float|none", "entries": "num_cars", "optional_entries": True, "transient_ok": True},
+    # The car's own maximum charge rate in kW, per car: Fetch caps car_charging_rate at it for every
+    # charger integration (car_max_rate_cap()). A list with a number or an entity pointer per car;
+    # a blank entry, 0, or a shorter list means no cap for that car. unknown/unavailable is normal
+    # for a car sensor (the runtime holds the last cap), but an entity that does not exist is an error.
+    "car_charging_max_rate": {"type": "sensor", "sensor_type": "float", "entries": "num_cars", "optional_entries": True, "transient_ok": True, "blank_entries": True},
     "carbon_intensity": {"type": "sensor", "sensor_type": "string"},
     "carbon_postcode": {"type": "string", "empty": False},
     "carbon_automatic": {"type": "boolean"},

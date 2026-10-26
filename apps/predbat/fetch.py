@@ -50,7 +50,6 @@ from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
 import ast
 import copy
 
-
 # Car state that changes at run time and that the plan reads (the rest is configuration, which a debug yaml holds)
 REPLAY_CAR_FIELDS = (
     "car_charging_planned",
@@ -2365,6 +2364,8 @@ class Fetch:
                     # gives the charger more than one power, the component passes on the lowest (catalogue_value(), #5438)
                     self.log("Car {} rate from Octopus is {}kW and configured rate {}".format(car_n, rate, self.car_charging_rate[car_n]))
                     self.car_charging_rate[car_n] = max(rate, self.car_charging_rate[car_n])
+                    # ...but it must not raise it past the car's own maximum (car_charging_max_rate)
+                    self.car_charging_rate[car_n] = self.car_rate_capped(car_n, self.car_charging_rate[car_n])
 
                 # Get car charging limit again from car based on new battery size
                 self.car_charging_limit[car_n] = dp3((float(self.get_arg("car_charging_limit", 100.0, index=car_n)) * self.car_charging_battery_size[car_n]) / 100.0)
@@ -3650,6 +3651,7 @@ class Fetch:
         self.car_charging_battery_size = [100.0 for c in range(self.num_cars)]
         self.car_charging_limit = [100.0 for c in range(self.num_cars)]
         self.car_charging_rate = [7.4 for c in range(max(self.num_cars, 1))]
+        self.car_charging_max_rate = [0.0 for c in range(max(self.num_cars, 1))]
         self.car_charging_slots = [[] for c in range(self.num_cars)]
         self.car_charging_exclusive = [False for c in range(self.num_cars)]
 
@@ -3672,6 +3674,8 @@ class Fetch:
             self.car_charging_battery_size[car_n] = dp2(float(self.get_arg("car_charging_battery_size", 100.0, index=car_n)))
             car_postfix = "" if car_n == 0 else "_" + str(car_n)
             self.car_charging_rate[car_n] = float(self.get_arg("car_charging_rate" + car_postfix))
+            self.car_charging_max_rate[car_n] = self.car_max_rate_cap(car_n)
+            self.car_charging_rate[car_n] = self.car_rate_capped(car_n, self.car_charging_rate[car_n])
             self.car_charging_limit[car_n] = dp3((float(self.get_arg("car_charging_limit", 100.0, index=car_n)) * self.car_charging_battery_size[car_n]) / 100.0)
             self.car_charging_exclusive[car_n] = self.get_arg("car_charging_exclusive", False, index=car_n)
 
@@ -3694,6 +3698,56 @@ class Fetch:
                     self.car_charging_exclusive,
                 )
             )
+
+    def car_max_rate_cap(self, car_n):
+        """
+        Return car car_n's own maximum charge rate in kW from car_charging_max_rate, or 0.0 for no cap.
+
+        Each entry is a number or an entity pointer. Absent, blank, 0, negative or non-numeric means
+        no cap. A pointed-to entity that is unknown/unavailable (a car integration dropping out, a
+        restart) holds the last usable cap for that car, so a sensor drop-out can not briefly put the
+        car back on the charger's rate. A pointer to an entity that does not exist is warned about
+        once and means no cap.
+        """
+        value = self.get_arg("car_charging_max_rate", None, index=car_n, indirect=False)
+        if isinstance(value, str) and is_entity_id(value):
+            entity_id = value
+            value = self.get_state_wrapper(entity_id, required_unit="kW")
+            if value is None:
+                if entity_id not in self.car_charging_max_rate_warned:
+                    self.car_charging_max_rate_warned.add(entity_id)
+                    self.log("Warn: car_charging_max_rate for car {} points to {} which does not exist, so the car's charge rate is not capped".format(car_n, entity_id))
+                self.car_charging_max_rate_held.pop(car_n, None)
+                return 0.0
+            if isinstance(value, str) and value.strip().lower() in ("unknown", "unavailable", ""):
+                return self.car_charging_max_rate_held.get(car_n, 0.0)
+        if value is None or isinstance(value, bool):
+            cap = 0.0
+        else:
+            try:
+                cap = float(value)
+            except (ValueError, TypeError):
+                cap = 0.0
+            if cap != cap or cap <= 0:  # NaN or non-positive
+                cap = 0.0
+        if cap > 0:
+            self.car_charging_max_rate_held[car_n] = cap
+        else:
+            self.car_charging_max_rate_held.pop(car_n, None)
+        return cap
+
+    def car_rate_capped(self, car_n, rate):
+        """
+        Return rate (kW) limited to car car_n's own maximum charge rate (car_charging_max_rate[car_n]).
+
+        The charger's rate is only what the charger can deliver; a car's on-board charger can take
+        less (e.g. a 3.6 kW plug-in hybrid on a 7.4 kW wallbox). A cap of 0 means no cap.
+        """
+        cap = self.car_charging_max_rate[car_n] if car_n < len(self.car_charging_max_rate) else 0.0
+        if cap > 0 and rate > cap:
+            self.log("Car {} charge rate {}kW capped at the car's maximum of {}kW (car_charging_max_rate)".format(car_n, rate, cap))
+            return cap
+        return rate
 
     def fetch_ml_load_forecast(self, now_utc, save=True):
         """
