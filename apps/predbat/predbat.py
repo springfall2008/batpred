@@ -2261,8 +2261,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         # Started
         self.publish_last_started()
 
-        # Run every N minutes aligned to the host's wall clock, from the host's clock rather than
-        # now_utc, as the scheduler in hass.py runs on it
+        # Run every N minutes aligned to the host's wall clock, using the real clock rather than
+        # now_utc; the scheduler in hass.py keeps the time in UTC
         next_time = next_aligned_run(run_every)
         self.log("Predbat: Next run time will be {} and then every {} seconds".format(next_time, run_every))
 
@@ -2272,7 +2272,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         # And then every N minutes
         if not INVERTER_TEST:
             self.run_every(self.run_time_loop, next_time, run_every, random_start=0, random_end=0)
-            self.run_every(self.update_time_loop, datetime.now(), 15, random_start=0, random_end=0)
+            self.run_every(self.update_time_loop, datetime.now(timezone.utc), 15, random_start=0, random_end=0)
         else:
             self.update_time_loop(None)
 

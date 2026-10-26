@@ -19,7 +19,7 @@ compensation curves, and thermal models to predict heating energy
 requirements and costs for heat pump systems.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import pytz
 from utils import str2time, dp2, dp3, minute_data, minutes_since_midnight, next_aligned_run
 
@@ -659,7 +659,7 @@ class PredHeat:
 
         # And then every N minutes
         self.run_every(self.run_time_loop, next_time, run_every, random_start=0, random_end=0)
-        self.run_every(self.update_time_loop, datetime.now(), 5, random_start=0, random_end=0)
+        self.run_every(self.update_time_loop, datetime.now(timezone.utc), 5, random_start=0, random_end=0)
 
     def is_enabled(self):
         """
