@@ -3110,7 +3110,7 @@ Copy the template [teslemetry.yaml](https://raw.githubusercontent.com/springfall
 
 This setup drives the Powerwall through the [Teslemetry](https://www.home-assistant.io/integrations/teslemetry) Home Assistant integration with the energy site paired to its local Powerwall gateway. Predbat reads everything from Home Assistant entities and controls the battery only with the integration's `teslemetry.dispatch_battery_power` and `teslemetry.resume_battery_operation` actions, so no Teslemetry token goes in `apps.yaml` and the commands go over your local network.
 
-- Install the Teslemetry integration (Home Assistant 2026.11 or later, or the Teslemetry HACS release v2026.10.24 or later) and pair your energy site with its local Powerwall gateway
+- Install the [Teslemetry HACS integration](https://github.com/Teslemetry/hass-teslemetry) v2026.10.24 or later, which provides `teslemetry.dispatch_battery_power` and `teslemetry.resume_battery_operation`, and pair your energy site with its local Powerwall gateway
 - Copy the template [teslemetry_local.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/teslemetry_local.yaml) over the top of your `apps.yaml`, and edit for your system
 - Create the two Number helpers and the two pack-total template sensors that the template describes, and set `device_id` to your energy site's device id
 

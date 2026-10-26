@@ -5,10 +5,9 @@
 # actions. No Teslemetry token goes in this file, and Predbat's built-in Teslemetry component is not used.
 #
 # Requirements:
-#   - A Teslemetry Home Assistant integration that provides teslemetry.dispatch_battery_power and
-#     teslemetry.resume_battery_operation (Home Assistant 2026.11 or later, or the Teslemetry HACS
-#     release v2026.10.24 or later). The per-pack energy sensors used for the state of charge below
-#     need the Teslemetry HACS release v2026.10.26 or later.
+#   - The Teslemetry HACS integration (https://github.com/Teslemetry/hass-teslemetry) v2026.10.24 or later,
+#     which provides teslemetry.dispatch_battery_power and teslemetry.resume_battery_operation. The per-pack
+#     energy sensors used for the state of charge below need v2026.10.26 or later.
 #   - The energy site paired with its local Powerwall gateway in the Teslemetry integration, so the
 #     dispatch actions and live values go over the local network.
 #
