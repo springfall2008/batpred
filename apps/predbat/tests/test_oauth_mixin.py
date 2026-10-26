@@ -162,7 +162,7 @@ def test_token_needs_refresh_api_key():
 
 
 def test_token_needs_refresh_valid_token():
-    """Token with > 2h remaining should not need refresh."""
+    """Token with well over the refresh threshold remaining should not need refresh."""
     failed = False
     comp = MockOAuthComponent()
     # Set expiry 3 hours from now
@@ -180,20 +180,40 @@ def test_token_needs_refresh_valid_token():
 
 
 def test_token_needs_refresh_expiring_token():
-    """Token with < 2h remaining should need refresh."""
+    """Token with less than the 30 minute threshold remaining should need refresh."""
     failed = False
     comp = MockOAuthComponent()
-    # Set expiry 1 hour from now (less than 2h threshold)
-    expiry = time.time() + 3600
+    # Set expiry 20 minutes from now (inside the 30 minute threshold)
+    expiry = time.time() + 20 * 60
     comp._init_oauth("oauth", "token", None, "fox_ess")
     comp.token_expires_at = expiry
 
     if not comp._token_needs_refresh():
-        print("ERROR: Token with 1h remaining SHOULD need refresh")
+        print("ERROR: Token with 20m remaining SHOULD need refresh")
         failed = True
 
     if not failed:
         print("PASS: _token_needs_refresh true for expiring token")
+    return failed
+
+
+def test_token_needs_refresh_fresh_one_hour_token():
+    """A freshly issued one-hour token (EDF Kraken) must not need refresh straight away.
+
+    With the old 2-hour threshold it always did, so every Kraken request called the
+    oauth-refresh edge function first.
+    """
+    failed = False
+    comp = MockOAuthComponent()
+    comp._init_oauth("oauth", "token", None, "kraken")
+    comp.token_expires_at = time.time() + 3600
+
+    if comp._token_needs_refresh():
+        print("ERROR: A token with 1h remaining should NOT need refresh")
+        failed = True
+
+    if not failed:
+        print("PASS: _token_needs_refresh false for a fresh one-hour token")
     return failed
 
 
@@ -654,6 +674,7 @@ def run_oauth_mixin_tests(my_predbat):
         ("needs_refresh_apikey", test_token_needs_refresh_api_key),
         ("needs_refresh_valid", test_token_needs_refresh_valid_token),
         ("needs_refresh_expiring", test_token_needs_refresh_expiring_token),
+        ("needs_refresh_fresh_1h", test_token_needs_refresh_fresh_one_hour_token),
         ("needs_refresh_no_expiry", test_token_needs_refresh_no_expiry),
         ("check_apikey_mode", test_check_and_refresh_api_key_mode),
         ("check_oauth_failed", test_check_and_refresh_oauth_failed),

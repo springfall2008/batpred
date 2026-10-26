@@ -35,6 +35,7 @@ import time
 import prediction_kernel
 from const import PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, MINUTE_WATT
 from prediction import Prediction
+from prediction_batch import export_end_soc_from_series, floor_export_limits
 from prediction_kernel import create_kernel_context, run_prediction_kernel, load_kernel
 from utils import remove_intersecting_windows, unpack_export_limit
 from tests.test_infra import reset_inverter, reset_rates
@@ -402,7 +403,8 @@ def dual_run(name, my_predbat, pv_step, pv10_step, load_step, load10_step, charg
     # Python engine first (kernel disabled so run_prediction cannot dispatch)
     my_predbat.prediction_kernel_enable = False
     prediction = Prediction(my_predbat, pv_step, pv10_step, load_step, load10_step, pv90_step, load90_step)
-    python_result = prediction.run_prediction(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, save=None, cache=False)
+    # export_floor=False: the pv10 export floor is applied before dispatch, not in the hot loop these compare
+    python_result = prediction.run_prediction(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, save=None, cache=False, export_floor=False)
 
     # Kernel run on the identical Prediction state
     prediction.kernel_handle = create_kernel_context(prediction)
@@ -418,7 +420,7 @@ def dual_run(name, my_predbat, pv_step, pv10_step, load_step, load10_step, charg
 
     # Also check the run_prediction dispatch glue path picks the kernel and agrees
     prediction.prediction_kernel_enable = True
-    dispatch_result = prediction.run_prediction(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, save=None, cache=False)
+    dispatch_result = prediction.run_prediction(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, save=None, cache=False, export_floor=False)
     failed |= compare_results(name + "_dispatch", kernel_result, dispatch_result)
     return failed
 
@@ -846,6 +848,80 @@ def run_random_sweep_tests(my_predbat, count=150):
     return failed
 
 
+def run_export_floor_parity_tests(my_predbat, count=60):
+    """The kernel's export floor matches the Python rule exactly, returns True on failure.
+
+    Three checks per seeded configuration: a single kernel run given floor SoCs agrees with the Python
+    engine running limits floored by floor_export_limits (all three scenarios); a batched job given the
+    same floor SoCs is bit-identical to that single run; and a batched job floored from its nominal
+    twin's window-end SoCs in the same batch is bit-identical to a single run given those SoCs.
+    """
+    print("**** Running kernel export floor parity tests ****")
+    failed = False
+    checked = 0
+    for seed in range(count):
+        rng = random.Random(70000 + seed)
+        reset_inverter(my_predbat)
+        reset_rates(my_predbat, 10.0, 5.0)
+        my_predbat.battery_rate_max_export = my_predbat.battery_rate_max_discharge
+        apply_random_scenario(my_predbat, rng)
+        pv_step, pv10_step, load_step, load10_step = make_step_data(my_predbat, rng=rng)
+        charge_window = make_windows(rng, my_predbat.minutes_now, my_predbat.forecast_minutes, rng.randint(0, 3))
+        charge_limit = [round(rng.uniform(0, my_predbat.soc_max), 2) for _ in charge_window]
+        export_window = make_windows(rng, my_predbat.minutes_now, my_predbat.forecast_minutes, rng.randint(1, 4))
+        export_limits = [unpack_export_limit(rng.choice([0.0, 0.0, round(rng.uniform(0, 60), 1), 99.0, 100.0])) for _ in export_window]
+        floors = [rng.choice([-1.0, round(rng.uniform(0, my_predbat.soc_max), 3), round(rng.uniform(0, my_predbat.soc_max), 3)]) for _ in export_window]
+        end_record = my_predbat.forecast_minutes
+
+        my_predbat.prediction_kernel_enable = False
+        prediction = Prediction(my_predbat, pv_step, pv10_step, load_step, load10_step)
+        floored = floor_export_limits(export_limits, floors, prediction.soc_max)
+        prediction.kernel_handle = create_kernel_context(prediction)
+        if not prediction.kernel_handle:
+            print("ERROR: export floor parity kernel context creation failed")
+            return True
+        for pv_scenario in (PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90):
+            handle = prediction.kernel_handle
+            prediction.kernel_handle = 0
+            python_result = prediction.run_prediction(charge_limit, charge_window, export_window, floored, pv_scenario, end_record, save=None, cache=False, export_floor=False)
+            prediction.kernel_handle = handle
+            kernel_result = run_prediction_kernel(prediction, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, 5, False, export_floor_soc=floors)
+            if kernel_result is None:
+                print("ERROR: export floor parity kernel run failed at seed {}".format(seed))
+                return True
+            failed |= compare_results("export_floor_{}_s{}".format(seed, pv_scenario), python_result, kernel_result)
+
+            if prediction_kernel.KERNEL_HAS_BATCH:
+                # A batched job carrying the floor SoCs directly is bit-identical to the single run
+                job = prediction_kernel.BatchJob(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, 5)
+                job.export_floor_soc = floors
+                batched = prediction_kernel.run_prediction_kernel_batch(prediction, [job], 1)
+                if batched is None or batched[0][0] is None or tuple(batched[0][0][:11]) != tuple(kernel_result[:11]):
+                    print("ERROR: seed {} scenario {} batched floor {} differs from the single run {}".format(seed, pv_scenario, batched[0][0][:11] if batched and batched[0][0] else batched, kernel_result[:11]))
+                    failed = True
+
+        if prediction_kernel.KERNEL_HAS_BATCH:
+            # Floored from its nominal twin in the same batch, at every thread count
+            twin = prediction_kernel.BatchJob(charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, end_record, 5)
+            twin.need_export_end_soc = True
+            single_twin = run_prediction_kernel(prediction, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, end_record, 5, False)
+            twin_ends = export_end_soc_from_series(single_twin[11], export_window, prediction.minutes_now, export_limits)
+            expect = run_prediction_kernel(prediction, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_PV10, end_record, 5, False, export_floor_soc=twin_ends)
+            for n_threads in (1, 4):
+                pv10 = prediction_kernel.BatchJob(charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_PV10, end_record, 5)
+                pv10.floor_twin = twin
+                batched = prediction_kernel.run_prediction_kernel_batch(prediction, [pv10, twin], n_threads)
+                if batched is None or batched[0][0] is None or tuple(batched[0][0][:11]) != tuple(expect[:11]):
+                    print("ERROR: seed {} at {} threads twin-floored pv10 {} differs from the single run {}".format(seed, n_threads, batched[0][0][:11] if batched and batched[0][0] else batched, expect[:11]))
+                    failed = True
+        checked += 1
+        if failed:
+            break
+    if not failed:
+        print("Export floor parity: {} configurations agree (single, batch, twin-floored batch)".format(checked))
+    return failed
+
+
 def make_intersecting_windows(rng, minutes_now, forecast_minutes):
     """Build a charge/export layout that deliberately exercises window clipping.
 
@@ -1005,6 +1081,9 @@ def build_batch_jobs(my_predbat, rng, count, window_variants=1):
                 soc_range_end_step=end_step,
                 want_range=range_window is not None,
                 range_window=range_window,
+                # Every other job also asks for the SoC at each export window's end, as optimise_export's
+                # nominal trials do, so both shapes of job share a batch
+                want_export_end_soc=(index % 2) == 1,
             )
         )
     return prediction, jobs
@@ -1014,7 +1093,8 @@ def build_batch_reference(prediction, jobs):
     """Run one pk_run per job to build the reference results run_prediction_kernel_batch is checked against.
 
     The SoC series is materialised (unlike the batch path) so the range can be scanned in Python
-    exactly as thread_run_prediction_charge_min_max does. Returns None if a reference run itself fails.
+    exactly as thread_run_prediction_charge_min_max does, and the window-end SoCs read from it exactly
+    as the Python fallback does. Returns None if a reference run itself fails.
     """
     reference = []
     for job in jobs:
@@ -1026,7 +1106,8 @@ def build_batch_reference(prediction, jobs):
             soc_range = (prediction.soc_max, 0)
         else:
             soc_range = prediction.scan_soc_range(single[11], job.range_window)
-        reference.append((single, soc_range))
+        export_end = export_end_soc_from_series(single[11], job.export_window, prediction.minutes_now, job.export_limits) if job.want_export_end_soc else None
+        reference.append((single, soc_range, export_end))
     return reference
 
 
@@ -1037,8 +1118,11 @@ def check_batch_results(jobs, reference, batched, n_threads):
         return True
 
     failed = False
-    for index, (result_tuple, soc_range_min, soc_range_max) in enumerate(batched):
-        single, (expect_min, expect_max) = reference[index]
+    for index, (result_tuple, soc_range_min, soc_range_max, export_end) in enumerate(batched):
+        single, (expect_min, expect_max), expect_export_end = reference[index]
+        if export_end != expect_export_end:
+            print("ERROR: job {} at {} threads window-end SoCs {} expected {}".format(index, n_threads, export_end, expect_export_end))
+            failed = True
         if result_tuple is None:
             print("ERROR: job {} reported a non-zero status at {} threads".format(index, n_threads))
             failed = True
@@ -1296,8 +1380,11 @@ def run_scratch_cross_context_tests(my_predbat, rounds=3):
                 if batched is None:
                     print("ERROR: cross-context batch call failed for {} minutes".format(forecast_minutes))
                     return True
-                for index, (result_tuple, soc_range_min, soc_range_max) in enumerate(batched):
-                    single, (expect_min, expect_max) = reference[index]
+                for index, (result_tuple, soc_range_min, soc_range_max, export_end) in enumerate(batched):
+                    single, (expect_min, expect_max), expect_export_end = reference[index]
+                    if export_end != expect_export_end:
+                        print("ERROR: round {} {} minutes job {} window-end SoCs {} want {}".format(round_n, forecast_minutes, index, export_end, expect_export_end))
+                        failed = True
                     if result_tuple is None:
                         print("ERROR: round {} {} minutes job {} reported a non-zero status".format(round_n, forecast_minutes, index))
                         failed = True
@@ -1361,8 +1448,11 @@ def run_worker_reuse_tests(my_predbat, batches=10, n_threads=4):
 def compare_batch_to_reference(label, batched, reference):
     """Compare a batch's results against a per-job pk_run reference, returns True on failure"""
     failed = False
-    for index, (result_tuple, soc_range_min, soc_range_max) in enumerate(batched):
-        single, (expect_min, expect_max) = reference[index]
+    for index, (result_tuple, soc_range_min, soc_range_max, export_end) in enumerate(batched):
+        single, (expect_min, expect_max), expect_export_end = reference[index]
+        if export_end != expect_export_end:
+            print("ERROR: {} job {} window-end SoCs {} want {}".format(label, index, export_end, expect_export_end))
+            failed = True
         if result_tuple is None:
             print("ERROR: {} job {} reported a non-zero status".format(label, index))
             failed = True
@@ -1547,6 +1637,7 @@ def run_kernel_parity_tests(my_predbat):
         failed = run_marshalling_tests()
         failed |= run_soc_percent_table_tests()
         failed |= run_edge_case_tests(my_predbat)
+        failed |= run_export_floor_parity_tests(my_predbat)
         if not failed:
             failed |= run_random_sweep_tests(my_predbat)
         if not failed:

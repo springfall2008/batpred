@@ -1,6 +1,7 @@
 # Custom Dictionary Words
 3hy
 aaaabbbbccccdddd
+ABCDEFGHJKLMNP
 acks
 activepower
 adata
@@ -8,6 +9,7 @@ adbase
 afci
 afewyards
 agentic
+agilepredict
 AIO
 AIO's
 aiofiles
@@ -184,6 +186,7 @@ ECONNRESET
 ecosmart
 Eddi
 eddis
+edfenergy
 efgh
 elif
 elinter
@@ -240,6 +243,7 @@ figsize
 finaliser
 Fingerbot
 firstparty
+flextras
 fline
 FLOMASTA
 fontsize

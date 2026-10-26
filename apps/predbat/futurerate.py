@@ -6,6 +6,7 @@ Octopus tariff period.
 """
 
 from datetime import datetime, timedelta
+import hashlib
 import requests
 import json
 import copy
@@ -15,6 +16,14 @@ from ha import run_async
 from utils import dp1, dp2, minute_data, strptime_aware
 
 TIME_FORMAT_NORD = "%d-%m-%YT%H:%M:%S%z"
+
+# AgilePredict (https://agilepredict.com) forecasts Octopus Agile prices per region for up to 14 days
+AGILEPREDICT_DEFAULT_URL = "https://prices.fly.dev/api/"
+AGILEPREDICT_REGIONS = "ABCDEFGHJKLMNP"
+# AgilePredict publishes new forecasts four times a day, so a 30 minute cache is plenty fresh
+AGILEPREDICT_CACHE_MINUTES = 30
+# Always ask for the same span so that every user of a shared cache asks for the same URL
+AGILEPREDICT_DAYS = 5
 
 
 class FutureRate:
@@ -316,8 +325,25 @@ class FutureRate:
     def futurerate_analysis(self, rate_import_real, rate_export_real):
         """
         Analyse futurerate energy data
-        """
 
+        Nord Pool day-ahead prices (futurerate_url) are used where they exist, and the AgilePredict
+        forecast (futurerate_agilepredict) fills the minutes beyond them.
+        """
+        mdata_import, mdata_export = self.futurerate_analysis_nordpool(rate_import_real, rate_export_real)
+
+        if self.get_arg("futurerate_agilepredict", False):
+            ap_import, ap_export = self.agilepredict_analysis()
+            for minute, rate in ap_import.items():
+                mdata_import.setdefault(minute, rate)
+            for minute, rate in ap_export.items():
+                mdata_export.setdefault(minute, rate)
+
+        return mdata_import, mdata_export
+
+    def futurerate_analysis_nordpool(self, rate_import_real, rate_export_real):
+        """
+        Analyse Nord Pool futurerate data from futurerate_url
+        """
         url = None
         if "futurerate_url" in self.base.args:
             url = self.base.args["futurerate_url"]
@@ -335,6 +361,152 @@ class FutureRate:
         else:
             print("Warning: Old futurerate URL, you must update this in apps.yaml")
             return {}, {}
+
+    @staticmethod
+    def agilepredict_region_from_tariff(tariff_code):
+        """
+        Return the Octopus region letter at the end of a tariff code (e.g. E-1R-AGILE-24-10-01-G), or None
+        """
+        if not tariff_code or not isinstance(tariff_code, str):
+            return None
+        region = tariff_code.strip().split("-")[-1].upper()
+        if len(region) == 1 and region in AGILEPREDICT_REGIONS:
+            return region
+        return None
+
+    def agilepredict_region(self):
+        """
+        The Octopus region to fetch the AgilePredict forecast for: futurerate_agilepredict_region if set,
+        else the region of the configured Octopus import (then export) tariff
+        """
+        region = self.get_arg("futurerate_agilepredict_region", None, indirect=False)
+        if region:
+            region = str(region).strip().upper()
+            if region in AGILEPREDICT_REGIONS and len(region) == 1:
+                return region
+            self.log("Warn: FutureRate: futurerate_agilepredict_region {} is not a valid Octopus region".format(region))
+            return None
+
+        for arg in ["metric_octopus_import", "metric_octopus_export"]:
+            entity = self.get_arg(arg, default=None, indirect=False)
+            if not entity:
+                continue
+            tariff_code = self.get_state_wrapper(entity, attribute="tariff_code")
+            if not tariff_code:
+                tariff_code = self.get_state_wrapper(entity, attribute="tariff")
+            region = self.agilepredict_region_from_tariff(tariff_code)
+            if region:
+                return region
+        return None
+
+    def agilepredict_analysis(self):
+        """
+        Fetch the AgilePredict forecast and convert it to minute data (p/kWh, minutes from midnight UTC)
+
+        The forecast is already in retail Agile prices, so unlike Nord Pool data it is not calibrated.
+        """
+        adjust_import = self.get_arg("futurerate_adjust_import", False)
+        adjust_export = self.get_arg("futurerate_adjust_export", False)
+        if not adjust_import and not adjust_export:
+            self.log("FutureRate: No futurerate adjustment enabled, skipping AgilePredict")
+            return {}, {}
+
+        region = self.agilepredict_region()
+        if not region:
+            self.log("Warn: FutureRate: Unable to work out the Octopus region for AgilePredict, set futurerate_agilepredict_region")
+            return {}, {}
+
+        base_url = str(self.get_arg("futurerate_agilepredict_url", AGILEPREDICT_DEFAULT_URL, indirect=False))
+        if not base_url.endswith("/"):
+            base_url += "/"
+        url = "{}{}/?days={}&high_low=false".format(base_url, region, AGILEPREDICT_DAYS)
+
+        mdata_import = {}
+        mdata_export = {}
+        if adjust_import:
+            mdata_import = self.agilepredict_to_minutes(self.download_agilepredict_data(url))
+        if adjust_export:
+            mdata_export = self.agilepredict_to_minutes(self.download_agilepredict_data(url + "&export=true"))
+
+        self.log("FutureRate: AgilePredict region {} gave {} import and {} export minutes".format(region, len(mdata_import), len(mdata_export)))
+        return mdata_import, mdata_export
+
+    def agilepredict_to_minutes(self, pdata):
+        """
+        Convert an AgilePredict API response (a list of forecasts, newest first) to minute data
+        """
+        mdata = {}
+        if not pdata or not isinstance(pdata, list) or not isinstance(pdata[0], dict):
+            return mdata
+        prices = pdata[0].get("prices", [])
+        if not isinstance(prices, list):
+            return mdata
+
+        points = []
+        for item in prices:
+            try:
+                stamp = datetime.fromisoformat(str(item["date_time"]).replace("Z", "+00:00"))
+                rate = float(item["agile_pred"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if stamp.tzinfo is None:
+                continue
+            points.append((int((stamp - self.midnight_utc).total_seconds() / 60), rate))
+        points.sort()
+
+        for index, (minute_start, rate) in enumerate(points):
+            minute_end = minute_start + 30
+            if index + 1 < len(points):
+                minute_end = min(points[index + 1][0], minute_end)
+            for minute in range(minute_start, minute_end):
+                mdata[minute] = dp2(rate)
+        return mdata
+
+    def download_agilepredict_data(self, url):
+        """
+        Download AgilePredict data, through the storage cache when there is one so that instances
+        sharing a cache fetch each URL once per refresh rather than once each
+        """
+        if not self.storage or not hasattr(self.storage, "fetch_cached"):
+            return self.download_agilepredict_data_func(url)
+
+        async def _download():
+            return self.download_agilepredict_data_func(url)
+
+        url_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
+        try:
+            return run_async(self.storage.fetch_cached("agilepredict", url_hash, _download, fresh_minutes=AGILEPREDICT_CACHE_MINUTES, stale_minutes=AGILEPREDICT_CACHE_MINUTES + 5, format="json"))
+        except Exception as e:  # pylint: disable=broad-except
+            self.log("Warn: FutureRate: AgilePredict cache error {}".format(e))
+            return None
+
+    def download_agilepredict_data_func(self, url):
+        """
+        Fetch AgilePredict data from the API, returning None on failure
+
+        Failures are only logged, not recorded as errors: the forecast is optional and without it
+        the plan falls back to copying the previous day's rates.
+        """
+        try:
+            r = requests.get(url, timeout=60)
+        except Exception as e:  # pylint: disable=broad-except
+            self.log("Warn: Error downloading AgilePredict data from URL {}, request exception {}".format(url, e))
+            return None
+
+        if r.status_code not in [200]:
+            self.log("Warn: Error downloading AgilePredict data from URL {}, code {}".format(url, r.status_code))
+            return None
+
+        try:
+            struct = r.json()
+        except ValueError:
+            self.log("Warn: Error decoding AgilePredict data from URL {}".format(url))
+            return None
+
+        if not isinstance(struct, list) or not struct:
+            self.log("Warn: AgilePredict data from URL {} has no forecasts".format(url))
+            return None
+        return struct
 
     def clean_futurerate_cache(self):
         """

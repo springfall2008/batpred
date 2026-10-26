@@ -1257,7 +1257,7 @@ For each charger, with `<id>` being the Hypervolt charger id:
 | ------ | ----------- |
 | `sensor.predbat_hypervolt_<id>_status` | `charging`, `connected` (a car is plugged in), `stopped` (charging has been stopped, by you or by Predbat), `disconnected` or `unknown`. Attributes give the model, name, firmware, charge mode details, the raw `release_state` and `pilot_status`, the lock state, and `stale`, which is true when the charger has sent nothing for four minutes |
 | `sensor.predbat_hypervolt_<id>_power` | Charging power in W |
-| `sensor.predbat_hypervolt_<id>_session_energy` | Energy added in the current session in kWh. It keeps the last session's value until the next session starts, rather than going `unknown` |
+| `sensor.predbat_hypervolt_<id>_session_energy` | Energy added in the current session in kWh. Where the charger sends a session id (V2) it keeps the last session's value until the next session starts, rather than going `unknown`. A charger on the V3 API sends no session id and reports 0 when charging stops (seen on a Home 3 Pro, firmware 4009), so on the V3 API any reading below the held value starts a new session and the sensor returns to 0 at a stop |
 | `binary_sensor.predbat_hypervolt_<id>_connected` | On while a car is plugged in. A charger that has not yet reported its cable since Predbat started shows on while charging and `unavailable` otherwise |
 | `binary_sensor.predbat_hypervolt_<id>_plugged` | The cable alone: on or off from the charger's report, `unavailable` until it has reported |
 | `binary_sensor.predbat_hypervolt_<id>_charging` | On while the car is charging |
@@ -1938,6 +1938,7 @@ All entities use the pattern `sensor.predbat_kraken_{account_id}_{suffix}` (acco
 | `sensor.predbat_kraken_a_12345678_import_standing` | Daily standing charge in £/day |
 | `sensor.predbat_kraken_a_12345678_export_rates` | Export rate periods — only present when an export tariff is found |
 | `binary_sensor.predbat_kraken_a_12345678_intelligent_dispatch[_N]` | On when a SmartFlex dispatch slot is active for device `N` — only present for accounts with a SmartFlex-managed EV device. The `dispatches_fetched_at` attribute is when the dispatches were last fetched successfully |
+| `sensor.predbat_kraken_a_12345678_free_electricity` | EDF Flextras free hours you have booked: `on` during a booked hour, `off` otherwise, with the booked hours in the `events` attribute - consumed by Predbat automatically and priced at 0p (see [EDF Flextras](energy-rates.md#kraken-integration-for-edf-or-eonnext)). EDF accounts only |
 
 Predbat is automatically configured to use these energy rates once Kraken is enabled.
 
