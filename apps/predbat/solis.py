@@ -260,6 +260,10 @@ SOLIS_SLOT_PROBE_RETRY_SECONDS = 60 * 60
 # reply carries the owner's station name and address, which must stay out of a log shared with support.
 SOLIS_DETAIL_SUMMARY_PATTERN = re.compile(r"model|version|firmware|machine|^power(Str)?$|^parallelBattery$|^batteryType(Name)?$|^batteryCount$", re.IGNORECASE)
 
+# inverterDetail `machine` of a grid-tied string inverter, which has no battery port: Solis names these
+# <series>-GR<phases>P (S6-GR1P6K, S5-GR3P10K), against EH/EA/RHI/RAI for the hybrid and storage ranges
+SOLIS_GRID_TIED_MACHINE_PATTERN = re.compile(r"^S\d+-GR\dP", re.IGNORECASE)
+
 def parse_cid_int(value, default=None):
     """Convert a CID register value to an int, returning default when it is missing or not numeric.
 
@@ -2192,13 +2196,22 @@ class SolisAPI(ComponentBase, OAuthMixin):
         dropped by one such response - on the one-shot automatic_config() pass that leaves Predbat
         planning with no battery until a restart. The pack counts are what corroborate them. Every
         field must be present, so an empty or unread detail still counts as a battery, and a named
-        pack is decided before any of this is looked at.
+        pack is decided before any of this is looked at. The code 0 is matched by value, as one
+        string inverter reports '0' and '0.0' on alternate polls.
+
+        A machine Solis names grid-tied (S6-GR1P6K) has no battery port, so once its readings are
+        present and zero the pack fields are not needed to corroborate them: one such unit was
+        enrolled with batteryType '0' and zero readings, so its pack fields did not read as empty.
+        A named pack still settles it first, and live or missing readings keep the battery, so a
+        misreported model cannot drop a battery that is actually reading.
         """
         battery_type = str(detail.get("batteryType") or "").strip()
         if battery_type.lower() == "no battery":
             return True
-        if battery_type and battery_type != "0":
+        if battery_type and not SolisAPI._reads_zero(detail, "batteryType"):
             return False
+        if SOLIS_GRID_TIED_MACHINE_PATTERN.match(str(detail.get("machine") or "")) and SolisAPI._reads_zero(detail, "batteryVoltage") and SolisAPI._reads_zero(detail, "batteryCapacitySoc"):
+            return True
         battery_list = detail.get("batteryList")
         for entry in battery_list if isinstance(battery_list, list) else []:
             if not isinstance(entry, dict):
