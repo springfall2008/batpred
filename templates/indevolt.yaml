@@ -75,7 +75,7 @@ pred_bat:
   # INDEVOLT - custom inverter definition
   # ---------------------------------------------------------------
   num_inverters: 1
-  inverter_type: 'IV'
+  inverter_type: 'Indevolt'
 
   inverter:
     name: "Indevolt"
