@@ -113,6 +113,16 @@ MOCK_PLUGNCHARGE_GET = {"applied": "boost"}
 MOCK_PLUGNCHARGE_SET = {"mode": "boost", "applied": True}
 MOCK_FIRMWARE = "2483.2"
 
+# Captured from a Home 3 Pro on firmware 4009 (V3 API), 26 Oct 2026 - the stand-ins above are V2-shaped:
+# a V3 session carries no session id, milli_amps, ccy_spent or ct_power
+MOCK_V3_SNAPSHOT = [{"brightness": 0.25}, {"lock_state": "unlocked"}, {"release_state": "default"}, {"max_current": 32000}, {"ct_flags": 0}, {"solar_mode": "boost"}, {"features": ["mms", "home-battery-drain-prevention", "enhanced-energy"]}, {"random_start": False}, {"effect_name": "party_mode"}]
+MOCK_V3_FIRMWARE = "4009"
+MOCK_V3_SESSION_UNPLUGGED = {"carbon_saved_grams": 0, "charging": False, "ct_current": 20600, "energy_flow": [], "ev_power": 0, "generation_power": 5065, "grid_power": -5065, "house_power": 0, "true_milli_amps": 0, "voltage": 0, "watt_hours": 0}
+# The first messages of a charge: current is flowing but ev_power has not caught up
+MOCK_V3_SESSION_STARTING = {"carbon_saved_grams": 2, "charging": True, "ct_current": 32700, "energy_flow": ["grid_to_ev", "grid_to_house"], "ev_power": 3, "generation_power": 0, "grid_power": 7716, "house_power": 7713, "true_milli_amps": 30400, "voltage": 231, "watt_hours": 7}
+MOCK_V3_SESSION_CHARGING = {"carbon_saved_grams": 19, "charging": True, "ct_current": 33000, "energy_flow": ["grid_to_ev", "grid_to_house"], "ev_power": 7087, "generation_power": 0, "grid_power": 7692, "house_power": 605, "true_milli_amps": 30800, "voltage": 231, "watt_hours": 44}
+MOCK_V3_REFUSED_PILOT = {"code": -32601, "data": None, "message": "get.pilot_status not allowed"}
+
 MOCK_CHARGERS = {"chargers": [{"id": V3_ID, "model": "Home 3 Pro", "adopted_at": "2024-01-01T00:00:00.000Z"}]}
 
 
@@ -335,7 +345,8 @@ async def _logged_in(transport, socket, charger_id=V3_ID):
 
 
 def test_sync_login_and_state_requests():
-    """The sync socket logs in with the token, then asks for state; plugncharge only on the V3 API."""
+    """The sync socket logs in with the token, then asks for state; plugncharge only on the V3 API,
+    and get.pilot_status only on the V2 API - a V3 charger refuses it and pushes the status after login."""
     for charger_id, expect_plugncharge in ((V3_ID, True), (V2_ID, False)):
         socket = FakeSocket()
         session, connects = _ws_session([socket])
@@ -355,9 +366,10 @@ def test_sync_login_and_state_requests():
         assert all(message["jsonrpc"] == "2.0" and message["id"] for message in socket.sent)
         assert len({message["id"] for message in socket.sent}) == len(socket.sent)
         methods = socket.methods()
-        for method in ("sync.snapshot", "firmware.version", "get.name", "get.pilot_status"):
+        for method in ("sync.snapshot", "firmware.version", "get.name"):
             assert method in methods, methods
         assert ("plugncharge.get" in methods) == expect_plugncharge, methods
+        assert ("get.pilot_status" in methods) == (not expect_plugncharge), methods
     print("  ✓ Sync socket logs in then asks for state")
 
 
@@ -434,6 +446,30 @@ def test_request_error_reply():
     with patch("aiohttp.ClientSession", return_value=session), patch("hypervolt.record_api_call"):
         run_async(scenario())
     print("  ✓ Error reply raises HypervoltRefusedError")
+
+
+def test_request_error_reply_v3_shape():
+    """A V3 error reply carries its reason in "message", and the raised error keeps it."""
+    socket = FakeSocket()
+    session, _ = _ws_session([socket])
+
+    async def scenario():
+        """Answer a command with a captured V3 error."""
+        transport = _signed_in_transport()
+        await _logged_in(transport, socket)
+        task = asyncio.ensure_future(transport.request(V3_ID, "sync.apply", {"max_current": 16000}))
+        await _settle()
+        socket.queue({"jsonrpc": "2.0", "id": socket.last("sync.apply")["id"], "error": MOCK_V3_REFUSED_PILOT})
+        try:
+            await task
+            raise AssertionError("Expected HypervoltRefusedError")
+        except HypervoltRefusedError as exc:
+            assert "-32601" in str(exc) and "not allowed" in str(exc), str(exc)
+        await transport.close()
+
+    with patch("aiohttp.ClientSession", return_value=session), patch("hypervolt.record_api_call"):
+        run_async(scenario())
+    print("  ✓ V3 error reply keeps its reason")
 
 
 def test_request_timeout():
@@ -713,6 +749,26 @@ def test_captured_payloads():
     apply_pilot(charger, MOCK_PILOT_C)
     assert status_text(charger) == "charging" and charger.power_w == 7440.0 and charger.session_energy_kwh == 5.12
     print("  ✓ Stand-in payloads give their states")
+
+
+def test_captured_v3_payloads():
+    """Messages captured from a real V3 charger give the state they were captured in."""
+    charger = HypervoltCharger(V3_ID, api_version=charger_api_version(V3_ID, MOCK_V3_FIRMWARE))
+    apply_snapshot(charger, MOCK_V3_SNAPSHOT)
+    assert charger.release_state == "default" and charger.max_current_a == 32 and charger.charge_mode == "boost"
+    apply_pilot(charger, MOCK_PILOT_A)
+    apply_session(charger, MOCK_V3_SESSION_UNPLUGGED)
+    assert status_text(charger) == "disconnected" and charger.power_w == 0.0 and charger.session_energy_kwh == 0.0
+    apply_pilot(charger, MOCK_PILOT_C)
+    apply_session(charger, MOCK_V3_SESSION_STARTING)
+    # ev_power reads 3 W while 30.4 A flows at 231 V, so the power comes from current x voltage
+    assert status_text(charger) == "charging" and abs(charger.power_w - 30.4 * 231) < 0.5, charger.power_w
+    apply_session(charger, MOCK_V3_SESSION_CHARGING)
+    assert charger.power_w == 7087.0 and charger.session_energy_kwh == 0.044
+    # Unplug and plug back in: watt_hours starts again from 0 with no session id, so the energy resets
+    apply_session(charger, dict(MOCK_V3_SESSION_CHARGING, watt_hours=0))
+    assert charger.session_energy_kwh == 0.0
+    print("  ✓ Captured V3 payloads give their states")
 
 
 def test_on_message_updates_charger():
@@ -1975,6 +2031,7 @@ def test_hypervolt(my_predbat=None):
     test_login_refused()
     test_request_reply()
     test_request_error_reply()
+    test_request_error_reply_v3_shape()
     test_request_timeout()
     test_late_reply_is_ignored()
     test_reader_skips_bad_json()
@@ -1992,6 +2049,7 @@ def test_hypervolt(my_predbat=None):
     test_status_text()
     test_charge_mode_options()
     test_captured_payloads()
+    test_captured_v3_payloads()
     test_on_message_updates_charger()
     test_backoff_sequence()
     test_reconnects_with_backoff()
