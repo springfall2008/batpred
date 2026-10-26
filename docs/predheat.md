@@ -80,7 +80,7 @@ Set **internal_temperature** to point to one or more internal temperature sensor
 
 The **weather** configuration points to the Open Weather Map sensor by default so should work as-is.
 
-Set the **target_temperature** to point to a sensor that indicates what your boiler thermostat is set to, or manually enter the temperature setting here.
+Set the **target_temperature** to point to a sensor that indicates what your boiler thermostat is set to, or manually enter the temperature setting here. If no target-temperature history is available, Predheat uses 21.5 °C as the fallback setpoint.
 
 Set **smart_thermostat** to True if your thermostat starts the boiler ahead of time for the new target temperature or False for regular options.
 When enabled, Predheat models each rise in the scheduled target temperature over the forecast as a pre-heat: it works out how long the heating takes to reach the new target, using only the heating period the rise belongs to (until the target next falls below the new value), and raises the target that much earlier.
