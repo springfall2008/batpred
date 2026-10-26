@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 from utils import MinuteArray
 from tests.test_single_debug import apply_overrides
-from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, plan_state_now, model_car_charging_now, rebuild_io_rates, run_soc, chart_replay, simulate_soc, install_logged_load_divergence, remove_logged_load_divergence, soc_rms_error, version_change, apply_logged_load_forecast, apply_logged_pv_forecast, parse_log, parse_override, rescan_rate_stats, counter_gain, crosses_midnight, shift_cumulative, shift_windows, roll_over_midnight, apply_run, today_values, apply_logged_rates, apply_logged_load_exact, apply_logged_pv_exact, apply_logged_sessions, apply_logged_dispatch, replay_records, plan_metrics, write_replay_json, yaml_stand_in
+from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, plan_state_now, model_car_charging_now, rebuild_io_rates, run_soc, chart_replay, simulate_soc, install_logged_load_divergence, remove_logged_load_divergence, soc_rms_error, version_change, apply_logged_load_forecast, apply_logged_pv_forecast, parse_log, parse_override, rescan_rate_stats, counter_gain, crosses_midnight, shift_cumulative, shift_windows, roll_over_midnight, apply_run, today_values, apply_logged_rates, apply_logged_load_exact, apply_logged_pv_exact, apply_logged_sessions, apply_logged_dispatch, replay_records, plan_metrics, write_replay_json, yaml_stand_in, run_gap
 
 SAMPLE_LOG = """2026-10-01 08:30:00.575570: --------------- PredBat - update at 2026-10-01 08:30:00+01:00 with clock skew 0 minutes, minutes now 510
 2026-10-01 08:30:00.577646: Predbat /config/github.py repository springfall2008/batpred version v9.3.3 currently running, latest version is v9.3.3, latest beta is v9.3.3
@@ -576,6 +576,33 @@ def test_apply_run_clears_p90_signatures():
     return 0
 
 
+def test_clocks_go_back():
+    """When the clocks go back the run after 01:55 BST is 01:15 GMT: 20 minutes on, though minutes_now falls from 115 to 75."""
+    bat = SimpleNamespace(
+        minutes_now=115,
+        now_utc=datetime(2026, 10, 25, 0, 55, tzinfo=timezone.utc),
+        load_minutes={},
+        import_today={},
+        export_today={},
+        pv_today={},
+        inverters=[],
+        rate_export={},
+        pv_forecast_minute90_signatures=None,
+        soc_max=18.08,
+    )
+    prev = {"today": None, "force": None, "time": "2026-10-25 01:55:00+01:00"}
+    run = {"time": "2026-10-25 01:15:00+00:00", "minutes_now": 75, "soc": ("10.0", "55", "0")}
+    failed = 0
+    if run_gap(prev, run) != 20:
+        print("ERROR: the gap across the clock change should be 20 minutes, got {}".format(run_gap(prev, run)))
+        failed += 1
+    apply_run(bat, prev, run)
+    if bat.minutes_now != 75 or bat.now_utc != datetime(2026, 10, 25, 1, 15, tzinfo=timezone.utc):
+        print("ERROR: apply_run should take live's minutes_now and move the clock 20 minutes: {} {}".format(bat.minutes_now, bat.now_utc))
+        failed += 1
+    return failed
+
+
 STATE_RATES_LOG = """2026-10-04 11:50:00.000000: --------------- PredBat - update at 2026-10-04 11:50:00+01:00 with clock skew 0 minutes, minutes now 710
 2026-10-04 11:50:01.000000: Replay input: rates changed, from 11:50 import [[0, 7.5], [10, 31.16]] 30 export [[0, 15.0]] 20 import_base [] 0 export_base [[0, 15.0]] 20
 2026-10-04 11:55:00.000000: --------------- PredBat - update at 2026-10-04 11:55:00+01:00 with clock skew 0 minutes, minutes now 715
@@ -1110,6 +1137,7 @@ def run_replay_forward_tests(my_predbat):
     failed += test_set_export_window_after_midnight()
     failed += test_parse_log_invalid_plan()
     failed += test_apply_run_clears_p90_signatures()
+    failed += test_clocks_go_back()
     failed += test_replay_state_and_rates()
     failed += test_apply_logged_rates_from_before_midnight()
     failed += test_load_exact()

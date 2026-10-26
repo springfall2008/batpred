@@ -584,11 +584,23 @@ def run_soc(run, soc_max=None):
     return float(run["soc"][0]), int(run["soc"][1])
 
 
+def run_gap(prev, run):
+    """Minutes that really passed from prev's moment to run's, from their logged times and UTC offsets.
+
+    Live Predbat's minutes_now is the local wall clock, so when the clocks go back it repeats an hour; the time that
+    passed, which the battery, the counters and the histories move by, never runs backwards.
+    """
+    return int((datetime.fromisoformat(run["time"]) - datetime.fromisoformat(prev["time"])).total_seconds() // 60)
+
+
 def apply_run(my_predbat, prev, run):
-    """Move the restored instance forwards from the previous run's moment to this run's."""
-    gap = run["minutes_now"] - my_predbat.minutes_now
+    """Move the restored instance forwards from the previous run's moment to this run's.
+
+    The instance takes the run's own minutes_now, as live had it, but ages by the time that really passed (run_gap).
+    """
+    gap = run_gap(prev, run)
     if gap < 0:
-        raise ValueError("Log run at minute {} is before the state at minute {}".format(run["minutes_now"], my_predbat.minutes_now))
+        raise ValueError("Log run at {} is before the previous run at {}".format(run["time"], prev["time"]))
     now_today, prev_today = today_values(run), today_values(prev)
     if now_today and prev_today:
         for name, now_value, prev_value in zip(COUNTER_ARRAYS, now_today, prev_today):
@@ -820,7 +832,7 @@ def replay_runs(my_predbat, runs, until_minutes, plan_day, yaml_today, simulate,
             load_kwh = counter_gain(now_today[0], before[0], new_day)
             pv_kwh = counter_gain(now_today[3], before[3], new_day)
             rebuild_load_pv_models(my_predbat)
-            sim_soc = simulate_soc(my_predbat, sim_soc, run["minutes_now"] - my_predbat.minutes_now, pv_kwh, load_kwh)
+            sim_soc = simulate_soc(my_predbat, sim_soc, run_gap(prev, run), pv_kwh, load_kwh)
         apply_run(my_predbat, prev, run)
         if run.get("octopus_slots") is not None and not my_predbat.replay_rates_logged:
             my_predbat.octopus_slots = run["octopus_slots"]
