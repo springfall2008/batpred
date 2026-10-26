@@ -24,7 +24,8 @@ picks up where it left off. No entity's last_changed is used.
 import copy
 from datetime import timedelta
 
-from const import CAR_MANUAL_SOC_IDLE_MINUTES, CAR_MANUAL_SOC_UNPLUG_MINUTES
+from utils import MinuteArray, minute_data
+from const import CAR_MANUAL_SOC_IDLE_MINUTES, CAR_MANUAL_SOC_LATE_MINUTES, CAR_MANUAL_SOC_UNPLUG_MINUTES
 
 ENERGY_SENSOR = "sensor.car_manual_soc_test_energy"
 PLUGGED_SENSOR = "binary_sensor.car_manual_soc_test_plugged"
@@ -34,6 +35,7 @@ NOW_SENSOR = "binary_sensor.car_manual_soc_test_charging"
 IOG_SENSOR = "binary_sensor.car_manual_soc_test_iog_slot"
 
 STATE_FIELDS = (
+    "now_utc",
     "num_cars",
     "car_charging_manual_soc",
     "car_charging_manual_soc_energy",
@@ -83,9 +85,11 @@ def _history(points):
 
 def _since(my_predbat, minutes_ago, car_n=0):
     """
-    Move car_n's record back so it counts from minutes_ago, as if that many minutes had passed since the last cycle.
+    Move car_n's record back so it counts from minutes_ago, as if that many minutes had passed since the last cycle
+    with none of the energy counted yet.
     """
     my_predbat.car_manual_soc_state[car_n]["since"] = (my_predbat.now_utc - timedelta(minutes=minutes_ago)).isoformat()
+    my_predbat.car_manual_soc_state[car_n]["counted"] = 0.0
 
 
 def _unplug(my_predbat, entity=PLUGGED_SENSOR, car_n=0):
@@ -772,6 +776,217 @@ def _run_idle(my_predbat):
     return failed
 
 
+def _late_cycles(my_predbat, lag, charge_minutes=180, total_minutes=195, kw=7.0, base=3.0):
+    """
+    Track a charge in 5 minute cycles with the history cache lag minutes behind now, as HAHistory leaves it, and the
+    history built by minute_data() as minute_data_import_export() builds it, smoothed back over the minutes after the
+    newest sample. The sensor adds kw for charge_minutes, one sample a minute, then stays flat. Returns the energy
+    the sensor recorded over the whole run in kWh.
+    """
+    start = my_predbat.now_utc
+    unit = {"unit_of_measurement": "kWh"}
+    samples = [(start + timedelta(minutes=minute), base + kw * min(minute, charge_minutes) / 60) for minute in range(total_minutes + 1)]
+    for minute in range(0, total_minutes + 1, 5):
+        my_predbat.now_utc = start + timedelta(minutes=minute)
+        cache_time = my_predbat.now_utc - timedelta(minutes=lag)
+        seen = [{"state": str(kwh), "last_updated": stamp.isoformat(), "attributes": dict(unit)} for stamp, kwh in samples if stamp <= cache_time]
+        data, _ = minute_data(seen, 1, my_predbat.now_utc, "state", "last_updated", backwards=True, smoothing=True, clean_increment=True, required_unit="kWh", can_modify_history=True)
+        my_predbat.car_charging_energy = MinuteArray(data, 24 * 60 + 2)
+        my_predbat.car_manual_soc_track()
+    my_predbat.now_utc = start
+    return kw * charge_minutes / 60
+
+
+def _run_late_history(my_predbat):
+    """
+    The charger's history reaches Predbat up to 2 minutes late, so a charge is counted in full only if the time
+    energy is counted from is not moved on to now each cycle.
+    """
+    failed = False
+    args = {"car_charging_energy": ENERGY_SENSOR, "car_charging_plugged": PLUGGED_SENSOR}
+    dummy = my_predbat.ha_interface.dummy_items
+    sensor = my_predbat.car_manual_soc_entity(0)
+
+    print("Test 55: a steady charge is counted in full whether the history is 0, 1 or 2 minutes behind")
+    for lag in (0, 1, 2):
+        _one_car(my_predbat, args, kwh=10.0)
+        my_predbat.car_charging_loss = 0.9
+        _plug(my_predbat, "on")
+        true_energy = _late_cycles(my_predbat, lag)
+        expected = 10.0 + true_energy * 0.9
+        failed |= _check("t55 lag {}".format(lag), abs(_manual_kwh(my_predbat) - expected) < expected * 0.01, "kwh {} expected {}".format(_manual_kwh(my_predbat), expected))
+
+    print("Test 56: energy the history later revises down is not counted twice")
+    _one_car(my_predbat, args, kwh=10.0)
+    _plug(my_predbat, "on")
+    my_predbat.car_manual_soc_track()
+    _since(my_predbat, 10)
+    my_predbat.car_charging_energy = _history([(5, 1.0)])
+    my_predbat.car_manual_soc_track()
+    failed |= _check("t56 first", abs(_manual_kwh(my_predbat) - 11.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+    my_predbat.car_charging_energy = _history([(5, 0.8)])
+    my_predbat.car_manual_soc_track()
+    failed |= _check("t56 revised down", abs(_manual_kwh(my_predbat) - 11.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+    my_predbat.car_charging_energy = _history([(5, 0.8), (1, 0.6)])
+    my_predbat.car_manual_soc_track()
+    failed |= _check("t56 counts on from what was counted", abs(_manual_kwh(my_predbat) - 11.4) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+    failed |= _check("t56 counted", abs(my_predbat.car_manual_soc_state[0]["counted"] - 1.4) < 0.001, "record {}".format(my_predbat.car_manual_soc_state))
+
+    print("Test 57: what has been counted goes back to zero when a value is entered, on an unplug and on an idle reset")
+    _one_car(my_predbat, args, kwh=10.0)
+    _plug(my_predbat, "on")
+    my_predbat.car_manual_soc_track()
+    _since(my_predbat, 10)
+    my_predbat.car_charging_energy = _history([(5, 1.0)])
+    my_predbat.car_manual_soc_track()
+    failed |= _check("t57 counted", my_predbat.car_manual_soc_state[0]["counted"] == 1.0, "record {}".format(my_predbat.car_manual_soc_state))
+    failed |= _check("t57 kept since", my_predbat.car_manual_soc_state[0]["since"] == (my_predbat.now_utc - timedelta(minutes=10)).isoformat(), "record {}".format(my_predbat.car_manual_soc_state))
+    my_predbat.expose_config("car_charging_manual_soc_kwh", 20.0)
+    my_predbat.car_manual_soc_track()
+    record = my_predbat.car_manual_soc_state[0]
+    failed |= _check("t57 entered", record["counted"] == 0.0 and record["since"] == my_predbat.now_utc.isoformat() and abs(_manual_kwh(my_predbat) - 20.0) < 0.001, "record {}".format(record))
+    _since(my_predbat, 10)
+    my_predbat.car_manual_soc_track()
+    failed |= _check("t57 counted again", my_predbat.car_manual_soc_state[0]["counted"] == 1.0, "record {}".format(my_predbat.car_manual_soc_state))
+    _unplug(my_predbat)
+    record = my_predbat.car_manual_soc_state[0]
+    failed |= _check("t57 unplugged", record["counted"] == 0.0 and record["since"] == my_predbat.now_utc.isoformat() and abs(_manual_kwh(my_predbat)) < 0.001, "record {}".format(record))
+    _one_car(my_predbat, {"car_charging_energy": ENERGY_SENSOR}, kwh=30.0)
+    my_predbat.expose_config("car_charging_manual_soc", True)
+    my_predbat.car_manual_soc_config()
+    my_predbat.car_manual_soc_track()
+    _since(my_predbat, 60)
+    my_predbat.car_charging_energy = _history([(5, 1.0)])
+    my_predbat.car_manual_soc_track()
+    failed |= _check("t57 idle counted", my_predbat.car_manual_soc_state[0]["counted"] == 1.0, "record {}".format(my_predbat.car_manual_soc_state))
+    _active(my_predbat, CAR_MANUAL_SOC_IDLE_MINUTES)
+    my_predbat.car_manual_soc_track()
+    record = my_predbat.car_manual_soc_state[0]
+    failed |= _check("t57 idle", record["counted"] == 0.0 and record["since"] == my_predbat.now_utc.isoformat() and abs(_manual_kwh(my_predbat)) < 0.001, "record {}".format(record))
+    my_predbat.expose_config("car_charging_manual_soc", False)
+
+    print("Test 58: with nothing new the time moves up and what is counted is worked out again for it")
+    _one_car(my_predbat, args, kwh=10.0)
+    _plug(my_predbat, "on")
+    my_predbat.car_manual_soc_track()
+    _since(my_predbat, 120)
+    my_predbat.car_charging_energy = _history([(100, 1.0), (5, 0.5)])
+    my_predbat.car_manual_soc_track()
+    _since(my_predbat, 120)
+    my_predbat.car_manual_soc_state[0]["counted"] = 1.5
+    my_predbat.car_manual_soc_track()
+    record = my_predbat.car_manual_soc_state[0]
+    failed |= _check("t58 moved up", record["since"] == (my_predbat.now_utc - timedelta(minutes=CAR_MANUAL_SOC_LATE_MINUTES)).isoformat() and record["counted"] == 0.5, "record {}".format(record))
+    failed |= _check("t58 kwh", abs(_manual_kwh(my_predbat) - 11.5) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+
+    print("Test 59: what has been counted is published and read back after a restart")
+    _one_car(my_predbat, args, kwh=10.0)
+    _plug(my_predbat, "on")
+    my_predbat.car_manual_soc_track()
+    _since(my_predbat, 10)
+    my_predbat.car_charging_energy = _history([(5, 1.0)])
+    my_predbat.car_manual_soc_track()
+    failed |= _check("t59 published", dummy.get(sensor, {}).get("counted") == 1.0 and dummy[sensor].get("since") == my_predbat.car_manual_soc_state[0]["since"], "sensor {}".format(dummy.get(sensor)))
+    _restart(my_predbat)
+    my_predbat.car_manual_soc_track()
+    failed |= _check("t59 not twice", abs(_manual_kwh(my_predbat) - 11.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+    failed |= _check("t59 counted", my_predbat.car_manual_soc_state[0]["counted"] == 1.0, "record {}".format(my_predbat.car_manual_soc_state))
+
+    print("Test 60: ... and an older record without it is read as nothing counted, as its time was where counting got to")
+    del dummy[sensor]["counted"]
+    _restart(my_predbat)
+    my_predbat.car_manual_soc_track()
+    failed |= _check("t60 read as zero", abs(_manual_kwh(my_predbat) - 12.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+    failed |= _check("t60 counted", my_predbat.car_manual_soc_state[0]["counted"] == 1.0, "record {}".format(my_predbat.car_manual_soc_state))
+    print("Test 61: a counted value that is negative or not a number is read as nothing counted")
+    for bad in (-1.0, True):
+        dummy[sensor]["counted"] = bad
+        failed |= _check("t61 read {}".format(bad), my_predbat.car_manual_soc_read(0)["counted"] == 0.0, "sensor {}".format(dummy[sensor]))
+
+    print("Test 62: a cycle with no history while energy is counted leaves the time and the count alone, so nothing is added twice")
+    _one_car(my_predbat, args, kwh=10.0)
+    _plug(my_predbat, "on")
+    my_predbat.car_manual_soc_track()
+    _since(my_predbat, 120)
+    my_predbat.car_charging_energy = _history([(100, 1.0), (5, 0.5)])
+    my_predbat.car_manual_soc_track()
+    record = dict(my_predbat.car_manual_soc_state[0])
+    my_predbat.car_manual_soc_energy_history = lambda car_n, minutes: None
+    try:
+        my_predbat.car_manual_soc_track()
+    finally:
+        del my_predbat.car_manual_soc_energy_history
+    kept = my_predbat.car_manual_soc_state[0]
+    failed |= _check("t62 kept", kept["since"] == record["since"] and kept["counted"] == 1.5, "record {} was {}".format(kept, record))
+    my_predbat.car_manual_soc_track()
+    failed |= _check("t62 not twice", abs(_manual_kwh(my_predbat) - 11.5) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+
+    print("Test 63: a cycle with nothing new reads the history once, for the total and the window the time moves up to")
+    _one_car(my_predbat, args, kwh=10.0)
+    _plug(my_predbat, "on")
+    my_predbat.car_manual_soc_track()
+    _since(my_predbat, 120)
+    my_predbat.car_charging_energy = _history([(100, 1.0), (5, 0.5)])
+    my_predbat.car_manual_soc_track()
+    reads = []
+    read = my_predbat.car_manual_soc_energy_history
+    my_predbat.car_manual_soc_energy_history = lambda car_n, minutes: reads.append(minutes) or read(car_n, minutes)
+    try:
+        my_predbat.car_manual_soc_track()
+    finally:
+        del my_predbat.car_manual_soc_energy_history
+    record = my_predbat.car_manual_soc_state[0]
+    failed |= _check("t63 one read", len(reads) == 1, "reads {}".format(reads))
+    failed |= _check("t63 moved up", record["since"] == (my_predbat.now_utc - timedelta(minutes=CAR_MANUAL_SOC_LATE_MINUTES)).isoformat() and record["counted"] == 0.5, "record {}".format(record))
+    failed |= _check("t63 kwh", abs(_manual_kwh(my_predbat) - 11.5) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+
+    print("Test 64: a read that shows less than is already counted leaves the time alone, so a full read after it adds nothing twice")
+    _one_car(my_predbat, args, kwh=10.0)
+    _plug(my_predbat, "on")
+    my_predbat.car_manual_soc_track()
+    _since(my_predbat, 180)
+    my_predbat.car_charging_energy = _history([(170, 3.5), (50, 1.5), (10, 1.0)])
+    my_predbat.car_manual_soc_track()
+    my_predbat.car_charging_energy = _history([(10, 1.0)])
+    my_predbat.car_manual_soc_track()
+    my_predbat.car_charging_energy = _history([(170, 3.5), (50, 1.5), (10, 1.0)])
+    my_predbat.car_manual_soc_track()
+    failed |= _check("t64 not twice", abs(_manual_kwh(my_predbat) - 16.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+
+    print("Test 65: when the cap bites counting starts again from now, so a counter glitch is not let through cycle by cycle")
+    _one_car(my_predbat, args, kwh=10.0)
+    _plug(my_predbat, "on")
+    my_predbat.car_manual_soc_track()
+    _since(my_predbat, 60)
+    start = my_predbat.now_utc
+    points = [(minute, 7.0 / 60) for minute in range(1, 61)] + [(30, 20.0)]
+    my_predbat.car_charging_energy = _history(points)
+    my_predbat.car_manual_soc_track()
+    capped = _manual_kwh(my_predbat)
+    my_predbat.now_utc = start + timedelta(minutes=5)
+    my_predbat.car_charging_energy = _history([(ago + 5, kwh) for ago, kwh in points])
+    my_predbat.car_manual_soc_track()
+    my_predbat.now_utc = start
+    failed |= _check("t65 capped", abs(capped - (10.0 + 7.4 * 1.1 + 0.1)) < 0.001, "kwh {}".format(capped))
+    failed |= _check("t65 glitch gone", abs(_manual_kwh(my_predbat) - capped) < 0.001, "kwh {} after the cap was {}".format(_manual_kwh(my_predbat), capped))
+
+    print("Test 66: a quiet cycle that changes what is counted publishes it, so a restart after the history has moved on still counts the next charge")
+    _one_car(my_predbat, args, kwh=10.0)
+    _plug(my_predbat, "on")
+    my_predbat.car_manual_soc_track()
+    _since(my_predbat, 120)
+    my_predbat.car_charging_energy = _history([(100, 1.0)])
+    my_predbat.car_manual_soc_track()
+    my_predbat.car_manual_soc_track()
+    record = my_predbat.car_manual_soc_state[0]
+    failed |= _check("t66 published", dummy.get(sensor, {}).get("counted") == 0.0 and dummy[sensor].get("since") == record["since"], "sensor {} record {}".format(dummy.get(sensor), record))
+    _restart(my_predbat)
+    my_predbat.car_charging_energy = _history([(5, 2.0)])
+    my_predbat.car_manual_soc_track()
+    failed |= _check("t66 next charge", abs(_manual_kwh(my_predbat) - 13.0) < 0.001, "kwh {}".format(_manual_kwh(my_predbat)))
+    return failed
+
+
 def _run_mirror(my_predbat):
     """
     Only a car with a SoC sensor has it shown in its manual kWh entity - a car that stops being tracked keeps its value.
@@ -823,6 +1038,7 @@ def run_car_manual_soc_tests(my_predbat):
         failed |= _run_guards(my_predbat)
         failed |= _run_fetch(my_predbat)
         failed |= _run_idle(my_predbat)
+        failed |= _run_late_history(my_predbat)
         failed |= _run_mirror(my_predbat)
     finally:
         for arg in SAVED_ARGS + ("octopus_intelligent_slot",):
