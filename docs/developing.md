@@ -734,7 +734,7 @@ grep -n "Traceback\|AssertionError" /tmp/all_tests.txt
 
 ### Adding a unit test
 
-1. Create `apps/predbat/tests/test_<feature>.py`. Each test is a function that takes `my_predbat` (the shared test fixture).
+1. Create `apps/predbat/tests/test_<feature>.py`. Each test is a function that takes `my_predbat` (a fresh `PredBat` instance, built for that test by `create_predbat()`).
    The function must have a docstring (docstring coverage is enforced). It returns `False` if the test passed and `True` if it failed.
    Tests either use `assert` statements with a helpful message, or print an `ERROR:` line and return `True`.
 2. In `apps/predbat/unit_test.py`, import your test function(s), next to the existing imports of the other tests:
@@ -764,16 +764,16 @@ Tips for writing good tests:
 
 - Copy the structure of a small, existing test in `apps/predbat/tests/` that is similar to what you want to test.
 - Test the behaviour, not just that the code runs. Include the cases where nothing should change as well as the case where something should.
-- If you need a different value of a setting or attribute on the shared `my_predbat` (for example a different `currency_symbols`),
-  restore it afterwards, using `try`/`finally` so it is restored even if the test fails. Otherwise, the changes can break a later,
-  unrelated test (see [finding test order dependencies](#finding-test-order-dependencies)).
+- Each test gets its own `PredBat`, so you can change settings and attributes on `my_predbat` freely: the changes don't reach other tests.
+  State that is *not* rebuilt for each test is different - module-level variables, class attributes, and anything you monkey patch. If a test changes one of those,
+  restore it afterwards, using `try`/`finally` so that it is restored even if the test fails (see [finding test order dependencies](#finding-test-order-dependencies)).
 - Some config items are only published to Home Assistant when another setting is on (for example `expert_mode`).
   If a test reads an entity that isn't there, check for an `enable` condition on the item in `config.py`.
 - The test messages and comments are spell checked like the rest of the code (see [enforced standards](#enforced-standards)).
 
 ### Finding test order dependencies
 
-All tests run against one shared `PredBat`/Home Assistant fixture (see `create_predbat()` in `unit_test.py`), so a test that mutates shared state and doesn't fully restore it can make a *later* test fail - a bug in the test suite itself, not in Predbat (see issue [#5079](https://github.com/springfall2008/batpred/issues/5079)). These only show up when the two tests happen to run in that order, so a clean `./run_all` doesn't prove there isn't one lurking.
+Each test builds its own `PredBat` with `create_predbat()` (see `unit_test.py`), so changes to the attributes of that instance can't leak into other tests. What can still leak is module-level or class-level state that `create_predbat()` doesn't rebuild - for example the `PLOT_ENABLED` module variable in `tests/test_infra.py`, or something that a test monkey patches and doesn't undo. A test that changes state like this and doesn't fully restore it can make a *later* test fail - a bug in the test suite itself, not in Predbat (see issue [#5079](https://github.com/springfall2008/batpred/issues/5079)). These only show up when the two tests happen to run in that order, so a clean `./run_all` doesn't prove there isn't one lurking.
 
 `./run_shuffle` fuzzes the test order looking for these:
 
@@ -782,7 +782,7 @@ All tests run against one shared `PredBat`/Home Assistant fixture (see `create_p
 - `./run_shuffle --bisect <SHUFFLE_SEED>` - given a shuffle-seed that's known to fail, narrow down which earlier test caused it, without hunting for a new one.
 - `./run_shuffle --campaign N` - repeat hunt-and-bisect for `N` independent rounds and print a frequency table of which (culprit, victim) pairs recur, to tell a common leak apart from a one-off ordering artefact.
 
-A found pair only proves shared state leaked between two tests - it doesn't say by itself whether the fix belongs in the culprit test's cleanup, or whether it exposed a real gap in the production code the victim test exercises (e.g. a missing bounds check that would also matter outside of tests). Check both before assuming it's "just" a test hygiene issue.
+A found pair only proves that state leaked from one test to another - it doesn't say by itself whether the fix belongs in the culprit test's cleanup, or whether it exposed a real gap in the production code the victim test exercises (e.g. a missing bounds check that would also matter outside of tests). Check both before assuming it's "just" a test hygiene issue.
 
 This is too slow for a per-commit CI gate (each hunt attempt is a full shuffled suite run, and a failure needs a further round of bisection on top), but cheap to run periodically or before a release.
 
@@ -884,7 +884,7 @@ Use `git status` to check (see [check what you are about to commit](#check-what-
 | `No secrets.yaml file found` (an `Info` message) | Normal. The tests don't need real secrets |
 | `ModuleNotFoundError`, or a missing Python package, when you run a Python command directly | The virtual environment isn't active. See [setting up the Python environment](#setting-up-the-python-environment) |
 | `AttributeError` on a new `self.something` in a test that builds its own mock object | Tests with their own mock `PredBat` (or `MockBase`) need to set the new attribute too |
-| A test passes alone but fails in a full run (or the reverse) | Shared state leaking between tests. See [finding test order dependencies](#finding-test-order-dependencies) |
+| A test passes alone but fails in a full run (or the reverse) | Module-level or class-level state leaking between tests. Each test has its own `PredBat`, so look for globals, class attributes and monkey patches that a test changes and doesn't restore. See [finding test order dependencies](#finding-test-order-dependencies) |
 | A test run seems stuck (no new output for many minutes) | Look for leftover test processes from an earlier run that was interrupted (`ps -eo pid,etime,pcpu,cmd \| grep -E "unit_test\|shuffle_fuzz\|run_all" \| grep -v grep`) and stop them with `kill <pid>`. Then press `CTRL-C` once to stop the stuck run, and run just the test it was stuck on (`./run_all --test <name>`) to see whether it hangs on its own |
 | A test you wrote never shows up | It isn't imported and registered in `unit_test.py`. See [adding a unit test](#adding-a-unit-test) |
 | A test fails and you aren't sure whether your change caused it | Run it on clean code and compare. Set your changes aside with `git stash push -u -m "wip"`, run the same `./run_all --test ...` command, then bring them back with `git stash pop`. If it fails without your changes too, the failure isn't yours. Make sure you aren't just testing `main` with your uncommitted edits (see [working on more than one change at once](#working-on-more-than-one-change-at-once)) |
@@ -1042,7 +1042,7 @@ on Predbat.
 
 ## The C++ prediction kernel
 
-Predbat has a compiled C++ "kernel" (`apps/predbat/prediction_kernel.cpp`) that is a fast, bit-for-bit-identical mirror of the Python simulation engine (`Prediction.run_prediction()` in `apps/predbat/prediction.py`). It's used to speed up the huge number of scenario evaluations run during planning. It's controlled by the `prediction_kernel_enable` `apps.yaml` setting (see [apps-yaml.md](apps-yaml.md#prediction_kernel_enable)), Off by default while it's tested more widely.
+Predbat has a compiled C++ "kernel" (`apps/predbat/prediction_kernel.cpp`) that is a fast, bit-for-bit-identical mirror of the Python simulation engine (`Prediction.run_prediction()` in `apps/predbat/prediction.py`). It's used to speed up the huge number of scenario evaluations run during planning. It's controlled by the `prediction_kernel_enable` `apps.yaml` setting (see [apps-yaml.md](apps-yaml.md#prediction_kernel_enable)), On by default; it automatically falls back to the Python engine if the binary for your architecture can't be loaded.
 
 ### Building the C++ kernel locally
 
@@ -1062,7 +1062,7 @@ Predbat also ships pre-built binaries for each supported platform/architecture (
 bash apps/predbat/build_kernel_cross.sh
 ```
 
-A GitHub Actions job (`kernel-binaries` in `.github/workflows/code-quality.yml`) runs this automatically on every pull request and commits any changed binaries back to the PR branch - similar to how `pre-commit.ci` auto-fixes formatting issues. You shouldn't normally need to run the cross-build script yourself.
+A GitHub Actions job (`kernel-binaries` in `.github/workflows/code-quality.yml`) runs this automatically on pull requests raised from branches in the Predbat repository itself, and commits any changed binaries back to the PR branch - similar to how `pre-commit.ci` auto-fixes formatting issues. It does **not** run for pull requests from forks, as it can't push to a fork's branch, so on a pull request from your fork it shows as skipped and the binaries are not rebuilt for you. The `pre-commit` job does run on fork pull requests, and one of its steps verifies the checked-in x86_64 binary (`apps/predbat/verify_kernel_binary.py`): it fails if the binary is missing, fails to load, is stale (an ABI or parity revision mismatch with the code) or fails the parity tests. So if your change alters the kernel or the Python engine that it mirrors, run `build_kernel_cross.sh` yourself (it needs zig) and commit the rebuilt binaries in your pull request. If you can't, say so in the pull request description.
 
 ### Testing the kernel
 
