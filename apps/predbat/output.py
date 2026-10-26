@@ -3378,8 +3378,14 @@ class Output:
                     if end_minutes <= start_minutes:
                         continue
 
-                    for minute in range(start_minutes, end_minutes, PREDICT_STEP):
-                        load_reported += yesterday_load_step.get(minute, 0)
+                    # Live EV leases retain seconds-precision boundaries. History
+                    # uses integer five-minute buckets: integrate their overlap
+                    # instead of truncating the lease or passing floats to range.
+                    first_step = math.floor(start_minutes / PREDICT_STEP) * PREDICT_STEP
+                    last_step = math.ceil(end_minutes / PREDICT_STEP) * PREDICT_STEP
+                    overlaps = [(minute, min(end_minutes, minute + PREDICT_STEP) - max(start_minutes, minute)) for minute in range(first_step, last_step, PREDICT_STEP)]
+                    for minute, overlap in overlaps:
+                        load_reported += yesterday_load_step.get(minute, 0) * overlap / PREDICT_STEP
                     if load_reported < kwh_drain:
                         # The slot is reporting more energy than the load, so we need to adjust the slot energy down to the real load
                         # e.g. Octopus can over report energy in the period
@@ -3392,10 +3398,19 @@ class Output:
 
                     # Subtract the energy for the period from the historical load as it will be added back in again during the simulation
                     total_hours = (end_minutes - start_minutes) / 60.0
-                    subtract_amount = khw / total_hours * PREDICT_STEP / 60.0
-                    for minute in range(start_minutes, end_minutes, PREDICT_STEP):
+                    removed_kwh = 0
+                    for minute, overlap in overlaps:
+                        if minute not in yesterday_load_step:
+                            continue
+                        subtract_amount = khw / total_hours * overlap / 60.0
                         load_value = yesterday_load_step.get(minute, 0)
-                        yesterday_load_step[minute] = max(load_value - subtract_amount, 0)
+                        # An aggregate cap cannot guarantee enough load in each
+                        # partially covered bucket. Never borrow energy from its
+                        # uncovered part, or add back energy we could not remove.
+                        removed = min(subtract_amount, max(load_value, 0) * overlap / PREDICT_STEP)
+                        yesterday_load_step[minute] = max(load_value - removed, 0)
+                        removed_kwh += removed
+                    slot["kwh"] = min(khw, removed_kwh)
 
     def plan_row_holding_for_car(self, minute_start, minute_end, car_hold_minutes=None):
         """

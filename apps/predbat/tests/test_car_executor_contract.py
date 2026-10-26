@@ -53,8 +53,8 @@ class ExecutorContractTests(unittest.TestCase):
         self.assertFalse(self.runner.expected_power_decision(replace(case, battery_percent=12), self.limits))
         self.assertFalse(self.runner.expected_power_decision(replace(case, load_w=14001), self.limits))
 
-    def test_signed_grid_export_and_hard_overload(self):
-        """Export is not falsely rejected as import; the hard site ceiling still applies."""
+    def test_signed_grid_export_and_emergency_ceiling(self):
+        """Characterise the existing emergency guard, not physical peak-shaving enforcement."""
         for grid in (-5000, 0, 5000, 14000):
             self.assertTrue(self.runner.expected_power_decision(self.runner.ExecutorCase("grid", grid_w=grid), self.limits))
         self.assertFalse(self.runner.expected_power_decision(self.runner.ExecutorCase("overload", grid_w=14001), self.limits))
@@ -91,6 +91,8 @@ class ExecutorContractTests(unittest.TestCase):
         self.assertNotEqual(list(bad), list(fixed))
         with self.assertRaises(ValueError):
             self.runner.validate_active_variable_order(fixed, list(bad))
+        with self.assertRaises(ValueError):
+            self.runner.validate_active_variable_order(fixed, None)
         self.runner.validate_active_variable_order(fixed, list(fixed))
 
 

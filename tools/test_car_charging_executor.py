@@ -8,6 +8,11 @@ the physical expectation is calculated independently of those templates.
 
 This intentionally is not a controller or a hardware commissioning certificate.
 The ordinary unit suite tests scenario construction without requiring HA installed.
+The external executor's measured-grid guard is its emergency load-port ceiling,
+not the requested grid peak-shaving setpoint. Independent axis sweeps characterise
+that existing policy even for contradictory synthetic inputs; they do not prove
+physical grid-cap enforcement. The native solver power matrix tests conservation
+and its separate grid-import constraint.
 """
 
 import asyncio
@@ -53,7 +58,7 @@ def validate_limits(limits):
 
 
 def expected_power_decision(case, limits):
-    """Independent start/continuation oracle; grid is signed and PV offsets load."""
+    """Independent executor-policy oracle; signed grid uses the emergency ceiling."""
     if case.expected is not None:
         return case.expected
     if case.permission != "on":
@@ -72,7 +77,9 @@ def expected_power_decision(case, limits):
 
 def validate_active_variable_order(variables, active_order):
     """Dictionary equality ignores execution order; compare the active key sequence too."""
-    if active_order is not None and active_order != list(variables):
+    if active_order is None:
+        raise ValueError("Active automation variable order is required for acceptance")
+    if active_order != list(variables):
         raise ValueError("Active automation variable order differs from saved configuration")
 
 

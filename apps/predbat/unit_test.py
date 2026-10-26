@@ -91,6 +91,9 @@ from tests.test_car_planning_migration import run_car_planning_migration_tests
 from tests.test_car_planning_measurements import run_car_planning_measurements_tests
 from tests.test_car_planning_publication import run_car_planning_publication_tests
 from tests.test_car_executor_contract import run_car_executor_contract_tests
+from tests.test_car_planning_power_matrix import run_car_planning_power_matrix_tests
+from tests.test_car_planning_authority_matrix import run_car_planning_authority_matrix_tests
+from tests.test_car_planning_history_bridge import run_car_planning_history_bridge_tests
 from tests.test_basic_rates import test_basic_rates
 from tests.test_clock import run_clock_tests
 from tests.test_rate_export_max_forward_calc import test_rate_export_max_forward_calc
@@ -591,6 +594,9 @@ def main():
         ("car_planning_measurements", run_car_planning_measurements_tests, "Native meter normalisation and device policy", False),
         ("car_planning_publication", run_car_planning_publication_tests, "Native car diagnostics without execution authority", False),
         ("car_executor_contract", run_car_executor_contract_tests, "External EV executor power and evidence acceptance matrix", False),
+        ("car_planning_power_matrix", run_car_planning_power_matrix_tests, "EV and battery physical power combinations", False),
+        ("car_planning_authority_matrix", run_car_planning_authority_matrix_tests, "EV connection, permission and lease lifecycle combinations", False),
+        ("car_planning_history_bridge", run_car_planning_history_bridge_tests, "Fractional live EV leases through native historical replay", False),
         ("car_planning_core", run_car_planning_core_tests, "EV site pure solver", False),
         ("car_planning_native", run_car_planning_native_tests_isolated, "EV site native shadow adapter", False),
         ("car_planning_limited", run_car_planning_limited_tests, "Limited battery discharge and native step replay", False),
