@@ -170,10 +170,6 @@ def _test_stats_sensor_exposes_the_holdout_scores():
     from load_ml_component import LoadMLComponent
 
     class MockBase:
-        def car_rate_capped(self, car_n, rate):
-            """Pass-through: no car_charging_max_rate cap in these tests."""
-            return rate
-
         """Minimal PredBat stand-in for driving _publish_entity."""
 
         def __init__(self):

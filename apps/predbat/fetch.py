@@ -3727,8 +3727,8 @@ class Fetch:
         away) and means no cap.
         """
         value = self.car_max_rate_entry(car_n)
-        if isinstance(value, str) and is_entity_id(value):
-            entity_id = value
+        entity_id = value if is_entity_id(value) else None
+        if entity_id:
             value = self.get_state_wrapper(entity_id, required_unit="kW")
             if value is None:
                 if entity_id not in self.car_charging_max_rate_warned:
@@ -3737,30 +3737,22 @@ class Fetch:
                 self.car_charging_max_rate_held.pop(car_n, None)
                 return 0.0
             self.car_charging_max_rate_warned.discard(entity_id)
-            if isinstance(value, str) and value.strip().lower() in ("unknown", "unavailable", "none", ""):
+        try:
+            cap = None if isinstance(value, bool) else float(value)
+        except (ValueError, TypeError):
+            cap = None
+        if entity_id:
+            if cap is None:
+                # unknown/unavailable/none/blank is a normal drop-out; any other text is warned about once
+                if str(value).strip().lower() not in ("unknown", "unavailable", "none", "") and car_n not in self.car_charging_max_rate_bad_warned:
+                    self.car_charging_max_rate_bad_warned.add(car_n)
+                    self.log("Warn: car_charging_max_rate for car {} reads {} = {}, which is not a number in kW, so the last cap is kept".format(car_n, entity_id, value))
                 return self.car_charging_max_rate_held.get(car_n, 0.0)
-            if not isinstance(value, bool):
-                try:
-                    float(value)
-                except (ValueError, TypeError):
-                    if car_n not in self.car_charging_max_rate_bad_warned:
-                        self.car_charging_max_rate_bad_warned.add(car_n)
-                        self.log("Warn: car_charging_max_rate for car {} reads {} = {}, which is not a number in kW, so the last cap is kept".format(car_n, entity_id, value))
-                    return self.car_charging_max_rate_held.get(car_n, 0.0)
             self.car_charging_max_rate_bad_warned.discard(car_n)
-        if value is None or isinstance(value, bool):
-            cap = 0.0
-        else:
-            try:
-                cap = float(value)
-            except (ValueError, TypeError):
-                cap = 0.0
-            if cap != cap or cap <= 0:  # NaN or non-positive
-                cap = 0.0
-        if cap > 0:
-            self.car_charging_max_rate_held[car_n] = cap
-        else:
+        if cap is None or cap != cap or cap <= 0:  # not a number, NaN or non-positive
             self.car_charging_max_rate_held.pop(car_n, None)
+            return 0.0
+        self.car_charging_max_rate_held[car_n] = cap
         return cap
 
     def car_max_rate_log_change(self, car_n, cap):

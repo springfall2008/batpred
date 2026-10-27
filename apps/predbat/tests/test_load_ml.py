@@ -1059,10 +1059,6 @@ def _test_component_run_data_merge():
         return loop.run_until_complete(coro)
 
     class MockBase:
-        def car_rate_capped(self, car_n, rate):
-            """Pass-through: no car_charging_max_rate cap in these tests."""
-            return rate
-
         def __init__(self):
             self.prefix = "predbat"
             self.config_root = None
@@ -1987,10 +1983,6 @@ def _test_component_fetch_load_data():
     # Test 2: Missing sensor (should return None)
     async def test_missing_sensor():
         class MockBaseNoSensor:
-            def car_rate_capped(self, car_n, rate):
-                """Pass-through: no car_charging_max_rate cap in these tests."""
-                return rate
-
             def __init__(self):
                 self.prefix = "predbat"
                 self.config_root = None
@@ -2107,14 +2099,17 @@ def _test_component_fetch_load_data():
         print("    PASS: Car charging subtraction works")
 
     # Test 3b: Car charging threshold-based detection (without sensor)
-    async def test_car_charging_threshold_detection(car_max_rate=None):
+    async def test_car_charging_threshold_detection(car_max_rate=None, rate_changed_to=None):
         """Test that car charging is detected based on load threshold when no sensor is configured.
 
         With car_max_rate set, the base caps car 0's rate as Fetch does (car_charging_max_rate), and the
         estimated car load subtracted must use the capped rate, not car_charging_rate.
+
+        With rate_changed_to set, car_charging_rate changes after the component starts, and the estimate
+        must use the new rate rather than the one read at startup.
         """
         mock_base_threshold = MockBase()
-        car_rate_kw = 7.5
+        car_rate_kw = 7.5 if rate_changed_to is None else rate_changed_to
         if car_max_rate is not None:
             mock_base_threshold.car_rate_capped = lambda car_n, rate: min(rate, car_max_rate) if car_n == 0 else rate
             car_rate_kw = min(car_rate_kw, car_max_rate)
@@ -2147,17 +2142,19 @@ def _test_component_fetch_load_data():
         age = 1.0
 
         # Override get_arg to DISABLE car_charging_energy sensor but keep car_charging_hold enabled
+        threshold_args = {
+            "load_today": ["sensor.load_today"],
+            "load_power": None,
+            "car_charging_energy": None,  # No sensor - will use threshold detection
+            "load_scaling": 1.0,
+            "car_charging_energy_scale": 1.0,
+            "car_charging_hold": True,  # Enable threshold-based detection
+            "car_charging_threshold": 6.0,  # 6.0 kW/h threshold (0.5 kWh per 5 min)
+            "car_charging_rate": 7.5,  # 7.5 kW/h charging rate (0.625 kWh per 5 min)
+        }
+
         def mock_get_arg_threshold(key, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
-            return {
-                "load_today": ["sensor.load_today"],
-                "load_power": None,
-                "car_charging_energy": None,  # No sensor - will use threshold detection
-                "load_scaling": 1.0,
-                "car_charging_energy_scale": 1.0,
-                "car_charging_hold": True,  # Enable threshold-based detection
-                "car_charging_threshold": 6.0,  # 6.0 kW/h threshold (0.5 kWh per 5 min)
-                "car_charging_rate": 7.5,  # 7.5 kW/h charging rate (0.625 kWh per 5 min)
-            }.get(key, default)
+            return threshold_args.get(key, default)
 
         mock_base_threshold.get_arg = mock_get_arg_threshold
 
@@ -2167,6 +2164,8 @@ def _test_component_fetch_load_data():
 
         component = LoadMLComponent(mock_base_threshold, load_ml_enable=True)
         # Component will use default thresholds from get_arg
+        if rate_changed_to is not None:
+            threshold_args["car_charging_rate"] = rate_changed_to
 
         result_data, result_age, result_now, result_pv, result_temp, result_import_rates, result_export_rates = await component._fetch_load_data()
 
@@ -2213,7 +2212,7 @@ def _test_component_fetch_load_data():
             expected = 1.0 - car_step_kwh  # Car detected, subtract estimate
             assert abs(value_1420 - expected) < 0.01, f"At minute 1420 (high load again), expected ~{expected} kWh, got {value_1420:.4f}"
 
-        print("    PASS: Car charging threshold detection works (car_max_rate {})".format(car_max_rate))
+        print("    PASS: Car charging threshold detection works (car_max_rate {}, rate_changed_to {})".format(car_max_rate, rate_changed_to))
 
     # Test 4: Load power fill
     async def test_load_power_fill():
@@ -2514,6 +2513,7 @@ def _test_component_fetch_load_data():
     run_async(test_car_charging_subtraction())
     run_async(test_car_charging_threshold_detection())
     run_async(test_car_charging_threshold_detection(car_max_rate=3.6))
+    run_async(test_car_charging_threshold_detection(rate_changed_to=3.0))
     run_async(test_load_power_fill())
     run_async(test_exception_handling())
     run_async(test_empty_load_data())
@@ -2533,10 +2533,6 @@ def _test_component_publish_entity():
 
     # Create mock base object
     class MockBase:
-        def car_rate_capped(self, car_n, rate):
-            """Pass-through: no car_charging_max_rate cap in these tests."""
-            return rate
-
         def __init__(self):
             self.prefix = "predbat"
             self.config_root = None
@@ -2744,10 +2740,6 @@ def _test_component_stale_midnight_baseline():
         return loop.run_until_complete(coro)
 
     class MockBase:
-        def car_rate_capped(self, car_n, rate):
-            """Pass-through: no car_charging_max_rate cap in these tests."""
-            return rate
-
         """Minimal PredBat stand-in positioned at 00:15, just after local midnight."""
 
         def __init__(self):
@@ -2905,10 +2897,6 @@ def _test_car_subtraction_direct():
 
     # Create a minimal mock base for component initialization
     class MockBase:
-        def car_rate_capped(self, car_n, rate):
-            """Pass-through: no car_charging_max_rate cap in these tests."""
-            return rate
-
         def __init__(self):
             self.prefix = "predbat"
             self.config_root = None
@@ -3175,10 +3163,6 @@ def _test_component_init_predictor_sets_last_train_time():
     from load_ml_component import LoadMLComponent
 
     class MockBase:
-        def car_rate_capped(self, car_n, rate):
-            """Pass-through: no car_charging_max_rate cap in these tests."""
-            return rate
-
         """Minimal base required by ComponentBase and LoadMLComponent.initialize."""
 
         def __init__(self, config_root):
@@ -3298,10 +3282,6 @@ def _test_database_zero_preservation():
     from load_ml_component import LoadMLComponent
 
     class MockBase:
-        def car_rate_capped(self, car_n, rate):
-            """Pass-through: no car_charging_max_rate cap in these tests."""
-            return rate
-
         """Minimal base for LoadMLComponent."""
 
         def __init__(self, config_root):
