@@ -710,6 +710,10 @@ On Octopus Intelligent (or E.ON/EDF SmartFlex through the Kraken component), wha
 
 **switch.predbat_octopus_intelligent_charging** only changes Predbat's own planning. With it off, a charger Octopus drives is still left to Octopus - Octopus goes on switching it either way - and a charger for a car Octopus drives follows Predbat's own plan, whether or not **switch.predbat_octopus_intelligent_charger_follows_car** is on.
 
+### Restarts and charger control
+
+For the GivEnergy and myenergi chargers, Predbat saves which chargers it has stopped, alongside the control switch. After a restart it still knows, so turning on read only mode, turning the control switch off or turning on guest charging lets them charge again. A restart on its own releases nothing, so it does not interrupt a charge. A stop is saved before it is sent, so one whose reply was lost is released like any other.
+
 ### Guest charging
 
 While Predbat drives a charger it holds it off outside the planned windows, so a visitor's car would not charge. Turn on the charger's guest charging switch - `switch.predbat_gecloud_guest_charging`, `switch.predbat_myenergi_guest_charging` or `switch.predbat_ohme_guest_charging` - and Predbat hands the charger back, as it does for read only mode. Choose how the guest charges (boost, solar only and so on) on the charger itself.

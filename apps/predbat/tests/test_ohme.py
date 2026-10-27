@@ -1721,7 +1721,7 @@ def _ohme_control_api(windows=None, now=None, read_only=False):
     api.ohme_automatic = True
     api.ohme_control = True
     api.charger_control_active = True
-    api.base.set_read_only = read_only
+    api.args["set_read_only"] = read_only
     api._now_override = now or datetime.datetime(2026, 8, 22, 23, 0, 0, tzinfo=datetime.timezone.utc).astimezone(api.local_tz)
     if windows is not None:
         api.states[("binary_sensor.predbat_car_charging_slot", "planned")] = windows
@@ -1983,7 +1983,7 @@ def _test_ohme_control_read_only_release(my_predbat=None):
     assert _ohme_held(api) is True, "Expected Predbat to be holding the charger"
 
     # Read only - hand it back to Ohme's own schedule
-    api.base.set_read_only = True
+    api.args["set_read_only"] = True
     run_async(api.charger_control_tick(api.now_utc_exact))
     assert any("Releasing the charger back to Ohme" in msg for msg in api.log_messages), f"Expected a release log, got {api.log_messages}"
     assert "enabled=false" in api.client.request_log[-1]["url"], f"Expected max charge cleared, got {api.client.request_log[-1]['url']}"
@@ -1996,7 +1996,7 @@ def _test_ohme_control_read_only_release(my_predbat=None):
     assert len(api.client.request_log) == count, f"Expected no further commands while read only, got {api.client.request_log}"
 
     # Clearing read only resumes control
-    api.base.set_read_only = False
+    api.args["set_read_only"] = False
     run_async(api.charger_control_tick(api.now_utc_exact))
     assert len(api.client.request_log) == count + 1, f"Expected control to resume, got {api.client.request_log}"
     assert "enabled=true" in api.client.request_log[-1]["url"], f"Expected max charge re-applied, got {api.client.request_log[-1]['url']}"
@@ -2078,7 +2078,7 @@ def _test_ohme_control_restores_target(my_predbat=None):
     assert "enabled=true" in api.client.request_log[0]["url"], f"Expected max charge, got {api.client.request_log[0]['url']}"
 
     # Releasing puts the user's target back so Ohme's own schedule is left correct
-    api.base.set_read_only = True
+    api.args["set_read_only"] = True
     run_async(api.charger_control_tick(api.now_utc_exact))
 
     restore_requests = [request for request in api.client.request_log if request["method"] == "PATCH"]
@@ -2087,7 +2087,7 @@ def _test_ohme_control_restores_target(my_predbat=None):
     assert any("Restored the charger target to 70%" in msg for msg in api.log_messages), f"Expected a restore log, got {api.log_messages}"
 
     # Taking control again snapshots afresh rather than reusing the old value
-    api.base.set_read_only = False
+    api.args["set_read_only"] = False
     api.client._charge_session = {"mode": "SMART_CHARGE", "power": {"watt": 0}, "appliedRule": {"targetPercent": 90, "targetTime": 25200}}
     run_async(api.charger_control_tick(api.now_utc_exact))
     assert api.control_saved_target == 90, f"Expected a fresh snapshot, got {api.control_saved_target}"
@@ -2110,7 +2110,7 @@ def _test_ohme_control_failed_release_retries(my_predbat=None):
     assert _ohme_held(api) is False, "Expected Predbat to be holding the charger paused"
 
     # Read only, and Ohme refuses the resume - the car was unplugged since it was paused, say
-    api.base.set_read_only = True
+    api.args["set_read_only"] = True
     resume_calls = []
 
     async def refuse_resume():
@@ -2136,20 +2136,22 @@ def _test_ohme_control_failed_release_retries(my_predbat=None):
 
 
 def _test_ohme_control_read_only_effective(my_predbat=None):
-    """Test read only follows the effective state, not just the config switch"""
+    """Test read only is the setting or Axle's flag, not the base attribute that reset() leaves True"""
     print("**** Running test_ohme_control_read_only_effective ****")
 
-    # axle_control forces read only via the attribute without touching the arg
+    # reset() leaves the attribute True until the first update_pred(), so it alone is not read only
     api = MockOhmeAPI()
-    api.base.set_read_only = True
-    api.args["set_read_only"] = False
-    assert api.charger_control_read_only_now() is True, "Expected the attribute to win over the arg"
-
-    # Before the attribute is first set, fall back to the configured value
-    api = MockOhmeAPI()
-    api.base.set_read_only = None
     api.args["set_read_only"] = True
-    assert api.charger_control_read_only_now() is True, "Expected the arg to be used as a fallback"
+    api.args["set_read_only"] = False
+    assert api.charger_control_read_only_now() is False, "Expected a restart not to read as read only"
+
+    # axle_control forces read only by setting the attribute and its own flag, not the arg
+    api.base.set_read_only_axle = True
+    assert api.charger_control_read_only_now() is True, "Expected Axle's read only to count"
+
+    api = MockOhmeAPI()
+    api.args["set_read_only"] = True
+    assert api.charger_control_read_only_now() is True, "Expected the setting to count"
 
     api.args["set_read_only"] = False
     assert api.charger_control_read_only_now() is False, "Expected control to run when not read only"

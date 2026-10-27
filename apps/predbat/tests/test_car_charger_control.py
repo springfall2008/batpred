@@ -14,7 +14,7 @@ import pytz
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from tests.test_infra import run_async
-from car_charger_control import CarChargerControl, GUEST_CHARGING_MAX_HOURS, OCTOPUS_DISCOVERY_WAIT_MINUTES, parse_control_setting, parse_dispatch_time
+from car_charger_control import CarChargerControl, ChargerControlDeferred, GUEST_CHARGING_MAX_HOURS, OCTOPUS_DISCOVERY_WAIT_MINUTES, parse_control_setting, parse_dispatch_time
 
 LONDON = pytz.timezone("Europe/London")
 
@@ -57,6 +57,8 @@ class FakeCharger:
         self.key = key
         self.connected = connected
         self.charging = False
+        # Set by a test for a charger that reports its car unplugged
+        self.unplugged = False
 
 
 class FakeComponent(CarChargerControl):
@@ -107,6 +109,10 @@ class FakeComponent(CarChargerControl):
     def charger_control_connected(self, handle):
         """Use the fake's plug state."""
         return handle.connected
+
+    def charger_control_unplugged(self, handle):
+        """The fake's own unplug report."""
+        return handle.unplugged
 
     def charger_control_drifted(self, handle, charge):
         """Only when the test asks for a drift-aware charger."""
@@ -239,25 +245,27 @@ def test_read_only_releases_once_and_resumes():
     component = FakeComponent([FakeCharger("a"), FakeCharger("b")])
     _plan(component, 0, [])
     run_async(component.charger_control_tick(_now()))
-    component.base.set_read_only = True
+    component.args["set_read_only"] = True
     run_async(component.charger_control_tick(_now()))
     run_async(component.charger_control_tick(_now()))
     assert component.commands == [("a", "off", 0), ("a", "release", False)], component.commands
     assert component.charger_control_state == {}, "Released chargers are forgotten"
-    component.base.set_read_only = False
+    component.args["set_read_only"] = False
     run_async(component.charger_control_tick(_now()))
     assert component.commands[-1] == ("a", "off", 0), component.commands
     assert any("Read only mode cleared" in line for line in component.logs), component.logs
 
 
-def test_read_only_falls_back_to_the_arg():
-    """Before the base attribute is set the config arg decides."""
+def test_read_only_comes_from_the_setting_and_axle():
+    """Read only is the setting, or Axle's VPP flag - not the base attribute, which reset() leaves True until the first update_pred()."""
     component = FakeComponent([FakeCharger("a")])
-    component.base.set_read_only = None
+    component.base.set_read_only = True
+    assert component.charger_control_read_only_now() is False, "a restart must not read as read only"
     component.args["set_read_only"] = True
     assert component.charger_control_read_only_now() is True
     component.args["set_read_only"] = False
-    assert component.charger_control_read_only_now() is False
+    component.base.set_read_only_axle = True
+    assert component.charger_control_read_only_now() is True
 
 
 def test_switch_off_releases_and_persists():
@@ -269,7 +277,7 @@ def test_switch_off_releases_and_persists():
     run_async(component.charger_control_set_enabled(False))
     run_async(component.charger_control_tick(_now()))
     assert component.commands == [("a", "on", 0), ("a", "release", True)], component.commands
-    assert storage.saved[("fake", "control_state")] == {"enabled": False}
+    assert storage.saved[("fake", "control_state")] == {"enabled": False, "held": {}}
 
     restarted = FakeComponent([FakeCharger("a")], storage=storage)
     run_async(restarted.charger_control_load_enabled())
@@ -339,13 +347,13 @@ def test_failed_release_is_retried():
         await real_release(handle, charge)
 
     component.charger_control_release_one = fail_on_b
-    component.base.set_read_only = True
+    component.args["set_read_only"] = True
     try:
         run_async(component.charger_control_tick(_now()))
         raise AssertionError("The failed release should reach the component")
     except OSError:
         pass
-    assert component.charger_control_released is None, "A failed release is not recorded as done"
+    # The charger that refused stays held, so it is tried again next cycle; the reason is logged only once
     assert set(component.charger_control_state) == {"b"}, component.charger_control_state
 
     component.charger_control_release_one = real_release
@@ -353,6 +361,7 @@ def test_failed_release_is_retried():
     releases = [command for command in component.commands if command[1] == "release"]
     assert releases == [("a", "release", False), ("b", "release", False)], releases
     assert component.charger_control_state == {} and component.charger_control_released is not None
+    assert len([line for line in component.logs if "releasing the charger because of" in line]) == 1, component.logs
 
 
 def test_one_refusing_charger_does_not_block_the_others():
@@ -372,7 +381,7 @@ def test_one_refusing_charger_does_not_block_the_others():
     component.refusing = set()
     run_async(component.charger_control_tick(_now()))
     component.refusing = {"a"}
-    component.base.set_read_only = True
+    component.args["set_read_only"] = True
     try:
         run_async(component.charger_control_tick(_now()))
     except RuntimeError:
@@ -386,9 +395,9 @@ def test_inactive_does_nothing():
     component = FakeComponent([FakeCharger("a")])
     component.charger_control_active = False
     _plan(component, 0, [])
-    component.base.set_read_only = True
+    component.args["set_read_only"] = True
     run_async(component.charger_control_tick(_now()))
-    component.base.set_read_only = False
+    component.args["set_read_only"] = False
     run_async(component.charger_control_tick(_now()))
     assert component.commands == [], component.commands
 
@@ -922,9 +931,110 @@ def test_no_guest_switch_without_a_prefix():
     assert run_async(component.charger_control_guest_event("switch.predbat_fake_guest_charging", "turn_on")) is False
 
 
+def test_held_chargers_survive_a_restart():
+    """A charger Predbat stopped is saved, so after a restart read only still releases it."""
+    storage = FakeStorage()
+    component = FakeComponent([FakeCharger("a")], storage=storage)
+    _plan(component, 0, [])
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "off", 0)]
+    assert storage.saved[("fake", "control_state")]["held"] == {"a": False}
+
+    restarted = FakeComponent([FakeCharger("a")], storage=storage)
+    run_async(restarted.charger_control_load_enabled())
+    assert restarted.charger_control_state == {"a": False}
+    # reset() leaves the base attribute True until the first update_pred(): not read only, so nothing is released
+    restarted.base.set_read_only = True
+    _plan(restarted, 0, [])
+    run_async(restarted.charger_control_tick(_now()))
+    assert restarted.commands == [], restarted.commands
+    restarted.args["set_read_only"] = True
+    run_async(restarted.charger_control_tick(_now()))
+    assert restarted.commands == [("a", "release", False)], restarted.commands
+    assert storage.saved[("fake", "control_state")]["held"] == {}
+
+
+def test_restored_hold_released_when_control_is_off():
+    """Control since turned off in apps.yaml: a charger an earlier session held is released, once."""
+    storage = FakeStorage({("fake", "control_state"): {"enabled": True, "held": {"a": False}}})
+    component = FakeComponent([FakeCharger("a")], storage=storage)
+    run_async(component.charger_control_load_enabled())
+    component.charger_control_active = False
+    run_async(component.charger_control_tick(_now()))
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "release", False)], component.commands
+    assert len([line for line in component.logs if "control is not enabled" in line]) == 1, component.logs
+
+
+def test_stop_recorded_before_it_is_sent():
+    """A stop that fails is still held, sent again next cycle, and released by read only."""
+    storage = FakeStorage()
+    charger = FakeCharger("a")
+    component = FakeComponent([charger], storage=storage)
+    _plan(component, 0, [])
+    component.refusing.add("a")
+    try:
+        run_async(component.charger_control_tick(_now()))
+        raise AssertionError("The refused stop should reach the component")
+    except RuntimeError:
+        pass
+    assert component.charger_control_state == {"a": False}
+    assert storage.saved[("fake", "control_state")]["held"] == {"a": False}
+    component.refusing.discard("a")
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "off", 0)], "An unconfirmed stop is sent again"
+    assert not any("changed away" in line for line in component.logs), component.logs
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "off", 0)], "Once confirmed it is not sent again"
+
+
+def test_deferred_release_is_kept_quietly():
+    """A release the component defers keeps the charger held, reports nothing, and is retried each cycle."""
+    component = FakeComponent([FakeCharger("a")])
+    _plan(component, 0, [])
+    run_async(component.charger_control_tick(_now()))
+    real_release = component.charger_control_release_one
+    calls = []
+
+    async def defer(handle, charge):
+        """Not yet."""
+        calls.append(handle.key)
+        raise ChargerControlDeferred()
+
+    component.charger_control_release_one = defer
+    component.args["set_read_only"] = True
+    run_async(component.charger_control_tick(_now()))
+    run_async(component.charger_control_tick(_now()))
+    assert calls == ["a", "a"] and component.charger_control_state == {"a": False}
+    component.charger_control_release_one = real_release
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands[-1] == ("a", "release", False) and component.charger_control_state == {}
+    assert len([line for line in component.logs if "releasing the charger because of" in line]) == 1, component.logs
+
+
+def test_unplug_releases_a_stopped_charger():
+    """A charger Predbat stopped is released when it reports its car unplugged."""
+    charger = FakeCharger("a")
+    component = FakeComponent([charger])
+    _plan(component, 0, [])
+    run_async(component.charger_control_tick(_now()))
+    charger.unplugged = True
+    charger.connected = False
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "off", 0), ("a", "release", False)], component.commands
+    assert component.charger_control_state == {}
+    run_async(component.charger_control_tick(_now()))
+    assert len(component.commands) == 2
+
+
 def run_car_charger_control_tests(my_predbat=None):
     """Run the shared charger control tests. Returns True on failure."""
     print("**** Running car charger control tests ****")
+    test_held_chargers_survive_a_restart()
+    test_restored_hold_released_when_control_is_off()
+    test_stop_recorded_before_it_is_sent()
+    test_deferred_release_is_kept_quietly()
+    test_unplug_releases_a_stopped_charger()
     test_no_plan_sends_nothing()
     test_on_inside_window_off_outside()
     test_empty_plan_stops()
@@ -935,7 +1045,7 @@ def run_car_charger_control_tests(my_predbat=None):
     test_disconnected_charger_is_left_alone()
     test_drift_is_reapplied()
     test_read_only_releases_once_and_resumes()
-    test_read_only_falls_back_to_the_arg()
+    test_read_only_comes_from_the_setting_and_axle()
     test_switch_off_releases_and_persists()
     test_storage_failures_fail_soft()
     test_storage_save_returning_false_is_a_failed_save()

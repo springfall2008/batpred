@@ -1602,8 +1602,10 @@ def test_control_failure_does_not_break_the_poll():
 
     assert run_async(component.run(0, True)) is True, "A refused mode must not fail the cycle"
     assert component.last_success_timestamp is not None, "Monitoring still succeeded, so the poll counts"
-    # Nothing was recorded as set, so the next cycle tries again rather than assuming it stuck
-    assert component.charger_control_state == {}, component.charger_control_state
+    # A stop is held as soon as it is sent (it may still have landed) but stays unconfirmed, so the next
+    # cycle tries again rather than assuming it stuck
+    assert component.charger_control_state == {"Z12345678": False}, component.charger_control_state
+    assert "Z12345678" in component.charger_control_unconfirmed
     print("  ✓ A refused mode command warns without failing the poll")
 
 

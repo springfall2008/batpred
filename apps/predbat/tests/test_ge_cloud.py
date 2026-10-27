@@ -6577,7 +6577,7 @@ def _test_evc_control(my_predbat):
         await ge.charger_control_apply(inside)
         assert commands == [("evc-first", "start-charge")], "Only the charger with a car should be commanded, got {}".format(commands)
 
-        # Test 11: a command GE Cloud refuses is not recorded as sent, so it is tried again
+        # Test 11: a stop GE Cloud refuses is held as stopped (it may still have landed) but sent again until it confirms
         commands = []
         ge = _evc_control_component(commands)
         ge.evc_device_list = ["evc-001"]
@@ -6597,13 +6597,13 @@ def _test_evc_control(my_predbat):
             assert False, "A refused command should raise"
         except EVCCommandFailed:
             pass
-        assert ge.charger_control_state == {}, "A refused stop must not be recorded, got {}".format(ge.charger_control_state)
+        assert ge.charger_control_state == {"evc-001": False} and "evc-001" in ge.charger_control_unconfirmed, "A refused stop is held but unconfirmed, got {}".format(ge.charger_control_state)
 
         ge.async_send_evc_command = real_send
         await ge.charger_control_apply(outside)
         assert commands == [("evc-001", "stop-charge")], "The stop should be retried, got {}".format(commands)
 
-        # Test 12: a refused release is not latched as done, so the stopped charger is not stranded
+        # Test 12: a refused release leaves the charger held, so it is retried and the stopped charger is not stranded
         commands.clear()
         ge._read_only = True
         ge.async_send_evc_command = refuse
@@ -6612,7 +6612,6 @@ def _test_evc_control(my_predbat):
             assert False, "A refused release should raise"
         except EVCCommandFailed:
             pass
-        assert ge.charger_control_released is None, "A refused release must not be recorded as done"
         assert ge.charger_control_state == {"evc-001": False}, "Predbat still holds the stopped charger"
 
         ge.async_send_evc_command = real_send
