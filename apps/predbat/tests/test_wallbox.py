@@ -1170,7 +1170,7 @@ def test_control_state_survives_a_restart():
     storage = _Storage()
     component = _control_component({0: PLAN_OUTSIDE}, storage=storage)
     run_async(component.control_tick(CONTROL_NOW))
-    assert storage.data[("wallbox", "control_state")] == {"control_enabled": True, "held": {"101": False}, "schedule": []}
+    assert storage.data[("wallbox", "control_state")] == {"control_enabled": True, "held": {"101": False}, "paused": ["101"], "schedule": []}
 
     restarted = _control_component({0: PLAN_OUTSIDE}, {101: _status(status_id=178, power=0)}, storage=storage, wallbox_control=False)
     assert restarted.charger_control_active is False and _held_stops(restarted) == {"101"}
@@ -1416,6 +1416,44 @@ def test_wallbox_restart_does_not_read_as_read_only():
     run_async(component.control_tick(CONTROL_NOW))
     assert ("resume", 101) not in component.transport.calls, component.transport.calls
     print("  ✓ A restart does not read as read only")
+
+
+def test_wallbox_failed_resume_is_retried():
+    """A resume that fails on release leaves the charger owed and paused, so the next cycle resumes it again."""
+    component = _restarted_with_control_off(_storage_with_paused("101"), {101: _status(status_id=178, power=0)})
+    component.transport.errors[("resume", 101)] = WallboxApiError("HTTP 500")
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == [("resume", 101)] and "101" in component.paused_by_predbat
+    # The stub transport raises a configured error once
+    component.transport.calls = []
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == [("resume", 101), ("resume_schedule", 101)], component.transport.calls
+    assert component.paused_by_predbat == set() and _held_stops(component) == set()
+    print("  ✓ A failed resume is retried")
+
+
+def test_wallbox_user_pause_is_not_resumed():
+    """A charger the user paused, held outside a window with nothing sent, is not resumed when control is released."""
+    component = _control_component({0: PLAN_OUTSIDE}, {101: _status(status_id=178, power=0)})
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == [] and component.paused_by_predbat == set()
+    component.base.args["set_read_only"] = True
+    run_async(component.control_tick(CONTROL_NOW))
+    assert ("resume", 101) not in component.transport.calls, component.transport.calls
+    print("  ✓ A charger the user paused is not resumed on release")
+
+
+def test_wallbox_rate_limit_stops_the_control_loop():
+    """A rate limit on one charger stops the loop at once and reaches run(), even after another charger's ordinary error."""
+    component = _control_component({0: PLAN_OUTSIDE, 1: PLAN_OUTSIDE}, {101: _status(), 202: _status()})
+    component.transport.errors[("pause", 101)] = WallboxApiError("HTTP 500")
+    component.transport.errors[("pause", 202)] = WallboxRateLimitError("HTTP 429")
+    try:
+        run_async(component.control_tick(CONTROL_NOW))
+        raise AssertionError("Expected the rate limit to reach the caller")
+    except WallboxRateLimitError:
+        pass
+    print("  ✓ A rate limit stops the control loop")
 
 
 def test_normalise_real_locked_capture():
@@ -1737,11 +1775,11 @@ def test_pause_is_persisted_before_it_is_sent():
 def test_failed_control_state_save_is_retried():
     """A save that reports failure is not taken as done: it is tried again on the next cycle."""
     storage = _Storage()
-    results = [False]
+    results = [False, False]
     real_save = storage.save
 
     async def flaky_save(module, filename, data, **kwargs):
-        """Report failure without storing, once, then behave."""
+        """Report failure without storing, twice, then behave."""
         if results:
             return results.pop()
         await real_save(module, filename, data, **kwargs)
@@ -1885,6 +1923,9 @@ def test_wallbox(my_predbat=None):
     test_wallbox_guest_charging_releases()
     test_wallbox_unplug_forgets_a_paused_charger()
     test_wallbox_restart_does_not_read_as_read_only()
+    test_wallbox_failed_resume_is_retried()
+    test_wallbox_user_pause_is_not_resumed()
+    test_wallbox_rate_limit_stops_the_control_loop()
     test_lock_warning_names_ocpp_when_it_holds_the_lock()
     test_location_and_timezone_are_read_and_published()
     test_software_versions_are_read_and_published()

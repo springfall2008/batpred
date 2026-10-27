@@ -512,6 +512,8 @@ class WallboxAPI(ComponentBase, CarChargerControl):
         self._auto_configured_order = None
         self.lock_warned = set()
         self.ocpp_warned = set()
+        # Chargers Predbat itself paused - one already paused, by the user or the app, is not Predbat's to resume
+        self.paused_by_predbat = set()
         # Chargers Predbat has resumed on release but not yet handed back to their own schedule
         self.schedule_pending = set()
         self.transport = None
@@ -868,9 +870,13 @@ class WallboxAPI(ComponentBase, CarChargerControl):
             # Monitoring succeeded, so a refused control is a warning, not a failed cycle
             self.log("Warn: wallbox: charge control failed: {}".format(exc))
 
+    # An account-wide refusal stops the control loop at once rather than going on to the next charger, so it
+    # reaches run() for its back-off or sign in handling - see CarChargerControl.charger_control_each()
+    charger_control_fatal_errors = (WallboxRateLimitError, WallboxAuthError)
+
     def charger_control_extra_state(self):
-        """Save the chargers still owed a hand-back to their schedule alongside the shared control state."""
-        return {"schedule": sorted(self.schedule_pending)}
+        """Save the pauses Predbat sent and the schedule hand-backs still owed alongside the shared control state."""
+        return {"paused": sorted(self.paused_by_predbat), "schedule": sorted(self.schedule_pending)}
 
     def charger_control_restore_extra(self, saved):
         """Restore the schedule hand-backs, and take over the paused list an earlier version saved.
@@ -880,10 +886,14 @@ class WallboxAPI(ComponentBase, CarChargerControl):
         """
         schedule = saved.get("schedule")
         if isinstance(schedule, list):
-            self.schedule_pending.update(str(charger_id) for charger_id in schedule)
+            for charger_id in schedule:
+                self.schedule_pending.add(str(charger_id))
+                # Held, so a release reaches it and hands it back - an earlier version kept no held state
+                self.charger_control_state.setdefault(str(charger_id), True)
         paused = saved.get("paused")
         if isinstance(paused, list):
             for charger_id in paused:
+                self.paused_by_predbat.add(str(charger_id))
                 if str(charger_id) not in self.charger_control_state:
                     self.charger_control_state[str(charger_id)] = False
                     self.charger_control_unconfirmed.add(str(charger_id))
@@ -930,28 +940,39 @@ class WallboxAPI(ComponentBase, CarChargerControl):
         if charge and charger.paused:
             self.log("Info: wallbox: resuming {} for car {}".format(charger.name, car_n))
             await self.transport.resume(self.api_id(charger))
+            if charger.charger_id in self.paused_by_predbat:
+                # Predbat's pause is undone, so a later one by the user is not Predbat's to resume
+                self.paused_by_predbat.discard(charger.charger_id)
+                await self.charger_control_save()
         elif not charge and charger.charging:
             self.log("Info: wallbox: pausing {} for car {}".format(charger.name, car_n))
+            # Recorded and stored before it is sent: a pause whose reply is lost may still have been applied
+            if charger.charger_id not in self.paused_by_predbat:
+                self.paused_by_predbat.add(charger.charger_id)
+                await self.charger_control_save()
             await self.transport.pause(self.api_id(charger))
 
     async def charger_control_release_one(self, charger, charge):
-        """Release one charger: resume it if Predbat left it paused, then hand it back to its own schedule.
+        """Release one charger: resume it if Predbat paused it and it is still paused, then hand it back to its own schedule.
 
-        The schedule step is tracked on its own, because a resume that worked followed by a schedule
-        call that failed leaves a charger that reports Charging and would otherwise never be handed
-        back. A charger that cannot be read, or reports Updating, Error, Unknown or locked with a car,
-        is deferred: it stays held for the next poll.
+        Only a pause Predbat sent is undone - a charger the user paused in the app stays paused. The
+        schedule step is tracked on its own, because a resume that worked followed by a schedule call
+        that failed leaves a charger that reports Charging and would otherwise never be handed back. A
+        resume that fails leaves the charger owed and still paused, so the next cycle resumes it again.
+        A charger that cannot be read, or reports Updating, Error, Unknown, Disconnected or locked with a
+        car, is deferred: it stays held for the next poll.
         """
         charger_id = charger.charger_id
         if charger_id in self.stale_ids:
             raise ChargerControlDeferred()
         if charger.status_id in EMPTY_STATUS_IDS:
             # No car, so nothing is owed
-            if charger_id in self.schedule_pending:
+            if charger_id in self.paused_by_predbat or charger_id in self.schedule_pending:
+                self.paused_by_predbat.discard(charger_id)
                 self.schedule_pending.discard(charger_id)
                 await self.charger_control_save()
             return
-        if charge is False and charger_id not in self.schedule_pending:
+        if charger_id in self.paused_by_predbat:
             if not charger.connected or self.held_by_lock(charger, once=True):
                 raise ChargerControlDeferred()
             if charger.paused:
@@ -959,6 +980,9 @@ class WallboxAPI(ComponentBase, CarChargerControl):
                 self.schedule_pending.add(charger_id)
                 await self.charger_control_save()
                 await self.transport.resume(self.api_id(charger))
+            # Resumed, or no longer paused anyway: nothing more is owed for the pause
+            self.paused_by_predbat.discard(charger_id)
+            await self.charger_control_save()
         if charger_id in self.schedule_pending:
             await self.transport.resume_schedule(self.api_id(charger))
             self.schedule_pending.discard(charger_id)
