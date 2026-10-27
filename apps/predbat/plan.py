@@ -1931,13 +1931,67 @@ class Plan:
         metric, battery_value, cost, metric_keep, battery_cycle, final_carbon_g, import_kwh, export_kwh = self.run_prediction_metric(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=end_record)
         return metric, cost, metric_keep, battery_cycle, final_carbon_g, import_kwh
 
-    def keep_window_change_if_improved(self, baseline, candidate, typ, window_n, snapshot):
-        """Undo a pending single-window plan change unless it improved the whole-plan metric.
+    def export_min_improvement(self, export_limit, window_size, all_n=None):
+        """Return how much an export must improve on idle before optimise_export selects it.
+
+        Freeze export improvements are small, so a freeze has its own flat threshold. A forced export's
+        threshold scales with its power and with the number of slots it covers - the window size, or the
+        number of windows when all_n optimises several together.
+        """
+        if export_mode_of(export_limit) == EXPORT_MODE_FREEZE:
+            return self.metric_min_improvement_export_freeze
+        rate_scale = export_power_of(export_limit)
+        if all_n:
+            return self.metric_min_improvement_export * rate_scale * len(all_n)
+        return self.metric_min_improvement_export * window_size * rate_scale / float(self.plan_interval_minutes)
+
+    def export_threshold_rejected(self, held_limit, held_window, new_limit, metric_loss, freeze_only=False):
+        """Return True when stepping a held export down costs no more than the export's improvement threshold.
+
+        The levels pass seeds exports without metric_min_improvement_export (or _freeze), so a window can hold
+        an export the threshold would reject. optimise_export then returns a mode exporting less battery -
+        freeze instead of a forced export, or idle instead of either - and that step down usually makes the
+        plan metric slightly worse. Judging it on the metric alone would undo it, so the threshold could never
+        remove an export once seeded (issue #3376).
+
+        The threshold is the improvement the user requires before an export is worth making, so a step down
+        losing no more than that is what the setting asks for. metric_loss is the plan metric after the step
+        down less the metric before (positive is worse), and it is compared with the held export's own
+        threshold. Modes are ordered TARGET < FREEZE < IDLE, so a larger mode exports less. With the threshold
+        at zero or below nothing is kept this way.
+
+        The step down only counts when optimise_export tried the held mode. A freeze-only search (freeze_only, or
+        set_export_freeze_only) never offers a forced export, and with freeze disabled a held freeze is not
+        offered either, so a step down there says nothing about the held export's threshold.
+
+        An export the inverter is running right now is excluded: stopping it part way through a price peak
+        is what keep_window_change_if_improved exists to prevent. This keys on isExporting rather than on the
+        window covering the current time alone, because the plan is rebuilt every cycle - the levels pass seeds
+        a rejected export again, and a time-only test would protect it from the moment its slot began. The
+        window's original start is used, as a later start may have been trimmed past the current time while
+        the export is still running.
+        """
+        held_mode = export_mode_of(held_limit)
+        if export_mode_of(new_limit) <= held_mode:
+            return False
+        if held_mode == EXPORT_MODE_TARGET and (freeze_only or self.set_export_freeze_only):
+            return False
+        if held_mode == EXPORT_MODE_FREEZE and not self.set_export_freeze:
+            return False
+        if self.isExporting and held_window.get("start_orig", held_window["start"]) <= self.minutes_now < held_window["end"]:
+            return False
+        threshold = self.export_min_improvement(held_limit, held_window["end"] - held_window["start"])
+        return threshold > 0 and metric_loss <= threshold
+
+    def keep_window_change_if_improved(self, baseline, candidate, typ, window_n, snapshot, threshold_rejected=False):
+        """Undo a pending single-window plan change unless it improved the whole-plan metric, or is an export
+        step down within its improvement threshold (threshold_rejected).
 
         optimise_charge_limit/optimise_export rank their candidates against the window being turned off rather
         than the setting the plan already holds, and on a score carrying adjustments the plan metric does not,
         so a pass that writes their result back unconditionally can replace a better setting chosen by an
-        earlier pass. Reverting on a regression keeps such a pass monotonic - notably it stops an in-progress
+        earlier pass. Reverting on a regression keeps such a pass monotonic, apart from those threshold step downs -
+        notably it stops an in-progress
         forced export being cancelled part way through a price peak.
 
         candidate is the metric of the plan as just written back, taken from the optimiser rather than
@@ -1952,9 +2006,16 @@ class Plan:
         than the setting already held is reverted even when optimise_export preferred it. Lower metric is
         better.
 
+        threshold_rejected keeps the change despite a worse metric: it is set when an export was stepped down at a
+        cost within its improvement threshold (see export_threshold_rejected).
+
         Returns the metric tuple to carry forward: the candidate when the change is kept, the baseline when not.
         """
         if candidate[0] <= baseline[0]:
+            return candidate
+        if threshold_rejected:
+            if self.debug_enable:
+                self.log("Kept change to {} window {} with metric {} (was {}) as the export fell within its improvement threshold".format(typ, window_n, dp2(candidate[0]), dp2(baseline[0])))
             return candidate
         if self.debug_enable:
             self.log("Reverted change to {} window {} as metric {} did not improve on {}".format(typ, window_n, dp2(candidate[0]), dp2(baseline[0])))
@@ -3213,16 +3274,7 @@ class Plan:
             window_key = str(this_export_limit) + "_" + str(window_size)
             window_results[window_key] = [metric, cost]
 
-            # Only select an export if it makes a notable improvement has defined by min_improvement (divided in M windows)
-            # Scale back in the case of freeze export as improvements will be smaller
-            rate_scale = export_power_of(this_export_limit)
-
-            if export_mode_of(this_export_limit) == EXPORT_MODE_FREEZE:
-                min_improvement_scaled = self.metric_min_improvement_export_freeze
-            elif all_n:
-                min_improvement_scaled = self.metric_min_improvement_export * rate_scale * len(all_n)
-            else:
-                min_improvement_scaled = self.metric_min_improvement_export * window_size * rate_scale / float(self.plan_interval_minutes)
+            min_improvement_scaled = self.export_min_improvement(this_export_limit, window_size, all_n)
 
             # When already exporting within this window keep the export going across planning cycles by
             # relaxing the cost gate (not just the metric above). This only sustains an in-progress forced
@@ -4019,7 +4071,8 @@ class Plan:
 
         This is the pass that runs after the levels and detailed passes have chosen the plan's shape.
         Each window is re-optimised against the whole plan and the change is kept only when it improves
-        on the plan we were handed, so the pass is monotonic.
+        on the plan we were handed, so the pass is monotonic - except that an export stepped down at a cost
+        within its improvement threshold is kept although the metric gets slightly worse (issue #3376).
 
         budget caps how many windows are visited; 0 visits every window in the record. The cheap default
         exists because the near-term windows are the ones about to be executed, but the cap is what makes
@@ -4080,7 +4133,8 @@ class Plan:
                 self.export_window_best[window_n]["start_orig"] = self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"])
                 set_window_start(self.export_window_best[window_n], best_start)
                 candidate = (best_metric_plan, best_cost, best_keep, best_cycle, best_carbon, best_import)
-                selected = self.keep_window_change_if_improved(selected, candidate, typ, window_n, snapshot)
+                threshold_rejected = self.export_threshold_rejected(snapshot[0], snapshot[1], best_soc, candidate[0] - selected[0])
+                selected = self.keep_window_change_if_improved(selected, candidate, typ, window_n, snapshot, threshold_rejected=threshold_rejected)
             if (count % 16) == 0 and self.debug_enable:
                 log_metric, log_cost, log_keep, log_cycle, log_carbon, log_import = selected
                 self.log("Plan pass type {} window {} metric {} metric_keep {} carbon {} import {} cost {}".format(typ, window_n, log_metric, dp2(log_keep), dp0(log_carbon), dp2(log_import), dp2(log_cost)))
@@ -4720,8 +4774,9 @@ class Plan:
         # makes no change, capped at a few iterations. The one-shot "freeze" and "low" sub-passes are
         # structural and do not need repeating, but a normal/trim change can open up a further
         # improvement in an earlier window that a single sweep never revisits - repeating the pair
-        # lets those cascade. Acceptance only ever keeps equal-or-better limits so the metric stays
-        # monotonic non-increasing and the extra iterations cannot make the plan worse.
+        # lets those cascade. Acceptance only ever keeps equal-or-better limits, apart from an export stepped
+        # down at a cost within its improvement threshold (issue #3376), and only a strict improvement starts another
+        # iteration, so the refinement loop still converges.
         base_sequence = ["trim_export", "trim_import", "freeze", "normal", "trim_export", "trim_import", "low"]
         refine_sequence = ["trim_export", "trim_import", "normal"]
         max_refine_iterations = 3
@@ -4956,6 +5011,7 @@ class Plan:
                                 allow_freeze=True,
                             )
                             set_window_start(self.export_window_best[window_n], keep_start)
+                            threshold_rejected = self.export_threshold_rejected(self.export_limits_best[window_n], self.export_window_best[window_n], n_best_soc, n_best_metric_plan - best_metric, freeze_only=(typ == "df") or pass_type == "freeze")
                             # The export trim pass may only reduce export, never add it, so the cheapest slots
                             # shed any levels over-export before the high-priced peak is touched. A reduction is
                             # a shallower discharge (higher SoC limit) and/or a smaller window (later start) -
@@ -4963,10 +5019,12 @@ class Plan:
                             # when the SoC limit rises). Off/freeze export no battery and force the start back to
                             # the full window, so they are exempt from the earlier-start check.
                             trim_export_ok = pass_type != "trim_export" or (export_limit_sort_key(n_best_soc) >= export_limit_sort_key(self.export_limits_best[window_n]) and (export_limit_exports_no_battery(n_best_soc) or n_best_start >= keep_start))
-                            if n_best_metric < best_metric and (n_best_soc != self.export_limits_best[window_n] or n_best_start != self.export_window_best[window_n]["start"]) and trim_export_ok:
+                            # A step down forced by the improvement threshold is taken even though the metric gets slightly worse
+                            if (n_best_metric < best_metric or threshold_rejected) and (n_best_soc != self.export_limits_best[window_n] or n_best_start != self.export_window_best[window_n]["start"]) and trim_export_ok:
                                 # Only a strict improvement drives another refinement iteration (see
                                 # the charge block above for why equal-metric flips must not).
-                                changed_this_iteration = True
+                                if n_best_metric < best_metric:
+                                    changed_this_iteration = True
                                 best_metric = n_best_metric
                                 best_cost = n_best_cost
                                 best_soc = n_best_soc
