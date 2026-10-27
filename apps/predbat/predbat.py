@@ -539,6 +539,13 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.car_charging_soc = [0]
         self.car_charging_soc_next = [None]
         self.car_charging_rate = [7.4]
+        # Per-car cap on car_charging_rate from car_charging_max_rate (0 = no cap), see car_max_rate_cap()
+        self.car_charging_max_rate = []
+        self.car_charging_max_rate_held = {}  # car index -> last usable cap, held while its sensor is unknown/unavailable
+        self.car_charging_max_rate_warned = set()  # missing entities already warned about, so each is logged once
+        self.car_charging_max_rate_bad_warned = set()  # car indexes whose cap sensor read as non-numeric text, warned once
+        self.car_charging_max_rate_logged = {}  # car index -> the cap last logged, so a change is logged once
+        self.car_charging_max_rate_saved = None  # the held caps last written to storage, so a write only happens on a change
         self.car_charging_loss = 1.0
         self.export_window = []
         self.export_limits = []
@@ -1947,6 +1954,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                                     # Allow fixed string values
                                     continue
 
+                                if sensor is None and spec.get("blank_entries", False):
+                                    # A blank list entry, for an item whose runtime reads it as "not set" for that slot
+                                    continue
                                 if not isinstance(sensor, str):
                                     self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not a valid entity_id (must be a string)".format(name, sensor))
                                     self.arg_errors[name] = "Invalid entity_id in element {}".format(sensor)
@@ -2227,6 +2237,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             if not self.components.start(phase=1):
                 self.log("Error: Some components failed to start (phase 1)")
                 self.record_status("Error: Some components failed to start (phase 1)", had_errors=True)
+
+            # Each car's own maximum charge rate, before Load ML (phase 2) first reads it
+            self.car_max_rate_startup()
 
             self.components.initialize(phase=2)
             if not self.components.start(phase=2):

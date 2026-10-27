@@ -159,7 +159,7 @@ If you are using Octopus-led charging with the [Octopus direct connection](energ
 
 - Predbat also looks up your enrolled charger's power, or your enrolled car's battery size, in Octopus's catalogue of chargers and cars, by make and model.
 A battery size found there is used in place of **car_charging_battery_size**, so that setting can't change it.
-A charger power found there is used if it is higher than **input_number.predbat_car_charging_rate** (or **input_number.predbat_car_charging_rate_1** etc. for further cars), but never to lower it.
+A charger power found there is used if it is higher than **input_number.predbat_car_charging_rate** (or **input_number.predbat_car_charging_rate_1** etc. for further cars), but never to lower it. It can never raise it above the car's own maximum, **car_charging_max_rate**, if you set that (see below).
 Some makes and models are listed more than once with different values (myenergi's "zappi (all models)" is listed at both 7.4 and 22 kW), and the name alone can't tell them apart.
 For those, Predbat takes the lowest of the charger powers listed and the largest of the battery sizes, and logs a warning naming the values the catalogue gave.
 As the car is planned at whichever is higher of that charger power and **input_number.predbat_car_charging_rate**, set **input_number.predbat_car_charging_rate** to your charger's rate.
@@ -259,6 +259,25 @@ If you don't specify a sensor Predbat will default to 100% - i.e. fill the car t
 - **car_charging_soc** - You should configure this to point to a sensor (on the HA integration for your EV charger) that specifies the car's current charge level
 expressed as a percentage - it must NOT be set to a sensor that gives the car's current kWh value as this will cause Predbat to charge the car to an incorrect level.
 If you don't specify a sensor, Predbat will default to 0%.
+
+- **car_charging_max_rate** - Optional, the car's own maximum charge rate in kW, as a list with one entry per car.
+The car charging rate (**input_number.predbat_car_charging_rate**, a charger integration's reported power, or the Octopus Intelligent charger power) is only what the charger can deliver.
+Many cars, particularly plug-in hybrids, have an on-board charger that takes less (for example 3.6 kW on a 7.4 kW charger), and Predbat would then plan too short a charge.
+With this set, each car is planned at whichever is lower, its charging rate or its own maximum. It applies to every charger integration, and Octopus's charger power can not raise the rate back above it:
+
+```yaml
+  car_charging_max_rate:
+    - 3.6
+    - sensor.second_car_max_charge_kw
+```
+
+Each entry is either a number or a sensor holding the car's rate (in kW, or in W with a `W` unit), and is read again every plan cycle, so a change of car takes effect without a restart.
+A blank entry, 0, or leaving a car off the end of the list means no cap for that car.
+If the sensor is briefly `unknown`, `unavailable` or `none`, for example while Home Assistant restarts, Predbat keeps the last cap it read for that car rather than dropping it. The last cap is saved, so this holds across a restart of Predbat too.
+Any other reading that is not a number also keeps the last cap, with a warning logged once.
+A sensor that does not exist is reported by `apps.yaml` validation and logged once as a warning, and that car is then not capped.
+As with **car_charging_battery_size**, write it as a list: a number on the same line as the key fails `apps.yaml` validation.
+A single sensor on the same line as the key (`car_charging_max_rate: sensor.my_car_max_charge_kw`) is accepted, but applies that one sensor to every car; with more than one car, use the list form so each car has its own entry.
 
 If you have [multiple electric cars](#multiple-electric-cars) then car_charging_soc should be set to a list of sensors, e.g.:
 

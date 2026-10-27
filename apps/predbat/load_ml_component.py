@@ -74,7 +74,6 @@ class LoadMLComponent(ComponentBase):
             self.car_charging_hold = False
         self.car_charging_threshold = float(self.get_arg("car_charging_threshold", 6.0)) / 60.0
         self.car_charging_energy_scale = self.get_arg("car_charging_energy_scale", 1.0)
-        self.car_charging_rate = float(self.get_arg("car_charging_rate", 7.5)) / 60.0
 
         self.ml_learning_rate = 0.001
         self.ml_epochs_initial = 100
@@ -354,12 +353,17 @@ class LoadMLComponent(ComponentBase):
             else:
                 # Filter car charging based on threshold if enabled
                 total_load_energy = 0
+                car_rate_per_minute = 0.0
+                if car_charging_hold:
+                    # The estimated car load is the car's charging rate capped at its own maximum (car_charging_max_rate)
+                    # as Fetch does; both are read now, as either can change at runtime
+                    car_rate_per_minute = self.car_rate_capped(0, float(self.get_arg("car_charging_rate", 7.5))) / 60.0
                 for minute in range(max_minute, -PREDICT_STEP, -PREDICT_STEP):
                     car_delta = 0.0
                     if car_charging_hold:
                         load_now = self.get_from_incrementing(load_minutes, minute, PREDICT_STEP, backwards=True)
                         if load_now >= self.car_charging_threshold * PREDICT_STEP:
-                            car_delta = self.car_charging_rate * PREDICT_STEP
+                            car_delta = car_rate_per_minute * PREDICT_STEP
 
                     # Work out load delta and subtract car delta
                     load_delta = self.get_from_incrementing(load_minutes, minute, PREDICT_STEP, backwards=True)
