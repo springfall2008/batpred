@@ -976,8 +976,9 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
     async def load_control_modes(self):
         """Restore the saved Zappi modes from storage - called once control has been decided.
 
-        With control off nothing is held, so modes left over from an earlier session are
-        dropped: restored months later they would no longer be where the user left the Zappi.
+        With control off and nothing held, modes left over from an earlier session are dropped:
+        restored months later they would no longer be where the user left the Zappi. While a Zappi
+        is still held they are kept, as releasing it needs them (#5788).
         """
         if self.storage is None:
             return
@@ -989,7 +990,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         modes = saved.get("modes") if isinstance(saved, dict) else None
         if not isinstance(modes, dict) or not modes:
             return
-        if self.charger_control_active:
+        if self.charger_control_active or self.charger_control_state:
             self.control_saved_modes = {str(device_id): mode for device_id, mode in modes.items()}
         else:
             await self.save_control_modes()
@@ -1091,7 +1092,10 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
                 if self.automatic and not self._auto_configured:
                     self.automatic_config()
                     self._auto_configured = True
-                if self.charger_control_active:
+                # Whether or not control is on: with myenergi_zappi_control since turned off, a Zappi an
+                # earlier session stopped is still released (#5788). Not with myenergi_enable_controls off,
+                # which means Predbat must not write to the Zappi at all
+                if self.enable_controls:
                     try:
                         await self.charger_control_tick(self.now_utc_exact)
                     except MyEnergiError as exc:

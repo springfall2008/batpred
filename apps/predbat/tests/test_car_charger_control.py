@@ -48,6 +48,7 @@ class FakeBase:
     def __init__(self):
         """Not read only unless a test says so."""
         self.set_read_only = False
+        self.set_read_only_axle = False
         self.num_cars = 1
 
 

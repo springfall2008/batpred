@@ -25,6 +25,8 @@ from ohme import (
     CHARGER_DISCOVERY_ENTITY_SPEC,
     ENERGY_TODAY_ENTITY,
     MAX_ENERGY_GAP_SECONDS,
+    OHME_CONTROL_STATE,
+    OHME_STORAGE_MODULE,
     POWER_WATTS_ENTITY,
     ApiException,
     OhmeAPI,
@@ -302,6 +304,7 @@ def test_ohme(my_predbat=None):
         ("run_tariff_control", _test_ohme_run_tariff_change_with_control, "OhmeAPI run moves ohme_control with the tariff"),
         ("run_wiring_retry", _test_ohme_run_wiring_retried_after_failed_poll, "OhmeAPI run still wires the slots after a failed poll"),
         ("run_release_retry", _test_ohme_run_release_retried_after_failure, "OhmeAPI run retries a failed charger hand-back"),
+        ("control_off_releases_held", _test_ohme_control_off_releases_held, "OhmeAPI releases a charger an earlier session held once ohme_control is off"),
         ("connected_sensor", _test_ohme_connected_sensor, "connected binary sensor tracks plug state"),
         ("plugged_sensor", _test_ohme_plugged_sensor, "plugged binary sensor stays on after a finished charge"),
         ("control_enable", _test_ohme_control_enable_rules, "ohme_control enable rules"),
@@ -1627,6 +1630,8 @@ class MockOhmeBase:
         self.api = api
         self.car_slot_owner = None
         self.components = MockComponents()
+        # As reset() leaves it: no Axle VPP event is forcing read only
+        self.set_read_only_axle = False
 
     def load_previous_value_from_ha(self, entity, attribute=None):
         """Return whatever the test staged for this entity/attribute"""
@@ -1647,7 +1652,8 @@ class MockOhmeAPI(OhmeAPI):
         self.ohme_automatic = False
         self.ohme_automatic_octopus_intelligent = None
         self.ohme_control = False
-        self.charger_control_setup("Ohme API", "charger", switch_prefix="ohme")
+        self.charger_control_setup("Ohme API", "charger", OHME_STORAGE_MODULE, OHME_CONTROL_STATE, "control_enabled", switch_prefix="ohme")
+        self.control_state_loaded = False
         self.octopus_intelligent = None
         self.octopus_other_device = False
         self.octopus_drives_ohme = False
@@ -3995,6 +4001,59 @@ def _test_ohme_run_release_retried_after_failure(my_predbat=None):
     assert calls == [], f"Expected no further hand-back, got {calls}"
 
     print("PASS: a failed charger hand-back was retried")
+    return 0
+
+
+def _test_ohme_control_off_releases_held(my_predbat=None):
+    """#5788: with ohme_control turned off and a restart, a charger an earlier session held paused is
+    released on the first poll, with the target the user had before put back"""
+    print("**** Running test_ohme_control_off_releases_held ****")
+
+    api = _ohme_api_with_octopus("E-1R-COSY-22-12-08-A")
+    api.ohme_automatic = True
+    api.ohme_control = False
+    # The serial _ohme_run_poll() gives the charger, which keys what Predbat holds
+    key = "TEST-SERIAL-123"
+    saved = {(OHME_STORAGE_MODULE, OHME_CONTROL_STATE): {"control_enabled": True, "held": {key: False}, "saved_target": 70, "max_charge_started": True}}
+
+    class _Storage:
+        """In-memory stand-in for the Storage component."""
+
+        async def save(self, module, filename, data, **kwargs):
+            """Record a save."""
+            saved[(module, filename)] = data
+
+        async def load(self, module, filename):
+            """Return what was saved."""
+            return saved.get((module, filename))
+
+    api.base.components.components["storage"] = _Storage()
+    calls = []
+
+    async def mock_resume():
+        calls.append("resume")
+
+    async def mock_max_charge(state=True):
+        calls.append(("max_charge", state))
+
+    async def mock_set_target(target_percent=None):
+        calls.append(("target", target_percent))
+
+    api.client.async_resume_charge = mock_resume
+    api.client.async_max_charge = mock_max_charge
+    api.client.async_set_target = mock_set_target
+
+    _ohme_run_poll(api, first=True)
+    assert api.charger_control_active is False, "Expected control off"
+    assert calls == ["resume", ("max_charge", False), ("target", 70)], f"Expected the held charger released with its target put back, got {calls}"
+    assert not api.charger_control_state and saved[(OHME_STORAGE_MODULE, OHME_CONTROL_STATE)]["held"] == {}, f"Expected the release saved, got {saved}"
+    assert saved[(OHME_STORAGE_MODULE, OHME_CONTROL_STATE)]["saved_target"] is None
+
+    del calls[:]
+    _ohme_run_poll(api, seconds=120)
+    assert calls == [], f"Expected no further hand-back, got {calls}"
+
+    print("PASS: control turned off in config still releases a held charger")
     return 0
 
 

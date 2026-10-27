@@ -398,7 +398,7 @@ class CarChargerControl:
         which comes after a component's first runs, so it would release every charger Predbat holds on
         each restart. Axle forces read only by setting only the attribute, so its own flag is read too.
         """
-        return bool(self.get_arg("set_read_only", False)) or bool(getattr(self.base, "set_read_only_axle", False))
+        return bool(self.get_arg("set_read_only", False)) or bool(self.base.set_read_only_axle)
 
     async def charger_control_set_enabled(self, enabled):
         """Handle the control switch being turned on or off, and persist it."""
@@ -425,29 +425,40 @@ class CarChargerControl:
         self.charger_control_save_pending = True
         try:
             # Storage reports serialisation and I/O failures by returning False rather than raising
-            if await self.storage.save(module, key, {field: self.charger_control_enabled, "held": dict(self.charger_control_state)}) is False:
+            document = dict(self.charger_control_extra_state())
+            document.update({field: self.charger_control_enabled, "held": dict(self.charger_control_state)})
+            if await self.storage.save(module, key, document) is False:
                 raise OSError("storage refused the save")
             self.charger_control_save_pending = False
         except Exception as exc:
             self.log("Warn: {}: could not save the {} control state, it may revert to the last saved state on restart: {}".format(self.charger_control_log_name, self.charger_control_noun, exc))
 
+    def charger_control_extra_state(self):
+        """Anything else of the component's own to save in the same document - none unless it says so."""
+        return {}
+
+    def charger_control_restore_extra(self, saved):
+        """Restore what charger_control_extra_state() saved, from the loaded document - nothing unless the component says so."""
+
     async def charger_control_load_enabled(self):
         """Restore the control switch, and the chargers Predbat held, from storage; the switch is left on when nothing is saved.
+
+        Returns False only when the read failed, so a component can try again next cycle.
 
         Called before the first control cycle: the switch has to carry its restored state
         from the start, or a restart with control switched off would take the charger back
         for a cycle and then hand it over again.
         """
         if self.charger_control_storage is None or self.storage is None:
-            return
+            return True
         module, key, field = self.charger_control_storage
         try:
             saved = await self.storage.load(module, key)
         except Exception as exc:
             self.log("Warn: {}: could not read the {} control switch state: {}".format(self.charger_control_log_name, self.charger_control_noun, exc))
-            return
+            return False
         if not isinstance(saved, dict):
-            return
+            return True
         if field in saved:
             self.charger_control_enabled = bool(saved[field])
             if not self.charger_control_enabled:
@@ -461,6 +472,8 @@ class CarChargerControl:
                     # Not confirmed: the charger may have been changed while Predbat was down, and not every
                     # charger can tell, so the first cycle sends the plan's command again as it did before
                     self.charger_control_unconfirmed.add(str(charger_key))
+        self.charger_control_restore_extra(saved)
+        return True
 
     def charger_control_refresh_windows(self, now):
         """Read Predbat's planned car charging windows for every car into charger_control_windows.
@@ -555,6 +568,9 @@ class CarChargerControl:
 
         The caller passes now so every charger is judged against one instant.
         """
+        if self.charger_control_save_pending:
+            # A save that failed is tried again each cycle, not only when a hold next changes
+            await self.charger_control_save()
         if not self.charger_control_active:
             # A charger an earlier session held - control since turned off in apps.yaml - is still released.
             # Only for a component that ticks while control is off; one that does not leaves it held
@@ -628,7 +644,8 @@ class CarChargerControl:
         """Hold a charger in the state Predbat set, saving only when that changes."""
         changed = self.charger_control_state.get(key) != charge
         self.charger_control_state[key] = charge
-        if changed or self.charger_control_save_pending:
+        if changed:
+            # A save that failed earlier is retried at the start of each cycle, see charger_control_tick()
             await self.charger_control_save()
 
     async def charger_control_hand_over_all(self):

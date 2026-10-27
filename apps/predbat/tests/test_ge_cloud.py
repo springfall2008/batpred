@@ -111,6 +111,8 @@ class MockGECloudDirect(GECloudDirect):
             def __init__(self):
                 self.ha_interface = MockHAInterface()
                 self.num_cars = 0
+                # As reset() leaves it: no Axle VPP event is forcing read only
+                self.set_read_only_axle = False
                 # What the user actually wrote in apps.yaml, which set_arg_auto uses to decide
                 # whether auto-discovery may replace a setting
                 self.args_from_apps_yaml = {}
@@ -366,6 +368,7 @@ def test_ge_cloud(my_predbat=None):
         ("inverter_control_off_user_writes", _test_inverter_control_off_user_writes, "Inverter control off still sends the user's writes, but not Predbat's"),
         ("evc_direct_setting", _test_evc_direct_setting, "ge_cloud_evc_direct starts GE Cloud Direct for the EV charger alone"),
         ("inverter_roles", _test_inverter_roles_from_settings, "ge_cloud_direct monitors the inverter, ge_cloud_inverter_control controls it"),
+        ("evc_control_off_releases_held", _test_evc_control_off_releases_held, "EVC control turned off in config still releases a charger an earlier session stopped"),
         ("evc_only_run", _test_evc_only_run, "EV charger only never reads, writes or reports an inverter"),
         ("evc_only_not_inverter_source", _test_evc_only_not_inverter_source, "EV charger only is not an inverter source"),
         ("enable_defaults_read_only", _test_run_read_only_skips_reset, "Enable defaults skipped in read-only mode"),
@@ -8694,6 +8697,54 @@ def _test_inverter_roles_from_settings(my_predbat):
             print("ERROR: ge_cloud_direct={} ge_cloud_inverter_control={} ge_cloud_evc_direct={} should give monitor/control/source {}, got {}".format(direct, control, evc_direct, (monitored, controlled, monitored), got))
             return 1
     return 0
+
+
+def _test_evc_control_off_releases_held(my_predbat):
+    """#5788: with ge_cloud_evc_control turned off and a restart, an EV charger an earlier session stopped is started again"""
+
+    async def test():
+        ge_cloud, api, calls = _make_rediscovery_ge_cloud(_gec_devices(battery=["inv001"]), evc_devices=[{"uuid": "evc-1"}])
+        GECloudDirect.initialize(ge_cloud, False, "key", True, automatic_evc=True, evc_control=False, evc_direct=True)
+        ge_cloud.log_messages = []
+        saved = {("gecloud", "evc_control_state"): {"evc_control_enabled": True, "held": {"evc-1": False}}}
+
+        class _Storage:
+            """In-memory stand-in for the Storage component."""
+
+            async def save(self, module, key, value, **kwargs):
+                """Record a save."""
+                saved[(module, key)] = value
+
+            async def load(self, module, key):
+                """Return what was saved."""
+                return saved.get((module, key))
+
+        ge_cloud._mock_storage = _Storage()
+        commands = []
+
+        async def mock_send(uuid, command, params):
+            """Record each EV charger command."""
+            commands.append((uuid, command))
+            return {"success": True}
+
+        ge_cloud.async_send_evc_command = mock_send
+        await ge_cloud.run(seconds=0, first=True)
+        if ge_cloud.charger_control_active:
+            print("ERROR: control should be off with ge_cloud_evc_control false")
+            return 1
+        if commands != [("evc-1", "start-charge")]:
+            print("ERROR: the charger an earlier session stopped should be started again, got {}".format(commands))
+            return 1
+        if saved[("gecloud", "evc_control_state")]["held"] != {}:
+            print("ERROR: the release should be saved, got {}".format(saved))
+            return 1
+        await ge_cloud.run(seconds=60, first=False)
+        if commands != [("evc-1", "start-charge")]:
+            print("ERROR: a released charger should not be commanded again, got {}".format(commands))
+            return 1
+        return 0
+
+    return run_async(test())
 
 
 def _test_evc_only_run(my_predbat):
