@@ -153,7 +153,8 @@ class CarChargerControl:
         # charger key -> True/False, the state Predbat last set. Only chargers Predbat has moved are here.
         # Saved with the control switch when the component has storage.
         self.charger_control_state = {}
-        # Chargers sent a stop that did not confirm - recorded as stopped all the same, and sent it again
+        # Held chargers whose state is not confirmed - a stop that did not confirm, or one restored after a
+        # restart - so the plan's command is sent again even though it matches what is held
         self.charger_control_unconfirmed = set()
         self.charger_control_setting = control_setting
         # car_n -> why that car's charger is left alone ("octopus", "car", "discovering", "discovery_failed" or "unknown"), so
@@ -450,7 +451,11 @@ class CarChargerControl:
         if isinstance(held, dict):
             # Merged under what this session already holds, which is newer
             for charger_key, charge in held.items():
-                self.charger_control_state.setdefault(str(charger_key), bool(charge))
+                if str(charger_key) not in self.charger_control_state:
+                    self.charger_control_state[str(charger_key)] = bool(charge)
+                    # Not confirmed: the charger may have been changed while Predbat was down, and not every
+                    # charger can tell, so the first cycle sends the plan's command again as it did before
+                    self.charger_control_unconfirmed.add(str(charger_key))
 
     def charger_control_refresh_windows(self, now):
         """Read Predbat's planned car charging windows for every car into charger_control_windows.
@@ -546,7 +551,8 @@ class CarChargerControl:
         The caller passes now so every charger is judged against one instant.
         """
         if not self.charger_control_active:
-            # A charger an earlier session held - control since turned off in apps.yaml - is still released
+            # A charger an earlier session held - control since turned off in apps.yaml - is still released.
+            # Only for a component that ticks while control is off; one that does not leaves it held
             if self.charger_control_state:
                 if self.charger_control_released is None:
                     self.log("Info: {}: releasing the {} because {} control is not enabled".format(self.charger_control_log_name, self.charger_control_noun, self.charger_control_noun))
@@ -612,6 +618,13 @@ class CarChargerControl:
         del self.charger_control_state[key]
         self.charger_control_unconfirmed.discard(key)
         await self.charger_control_save()
+
+    async def charger_control_hold(self, key, charge):
+        """Hold a charger in the state Predbat set, saving only when that changes."""
+        changed = self.charger_control_state.get(key) != charge
+        self.charger_control_state[key] = charge
+        if changed:
+            await self.charger_control_save()
 
     async def charger_control_hand_over_all(self):
         """Hand every held charger to Octopus, each on its own so one refusing does not strand the rest."""
@@ -690,7 +703,8 @@ class CarChargerControl:
             self.log("Info: {}: car {} was unplugged from {} {}, releasing it".format(self.charger_control_log_name, car_n, self.charger_control_noun, key))
             await self.charger_control_release_held(key, handle)
             return
-        if not self.charger_control_connected(handle):
+        if self.charger_control_unplugged(handle) or not self.charger_control_connected(handle):
+            # An empty charger is not driven - stopping it now would only be released again next cycle
             return
         if car_n not in self.charger_control_windows and key not in self.charger_control_state and not self.charger_control_dispatch_active(car_n, now):
             # This car's plan has not been published yet - one car's slot sensor can appear before
@@ -702,21 +716,19 @@ class CarChargerControl:
         charge = self.charger_control_should_charge(car_n, now)
         last = self.charger_control_state.get(key, None)
         drifted = self.charger_control_drifted(handle, charge)
-        unconfirmed = not charge and key in self.charger_control_unconfirmed
+        unconfirmed = key in self.charger_control_unconfirmed
         if last == charge and not drifted and not unconfirmed:
             return
         if last == charge and not unconfirmed:
             self.log("Info: {}: {} {} was changed away from what Predbat set, re-applying".format(self.charger_control_log_name, self.charger_control_noun, key))
         if charge:
             await self.charger_control_send(handle, charge, car_n)
-            self.charger_control_state[key] = charge
             self.charger_control_unconfirmed.discard(key)
-            await self.charger_control_save()
+            await self.charger_control_hold(key, charge)
             return
         # A stop is recorded, and saved, before it is sent: one whose reply is lost may still have been
         # applied, and must then be released like any other. Until it confirms it is sent again each cycle
-        self.charger_control_state[key] = False
         self.charger_control_unconfirmed.add(key)
-        await self.charger_control_save()
+        await self.charger_control_hold(key, False)
         await self.charger_control_send(handle, charge, car_n)
         self.charger_control_unconfirmed.discard(key)

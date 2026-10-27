@@ -943,14 +943,15 @@ def test_held_chargers_survive_a_restart():
     restarted = FakeComponent([FakeCharger("a")], storage=storage)
     run_async(restarted.charger_control_load_enabled())
     assert restarted.charger_control_state == {"a": False}
-    # reset() leaves the base attribute True until the first update_pred(): not read only, so nothing is released
+    # reset() leaves the base attribute True until the first update_pred(): not read only, so nothing is
+    # released - the restored stop is only sent again, as it is not confirmed
     restarted.base.set_read_only = True
     _plan(restarted, 0, [])
     run_async(restarted.charger_control_tick(_now()))
-    assert restarted.commands == [], restarted.commands
+    assert restarted.commands == [("a", "off", 0)], restarted.commands
     restarted.args["set_read_only"] = True
     run_async(restarted.charger_control_tick(_now()))
-    assert restarted.commands == [("a", "release", False)], restarted.commands
+    assert restarted.commands == [("a", "off", 0), ("a", "release", False)], restarted.commands
     assert storage.saved[("fake", "control_state")]["held"] == {}
 
 
@@ -1027,6 +1028,29 @@ def test_unplug_releases_a_stopped_charger():
     assert len(component.commands) == 2
 
 
+def test_restored_hold_is_reapplied_once():
+    """After a restart a restored hold is not trusted: the plan's command is sent once more, then not again."""
+    storage = FakeStorage({("fake", "control_state"): {"enabled": True, "held": {"a": False}}})
+    component = FakeComponent([FakeCharger("a")], storage=storage)
+    run_async(component.charger_control_load_enabled())
+    _plan(component, 0, [])
+    run_async(component.charger_control_tick(_now()))
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "off", 0)], component.commands
+    assert not any("changed away" in line for line in component.logs), component.logs
+
+
+def test_unplugged_charger_is_not_driven():
+    """A charger that reports its car unplugged is not stopped - it would only be released again next cycle."""
+    charger = FakeCharger("a")
+    charger.unplugged = True
+    component = FakeComponent([charger])
+    _plan(component, 0, [])
+    for _ in range(3):
+        run_async(component.charger_control_tick(_now()))
+    assert component.commands == [], component.commands
+
+
 def run_car_charger_control_tests(my_predbat=None):
     """Run the shared charger control tests. Returns True on failure."""
     print("**** Running car charger control tests ****")
@@ -1035,6 +1059,8 @@ def run_car_charger_control_tests(my_predbat=None):
     test_stop_recorded_before_it_is_sent()
     test_deferred_release_is_kept_quietly()
     test_unplug_releases_a_stopped_charger()
+    test_restored_hold_is_reapplied_once()
+    test_unplugged_charger_is_not_driven()
     test_no_plan_sends_nothing()
     test_on_inside_window_off_outside()
     test_empty_plan_stops()

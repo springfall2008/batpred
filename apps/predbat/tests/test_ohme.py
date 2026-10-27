@@ -2141,7 +2141,7 @@ def _test_ohme_control_read_only_effective(my_predbat=None):
 
     # reset() leaves the attribute True until the first update_pred(), so it alone is not read only
     api = MockOhmeAPI()
-    api.args["set_read_only"] = True
+    api.base.set_read_only = True
     api.args["set_read_only"] = False
     assert api.charger_control_read_only_now() is False, "Expected a restart not to read as read only"
 
