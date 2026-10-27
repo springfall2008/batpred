@@ -2564,6 +2564,45 @@ def test_sigenergy_run_polls_rest_when_mqtt_lagging(my_predbat):
     return failed
 
 
+def test_sigenergy_run_mqtt_fresh_window_covers_cadence_jitter(my_predbat):
+    """The broker's ~5 min period cadence jitters past 300s, so a message up to 450s old still counts as fresh.
+
+    Live gaps between period messages ran 214-411s; with a 300s window a poll tick landing in that
+    jitter sent a REST poll on a healthy feed (6 of 16 REST polls in one afternoon). A genuine broker
+    silence (10-20 min seen) must still fall back to REST.
+    """
+    sid = "SIG001"
+
+    def _run_with_mqtt_age(age_seconds):
+        """Run one poll tick with the last MQTT message age_seconds old, carrying a current reading."""
+        api = MockSigenergyAPI()
+        api.systems = {sid: {"deviceList": []}}
+        api.current_mode = {sid: SIGENERGY_MODE_VPP}
+        api.system_id_filter = {sid}
+        task = MagicMock()
+        task.done = MagicMock(return_value=False)
+        api._mqtt_task = task
+        api._manage_vpp_registration = AsyncMock(return_value=True)
+        api.fetch_energy_flow = AsyncMock(return_value=True)
+        api.fetch_inverter_realtime = AsyncMock(return_value=True)
+        api.fetch_daily_summary = AsyncMock(return_value=True)
+        api.fetch_history_totals = AsyncMock(return_value=True)
+        api.publish_system_entities = AsyncMock()
+        api.apply_controls = AsyncMock()
+        api.last_mqtt_update[sid] = time.time() - age_seconds
+        api.mqtt_data_lag[sid] = 5
+        run_async(api.run(seconds=300, first=False))
+        return api.fetch_energy_flow.call_count
+
+    failed = False
+    for age, expected_polls in ((60, 0), (366, 0), (418, 0), (449, 0), (451, 1), (720, 1)):
+        polls = _run_with_mqtt_age(age)
+        if polls != expected_polls:
+            print("ERROR: MQTT {}s old: expected {} REST poll(s), got {}".format(age, expected_polls, polls))
+            failed = True
+    return failed
+
+
 def test_sigenergy_fetch_inverter_realtime(my_predbat):
     """Test fetch_inverter_realtime maps realtimeInfo fields to energy_flow correctly."""
     failed = False
@@ -5026,6 +5065,7 @@ def run_sigenergy_tests(my_predbat):
         ("mqtt_listener_ignores_stale_period", test_sigenergy_mqtt_listener_ignores_stale_period),
         ("mqtt_listener_applies_fresh_period", test_sigenergy_mqtt_listener_applies_fresh_period),
         ("run_polls_rest_when_mqtt_lagging", test_sigenergy_run_polls_rest_when_mqtt_lagging),
+        ("run_mqtt_fresh_window_covers_cadence_jitter", test_sigenergy_run_mqtt_fresh_window_covers_cadence_jitter),
         ("fetch_inverter_realtime", test_sigenergy_fetch_inverter_realtime),
         ("fetch_inverter_realtime_pv_power_key_fallback", test_sigenergy_fetch_inverter_realtime_pv_power_key_fallback),
         ("fetch_energy_flow", test_sigenergy_fetch_energy_flow),

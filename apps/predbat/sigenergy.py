@@ -134,6 +134,10 @@ SIGENERGY_TOKEN_EXPIRY_BUFFER = 600   # refresh token 10 min before expiry
 SIGENERGY_MIN_REQUEST_INTERVAL = 6.0  # enforce ≥10 req/min API limit
 SIGENERGY_POLL_INTERVAL = 300         # realtime data poll every 5 minutes
 SIGENERGY_MQTT_STALE_SECONDS = 300    # an MQTT period reading older than this on arrival is stale - poll REST instead
+# MQTT counts as keeping energy_flow live if a message arrived within this long. Wider than the poll
+# interval because the broker's ~5 min period cadence jitters to ~410s: a 300s window sent REST polls
+# on healthy feeds, and REST energyFlow is the weaker source (no third-party PV, for one).
+SIGENERGY_MQTT_FRESH_SECONDS = 450
 SIGENERGY_VPP_RECLAIM_INTERVAL = 60   # re-assert VPP ownership every minute (see _manage_vpp_registration)
 SIGENERGY_DEVICE_POLL_INTERVAL = 1800  # device list refresh every 30 minutes
 SIGENERGY_RATE_LIMIT_BACKOFF = [15, 30, 60, 120, 480]  # seconds to wait after code 1201
@@ -3453,7 +3457,7 @@ class SigenergyAPI(ComponentBase):
                 last_update = self.last_mqtt_update.get(sid, 0)
                 mqtt_age = now_ts - last_update
                 # Arriving recently is not enough - the reading it carried must be recent too
-                mqtt_fresh = last_update > 0 and mqtt_age < SIGENERGY_POLL_INTERVAL and self.mqtt_data_lag.get(sid, 0) <= SIGENERGY_MQTT_STALE_SECONDS
+                mqtt_fresh = last_update > 0 and mqtt_age < SIGENERGY_MQTT_FRESH_SECONDS and self.mqtt_data_lag.get(sid, 0) <= SIGENERGY_MQTT_STALE_SECONDS
                 if mqtt_fresh:
                     # MQTT is genuinely keeping energy_flow live — worth persisting/re-timestamping.
                     self.log("SigenergyAPI: Skipping REST energy poll for {} (MQTT data {:.0f}s old)".format(sid, mqtt_age))
