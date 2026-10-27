@@ -766,6 +766,7 @@ untriaged
 urandom
 urlsafe
 uscapacity
+usegmt
 useid
 userinterface
 utcoffset

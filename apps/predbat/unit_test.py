@@ -206,6 +206,7 @@ from tests.test_octopus_saving_event_type import test_octopus_saving_event_type
 from tests.test_octopus_waf_block import test_octopus_waf_block_wrapper
 from tests.test_octopus_catalogue_cache import test_octopus_catalogue_cache_wrapper
 from tests.test_octopus_rate_limit import test_octopus_rate_limit_wrapper
+from tests.test_octopus_backoff import test_octopus_backoff_wrapper
 from tests.test_octopus_logging import test_octopus_logging_wrapper
 from tests.test_octopus_fetch_previous_dispatch import test_octopus_fetch_previous_dispatch_wrapper
 from tests.test_octopus_intelligent_devices import test_octopus_intelligent_devices_wrapper
@@ -542,11 +543,12 @@ def main():
         ("octopus_refresh_token", test_octopus_refresh_token_wrapper, "Octopus refresh token tests", False),
         ("octopus_misc", test_octopus_misc_wrapper, "Octopus misc API tests (set intelligent schedule, join saving sessions)", False),
         ("octopus_read_response", test_octopus_read_response_wrapper, "Octopus read response tests", False),
-        ("octopus_read_response_retry", test_octopus_read_response_retry_wrapper, "Octopus read response retry with exponential backoff tests", False),
+        ("octopus_read_response_retry", test_octopus_read_response_retry_wrapper, "Octopus read response (read once) tests", False),
         ("octopus_saving_event_type", test_octopus_saving_event_type, "Octopus savingSessions eventType classification tests (issue #4851)", False),
         ("octopus_waf_block", test_octopus_waf_block_wrapper, "Octopus CloudFront/WAF 403 handling tests", False),
         ("octopus_catalogue_cache", test_octopus_catalogue_cache_wrapper, "Octopus EV catalogue caching tests", False),
         ("octopus_rate_limit", test_octopus_rate_limit_wrapper, "Octopus API rate limit tests", False),
+        ("octopus_backoff", test_octopus_backoff_wrapper, "Octopus rate limit backoff tests", False),
         ("octopus_logging", test_octopus_logging_wrapper, "Octopus GraphQL logging redaction tests", False),
         ("octopus_fetch_previous_dispatch", test_octopus_fetch_previous_dispatch_wrapper, "Octopus fetch previous dispatch tests", False),
         ("octopus_intelligent_devices", test_octopus_intelligent_devices_wrapper, "Octopus intelligent devices tests (flexPlannedDispatches, energyAddedKwh)", False),
