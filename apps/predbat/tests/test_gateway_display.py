@@ -79,7 +79,7 @@ class TestGatewayDisplayOnly:
 
         async def exercise():
             await gw.publish_command("set_read_only", enable=False)
-            await gw._send_ev_command({"action": "RemoteStartTransaction"})
+            await gw._send_ev_command("cp1", {"action": "RemoteStartTransaction"})
             await gw.publish_plan([], "Europe/London")
 
         asyncio.run(exercise())
