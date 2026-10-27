@@ -302,7 +302,7 @@ async def test_octopus_backoff(my_predbat):
     check(backoff.clear() == 0, "clearing an inactive backoff returns 0")
 
     # Test 17
-    print("\n*** Test 17: backoffs are timed in UTC ***")
+    print("\n*** Test 17: every backoff is timed in UTC ***")
     api, session = _make_api(my_predbat, _make_response(403, CLOUDFRONT_403_BODY))
     api.graphql_token = "token"
     api.async_refresh_token = AsyncMock(return_value="token")
