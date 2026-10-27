@@ -205,7 +205,8 @@ source setup.csh
 ./standalone
 ```
 
-Use `./standalone_ha` instead to run with the app's own `apps.yaml` and `secrets.yaml`. Both standalone scripts delete any old `predbat.log` (the log file that Predbat writes as it runs) before they start.
+Use `./standalone_ha` instead to run with the app's own `apps.yaml` and `secrets.yaml`. Both standalone scripts delete any old `predbat.log` from the `coverage` directory (the log file that the unit tests writes as it runs) before they start.
+The scripts then create and cd to a `predbat_standalone` (or `predbat_standalone_ha`) sub-directory, and run `python3 hass.py` from there. `hass.py` will open `predbat.log` in that sub-directory, so the standalone run log is `coverage/standalone/predbat.log`.
 
 To copy your code into the app instead, run `./deploy`, which doesn't need the Python environment. Predbat restarts itself when it sees the new files.
 
@@ -716,14 +717,15 @@ For example, running all the test scripts, putting the script output into a file
 ```bash
 ./run_all --quick > /tmp/all_tests.txt 2>&1
 tail -3 /tmp/all_tests.txt
-grep -n "Traceback\|AssertionError" /tmp/all_tests.txt
+grep -n "FAILED\|Traceback\|AssertionError" /tmp/all_tests.txt
 ```
 
 ### Reading the results
 
 - A successful run finishes with a line like `**** All tests passed (4 slow tests skipped, total time: 211.29s) ****`.
-- A failing test stops with a traceback (often an `AssertionError`, with a message saying what was expected),
+- A failing test that raises an exception will stop with a traceback (often an `AssertionError`, with a message saying what was expected),
   and the run does not end with the "All tests passed" line.
+- Tests can also fail by printing an `ERROR:` line and returning True but no traceback. The unit_test handler will print `**** <name>: FAILED in ...s` (or `**** ERROR: Test <name> FAILED with --test/-k`), followed by `**** ERROR: Some tests failed` at the end of the output.
 - Be aware that the test output is long and **contains many `Error:` and `Warn:` log lines even in a passing run**. Many tests
   deliberately feed in bad data (for example corrupt update files or invalid configuration) to prove that Predbat rejects it
   and reports it correctly. Searching for the word "error" will find these, so it is not a good way to look for failures.
