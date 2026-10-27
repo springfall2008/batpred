@@ -712,7 +712,7 @@ On Octopus Intelligent (or E.ON/EDF SmartFlex through the Kraken component), wha
 
 ### Restarts and charger control
 
-For the GivEnergy and myenergi chargers, Predbat saves which chargers it has stopped, alongside the control switch. After a restart it still knows, so turning on read only mode, turning the control switch off or turning on guest charging lets them charge again. A restart on its own releases nothing, so it does not interrupt a charge. A stop is saved before it is sent, so one whose reply was lost is released like any other.
+For the GivEnergy, myenergi and Ohme chargers, Predbat saves which chargers it has stopped, alongside the control switch. After a restart it still knows, so turning on read only mode, turning the control switch off, turning on guest charging or turning the charger's control setting off in `apps.yaml` lets them charge again. If Octopus Intelligent now drives that charger, Predbat hands it to Octopus instead of starting it. A restart on its own releases nothing, so it does not interrupt a charge. A stop is saved before it is sent, so one whose reply was lost is released like any other. With `myenergi_enable_controls` off Predbat never writes to a Zappi, so it is not released either.
 
 ### Guest charging
 
