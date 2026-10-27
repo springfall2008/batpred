@@ -21,6 +21,7 @@ import array
 import ctypes
 import os
 from datetime import datetime, timedelta, timezone, time
+from email.utils import parsedate_to_datetime
 from io import StringIO
 from functools import lru_cache
 from const import (
@@ -2732,6 +2733,14 @@ TOKEN_MINT_BACKOFF_MAX_DOUBLINGS = 16
 # short log window unable to tell a deliberate cooldown from a bad API key. Repeat the reason
 # at most this often.
 TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS = 600
+# After a rate limit (KT-CT-1199, HTTP 429 or an edge/WAF block) the Kraken-based components pause
+# their GraphQL queries rather than sending the rest of the poll into the same limit. The pause
+# doubles per consecutive rate limit, capped so a limit that lifts is picked up within the half
+# hour. The base matches the two minute dispatch poll, so the first rate limit skips one poll.
+GRAPHQL_RATE_LIMIT_BACKOFF_BASE_SECONDS = 120
+GRAPHQL_RATE_LIMIT_BACKOFF_MAX_SECONDS = 1800
+# Kraken's GraphQL error code for "Too many requests"
+KRAKEN_RATE_LIMIT_ERROR_CODE = "KT-CT-1199"
 
 
 def token_mint_backoff_seconds(block_count):
@@ -2746,8 +2755,66 @@ def token_mint_backoff_seconds(block_count):
     Returns:
         int: Delay in seconds.
     """
-    exponent = min(max(block_count - 1, 0), TOKEN_MINT_BACKOFF_MAX_DOUBLINGS)
-    return min(TOKEN_MINT_BACKOFF_BASE_SECONDS * (2**exponent), TOKEN_MINT_BACKOFF_MAX_SECONDS)
+    return exponential_backoff_seconds(block_count, TOKEN_MINT_BACKOFF_BASE_SECONDS, TOKEN_MINT_BACKOFF_MAX_SECONDS)
+
+
+def exponential_backoff_seconds(count, base_seconds, max_seconds):
+    """Backoff delay in seconds after this many consecutive failures.
+
+    Doubles per consecutive failure from base_seconds, capped at max_seconds.
+
+    Args:
+        count: Number of consecutive failures so far, 1 for the first.
+        base_seconds: Delay after the first failure.
+        max_seconds: Longest delay returned.
+
+    Returns:
+        int: Delay in seconds.
+    """
+    exponent = min(max(count - 1, 0), TOKEN_MINT_BACKOFF_MAX_DOUBLINGS)
+    return min(base_seconds * (2**exponent), max_seconds)
+
+
+def is_kraken_rate_limit_error(errors):
+    """Return True if a GraphQL errors list carries Kraken's rate limit code (KT-CT-1199).
+
+    Args:
+        errors: The "errors" list from a GraphQL response body, or anything else.
+
+    Returns:
+        bool: True if any error is a rate limit.
+    """
+    if not isinstance(errors, list):
+        return False
+    return any(isinstance(error, dict) and isinstance(error.get("extensions"), dict) and error["extensions"].get("errorCode") == KRAKEN_RATE_LIMIT_ERROR_CODE for error in errors)
+
+
+def parse_retry_after(value, now=None):
+    """Parse an HTTP Retry-After header into seconds to wait.
+
+    The header is either a whole number of seconds or an HTTP date. Anything else - a missing
+    header, a negative number, garbage - returns None so the caller falls back to its own schedule.
+
+    Args:
+        value: The header value, or None when the header is absent.
+        now: The current time as an aware datetime, defaulting to now in UTC. Only used for the date form.
+
+    Returns:
+        int or None: Seconds to wait, 0 for a date already passed, None if the header is unusable.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    value = value.strip()
+    if value.isdigit():
+        return int(value)
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError, IndexError):
+        return None
+    if when is None or when.tzinfo is None:
+        return None
+    now = now or datetime.now(timezone.utc)
+    return max(int((when - now).total_seconds()), 0)
 
 
 def is_edge_block_body(text):
