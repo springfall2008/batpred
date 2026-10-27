@@ -4318,7 +4318,9 @@ class Fetch:
         """
         reason = None
         if self.export_more_solar:
-            if not self.calculate_best_export:
+            if not self.battery_export_permitted:
+                reason = "the inverter is not permitted to export battery energy, so export slots are not planned. Turn export_more_solar off."
+            elif not self.calculate_best_export:
                 reason = "Predbat mode is not Control charge & discharge, so export slots are not planned. Change the mode, or turn export_more_solar off."
             elif not self.set_export_freeze:
                 # Ask the inverter rather than the switch: an unsupported inverter forces set_export_freeze off

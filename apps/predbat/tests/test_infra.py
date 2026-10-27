@@ -411,6 +411,7 @@ class TestHAInterface:
 class TestInverter:
     def __init__(self):
         self.id = 0
+        self.inv_battery_export_permitted = True
 
     def refresh_config(self, quiet=False):
         """
