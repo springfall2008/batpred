@@ -181,6 +181,12 @@ class MockSigenergyAPI(SigenergyAPI):
         """Store state."""
         self.dashboard_items[entity_id] = {"state": state, "attributes": attributes or {}}
 
+    async def set_state_external(self, entity_id, state, attributes=None):
+        """Capture changes to Predbat's own config entities (ComponentBase.set_state_external)."""
+        if not hasattr(self, "external_state"):
+            self.external_state = {}
+        self.external_state[entity_id] = state
+
     def get_arg(self, key, default=None, **kwargs):
         """Return stored arg or default.
 
@@ -2819,6 +2825,93 @@ def test_sigenergy_fetch_energy_flow_live_sample_balances(my_predbat):
     return failed
 
 
+# Live energyFlow from an AC-coupled site (SolarEdge array beside a SigenStor) exporting 8.29kW at
+# midday: pvPower and acPower both read 0 while MQTT "PV power" read 9.38kW at the same time.
+AC_COUPLED_ENERGY_FLOW = {"code": 0, "data": '{"pvPower":0.0,"gridPower":8.29,"evPower":0.0,"acPower":0.0,"loadPower":0.74,"heatPumpPower":0.0,"batteryPower":0.2,"batterySoc":100.0}'}
+AC_COUPLED_TOTALS = {"FROM_SOLAR": 0.08, "FROM_THIRD_PARTY_INV": 616.46, "TO_LOAD": 885.3}
+HYBRID_TOTALS = {"FROM_SOLAR": 9176.11, "FROM_THIRD_PARTY_INV": 0.0, "TO_LOAD": 7200.0}
+
+
+def _fetch_energy_flow_with_totals(totals, response):
+    """Run fetch_energy_flow for system SYS1 with the given lifetime totals and raw response."""
+    api = MockSigenergyAPI()
+    api.access_token = "fake_token"
+    api.token_expires_at = 9_999_999_999
+    api._last_request_time = 0
+    if totals is not None:
+        api.history_totals["SYS1"] = dict(totals)
+    with patch("sigenergy.aiohttp.ClientSession", return_value=_make_mock_session(_make_mock_response(status=200, json_data=response))):
+        ok = run_async(api.fetch_energy_flow("SYS1"))
+    assert ok is True, "fetch_energy_flow should return True"
+    return api.energy_flow["SYS1"]
+
+
+def test_sigenergy_fetch_energy_flow_third_party_pv_from_balance(my_predbat):
+    """energyFlow omits third-party PV, so on an AC-coupled system PV comes from the energy balance.
+
+    Without it pv_power read 0 on every REST poll while the array was exporting 8kW, and only
+    jumped back when an MQTT period message arrived.
+    """
+    flow = _fetch_energy_flow_with_totals(AC_COUPLED_TOTALS, AC_COUPLED_ENERGY_FLOW)
+    # load 0.74 + battery charge 0.2 + export 8.29
+    assert abs(flow["pvPower"] - 9.23) < 0.01, "third-party PV recovered from the balance, got {}".format(flow["pvPower"])
+    assert flow["loadPower"] == 0.74, "loadPower unchanged"
+    assert flow["gridPower"] == 8.29, "gridPower unchanged"
+    return False
+
+
+def test_sigenergy_fetch_energy_flow_hybrid_pv_not_derived(my_predbat):
+    """Without third-party PV the reported pvPower stands - the balance must not inflate a hybrid's PV."""
+    failed = False
+    noisy = {"code": 0, "data": '{"pvPower":3.0,"gridPower":0.5,"evPower":0.0,"acPower":0.0,"loadPower":1.4,"heatPumpPower":0.0,"batteryPower":1.2,"batterySoc":50.0}'}
+    for label, totals in (("hybrid totals", HYBRID_TOTALS), ("no totals yet", None)):
+        flow = _fetch_energy_flow_with_totals(totals, noisy)
+        if flow["pvPower"] != 3.0:
+            print("ERROR: {}: pvPower should stay 3.0, got {}".format(label, flow["pvPower"]))
+            failed = True
+    return failed
+
+
+def test_sigenergy_hybrid_switch_only_moves_on_ac_coupled_evidence(my_predbat):
+    """inverter_hybrid only moves off, and only when every system is AC-coupled.
+
+    Off on a real hybrid lets PV and battery charge plan past inverter_limit; on for an AC-coupled
+    site only skips the PV->battery conversion loss. So anything short of clear evidence leaves
+    Predbat's default alone.
+    """
+    failed = False
+    entity = "switch.predbat_inverter_hybrid"
+    cases = [
+        ("AC-coupled", {"SYS1": AC_COUPLED_TOTALS}, False),
+        ("hybrid", {"SYS1": HYBRID_TOTALS}, None),
+        ("hybrid with a third-party inverter as well", {"SYS1": {"FROM_SOLAR": 500.0, "FROM_THIRD_PARTY_INV": 300.0}}, None),
+        ("no PV yet", {"SYS1": {"FROM_SOLAR": 0.0, "FROM_THIRD_PARTY_INV": 0.0}}, None),
+        ("no totals yet", {}, None),
+        ("one AC-coupled and one hybrid system", {"SYS1": AC_COUPLED_TOTALS, "SYS2": HYBRID_TOTALS}, None),
+    ]
+    for label, totals, expected in cases:
+        api = MockSigenergyAPI()
+        api.systems = {"SYS1": {}, "SYS2": {}} if "SYS2" in totals else {"SYS1": {}}
+        api.history_totals = {sid: dict(t) for sid, t in totals.items()}
+        run_async(api.apply_hybrid_verdict())
+        actual = getattr(api, "external_state", {}).get(entity)
+        if actual is not expected:
+            print("ERROR: {}: expected {} to be {}, got {}".format(label, entity, expected, actual))
+            failed = True
+    return failed
+
+
+def test_sigenergy_automatic_config_sets_hybrid_off_for_ac_coupled(my_predbat):
+    """automatic_config applies the hybrid verdict, so an AC-coupled install is set up without help."""
+    api = MockSigenergyAPI()
+    api.automatic = True
+    api.systems = {"SIG001": {"systemName": "Home"}}
+    api.history_totals = {"SIG001": dict(AC_COUPLED_TOTALS)}
+    run_async(api.automatic_config())
+    assert getattr(api, "external_state", {}).get("switch.predbat_inverter_hybrid") is False, "inverter_hybrid set off"
+    return False
+
+
 def test_sigenergy_fetch_inverter_realtime_no_inverter(my_predbat):
     """Test fetch_inverter_realtime returns False when no inverter device is found."""
     failed = False
@@ -4914,6 +5007,10 @@ def run_sigenergy_tests(my_predbat):
         ("run_falls_back_to_realtime_when_energy_flow_fails", test_sigenergy_run_falls_back_to_realtime_when_energy_flow_fails),
         ("fetch_inverter_realtime_live_sample_holds_grid_and_load", test_sigenergy_fetch_inverter_realtime_live_sample_holds_grid_and_load),
         ("fetch_energy_flow_live_sample_balances", test_sigenergy_fetch_energy_flow_live_sample_balances),
+        ("fetch_energy_flow_third_party_pv_from_balance", test_sigenergy_fetch_energy_flow_third_party_pv_from_balance),
+        ("fetch_energy_flow_hybrid_pv_not_derived", test_sigenergy_fetch_energy_flow_hybrid_pv_not_derived),
+        ("hybrid_switch_only_moves_on_ac_coupled_evidence", test_sigenergy_hybrid_switch_only_moves_on_ac_coupled_evidence),
+        ("automatic_config_sets_hybrid_off_for_ac_coupled", test_sigenergy_automatic_config_sets_hybrid_off_for_ac_coupled),
         ("get_inverter_serial", test_sigenergy_get_inverter_serial),
         ("build_tls_context", test_sigenergy_build_tls_context),
         ("battery_max_power", test_sigenergy_battery_max_power),
