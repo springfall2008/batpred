@@ -35,7 +35,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v9.5.2"
+THIS_VERSION = "v9.5.3"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
 from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, DEFAULT_PREDBAT_REPOSITORY
@@ -96,6 +96,7 @@ from utils import (
     MALLOC_ARENA_LIMIT,
     export_limits_to_stored,
     export_limits_from_stored,
+    next_aligned_run,
 )
 from predheat import PredHeat
 from octopus import Octopus
@@ -538,6 +539,13 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.car_charging_soc = [0]
         self.car_charging_soc_next = [None]
         self.car_charging_rate = [7.4]
+        # Per-car cap on car_charging_rate from car_charging_max_rate (0 = no cap), see car_max_rate_cap()
+        self.car_charging_max_rate = []
+        self.car_charging_max_rate_held = {}  # car index -> last usable cap, held while its sensor is unknown/unavailable
+        self.car_charging_max_rate_warned = set()  # missing entities already warned about, so each is logged once
+        self.car_charging_max_rate_bad_warned = set()  # car indexes whose cap sensor read as non-numeric text, warned once
+        self.car_charging_max_rate_logged = {}  # car index -> the cap last logged, so a change is logged once
+        self.car_charging_max_rate_saved = None  # the held caps last written to storage, so a write only happens on a change
         self.car_charging_loss = 1.0
         self.export_window = []
         self.export_limits = []
@@ -1946,6 +1954,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                                     # Allow fixed string values
                                     continue
 
+                                if sensor is None and spec.get("blank_entries", False):
+                                    # A blank list entry, for an item whose runtime reads it as "not set" for that slot
+                                    continue
                                 if not isinstance(sensor, str):
                                     self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not a valid entity_id (must be a string)".format(name, sensor))
                                     self.arg_errors[name] = "Invalid entity_id in element {}".format(sensor)
@@ -2177,11 +2188,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.update_time(print=False)
         self.started_time = self.now_utc_real
         run_every = RUN_EVERY * 60
-        # The host's naive clock, deliberately not now_utc: the run times below are handed to
-        # run_every(), and hass.py's timer_tick compares them against datetime.now(). This is the
-        # only place that needs it, so it stays local rather than living on the instance.
-        host_now = datetime.now()
-        host_midnight = host_now.replace(hour=0, minute=0, second=0, microsecond=0)
 
         try:
             self.reset()
@@ -2232,6 +2238,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 self.log("Error: Some components failed to start (phase 1)")
                 self.record_status("Error: Some components failed to start (phase 1)", had_errors=True)
 
+            # Each car's own maximum charge rate, before Load ML (phase 2) first reads it
+            self.car_max_rate_startup()
+
             self.components.initialize(phase=2)
             if not self.components.start(phase=2):
                 self.log("Error: Some components failed to start (phase 2)")
@@ -2265,13 +2274,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         # Started
         self.publish_last_started()
 
-        # Run every N minutes aligned to the minute
-        seconds_now = (host_now - host_midnight).seconds
-
-        # Calculate next run time to exactly align with the run_every time
-        seconds_offset = seconds_now % run_every
-        seconds_next = seconds_now + (run_every - seconds_offset)
-        next_time = host_midnight + timedelta(seconds=seconds_next)
+        # Run every N minutes aligned to the host's wall clock, using the real clock rather than
+        # now_utc; the scheduler in hass.py keeps the time in UTC
+        next_time = next_aligned_run(run_every)
         self.log("Predbat: Next run time will be {} and then every {} seconds".format(next_time, run_every))
 
         # First run is now
@@ -2280,7 +2285,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         # And then every N minutes
         if not INVERTER_TEST:
             self.run_every(self.run_time_loop, next_time, run_every, random_start=0, random_end=0)
-            self.run_every(self.update_time_loop, datetime.now(), 15, random_start=0, random_end=0)
+            self.run_every(self.update_time_loop, datetime.now(timezone.utc), 15, random_start=0, random_end=0)
         else:
             self.update_time_loop(None)
 

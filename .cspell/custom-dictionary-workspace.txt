@@ -78,6 +78,7 @@ byok
 cadata
 calcsize
 calib
+callees
 Cantarell
 cbat
 CDLL
@@ -219,6 +220,7 @@ epod
 epvtoday
 errno
 ESSAPI
+etime
 ETIMEDOUT
 eto
 etoday
@@ -328,6 +330,7 @@ iess
 iflux
 importlimit
 inday
+Indevolt
 indra
 inteless
 INTELLI
@@ -510,6 +513,7 @@ parseable
 pbat
 pbgw
 pcharging
+pcpu
 pcsenmap
 pdata
 pdetails
@@ -733,6 +737,7 @@ typecode
 typecodes
 tzfile
 tzpath
+tzset
 unasserted
 uncalibrated
 uncompilable
@@ -761,8 +766,10 @@ untriaged
 urandom
 urlsafe
 uscapacity
+usegmt
 useid
 userinterface
+utcoffset
 Vallery
 varh
 venv

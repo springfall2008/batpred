@@ -59,6 +59,10 @@ MAX_SENT_IDS = 50
 
 MIN_CURRENT_A = 6
 MAX_CURRENT_A = 32
+# ev_power under this fraction of true_milli_amps x voltage is taken as a stale reading (seen at the start of a charge),
+# once current x voltage is at least the minimum - below it a noisy current reading could invent power
+EV_POWER_TRUST_FRACTION = 0.5
+EV_POWER_MIN_MEASURED_W = 500
 
 # Websocket reconnect back-off, as the Home Assistant integration uses
 BACKOFF_MIN_SECONDS = 3
@@ -187,12 +191,18 @@ def apply_session(charger, result):
         charger.charging = bool(result["charging"])
     if not charger.charging:
         charger.power_w = 0.0
-    elif "ev_power" in result:
-        charger.power_w = _to_float(result["ev_power"]) or 0.0
-    elif "true_milli_amps" in result and "voltage" in result:
-        milliamps = _to_float(result["true_milli_amps"])
-        voltage = _to_float(result["voltage"])
-        charger.power_w = milliamps * voltage / 1000.0 if milliamps is not None and voltage is not None else 0.0
+    else:
+        metered = _to_float(result.get("ev_power"))
+        milliamps = _to_float(result.get("true_milli_amps"))
+        voltage = _to_float(result.get("voltage"))
+        measured = milliamps * voltage / 1000.0 if milliamps is not None and voltage is not None else None
+        if metered is not None and (measured is None or measured < EV_POWER_MIN_MEASURED_W or metered >= measured * EV_POWER_TRUST_FRACTION):
+            charger.power_w = metered
+        elif measured is not None:
+            # A V3 charger reports ev_power as 0 or 3 W for the first few messages of a charge while
+            # true_milli_amps and voltage already show ~30 A at 231 V, so current x voltage wins then
+            charger.power_w = measured
+        # A message with neither leaves the last power alone
     if "session" in result and result["session"] != charger.session_id:
         # A new session: its energy starts again from whatever this message says
         charger.session_id = result["session"]
@@ -712,8 +722,11 @@ class HypervoltTransport:
             await self._send(link, "plugncharge.get")
         await self._send(link, "firmware.version")
         await self._send(link, "get.name")
-        # The integration only ever sees this pushed on a change; asking means a restart need not wait for the cable to move
-        await self._send(link, "get.pilot_status")
+        if charger_major_version(link.charger_id) < 3:
+            # The integration only ever sees this pushed on a change; asking means a restart need not wait for the cable to move.
+            # A V3 charger refuses it ("get.pilot_status not allowed") but pushes the pilot status straight after login anyway.
+            # Decided by the hardware, not the API: a V2 promoted to the V3 API keeps asking, as it did before.
+            await self._send(link, "get.pilot_status")
 
     async def _handle_sync_frame(self, link, text):
         """Route one sync socket frame: a reply to its caller and on_message, a push to on_message."""
@@ -742,7 +755,9 @@ class HypervoltTransport:
                     await self._login_refused(link)
                     return
                 if future and not future.done():
-                    future.set_exception(HypervoltRefusedError("charger {} refused {}: {} {}".format(link.charger_id, method, error.get("code", ""), error.get("error", "")).strip()))
+                    # A V3 charger puts the reason in "message", e.g. {"code": -32601, "data": null, "message": "get.pilot_status not allowed"}
+                    reason = error.get("message") or error.get("error") or ""
+                    future.set_exception(HypervoltRefusedError("charger {} refused {}: {} {}".format(link.charger_id, method, error.get("code", ""), reason).strip()))
                 return
             result = message.get("result")
             if method == "login":

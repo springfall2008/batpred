@@ -2804,6 +2804,11 @@ APPS_SCHEMA = {
     "car_charging_soc": {"type": "sensor", "sensor_type": "float", "entries": "num_cars"},
     "car_charging_limit": {"type": "sensor", "sensor_type": "float", "entries": "num_cars"},
     "car_charging_exclusive": {"type": "boolean_list", "entries": "num_cars"},
+    # The car's own maximum charge rate in kW, per car: Fetch caps car_charging_rate at it for every
+    # charger integration (car_max_rate_cap()). A list with a number or an entity pointer per car;
+    # a blank entry, 0, or a shorter list means no cap for that car. unknown/unavailable is normal
+    # for a car sensor (the runtime holds the last cap), but an entity that does not exist is an error.
+    "car_charging_max_rate": {"type": "sensor", "sensor_type": "float", "entries": "num_cars", "optional_entries": True, "transient_ok": True, "blank_entries": True},
     "carbon_intensity": {"type": "sensor", "sensor_type": "string"},
     "carbon_postcode": {"type": "string", "empty": False},
     "carbon_automatic": {"type": "boolean"},
