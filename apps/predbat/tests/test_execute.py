@@ -1157,6 +1157,180 @@ def test_poll_clamps_stored_rates_to_refreshed_ceilings(my_predbat):
     return failed
 
 
+def test_rate_limit_zero_pauses_battery(my_predbat):
+    """
+    A limit (inverter_limit_charge / inverter_limit_discharge) of 0, or a balancer hold at 0,
+    must also set the pause mode, if pause mode is available for the inverter (GitHub issue 2155).
+    A rate of 0 alone still lets the battery trickle charge or discharge at a few hundred W.
+    The pause must be released again (Disabled) once the limit or the hold is lifted.
+
+    The pause is written once, from the plan's own pause request, the limits and any balancer
+    hold together, so none of them can undo another.
+    """
+    failed = balance_fixture(my_predbat, "limit_pause_setup")
+    if failed:
+        return failed
+    saved = save_balance_state(my_predbat)
+    saved_limits = [(inverter.battery_rate_max_charge, inverter.battery_rate_max_discharge) for inverter in my_predbat.inverters]
+    try:
+        # (charge limit W, discharge limit W, plan pause_charge, plan pause_discharge, expected pause_charge, expected pause_discharge)
+        cases = [
+            (2600, 2600, False, False, False, False),
+            (0, 2600, False, False, True, False),
+            (2600, 0, False, False, False, True),
+            (0, 0, False, False, True, True),
+            # The plan's own request is kept and merged with the limit of 0 rather than replaced by it
+            (0, 2600, False, True, True, True),
+            (2600, 2600, True, False, True, False),
+        ]
+        for charge_w, discharge_w, plan_charge, plan_discharge, want_charge, want_discharge in cases:
+            for inverter in my_predbat.inverters:
+                inverter.battery_rate_max_charge = charge_w / MINUTE_WATT
+                inverter.battery_rate_max_discharge = discharge_w / MINUTE_WATT
+                inverter.pause_charge = None
+                inverter.pause_discharge = None
+                entry = {"charge_rate": None, "discharge_rate": None, "pause_charge": plan_charge, "pause_discharge": plan_discharge, "owner": "demand", "reset_rates": True}
+                my_predbat.apply_inverter_rates(inverter, entry)
+                if inverter.pause_charge != want_charge or inverter.pause_discharge != want_discharge:
+                    print(
+                        "ERROR: inverter {} limits {}W/{}W plan pause {}/{} should pause charge {} discharge {}, got {} {}".format(
+                            inverter.id, charge_w, discharge_w, plan_charge, plan_discharge, want_charge, want_discharge, inverter.pause_charge, inverter.pause_discharge
+                        )
+                    )
+                    failed = True
+
+        # Monitor mode: Predbat is only watching, so a limit of 0 must not write a pause
+        for inverter in my_predbat.inverters:
+            inverter.battery_rate_max_charge = 0
+            inverter.battery_rate_max_discharge = 0
+            inverter.pause_charge = None
+            inverter.pause_discharge = None
+            my_predbat.apply_inverter_rates(inverter, {"charge_rate": None, "discharge_rate": None, "pause_charge": False, "pause_discharge": False, "owner": "demand", "reset_rates": False})
+            if inverter.pause_charge is not None or inverter.pause_discharge is not None:
+                print("ERROR: inverter {} wrote a pause in monitor mode with a limit of 0, but monitor mode must not change anything on the inverter, including its pause mode".format(inverter.id))
+                failed = True
+
+        # Releasing: a pause set because of a limit of 0 must go back to Disabled once the limit is above 0 again
+        for inverter in my_predbat.inverters:
+            entry = {"charge_rate": None, "discharge_rate": None, "pause_charge": False, "pause_discharge": False, "owner": "demand", "reset_rates": True}
+            inverter.battery_rate_max_charge = 0
+            inverter.battery_rate_max_discharge = 0
+            my_predbat.apply_inverter_rates(inverter, entry)
+            if not (inverter.pause_charge and inverter.pause_discharge):
+                print("ERROR: inverter {} limits of 0 should have paused both before the release check, got {} {}".format(inverter.id, inverter.pause_charge, inverter.pause_discharge))
+                failed = True
+            inverter.battery_rate_max_charge = 2600 / MINUTE_WATT
+            my_predbat.apply_inverter_rates(inverter, entry)
+            if inverter.pause_charge or not inverter.pause_discharge:
+                print("ERROR: inverter {} charge limit back above 0 should release the charge pause only, got {} {}".format(inverter.id, inverter.pause_charge, inverter.pause_discharge))
+                failed = True
+            inverter.battery_rate_max_discharge = 2600 / MINUTE_WATT
+            my_predbat.apply_inverter_rates(inverter, entry)
+            if inverter.pause_charge or inverter.pause_discharge:
+                print("ERROR: inverter {} both limits back above 0 should release the pause, got {} {}".format(inverter.id, inverter.pause_charge, inverter.pause_discharge))
+                failed = True
+
+        # Balancer hold: the plan asked for 2000W and the balancer has taken the charge rate to 0
+        for inverter in my_predbat.inverters:
+            inverter.battery_rate_max_charge = 2600 / MINUTE_WATT
+            inverter.battery_rate_max_discharge = 2600 / MINUTE_WATT
+            inverter.pause_charge = None
+            inverter.pause_discharge = None
+        my_predbat.inverter_rate_intent = {inverter.id: {"charge_rate": 2000, "discharge_rate": 2000, "pause_charge": False, "pause_discharge": False, "owner": "charge", "reset_rates": True} for inverter in my_predbat.inverters}
+        intent = {inverter.id: dict(my_predbat.inverter_rate_intent[inverter.id]) for inverter in my_predbat.inverters}
+        intent[0]["charge_rate"] = 0
+        my_predbat.apply_rate_intent(intent)
+        if not my_predbat.inverters[0].pause_charge or my_predbat.inverters[0].pause_discharge:
+            print("ERROR: balancer hold of charge on inverter 0 should pause charge only, got {} {}".format(my_predbat.inverters[0].pause_charge, my_predbat.inverters[0].pause_discharge))
+            failed = True
+        if my_predbat.inverters[1].pause_charge or my_predbat.inverters[1].pause_discharge:
+            print("ERROR: inverter 1 was not held by the balancer so should not pause, got {} {}".format(my_predbat.inverters[1].pause_charge, my_predbat.inverters[1].pause_discharge))
+            failed = True
+
+        # The hold is lifted: the same plan applied without the balancer's override must release the charge pause
+        my_predbat.apply_rate_intent({inverter.id: dict(my_predbat.inverter_rate_intent[inverter.id]) for inverter in my_predbat.inverters})
+        for inverter in my_predbat.inverters:
+            if inverter.pause_charge or inverter.pause_discharge:
+                print("ERROR: inverter {} balancer hold lifted should release the pause, got {} {}".format(inverter.id, inverter.pause_charge, inverter.pause_discharge))
+                failed = True
+
+        # End to end with the real balancer: it holds the cross-charging inverter at a charge rate of 0, which must pause its charge
+        for inverter in my_predbat.inverters:
+            inverter.battery_rate_max_charge = 2600 / MINUTE_WATT
+            inverter.battery_rate_max_discharge = 2600 / MINUTE_WATT
+            inverter.pause_charge = None
+            inverter.pause_discharge = None
+        my_predbat.balance_inverters_enable = True
+        my_predbat.balance_inverters_crosscharge = True
+        my_predbat.balance_inverters_charge = False
+        my_predbat.balance_inverters_discharge = False
+        force_fleet(my_predbat, {0: 2000.0, 1: -500.0}, grid=0.0)
+        my_predbat.execute_plan()
+        if my_predbat.inverters[1].charge_rate != 0:
+            print("ERROR: balancing did not hold the cross-charger, so the pause check proves nothing")
+            failed = True
+        if not my_predbat.inverters[1].pause_charge:
+            print("ERROR: balancer hold of charge on inverter 1 did not pause charge")
+            failed = True
+        if my_predbat.inverters[0].pause_charge:
+            print("ERROR: inverter 0 was not held by the balancer so should not pause charge")
+            failed = True
+        my_predbat.balance_inverters_enable = False
+
+        # Freeze Export during Demand pauses charge; a limit of 0 on discharge must add to that, giving a pause of both
+        saved_freeze_demand = my_predbat.set_freeze_export_during_demand
+        my_predbat.set_freeze_export_during_demand = True
+        for inverter in my_predbat.inverters:
+            inverter.battery_rate_max_discharge = 0
+            inverter.pause_charge = None
+            inverter.pause_discharge = None
+        my_predbat.execute_plan()
+        my_predbat.set_freeze_export_during_demand = saved_freeze_demand
+        for inverter in my_predbat.inverters:
+            if not (inverter.pause_charge and inverter.pause_discharge):
+                print("ERROR: Freeze Export during Demand plus a discharge limit of 0 should pause both on inverter {}, got {} {}".format(inverter.id, inverter.pause_charge, inverter.pause_discharge))
+                failed = True
+            inverter.battery_rate_max_discharge = 2600 / MINUTE_WATT
+
+        # Control SoC only (both windows off): a limit of 0 alone must not write a pause
+        saved_charge_window = my_predbat.set_charge_window
+        saved_export_window = my_predbat.set_export_window
+        my_predbat.set_charge_window = False
+        my_predbat.set_export_window = False
+        for inverter in my_predbat.inverters:
+            inverter.battery_rate_max_charge = 0
+            inverter.pause_charge = None
+            inverter.pause_discharge = None
+        my_predbat.execute_plan()
+        my_predbat.set_charge_window = saved_charge_window
+        my_predbat.set_export_window = saved_export_window
+        for inverter in my_predbat.inverters:
+            if inverter.pause_charge is not None or inverter.pause_discharge is not None:
+                print("ERROR: Control SoC only wrote a pause on inverter {} for a limit of 0, got {} {}".format(inverter.id, inverter.pause_charge, inverter.pause_discharge))
+                failed = True
+
+        # End to end: a plan run with both limits at 0 ends with one pause of both
+        for inverter in my_predbat.inverters:
+            inverter.battery_rate_max_charge = 0
+            inverter.battery_rate_max_discharge = 0
+            inverter.pause_charge = None
+            inverter.pause_discharge = None
+        my_predbat.execute_plan()
+        for inverter in my_predbat.inverters:
+            if not (inverter.pause_charge and inverter.pause_discharge):
+                print("ERROR: execute_plan with both limits at 0 should pause both on inverter {}, got {} {}".format(inverter.id, inverter.pause_charge, inverter.pause_discharge))
+                failed = True
+    finally:
+        for inverter, (max_charge, max_discharge) in zip(my_predbat.inverters, saved_limits):
+            inverter.battery_rate_max_charge = max_charge
+            inverter.battery_rate_max_discharge = max_discharge
+            inverter.pause_charge = False
+            inverter.pause_discharge = False
+        my_predbat.inverter_balance_overridden = {}
+        restore_balance_state(my_predbat, saved)
+    return failed
+
+
 def test_monitor_mode_writes_no_rates(my_predbat):
     """
     Monitor and Control-SoC-only modes must not touch the rate registers.
@@ -4854,6 +5028,7 @@ def run_execute_tests(my_predbat):
         return failed
 
     failed |= test_monitor_mode_writes_no_rates(my_predbat)
+    failed |= test_rate_limit_zero_pauses_battery(my_predbat)
     if failed:
         return failed
 
