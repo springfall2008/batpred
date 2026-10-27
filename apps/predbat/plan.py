@@ -1962,7 +1962,8 @@ class Plan:
 
         The step down only counts when optimise_export tried the held mode. A freeze-only search (freeze_only, or
         set_export_freeze_only) never offers a forced export, and with freeze disabled a held freeze is not
-        offered either, so a step down there says nothing about the held export's threshold.
+        offered either, so a step down there says nothing about the held export's threshold. With freeze
+        disabled optimise_export ignores freeze-only and offers the forced export again, so that case counts.
 
         An export the inverter is running right now is excluded: stopping it part way through a price peak
         is what keep_window_change_if_improved exists to prevent. This keys on isExporting rather than on the
@@ -1974,7 +1975,7 @@ class Plan:
         held_mode = export_mode_of(held_limit)
         if export_mode_of(new_limit) <= held_mode:
             return False
-        if held_mode == EXPORT_MODE_TARGET and (freeze_only or self.set_export_freeze_only):
+        if held_mode == EXPORT_MODE_TARGET and self.set_export_freeze and (freeze_only or self.set_export_freeze_only):
             return False
         if held_mode == EXPORT_MODE_FREEZE and not self.set_export_freeze:
             return False
@@ -4073,6 +4074,10 @@ class Plan:
         Each window is re-optimised against the whole plan and the change is kept only when it improves
         on the plan we were handed, so the pass is monotonic - except that an export stepped down at a cost
         within its improvement threshold is kept although the metric gets slightly worse (issue #3376).
+        A kept step down then becomes the baseline for every window after it, charge windows included, so a
+        later change is judged against the stepped-down plan rather than the one handed in. The total drift
+        is bounded by the thresholds of the step downs kept, as each later change is an improvement on the
+        plan it found.
 
         budget caps how many windows are visited; 0 visits every window in the record. The cheap default
         exists because the near-term windows are the ones about to be executed, but the cap is what makes
@@ -4763,6 +4768,10 @@ class Plan:
         best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export = self.run_prediction_metric(
             self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
         )
+        # best_metric becomes the optimiser's ranking score once a change is accepted, which carries adjustments
+        # the plan metric does not (the in-progress export bonus, the idle and full export weightings), so the
+        # threshold step down is measured against the plan metric tracked here instead
+        best_metric_plan = best_metric
         curr = self.currency_symbols[1]
         self.log(
             "Starting detailed optimisation end_record {}, best_price_charge {}{}, best_price_export {}{}. lowest_price_charge {}{} with charge limits {}kWh and export limits {}kWh".format(
@@ -4889,6 +4898,7 @@ class Plan:
                                 # end_record proxy and can diverge from the post-clipping final metric.
                                 changed_this_iteration = True
                                 best_metric = n_best_metric
+                                best_metric_plan = n_best_metric_plan
                                 best_cost = n_best_cost
                                 best_soc = n_best_soc
                                 best_keep = n_best_keep
@@ -5011,7 +5021,7 @@ class Plan:
                                 allow_freeze=True,
                             )
                             set_window_start(self.export_window_best[window_n], keep_start)
-                            threshold_rejected = self.export_threshold_rejected(self.export_limits_best[window_n], self.export_window_best[window_n], n_best_soc, n_best_metric_plan - best_metric, freeze_only=(typ == "df") or pass_type == "freeze")
+                            threshold_rejected = self.export_threshold_rejected(self.export_limits_best[window_n], self.export_window_best[window_n], n_best_soc, n_best_metric_plan - best_metric_plan, freeze_only=(typ == "df") or pass_type == "freeze")
                             # The export trim pass may only reduce export, never add it, so the cheapest slots
                             # shed any levels over-export before the high-priced peak is touched. A reduction is
                             # a shallower discharge (higher SoC limit) and/or a smaller window (later start) -
@@ -5026,6 +5036,7 @@ class Plan:
                                 if n_best_metric < best_metric:
                                     changed_this_iteration = True
                                 best_metric = n_best_metric
+                                best_metric_plan = n_best_metric_plan
                                 best_cost = n_best_cost
                                 best_soc = n_best_soc
                                 best_start = n_best_start

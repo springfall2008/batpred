@@ -43,6 +43,34 @@ def setup_held_export(my_predbat, start_offset, threshold):
     return end_record
 
 
+def setup_two_held_exports(my_predbat, threshold):
+    """
+    Hold two forced exports to 0%, each half an hour long, one and four hours from now.
+
+    Each window exports half the battery, so both are profitable and the second still has energy to export
+    once the first has run. Returns end_record.
+    """
+    end_record = setup_held_export(my_predbat, 60, threshold)
+    first = my_predbat.export_window_best[0]
+    first["end"] = first["start"] + 30
+    second = dict(first)
+    second["start"] = my_predbat.minutes_now + 240
+    second["end"] = second["start"] + 30
+    my_predbat.export_window_best.append(second)
+    my_predbat.export_limits_best = [pack_export_limit(EXPORT_MODE_TARGET, 0), pack_export_limit(EXPORT_MODE_TARGET, 0)]
+    update_rates_export(my_predbat, my_predbat.export_window_best)
+    return end_record
+
+
+def check_all_export_modes(my_predbat, label, expected_mode):
+    """Return True (failed) when any export window is not left in expected_mode."""
+    modes = [export_mode_of(limit) for limit in my_predbat.export_limits_best]
+    if any(mode != expected_mode for mode in modes):
+        print("ERROR: {} - expected every export window in mode {} but they hold {}".format(label, expected_mode, my_predbat.export_limits_best))
+        return True
+    return False
+
+
 def run_detailed_pass(my_predbat, end_record):
     """Run optimise_detailed_pass over the plan currently held, as optimise_all_windows would after the levels pass."""
     best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export = my_predbat.run_prediction_metric(
@@ -148,6 +176,17 @@ def run_export_threshold_removal_tests(my_predbat):
         my_predbat.optimise_plan_pass(end_record, budget=8)
         failed |= check_export_mode(my_predbat, "plan pass with a zero threshold", EXPORT_MODE_TARGET)
 
+        # 6b) With two held exports, a kept step down becomes the baseline for the window after it, so the second
+        #     window's loss is measured against the plan with the first already removed. Both must still be
+        #     removed by a 100p threshold, and both kept at the default, in each pass.
+        for threshold, expected_mode in ((100.0, EXPORT_MODE_IDLE), (0.1, EXPORT_MODE_TARGET)):
+            end_record = setup_two_held_exports(my_predbat, threshold)
+            my_predbat.optimise_plan_pass(end_record, budget=8)
+            failed |= check_all_export_modes(my_predbat, "plan pass on two exports with a {}p threshold".format(threshold), expected_mode)
+            end_record = setup_two_held_exports(my_predbat, threshold)
+            run_detailed_pass(my_predbat, end_record)
+            failed |= check_all_export_modes(my_predbat, "detailed pass on two exports with a {}p threshold".format(threshold), expected_mode)
+
         # 7) Which step downs are kept: (label, held limit, held window, new limit, metric loss, isExporting, expected).
         #    With a 10p threshold a full power forced export over a two hour window must gain 10p per slot.
         my_predbat.metric_min_improvement_export = 10.0
@@ -203,6 +242,15 @@ def run_export_threshold_removal_tests(my_predbat):
         if my_predbat.export_threshold_rejected(freeze, future, idle, 0.0):
             print("ERROR: export_threshold_rejected kept a freeze removed while freeze export is disabled")
             failed = True
+        # With freeze disabled optimise_export ignores freeze-only and offers the forced export again
+        my_predbat.set_export_freeze_only = True
+        if not my_predbat.export_threshold_rejected(target, future, idle, 0.0):
+            print("ERROR: export_threshold_rejected refused a forced export removed with set_export_freeze_only while freeze export is disabled")
+            failed = True
+        if not my_predbat.export_threshold_rejected(target, future, idle, 0.0, freeze_only=True):
+            print("ERROR: export_threshold_rejected refused a forced export removed by a freeze-only search while freeze export is disabled")
+            failed = True
+        my_predbat.set_export_freeze_only = False
 
         # 9) With the threshold at zero nothing is kept this way, not even a tie
         my_predbat.metric_min_improvement_export = 0.0
