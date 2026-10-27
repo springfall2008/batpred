@@ -1653,7 +1653,6 @@ class MockOhmeAPI(OhmeAPI):
         self.ohme_automatic_octopus_intelligent = None
         self.ohme_control = False
         self.charger_control_setup("Ohme API", "charger", OHME_STORAGE_MODULE, OHME_CONTROL_STATE, "control_enabled", switch_prefix="ohme")
-        self.control_state_loaded = False
         self.octopus_intelligent = None
         self.octopus_other_device = False
         self.octopus_drives_ohme = False

@@ -129,8 +129,9 @@ class CarChargerControl:
         Args:
             log_name: How the component names itself in log lines, e.g. "myenergi".
             noun: What the chargers are called in log lines, e.g. "Zappi".
-            storage_module, storage_key, storage_field: Where the control switch is persisted.
-                Left as None the component has no switch and only read only mode releases.
+            storage_module, storage_key, storage_field: Where the control switch and the chargers
+                Predbat holds are persisted - for a component with no switch (Ohme), just the latter.
+                Left as None neither survives a restart.
             control: The component's control setting from apps.yaml. None (unset) lets control
                 run wherever the component's automatic setup maps chargers to cars; False turns
                 it off; True also drives a charger whose Octopus arrangement cannot be told.
@@ -158,6 +159,8 @@ class CarChargerControl:
         self.charger_control_unconfirmed = set()
         # A save of the control state that has not gone through yet
         self.charger_control_save_pending = False
+        # Whether the saved control state has been read; a read that failed is tried again each tick
+        self.charger_control_loaded = False
         self.charger_control_setting = control_setting
         # car_n -> why that car's charger is left alone ("octopus", "car", "discovering", "discovery_failed" or "unknown"), so
         # each reason is logged once rather than every cycle, and again only when it changes
@@ -450,6 +453,7 @@ class CarChargerControl:
         for a cycle and then hand it over again.
         """
         if self.charger_control_storage is None or self.storage is None:
+            self.charger_control_loaded = True
             return True
         module, key, field = self.charger_control_storage
         try:
@@ -457,6 +461,7 @@ class CarChargerControl:
         except Exception as exc:
             self.log("Warn: {}: could not read the {} control switch state: {}".format(self.charger_control_log_name, self.charger_control_noun, exc))
             return False
+        self.charger_control_loaded = True
         if not isinstance(saved, dict):
             return True
         if field in saved:
@@ -568,6 +573,10 @@ class CarChargerControl:
 
         The caller passes now so every charger is judged against one instant.
         """
+        if not self.charger_control_loaded:
+            # A read that failed at start-up - or one a component never got to - is tried again, so a
+            # charger an earlier session held is not forgotten for the rest of this one
+            await self.charger_control_load_enabled()
         if self.charger_control_save_pending:
             # A save that failed is tried again each cycle, not only when a hold next changes
             await self.charger_control_save()
@@ -578,7 +587,7 @@ class CarChargerControl:
                 if self.charger_control_released is None:
                     self.log("Info: {}: releasing the {} because {} control is not enabled".format(self.charger_control_log_name, self.charger_control_noun, self.charger_control_noun))
                     self.charger_control_released = "Control not enabled"
-                await self.charger_control_release()
+                await self.charger_control_release_inactive()
             return
         if self.charger_control_guest:
             why = self.charger_control_guest_over(now)
@@ -628,6 +637,23 @@ class CarChargerControl:
         """
         held = [(key, handle) for key, handle in self.charger_control_chargers() if key in self.charger_control_state]
         await self.charger_control_each([lambda key=key, handle=handle: self.charger_control_release_held(key, handle) for key, handle in held])
+
+    async def charger_control_release_inactive(self):
+        """Hand back every held charger while control is off: to Octopus where Octopus now drives it, released otherwise.
+
+        As the active path does - a plain release would start a charge Octopus is scheduling. A charger
+        past the cars, whose car cannot be asked about, is released.
+        """
+        car_count = self.charger_control_car_count()
+        steps = []
+        for car_n, (key, handle) in enumerate(self.charger_control_chargers()):
+            if key not in self.charger_control_state:
+                continue
+            if car_n < car_count and self.charger_control_octopus_drives_charger(car_n) is True:
+                steps.append(lambda key=key, handle=handle: self.charger_control_hand_over_held(key, handle))
+            else:
+                steps.append(lambda key=key, handle=handle: self.charger_control_release_held(key, handle))
+        await self.charger_control_each(steps)
 
     async def charger_control_hand_over_held(self, key, handle):
         """Hand one held charger to Octopus, then forget it - after, so a failed command is retried."""

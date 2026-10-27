@@ -1553,7 +1553,8 @@ def test_run_enables_control_and_drives_the_zappi():
     zappi = _zappi(12345678)
     component.transport.fetch_devices = AsyncMock(return_value=[zappi])
     component.transport.set_mode = AsyncMock(return_value=True)
-    component.charger_control_load_enabled = AsyncMock()
+    # As the real load does, it marks the saved state as read
+    component.charger_control_load_enabled = AsyncMock(side_effect=lambda: setattr(component, "charger_control_loaded", True))
 
     assert run_async(component.run(0, True)) is True
     assert component.charger_control_active is True
@@ -1630,7 +1631,8 @@ def test_control_failure_does_not_break_the_poll():
     zappi = _zappi(12345678)
     component.transport.fetch_devices = AsyncMock(return_value=[zappi])
     component.transport.set_mode = AsyncMock(side_effect=MyEnergiApiError("myenergi refused the mode"))
-    component.charger_control_load_enabled = AsyncMock()
+    # As the real load does, it marks the saved state as read
+    component.charger_control_load_enabled = AsyncMock(side_effect=lambda: setattr(component, "charger_control_loaded", True))
 
     assert run_async(component.run(0, True)) is True, "A refused mode must not fail the cycle"
     assert component.last_success_timestamp is not None, "Monitoring still succeeded, so the poll counts"

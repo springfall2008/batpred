@@ -245,7 +245,6 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         # charger and its saved target across a restart, so one an earlier session held is still released
         # once control is off (#5788)
         self.charger_control_setup("Ohme API", "charger", OHME_STORAGE_MODULE, OHME_CONTROL_STATE, "control_enabled", control=self.ohme_control, switch_prefix="ohme", control_setting="ohme_control")
-        self.control_state_loaded = False
         # Whether the car is on Octopus Intelligent as last decided, None until the first decision
         self.octopus_intelligent = None
         # Octopus Intelligent is driving a live device and wires the car slots to it itself - the car, another
@@ -292,9 +291,14 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         if first:
             self.log("Ohme API: Started")
         # Every cycle until it succeeds, before anything decides control: a read that failed at start-up
-        # must not lose a charger an earlier session held
-        if not self.control_state_loaded:
-            self.control_state_loaded = await self.charger_control_load_enabled()
+        # must not lose a charger an earlier session held. Here as well as in the shared tick, as Ohme's own
+        # stand-down hand-back runs outside it
+        if not self.charger_control_loaded:
+            await self.charger_control_load_enabled()
+        elif self.charger_control_save_pending and not self.charger_control_active:
+            # The shared tick retries a failed save, but only runs while control is on - this covers a
+            # stand-down hand-back whose save failed
+            await self.charger_control_save()
 
         # Process queued events
         refresh = False

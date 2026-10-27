@@ -1078,7 +1078,7 @@ def test_restored_hold_waits_for_its_plan():
 
 
 def test_failed_save_is_retried():
-    """Saves happen only when a hold changes, but one that failed is tried again on the next hold."""
+    """Saves happen only when a hold changes, but one that failed is tried again at the start of the next cycle."""
     storage = FakeStorage(fail=True)
     component = FakeComponent([FakeCharger("a")], storage=storage)
     component.refusing.add("a")
@@ -1099,6 +1099,33 @@ def test_failed_save_is_retried():
     assert storage.saves == saves, "Nothing changed, so nothing is saved"
 
 
+def test_control_off_hands_an_octopus_charger_to_octopus():
+    """With control off, a held charger Octopus now drives is handed to Octopus - a stop left for it to start -
+    not released, which would start a charge outside its dispatches."""
+    storage = FakeStorage({("fake", "control_state"): {"enabled": True, "held": {"a": False}}})
+    component = FakeComponent([FakeCharger("a")], storage=storage)
+    run_async(component.charger_control_load_enabled())
+    component.args["octopus_intelligent_slot"] = ["binary_sensor.octopus_dispatching"]
+    component.sensors["binary_sensor.octopus_dispatching"] = {"is_charger": True}
+    component.charger_control_active = False
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [], "The stop is left for Octopus, got {}".format(component.commands)
+    assert component.charger_control_state == {}
+
+
+def test_failed_load_is_retried_by_the_tick():
+    """A start-up read that failed is tried again on the next tick, so a held charger is not forgotten."""
+    storage = FakeStorage({("fake", "control_state"): {"enabled": True, "held": {"a": False}}}, fail=True)
+    component = FakeComponent([FakeCharger("a")], storage=storage)
+    assert run_async(component.charger_control_load_enabled()) is False
+    assert component.charger_control_loaded is False
+    storage.fail = False
+    component.charger_control_active = False
+    run_async(component.charger_control_tick(_now()))
+    assert component.charger_control_loaded is True
+    assert component.commands == [("a", "release", False)], component.commands
+
+
 def run_car_charger_control_tests(my_predbat=None):
     """Run the shared charger control tests. Returns True on failure."""
     print("**** Running car charger control tests ****")
@@ -1112,6 +1139,8 @@ def run_car_charger_control_tests(my_predbat=None):
     test_held_charger_released_when_unplugged_either_way()
     test_restored_hold_waits_for_its_plan()
     test_failed_save_is_retried()
+    test_control_off_hands_an_octopus_charger_to_octopus()
+    test_failed_load_is_retried_by_the_tick()
     test_no_plan_sends_nothing()
     test_on_inside_window_off_outside()
     test_empty_plan_stops()
