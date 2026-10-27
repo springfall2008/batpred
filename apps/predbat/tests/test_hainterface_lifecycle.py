@@ -206,6 +206,50 @@ def test_hainterface_initialize_retry_deadline(my_predbat=None):
     return 0
 
 
+def test_predbat_stops_phase0_start_without_ha_interface(my_predbat):
+    """Phase-0 components are not started if construction failed to provide HAInterface."""
+    original_components = my_predbat.components
+    original_interface = my_predbat.ha_interface
+
+    class FakeComponents:
+        """Track component startup while simulating a missing HA interface."""
+
+        def __init__(self, base):
+            self.base = base
+            self.started = False
+
+        def initialize(self, phase):
+            """Simulate phase-0 HA component initialization failing."""
+            self.base.ha_interface = None
+
+        def start(self, phase):
+            """Record whether phase-0 dependents were started."""
+            self.started = True
+            return True
+
+    try:
+        components = FakeComponents(my_predbat)
+        my_predbat.now_utc_real = my_predbat.now_utc
+        with patch("predbat.Components", return_value=components), patch.object(my_predbat, "reset"), patch.object(my_predbat, "update_time"), patch.object(my_predbat, "record_status"):
+            try:
+                my_predbat.initialize()
+            except ValueError as error:
+                if str(error) != "HA interface not found":
+                    raise
+            else:
+                print("ERROR: expected initialization to stop without HAInterface")
+                return 1
+        if components.started:
+            print("ERROR: phase-0 dependent components started without HAInterface")
+            return 1
+    finally:
+        my_predbat.components = original_components
+        my_predbat.ha_interface = original_interface
+
+    print("✓ Phase-0 startup stopped before dependents without HAInterface")
+    return 0
+
+
 def test_hainterface_initialize_db_mirror(my_predbat=None):
     """Test initialize() with DB mirroring enabled"""
     print("\n=== Testing HAInterface initialize() DB mirror ===")
@@ -517,6 +561,7 @@ def run_hainterface_lifecycle_tests(my_predbat):
     failed += test_hainterface_initialize_retries_transient_statuses(my_predbat)
     failed += test_hainterface_initialize_rejects_nonretryable_status(my_predbat)
     failed += test_hainterface_initialize_retry_deadline(my_predbat)
+    failed += test_predbat_stops_phase0_start_without_ha_interface(my_predbat)
     failed += test_hainterface_initialize_db_mirror(my_predbat)
     failed += test_hainterface_is_alive_not_started(my_predbat)
     failed += test_hainterface_is_alive_no_websocket(my_predbat)
