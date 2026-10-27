@@ -1273,19 +1273,17 @@ class HypervoltAPI(ComponentBase, CarChargerControl):
     async def charger_control_release_one(self, charger, charge):
         """Hand a charger back: let it charge again if Predbat stopped it, and forget it once nothing is owed.
 
-        A charger owed a release that cannot be acted on yet - not heard from recently, or its
-        release state not reported since a restart - raises, so the shared loop keeps it held and
-        tries again next cycle rather than recording a release that never happened.
+        A charger back in "default" is owed nothing. One whose state is unknown since a restart is
+        sent the release anyway - letting a charger charge is harmless if it already can - rather
+        than waiting on a report that may never come. One not heard from recently cannot be sent
+        anything, so it stays owed; control_tick() retries it each cycle.
         """
-        if charger.charger_id in self.released_by_predbat:
+        if charger.charger_id in self.released_by_predbat and charger.release_state != "default":
             if is_stale(charger, time.time()):
-                raise HypervoltApiError("charger {} has not been heard from, releasing it later".format(charger.charger_id))
-            if charger.release_state == "released":
-                # Even when unplugged: whether a stop survives the cable coming out is not known
-                self.log("Info: hypervolt: releasing {}".format(charger.name or charger.charger_id))
-                await self.send_command(charger, release_command(True))
-            elif charger.release_state is None and charger.pilot_status != "A":
-                raise HypervoltApiError("charger {} has not reported whether it is stopped yet, releasing it later".format(charger.charger_id))
+                return
+            # Even when unplugged: whether a stop survives the cable coming out is not known
+            self.log("Info: hypervolt: releasing {}".format(charger.name or charger.charger_id))
+            await self.send_command(charger, release_command(True))
         self.forget(charger)
 
     async def charger_control_hand_to_octopus(self, charger, charge):
@@ -1320,9 +1318,10 @@ class HypervoltAPI(ComponentBase, CarChargerControl):
     async def settle_released(self):
         """Settle every charger owed a release whose situation has changed, whether or not control runs.
 
-        Unplugged while still stopped: released before it is forgotten, as a stop that outlived the
-        unplug would hold the next car too. Back to charging, or unplugged and not stopped: nothing
-        is owed. Done here rather than in the shared loop, which leaves an unplugged charger alone.
+        Back to "default": nothing is owed. Unplugged while stopped, or while its state is not known
+        since a restart: released before it is forgotten, as a stop that outlived the unplug would
+        hold the next car too. Done here rather than in the shared loop, which leaves an unplugged
+        charger alone.
         """
         now = time.time()
         for charger_id in sorted(self.released_by_predbat):
@@ -1331,11 +1330,10 @@ class HypervoltAPI(ComponentBase, CarChargerControl):
                 continue
             if charger.release_state == "default":
                 self.forget(charger)
-            elif charger.pilot_status == "A" and charger.release_state == "released":
+            elif charger.pilot_status == "A":
+                # Stopped, or not yet known to be otherwise since a restart
                 self.log("Info: hypervolt: the car was unplugged from {}".format(charger.name or charger.charger_id))
                 await self.guarded(self.charger_control_release_one(charger, False), charger)
-            elif charger.pilot_status == "A":
-                self.forget(charger)
 
     async def guarded(self, action, charger=None):
         """Run a control step so that a refused or failed command is reported rather than failing the run.
@@ -1369,6 +1367,11 @@ class HypervoltAPI(ComponentBase, CarChargerControl):
                     await self.guarded(self.charger_control_release())
                 return
             await self.guarded(self.charger_control_tick(now))
+            if self.charger_control_released is not None and self.released_by_predbat:
+                # The shared loop releases once per reason; a charger that could not be sent the release
+                # then (not heard from) is still owed, so it is tried again each cycle until it goes through
+                self.sync_held()
+                await self.guarded(self.charger_control_release())
         finally:
             if self.control_state_dirty:
                 await self.save_control_state()

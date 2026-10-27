@@ -1868,18 +1868,33 @@ def test_release_retried_after_stale_charger():
     print("  ✓ A release missed while a charger was stale is retried")
 
 
-def test_release_waits_for_release_state():
-    """After a restart, a charger whose release state has not been reported is kept owed rather than forgotten."""
-    component = _control_component({0: PLAN_OUTSIDE}, [_charger(release_state=None, pilot_status="B")])
+def test_release_with_unknown_state_is_sent():
+    """After a restart, a charger owed a release whose state is not reported yet is sent the release, plugged in or not."""
+    for pilot in ("B", "A", None):
+        component = _control_component({0: PLAN_OUTSIDE}, [_charger(release_state=None, pilot_status=pilot)])
+        component.released_by_predbat.add(V3_ID)
+        component.base.args["set_read_only"] = True
+        run_async(component.control_tick(CONTROL_NOW))
+        assert _requests(component) == [(V3_ID, "sync.apply", {"release": False})], pilot
+        assert component.released_by_predbat == set(), pilot
+    print("  ✓ A release is sent when the charger's state is not known yet")
+
+
+def test_stale_release_is_quiet_and_default_is_forgotten():
+    """A charger that stays offline is retried without a line every cycle; one already back to default is just forgotten."""
+    component = _control_component({0: PLAN_OUTSIDE}, [_charger(release_state="released", pilot_status="B", last_message=time.time() - 600)])
+    component.released_by_predbat.add(V3_ID)
+    component.base.args["set_read_only"] = True
+    for _ in range(3):
+        run_async(component.control_tick(CONTROL_NOW))
+    assert _requests(component) == [] and component.released_by_predbat == {V3_ID}
+    assert len([message for message in component.log_messages if "releasing the Hypervolt because" in message or "control failed" in message]) <= 1, component.log_messages
+    component = _control_component({0: PLAN_OUTSIDE}, [_charger(release_state="default", pilot_status="B", last_message=time.time() - 600)])
     component.released_by_predbat.add(V3_ID)
     component.base.args["set_read_only"] = True
     run_async(component.control_tick(CONTROL_NOW))
-    assert _requests(component) == [] and component.released_by_predbat == {V3_ID}
-    component.transport.chargers[V3_ID].release_state = "released"
-    run_async(component.control_tick(CONTROL_NOW))
-    assert _requests(component) == [(V3_ID, "sync.apply", {"release": False})]
-    assert component.released_by_predbat == set()
-    print("  ✓ A release waits for the charger to report its state")
+    assert _requests(component) == [] and component.released_by_predbat == set()
+    print("  ✓ An offline charger is retried quietly")
 
 
 def test_axle_read_only_releases():
@@ -2246,7 +2261,8 @@ def test_hypervolt(my_predbat=None):
     test_guest_charging_releases_and_publishes()
     test_drift_is_reapplied()
     test_release_retried_after_stale_charger()
-    test_release_waits_for_release_state()
+    test_release_with_unknown_state_is_sent()
+    test_stale_release_is_quiet_and_default_is_forgotten()
     test_axle_read_only_releases()
     test_string_error_reply_fails_caller_and_reader_survives()
     test_reader_survives_a_handler_exception()
