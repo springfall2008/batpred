@@ -751,6 +751,8 @@ def find_bot_pr_requester(issue_number):
         timeout=GH_LINK_TIMEOUT_SECONDS,
     )
     if result.returncode != 0:
+        # Said why, so a failed lookup (auth expiry, rate limit) is not mistaken for an issue nobody asked on
+        print(f"[pr] issue #{issue_number}: BOT_PR requester lookup failed: {(result.stderr or '').strip() or 'exit ' + str(result.returncode)}", flush=True)
         return None
     logins = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
     return logins[-1] if logins else None

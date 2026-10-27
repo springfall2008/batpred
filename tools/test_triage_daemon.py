@@ -442,6 +442,16 @@ class LabelSwapTests(unittest.TestCase):
         self.assertTrue(any("--add-assignee" in call for call in calls))
 
     @patch("triage_daemon.subprocess.run")
+    def test_find_bot_pr_requester_reports_why_a_lookup_failed(self, mock_run):
+        """A lookup that errors says why, rather than reading like an issue with no requester."""
+        mock_run.return_value = MagicMock(stdout="", returncode=1, stderr="HTTP 401: Bad credentials")
+        with patch("builtins.print") as mock_print:
+            self.assertIsNone(triage_daemon.find_bot_pr_requester(4720))
+        printed = " ".join(str(call.args[0]) for call in mock_print.call_args_list)
+        self.assertIn("lookup failed", printed)
+        self.assertIn("Bad credentials", printed)
+
+    @patch("triage_daemon.subprocess.run")
     def test_find_bot_pr_requester_takes_the_latest_label_event(self, mock_run):
         """BOT_PR re-added after a failure has several labeled events, one line each across
         pages; the most recent one is the person who asked this time. Null actors are
