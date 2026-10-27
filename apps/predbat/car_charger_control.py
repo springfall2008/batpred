@@ -156,6 +156,8 @@ class CarChargerControl:
         # Held chargers whose state is not confirmed - a stop that did not confirm, or one restored after a
         # restart - so the plan's command is sent again even though it matches what is held
         self.charger_control_unconfirmed = set()
+        # A save of the control state that has not gone through yet
+        self.charger_control_save_pending = False
         self.charger_control_setting = control_setting
         # car_n -> why that car's charger is left alone ("octopus", "car", "discovering", "discovery_failed" or "unknown"), so
         # each reason is logged once rather than every cycle, and again only when it changes
@@ -419,10 +421,13 @@ class CarChargerControl:
         if self.charger_control_storage is None or self.storage is None:
             return
         module, key, field = self.charger_control_storage
+        # Set until a save goes through, so a failed one is tried again even if nothing has changed since
+        self.charger_control_save_pending = True
         try:
             # Storage reports serialisation and I/O failures by returning False rather than raising
             if await self.storage.save(module, key, {field: self.charger_control_enabled, "held": dict(self.charger_control_state)}) is False:
                 raise OSError("storage refused the save")
+            self.charger_control_save_pending = False
         except Exception as exc:
             self.log("Warn: {}: could not save the {} control state, it may revert to the last saved state on restart: {}".format(self.charger_control_log_name, self.charger_control_noun, exc))
 
@@ -623,7 +628,7 @@ class CarChargerControl:
         """Hold a charger in the state Predbat set, saving only when that changes."""
         changed = self.charger_control_state.get(key) != charge
         self.charger_control_state[key] = charge
-        if changed:
+        if changed or self.charger_control_save_pending:
             await self.charger_control_save()
 
     async def charger_control_hand_over_all(self):
@@ -698,20 +703,23 @@ class CarChargerControl:
         if car_n in self.charger_control_octopus_cars:
             self.log("Info: {}: car {} is no longer left to Octopus, Predbat drives the {}".format(self.charger_control_log_name, car_n, self.charger_control_noun))
             del self.charger_control_octopus_cars[car_n]
-        if self.charger_control_state.get(key) is False and self.charger_control_unplugged(handle):
-            # Released before it is forgotten: a stop that outlived the unplug would hold the next car too
-            self.log("Info: {}: car {} was unplugged from {} {}, releasing it".format(self.charger_control_log_name, car_n, self.charger_control_noun, key))
-            await self.charger_control_release_held(key, handle)
-            return
-        if self.charger_control_unplugged(handle) or not self.charger_control_connected(handle):
+        if self.charger_control_unplugged(handle):
+            if key in self.charger_control_state:
+                # Handed back when the car goes: a stop that outlived the unplug would hold the next car,
+                # and a charger left allowed would charge it outside the plan
+                self.log("Info: {}: car {} was unplugged from {} {}, releasing it".format(self.charger_control_log_name, car_n, self.charger_control_noun, key))
+                await self.charger_control_release_held(key, handle)
             # An empty charger is not driven - stopping it now would only be released again next cycle
             return
-        if car_n not in self.charger_control_windows and key not in self.charger_control_state and not self.charger_control_dispatch_active(car_n, now):
+        if not self.charger_control_connected(handle):
+            return
+        if car_n not in self.charger_control_windows and (key not in self.charger_control_state or key in self.charger_control_unconfirmed) and not self.charger_control_dispatch_active(car_n, now):
             # This car's plan has not been published yet - one car's slot sensor can appear before
             # another's - and no dispatch says to charge, so Predbat knows nothing to act on: an
             # absent plan is not an empty one, and stopping the charger would cut off a charge.
             # A charger Predbat already holds is still driven, so one a dispatch started is stopped
-            # when the dispatch ends rather than left running with nobody in control
+            # when the dispatch ends rather than left running with nobody in control - but not one only
+            # restored after a restart, which waits for its plan like any other
             return
         charge = self.charger_control_should_charge(car_n, now)
         last = self.charger_control_state.get(key, None)

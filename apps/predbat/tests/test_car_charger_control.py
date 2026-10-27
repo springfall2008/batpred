@@ -26,9 +26,11 @@ class FakeStorage:
         """Start with an optional saved record, or fail every call."""
         self.saved = dict(saved or {})
         self.fail = fail
+        self.saves = 0
 
     async def save(self, module, key, value):
         """Record a save."""
+        self.saves += 1
         if self.fail:
             raise OSError("disk full")
         self.saved[(module, key)] = value
@@ -1051,6 +1053,51 @@ def test_unplugged_charger_is_not_driven():
     assert component.commands == [], component.commands
 
 
+def test_held_charger_released_when_unplugged_either_way():
+    """A charger Predbat left allowed is handed back when its car is unplugged too, not held allowed for the next car."""
+    charger = FakeCharger("a")
+    component = FakeComponent([charger])
+    _plan(component, 0, [("06-01 01:00:00", "06-01 02:00:00")])
+    run_async(component.charger_control_tick(_now()))
+    charger.unplugged = True
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "on", 0), ("a", "release", True)], component.commands
+    assert component.charger_control_state == {}
+
+
+def test_restored_hold_waits_for_its_plan():
+    """After a restart a restored hold is not driven until its own car's plan is published."""
+    storage = FakeStorage({("fake", "control_state"): {"enabled": True, "held": {"b": True}}})
+    component = FakeComponent([FakeCharger("a"), FakeCharger("b")], storage=storage)
+    component.base.num_cars = 2
+    run_async(component.charger_control_load_enabled())
+    _plan(component, 0, [("06-01 01:00:00", "06-01 02:00:00")])
+    run_async(component.charger_control_tick(_now()))
+    assert ("b", "off", 1) not in component.commands, component.commands
+
+
+def test_failed_save_is_retried():
+    """Saves happen only when a hold changes, but one that failed is tried again on the next hold."""
+    storage = FakeStorage(fail=True)
+    component = FakeComponent([FakeCharger("a")], storage=storage)
+    component.refusing.add("a")
+    _plan(component, 0, [])
+    for _ in range(2):
+        try:
+            run_async(component.charger_control_tick(_now()))
+        except RuntimeError:
+            pass
+    assert storage.saves == 2, "A failed save is retried while the stop is resent"
+    storage.fail = False
+    component.refusing.discard("a")
+    run_async(component.charger_control_tick(_now()))
+    run_async(component.charger_control_tick(_now()))
+    assert storage.saved[("fake", "control_state")]["held"] == {"a": False}
+    saves = storage.saves
+    run_async(component.charger_control_tick(_now()))
+    assert storage.saves == saves, "Nothing changed, so nothing is saved"
+
+
 def run_car_charger_control_tests(my_predbat=None):
     """Run the shared charger control tests. Returns True on failure."""
     print("**** Running car charger control tests ****")
@@ -1061,6 +1108,9 @@ def run_car_charger_control_tests(my_predbat=None):
     test_unplug_releases_a_stopped_charger()
     test_restored_hold_is_reapplied_once()
     test_unplugged_charger_is_not_driven()
+    test_held_charger_released_when_unplugged_either_way()
+    test_restored_hold_waits_for_its_plan()
+    test_failed_save_is_retried()
     test_no_plan_sends_nothing()
     test_on_inside_window_off_outside()
     test_empty_plan_stops()
