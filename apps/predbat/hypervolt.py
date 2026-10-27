@@ -1273,14 +1273,17 @@ class HypervoltAPI(ComponentBase, CarChargerControl):
     async def charger_control_release_one(self, charger, charge):
         """Hand a charger back: let it charge again if Predbat stopped it, and forget it once nothing is owed.
 
-        A charger back in "default" is owed nothing. One whose state is unknown since a restart is
-        sent the release anyway - letting a charger charge is harmless if it already can - rather
-        than waiting on a report that may never come. One not heard from recently cannot be sent
-        anything, so it stays owed; control_tick() retries it each cycle.
+        One not heard from recently cannot be trusted or sent anything, so it stays owed whatever it
+        last read; control_tick() retries it each cycle. Otherwise a charger back in "default" is owed
+        nothing, and one whose state is unknown since a restart is sent the release anyway - letting
+        a charger charge is harmless if it already can - rather than waiting on a report that may
+        never come.
         """
-        if charger.charger_id in self.released_by_predbat and charger.release_state != "default":
+        if charger.charger_id in self.released_by_predbat:
             if is_stale(charger, time.time()):
+                # Even one that last read "default": a stop whose reply was lost may still have landed
                 return
+        if charger.charger_id in self.released_by_predbat and charger.release_state != "default":
             # Even when unplugged: whether a stop survives the cable coming out is not known
             self.log("Info: hypervolt: releasing {}".format(charger.name or charger.charger_id))
             await self.send_command(charger, release_command(True))
