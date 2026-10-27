@@ -96,6 +96,7 @@ from utils import (
     MALLOC_ARENA_LIMIT,
     export_limits_to_stored,
     export_limits_from_stored,
+    next_aligned_run,
 )
 from predheat import PredHeat
 from octopus import Octopus
@@ -2186,11 +2187,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.update_time(print=False)
         self.started_time = self.now_utc_real
         run_every = RUN_EVERY * 60
-        # The host's naive clock, deliberately not now_utc: the run times below are handed to
-        # run_every(), and hass.py's timer_tick compares them against datetime.now(). This is the
-        # only place that needs it, so it stays local rather than living on the instance.
-        host_now = datetime.now()
-        host_midnight = host_now.replace(hour=0, minute=0, second=0, microsecond=0)
 
         try:
             self.reset()
@@ -2274,13 +2270,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         # Started
         self.publish_last_started()
 
-        # Run every N minutes aligned to the minute
-        seconds_now = (host_now - host_midnight).seconds
-
-        # Calculate next run time to exactly align with the run_every time
-        seconds_offset = seconds_now % run_every
-        seconds_next = seconds_now + (run_every - seconds_offset)
-        next_time = host_midnight + timedelta(seconds=seconds_next)
+        # Run every N minutes aligned to the host's wall clock, using the real clock rather than
+        # now_utc; the scheduler in hass.py keeps the time in UTC
+        next_time = next_aligned_run(run_every)
         self.log("Predbat: Next run time will be {} and then every {} seconds".format(next_time, run_every))
 
         # First run is now
@@ -2289,7 +2281,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         # And then every N minutes
         if not INVERTER_TEST:
             self.run_every(self.run_time_loop, next_time, run_every, random_start=0, random_end=0)
-            self.run_every(self.update_time_loop, datetime.now(), 15, random_start=0, random_end=0)
+            self.run_every(self.update_time_loop, datetime.now(timezone.utc), 15, random_start=0, random_end=0)
         else:
             self.update_time_loop(None)
 

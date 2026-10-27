@@ -78,6 +78,7 @@ byok
 cadata
 calcsize
 calib
+callees
 Cantarell
 cbat
 CDLL
@@ -219,6 +220,7 @@ epod
 epvtoday
 errno
 ESSAPI
+etime
 ETIMEDOUT
 eto
 etoday
@@ -511,6 +513,7 @@ parseable
 pbat
 pbgw
 pcharging
+pcpu
 pcsenmap
 pdata
 pdetails
@@ -734,6 +737,7 @@ typecode
 typecodes
 tzfile
 tzpath
+tzset
 unasserted
 uncalibrated
 uncompilable

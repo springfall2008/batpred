@@ -2008,6 +2008,20 @@ def minutes_since_midnight(now, midnight):
     return int((now - midnight).total_seconds() / 60 / PREDICT_STEP) * PREDICT_STEP
 
 
+def next_aligned_run(run_every, now=None):
+    """
+    The first moment after now on a run_every-second boundary of the host's local wall clock, timezone-aware
+
+    Aware, so the scheduler can keep it in UTC: a naive "02:00" worked out at 01:55 BST on the night the clocks
+    go back would mean 02:00 GMT, an hour and five minutes later (#5770). now defaults to the host clock.
+    """
+    if now is None:
+        now = datetime.now().astimezone()
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    seconds_now = (now - midnight).seconds
+    return midnight + timedelta(seconds=seconds_now + run_every - seconds_now % run_every)
+
+
 def minutes_since_yesterday(now):
     """
     Calculate the number of minutes since 23:59 yesterday
