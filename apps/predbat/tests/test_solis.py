@@ -1262,6 +1262,24 @@ _DETAIL_STRING_INVERTER = {
     "dataTimestamp": "1790579858000",
 }
 
+# A grid-tied string inverter (S6-GR1P: GR = grid-tied, no battery port) beside an S5-EH1P hybrid on one
+# account. The summary fields are as its inverterDetail logged them on a live system; the battery
+# readings are as its published sensors read. batteryType alternates between '0' and '0.0' from one
+# poll to the next, and it was still enrolled as a battery inverter when it reported '0'.
+_DETAIL_GRID_TIED_STRING_INVERTER = {
+    "machine": "S6-GR1P6K",
+    "productModel": "0206",
+    "model": "0206",
+    "power": 6.0,
+    "powerStr": "kW",
+    "batteryModel": None,
+    "batteryType": "0.0",
+    "parallelBattery": 0,
+    "batteryHealthSoh": 0.0,
+    "batteryCapacitySoc": 0.0,
+    "batteryVoltage": 0.0,
+}
+
 
 async def _run_automatic_config(details):
     """Run automatic_config() over `details` ({sn: detail}) and return the recorded set_arg_auto args."""
@@ -1876,6 +1894,9 @@ def test_reports_no_battery_for_a_silent_string_inverter():
         ("batteryType null, all zero", dict(zeros, batteryType=None), True),
         ("batteryType code '0', all zero", dict(zeros, batteryType="0"), True),
         ("batteryType code 0 as a number, all zero", dict(zeros, batteryType=0), True),
+        ("batteryType code '0.0', all zero", dict(zeros, batteryType="0.0"), True),
+        ("batteryType code 0.0 as a number, all zero", dict(zeros, batteryType=0.0), True),
+        ("batteryType code '0.0' but a live battery", dict(zeros, batteryType="0.0", batteryVoltage=49.3, batteryCapacitySoc=66.0), False),
         ("empty batteryList, all zero", dict(zeros, batteryList=[]), True),
         ("all zero as strings", {"batteryVoltage": "0", "batteryCapacitySoc": "0.0", "batteryNum": "0", "batteryJump": {"batteryCount": "0"}}, True),
         # A transient all-zero reading on a battery inverter that names no type - the pack counts must corroborate it
@@ -1910,6 +1931,59 @@ def test_reports_no_battery_for_a_silent_string_inverter():
     assert MockSolisAPI._reports_no_battery(_DETAIL_REAL_BATTERY_ZERO_SOH) is False
     assert MockSolisAPI._reports_no_battery(_DETAIL_NO_BATTERY) is True
     print("PASSED: a silent string inverter is PV-only, nothing else is")
+    return False
+
+
+def test_reports_no_battery_for_a_grid_tied_model():
+    """A machine Solis names grid-tied (S6-GR1P...) is PV-only when its battery readings are zero, whatever its pack fields say.
+
+    The model has no battery port, so a batteryList entry or a missing pack count cannot mean a battery
+    there. The readings must still be present and zero, and a named pack still decides on its own, so
+    a misreported model never drops a battery that is actually reading.
+    """
+    print("\n=== Test: _reports_no_battery on a grid-tied model ===")
+    gr = dict(_DETAIL_GRID_TIED_STRING_INVERTER)
+    cases = [
+        ("grid-tied model as captured", dict(gr), True),
+        ("grid-tied model, batteryType '0'", dict(gr, batteryType="0"), True),
+        ("grid-tied model, batteryType absent", {k: v for k, v in gr.items() if k != "batteryType"}, True),
+        ("grid-tied model, batteryList entry that names no pack", dict(gr, batteryType="0", batteryList=[{"batteryType": 0}]), True),
+        ("three-phase grid-tied model", dict(gr, machine="S5-GR3P10K"), True),
+        ("grid-tied model in lower case", dict(gr, machine="s6-gr1p6k"), True),
+        ("grid-tied model but a live voltage", dict(gr, batteryVoltage=51.2), False),
+        ("grid-tied model but a live SOC", dict(gr, batteryCapacitySoc=40.0), False),
+        ("grid-tied model, voltage absent", dict(gr, batteryVoltage=None), False),
+        ("grid-tied model, SOC absent", dict(gr, batteryCapacitySoc=None), False),
+        ("grid-tied model naming a pack", dict(gr, batteryType="PYLON_LV"), False),
+        # The same zeros on a hybrid are a transient placeholder (issue #4494) without the pack counts
+        ("hybrid model, same zeros", dict(gr, machine="S5-EH1P6K-L"), False),
+        ("AC-coupled storage model, same zeros", dict(gr, machine="S6-EA1P5K-L"), False),
+        ("RHI hybrid, same zeros", dict(gr, machine="RHI-6K-48ES-5G"), False),
+        ("machine absent, same zeros", {k: v for k, v in gr.items() if k != "machine"}, False),
+        ("GR only later in the name", dict(gr, machine="S6-EH1P-GR1P"), False),
+    ]
+    for label, detail, expected in cases:
+        got = MockSolisAPI._reports_no_battery(detail)
+        assert got is expected, "{}: expected _reports_no_battery {} for {}, got {}".format(label, expected, detail, got)
+    print("PASSED: a grid-tied model reading zero is PV-only, a hybrid is not")
+    return False
+
+
+async def test_automatic_config_treats_grid_tied_model_as_pv_only():
+    """A grid-tied string inverter beside a hybrid is left out of the battery args but kept in the PV totals."""
+    print("\n=== Test: automatic_config treats a grid-tied model as PV-only ===")
+    with_batt = "6031050241180AA"
+    string_inv = "1802060232170BB"
+    for battery_type in ("0", "0.0"):
+        recorded, api = await _run_automatic_config({with_batt: _DETAIL_WITH_BATTERY, string_inv: dict(_DETAIL_GRID_TIED_STRING_INVERTER, batteryType=battery_type)})
+        assert recorded.get("num_inverters") == 1, "batteryType {!r}: expected only the hybrid to be enrolled, got num_inverters={}".format(battery_type, recorded.get("num_inverters"))
+        for arg in ("soc_percent", "discharge_start_time", "charge_start_time", "reserve"):
+            entities = recorded.get(arg) or []
+            assert len(entities) == 1 and string_inv.lower() not in " ".join(entities), "batteryType {!r}: {} must stay on the hybrid alone, got {}".format(battery_type, arg, entities)
+        expect_pv_today = [f"sensor.predbat_solis_{with_batt.lower()}_pv_energy_total", f"sensor.predbat_solis_{string_inv.lower()}_pv_energy_total"]
+        assert recorded.get("pv_today") == expect_pv_today, "batteryType {!r}: expected pv_today to cover both inverters, got {}".format(battery_type, recorded.get("pv_today"))
+        assert api.is_battery_inverter(string_inv) is False and api.is_battery_inverter(with_batt) is True
+    print("PASSED: the grid-tied model is PV-only and stays in the PV totals")
     return False
 
 
@@ -2249,6 +2323,8 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_automatic_config_keeps_no_battery_inverter_in_pv_totals())
         failed |= test_reports_no_battery_for_a_silent_string_inverter()
         failed |= asyncio.run(test_automatic_config_treats_silent_string_inverter_as_pv_only())
+        failed |= test_reports_no_battery_for_a_grid_tied_model()
+        failed |= asyncio.run(test_automatic_config_treats_grid_tied_model_as_pv_only())
         failed |= asyncio.run(test_automatic_config_pv_totals_unchanged_when_all_have_batteries())
         failed |= test_solis_catalogue_describes_battery_and_pv_only()
         failed |= test_solis_catalogue_battery_ratings_carry_only_stated_facts()
