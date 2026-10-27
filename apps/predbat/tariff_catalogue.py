@@ -12,6 +12,9 @@ realistic tariff. Compare's key names differ from the annual engine's, so the
 mapping lives here and nowhere else.
 """
 
+from const import OCTOPUS_API_URL
+from utils import migrate_octopus_url
+
 # Compare writes rates_import_octopus_url; the annual engine reads import_octopus_url
 COMPARE_KEY_MAP = {
     "rates_import_octopus_url": "import_octopus_url",
@@ -52,7 +55,7 @@ PRICE_CAP_STANDING_CHARGE_P = 57.19
 # cap is not on one of them.
 SEG_EXPORT_P = 4.1
 
-_OCTOPUS = "https://api.octopus.energy/v1/products"
+_OCTOPUS = "{}/v1/products".format(OCTOPUS_API_URL)
 
 # The two Octopus flat-rate export products offered against each import tariff below.
 # "Fixed" (OUTGOING-VAR) pays one rate around the clock. "Prime" is flat only in the sense
@@ -209,12 +212,13 @@ def match_entry(catalogue, tariff, url_key, rates_key):
     catalogue.
     """
     tariff = tariff or {}
-    current_url = tariff.get(url_key)
+    # A run saved before the Octopus API moved (GH#5786) names the old address
+    current_url = migrate_octopus_url(tariff.get(url_key))
     current_rates = tariff.get(rates_key)
     if not current_url and not current_rates:
         return None
     for entry in catalogue or []:
-        if current_url and entry.get(url_key) == current_url:
+        if current_url and migrate_octopus_url(entry.get(url_key)) == current_url:
             return entry
         if not current_url and entry.get(rates_key) == current_rates:
             return entry

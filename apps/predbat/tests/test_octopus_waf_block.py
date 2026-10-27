@@ -125,7 +125,7 @@ async def test_octopus_waf_block(my_predbat):
 
     api3.async_read_response = counting_read
 
-    result3 = await api3.async_read_response_retry(response3, "https://api.octopus.energy/v1/graphql/")
+    result3 = await api3.async_read_response_retry(response3, "https://api.oegb-kraken.energy/v1/graphql/")
 
     if result3 is not None:
         print("ERROR: Expected None for a blocked response, got {}".format(result3))

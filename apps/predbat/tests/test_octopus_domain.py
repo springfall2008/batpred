@@ -1,0 +1,139 @@
+# -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+# fmt off
+# pylint: disable=consider-using-f-string
+# pylint: disable=line-too-long
+
+"""Tests for the move of the Octopus API from api.octopus.energy to api.oegb-kraken.energy (GH#5786)."""
+
+from datetime import datetime
+from unittest.mock import patch
+
+from annual_tariff import AnnualTariff
+from const import OCTOPUS_API_URL, OCTOPUS_BACKEND_API_URL
+from octopus import OctopusEnergyApiClient
+from tariff_catalogue import IMPORT_TARIFFS, match_entry
+from utils import migrate_octopus_url
+
+OLD_AGILE_URL = "https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-A/standard-unit-rates/"
+NEW_AGILE_URL = "https://api.oegb-kraken.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-A/standard-unit-rates/"
+
+
+def test_octopus_domain(my_predbat):
+    """Old-domain URLs are moved to the new domain wherever they are fetched, and nothing else is touched."""
+    failed = False
+    print("**** Testing octopus_domain ****")
+
+    print("Test: migrate_octopus_url moves the old host and leaves everything else alone")
+    cases = [
+        (OLD_AGILE_URL, NEW_AGILE_URL),
+        ("http://api.octopus.energy/v1/products/", "https://api.oegb-kraken.energy/v1/products/"),
+        ("https://API.Octopus.Energy/v1/products/", "https://api.oegb-kraken.energy/v1/products/"),
+        ("https://api.octopus.energy", "https://api.oegb-kraken.energy"),
+        ("https://api.octopus.energy?x=1", "https://api.oegb-kraken.energy?x=1"),
+        (NEW_AGILE_URL, NEW_AGILE_URL),
+        ("https://api.backend.octopus.energy/v1/graphql/", "https://api.backend.octopus.energy/v1/graphql/"),
+        ("https://api.octopus.energy.example.com/v1/", "https://api.octopus.energy.example.com/v1/"),
+        ("https://api.edfgb-kraken.energy/v1/products/", "https://api.edfgb-kraken.energy/v1/products/"),
+        ("https://example.com/?next=https://api.octopus.energy/", "https://example.com/?next=https://api.octopus.energy/"),
+        ("", ""),
+        (None, None),
+        (42, 42),
+    ]
+    for url, expected in cases:
+        result = migrate_octopus_url(url)
+        if result != expected:
+            print("  ERROR: migrate_octopus_url({!r}) gave {!r}, expected {!r}".format(url, result, expected))
+            failed = True
+
+    print("Test: the API client talks to the new host, and keeps the backend host for saving sessions")
+    client = OctopusEnergyApiClient("test-key", print)
+    if client.base_url != OCTOPUS_API_URL or client.base_url != "https://api.oegb-kraken.energy":
+        print("  ERROR: base_url is {}, expected the new domain".format(client.base_url))
+        failed = True
+    if client.backend_url != OCTOPUS_BACKEND_API_URL or client.backend_url != "https://api.backend.octopus.energy":
+        print("  ERROR: backend_url is {}, expected the unchanged backend host".format(client.backend_url))
+        failed = True
+
+    print("Test: download_octopus_rates fetches an old-domain apps.yaml URL from the new domain and says so")
+    my_predbat.octopus_url_cache = {}
+    my_predbat.midnight_utc = datetime.strptime("2024-06-12T00:00:00+00:00", "%Y-%m-%dT%H:%M:%S%z")
+    my_predbat.now_utc = my_predbat.midnight_utc
+    my_predbat.minutes_now = 0
+    my_predbat.debug_enable = False
+    requested = []
+    logged = []
+
+    def fake_download(url):
+        """Record the URL asked for and return one rate."""
+        requested.append(url)
+        return {0: 10.0, 60: 12.0}
+
+    original_log = my_predbat.log
+    with patch.object(my_predbat, "download_octopus_rates_func", side_effect=fake_download), patch.object(my_predbat, "_save_octopus_url_cache_to_storage"), patch.object(my_predbat, "_load_octopus_url_cache_from_storage"):
+        my_predbat.log = lambda msg, *args, **kwargs: logged.append(msg)
+        try:
+            result = my_predbat.download_octopus_rates(OLD_AGILE_URL)
+        finally:
+            my_predbat.log = original_log
+    if requested != [NEW_AGILE_URL]:
+        print("  ERROR: expected one download from the new domain, got {}".format(requested))
+        failed = True
+    if result != {0: 10.0, 60: 12.0}:
+        print("  ERROR: expected the downloaded rates back, got {}".format(result))
+        failed = True
+    if NEW_AGILE_URL not in my_predbat.octopus_url_cache or OLD_AGILE_URL in my_predbat.octopus_url_cache:
+        print("  ERROR: the cache should be keyed by the new-domain URL, got keys {}".format(list(my_predbat.octopus_url_cache.keys())))
+        failed = True
+    if not any("old Octopus API address" in msg and "apps.yaml" in msg for msg in logged):
+        print("  ERROR: expected a log line asking for apps.yaml to be updated, got {}".format(logged))
+        failed = True
+
+    print("Test: a new-domain URL is fetched as given, with no hint logged")
+    my_predbat.octopus_url_cache = {}
+    requested.clear()
+    logged.clear()
+    with patch.object(my_predbat, "download_octopus_rates_func", side_effect=fake_download), patch.object(my_predbat, "_save_octopus_url_cache_to_storage"), patch.object(my_predbat, "_load_octopus_url_cache_from_storage"):
+        my_predbat.log = lambda msg, *args, **kwargs: logged.append(msg)
+        try:
+            my_predbat.download_octopus_rates(NEW_AGILE_URL)
+        finally:
+            my_predbat.log = original_log
+    if requested != [NEW_AGILE_URL] or any("old Octopus API address" in msg for msg in logged):
+        print("  ERROR: a new-domain URL should be fetched unchanged with no hint, got {} / {}".format(requested, logged))
+        failed = True
+
+    print("Test: an annual tariff naming the old domain resolves its URLs to the new one, {dno_region} included")
+    config = {
+        "import_octopus_url": "https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-{dno_region}/standard-unit-rates/",
+        "export_octopus_url": "https://api.octopus.energy/v1/products/OUTGOING-VAR-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-24-10-26-{dno_region}/standard-unit-rates/",
+        "dno_region": "A",
+    }
+    tariff = AnnualTariff(config, log=print, predbat=my_predbat, fetch_json=None)
+    if tariff.import_url != NEW_AGILE_URL:
+        print("  ERROR: annual import URL is {}, expected {}".format(tariff.import_url, NEW_AGILE_URL))
+        failed = True
+    if tariff.export_url != "https://api.oegb-kraken.energy/v1/products/OUTGOING-VAR-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-24-10-26-A/standard-unit-rates/":
+        print("  ERROR: annual export URL is {}".format(tariff.export_url))
+        failed = True
+
+    print("Test: a saved annual run naming the old domain still matches its catalogue entry")
+    agile = [entry for entry in IMPORT_TARIFFS if entry["id"] == "agile"][0]
+    if not agile["import_octopus_url"].startswith(OCTOPUS_API_URL + "/"):
+        print("  ERROR: the catalogue should list the new domain, got {}".format(agile["import_octopus_url"]))
+        failed = True
+    old_saved = {"import_octopus_url": agile["import_octopus_url"].replace(OCTOPUS_API_URL, "https://api.octopus.energy")}
+    matched = match_entry(IMPORT_TARIFFS, old_saved, "import_octopus_url", "rates_import")
+    if not matched or matched["id"] != "agile":
+        print("  ERROR: an old-domain saved tariff should match Agile, got {}".format(matched))
+        failed = True
+    old_catalogue = [dict(agile, import_octopus_url=old_saved["import_octopus_url"])]
+    matched = match_entry(old_catalogue, {"import_octopus_url": agile["import_octopus_url"]}, "import_octopus_url", "rates_import")
+    if not matched or matched["id"] != "agile":
+        print("  ERROR: a compare_list entry still naming the old domain should match a new-domain tariff, got {}".format(matched))
+        failed = True
+
+    return failed

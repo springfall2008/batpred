@@ -24,6 +24,13 @@ TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
 TIME_FORMAT_SOLIS = "%Y-%m-%d %H:%M:%S"
 PREDICT_STEP = 5
 
+# Octopus Energy API. Octopus moved its public API to api.oegb-kraken.energy (GH#5786), with api.octopus.energy kept
+# running in parallel for a few months; URLs still naming the old host (apps.yaml, compare and annual configs) are
+# rewritten to the new one. Saving sessions are only served by the backend host, which has no new-domain equivalent
+OCTOPUS_API_URL = "https://api.oegb-kraken.energy"
+OCTOPUS_LEGACY_API_HOST = "api.octopus.energy"
+OCTOPUS_BACKEND_API_URL = "https://api.backend.octopus.energy"
+
 # Octopus Intelligent slot confirmation (octopus_intelligent_dynamic): how long a car inside a dispatch must
 # show "not charging" before its slots, and their cheap rate, are cancelled. car_charging_now reports the
 # car directly, so two minutes (one charger/integration update) is enough once the start band has passed;

@@ -57,12 +57,12 @@ def test_octopus_download_rates(my_predbat):
     }
 
     with patch.object(my_predbat, 'download_octopus_rates_func', return_value=mock_rate_data):
-        result = my_predbat.download_octopus_rates("https://api.octopus.energy/v1/products/AGILE-24-04-03/electricity-tariffs/E-1R-AGILE-24-04-03-A/standard-unit-rates/")
+        result = my_predbat.download_octopus_rates("https://api.oegb-kraken.energy/v1/products/AGILE-24-04-03/electricity-tariffs/E-1R-AGILE-24-04-03-A/standard-unit-rates/")
 
     if result != mock_rate_data:
         print(f"✗ Test 1 failed - Expected rate data, got {result}")
         failed = True
-    elif "https://api.octopus.energy/v1/products/AGILE-24-04-03/electricity-tariffs/E-1R-AGILE-24-04-03-A/standard-unit-rates/" not in my_predbat.octopus_url_cache:
+    elif "https://api.oegb-kraken.energy/v1/products/AGILE-24-04-03/electricity-tariffs/E-1R-AGILE-24-04-03-A/standard-unit-rates/" not in my_predbat.octopus_url_cache:
         print("✗ Test 1 failed - URL not in cache")
         failed = True
     else:
@@ -70,7 +70,7 @@ def test_octopus_download_rates(my_predbat):
 
     # Test 2: Cache hit - returns cached data when fresh
     print("\nTest 2: Cache hit - returns cached data when fresh")
-    test_url = "https://api.octopus.energy/test"
+    test_url = "https://api.oegb-kraken.energy/test"
     cached_data = {0: 5.0, 60: 6.0}
     fresh_timestamp = datetime.now() - timedelta(minutes=10)  # 10 minutes ago (fresh)
 
@@ -97,7 +97,7 @@ def test_octopus_download_rates(my_predbat):
 
     # Test 3: Cache miss - downloads when cache expired (>30 min)
     print("\nTest 3: Cache miss - downloads when cache expired")
-    test_url = "https://api.octopus.energy/test-stale"
+    test_url = "https://api.oegb-kraken.energy/test-stale"
     stale_data = {0: 5.0}
     new_data = {0: 10.0, 60: 12.0}
     stale_timestamp = datetime.now() - timedelta(minutes=40)  # 40 minutes ago (stale)
@@ -124,7 +124,7 @@ def test_octopus_download_rates(my_predbat):
 
     # Test 4: Download failure - returns stale cache when available
     print("\nTest 4: Download failure - returns stale cache when available")
-    test_url = "https://api.octopus.energy/test-fail"
+    test_url = "https://api.oegb-kraken.energy/test-fail"
     cached_data = {0: 7.5}
     my_predbat.octopus_url_cache = {
         test_url: {
@@ -146,7 +146,7 @@ def test_octopus_download_rates(my_predbat):
 
     # Test 4a: Cache invalidation - midnight crossing
     print("\nTest 4a: Cache invalidation - midnight crossing")
-    test_url = "https://api.octopus.energy/test-midnight"
+    test_url = "https://api.oegb-kraken.energy/test-midnight"
     yesterday_midnight = my_predbat.midnight_utc - timedelta(days=1)
     cached_data = {0: 5.0, 60: 6.0}
     new_data = {0: 10.0, 60: 12.0}
@@ -179,7 +179,7 @@ def test_octopus_download_rates(my_predbat):
     # Test 5: Download failure - raises ValueError when no cache available
     print("\nTest 5: Download failure - raises ValueError when no cache")
     my_predbat.octopus_url_cache = {}  # No cache
-    test_url = "https://api.octopus.energy/test-fail-no-cache"
+    test_url = "https://api.oegb-kraken.energy/test-fail-no-cache"
 
     with patch.object(my_predbat, 'download_octopus_rates_func', return_value={}):
         try:
@@ -192,7 +192,7 @@ def test_octopus_download_rates(my_predbat):
     # Test 6: Retry mechanism - succeeds on second attempt
     print("\nTest 6: Retry mechanism - succeeds on second attempt")
     my_predbat.octopus_url_cache = {}
-    test_url = "https://api.octopus.energy/test-retry"
+    test_url = "https://api.oegb-kraken.energy/test-retry"
     success_data = {0: 20.0}
 
     # First call returns empty, second call succeeds
@@ -210,7 +210,7 @@ def test_octopus_download_rates(my_predbat):
     # historical results, so this can't be caught by any of the existing failure paths above -
     # it needs its own check that the data actually reaches "now" onward.
     print("\nTest 13: No current/future rates (#2726) - falls back to stale cache")
-    test_url = "https://api.octopus.energy/test-stale-product"
+    test_url = "https://api.oegb-kraken.energy/test-stale-product"
     stale_cached_data = {0: 8.0, 60: 9.0}
     my_predbat.octopus_url_cache = {
         test_url: {
@@ -234,7 +234,7 @@ def test_octopus_download_rates(my_predbat):
 
     # Test 14: No current/future rates (#2726) - raises ValueError when no cache available
     print("\nTest 14: No current/future rates (#2726) - raises ValueError when no cache")
-    test_url = "https://api.octopus.energy/test-stale-product-no-cache"
+    test_url = "https://api.oegb-kraken.energy/test-stale-product-no-cache"
     my_predbat.octopus_url_cache = {}
     my_predbat.minutes_now = 120
     historical_only_data = {0: 5.0, 60: 6.0}
@@ -258,7 +258,7 @@ def test_octopus_download_rates(my_predbat):
     # midnight from now_utc (GH#4804), and this pin is left behind for later test modules.
     my_predbat.now_utc = my_predbat.midnight_utc
 
-    test_url = "https://api.octopus.energy/test-func"
+    test_url = "https://api.oegb-kraken.energy/test-func"
 
     # Mock requests.get
     mock_response = Mock()
@@ -287,7 +287,7 @@ def test_octopus_download_rates(my_predbat):
     my_predbat.debug_enable = False
     my_predbat.failures_total = 0
 
-    test_url = "https://api.octopus.energy/test-pagination"
+    test_url = "https://api.oegb-kraken.energy/test-pagination"
 
     # Mock two pages of results
     mock_response_1 = Mock()
@@ -296,7 +296,7 @@ def test_octopus_download_rates(my_predbat):
         "results": [
             {"valid_from": "2024-06-12T00:00:00Z", "valid_to": "2024-06-12T00:30:00Z", "value_inc_vat": 10.5}
         ],
-        "next": "https://api.octopus.energy/test-pagination?page=2"
+        "next": "https://api.oegb-kraken.energy/test-pagination?page=2"
     }
 
     mock_response_2 = Mock()
@@ -322,7 +322,7 @@ def test_octopus_download_rates(my_predbat):
     print("\nTest 9: download_octopus_rates_func - ConnectionError")
     my_predbat.debug_enable = False
     my_predbat.failures_total = 0
-    test_url = "https://api.octopus.energy/test-connection-error"
+    test_url = "https://api.oegb-kraken.energy/test-connection-error"
 
     with patch('requests.get', side_effect=requests.exceptions.ConnectionError()):
         result = my_predbat.download_octopus_rates_func(test_url)
@@ -337,7 +337,7 @@ def test_octopus_download_rates(my_predbat):
     print("\nTest 10: download_octopus_rates_func - HTTP error status")
     my_predbat.debug_enable = False
     my_predbat.failures_total = 0
-    test_url = "https://api.octopus.energy/test-404"
+    test_url = "https://api.oegb-kraken.energy/test-404"
 
     mock_response = Mock()
     mock_response.status_code = 404
@@ -355,7 +355,7 @@ def test_octopus_download_rates(my_predbat):
     print("\nTest 11: download_octopus_rates_func - JSON decode error")
     my_predbat.debug_enable = False
     my_predbat.failures_total = 0
-    test_url = "https://api.octopus.energy/test-json-error"
+    test_url = "https://api.oegb-kraken.energy/test-json-error"
 
     mock_response = Mock()
     mock_response.status_code = 200
@@ -377,7 +377,7 @@ def test_octopus_download_rates(my_predbat):
     print("\nTest 12: download_octopus_rates_func - missing 'results' key")
     my_predbat.debug_enable = False
     my_predbat.failures_total = 0
-    test_url = "https://api.octopus.energy/test-no-results"
+    test_url = "https://api.oegb-kraken.energy/test-no-results"
 
     mock_response = Mock()
     mock_response.status_code = 200

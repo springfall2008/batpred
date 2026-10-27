@@ -181,7 +181,7 @@ async def test_octopus_tou_windows(my_predbat):
     print("\n**** Running Octopus TOU window tests ****")
     failed = False
 
-    base_url = "https://api.octopus.energy/v1/products/PROD/electricity-tariffs/TARIFF/standard-unit-rates/"
+    base_url = "https://api.oegb-kraken.energy/v1/products/PROD/electricity-tariffs/TARIFF/standard-unit-rates/"
     eco7 = "E-2R-OE-FIX-12M-26-06-11-B"
 
     # ------------------------------------------------------------------

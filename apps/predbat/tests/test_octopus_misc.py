@@ -1157,9 +1157,9 @@ async def test_octopus_fetch_tariffs(my_predbat):
                 "direct_debit_monthly": {
                     "code": iog_tariff_code,
                     "links": [
-                        {"rel": "day_unit_rates", "href": f"https://api.octopus.energy/v1/products/{iog_product_code}/electricity-tariffs/{iog_tariff_code}/day-unit-rates/"},
-                        {"rel": "night_unit_rates", "href": f"https://api.octopus.energy/v1/products/{iog_product_code}/electricity-tariffs/{iog_tariff_code}/night-unit-rates/"},
-                        {"rel": "standing_charges", "href": f"https://api.octopus.energy/v1/products/{iog_product_code}/electricity-tariffs/{iog_tariff_code}/standing-charges/"},
+                        {"rel": "day_unit_rates", "href": f"https://api.oegb-kraken.energy/v1/products/{iog_product_code}/electricity-tariffs/{iog_tariff_code}/day-unit-rates/"},
+                        {"rel": "night_unit_rates", "href": f"https://api.oegb-kraken.energy/v1/products/{iog_product_code}/electricity-tariffs/{iog_tariff_code}/night-unit-rates/"},
+                        {"rel": "standing_charges", "href": f"https://api.oegb-kraken.energy/v1/products/{iog_product_code}/electricity-tariffs/{iog_tariff_code}/standing-charges/"},
                     ],
                 }
             }
@@ -1256,7 +1256,7 @@ async def test_octopus_fetch_tariffs(my_predbat):
         print("PASS: FLUX-IMPORT rates stored correctly as export fallback")
 
     # Verify the URL constructed has FLUX-IMPORT, not FLUX-EXPORT
-    expected_flux_import_url = f"https://api.octopus.energy/v1/products/{flux_import_product}/electricity-tariffs/{flux_import_tariff}/standard-unit-rates/"
+    expected_flux_import_url = f"https://api.oegb-kraken.energy/v1/products/{flux_import_product}/electricity-tariffs/{flux_import_tariff}/standard-unit-rates/"
     if expected_flux_import_url not in urls_called8:
         print(f"ERROR: Expected exact URL {expected_flux_import_url}, got {urls_called8}")
         failed = True

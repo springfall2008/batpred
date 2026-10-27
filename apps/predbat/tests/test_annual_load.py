@@ -218,7 +218,7 @@ def test_annual_load_octopus(my_predbat):
         if len(calls) == 1:
             return {"properties": [{"electricity_meter_points": [{"mpan": "1200000000000", "is_export": False, "meters": [{"serial_number": "S1"}]}]}]}
         if len(calls) == 2:
-            return {"results": results, "next": "https://api.octopus.energy/v1/electricity-meter-points/x/meters/y/consumption/?page=2"}
+            return {"results": results, "next": "https://api.oegb-kraken.energy/v1/electricity-meter-points/x/meters/y/consumption/?page=2"}
         return None
 
     fake_storage = FakeAnnualStorage()

@@ -307,12 +307,12 @@ def test_annual_config(my_predbat):
 
     print("Test: a templated tariff URL without dno_region is rejected up front")
     config = base_config()
-    config["annual"]["tariff"] = {"import_octopus_url": "https://api.octopus.energy/v1/products/AGILE/electricity-tariffs/E-1R-AGILE-{dno_region}/standard-unit-rates/"}
+    config["annual"]["tariff"] = {"import_octopus_url": "https://api.oegb-kraken.energy/v1/products/AGILE/electricity-tariffs/E-1R-AGILE-{dno_region}/standard-unit-rates/"}
     failed = expect_error("templated url without region", config, "dno_region is not set", failed)
 
     print("Test: a templated tariff URL with dno_region validates and is carried through")
     config = base_config()
-    config["annual"]["tariff"] = {"import_octopus_url": "https://api.octopus.energy/v1/products/AGILE/electricity-tariffs/E-1R-AGILE-{dno_region}/standard-unit-rates/", "dno_region": "A"}
+    config["annual"]["tariff"] = {"import_octopus_url": "https://api.oegb-kraken.energy/v1/products/AGILE/electricity-tariffs/E-1R-AGILE-{dno_region}/standard-unit-rates/", "dno_region": "A"}
     result = validate_config(config, today=date(2026, 7, 25))
     if result["tariff"].get("dno_region") != "A":
         print("  ERROR: dno_region should survive validation, got {}".format(result["tariff"].get("dno_region")))
@@ -321,8 +321,8 @@ def test_annual_config(my_predbat):
     print("Test: both import and export templated URLs without dno_region are both named in the error")
     config = base_config()
     config["annual"]["tariff"] = {
-        "import_octopus_url": "https://api.octopus.energy/v1/products/AGILE/electricity-tariffs/E-1R-AGILE-{dno_region}/standard-unit-rates/",
-        "export_octopus_url": "https://api.octopus.energy/v1/products/AGILE-OUTGOING/electricity-tariffs/E-1R-AGILE-OUTGOING-{dno_region}/standard-unit-rates/",
+        "import_octopus_url": "https://api.oegb-kraken.energy/v1/products/AGILE/electricity-tariffs/E-1R-AGILE-{dno_region}/standard-unit-rates/",
+        "export_octopus_url": "https://api.oegb-kraken.energy/v1/products/AGILE-OUTGOING/electricity-tariffs/E-1R-AGILE-OUTGOING-{dno_region}/standard-unit-rates/",
     }
     try:
         validate_config(config, today=date(2026, 7, 25))
