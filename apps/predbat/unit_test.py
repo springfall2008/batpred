@@ -341,6 +341,7 @@ from tests.test_charge_freeze_only import run_charge_freeze_only_tests
 from tests.test_prune_dead_slots import run_prune_dead_slots_tests
 from tests.test_export_floor import run_export_floor_tests
 from tests.test_plan_pv10_hedge import run_plan_pv10_hedge_tests
+from tests.test_plan_freeze_export_fallback import run_plan_freeze_export_fallback_tests
 from tests.test_clip_charge_slots import run_clip_charge_slots_tests
 from tests.test_discard_unused_charge_slots import run_discard_unused_charge_slots_tests
 from tests.test_discard_unused_export_slots import run_discard_unused_export_slots_tests
@@ -814,6 +815,7 @@ def main():
         ("prune_dead_slots", run_prune_dead_slots_tests, "Prune dead plan slots tests", False),
         ("export_floor", run_export_floor_tests, "Realistic pv10 export floor, pinning and staircase merge tests", False),
         ("plan_pv10_hedge", run_plan_pv10_hedge_tests, "End to end: a bad PV10 forecast makes the overnight charge bigger", False),
+        ("plan_freeze_export_fallback", run_plan_freeze_export_fallback_tests, "End to end: without Freeze Export a target export stands in for it", False),
         ("clip_charge_slots", run_clip_charge_slots_tests, "Clip charge slots tests", False),
         ("discard_unused_charge_slots", run_discard_unused_charge_slots_tests, "Discard unused charge slots tests", False),
         ("discard_unused_export_slots", run_discard_unused_export_slots_tests, "Discard unused export slots tests", False),
