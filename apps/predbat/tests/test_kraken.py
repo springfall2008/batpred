@@ -2639,7 +2639,7 @@ def test_kraken_api_edge_block_uses_all_bound_backoff_helpers():
     api._kraken_token_request = AsyncMock(side_effect=_blocked)
     assert asyncio.run(api.check_and_refresh_oauth_token()) is False
     assert api.oauth_failed is False, "a CDN block must not latch oauth_failed"
-    assert api.token_mint_block_count == 1
+    assert api.token_mint_backoff.count == 1
 
     # log_token_mint_backoff - suppressed call inside the window
     api._kraken_token_request = AsyncMock()
@@ -2647,12 +2647,12 @@ def test_kraken_api_edge_block_uses_all_bound_backoff_helpers():
     api._kraken_token_request.assert_not_called()
 
     # clear_token_mint_backoff - deadline elapsed, mint succeeds
-    api.token_mint_blocked_until = datetime.now(timezone.utc) - timedelta(seconds=1)
+    api.token_mint_backoff.until = datetime.now(timezone.utc) - timedelta(seconds=1)
     api._kraken_token_request = AsyncMock(return_value={"token": "recovered-jwt", "refreshToken": "recovered-refresh", "exp": int(time.time()) + 3600})
     assert asyncio.run(api.check_and_refresh_oauth_token()) is True
     assert api.access_token == "recovered-jwt"
-    assert api.token_mint_blocked_until is None
-    assert api.token_mint_block_count == 0
+    assert api.token_mint_backoff.until is None
+    assert api.token_mint_backoff.count == 0
 
 
 def test_graphql_query_expired_jwt_refreshes_and_retries():
@@ -3259,10 +3259,12 @@ def test_graphql_query_rate_limit_pauses_queries():
 
     api = make_rate_limit_api()
     session = make_graphql_session(KRAKEN_RATE_LIMIT_RESPONSE)
-    before = datetime.now()
+    before = datetime.now(timezone.utc)
     with patch("aiohttp.ClientSession", return_value=session):
         assert asyncio.run(api.async_graphql_query("query { a }", "first")) is None
-        assert api.graphql_rate_limited_until >= before + timedelta(seconds=GRAPHQL_RATE_LIMIT_BACKOFF_BASE_SECONDS - 1)
+        assert api.graphql_backoff.until >= before + timedelta(seconds=GRAPHQL_RATE_LIMIT_BACKOFF_BASE_SECONDS - 1)
+        # Timed in UTC, the same clock as the mint backoff, so a clock change cannot stretch or shorten it
+        assert api.graphql_backoff.until.utcoffset() == timedelta(0)
         assert asyncio.run(api.async_graphql_query("query { b }", "second")) is None
 
     assert session.post.call_count == 1, "the query after a rate limit was still sent"
@@ -3273,11 +3275,11 @@ def test_graphql_query_429_honours_retry_after():
     """An HTTP 429 pauses queries for at least its Retry-After."""
     api = make_rate_limit_api()
     session = make_graphql_session((429, None, "Too Many Requests", {"Retry-After": "600"}))
-    before = datetime.now()
+    before = datetime.now(timezone.utc)
     with patch("aiohttp.ClientSession", return_value=session):
         asyncio.run(api.async_graphql_query("query { a }", "q"))
 
-    assert api.graphql_rate_limited_until >= before + timedelta(seconds=599)
+    assert api.graphql_backoff.until >= before + timedelta(seconds=599)
 
 
 def test_graphql_query_edge_block_pauses_queries():
@@ -3287,7 +3289,7 @@ def test_graphql_query_edge_block_pauses_queries():
     with patch("aiohttp.ClientSession", return_value=session):
         asyncio.run(api.async_graphql_query("query { a }", "q"))
 
-    assert api.graphql_rate_limited_until is not None
+    assert api.graphql_backoff.until is not None
     logged = " ".join(str(c.args[0]) for c in api.log.call_args_list)
     assert "edge/WAF blocked" in logged, logged
 
@@ -3299,7 +3301,7 @@ def test_graphql_query_plain_error_does_not_pause():
     with patch("aiohttp.ClientSession", return_value=session):
         asyncio.run(api.async_graphql_query("query { a }", "q"))
 
-    assert api.graphql_rate_limited_until is None
+    assert api.graphql_backoff.until is None
 
 
 def test_graphql_query_rate_limit_doubles_then_clears():
@@ -3310,16 +3312,16 @@ def test_graphql_query_rate_limit_doubles_then_clears():
     session = make_graphql_session(KRAKEN_RATE_LIMIT_RESPONSE, KRAKEN_RATE_LIMIT_RESPONSE, KRAKEN_SUCCESS_RESPONSE)
     with patch("aiohttp.ClientSession", return_value=session):
         asyncio.run(api.async_graphql_query("query { a }", "q"))
-        api.graphql_rate_limited_until = datetime.now() - timedelta(seconds=1)
-        before = datetime.now()
+        api.graphql_backoff.until = datetime.now(timezone.utc) - timedelta(seconds=1)
+        before = datetime.now(timezone.utc)
         asyncio.run(api.async_graphql_query("query { a }", "q"))
-        assert api.graphql_rate_limit_count == 2
-        assert api.graphql_rate_limited_until >= before + timedelta(seconds=2 * GRAPHQL_RATE_LIMIT_BACKOFF_BASE_SECONDS - 1)
-        api.graphql_rate_limited_until = datetime.now() - timedelta(seconds=1)
+        assert api.graphql_backoff.count == 2
+        assert api.graphql_backoff.until >= before + timedelta(seconds=2 * GRAPHQL_RATE_LIMIT_BACKOFF_BASE_SECONDS - 1)
+        api.graphql_backoff.until = datetime.now(timezone.utc) - timedelta(seconds=1)
         result = asyncio.run(api.async_graphql_query("query { a }", "q"))
 
     assert result == {"ok": True}
-    assert api.graphql_rate_limit_count == 0
-    assert api.graphql_rate_limited_until is None
+    assert api.graphql_backoff.count == 0
+    assert api.graphql_backoff.until is None
     logged = " ".join(str(c.args[0]) for c in api.log.call_args_list)
     assert "rate limit cleared" in logged, logged

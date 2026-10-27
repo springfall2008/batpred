@@ -43,10 +43,9 @@ from utils import (
     round_out_to_period,
     filter_payment_method,
     is_edge_block_body,
-    token_mint_backoff_seconds,
-    exponential_backoff_seconds,
+    Backoff,
     parse_retry_after,
-    TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS,
+    TOKEN_MINT_BACKOFF_BASE_SECONDS,
     TOKEN_MINT_BACKOFF_MAX_SECONDS,
     GRAPHQL_RATE_LIMIT_BACKOFF_BASE_SECONDS,
     GRAPHQL_RATE_LIMIT_BACKOFF_MAX_SECONDS,
@@ -727,17 +726,12 @@ class OctopusAPI(ComponentBase):
         self.graphql_token = None
         self.graphql_expiration = None
         self.consecutive_edge_blocks = 0
-        # When the current run of edge blocks began - see EDGE_BLOCK_REFRESH_AFTER_SECONDS
+        # When the current run of edge blocks began, in UTC - see EDGE_BLOCK_REFRESH_AFTER_SECONDS
         self.edge_block_started_at = None
-        # Set while the token mint itself is edge blocked or rate limited - see async_refresh_token
-        self.token_mint_blocked_until = None
-        self.token_mint_block_count = 0
-        self.token_mint_backoff_logged_at = None
-        self.token_mint_block_reason = None
-        # Set while GraphQL queries are paused after a rate limit - see async_graphql_query
-        self.graphql_rate_limited_until = None
-        self.graphql_rate_limit_count = 0
-        self.graphql_rate_limit_logged_at = None
+        # Running while the token mint itself is edge blocked or rate limited - see async_refresh_token
+        self.token_mint_backoff = Backoff(TOKEN_MINT_BACKOFF_BASE_SECONDS, TOKEN_MINT_BACKOFF_MAX_SECONDS)
+        # Running while GraphQL queries are paused after a rate limit - see async_graphql_query
+        self.graphql_backoff = Backoff(GRAPHQL_RATE_LIMIT_BACKOFF_BASE_SECONDS, GRAPHQL_RATE_LIMIT_BACKOFF_MAX_SECONDS)
         # Set by async_read_response() when a response is a rate limit (KT-CT-1199 or HTTP 429), so the caller backs off
         self.last_read_rate_limited = False
         self.account_data = {}
@@ -2039,7 +2033,11 @@ class OctopusAPI(ComponentBase):
             self.log("Warn: OctopusAPI: TOU bucket lookup failed ({}), falling back to hard-wired windows".format(error))
             response_data = None
         windows = _tou_windows_from_measurements(response_data)
-        self.tou_windows_day = today
+        # Only a lookup that returned data settles the day. A failed or rate-limit-held one is
+        # retried on the next fetch rather than leaving the hard-wired windows in place until
+        # UTC midnight.
+        if response_data is not None:
+            self.tou_windows_day = today
         self.tou_windows = windows
         return windows
 
@@ -2413,74 +2411,47 @@ class OctopusAPI(ComponentBase):
         return data_as_json
 
     def start_token_mint_backoff(self, reason="edge/WAF blocked", retry_after=None):
-        """Back off from the token mint after a CDN/WAF block or a rate limit.
-
-        Each consecutive block doubles the wait, capped at TOKEN_MINT_BACKOFF_MAX_SECONDS. A
-        Retry-After from the server lengthens the wait, within the same cap.
+        """Back off from the token mint after a CDN/WAF block or a rate limit, and log why.
 
         Args:
-            reason: How the mint was refused, for the log - "edge/WAF blocked" or "rate limited".
+            reason: How the mint was refused - "edge/WAF blocked" or "rate limited".
             retry_after: Seconds the server asked us to wait, or None.
         """
-        self.token_mint_block_count += 1
-        delay = token_mint_backoff_seconds(self.token_mint_block_count)
-        if retry_after:
-            delay = min(max(delay, retry_after), TOKEN_MINT_BACKOFF_MAX_SECONDS)
-        now = datetime.now()
-        self.token_mint_blocked_until = now + timedelta(seconds=delay)
-        self.token_mint_backoff_logged_at = now
-        self.token_mint_block_reason = reason
-        self.log("Warn: OctopusAPI: Token mint {} (block {}) - this is rate limiting, not a bad API key. Backing off for {}s".format(reason, self.token_mint_block_count, delay))
+        delay = self.token_mint_backoff.start(reason, retry_after)
+        self.log("Warn: OctopusAPI: Token mint {} (block {}) - this is rate limiting, not a bad API key. Backing off for {}s".format(reason, self.token_mint_backoff.count, delay))
 
-    def log_token_mint_backoff(self, now):
+    def log_token_mint_backoff(self):
         """Repeat the backoff reason occasionally so it stays visible in a short log window"""
-        if self.token_mint_backoff_logged_at and (now - self.token_mint_backoff_logged_at).total_seconds() < TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS:
-            return
-        self.token_mint_backoff_logged_at = now
-        self.log("Warn: OctopusAPI: Token mint still {} (block {}) - suppressing mints until {}".format(self.token_mint_block_reason or "edge/WAF blocked", self.token_mint_block_count, self.token_mint_blocked_until.strftime(TIME_FORMAT)))
+        if self.token_mint_backoff.due_reminder():
+            backoff = self.token_mint_backoff
+            self.log("Warn: OctopusAPI: Token mint still {} (block {}) - suppressing mints until {}".format(backoff.reason, backoff.count, backoff.until.strftime(TIME_FORMAT)))
 
     def clear_token_mint_backoff(self):
         """Clear the mint backoff after a successful token mint"""
-        if self.token_mint_block_count:
-            self.log("OctopusAPI: Token mint recovered after {} refused mint(s)".format(self.token_mint_block_count))
-        self.token_mint_block_count = 0
-        self.token_mint_blocked_until = None
-        self.token_mint_backoff_logged_at = None
-        self.token_mint_block_reason = None
+        count = self.token_mint_backoff.clear()
+        if count:
+            self.log("OctopusAPI: Token mint recovered after {} refused mint(s)".format(count))
 
     def start_graphql_rate_limit_backoff(self, reason, retry_after=None):
-        """Pause GraphQL queries after a rate limit, so the rest of the poll does not run into the same limit.
-
-        Each consecutive rate limit doubles the pause, capped at GRAPHQL_RATE_LIMIT_BACKOFF_MAX_SECONDS.
-        A Retry-After from the server lengthens the pause, within the same cap.
+        """Pause GraphQL queries after a rate limit, so the rest of the poll does not run into the same limit, and log why.
 
         Args:
-            reason: What limited the query, for the log - "rate limited" or "edge/WAF blocked".
+            reason: What limited the query - "rate limited" or "edge/WAF blocked".
             retry_after: Seconds the server asked us to wait, or None.
         """
-        self.graphql_rate_limit_count += 1
-        delay = exponential_backoff_seconds(self.graphql_rate_limit_count, GRAPHQL_RATE_LIMIT_BACKOFF_BASE_SECONDS, GRAPHQL_RATE_LIMIT_BACKOFF_MAX_SECONDS)
-        if retry_after:
-            delay = min(max(delay, retry_after), GRAPHQL_RATE_LIMIT_BACKOFF_MAX_SECONDS)
-        now = datetime.now()
-        self.graphql_rate_limited_until = now + timedelta(seconds=delay)
-        self.graphql_rate_limit_logged_at = now
-        self.log("Warn: OctopusAPI: GraphQL {} (rate limit {}) - pausing GraphQL queries for {}s".format(reason, self.graphql_rate_limit_count, delay))
+        delay = self.graphql_backoff.start(reason, retry_after)
+        self.log("Warn: OctopusAPI: GraphQL {} (rate limit {}) - pausing GraphQL queries for {}s".format(reason, self.graphql_backoff.count, delay))
 
-    def log_graphql_rate_limit_backoff(self, now):
+    def log_graphql_rate_limit_backoff(self):
         """Repeat the pause reason occasionally: held queries send nothing, so would otherwise log nothing"""
-        if self.graphql_rate_limit_logged_at and (now - self.graphql_rate_limit_logged_at).total_seconds() < TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS:
-            return
-        self.graphql_rate_limit_logged_at = now
-        self.log("Warn: OctopusAPI: GraphQL still rate limited (rate limit {}) - holding queries until {}".format(self.graphql_rate_limit_count, self.graphql_rate_limited_until.strftime(TIME_FORMAT)))
+        if self.graphql_backoff.due_reminder():
+            self.log("Warn: OctopusAPI: GraphQL still rate limited (rate limit {}) - holding queries until {}".format(self.graphql_backoff.count, self.graphql_backoff.until.strftime(TIME_FORMAT)))
 
     def clear_graphql_rate_limit_backoff(self):
         """Clear the GraphQL pause and the edge block run after a successful query"""
-        if self.graphql_rate_limit_count:
-            self.log("OctopusAPI: GraphQL rate limit cleared after {} rate limit(s)".format(self.graphql_rate_limit_count))
-        self.graphql_rate_limit_count = 0
-        self.graphql_rate_limited_until = None
-        self.graphql_rate_limit_logged_at = None
+        count = self.graphql_backoff.clear()
+        if count:
+            self.log("OctopusAPI: GraphQL rate limit cleared after {} rate limit(s)".format(count))
         self.consecutive_edge_blocks = 0
         self.edge_block_started_at = None
 
@@ -2500,10 +2471,10 @@ class OctopusAPI(ComponentBase):
         # an outage the block itself would not have caused. Callers that hit a genuine auth
         # failure clear graphql_token before re-minting, so a revoked token is never revived
         # here - only one we have simply not been able to renew yet.
-        if self.token_mint_blocked_until and now < self.token_mint_blocked_until:
+        if self.token_mint_backoff.active():
             if expiry and expiry > now:
                 return self.graphql_token
-            self.log_token_mint_backoff(now)
+            self.log_token_mint_backoff()
             return None
 
         client = await self.api.async_create_client_session()
@@ -2565,11 +2536,9 @@ class OctopusAPI(ComponentBase):
         and returns None. Mutations (returns_data=False) are user commands rather than polls, so they
         are always sent, and a retry after a token refresh is part of the request that was let through.
         """
-        if returns_data and _retry_count == 0 and self.graphql_rate_limited_until:
-            now = datetime.now()
-            if now < self.graphql_rate_limited_until:
-                self.log_graphql_rate_limit_backoff(now)
-                return None
+        if returns_data and _retry_count == 0 and self.graphql_backoff.active():
+            self.log_graphql_rate_limit_backoff()
+            return None
         token = await self.async_refresh_token()
         if token is None:
             self.failures_total += 1
@@ -2634,7 +2603,7 @@ class OctopusAPI(ComponentBase):
                     log_response(response.status, error_text, always_full=True)
                     edge_block_token = None
                     if response.status == 403 and is_edge_block_body(error_text):
-                        now = datetime.now()
+                        now = datetime.now(timezone.utc)
                         self.consecutive_edge_blocks += 1
                         if self.edge_block_started_at is None:
                             self.edge_block_started_at = now
@@ -2643,8 +2612,7 @@ class OctopusAPI(ComponentBase):
                         blocked_seconds = (now - self.edge_block_started_at).total_seconds()
                         # While the mint is itself refused, discarding the token would leave nothing
                         # to query with once the block lifts, so only fall back when it could work.
-                        mint_blocked = self.token_mint_blocked_until is not None and now < self.token_mint_blocked_until
-                        if blocked_seconds < EDGE_BLOCK_REFRESH_AFTER_SECONDS or mint_blocked:
+                        if blocked_seconds < EDGE_BLOCK_REFRESH_AFTER_SECONDS or self.token_mint_backoff.active():
                             if not ignore_errors:
                                 self.log(f"Warn: OctopusAPI: HTTP {response.status} edge/WAF block for graphql query {request_context} - rate limited, keeping cached token")
                                 self.failures_total += 1
@@ -2664,7 +2632,7 @@ class OctopusAPI(ComponentBase):
                     if retry_token is None:
                         # A mint refused by rate limiting says nothing about the token the edge block
                         # made us doubt, so keep it rather than leave the component with no token at all.
-                        if edge_block_token and self.token_mint_blocked_until and datetime.now() < self.token_mint_blocked_until:
+                        if edge_block_token and self.token_mint_backoff.active():
                             self.graphql_token = edge_block_token
                         self.failures_total += 1
                         self.log(f"Warn: OctopusAPI: Failed to refresh token for retry of graphql query {request_context}")

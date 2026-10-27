@@ -23,13 +23,12 @@ from component_base import ComponentBase
 from const import TIME_FORMAT
 from utils import (
     filter_payment_method,
-    exponential_backoff_seconds,
+    Backoff,
     is_edge_block_body,
     is_kraken_rate_limit_error,
     parse_retry_after,
     GRAPHQL_RATE_LIMIT_BACKOFF_BASE_SECONDS,
     GRAPHQL_RATE_LIMIT_BACKOFF_MAX_SECONDS,
-    TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS,
 )
 from mock_base import MockBase as KrakenMockBase
 from utils import str2time
@@ -317,10 +316,8 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         self.requests_total = 0
         self.failures_total = 0
         self.oauth_failed = False
-        # Set while GraphQL queries are paused after a rate limit - see async_graphql_query
-        self.graphql_rate_limited_until = None
-        self.graphql_rate_limit_count = 0
-        self.graphql_rate_limit_logged_at = None
+        # Running while GraphQL queries are paused after a rate limit - see async_graphql_query
+        self.graphql_backoff = Backoff(GRAPHQL_RATE_LIMIT_BACKOFF_BASE_SECONDS, GRAPHQL_RATE_LIMIT_BACKOFF_MAX_SECONDS)
 
         # Last-fetched data, cached to storage so it survives a restart. Rates are the actual
         # rate-period lists last published to the sensors; the *_fetched_at timestamps drive the
@@ -392,38 +389,25 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         return f"{name} login failed - check the Kraken credentials, then restart the Kraken component"
 
     def start_graphql_rate_limit_backoff(self, reason, retry_after=None):
-        """Pause GraphQL queries after a rate limit, so the rest of the poll does not run into the same limit.
-
-        Each consecutive rate limit doubles the pause, capped at GRAPHQL_RATE_LIMIT_BACKOFF_MAX_SECONDS.
-        A Retry-After from the server lengthens the pause, within the same cap.
+        """Pause GraphQL queries after a rate limit, so the rest of the poll does not run into the same limit, and log why.
 
         Args:
-            reason: What limited the query, for the log - "rate limited" or "edge/WAF blocked".
+            reason: What limited the query - "rate limited" or "edge/WAF blocked".
             retry_after: Seconds the server asked us to wait, or None.
         """
-        self.graphql_rate_limit_count += 1
-        delay = exponential_backoff_seconds(self.graphql_rate_limit_count, GRAPHQL_RATE_LIMIT_BACKOFF_BASE_SECONDS, GRAPHQL_RATE_LIMIT_BACKOFF_MAX_SECONDS)
-        if retry_after:
-            delay = min(max(delay, retry_after), GRAPHQL_RATE_LIMIT_BACKOFF_MAX_SECONDS)
-        now = datetime.now()
-        self.graphql_rate_limited_until = now + timedelta(seconds=delay)
-        self.graphql_rate_limit_logged_at = now
-        self.log(f"Warn: Kraken: GraphQL {reason} (rate limit {self.graphql_rate_limit_count}) - pausing GraphQL queries for {delay}s")
+        delay = self.graphql_backoff.start(reason, retry_after)
+        self.log(f"Warn: Kraken: GraphQL {reason} (rate limit {self.graphql_backoff.count}) - pausing GraphQL queries for {delay}s")
 
-    def log_graphql_rate_limit_backoff(self, now):
+    def log_graphql_rate_limit_backoff(self):
         """Repeat the pause reason occasionally: held queries send nothing, so would otherwise log nothing"""
-        if self.graphql_rate_limit_logged_at and (now - self.graphql_rate_limit_logged_at).total_seconds() < TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS:
-            return
-        self.graphql_rate_limit_logged_at = now
-        self.log(f"Warn: Kraken: GraphQL still rate limited (rate limit {self.graphql_rate_limit_count}) - holding queries until {self.graphql_rate_limited_until.strftime(TIME_FORMAT)}")
+        if self.graphql_backoff.due_reminder():
+            self.log(f"Warn: Kraken: GraphQL still rate limited (rate limit {self.graphql_backoff.count}) - holding queries until {self.graphql_backoff.until.strftime(TIME_FORMAT)}")
 
     def clear_graphql_rate_limit_backoff(self):
         """Clear the GraphQL pause after a successful query"""
-        if self.graphql_rate_limit_count:
-            self.log(f"Kraken: GraphQL rate limit cleared after {self.graphql_rate_limit_count} rate limit(s)")
-        self.graphql_rate_limit_count = 0
-        self.graphql_rate_limited_until = None
-        self.graphql_rate_limit_logged_at = None
+        count = self.graphql_backoff.clear()
+        if count:
+            self.log(f"Kraken: GraphQL rate limit cleared after {count} rate limit(s)")
 
     async def async_graphql_query(self, query, request_context, _retry_count=0):
         """Execute a GraphQL query with auth and auto-retry on auth errors.
@@ -432,11 +416,9 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         sent and returns None. A retry after a token refresh is part of the request that was let
         through, so it is not held.
         """
-        if _retry_count == 0 and self.graphql_rate_limited_until:
-            now = datetime.now()
-            if now < self.graphql_rate_limited_until:
-                self.log_graphql_rate_limit_backoff(now)
-                return None
+        if _retry_count == 0 and self.graphql_backoff.active():
+            self.log_graphql_rate_limit_backoff()
+            return None
         token_ok = await self.check_and_refresh_oauth_token()
         if not token_ok:
             self.log(f"Warn: Kraken: Auth not available for {request_context}")

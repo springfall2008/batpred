@@ -363,8 +363,8 @@ def test_edge_block_does_not_latch_oauth_failed():
 
     assert result is False
     assert mixin.oauth_failed is False, "an edge block must not latch oauth_failed"
-    assert mixin.token_mint_blocked_until is not None
-    assert mixin.token_mint_block_count == 1
+    assert mixin.token_mint_backoff.until is not None
+    assert mixin.token_mint_backoff.count == 1
     # One attempt only - no immediate retry with primary credentials into the same block
     assert mixin._kraken_token_request.call_count == 1
 
@@ -380,7 +380,7 @@ def test_edge_block_suppresses_the_next_mint():
 
     assert result is False
     mixin._kraken_token_request.assert_not_called()
-    assert mixin.token_mint_block_count == 1, "a suppressed attempt must not grow the backoff"
+    assert mixin.token_mint_backoff.count == 1, "a suppressed attempt must not grow the backoff"
 
 
 def test_edge_block_keeps_a_still_valid_token():
@@ -392,7 +392,7 @@ def test_edge_block_keeps_a_still_valid_token():
 
     # The mint is refused, but the token itself is still good for ~3 minutes
     assert asyncio.run(mixin.check_and_refresh_oauth_token()) is True
-    assert mixin.token_mint_blocked_until is not None
+    assert mixin.token_mint_backoff.until is not None
 
     # Next caller, still inside the window, token still has ~3 minutes of life
     mixin._kraken_token_request = AsyncMock()
@@ -412,9 +412,9 @@ def test_elapsed_backoff_reopens_the_mint():
     mixin = make_mixin(auth_method="api_key", key="sk_live_test123")
     mixin._kraken_token_request = edge_blocked_request(mixin)
     asyncio.run(mixin.check_and_refresh_oauth_token())
-    assert mixin.token_mint_blocked_until is not None
+    assert mixin.token_mint_backoff.until is not None
 
-    mixin.token_mint_blocked_until = datetime.now(timezone.utc) - timedelta(seconds=1)
+    mixin.token_mint_backoff.until = datetime.now(timezone.utc) - timedelta(seconds=1)
     mixin._kraken_token_request = AsyncMock(
         return_value={"token": "recovered", "refreshToken": "r", "exp": int(time.time()) + 3600}
     )
@@ -423,8 +423,8 @@ def test_elapsed_backoff_reopens_the_mint():
 
     assert result is True
     assert mixin.access_token == "recovered"
-    assert mixin.token_mint_blocked_until is None
-    assert mixin.token_mint_block_count == 0
+    assert mixin.token_mint_backoff.until is None
+    assert mixin.token_mint_backoff.count == 0
     assert mixin.oauth_failed is False
 
 
@@ -437,7 +437,7 @@ def test_genuine_auth_failure_still_latches_oauth_failed():
 
     assert result is False
     assert mixin.oauth_failed is True
-    assert mixin.token_mint_blocked_until is None
+    assert mixin.token_mint_backoff.until is None
 
 
 def test_edge_block_with_a_refresh_token_held():
@@ -453,7 +453,7 @@ def test_edge_block_with_a_refresh_token_held():
     assert mixin.oauth_failed is False
     assert mixin.refresh_token == "still-good-refresh", "the refresh token is not what the CDN objected to"
     assert mixin._kraken_token_request.call_count == 1, "must not recurse into the same block"
-    assert mixin.token_mint_blocked_until is not None
+    assert mixin.token_mint_backoff.until is not None
     assert mixin._refresh_in_progress is False
 
 
@@ -578,7 +578,7 @@ def test_rate_limited_mint_does_not_latch_oauth_failed():
     assert mixin.oauth_failed is False, "a rate limit must not latch oauth_failed"
     assert mixin.refresh_token == "still-good-refresh"
     assert mixin._kraken_token_request.call_count == 1, "must not retry into the same rate limit"
-    assert mixin.token_mint_blocked_until is not None
+    assert mixin.token_mint_backoff.until is not None
     logged = " ".join(str(c.args[0]) for c in mixin.log.call_args_list)
     assert "Token mint rate limited" in logged, logged
 
@@ -596,7 +596,7 @@ def test_rate_limited_mint_honours_retry_after():
 
     asyncio.run(mixin.check_and_refresh_oauth_token())
 
-    assert mixin.token_mint_blocked_until >= before + timedelta(seconds=1999)
+    assert mixin.token_mint_backoff.until >= before + timedelta(seconds=1999)
 
 
 def test_rate_limited_mint_keeps_a_still_valid_token():

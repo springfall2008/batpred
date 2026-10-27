@@ -18,7 +18,7 @@ import aiohttp
 import asyncio
 import json
 from datetime import datetime, timezone, timedelta
-from utils import is_edge_block_body, is_kraken_rate_limit_error, parse_retry_after, token_mint_backoff_seconds, TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS, TOKEN_MINT_BACKOFF_MAX_SECONDS
+from utils import Backoff, is_edge_block_body, is_kraken_rate_limit_error, parse_retry_after, TOKEN_MINT_BACKOFF_BASE_SECONDS, TOKEN_MINT_BACKOFF_MAX_SECONDS
 
 # Longest token-error summary written to the log, so one odd response cannot flood it
 TOKEN_ERROR_SUMMARY_MAX_CHARS = 300
@@ -104,46 +104,29 @@ class KrakenAuthMixin:
         # HTTP 429), with the Retry-After it carried - see check_and_refresh_oauth_token
         self.token_mint_rate_limited = False
         self.token_mint_retry_after = None
-        self.token_mint_blocked_until = None
-        self.token_mint_block_count = 0
-        self.token_mint_backoff_logged_at = None
-        self.token_mint_block_reason = None
+        self.token_mint_backoff = Backoff(TOKEN_MINT_BACKOFF_BASE_SECONDS, TOKEN_MINT_BACKOFF_MAX_SECONDS)
 
     def start_token_mint_backoff(self, reason="edge/WAF blocked", retry_after=None):
-        """Back off from the token mint after a CDN/WAF block or a rate limit.
-
-        Each consecutive block doubles the wait, capped by token_mint_backoff_seconds(). A
-        Retry-After from the server lengthens the wait, within the same cap.
+        """Back off from the token mint after a CDN/WAF block or a rate limit, and log why.
 
         Args:
-            reason: How the mint was refused, for the log - "edge/WAF blocked" or "rate limited".
+            reason: How the mint was refused - "edge/WAF blocked" or "rate limited".
             retry_after: Seconds the server asked us to wait, or None.
         """
-        self.token_mint_block_count += 1
-        delay = token_mint_backoff_seconds(self.token_mint_block_count)
-        if retry_after:
-            delay = min(max(delay, retry_after), TOKEN_MINT_BACKOFF_MAX_SECONDS)
-        now = datetime.now(timezone.utc)
-        self.token_mint_blocked_until = now + timedelta(seconds=delay)
-        self.token_mint_backoff_logged_at = now
-        self.token_mint_block_reason = reason
-        self.log(f"Warn: Kraken: Token mint {reason} (block {self.token_mint_block_count}) - this is rate limiting, not a bad credential. Backing off for {delay}s")
+        delay = self.token_mint_backoff.start(reason, retry_after)
+        self.log(f"Warn: Kraken: Token mint {reason} (block {self.token_mint_backoff.count}) - this is rate limiting, not a bad credential. Backing off for {delay}s")
 
-    def log_token_mint_backoff(self, now):
+    def log_token_mint_backoff(self):
         """Repeat the backoff reason occasionally so it stays visible in a short log window"""
-        if self.token_mint_backoff_logged_at and (now - self.token_mint_backoff_logged_at).total_seconds() < TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS:
-            return
-        self.token_mint_backoff_logged_at = now
-        self.log(f"Warn: Kraken: Token mint still {self.token_mint_block_reason or 'edge/WAF blocked'} (block {self.token_mint_block_count}) - suppressing mints until {self.token_mint_blocked_until}")
+        if self.token_mint_backoff.due_reminder():
+            backoff = self.token_mint_backoff
+            self.log(f"Warn: Kraken: Token mint still {backoff.reason} (block {backoff.count}) - suppressing mints until {backoff.until}")
 
     def clear_token_mint_backoff(self):
         """Clear the mint backoff after a successful token mint"""
-        if self.token_mint_block_count:
-            self.log(f"Kraken: Token mint recovered after {self.token_mint_block_count} refused mint(s)")
-        self.token_mint_block_count = 0
-        self.token_mint_blocked_until = None
-        self.token_mint_backoff_logged_at = None
-        self.token_mint_block_reason = None
+        count = self.token_mint_backoff.clear()
+        if count:
+            self.log(f"Kraken: Token mint recovered after {count} refused mint(s)")
 
     async def check_and_refresh_oauth_token(self):
         """Ensure a valid access token is available, refreshing or re-obtaining as needed.
@@ -163,10 +146,10 @@ class KrakenAuthMixin:
         # Re-minting while the mint is edge blocked would only be refused again. A token inside
         # the five minute proactive refresh window has NOT actually expired, so keep using it
         # rather than manufacturing an outage the block itself would not have caused.
-        if self.token_mint_blocked_until and now < self.token_mint_blocked_until:
+        if self.token_mint_backoff.active():
             if self.access_token and self.token_expires_at and self.token_expires_at > now:
                 return True
-            self.log_token_mint_backoff(now)
+            self.log_token_mint_backoff()
             return False
 
         self._refresh_in_progress = True

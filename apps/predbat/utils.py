@@ -2726,36 +2726,21 @@ HTML_DOCUMENT_PREFIXES = ("<!doctype", "<html")
 # still picked up within the hour.
 TOKEN_MINT_BACKOFF_BASE_SECONDS = 300
 TOKEN_MINT_BACKOFF_MAX_SECONDS = 3600
-# Bound the exponent so a long block cannot grow 2 ** block_count without limit; the delay
-# is capped well before this, so the clamp only stops the arithmetic running away.
-TOKEN_MINT_BACKOFF_MAX_DOUBLINGS = 16
-# While suppressed the mint makes no request and so logs nothing, which leaves a reader of a
-# short log window unable to tell a deliberate cooldown from a bad API key. Repeat the reason
-# at most this often.
-TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS = 600
 # After a rate limit (KT-CT-1199, HTTP 429 or an edge/WAF block) the Kraken-based components pause
 # their GraphQL queries rather than sending the rest of the poll into the same limit. The pause
 # doubles per consecutive rate limit, capped so a limit that lifts is picked up within the half
 # hour. The base matches the two minute dispatch poll, so the first rate limit skips one poll.
 GRAPHQL_RATE_LIMIT_BACKOFF_BASE_SECONDS = 120
 GRAPHQL_RATE_LIMIT_BACKOFF_MAX_SECONDS = 1800
+# Bound the exponent so a long run of refusals cannot grow 2 ** count without limit; the delay
+# is capped well before this, so the clamp only stops the arithmetic running away.
+BACKOFF_MAX_DOUBLINGS = 16
+# While backing off nothing is sent and so nothing is logged, which leaves a reader of a short
+# log window unable to tell a deliberate cooldown from a bad API key. Repeat the reason at most
+# this often.
+BACKOFF_LOG_INTERVAL_SECONDS = 600
 # Kraken's GraphQL error code for "Too many requests"
 KRAKEN_RATE_LIMIT_ERROR_CODE = "KT-CT-1199"
-
-
-def token_mint_backoff_seconds(block_count):
-    """Backoff delay in seconds after this many consecutive CDN blocks on a token mint.
-
-    Doubles per consecutive block from TOKEN_MINT_BACKOFF_BASE_SECONDS, capped at
-    TOKEN_MINT_BACKOFF_MAX_SECONDS so a block that lifts is still picked up within the hour.
-
-    Args:
-        block_count: Number of consecutive blocks so far, 1 for the first.
-
-    Returns:
-        int: Delay in seconds.
-    """
-    return exponential_backoff_seconds(block_count, TOKEN_MINT_BACKOFF_BASE_SECONDS, TOKEN_MINT_BACKOFF_MAX_SECONDS)
 
 
 def exponential_backoff_seconds(count, base_seconds, max_seconds):
@@ -2771,8 +2756,79 @@ def exponential_backoff_seconds(count, base_seconds, max_seconds):
     Returns:
         int: Delay in seconds.
     """
-    exponent = min(max(count - 1, 0), TOKEN_MINT_BACKOFF_MAX_DOUBLINGS)
+    exponent = min(max(count - 1, 0), BACKOFF_MAX_DOUBLINGS)
     return min(base_seconds * (2**exponent), max_seconds)
+
+
+class Backoff:
+    """Exponential backoff after consecutive refusals - a rate limit or a CDN/WAF block.
+
+    Shared by every Kraken-based token mint and GraphQL cooldown so the schedule, the cap and
+    the clock live in one place. Each consecutive refusal doubles the wait from base_seconds,
+    capped at max_seconds; a Retry-After from the server lengthens it within the same cap.
+    Times are aware UTC, so a clock change cannot stretch or shorten a wait. Logging is left to
+    the caller, whose wording and prefix differ: start() returns the delay, due_reminder() says
+    when to repeat the reason, and clear() returns how many refusals it cleared.
+
+    Attributes:
+        count: Consecutive refusals so far, 0 when not backing off.
+        until: Aware UTC time the backoff ends, or None.
+        reason: How the last request was refused, for the log.
+    """
+
+    def __init__(self, base_seconds, max_seconds):
+        """Create an inactive backoff with the given schedule."""
+        self.base_seconds = base_seconds
+        self.max_seconds = max_seconds
+        self.count = 0
+        self.until = None
+        self.logged_at = None
+        self.reason = None
+
+    def start(self, reason, retry_after=None):
+        """Record another refusal and start (or extend) the backoff.
+
+        Args:
+            reason: How the request was refused, e.g. "rate limited" or "edge/WAF blocked".
+            retry_after: Seconds the server asked us to wait, or None.
+
+        Returns:
+            int: The delay in seconds.
+        """
+        self.count += 1
+        delay = exponential_backoff_seconds(self.count, self.base_seconds, self.max_seconds)
+        if retry_after:
+            delay = min(max(delay, retry_after), self.max_seconds)
+        now = datetime.now(timezone.utc)
+        self.until = now + timedelta(seconds=delay)
+        self.logged_at = now
+        self.reason = reason
+        return delay
+
+    def active(self):
+        """Return True while the backoff is running."""
+        return self.until is not None and datetime.now(timezone.utc) < self.until
+
+    def due_reminder(self):
+        """Return True, at most every BACKOFF_LOG_INTERVAL_SECONDS, when the caller should repeat why it is backing off."""
+        now = datetime.now(timezone.utc)
+        if self.logged_at and (now - self.logged_at).total_seconds() < BACKOFF_LOG_INTERVAL_SECONDS:
+            return False
+        self.logged_at = now
+        return True
+
+    def clear(self):
+        """End the backoff after a success.
+
+        Returns:
+            int: How many consecutive refusals were cleared, 0 if it was not backing off.
+        """
+        count = self.count
+        self.count = 0
+        self.until = None
+        self.logged_at = None
+        self.reason = None
+        return count
 
 
 def is_kraken_rate_limit_error(errors):

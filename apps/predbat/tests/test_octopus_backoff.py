@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 from octopus import OctopusAPI, integration_context_header, EDGE_BLOCK_REFRESH_AFTER_SECONDS, GRAPHQL_RATE_LIMIT_BACKOFF_BASE_SECONDS, GRAPHQL_RATE_LIMIT_BACKOFF_MAX_SECONDS
-from utils import parse_retry_after, exponential_backoff_seconds, token_mint_backoff_seconds, TOKEN_MINT_BACKOFF_BASE_SECONDS
+from utils import Backoff, parse_retry_after, exponential_backoff_seconds, TOKEN_MINT_BACKOFF_BASE_SECONDS, TOKEN_MINT_BACKOFF_MAX_SECONDS, BACKOFF_LOG_INTERVAL_SECONDS
 
 RATE_LIMIT_BODY = json.dumps({"errors": [{"message": "Too many requests.", "extensions": {"errorCode": "KT-CT-1199"}}]})
 
@@ -68,7 +68,7 @@ def _make_api(my_predbat, *responses):
 
 def _expire_graphql_backoff(api):
     """Move the GraphQL cooldown into the past, as if it had elapsed."""
-    api.graphql_rate_limited_until = datetime.now() - timedelta(seconds=1)
+    api.graphql_backoff.until = datetime.now(timezone.utc) - timedelta(seconds=1)
 
 
 def test_octopus_backoff_wrapper(my_predbat):
@@ -79,7 +79,7 @@ async def test_octopus_backoff(my_predbat):
     """
     Tests:
     - Test 1: parse_retry_after handles seconds, HTTP dates and junk
-    - Test 2: exponential_backoff_seconds doubles and caps; token_mint_backoff_seconds is unchanged
+    - Test 2: exponential_backoff_seconds doubles and caps; the token mint schedule is unchanged
     - Test 3: A KT-CT-1199 token mint starts the mint backoff and the next mint is suppressed
     - Test 4: A KT-CT-1199 token mint keeps a not-yet-expired token
     - Test 5: An HTTP 429 token mint backs off for at least Retry-After
@@ -93,6 +93,9 @@ async def test_octopus_backoff(my_predbat):
     - Test 13: The fallback never discards the token while the mint is blocked
     - Test 14: A fallback mint refused by rate limiting restores the token
     - Test 15: A failed response is read once, without sleeping
+    - Test 16: Backoff starts, honours and caps Retry-After, reminds at most every interval, and clears
+    - Test 17: Every backoff and the edge block run are timed in UTC, so a clock change cannot skew them
+    - Test 18: A TOU lookup that returns nothing (failed or held by the cooldown) is retried, not cached for the day
     """
     print("**** Running Octopus rate limit backoff tests ****")
     failed = False
@@ -120,16 +123,16 @@ async def test_octopus_backoff(my_predbat):
     check([exponential_backoff_seconds(n, 120, 1800) for n in range(1, 7)] == [120, 240, 480, 960, 1800, 1800], "doubling from 120 capped at 1800")
     check(exponential_backoff_seconds(0, 120, 1800) == 120, "a zero count is the base")
     check(exponential_backoff_seconds(10**6, 120, 1800) == 1800, "a huge count stays capped")
-    check([token_mint_backoff_seconds(n) for n in range(1, 7)] == [300, 600, 1200, 2400, 3600, 3600], "token mint schedule unchanged")
+    check([exponential_backoff_seconds(n, TOKEN_MINT_BACKOFF_BASE_SECONDS, TOKEN_MINT_BACKOFF_MAX_SECONDS) for n in range(1, 7)] == [300, 600, 1200, 2400, 3600, 3600], "token mint schedule unchanged")
 
     # Test 3
     print("\n*** Test 3: KT-CT-1199 on the token mint starts the mint backoff ***")
     api, session = _make_api(my_predbat, _make_response(200, RATE_LIMIT_BODY))
-    before = datetime.now()
+    before = datetime.now(timezone.utc)
     token = await api.async_refresh_token()
     check(token is None, "no token to hand back, got {}".format(token))
-    check(api.token_mint_block_count == 1, "block count should be 1, got {}".format(api.token_mint_block_count))
-    check(api.token_mint_blocked_until is not None and api.token_mint_blocked_until >= before + timedelta(seconds=TOKEN_MINT_BACKOFF_BASE_SECONDS - 1), "mint should be blocked for the base delay, got {}".format(api.token_mint_blocked_until))
+    check(api.token_mint_backoff.count == 1, "block count should be 1, got {}".format(api.token_mint_backoff.count))
+    check(api.token_mint_backoff.until is not None and api.token_mint_backoff.until >= before + timedelta(seconds=TOKEN_MINT_BACKOFF_BASE_SECONDS - 1), "mint should be blocked for the base delay, got {}".format(api.token_mint_backoff.until))
     check(any("Token mint rate limited" in line for line in api.logged), "backoff not logged as a rate limit: {}".format(api.logged))
     await api.async_refresh_token()
     check(session.post.call_count == 1, "the mint was retried inside the backoff ({} POSTs)".format(session.post.call_count))
@@ -137,18 +140,18 @@ async def test_octopus_backoff(my_predbat):
     # Test 4
     print("\n*** Test 4: KT-CT-1199 on the mint keeps a not-yet-expired token ***")
     api, session = _make_api(my_predbat, _make_response(200, RATE_LIMIT_BODY))
-    renewing = _make_jwt(datetime.now() + timedelta(minutes=3))
+    renewing = _make_jwt(datetime.now(timezone.utc) + timedelta(minutes=3))
     api.graphql_token = renewing
     token = await api.async_refresh_token()
     check(token == renewing, "a token three minutes from expiry should be kept, got {}".format(token))
-    check(api.token_mint_blocked_until is not None, "mint backoff should be running")
+    check(api.token_mint_backoff.until is not None, "mint backoff should be running")
 
     # Test 5
     print("\n*** Test 5: HTTP 429 on the mint honours Retry-After ***")
     api, session = _make_api(my_predbat, _make_response(429, "Too Many Requests", headers={"Retry-After": "900"}))
-    before = datetime.now()
+    before = datetime.now(timezone.utc)
     await api.async_refresh_token()
-    check(api.token_mint_blocked_until is not None and api.token_mint_blocked_until >= before + timedelta(seconds=899), "mint should wait out Retry-After, got {}".format(api.token_mint_blocked_until))
+    check(api.token_mint_backoff.until is not None and api.token_mint_backoff.until >= before + timedelta(seconds=899), "mint should wait out Retry-After, got {}".format(api.token_mint_backoff.until))
     check(not any("Unexpected response" in line for line in api.logged), "429 logged as unexpected: {}".format(api.logged))
 
     # Test 6
@@ -156,10 +159,10 @@ async def test_octopus_backoff(my_predbat):
     api, session = _make_api(my_predbat, _make_response(200, RATE_LIMIT_BODY))
     api.graphql_token = "token"
     api.async_refresh_token = AsyncMock(return_value="token")
-    before = datetime.now()
+    before = datetime.now(timezone.utc)
     result = await api.async_graphql_query("query { a }", "first")
     check(result is None, "rate-limited query should return None")
-    check(api.graphql_rate_limited_until is not None and api.graphql_rate_limited_until >= before + timedelta(seconds=GRAPHQL_RATE_LIMIT_BACKOFF_BASE_SECONDS - 1), "cooldown not started, got {}".format(api.graphql_rate_limited_until))
+    check(api.graphql_backoff.until is not None and api.graphql_backoff.until >= before + timedelta(seconds=GRAPHQL_RATE_LIMIT_BACKOFF_BASE_SECONDS - 1), "cooldown not started, got {}".format(api.graphql_backoff.until))
     result = await api.async_graphql_query("query { b }", "second", ignore_errors=True)
     check(result is None, "held query should return None")
     check(session.post.call_count == 1, "the query after a rate limit was still sent ({} POSTs)".format(session.post.call_count))
@@ -178,14 +181,14 @@ async def test_octopus_backoff(my_predbat):
     api.async_refresh_token = AsyncMock(return_value="token")
     await api.async_graphql_query("query { a }", "q")
     _expire_graphql_backoff(api)
-    before = datetime.now()
+    before = datetime.now(timezone.utc)
     await api.async_graphql_query("query { a }", "q")
-    check(api.graphql_rate_limit_count == 2, "count should be 2, got {}".format(api.graphql_rate_limit_count))
-    check(api.graphql_rate_limited_until >= before + timedelta(seconds=2 * GRAPHQL_RATE_LIMIT_BACKOFF_BASE_SECONDS - 1), "second cooldown should double, got {}".format(api.graphql_rate_limited_until))
+    check(api.graphql_backoff.count == 2, "count should be 2, got {}".format(api.graphql_backoff.count))
+    check(api.graphql_backoff.until >= before + timedelta(seconds=2 * GRAPHQL_RATE_LIMIT_BACKOFF_BASE_SECONDS - 1), "second cooldown should double, got {}".format(api.graphql_backoff.until))
     _expire_graphql_backoff(api)
     result = await api.async_graphql_query("query { a }", "q")
     check(result == {"ok": True}, "query after the cooldown should succeed, got {}".format(result))
-    check(api.graphql_rate_limit_count == 0 and api.graphql_rate_limited_until is None, "success should clear the cooldown")
+    check(api.graphql_backoff.count == 0 and api.graphql_backoff.until is None, "success should clear the cooldown")
     check(any("rate limit cleared" in line for line in api.logged), "recovery not logged: {}".format(api.logged))
 
     # Test 9
@@ -193,9 +196,9 @@ async def test_octopus_backoff(my_predbat):
     api, session = _make_api(my_predbat, _make_response(429, "Too Many Requests", headers={"Retry-After": "600"}))
     api.graphql_token = "token"
     api.async_refresh_token = AsyncMock(return_value="token")
-    before = datetime.now()
+    before = datetime.now(timezone.utc)
     await api.async_graphql_query("query { a }", "q")
-    check(api.graphql_rate_limited_until is not None and api.graphql_rate_limited_until >= before + timedelta(seconds=599), "cooldown should honour Retry-After, got {}".format(api.graphql_rate_limited_until))
+    check(api.graphql_backoff.until is not None and api.graphql_backoff.until >= before + timedelta(seconds=599), "cooldown should honour Retry-After, got {}".format(api.graphql_backoff.until))
     check(not any("Unexpected response" in line for line in api.logged), "429 logged as unexpected: {}".format(api.logged))
     check(api.graphql_token == "token", "a 429 must not touch the token")
 
@@ -204,7 +207,7 @@ async def test_octopus_backoff(my_predbat):
     api.graphql_token = "token"
     api.async_refresh_token = AsyncMock(return_value="token")
     await api.async_graphql_query("query { a }", "q")
-    check(api.graphql_rate_limited_until <= datetime.now() + timedelta(seconds=GRAPHQL_RATE_LIMIT_BACKOFF_MAX_SECONDS + 1), "Retry-After should be capped, got {}".format(api.graphql_rate_limited_until))
+    check(api.graphql_backoff.until <= datetime.now(timezone.utc) + timedelta(seconds=GRAPHQL_RATE_LIMIT_BACKOFF_MAX_SECONDS + 1), "Retry-After should be capped, got {}".format(api.graphql_backoff.until))
 
     # Test 10
     print("\n*** Test 10: an edge block starts the cooldown and keeps the token ***")
@@ -212,7 +215,7 @@ async def test_octopus_backoff(my_predbat):
     api.graphql_token = "token"
     api.async_refresh_token = AsyncMock(return_value="token")
     await api.async_graphql_query("query { a }", "q")
-    check(api.graphql_rate_limited_until is not None, "edge block should start the cooldown")
+    check(api.graphql_backoff.until is not None, "edge block should start the cooldown")
     check(api.graphql_token == "token", "edge block discarded the token")
     check(api.edge_block_started_at is not None, "edge block start not recorded")
 
@@ -229,21 +232,21 @@ async def test_octopus_backoff(my_predbat):
     api, session = _make_api(my_predbat, _make_response(403, CLOUDFRONT_403_BODY), _make_response(200, json.dumps({"data": {"ok": True}})))
     api.graphql_token = "old-token"
     api.async_refresh_token = AsyncMock(side_effect=["old-token", "new-token", "new-token"])
-    api.edge_block_started_at = datetime.now() - timedelta(seconds=EDGE_BLOCK_REFRESH_AFTER_SECONDS + 60)
+    api.edge_block_started_at = datetime.now(timezone.utc) - timedelta(seconds=EDGE_BLOCK_REFRESH_AFTER_SECONDS + 60)
     api.consecutive_edge_blocks = 4
     result = await api.async_graphql_query("query { a }", "q")
     # The cached lookup, the forced mint, then the retried query's own lookup
     check(api.async_refresh_token.call_count == 3, "persistent blocks should force a refresh, got {} token calls".format(api.async_refresh_token.call_count))
     check(result == {"ok": True}, "the retry with the fresh token should succeed, got {}".format(result))
-    check(api.edge_block_started_at is None and api.graphql_rate_limited_until is None, "success should clear the edge block state and cooldown")
+    check(api.edge_block_started_at is None and api.graphql_backoff.until is None, "success should clear the edge block state and cooldown")
 
     # Test 13
     print("\n*** Test 13: no discard while the mint is blocked ***")
     api, session = _make_api(my_predbat, _make_response(403, CLOUDFRONT_403_BODY))
     api.graphql_token = "old-token"
     api.async_refresh_token = AsyncMock(return_value="old-token")
-    api.edge_block_started_at = datetime.now() - timedelta(seconds=EDGE_BLOCK_REFRESH_AFTER_SECONDS + 60)
-    api.token_mint_blocked_until = datetime.now() + timedelta(minutes=5)
+    api.edge_block_started_at = datetime.now(timezone.utc) - timedelta(seconds=EDGE_BLOCK_REFRESH_AFTER_SECONDS + 60)
+    api.token_mint_backoff.until = datetime.now(timezone.utc) + timedelta(minutes=5)
     await api.async_graphql_query("query { a }", "q")
     check(api.async_refresh_token.call_count == 1, "token was re-minted while the mint is blocked")
     check(api.graphql_token == "old-token", "token discarded while the mint is blocked")
@@ -252,7 +255,7 @@ async def test_octopus_backoff(my_predbat):
     print("\n*** Test 14: a fallback mint refused by rate limiting restores the token ***")
     api, session = _make_api(my_predbat, _make_response(403, CLOUDFRONT_403_BODY))
     api.graphql_token = "old-token"
-    api.edge_block_started_at = datetime.now() - timedelta(seconds=EDGE_BLOCK_REFRESH_AFTER_SECONDS + 60)
+    api.edge_block_started_at = datetime.now(timezone.utc) - timedelta(seconds=EDGE_BLOCK_REFRESH_AFTER_SECONDS + 60)
     calls = {"n": 0}
 
     async def refresh():
@@ -260,14 +263,14 @@ async def test_octopus_backoff(my_predbat):
         calls["n"] += 1
         if calls["n"] == 1:
             return "old-token"
-        api.token_mint_blocked_until = datetime.now() + timedelta(minutes=5)
+        api.token_mint_backoff.until = datetime.now(timezone.utc) + timedelta(minutes=5)
         return None
 
     api.async_refresh_token = refresh
     await api.async_graphql_query("query { a }", "q")
     check(calls["n"] == 2, "the fallback should have tried a mint")
     check(api.graphql_token == "old-token", "a rate-limited mint left the component with no token, got {}".format(api.graphql_token))
-    check(api.graphql_rate_limited_until is not None, "cooldown should be running after the failed fallback")
+    check(api.graphql_backoff.until is not None, "cooldown should be running after the failed fallback")
 
     # Test 15
     print("\n*** Test 15: a failed response is read once without sleeping ***")
@@ -279,6 +282,49 @@ async def test_octopus_backoff(my_predbat):
     check(sleep.call_count == 0, "a failed read slept {} times".format(sleep.call_count))
     check(sum("Internal Server Error" in line for line in api.logged) == 1, "a failed read should log once, got {}".format(api.logged))
     check(api.failures_total == 1, "failures_total should be 1, got {}".format(api.failures_total))
+
+    # Test 16
+    print("\n*** Test 16: Backoff ***")
+    backoff = Backoff(120, 1800)
+    check(not backoff.active() and backoff.count == 0, "a new backoff is inactive")
+    before = datetime.now(timezone.utc)
+    check(backoff.start("rate limited") == 120 and backoff.count == 1, "first delay is the base")
+    check(backoff.active() and backoff.until >= before + timedelta(seconds=119), "backoff should be running for the base delay")
+    check(backoff.reason == "rate limited", "reason recorded")
+    check(not backoff.due_reminder(), "no reminder straight after starting, which logged already")
+    backoff.logged_at = datetime.now(timezone.utc) - timedelta(seconds=BACKOFF_LOG_INTERVAL_SECONDS + 1)
+    check(backoff.due_reminder() and not backoff.due_reminder(), "one reminder per interval")
+    check(backoff.start("rate limited", retry_after=600) == 600, "Retry-After longer than the schedule wins")
+    check(backoff.start("rate limited", retry_after=86400) == 1800, "Retry-After is capped")
+    # The fourth refusal's own schedule is 960s, which a 5s Retry-After must not cut short
+    check(backoff.start("rate limited", retry_after=5) == 960, "a short Retry-After never shortens the schedule")
+    check(backoff.clear() == 4 and not backoff.active() and backoff.until is None and backoff.count == 0, "clear resets and returns the count")
+    check(backoff.clear() == 0, "clearing an inactive backoff returns 0")
+
+    # Test 17
+    print("\n*** Test 17: backoffs are timed in UTC ***")
+    api, session = _make_api(my_predbat, _make_response(403, CLOUDFRONT_403_BODY))
+    api.graphql_token = "token"
+    api.async_refresh_token = AsyncMock(return_value="token")
+    await api.async_graphql_query("query { a }", "q")
+    api.start_token_mint_backoff("rate limited")
+    for name, value in [("graphql_backoff.until", api.graphql_backoff.until), ("token_mint_backoff.until", api.token_mint_backoff.until), ("edge_block_started_at", api.edge_block_started_at)]:
+        check(value is not None and value.utcoffset() == timedelta(0), "{} should be aware UTC, got {!r}".format(name, value))
+
+    # Test 18
+    print("\n*** Test 18: an empty TOU lookup is retried, not cached for the day ***")
+    api = OctopusAPI(my_predbat, key="test-api-key", account_id="test-account", automatic=False)
+    api.mpan = "1100000000000"
+    api.async_graphql_query = AsyncMock(return_value=None)
+    check(await api.async_get_tou_night_windows() is None, "no data gives no windows")
+    check(api.tou_windows_day is None, "a lookup that returned nothing settled the day")
+    await api.async_get_tou_night_windows()
+    check(api.async_graphql_query.call_count == 2, "the next fetch should retry the lookup, made {} calls".format(api.async_graphql_query.call_count))
+    api.async_graphql_query = AsyncMock(return_value={"account": {"properties": []}})
+    await api.async_get_tou_night_windows()
+    check(api.tou_windows_day is not None, "a lookup that returned data should settle the day")
+    await api.async_get_tou_night_windows()
+    check(api.async_graphql_query.call_count == 1, "a settled day should not query again")
 
     if failed:
         print("**** Octopus rate limit backoff tests FAILED ****")
