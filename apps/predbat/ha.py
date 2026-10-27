@@ -1171,7 +1171,7 @@ class HAInterface(ComponentBase):
                     response = requests.get(url, headers=headers, params=data_in, timeout=TIMEOUT)
                 else:
                     response = requests.get(url, headers=headers, timeout=TIMEOUT)
-            self.last_api_status = getattr(response, "status_code", None)
+            self.last_api_status = response.status_code
             data = response.json()
             self.api_errors = 0
         except requests.exceptions.JSONDecodeError:
