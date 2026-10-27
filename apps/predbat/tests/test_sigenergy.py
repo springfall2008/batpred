@@ -2860,6 +2860,32 @@ def test_sigenergy_fetch_energy_flow_third_party_pv_from_balance(my_predbat):
     return False
 
 
+def test_sigenergy_fetch_energy_flow_load_excludes_ev(my_predbat):
+    """energyFlow's loadPower leaves out the DC EV charger: grid import meets load + evPower.
+
+    Live sample at night with no PV and the battery idle: importing 9.22kW, load 0.42kW, EV 8.8kW.
+    This is why the third-party PV balance has to add evPower back in.
+    """
+    response = {"code": 0, "data": '{"pvPower":0.0,"gridPower":-9.22,"evPower":8.8,"acPower":0.0,"loadPower":0.42,"heatPumpPower":0.0,"batteryPower":0.0,"batterySoc":25.5}'}
+    flow = _fetch_energy_flow_with_totals(None, response)
+    # Predbat convention: grid +export/-import, so import = -gridPower
+    assert abs(-flow["gridPower"] - (flow["loadPower"] + flow["evPower"])) < 0.01, "import = load + EV: {}".format(flow)
+    return False
+
+
+def test_sigenergy_fetch_energy_flow_third_party_pv_with_ev_charging(my_predbat):
+    """Third-party PV still balances while the DC EV charger draws in daylight.
+
+    9.2kW of third-party PV feeding a 7kW EV, 1kW of load and 1.2kW of export: without evPower in the
+    balance PV would read 2.2kW.
+    """
+    response = {"code": 0, "data": '{"pvPower":0.0,"gridPower":1.2,"evPower":7.0,"acPower":0.0,"loadPower":1.0,"heatPumpPower":0.0,"batteryPower":0.0,"batterySoc":80.0}'}
+    flow = _fetch_energy_flow_with_totals(AC_COUPLED_TOTALS, response)
+    assert abs(flow["pvPower"] - 9.2) < 0.01, "PV includes what the EV took, got {}".format(flow["pvPower"])
+    assert flow["evPower"] == 7.0, "evPower passed through"
+    return False
+
+
 def test_sigenergy_fetch_energy_flow_hybrid_pv_not_derived(my_predbat):
     """Without third-party PV the reported pvPower stands - the balance must not inflate a hybrid's PV."""
     failed = False
@@ -5008,6 +5034,8 @@ def run_sigenergy_tests(my_predbat):
         ("fetch_inverter_realtime_live_sample_holds_grid_and_load", test_sigenergy_fetch_inverter_realtime_live_sample_holds_grid_and_load),
         ("fetch_energy_flow_live_sample_balances", test_sigenergy_fetch_energy_flow_live_sample_balances),
         ("fetch_energy_flow_third_party_pv_from_balance", test_sigenergy_fetch_energy_flow_third_party_pv_from_balance),
+        ("fetch_energy_flow_load_excludes_ev", test_sigenergy_fetch_energy_flow_load_excludes_ev),
+        ("fetch_energy_flow_third_party_pv_with_ev_charging", test_sigenergy_fetch_energy_flow_third_party_pv_with_ev_charging),
         ("fetch_energy_flow_hybrid_pv_not_derived", test_sigenergy_fetch_energy_flow_hybrid_pv_not_derived),
         ("hybrid_switch_only_moves_on_ac_coupled_evidence", test_sigenergy_hybrid_switch_only_moves_on_ac_coupled_evidence),
         ("automatic_config_sets_hybrid_off_for_ac_coupled", test_sigenergy_automatic_config_sets_hybrid_off_for_ac_coupled),

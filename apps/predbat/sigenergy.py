@@ -1039,20 +1039,26 @@ class SigenergyAPI(ComponentBase):
         pv_kw = _safe_float(data.get("pvPower", 0))
         grid_kw = _safe_float(data.get("gridPower", 0))
         load_kw = _safe_float(data.get("loadPower", 0))
+        ev_kw = _safe_float(data.get("evPower", 0))
         # energyFlow's pvPower (and acPower) leave out a third-party PV inverter's output, although
         # loadPower and gridPower include it: an AC-coupled site exporting 8.3kW reported pvPower 0,
         # acPower 0, load 0.74kW, battery charging 0.2kW, while MQTT "PV power" read 9.4kW. Recover
         # the missing PV from the energy balance, but only where the system has third-party PV, so
         # a hybrid's PV is never inflated by measurement noise.
+        #
+        # loadPower excludes the DC EV charger, which is its own branch: a site importing 9.22kW at
+        # night with the battery idle reported load 0.42kW and evPower 8.8kW. heatPumpPower is left
+        # out because no live sample has shown whether loadPower covers it, and adding a term
+        # loadPower already holds would over-report PV, where leaving one out can only under-report.
         if self._has_third_party_pv(system_id):
-            pv_kw = max(pv_kw, load_kw - battery_kw + grid_kw)
+            pv_kw = max(pv_kw, load_kw + ev_kw - battery_kw + grid_kw)
         self.energy_flow[system_id] = {
             "batterySoc": soc,
             "batteryPower": battery_kw,
             "pvPower": pv_kw,
             "gridPower": grid_kw,
             "loadPower": load_kw,
-            "evPower": _safe_float(data.get("evPower", 0)),
+            "evPower": ev_kw,
         }
         self.log("SigenergyAPI: System {} — SOC {:.0f}% battery {:.2f}kW pv {:.2f}kW grid {:.2f}kW".format(system_id, soc, battery_kw, pv_kw, grid_kw))
         self._grid_load_unknown_warned.discard(system_id)  # measured again - warn afresh if it is lost later
