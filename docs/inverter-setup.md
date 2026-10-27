@@ -628,7 +628,7 @@ Growatt has two popular series of inverters, SPA and SPH. Copy the template that
 
 ## Hanchu iESS Local BLE
 
-This is an alternative to the cloud-based [Hanchu iESS (Cloud)](#hanchu-iess-cloud) setup below, using the [hanchu-ess-ble](https://github.com/upton68/hanchu-ess-ble) integration instead of the cloud one. It controls the inverter directly over Bluetooth Low Energy — no dependency on the Hanchu cloud, and works even if cloud connectivity is unavailable. If you're already running the cloud integration for Predbat, you can run both side by side (e.g. cloud read-only for monitoring/fallback, BLE live for control) by using a separate Predbat instance with its own `prefix` for each.
+This is an alternative to the cloud-based [Hanchu iESS](#hanchu-iess) setup below, using the [hanchu-ess-ble](https://github.com/upton68/hanchu-ess-ble) integration instead of the cloud one. It controls the inverter directly over Bluetooth Low Energy — no dependency on the Hanchu cloud, and works even if cloud connectivity is unavailable. If you're already running the cloud integration for Predbat, you can run both side by side (e.g. cloud read-only for monitoring/fallback, BLE live for control) by using a separate Predbat instance with its own `prefix` for each.
 
 Control is implemented via Predbat's generic Service API, similarly to the cloud version, but the write mechanism is different: BLE has no single-call equivalent to the cloud's `iotSet`/`device_control` API. Instead, Predbat's four service hooks point at a bridge script that stages the affected charge/discharge time-slot entities directly (via Home Assistant's standard `time.set_value` service) and then calls a dedicated `hanchu_ess_ble.confirm_write` service to flush them to the device in a single BLE connection.
 
@@ -1038,7 +1038,7 @@ Create the following helpers in Home Assistant (Settings → Devices & Services 
 | `input_number.predbat_charge_rate` | Predbat Charge Rate |
 | `input_number.predbat_discharge_rate` | Predbat Discharge Rate |
 
-These are placeholders for Predbat's `charge_rate`/`discharge_rate` — see the note on charge and discharge rates under [Hanchu Cloud Notes](#hanchu-cloud-notes).
+These are placeholders for Predbat's `charge_rate`/`discharge_rate` — see the note on charge and discharge rates under [Hanchu iESS Notes](#hanchu-iess-notes).
 
 ### Hanchu iESS Step 2 — Create the bridge script
 
