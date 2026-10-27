@@ -1368,7 +1368,7 @@ def history_attribute_to_minute_data(now_utc, data, backwards=True):
     return [mdata, max_days]
 
 
-OCTOPUS_LEGACY_API_RE = re.compile(r"^https?://" + re.escape(OCTOPUS_LEGACY_API_HOST) + r"(?=[/?]|$)", re.IGNORECASE)
+OCTOPUS_LEGACY_API_RE = re.compile(r"^https?://" + re.escape(OCTOPUS_LEGACY_API_HOST) + r"(?=[/?#:]|$)", re.IGNORECASE)
 
 
 def migrate_octopus_url(url):

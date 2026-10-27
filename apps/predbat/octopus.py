@@ -3404,16 +3404,21 @@ class Octopus:
         Download octopus rates directly from a URL or return from cache if recent
         Retry 3 times and then throw error
         """
-        migrated_url = migrate_octopus_url(url)
-        if migrated_url != url:
-            self.log("Octopus: URL {} uses the old Octopus API address, using {} instead - please update apps.yaml".format(url, migrated_url))
-            url = migrated_url
+        legacy_url = url
+        url = migrate_octopus_url(url)
+        if url != legacy_url and legacy_url not in self.octopus_url_migrated:
+            self.octopus_url_migrated.add(legacy_url)
+            self.log("Warn: Octopus: URL {} uses the old Octopus API address, using {} instead - please update apps.yaml".format(legacy_url, url))
 
         self.log("Octopus: Download Octopus rates from {}".format(url))
 
         # Pre-warm the entire cache from storage once per process lifetime (shared with free sessions).
         # Done before any in-memory population so the one-shot storage load cannot clobber freshly cached entries.
         self._load_octopus_url_cache_from_storage()
+
+        # Rates cached under the old address before the upgrade stay the fallback for a failed download
+        if url != legacy_url and url not in self.octopus_url_cache and legacy_url in self.octopus_url_cache:
+            self.octopus_url_cache[url] = self.octopus_url_cache.pop(legacy_url)
 
         # Check the cache first
         now = datetime.now()

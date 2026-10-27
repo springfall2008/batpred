@@ -34,6 +34,8 @@ def test_octopus_domain(my_predbat):
         ("https://API.Octopus.Energy/v1/products/", "https://api.oegb-kraken.energy/v1/products/"),
         ("https://api.octopus.energy", "https://api.oegb-kraken.energy"),
         ("https://api.octopus.energy?x=1", "https://api.oegb-kraken.energy?x=1"),
+        ("https://api.octopus.energy:443/v1/products/", "https://api.oegb-kraken.energy:443/v1/products/"),
+        ("https://api.octopus.energy#x", "https://api.oegb-kraken.energy#x"),
         (NEW_AGILE_URL, NEW_AGILE_URL),
         ("https://api.backend.octopus.energy/v1/graphql/", "https://api.backend.octopus.energy/v1/graphql/"),
         ("https://api.octopus.energy.example.com/v1/", "https://api.octopus.energy.example.com/v1/"),
@@ -64,6 +66,7 @@ def test_octopus_domain(my_predbat):
     my_predbat.now_utc = my_predbat.midnight_utc
     my_predbat.minutes_now = 0
     my_predbat.debug_enable = False
+    my_predbat.octopus_url_migrated = set()
     requested = []
     logged = []
 
@@ -88,8 +91,36 @@ def test_octopus_domain(my_predbat):
     if NEW_AGILE_URL not in my_predbat.octopus_url_cache or OLD_AGILE_URL in my_predbat.octopus_url_cache:
         print("  ERROR: the cache should be keyed by the new-domain URL, got keys {}".format(list(my_predbat.octopus_url_cache.keys())))
         failed = True
-    if not any("old Octopus API address" in msg and "apps.yaml" in msg for msg in logged):
-        print("  ERROR: expected a log line asking for apps.yaml to be updated, got {}".format(logged))
+    if not any("Warn:" in msg and "old Octopus API address" in msg and "apps.yaml" in msg for msg in logged):
+        print("  ERROR: expected a warning asking for apps.yaml to be updated, got {}".format(logged))
+        failed = True
+
+    print("Test: the old-address warning is given once per URL, not every cycle")
+    logged.clear()
+    my_predbat.octopus_url_cache = {}
+    with patch.object(my_predbat, "download_octopus_rates_func", side_effect=fake_download), patch.object(my_predbat, "_save_octopus_url_cache_to_storage"), patch.object(my_predbat, "_load_octopus_url_cache_from_storage"):
+        my_predbat.log = lambda msg, *args, **kwargs: logged.append(msg)
+        try:
+            my_predbat.download_octopus_rates(OLD_AGILE_URL)
+        finally:
+            my_predbat.log = original_log
+    if any("old Octopus API address" in msg for msg in logged):
+        print("  ERROR: the warning should not repeat for a URL already warned about, got {}".format(logged))
+        failed = True
+
+    print("Test: rates cached under the old address before the upgrade are still the fallback when the download fails")
+    stale = {0: 7.0, 60: 8.0}
+    my_predbat.octopus_url_cache = {OLD_AGILE_URL: {"stamp": datetime(2024, 6, 11), "midnight_utc": my_predbat.midnight_utc, "data": stale}}
+    with patch.object(my_predbat, "download_octopus_rates_func", return_value={}), patch.object(my_predbat, "_save_octopus_url_cache_to_storage"), patch.object(my_predbat, "_load_octopus_url_cache_from_storage"):
+        try:
+            result = my_predbat.download_octopus_rates(OLD_AGILE_URL)
+        except ValueError:
+            result = "ValueError"
+    if result != stale:
+        print("  ERROR: expected the rates cached under the old address, got {}".format(result))
+        failed = True
+    if OLD_AGILE_URL in my_predbat.octopus_url_cache or NEW_AGILE_URL not in my_predbat.octopus_url_cache:
+        print("  ERROR: the cache entry should have moved to the new address, got keys {}".format(list(my_predbat.octopus_url_cache.keys())))
         failed = True
 
     print("Test: a new-domain URL is fetched as given, with no hint logged")
