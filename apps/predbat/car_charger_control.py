@@ -613,6 +613,10 @@ class CarChargerControl:
             self.charger_control_released = None
         await self.charger_control_apply(now)
 
+    # Exceptions that stop charger_control_each() at once - an account-wide refusal such as a rate limit,
+    # where going on to the next charger would only be refused too and the component must back off
+    charger_control_fatal_errors = ()
+
     async def charger_control_each(self, steps):
         """Await each step in turn - one coroutine factory per charger - so one charger that
         refuses a command does not stop the others being handled. The first failure is raised
@@ -624,6 +628,8 @@ class CarChargerControl:
             except ChargerControlDeferred:
                 # Kept held, and tried again next cycle without being reported
                 continue
+            except self.charger_control_fatal_errors:
+                raise
             except Exception as exc:
                 if failure is None:
                     failure = exc
