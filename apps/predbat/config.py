@@ -42,10 +42,8 @@ CURRENCY_ICONS = {
     "₦": "mdi:currency-ngn",
     "₱": "mdi:currency-php",
     "฿": "mdi:currency-thb",
-    "₫": "mdi:currency-vnd",
     "₸": "mdi:currency-kzt",
     "R$": "mdi:currency-brl",
-    "CHF": "mdi:currency-chf",
 }
 # Only items priced in the minor currency unit have their icons updated, so the few items that
 # borrow the currency icon for a non-currency value (kWh, minutes) are left alone

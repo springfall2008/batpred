@@ -328,7 +328,7 @@ sensors are what the [Compare tab](compare.md) builds its day-by-day history fro
 calibration, the PV chart and the PV accuracy chart compare against their history. Adding a `sensor.*` entity to
 `exclude` and to `include` does not rescue it either - an entry under `include` only overrides the exclusion of its
 whole *domain*, which here is `predbat`, not `sensor`
-- Do not be tempted to use an 'entity_globs' configuration on the include list as this will flip the whole config into allowlist mode and all sensors that are not explicitly listed in the recorder configuration (e.g. inverter data) won't match any include rule, so they’re excluded, along with nearly everything else.
+- Do not be tempted to use a `domain` or an `entity_globs` configuration on the `include` list as this will flip the whole config into allowlist mode and all sensors that are not explicitly listed in the recorder configuration (e.g. inverter data) won't match any include rule, so they’re excluded, along with nearly everything else.
 
 When the serialized attributes payload for a Predbat entity state exceeds 16384 bytes, the recorder will not store any attributes for that state (only the state value itself is stored). States whose serialized attributes payload is below this limit are stored normally.
 You can suppress these warnings by adding the following to your `configuration.yaml` file:

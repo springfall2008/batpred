@@ -98,9 +98,6 @@ pred_bat:
     time_button_press: false
     clock_time_format: "%Y-%m-%d %H:%M:%S"
     write_and_poll_sleep: 2
-    # CRITICAL: without has_time_window: false Predbat falls back to its
-    # default GivEnergy-style behaviour, keeps looking for a charge window it
-    # will never find, and throws a ValueError on every timer tick.
     has_time_window: false
     support_charge_freeze: false
     support_discharge_freeze: false
