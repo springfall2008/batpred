@@ -3,6 +3,7 @@ Tests for Octopus miscellaneous API methods (async_set_intelligent_target_schedu
 """
 
 import asyncio
+import copy
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 from octopus import OctopusAPI
 from datetime import datetime, timedelta
@@ -20,6 +21,7 @@ async def test_octopus_misc(my_predbat):
     failed += await test_octopus_set_intelligent_schedule(my_predbat)
     failed += await test_octopus_join_saving_session(my_predbat)
     failed += await test_octopus_get_saving_sessions(my_predbat)
+    failed += await test_octopus_saving_sessions_partial_errors(my_predbat)
     failed += await test_octopus_fetch_tariffs(my_predbat)
     failed += test_octopus_get_octopus_rates_direct(my_predbat)
     failed += test_octopus_get_intelligent_target_soc(my_predbat)
@@ -662,6 +664,243 @@ async def test_octopus_get_saving_sessions(my_predbat):
     else:
         print("\n**** ✅ Octopus async_get_saving_sessions tests PASSED ****")
         return 0
+
+
+async def test_octopus_saving_sessions_partial_errors(my_predbat):
+    """
+    A partial GraphQL error must not wipe the saving sessions or free electricity events (#5745).
+
+    The queries run with ignore_errors, so an answer carrying errors still hands back its data, with the
+    failed part null. Octopus answered savingSessions with account null and OE-0003 ("Temporary service
+    error") mid-way through a joined Weekend Happy Hour: read as an empty account it said nothing was
+    joined, the free session was dropped while running, and the emptied account was then kept through
+    the 504s that followed, losing the afternoon's session too. A real account with nothing joined comes
+    back as an account with an empty joinedEvents list, never null.
+
+    - account null keeps the last known account, with the events list from the same answer
+    - savingSessions null keeps the last known saving sessions
+    - events null, or joinedEvents null inside an answered account, keeps the last known list
+    - a real account with joinedEvents [] still clears the joined events
+    - the free electricity events are kept when their query fails, whole or in part, and still clear
+      when Octopus answers that there are none
+    - the flexibility API still falls back to the legacy query when it has no saving events
+    """
+    print("\n**** Running Octopus saving sessions partial error tests ****")
+    failed = 0
+
+    happy_hour = {"eventId": 4102, "startAt": "2026-10-25T08:00:00+00:00", "endAt": "2026-10-25T09:00:00+00:00", "rewardGivenInOctoPoints": 0}
+    afternoon = {"eventId": 4103, "startAt": "2026-10-25T13:00:00+00:00", "endAt": "2026-10-25T14:00:00+00:00", "rewardGivenInOctoPoints": 0}
+    cached_account = {"hasJoinedCampaign": True, "joinedEvents": [happy_hour, afternoon]}
+    events = [{"id": 4102, "code": "EVENT_HH_251026_AM", "eventType": "WEEKEND_HAPPY_HOUR"}, {"id": 4103, "code": "EVENT_HH_251026_PM", "eventType": "WEEKEND_HAPPY_HOUR"}]
+    fresh_events = events + [{"id": 4104, "code": "EVENT_HH_011126_AM", "eventType": "WEEKEND_HAPPY_HOUR"}]
+
+    def make_api():
+        """An OctopusAPI with a joined morning and afternoon Happy Hour already cached."""
+        api = OctopusAPI(my_predbat, key="test-api-key", account_id="test-account", automatic=False)
+        api.saving_sessions = {"events": [dict(event) for event in events], "account": {"hasJoinedCampaign": True, "joinedEvents": [dict(happy_hour), dict(afternoon)]}}
+        api.log = MagicMock()
+        return api
+
+    # ------------------------------------------------------------------
+    # account null (OE-0003) keeps the last known account; the events list in the answer is still taken
+    # ------------------------------------------------------------------
+    print("\n*** account null keeps the last known account ***")
+    api = make_api()
+    api.async_graphql_query = AsyncMock(return_value={"savingSessions": {"events": fresh_events, "account": None}})
+    result = await api.async_get_saving_sessions("test-account")
+    if result.get("account") != cached_account:
+        print(f"ERROR: Expected the joined Happy Hours kept through account null, got {result.get('account')}")
+        failed += 1
+    elif result.get("events") != fresh_events:
+        print(f"ERROR: Expected the events list from the same answer, got {result.get('events')}")
+        failed += 1
+    else:
+        print("PASS: account null keeps the joined events, with the fresh events list")
+
+    # The 504s that followed then keep that, not an emptied account
+    api.saving_sessions = result
+    api.async_graphql_query = AsyncMock(return_value=None)
+    result = await api.async_get_saving_sessions("test-account")
+    if result.get("account") != cached_account:
+        print(f"ERROR: Expected the joined events still there after a later failed fetch, got {result.get('account')}")
+        failed += 1
+    else:
+        print("PASS: A failed fetch after account null still has the joined events")
+
+    # ------------------------------------------------------------------
+    # savingSessions null keeps the last known saving sessions
+    # ------------------------------------------------------------------
+    print("\n*** savingSessions null keeps the last known saving sessions ***")
+    api = make_api()
+    expected = copy.deepcopy(api.saving_sessions)
+    api.async_graphql_query = AsyncMock(return_value={"savingSessions": None})
+    result = await api.async_get_saving_sessions("test-account")
+    if result != expected:
+        print(f"ERROR: Expected the last known saving sessions through savingSessions null, got {result}")
+        failed += 1
+    else:
+        print("PASS: savingSessions null keeps the last known saving sessions")
+
+    # ------------------------------------------------------------------
+    # events null, or joinedEvents null inside an answered account, keep the last known list: joined sessions
+    # are found by walking the events list, so either one read as [] drops them as account null did, and
+    # left as None the session data loops over it and raises
+    # ------------------------------------------------------------------
+    print("\n*** events or joinedEvents null keep the last known list ***")
+    api = make_api()
+    api.async_graphql_query = AsyncMock(return_value={"savingSessions": {"events": None, "account": {"hasJoinedCampaign": True, "joinedEvents": [happy_hour]}}})
+    result = await api.async_get_saving_sessions("test-account")
+    if result.get("events") != events or result.get("account") != {"hasJoinedCampaign": True, "joinedEvents": [happy_hour]}:
+        print(f"ERROR: Expected the last known events with the answered account, got {result}")
+        failed += 1
+    else:
+        print("PASS: events null keeps the last known events, with the answered account")
+
+    api = make_api()
+    api.async_graphql_query = AsyncMock(return_value={"savingSessions": {"events": fresh_events, "account": {"hasJoinedCampaign": True, "joinedEvents": None}}})
+    result = await api.async_get_saving_sessions("test-account")
+    if result.get("events") != fresh_events or result.get("account") != cached_account:
+        print(f"ERROR: Expected the last known joined events with the fresh events list, got {result}")
+        failed += 1
+    else:
+        print("PASS: joinedEvents null keeps the last known joined events, with the fresh events list")
+
+    # With nothing known both come back empty, and the session data reads them without raising
+    api = make_api()
+    api.saving_sessions = {}
+    api.async_graphql_query = AsyncMock(return_value={"savingSessions": {"events": None, "account": {"hasJoinedCampaign": True, "joinedEvents": None}}})
+    result = await api.async_get_saving_sessions("test-account")
+    api.saving_sessions = result
+    try:
+        api.get_saving_session_data()
+    except TypeError as error:
+        print(f"ERROR: Session data raised on null events with nothing known: {error}")
+        failed += 1
+    else:
+        if result.get("events") != [] or result.get("account", {}).get("joinedEvents") != []:
+            print(f"ERROR: Expected empty events and joined events with nothing known, got {result}")
+            failed += 1
+        else:
+            print("PASS: Null events and joined events with nothing known read as empty, without raising")
+
+    # ------------------------------------------------------------------
+    # A real account with nothing joined still clears the joined events
+    # ------------------------------------------------------------------
+    print("\n*** A real account with no joined events clears them ***")
+    api = make_api()
+    api.async_graphql_query = AsyncMock(return_value={"savingSessions": {"events": events, "account": {"hasJoinedCampaign": True, "joinedEvents": []}}})
+    result = await api.async_get_saving_sessions("test-account")
+    if result.get("account") != {"hasJoinedCampaign": True, "joinedEvents": []}:
+        print(f"ERROR: Expected an answered empty joinedEvents to clear the joined events, got {result.get('account')}")
+        failed += 1
+    else:
+        print("PASS: An answered empty joinedEvents still clears the joined events")
+
+    # ------------------------------------------------------------------
+    # Free electricity events, from the flexibility API
+    # ------------------------------------------------------------------
+    cached_free = [{"code": "FREE-1", "startAt": "2026-10-25T12:00:00+00:00", "endAt": "2026-10-25T13:00:00+00:00"}]
+    saving_answer = {"customerFlexibilityCampaignEvents": {"edges": [{"node": {"code": "SAVE-1", "startAt": "2026-10-26T17:00:00+00:00", "endAt": "2026-10-26T18:00:00+00:00"}}]}}
+
+    async def free_events_after(free_answer):
+        """The free electricity events after a flexibility poll whose free electricity query answered free_answer."""
+        api = make_api()
+        api.mpan = "2200017612712"
+        api.free_electricity_events = [dict(event) for event in cached_free]
+
+        async def query(query, context, **kwargs):
+            if context == "get-flexibility-saving-sessions":
+                return saving_answer
+            if context == "get-flexibility-free-electricity":
+                return free_answer
+            return None
+
+        api.async_graphql_query = AsyncMock(side_effect=query)
+        await api.async_get_flexibility_events("test-account")
+        return api.free_electricity_events
+
+    print("\n*** Free electricity events are kept when their query fails ***")
+    kept = await free_events_after(None)
+    if kept != cached_free:
+        print(f"ERROR: Expected the free electricity events kept through a failed query, got {kept}")
+        failed += 1
+    else:
+        print("PASS: A failed free electricity query keeps the last known events")
+
+    kept = await free_events_after({"customerFlexibilityCampaignEvents": None})
+    if kept != cached_free:
+        print(f"ERROR: Expected the free electricity events kept through a partial error, got {kept}")
+        failed += 1
+    else:
+        print("PASS: A free electricity answer with the events null keeps the last known events")
+
+    print("\n*** Free electricity events follow a real answer ***")
+    cleared = await free_events_after({"customerFlexibilityCampaignEvents": {"edges": []}})
+    if cleared != []:
+        print(f"ERROR: Expected an answered empty list to clear the free electricity events, got {cleared}")
+        failed += 1
+    else:
+        print("PASS: An answered empty list clears the free electricity events")
+
+    new_free = {"code": "FREE-2", "startAt": "2026-11-01T12:00:00+00:00", "endAt": "2026-11-01T13:00:00+00:00"}
+    replaced = await free_events_after({"customerFlexibilityCampaignEvents": {"edges": [{"node": new_free}]}})
+    if replaced != [new_free]:
+        print(f"ERROR: Expected the answered free electricity events, got {replaced}")
+        failed += 1
+    else:
+        print("PASS: Answered free electricity events replace the last known ones")
+
+    # An empty node is skipped, and an answer with no events object at all is still an answer
+    skipped = await free_events_after({"customerFlexibilityCampaignEvents": {"edges": [{"node": None}, {"node": new_free}]}})
+    emptied = await free_events_after({"customerFlexibilityCampaignEvents": {}})
+    if skipped != [new_free] or emptied != []:
+        print(f"ERROR: Expected an empty node skipped and an empty events object to clear, got {skipped} and {emptied}")
+        failed += 1
+    else:
+        print("PASS: An empty node is skipped, and an empty events object clears the free electricity events")
+
+    # A failed query with nothing known leaves nothing, without warning about keeping it
+    api = make_api()
+    api.mpan = "2200017612712"
+    api.free_electricity_events = []
+    api.async_graphql_query = AsyncMock(side_effect=lambda query, context, **kwargs: saving_answer if context == "get-flexibility-saving-sessions" else None)
+    await api.async_get_flexibility_events("test-account")
+    if api.free_electricity_events != [] or any("keeping" in str(call.args[0]) for call in api.log.call_args_list if call.args):
+        print(f"ERROR: Expected no free electricity events and no keep warning, got {api.free_electricity_events}, logged {api.log.call_args_list}")
+        failed += 1
+    else:
+        print("PASS: A failed free electricity query with nothing known leaves none")
+
+    # ------------------------------------------------------------------
+    # The flexibility API falls back to the legacy query - now cache-keeping - when it has no saving events
+    # ------------------------------------------------------------------
+    print("\n*** The flexibility API falls back to the legacy saving sessions query ***")
+    legacy = {"events": events, "account": {"hasJoinedCampaign": True, "joinedEvents": []}}
+    for label, mpan, saving in (("no MPAN", None, saving_answer), ("a failed saving sessions query", "2200017612712", None), ("the saving events null", "2200017612712", {"customerFlexibilityCampaignEvents": None})):
+        api = make_api()
+        api.mpan = mpan
+        api.async_get_saving_sessions = AsyncMock(return_value=legacy)
+        api.async_graphql_query = AsyncMock(side_effect=lambda query, context, saving=saving, **kwargs: saving if context == "get-flexibility-saving-sessions" else None)
+        result = await api.async_get_flexibility_events("test-account")
+        if result != legacy or api.async_get_saving_sessions.call_count != 1:
+            print(f"ERROR: Expected the legacy saving sessions with {label}, got {result}")
+            failed += 1
+        else:
+            print(f"PASS: The legacy saving sessions are used with {label}")
+
+    # Saving events from the flexibility API are all joined, and an empty node is skipped
+    api = make_api()
+    api.mpan = "2200017612712"
+    saving_with_empty = {"customerFlexibilityCampaignEvents": {"edges": [{"node": None}] + saving_answer["customerFlexibilityCampaignEvents"]["edges"]}}
+    api.async_graphql_query = AsyncMock(side_effect=lambda query, context, **kwargs: saving_with_empty if context == "get-flexibility-saving-sessions" else None)
+    result = await api.async_get_flexibility_events("test-account")
+    if result.get("account", {}).get("joinedEvents") != [{"eventId": "SAVE-1", "startAt": "2026-10-26T17:00:00+00:00", "endAt": "2026-10-26T18:00:00+00:00", "rewardGivenInOctoPoints": None}]:
+        print(f"ERROR: Expected the flexibility saving event as joined, got {result}")
+        failed += 1
+    else:
+        print("PASS: Flexibility API saving events are taken as joined")
+
+    return failed
 
 
 async def test_octopus_fetch_tariffs(my_predbat):

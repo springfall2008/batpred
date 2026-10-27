@@ -268,12 +268,15 @@ def run_optimise_levels_tests(my_predbat):
     # Discharge - create fresh window dictionaries to avoid state contamination
     charge_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 10.0}, {"start": my_predbat.minutes_now + 120, "end": my_predbat.minutes_now + 240, "average": 6}]
     export_window_best = [{"start": my_predbat.minutes_now + 240, "end": my_predbat.minutes_now + 300, "average": 7.5}]
+    # The one-hour export can only move 1kWh, so charge exactly that. Charging to 100% ties in nominal
+    # and pv90, but pv10 charges slower and its export stops at the SoC nominal reached, so the extra
+    # charge is stranded and pv10 exports less (blended -1.425p against -1.5p for charging to 1%)
     this_failed, best_metric, metric_keep, charge_limit_best, export_limit_best = run_optimise_levels(
         "discharge",
         my_predbat,
         charge_window_best=charge_window_best,
         export_window_best=export_window_best,
-        expect_charge_limit=[0, 100],
+        expect_charge_limit=[0, 1.0],
         expect_export_limit=[pack_export_limit(EXPORT_MODE_TARGET, 0)],
         load_amount=0,
         pv_amount=0,

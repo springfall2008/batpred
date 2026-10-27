@@ -172,6 +172,12 @@ class ComponentBase(ABC):
         """
         return self.base.get_arg(arg, default=default, indirect=indirect, combine=combine, attribute=attribute, index=index, domain=domain, can_override=can_override, required_unit=required_unit)
 
+    def car_rate_capped(self, car_n, rate):
+        """
+        Return rate (kW) limited to car car_n's own maximum charge rate (car_charging_max_rate), as Fetch caps it.
+        """
+        return self.base.car_rate_capped(car_n, rate)
+
     def update_success_timestamp(self):
         """Update the last success timestamp to the current time"""
         self.last_success_timestamp = datetime.now(timezone.utc)

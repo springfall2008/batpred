@@ -9,7 +9,8 @@ itself blocked, so the component can never recover without a restart.
 
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
-from octopus import OctopusAPI, integration_context_header, EDGE_BLOCK_REFRESH_AFTER
+from datetime import datetime, timedelta, timezone
+from octopus import OctopusAPI, integration_context_header, EDGE_BLOCK_REFRESH_AFTER_SECONDS
 
 CLOUDFRONT_403_BODY = (
     '<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">\n'
@@ -144,8 +145,13 @@ async def test_octopus_waf_block(my_predbat):
     api4.graphql_token = "token"
     api4.async_refresh_token = AsyncMock(return_value="token")
 
-    queries = EDGE_BLOCK_REFRESH_AFTER + 1
-    for _ in range(queries):
+    queries = 6
+    for index in range(queries):
+        # The rate limit pause would hold the next query; let it elapse as a real poll would
+        api4.graphql_backoff.until = None
+        if index == queries - 1:
+            # The final block lands after the blocks have persisted past the threshold
+            api4.edge_block_started_at = datetime.now(timezone.utc) - timedelta(seconds=EDGE_BLOCK_REFRESH_AFTER_SECONDS + 60)
         await api4.async_graphql_query("query { test }", "test-query")
 
     # Without an escape hatch there is exactly one refresh lookup per query and never more
