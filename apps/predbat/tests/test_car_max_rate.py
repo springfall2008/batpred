@@ -17,8 +17,11 @@ Octopus's charger power raises it.
 """
 
 import copy
+import shutil
+import tempfile
 from datetime import timedelta
 
+from tests.test_infra import run_async, MockStorageComponents, make_test_storage
 from tests.test_multi_car_iog import pin_test_clock, restore_test_clock
 
 CAP_SENSOR = "sensor.car_max_rate_test"
@@ -40,6 +43,7 @@ STATE_FIELDS = (
     "car_charging_max_rate_warned",
     "car_charging_max_rate_bad_warned",
     "car_charging_max_rate_logged",
+    "car_charging_max_rate_saved",
     "car_charging_slots",
     "car_charging_exclusive",
     "car_charging_manual_soc",
@@ -372,6 +376,82 @@ def _run_validation(my_predbat):
     return failed
 
 
+def _restart(my_predbat):
+    """
+    Lose the in-memory cap state, as a restart does, then run the start-up step that comes before the components start.
+    """
+    my_predbat.car_charging_max_rate = []
+    my_predbat.car_charging_max_rate_held = {}
+    my_predbat.car_charging_max_rate_saved = None
+    my_predbat.car_max_rate_startup()
+
+
+def _run_restart(my_predbat):
+    """
+    A held cap is saved to storage when it changes and restored at start-up, and every car's cap is worked
+    out at start-up, before the components (Load ML among them) start.
+    """
+    failed = False
+    tmpdir = tempfile.mkdtemp()
+    try:
+        storage = make_test_storage(my_predbat, tmpdir)
+        saves = []
+        backend_save = storage.backend.save
+
+        async def counting_save(module, filename, data, **kwargs):
+            """Count the writes, then make them."""
+            saves.append(filename)
+            return await backend_save(module, filename, data, **kwargs)
+
+        storage.backend.save = counting_save
+        my_predbat.components = MockStorageComponents(storage)
+
+        print("Test 19: a held cap survives a restart while its sensor is still unavailable")
+        _setup(my_predbat, 2, [CAP_SENSOR, 5.0])
+        my_predbat.ha_interface.dummy_items[CAP_SENSOR] = "3.6"
+        _rates(my_predbat)
+        my_predbat.ha_interface.dummy_items[CAP_SENSOR] = "unavailable"
+        _restart(my_predbat)
+        failed |= _check("t19 caps known at start-up", my_predbat.car_charging_max_rate == [3.6, 5.0], "caps {}".format(my_predbat.car_charging_max_rate))
+        failed |= _check("t19 first cycle capped", _rates(my_predbat) == [3.6, 5.0], "rates {}".format(my_predbat.car_charging_rate))
+
+        print("Test 20: the cap is written once while it is steady, and again when it changes")
+        saves.clear()
+        my_predbat.ha_interface.dummy_items[CAP_SENSOR] = "3.6"
+        for _cycle in range(3):
+            _rates(my_predbat)
+        steady = len(saves)
+        my_predbat.ha_interface.dummy_items[CAP_SENSOR] = "3.3"
+        _rates(my_predbat)
+        _rates(my_predbat)
+        failed |= _check("t20 steady writes nothing", steady == 0, "saves {}".format(steady))
+        failed |= _check("t20 change writes once", len(saves) == 1, "saves {}".format(saves))
+
+        print("Test 21: a cap removed (sensor reads 0) stays removed after a restart")
+        my_predbat.ha_interface.dummy_items[CAP_SENSOR] = "0"
+        _rates(my_predbat)
+        my_predbat.ha_interface.dummy_items[CAP_SENSOR] = "unavailable"
+        _restart(my_predbat)
+        failed |= _check("t21 no cap", _rates(my_predbat) == [7.4, 5.0], "rates {}".format(my_predbat.car_charging_rate))
+
+        print("Test 22: junk in storage is ignored")
+        for junk in (["not", "a", "dict"], {"held": {"x": 3.6, "0": "fast", "1": -1}}):
+            run_async(storage.save("predbat", "car_max_rate", junk, format="json"))
+            _restart(my_predbat)
+            failed |= _check("t22 {} ignored".format(junk), 0 not in my_predbat.car_charging_max_rate_held and _rates(my_predbat) == [7.4, 5.0], "held {} rates {}".format(my_predbat.car_charging_max_rate_held, my_predbat.car_charging_rate))
+
+        print("Test 23: with no storage, start-up still works out the caps")
+        for components in (None, MockStorageComponents(None)):
+            my_predbat.components = components
+            _setup(my_predbat, 1, [3.6])
+            _restart(my_predbat)
+            failed |= _check("t23 cap", my_predbat.car_charging_max_rate == [3.6], "caps {}".format(my_predbat.car_charging_max_rate))
+            _rates(my_predbat)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+    return failed
+
+
 def run_car_max_rate_tests(my_predbat):
     """
     car_charging_max_rate caps each car's charge rate, per car and against Octopus's raise.
@@ -381,6 +461,7 @@ def run_car_max_rate_tests(my_predbat):
     saved_args = {key: copy.deepcopy(my_predbat.args[key]) for key in SAVED_ARGS if key in my_predbat.args}
     saved_rates = {name: my_predbat.config_index[name].get("value") for name in RATE_ITEMS}
     saved_states = my_predbat.ha_interface.dummy_items.copy()
+    saved_components = my_predbat.components
     failed = False
     try:
         failed |= _run_per_car(my_predbat)
@@ -389,7 +470,9 @@ def run_car_max_rate_tests(my_predbat):
         failed |= _run_logging(my_predbat)
         failed |= _run_octopus(my_predbat)
         failed |= _run_validation(my_predbat)
+        failed |= _run_restart(my_predbat)
     finally:
+        my_predbat.components = saved_components
         for field, value in saved_state.items():
             setattr(my_predbat, field, value)
         for key in SAVED_ARGS:

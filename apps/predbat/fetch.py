@@ -3679,6 +3679,7 @@ class Fetch:
             self.car_charging_rate[car_n] = self.car_rate_capped(car_n, self.car_charging_rate[car_n])
             self.car_charging_limit[car_n] = dp3((float(self.get_arg("car_charging_limit", 100.0, index=car_n)) * self.car_charging_battery_size[car_n]) / 100.0)
             self.car_charging_exclusive[car_n] = self.get_arg("car_charging_exclusive", False, index=car_n)
+        self.car_max_rate_save()
 
         if self.num_cars > 0:
             car_charging_limit_percent = [dp1(limit / size * 100) if size else 0 for limit, size in zip(self.car_charging_limit, self.car_charging_battery_size)]
@@ -3778,6 +3779,56 @@ class Fetch:
         if cap > 0 and rate > cap:
             return cap
         return rate
+
+    def car_max_rate_save(self):
+        """
+        Save the held caps (car_charging_max_rate_held) to storage when they have changed since the last save,
+        so a car whose cap sensor is not reporting yet after a restart keeps its last cap. Called every cycle,
+        so it costs nothing when nothing has changed.
+        """
+        held = {str(car_n): cap for car_n, cap in self.car_charging_max_rate_held.items()}
+        if held == self.car_charging_max_rate_saved:
+            return
+        storage = self.components.get_component("storage") if self.components else None
+        if not storage:
+            return
+        from ha import run_async
+
+        # Recorded whether or not the write works: a store that is failing is not retried every cycle
+        self.car_charging_max_rate_saved = held
+        try:
+            if not run_async(storage.save("predbat", "car_max_rate", {"held": held}, format="json")):
+                self.log("Warn: car_charging_max_rate: failed to save the held caps")
+        except Exception as e:
+            self.log("Warn: car_charging_max_rate: failed to save the held caps: {}".format(e))
+
+    def car_max_rate_startup(self):
+        """
+        At start up, before the components start: restore the held caps saved by car_max_rate_save(), then
+        work out each car's cap, so the first plan and Load ML's first fetch (a phase 2 component) both see them.
+        """
+        storage = self.components.get_component("storage") if self.components else None
+        if storage:
+            from ha import run_async
+
+            try:
+                data = run_async(storage.load("predbat", "car_max_rate"))
+            except Exception as e:
+                self.log("Warn: car_charging_max_rate: failed to load the held caps: {}".format(e))
+                data = None
+            held = data.get("held") if isinstance(data, dict) else None
+            if not isinstance(held, dict):
+                held = {}
+            for key, cap in held.items():
+                try:
+                    car_n, cap = int(key), float(cap)
+                except (ValueError, TypeError):
+                    continue
+                if cap > 0:
+                    self.car_charging_max_rate_held[car_n] = cap
+            self.car_charging_max_rate_saved = {str(car_n): cap for car_n, cap in self.car_charging_max_rate_held.items()}
+        num_cars = min(self.get_arg("num_cars", 1), PREDBAT_MAX_CARS)
+        self.car_charging_max_rate = [self.car_max_rate_cap(car_n) for car_n in range(max(num_cars, 1))]
 
     def fetch_ml_load_forecast(self, now_utc, save=True):
         """

@@ -545,6 +545,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.car_charging_max_rate_warned = set()  # missing entities already warned about, so each is logged once
         self.car_charging_max_rate_bad_warned = set()  # car indexes whose cap sensor read as non-numeric text, warned once
         self.car_charging_max_rate_logged = {}  # car index -> the cap last logged, so a change is logged once
+        self.car_charging_max_rate_saved = None  # the held caps last written to storage, so a write only happens on a change
         self.car_charging_loss = 1.0
         self.export_window = []
         self.export_limits = []
@@ -2236,6 +2237,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             if not self.components.start(phase=1):
                 self.log("Error: Some components failed to start (phase 1)")
                 self.record_status("Error: Some components failed to start (phase 1)", had_errors=True)
+
+            # Each car's own maximum charge rate, before Load ML (phase 2) first reads it
+            self.car_max_rate_startup()
 
             self.components.initialize(phase=2)
             if not self.components.start(phase=2):
