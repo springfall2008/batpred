@@ -159,7 +159,9 @@ pred_bat:
   # minimum 0, maximum 10000, step 100 and unit W (raise the maximum if your battery_rate_max is higher):
   #   input_number.predbat_powerwall_charge_rate
   #   input_number.predbat_powerwall_discharge_rate
-  # Predbat writes the rate it chose into these and sends that rate in the dispatch below.
+  # Predbat writes the rate it chose into these and sends the current value in the dispatch below. The rate
+  # is written after the dispatch is sent, so the first dispatch of a charge or export window can run at the
+  # previous rate (after idle, the maximum) for one cycle until the next dispatch replaces it.
   charge_rate:
     - input_number.predbat_powerwall_charge_rate
   discharge_rate:
