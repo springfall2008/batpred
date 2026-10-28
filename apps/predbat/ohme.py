@@ -75,6 +75,10 @@ SLOT_MODE_CHARGER = "charger_schedule"
 # finer cadence buys nothing, and this matches the gateway EV charger control loop
 CONTROL_INTERVAL_SECONDS = 60
 
+# Where the held charger and its saved target are kept across a restart
+OHME_STORAGE_MODULE = "ohme"
+OHME_CONTROL_STATE = "control_state"
+
 # The charger-facing entities for the discovery catalogue's chargers record - see
 # OhmeAPI.build_discovery(). Predbat standard name -> entity descriptor, filtered down to what
 # Home Assistant has actually seen by ComponentBase.discovery_entities(). All of them are published
@@ -237,8 +241,10 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         # Tri-state: True/False force the Intelligent wiring on or off, None auto-detects it
         self.ohme_automatic_octopus_intelligent = ohme_automatic_octopus_intelligent
         self.ohme_control = parse_control_setting(ohme_control)
-        # No control switch: read only mode is what releases an Ohme charger
-        self.charger_control_setup("Ohme API", "charger", control=self.ohme_control, switch_prefix="ohme", control_setting="ohme_control")
+        # No control switch: read only mode is what releases an Ohme charger. The storage keeps the held
+        # charger and its saved target across a restart, so one an earlier session held is still released
+        # once control is off (#5788)
+        self.charger_control_setup("Ohme API", "charger", OHME_STORAGE_MODULE, OHME_CONTROL_STATE, "control_enabled", control=self.ohme_control, switch_prefix="ohme", control_setting="ohme_control")
         # Whether the car is on Octopus Intelligent as last decided, None until the first decision
         self.octopus_intelligent = None
         # Octopus Intelligent is driving a live device and wires the car slots to it itself - the car, another
@@ -284,6 +290,15 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         """
         if first:
             self.log("Ohme API: Started")
+        # Every cycle until it succeeds, before anything decides control: a read that failed at start-up
+        # must not lose a charger an earlier session held. Here as well as in the shared tick, as Ohme's own
+        # stand-down hand-back runs outside it
+        if not self.charger_control_loaded:
+            await self.charger_control_load_enabled()
+        elif self.charger_control_save_pending and not self.charger_control_active:
+            # The shared tick retries a failed save, but only runs while control is on - this covers a
+            # stand-down hand-back whose save failed
+            await self.charger_control_save()
 
         # Process queued events
         refresh = False
@@ -408,6 +423,17 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         if charge:
             return mode is not ChargerMode.MAX_CHARGE
         return mode is not ChargerMode.PAUSED
+
+    def charger_control_extra_state(self):
+        """Save the charger's own target and whether Predbat started max charge, which a release needs."""
+        return {"saved_target": self.control_saved_target, "max_charge_started": self.control_max_charge_started}
+
+    def charger_control_restore_extra(self, saved):
+        """Restore what charger_control_extra_state() saved, keeping anything this session already knows."""
+        if self.control_saved_target is None and isinstance(saved.get("saved_target"), (int, float)):
+            self.control_saved_target = saved["saved_target"]
+        if saved.get("max_charge_started"):
+            self.control_max_charge_started = True
 
     async def charger_control_send(self, client, charge, car_n):
         """Max charge inside a planned window, paused outside one."""

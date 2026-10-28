@@ -8,12 +8,22 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
-"""Tests for the Predheat scheduler and its predheat_enable gate (#4670)."""
+"""Tests for the Predheat scheduler, its predheat_enable gate (#4670) and the smart thermostat pre-heat model."""
 
 import asyncio
 from datetime import datetime, timedelta
 
+import pytz
+
+from const import TIME_FORMAT
 from predheat import PredHeat
+
+# Smart thermostat simulation fixture: two forecast days from midnight, 16 °C outside the heating periods
+SIM_DAYS = 2
+SIM_MINUTES = SIM_DAYS * 24 * 60
+BASE_TEMP = 16.0
+# 06:00-09:00 at 20 °C and 17:00-22:00 at 21 °C on both days
+DAILY_PERIODS = [(360, 540, 20.0), (1020, 1320, 21.0), (1800, 1980, 20.0), (2460, 2760, 21.0)]
 
 
 class FakeComponents:
@@ -143,6 +153,182 @@ def test_predheat(my_predbat):
         my_predbat.components = original_components
         my_predbat.run_list = original_run_list
         my_predbat.config_index["predheat_enable"]["value"] = original_enable
+        if original_predheat_args is None:
+            my_predbat.args.pop("predheat", None)
+        else:
+            my_predbat.args["predheat"] = original_predheat_args
+
+    return failed
+
+
+def _setpoint(periods, minute):
+    """Scheduled setpoint at a forecast minute: the period's setpoint inside a heating period, otherwise BASE_TEMP."""
+    for start, end, setpoint in periods:
+        if start <= minute < end:
+            return setpoint
+    return BASE_TEMP
+
+
+def _make_simulation(my_predbat, periods, smart_thermostat=True, max_minutes=None):
+    """Build a PredHeat with a fixed thermal model and a two day setpoint schedule, ready for run_simulation().
+
+    With days_previous [2] get_historical() reads forecast minute m from history index 2880 - m, so the
+    target history is laid out back to front to replay the schedule. Published sensors are captured in
+    predheat.published instead of being written to HA.
+    """
+    predheat = PredHeat(my_predbat)
+    predheat.prefix = "predheat"
+    predheat.published = {}
+    predheat.set_state = lambda entity_id, state=None, attributes=None: predheat.published.__setitem__(entity_id, attributes or {})
+
+    predheat.forecast_days = SIM_DAYS
+    predheat.minutes_now = 0
+    predheat.midnight_utc = datetime(2026, 1, 5, tzinfo=pytz.utc)
+    predheat.days_previous = [2]
+    predheat.days_previous_weight = [1]
+    predheat.minute_data_age = 2
+    predheat.target_temperature = {index: _setpoint(periods, SIM_MINUTES - index) for index in range(0, SIM_MINUTES + 1)}
+    predheat.internal_temperature = {0: BASE_TEMP}
+    predheat.external_temperature = {0: 5.0}
+    predheat.temperatures = {}
+    predheat.heat_energy_today = 0
+    predheat.import_today_cost = 0
+    predheat.rate_import = {}
+
+    predheat.mode = "pump"
+    predheat.flow_temp = 40.0
+    predheat.flow_difference_target = 5
+    predheat.heat_loss_watts = 120
+    predheat.heat_loss_degrees = 0.03
+    predheat.watt_per_degree = predheat.heat_loss_watts / predheat.heat_loss_degrees
+    predheat.heat_gain_static = 0
+    predheat.heat_output = 7000
+    predheat.heat_volume = 75
+    predheat.heat_max_power = 7000
+    predheat.heat_min_power = 2000
+    predheat.heat_cop = 4.0
+    predheat.smart_thermostat = smart_thermostat
+    predheat.smart_thermostat_max_minutes = max_minutes
+    return predheat
+
+
+def _first_pass_prediction(spans):
+    """A first pass internal temperature forecast at BASE_TEMP, below every raised setpoint, except inside each (start, end, temperature) span."""
+    return {minute: _setpoint(spans, minute) for minute in range(0, SIM_MINUTES, 5)}
+
+
+def _published_targets(predheat, last_predict_minute):
+    """Run the pre-heat simulation pass and return the published target setpoint keyed by forecast minute (10 minute resolution)."""
+    predheat.run_simulation(BASE_TEMP, False, last_predict_minute=last_predict_minute)
+    results = predheat.published[predheat.prefix + ".target_temp"]["results"]
+    return {minute: results[(predheat.midnight_utc + timedelta(minutes=minute)).strftime(TIME_FORMAT)] for minute in range(0, SIM_MINUTES, 10)}
+
+
+def _check_targets(name, periods, windows, targets):
+    """Compare the published target with the schedule raised to each (start, end, setpoint) pre-heat window, return True on failure."""
+    mismatches = []
+    for minute, got in sorted(targets.items()):
+        expected = _setpoint(periods, minute)
+        for start, end, setpoint in windows:
+            if start <= minute < end:
+                expected = max(expected, setpoint)
+        if got != expected:
+            mismatches.append((minute, got, expected))
+    if mismatches:
+        print("  ERROR: {} - published target differs at {} sampled minutes, first (minute, got, expected): {}".format(name, len(mismatches), mismatches[:8]))
+        return True
+    return False
+
+
+def _shift(spans, offset):
+    """Move every (start, end, temperature) span later by offset minutes."""
+    return [(start + offset, end + offset, temperature) for start, end, temperature in spans]
+
+
+def _check_case(my_predbat, name, periods, reached_spans, windows, smart_thermostat=True, max_minutes=None):
+    """Run one pre-heat scenario and check the published target against the expected windows, return True on failure.
+
+    The published target is sampled every 10 minutes, so the scenario is run a second time one 5 minute
+    step later to check every window boundary at the simulation's full resolution.
+    """
+    failed = False
+    for offset in (0, 5):
+        predheat = _make_simulation(my_predbat, _shift(periods, offset), smart_thermostat=smart_thermostat, max_minutes=max_minutes)
+        targets = _published_targets(predheat, _first_pass_prediction(_shift(reached_spans, offset)))
+        failed |= _check_targets("{} (offset {})".format(name, offset), _shift(periods, offset), _shift(windows, offset), targets)
+    return failed
+
+
+def test_predheat_smart_thermostat(my_predbat):
+    """Smart thermostat pre-heat windows modelled by PredHeat.run_simulation() and the smart_thermostat_max_minutes setting."""
+    failed = False
+    print("**** Running Predheat smart thermostat tests ****")
+
+    # The first pass reaches each raised setpoint 60, 90, 40 and 120 minutes after its rise
+    reached_spans = [(420, 540, 20.0), (1110, 1320, 21.0), (1840, 1980, 20.0), (2580, 2760, 21.0)]
+
+    # ------------------------------------------------------------------
+    print("Test: every setpoint rise in the horizon gets its own pre-heat window")
+    failed |= _check_case(my_predbat, "each rise pre-heated", DAILY_PERIODS, reached_spans, [(300, 360, 20.0), (930, 1020, 21.0), (1760, 1800, 20.0), (2340, 2460, 21.0)])
+
+    # ------------------------------------------------------------------
+    print("Test: smart_thermostat_max_minutes caps each lead time")
+    failed |= _check_case(my_predbat, "lead time capped at 60", DAILY_PERIODS, reached_spans, [(300, 360, 20.0), (960, 1020, 21.0), (1760, 1800, 20.0), (2400, 2460, 21.0)], max_minutes=60)
+
+    # ------------------------------------------------------------------
+    print("Test: a rise never reached within its period pre-heats for the whole period length when uncapped")
+    failed |= _check_case(my_predbat, "never reached, uncapped", DAILY_PERIODS, [], [(180, 360, 20.0), (720, 1020, 21.0), (1620, 1800, 20.0), (2160, 2460, 21.0)])
+
+    print("Test: a rise never reached within its period pre-heats for the cap when one is set")
+    failed |= _check_case(my_predbat, "never reached, capped", DAILY_PERIODS, [], [(300, 360, 20.0), (960, 1020, 21.0), (1740, 1800, 20.0), (2400, 2460, 21.0)], max_minutes=60)
+
+    print("Test: a period shorter than the cap and never reached pre-heats for the full cap")
+    failed |= _check_case(my_predbat, "short period never reached, capped", [(360, 390, 20.0)], [], [(300, 360, 20.0)], max_minutes=60)
+
+    print("Test: a heating period ends where the setpoint first drops below the raised value, not where it returns to the earlier setpoint")
+    # 16 °C to 21 °C at 06:00, down to 19 °C at 08:00 and back to 16 °C at 10:00: the 21 °C period is 06:00-08:00
+    failed |= _check_case(my_predbat, "partial drop ends the period", [(360, 480, 21.0), (480, 600, 19.0)], [], [(240, 360, 21.0)])
+
+    # ------------------------------------------------------------------
+    print("Test: a rise only reached in a later heating period is bounded by its own period")
+    # 15:00-17:00 at 21 °C on both days, the first pass only reaching 21 °C at 15:30 on the second day
+    failed |= _check_case(my_predbat, "reached next day", [(900, 1020, 21.0), (2340, 2460, 21.0)], [(2370, 2460, 21.0)], [(780, 900, 21.0), (2310, 2340, 21.0)])
+
+    print("Test: a single rise reached only after its period ends does not raise the target from now")
+    failed |= _check_case(my_predbat, "single rise reached next day", [(900, 1020, 21.0)], [(2370, 2460, 21.0)], [(780, 900, 21.0)])
+
+    # ------------------------------------------------------------------
+    print("Test: a further rise inside a heating period pre-heats from the end of the earlier rise, not before it")
+    # 16 °C to 19 °C at 06:00, then 21 °C at 07:00 until 09:00: the 07:00 window would start at 05:00 but is clamped to 06:00
+    failed |= _check_case(my_predbat, "back to back rises", [(360, 420, 19.0), (420, 540, 21.0)], [], [(180, 360, 19.0), (360, 420, 21.0)])
+
+    # ------------------------------------------------------------------
+    print("Test: a pre-heat window never lowers an earlier, higher setpoint")
+    # 06:00-09:00 at 21 °C, 16 °C until 10:00, then 20 °C until 12:00: the second window reaches back into the first period
+    failed |= _check_case(my_predbat, "window overlapping a higher setpoint", [(360, 540, 21.0), (600, 720, 20.0)], [], [(180, 360, 21.0), (480, 600, 20.0)])
+
+    # ------------------------------------------------------------------
+    print("Test: with smart_thermostat off the target follows the schedule and the pre-heat pass changes nothing")
+    failed |= _check_case(my_predbat, "smart_thermostat off", DAILY_PERIODS, reached_spans, [], smart_thermostat=False, max_minutes=60)
+    predheat = _make_simulation(my_predbat, DAILY_PERIODS, smart_thermostat=False, max_minutes=60)
+    _, plain_predict = predheat.run_simulation(BASE_TEMP, False, save="none")
+    _, second_predict = predheat.run_simulation(BASE_TEMP, False, save="none", last_predict_minute=plain_predict)
+    if second_predict != plain_predict:
+        print("  ERROR: with smart_thermostat off the second simulation pass changed the internal temperature forecast")
+        failed = True
+
+    # ------------------------------------------------------------------
+    print("Test: smart_thermostat_max_minutes is read as whole minutes, and unset or not a number leaves the lead time uncapped")
+    original_predheat_args = my_predbat.args.get("predheat", None)
+    try:
+        predheat = PredHeat(my_predbat)
+        for value, expected in [(None, None), (60, 60), ("45", 45), (45.5, 45), (-10, 0), ("soon", None), (float("inf"), None), ("inf", None), ("nan", None)]:
+            my_predbat.args["predheat"] = {} if value is None else {"smart_thermostat_max_minutes": value}
+            got = predheat.get_smart_thermostat_max_minutes()
+            if got != expected:
+                print("  ERROR: smart_thermostat_max_minutes {} read as {}, expected {}".format(repr(value), repr(got), repr(expected)))
+                failed = True
+    finally:
         if original_predheat_args is None:
             my_predbat.args.pop("predheat", None)
         else:

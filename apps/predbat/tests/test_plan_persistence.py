@@ -54,6 +54,9 @@ def test_plan_persistence(my_predbat):
         # restart too - without it the first recompute back compares a clipped incumbent and falls back
         preclip = ([9.0], charge_windows, export_windows, [pack_export_limit(EXPORT_MODE_TARGET, 0)])
         my_predbat.plan_preclip = preclip
+        # The version that made the plan has to survive a restart, so the first recompute back knows whether
+        # the restored plan came from this code or an older one
+        my_predbat.plan_made_by_version = "v9.9.9 (test build)"
 
         # 1. save_plan() must not raise and must write something loadable
         print("  Test 1: save_plan() round-trip")
@@ -68,6 +71,7 @@ def test_plan_persistence(my_predbat):
         my_predbat.plan_last_updated_minutes = 0
         my_predbat.plan_valid = False
         my_predbat.plan_preclip = None
+        my_predbat.plan_made_by_version = None
 
         my_predbat.load_plan()
 
@@ -95,6 +99,37 @@ def test_plan_persistence(my_predbat):
         elif [list(x) for x in my_predbat.plan_preclip] != [list(x) for x in preclip]:
             print("  FAILED: plan_preclip mismatch: {}".format(my_predbat.plan_preclip))
             failed += 1
+        if my_predbat.plan_made_by_version != "v9.9.9 (test build)":
+            print("  FAILED: plan_made_by_version was not restored: {}".format(my_predbat.plan_made_by_version))
+            failed += 1
+
+        # 1b. A plan saved before the version was recorded is still restored, made by an unknown version
+        print("  Test 1b: load_plan() restores a plan saved without a version")
+        tmpdir1b = tempfile.mkdtemp()
+        try:
+            storage1b = make_test_storage(my_predbat, tmpdir1b)
+            my_predbat.components = MockStorageComponents(storage1b)
+            plan_data = {
+                "charge_window_best": [{"start": 120, "end": 240, "average": 10.0}],
+                "charge_limit_best": [5.0],
+                "export_window_best": [],
+                "export_limits_best": [],
+                "plan_last_updated": my_predbat.now_utc.isoformat(),
+                "plan_last_updated_minutes": 60,
+            }
+            run_async(storage1b.save("predbat", "plan", plan_data, format="json", expiry=datetime.now(timezone.utc) + timedelta(hours=8)))
+            my_predbat.plan_valid = False
+            my_predbat.plan_made_by_version = "stale"
+            my_predbat.load_plan()
+            if not my_predbat.plan_valid or my_predbat.charge_limit_best != [5.0]:
+                print("  FAILED: a plan saved without a version should still be restored")
+                failed += 1
+            if my_predbat.plan_made_by_version is not None:
+                print("  FAILED: plan_made_by_version should be None for a plan saved without a version, got {}".format(my_predbat.plan_made_by_version))
+                failed += 1
+        finally:
+            shutil.rmtree(tmpdir1b, ignore_errors=True)
+            my_predbat.components = MockStorageComponents(storage)
 
         # 2. load_plan() with empty storage leaves plan_valid False
         print("  Test 2: load_plan() with no saved plan")

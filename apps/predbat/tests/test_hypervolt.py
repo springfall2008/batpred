@@ -113,6 +113,17 @@ MOCK_PLUGNCHARGE_GET = {"applied": "boost"}
 MOCK_PLUGNCHARGE_SET = {"mode": "boost", "applied": True}
 MOCK_FIRMWARE = "2483.2"
 
+# Captured from a Home 3 Pro on firmware 4009 (V3 API), 26 Oct 2026 - the stand-ins above are V2-shaped:
+# a V3 session carries no session id, milli_amps, ccy_spent or ct_power
+MOCK_V3_SNAPSHOT = [{"brightness": 0.25}, {"lock_state": "unlocked"}, {"release_state": "default"}, {"max_current": 32000}, {"ct_flags": 0}, {"solar_mode": "boost"}, {"features": ["mms", "home-battery-drain-prevention", "enhanced-energy"]}, {"random_start": False}, {"effect_name": "party_mode"}]
+MOCK_V3_FIRMWARE = "4009"
+MOCK_V3_SESSION_UNPLUGGED = {"carbon_saved_grams": 0, "charging": False, "ct_current": 20600, "energy_flow": [], "ev_power": 0, "generation_power": 5065, "grid_power": -5065, "house_power": 0, "true_milli_amps": 0, "voltage": 0, "watt_hours": 0}
+# The first messages of a charge: current is flowing but ev_power has not caught up
+MOCK_V3_SESSION_STARTING = {"carbon_saved_grams": 2, "charging": True, "ct_current": 32700, "energy_flow": ["grid_to_ev", "grid_to_house"], "ev_power": 3, "generation_power": 0, "grid_power": 7716, "house_power": 7713, "true_milli_amps": 30400, "voltage": 231, "watt_hours": 7}
+MOCK_V3_SESSION_CHARGING = {"carbon_saved_grams": 19, "charging": True, "ct_current": 33000, "energy_flow": ["grid_to_ev", "grid_to_house"], "ev_power": 7087, "generation_power": 0, "grid_power": 7692, "house_power": 605, "true_milli_amps": 30800, "voltage": 231, "watt_hours": 44}
+# The shape of a V3 error reply, as the charger sent it when refusing get.pilot_status
+MOCK_V3_ERROR = {"code": -32601, "data": None, "message": "get.pilot_status not allowed"}
+
 MOCK_CHARGERS = {"chargers": [{"id": V3_ID, "model": "Home 3 Pro", "adopted_at": "2024-01-01T00:00:00.000Z"}]}
 
 
@@ -335,7 +346,8 @@ async def _logged_in(transport, socket, charger_id=V3_ID):
 
 
 def test_sync_login_and_state_requests():
-    """The sync socket logs in with the token, then asks for state; plugncharge only on the V3 API."""
+    """The sync socket logs in with the token, then asks for state; plugncharge only on the V3 API,
+    and get.pilot_status only on the V2 API - a V3 charger refuses it and pushes the status after login."""
     for charger_id, expect_plugncharge in ((V3_ID, True), (V2_ID, False)):
         socket = FakeSocket()
         session, connects = _ws_session([socket])
@@ -355,9 +367,10 @@ def test_sync_login_and_state_requests():
         assert all(message["jsonrpc"] == "2.0" and message["id"] for message in socket.sent)
         assert len({message["id"] for message in socket.sent}) == len(socket.sent)
         methods = socket.methods()
-        for method in ("sync.snapshot", "firmware.version", "get.name", "get.pilot_status"):
+        for method in ("sync.snapshot", "firmware.version", "get.name"):
             assert method in methods, methods
         assert ("plugncharge.get" in methods) == expect_plugncharge, methods
+        assert ("get.pilot_status" in methods) == (not expect_plugncharge), methods
     print("  ✓ Sync socket logs in then asks for state")
 
 
@@ -434,6 +447,30 @@ def test_request_error_reply():
     with patch("aiohttp.ClientSession", return_value=session), patch("hypervolt.record_api_call"):
         run_async(scenario())
     print("  ✓ Error reply raises HypervoltRefusedError")
+
+
+def test_request_error_reply_v3_shape():
+    """A V3 error reply carries its reason in "message", and the raised error keeps it."""
+    socket = FakeSocket()
+    session, _ = _ws_session([socket])
+
+    async def scenario():
+        """Answer a command with a captured V3 error."""
+        transport = _signed_in_transport()
+        await _logged_in(transport, socket)
+        task = asyncio.ensure_future(transport.request(V3_ID, "sync.apply", {"max_current": 16000}))
+        await _settle()
+        socket.queue({"jsonrpc": "2.0", "id": socket.last("sync.apply")["id"], "error": MOCK_V3_ERROR})
+        try:
+            await task
+            raise AssertionError("Expected HypervoltRefusedError")
+        except HypervoltRefusedError as exc:
+            assert "-32601" in str(exc) and "not allowed" in str(exc), str(exc)
+        await transport.close()
+
+    with patch("aiohttp.ClientSession", return_value=session), patch("hypervolt.record_api_call"):
+        run_async(scenario())
+    print("  ✓ V3 error reply keeps its reason")
 
 
 def test_request_timeout():
@@ -596,7 +633,7 @@ def test_apply_snapshot_ignores_bad_items():
 
 
 def test_apply_session_power():
-    """Power is ev_power when sent, else amps times volts, and zero when not charging."""
+    """Power is ev_power when sent (unless it is stale-low against amps times volts), else amps times volts, and zero when not charging."""
     charger = HypervoltCharger(V3_ID)
     apply_session(charger, {"charging": True, "ev_power": 7100, "true_milli_amps": 16000, "voltage": 240})
     assert charger.charging is True and charger.power_w == 7100.0
@@ -621,6 +658,29 @@ def test_session_energy_holds_and_resets():
     apply_session(charger, {"charging": True, "session": 8, "watt_hours": 150})
     assert charger.session_energy_kwh == 0.15 and charger.session_id == 8
     print("  ✓ Session energy holds and resets")
+
+
+def test_session_energy_v3_without_session_id():
+    """V3 sends no session id and watt_hours drops to 0 at a stop, so a lower value starts a new session."""
+    charger = HypervoltCharger(V3_ID, api_version=3)
+    for watt_hours, expected in ((0, 0.0), (3343, 3.343), (0, 0.0), (1000, 1.0), (17836, 17.836), (0, 0.0), (1664, 1.664)):
+        apply_session(charger, {"charging": watt_hours > 0, "watt_hours": watt_hours})
+        assert charger.session_energy_kwh == expected
+    apply_session(charger, {"charging": False, "ct_current": 30100})
+    assert charger.session_energy_kwh == 1.664
+    # A lower reading other than 0 also starts a new session, so a lost 0 at a stop does not freeze the sensor
+    apply_session(charger, {"charging": True, "watt_hours": 500})
+    assert charger.session_energy_kwh == 0.5
+    # With a session id a lower value in the same session is still ignored
+    apply_session(charger, {"charging": True, "session": 9, "watt_hours": 5000})
+    apply_session(charger, {"charging": True, "session": 9, "watt_hours": 0})
+    assert charger.session_energy_kwh == 5.0
+    # A V2 charger keeps its session maximum even for a message without a session id
+    v2 = HypervoltCharger(V2_ID)
+    apply_session(v2, {"charging": True, "session": 9, "watt_hours": 5000})
+    apply_session(v2, {"charging": True, "watt_hours": 4000})
+    assert v2.session_energy_kwh == 5.0
+    print("  ✓ Session energy on V3 without a session id")
 
 
 def test_apply_pilot():
@@ -690,6 +750,32 @@ def test_captured_payloads():
     apply_pilot(charger, MOCK_PILOT_C)
     assert status_text(charger) == "charging" and charger.power_w == 7440.0 and charger.session_energy_kwh == 5.12
     print("  ✓ Stand-in payloads give their states")
+
+
+def test_captured_v3_payloads():
+    """Messages captured from a real V3 charger give the state they were captured in."""
+    charger = HypervoltCharger(V3_ID, api_version=charger_api_version(V3_ID, MOCK_V3_FIRMWARE))
+    apply_snapshot(charger, MOCK_V3_SNAPSHOT)
+    assert charger.release_state == "default" and charger.max_current_a == 32 and charger.charge_mode == "boost"
+    apply_pilot(charger, MOCK_PILOT_A)
+    apply_session(charger, MOCK_V3_SESSION_UNPLUGGED)
+    assert status_text(charger) == "disconnected" and charger.power_w == 0.0 and charger.session_energy_kwh == 0.0
+    apply_pilot(charger, MOCK_PILOT_C)
+    apply_session(charger, MOCK_V3_SESSION_STARTING)
+    # ev_power reads 3 W while 30.4 A flows at 231 V, so the power comes from current x voltage
+    assert status_text(charger) == "charging" and abs(charger.power_w - 30.4 * 231) < 0.5, charger.power_w
+    apply_session(charger, MOCK_V3_SESSION_CHARGING)
+    assert charger.power_w == 7087.0 and charger.session_energy_kwh == 0.044
+    # A message with no power fields keeps the last power rather than reading 0 mid-charge
+    apply_session(charger, {"charging": True, "watt_hours": 45})
+    assert charger.power_w == 7087.0
+    # A noisy trickle of current with ev_power 0 is not invented into power
+    apply_session(charger, dict(MOCK_V3_SESSION_CHARGING, ev_power=0, true_milli_amps=300))
+    assert charger.power_w == 0.0
+    # Stopping (or unplugging) ends the session: watt_hours starts again from 0 with no session id, so the energy resets
+    apply_session(charger, dict(MOCK_V3_SESSION_CHARGING, watt_hours=0))
+    assert charger.session_energy_kwh == 0.0
+    print("  ✓ Captured V3 payloads give their states")
 
 
 def test_on_message_updates_charger():
@@ -1480,10 +1566,10 @@ def _control_component(plans, chargers=None, storage=None, **overrides):
 
 def test_control_needs_automatic():
     """Control stays off, with a warning, unless automatic configuration is on."""
-    assert _control_component({}).control_active is True
+    assert _control_component({}).charger_control_active is True
     without_auto = _control_component({}, automatic=False)
-    assert without_auto.control_active is False and _logged(without_auto, "needs hypervolt_automatic")
-    assert _control_component({}, hypervolt_control=False).control_active is False
+    assert without_auto.charger_control_active is False and _logged(without_auto, "needs hypervolt_automatic")
+    assert _control_component({}, hypervolt_control=False).charger_control_active is False
     print("  ✓ Control needs hypervolt_control and hypervolt_automatic")
 
 
@@ -1582,7 +1668,7 @@ def test_control_releases_on_read_only_and_switch_off():
         if setup == "read_only":
             component.base.args["set_read_only"] = True
         else:
-            component.control_enabled = False
+            component.charger_control_enabled = False
         run_async(component.control_tick(CONTROL_NOW))
         assert _requests(component) == [(V3_ID, "sync.apply", {"release": False})], setup
         assert component.released_by_predbat == set()
@@ -1618,9 +1704,9 @@ def test_control_switch_state_survives_restart():
     storage = _Storage()
     component = _control_component({}, storage=storage)
     run_async(component.switch_event_handler("switch.predbat_hypervolt_control", "turn_off"))
-    assert component.control_enabled is False
+    assert component.charger_control_enabled is False
     again = _control_component({}, storage=storage)
-    assert again.control_enabled is False
+    assert again.charger_control_enabled is False
     print("  ✓ Control switch state survives a restart")
 
 
@@ -1642,9 +1728,9 @@ def test_control_state_load_is_retried():
     component.base.components = _Components(storage)
     component.released_by_predbat.add(V3_ID)
     run_async(component.load_control_state())
-    assert component.control_enabled is True and component.control_state_loaded is False
+    assert component.charger_control_enabled is True and component.control_state_loaded is False
     run_async(component.load_control_state())
-    assert component.control_enabled is False and component.released_by_predbat == {V3_ID, OTHER_ID}
+    assert component.charger_control_enabled is False and component.released_by_predbat == {V3_ID, OTHER_ID}
     print("  ✓ Control state load is retried and merged")
 
 
@@ -1675,6 +1761,155 @@ def test_released_charger_reads_connected_without_pilot():
     run_async(other.run(0, True))
     assert other.base.entities["binary_sensor.predbat_hypervolt_{}_connected".format(V3_ID)]["state"] == "unavailable"
     print("  ✓ A charger Predbat stopped reads connected without a pilot status")
+
+
+DISPATCH = "binary_sensor.octopus_energy_intelligent_dispatching"
+# CONTROL_NOW (23:30 BST) is inside this dispatch
+DISPATCH_NOW = [{"start": "2026-10-05T22:00:00+0000", "end": "2026-10-05T23:00:00+0000", "charge_in_kwh": 7.0}]
+
+
+def _octopus_control_component(is_charger, plans, chargers, dispatches=None, follows_car=False):
+    """A control component whose car 0 is on Octopus Intelligent, with a dispatch sensor saying whether Octopus drives the charger."""
+    component = _control_component(plans, chargers)
+    component.base.args["octopus_intelligent_slot"] = [DISPATCH]
+    component.base.args["octopus_intelligent_charger_follows_car"] = follows_car
+    attributes = {"planned_dispatches": dispatches or []}
+    if is_charger is not None:
+        attributes["is_charger"] = is_charger
+    component.base.set_state_wrapper(DISPATCH, "on" if dispatches else "off", attributes)
+    return component
+
+
+def test_octopus_drives_car_leaves_charger_alone():
+    """Octopus drives the car: by default the charger is left alone outside a window, with one Info line naming the switch."""
+    component = _octopus_control_component(False, {0: PLAN_OUTSIDE}, [_charger(release_state="default", pilot_status="C", charging=True)])
+    run_async(component.control_tick(CONTROL_NOW))
+    run_async(component.control_tick(CONTROL_NOW))
+    assert _requests(component) == []
+    assert len([message for message in component.log_messages if "drives car 0 itself" in message and "charger_follows_car" in message]) == 1, component.log_messages
+    print("  ✓ Octopus drives the car: charger left alone")
+
+
+def test_octopus_drives_car_follows_dispatches():
+    """With octopus_intelligent_charger_follows_car on, the charger is stopped outside a dispatch and let charge inside one."""
+    component = _octopus_control_component(False, {0: []}, [_charger(release_state="default", pilot_status="B")], follows_car=True)
+    run_async(component.control_tick(CONTROL_NOW))
+    assert _requests(component) == [(V3_ID, "sync.apply", {"release": True})]
+    assert component.released_by_predbat == {V3_ID}
+    component.transport.chargers[V3_ID].release_state = "released"
+    component.transport.calls = []
+    component.base.set_state_wrapper(DISPATCH, "on", {"is_charger": False, "planned_dispatches": DISPATCH_NOW})
+    run_async(component.control_tick(CONTROL_NOW))
+    assert _requests(component) == [(V3_ID, "sync.apply", {"release": False})]
+    assert component.released_by_predbat == set()
+    print("  ✓ Octopus drives the car: charger follows the dispatches when asked")
+
+
+def test_octopus_drives_charger_hands_it_back():
+    """Octopus drives the charger: Predbat sends nothing, and a charger it had stopped is let charge and forgotten."""
+    component = _octopus_control_component(True, {0: PLAN_OUTSIDE}, [_charger(release_state="default", pilot_status="C", charging=True)])
+    run_async(component.control_tick(CONTROL_NOW))
+    assert _requests(component) == []
+    component = _octopus_control_component(True, {0: PLAN_OUTSIDE}, [_charger(release_state="released", pilot_status="B")])
+    component.released_by_predbat.add(V3_ID)
+    run_async(component.control_tick(CONTROL_NOW))
+    run_async(component.control_tick(CONTROL_NOW))
+    assert _requests(component) == [(V3_ID, "sync.apply", {"release": False})]
+    assert component.released_by_predbat == set() and V3_ID not in component.charger_control_state
+    print("  ✓ Octopus drives the charger: handed back")
+
+
+def test_octopus_cannot_tell_drives_charger_with_control_true():
+    """A dispatch sensor that does not say which device Octopus drives: hypervolt_control true means the charger is not it."""
+    component = _octopus_control_component(None, {0: PLAN_OUTSIDE}, [_charger(release_state="default", pilot_status="C", charging=True)])
+    run_async(component.control_tick(CONTROL_NOW))
+    assert _requests(component) == [(V3_ID, "sync.apply", {"release": True})]
+    print("  ✓ Cannot tell, with hypervolt_control true: driven")
+
+
+def test_guest_charging_releases_and_publishes():
+    """The guest charging switch is published with control, and turning it on releases a charger Predbat stopped."""
+    component = _control_component({0: PLAN_OUTSIDE}, [_charger(release_state="released", pilot_status="B")])
+    component.released_by_predbat.add(V3_ID)
+    run_async(component.publish_data())
+    assert component.base.entities["switch.predbat_hypervolt_guest_charging"]["state"] == "off"
+    run_async(component.switch_event_handler("switch.predbat_hypervolt_guest_charging", "turn_on"))
+    assert component.charger_control_guest is True
+    run_async(component.control_tick(CONTROL_NOW))
+    assert _requests(component) == [(V3_ID, "sync.apply", {"release": False})]
+    assert component.released_by_predbat == set()
+    print("  ✓ Guest charging releases the charger")
+
+
+def test_drift_is_reapplied():
+    """A charger Predbat stopped that is let charge from the app outside a window is stopped again."""
+    component = _control_component({0: PLAN_OUTSIDE}, [_charger(release_state="default", pilot_status="C", charging=True)])
+    run_async(component.control_tick(CONTROL_NOW))
+    component.transport.chargers[V3_ID].release_state = "released"
+    run_async(component.control_tick(CONTROL_NOW))
+    assert len(_requests(component)) == 1
+    component.transport.chargers[V3_ID].release_state = "default"
+    run_async(component.control_tick(CONTROL_NOW))
+    assert _requests(component) == [(V3_ID, "sync.apply", {"release": True})] * 2
+    print("  ✓ A charger changed from the app outside a window is stopped again")
+
+
+def test_release_retried_after_stale_charger():
+    """A charger that is stale when guest charging releases is not dropped: once it is heard from, it is released."""
+    component = _control_component({0: PLAN_OUTSIDE}, [_charger(release_state="released", pilot_status="B", last_message=time.time() - 600)])
+    component.released_by_predbat.add(V3_ID)
+    run_async(component.switch_event_handler("switch.predbat_hypervolt_guest_charging", "turn_on"))
+    run_async(component.control_tick(CONTROL_NOW))
+    assert _requests(component) == [] and component.released_by_predbat == {V3_ID}
+    component.transport.chargers[V3_ID].last_message = time.time()
+    run_async(component.control_tick(CONTROL_NOW))
+    assert _requests(component) == [(V3_ID, "sync.apply", {"release": False})]
+    assert component.released_by_predbat == set()
+    print("  ✓ A release missed while a charger was stale is retried")
+
+
+def test_release_with_unknown_state_is_sent():
+    """After a restart, a charger owed a release whose state is not reported yet is sent the release, plugged in or not."""
+    for pilot in ("B", "A", None):
+        component = _control_component({0: PLAN_OUTSIDE}, [_charger(release_state=None, pilot_status=pilot)])
+        component.released_by_predbat.add(V3_ID)
+        component.base.args["set_read_only"] = True
+        run_async(component.control_tick(CONTROL_NOW))
+        assert _requests(component) == [(V3_ID, "sync.apply", {"release": False})], pilot
+        assert component.released_by_predbat == set(), pilot
+    print("  ✓ A release is sent when the charger's state is not known yet")
+
+
+def test_stale_release_is_quiet_and_kept_owed():
+    """A charger that stays offline is retried without a line every cycle, and stays owed even if it last read default -
+    a stop whose reply was lost may still have landed."""
+    component = _control_component({0: PLAN_OUTSIDE}, [_charger(release_state="released", pilot_status="B", last_message=time.time() - 600)])
+    component.released_by_predbat.add(V3_ID)
+    component.base.args["set_read_only"] = True
+    for _ in range(3):
+        run_async(component.control_tick(CONTROL_NOW))
+    assert _requests(component) == [] and component.released_by_predbat == {V3_ID}
+    assert len([message for message in component.log_messages if "releasing the Hypervolt because" in message or "control failed" in message]) <= 1, component.log_messages
+    component = _control_component({0: PLAN_OUTSIDE}, [_charger(release_state="default", pilot_status="B", last_message=time.time() - 600)])
+    component.released_by_predbat.add(V3_ID)
+    component.base.args["set_read_only"] = True
+    run_async(component.control_tick(CONTROL_NOW))
+    assert _requests(component) == [] and component.released_by_predbat == {V3_ID}
+    component.transport.chargers[V3_ID].last_message = time.time()
+    component.transport.chargers[V3_ID].release_state = "released"
+    run_async(component.control_tick(CONTROL_NOW))
+    assert _requests(component) == [(V3_ID, "sync.apply", {"release": False})] and component.released_by_predbat == set()
+    print("  ✓ An offline charger is retried quietly")
+
+
+def test_axle_read_only_releases():
+    """Axle's VPP read only, which sets only the base flag, releases the chargers too."""
+    component = _control_component({0: PLAN_OUTSIDE}, [_charger(release_state="released", pilot_status="B")])
+    component.released_by_predbat.add(V3_ID)
+    component.base.set_read_only_axle = True
+    run_async(component.control_tick(CONTROL_NOW))
+    assert _requests(component) == [(V3_ID, "sync.apply", {"release": False})]
+    print("  ✓ Axle read only releases")
 
 
 def test_string_error_reply_fails_caller_and_reader_survives():
@@ -1952,6 +2187,7 @@ def test_hypervolt(my_predbat=None):
     test_login_refused()
     test_request_reply()
     test_request_error_reply()
+    test_request_error_reply_v3_shape()
     test_request_timeout()
     test_late_reply_is_ignored()
     test_reader_skips_bad_json()
@@ -1962,12 +2198,14 @@ def test_hypervolt(my_predbat=None):
     test_apply_snapshot_ignores_bad_items()
     test_apply_session_power()
     test_session_energy_holds_and_resets()
+    test_session_energy_v3_without_session_id()
     test_apply_pilot()
     test_connected_state_unknown_until_pilot()
     test_apply_plugncharge()
     test_status_text()
     test_charge_mode_options()
     test_captured_payloads()
+    test_captured_v3_payloads()
     test_on_message_updates_charger()
     test_backoff_sequence()
     test_reconnects_with_backoff()
@@ -2021,6 +2259,16 @@ def test_hypervolt(my_predbat=None):
     test_control_state_load_is_retried()
     test_control_failure_does_not_fail_run()
     test_released_charger_reads_connected_without_pilot()
+    test_octopus_drives_car_leaves_charger_alone()
+    test_octopus_drives_car_follows_dispatches()
+    test_octopus_drives_charger_hands_it_back()
+    test_octopus_cannot_tell_drives_charger_with_control_true()
+    test_guest_charging_releases_and_publishes()
+    test_drift_is_reapplied()
+    test_release_retried_after_stale_charger()
+    test_release_with_unknown_state_is_sent()
+    test_stale_release_is_quiet_and_kept_owed()
+    test_axle_read_only_releases()
     test_string_error_reply_fails_caller_and_reader_survives()
     test_reader_survives_a_handler_exception()
     test_link_alive_and_dead_link_restarted()

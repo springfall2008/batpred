@@ -1,6 +1,7 @@
 # Custom Dictionary Words
 3hy
 aaaabbbbccccdddd
+ABCDEFGHJKLMNP
 acks
 activepower
 adata
@@ -8,6 +9,7 @@ adbase
 afci
 afewyards
 agentic
+agilepredict
 AIO
 AIO's
 aiofiles
@@ -76,6 +78,7 @@ byok
 cadata
 calcsize
 calib
+callees
 Cantarell
 cbat
 CDLL
@@ -183,6 +186,7 @@ ECONNRESET
 ecosmart
 Eddi
 eddis
+edfenergy
 efgh
 elif
 elinter
@@ -216,6 +220,7 @@ epod
 epvtoday
 errno
 ESSAPI
+etime
 ETIMEDOUT
 eto
 etoday
@@ -239,6 +244,7 @@ figsize
 finaliser
 Fingerbot
 firstparty
+flextras
 fline
 FLOMASTA
 fontsize
@@ -324,6 +330,7 @@ iess
 iflux
 importlimit
 inday
+Indevolt
 indra
 inteless
 INTELLI
@@ -402,6 +409,7 @@ maxrss
 maxsoc
 mbat
 mbuhansen
+mdi
 mdlrc
 measurand
 measurands
@@ -506,6 +514,7 @@ parseable
 pbat
 pbgw
 pcharging
+pcpu
 pcsenmap
 pdata
 pdetails
@@ -586,6 +595,7 @@ remainings
 remotecontrol
 renderable
 replayer
+repr
 resetmidnight
 resultid
 resultmid
@@ -727,8 +737,10 @@ tunables
 twinx
 typecode
 typecodes
+tzdata
 tzfile
 tzpath
+tzset
 unasserted
 uncalibrated
 uncompilable
@@ -757,8 +769,10 @@ untriaged
 urandom
 urlsafe
 uscapacity
+usegmt
 useid
 userinterface
+utcoffset
 Vallery
 varh
 venv
@@ -776,6 +790,7 @@ WEXITSTATUS
 WIFEXITED
 WNOHANG
 workmode
+workstream
 worktree
 writeonly
 wrongsha
