@@ -743,7 +743,7 @@ On Octopus Intelligent (or E.ON/EDF SmartFlex through the Kraken component), wha
 
 Wherever Predbat drives the charger with **switch.predbat_octopus_intelligent_charging** on, it also follows the dispatch times on the car's dispatch sensor, as above. While **octopus_intelligent_smart_control** is `off` it does not follow the planned ones, bump/boost charges included, which Octopus will not carry out.
 
-**switch.predbat_octopus_intelligent_charging** only changes Predbat's own planning. With it off, a charger Octopus drives is still left to Octopus - Octopus goes on switching it either way - and a charger for a car Octopus drives follows Predbat's own plan, whether or not **switch.predbat_octopus_intelligent_charger_follows_car** is on.
+**switch.predbat_octopus_intelligent_charging** only changes Predbat's own planning. With it off, a charger Octopus drives is still left to Octopus - Octopus goes on switching it either way - unless the charger's control setting is `true` and you filter its dispatches through **octopus_intelligent_planned_slot**, which Predbat enforces whichever way this switch is set (with it off, Predbat follows only its own plan windows for that charger). A charger for a car Octopus drives follows Predbat's own plan, whether or not **switch.predbat_octopus_intelligent_charger_follows_car** is on.
 
 ### Restarts and charger control
 
