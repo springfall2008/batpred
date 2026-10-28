@@ -312,6 +312,10 @@ class LoadMLComponent(ComponentBase):
             result[minute] = dp4(total_energy)
         return result
 
+    def iboost_subtract_active(self):
+        """True when iBoost/diverter energy is to be subtracted from load history, re-read so a switch change is picked up without a restart."""
+        return bool(self.get_arg("iboost_energy_subtract", True) and self.get_arg("iboost_energy_today", default=None, indirect=False))
+
     async def _fetch_load_data(self):
         """
         Fetch and process load data from configured sensors.
@@ -344,6 +348,15 @@ class LoadMLComponent(ComponentBase):
                 # ever-growing cumulative series, inflating fill_load_from_power gap-fills.
                 load_power_data, load_minutes_age = self.base.minute_data_load(self.now_utc, "load_power", days_to_fetch, required_unit="W", load_scaling=1.0, interpolate=True, pad=False, clean_increment=False)
                 load_minutes = self.base.fill_load_from_power(load_minutes, load_power_data)
+
+            # Subtract iBoost/diverter energy as the standard load forecast does (get_filtered_load_window),
+            # whether or not Predbat controls the diverter. Done before the car step so the car threshold test
+            # judges diverter-free load, the same order as the standard path.
+            if self.iboost_subtract_active():
+                iboost_energy = self.base.minute_data_import_export(days_to_fetch, self.now_utc, "iboost_energy_today", required_unit="kWh", pad=False)
+                if iboost_energy:
+                    self.log("ML Component: Applying iBoost energy subtraction")
+                    load_minutes = self.iboost_subtraction(load_minutes, iboost_energy, step=PREDICT_STEP)
 
             # Re-read car charging settings dynamically so switch changes are picked up without a restart.
             # Note: car_charging_from_battery does not affect EV subtraction from load history; it only controls
@@ -391,14 +404,6 @@ class LoadMLComponent(ComponentBase):
                     # Store at 5-minute intervals (ML only uses PREDICT_STEP data)
                     load_minutes_new[minute] = dp4(total_load_energy + load_delta)
                     total_load_energy += load_delta
-
-            # Subtract iBoost/diverter energy as the standard load forecast does (get_filtered_load_window),
-            # whether or not Predbat controls the diverter. Re-read so a switch change is picked up without a restart.
-            if self.get_arg("iboost_energy_subtract", True) and self.get_arg("iboost_energy_today", default=None, indirect=False):
-                iboost_energy = self.base.minute_data_import_export(days_to_fetch, self.now_utc, "iboost_energy_today", required_unit="kWh", pad=False)
-                if iboost_energy:
-                    self.log("ML Component: Applying iBoost energy subtraction")
-                    load_minutes_new = self.iboost_subtraction(load_minutes_new, iboost_energy, step=PREDICT_STEP)
 
             # Get current cumulative load value (excludes car and iBoost) before converting to per-step
             load_minutes_now = get_now_from_cumulative(load_minutes_new, self.minutes_now, backwards=True)
@@ -890,6 +895,7 @@ class LoadMLComponent(ComponentBase):
                 "n_steps": total_steps,
                 "age_days": float(self.load_data_age_days),
                 "nan_sentinel": True,
+                "iboost_subtracted": self.iboost_subtract_active(),
             }
         )
 
@@ -931,6 +937,15 @@ class LoadMLComponent(ComponentBase):
                 step_minutes = metadata.get("step_minutes", PREDICT_STEP)
                 if step_minutes != PREDICT_STEP:
                     self.log("Warn: ML Component: Database step size mismatch (saved={}min, current={}min), discarding".format(step_minutes, PREDICT_STEP))
+                    return
+
+                # The saved load channel is already prepped; if it was saved with a different iBoost subtraction
+                # (including any database from before LoadML subtracted iBoost at all) old rows would keep or lose the
+                # diverter's energy unlike every fresh fetch, so discard it rather than train on a mixed series
+                saved_iboost_subtracted = metadata.get("iboost_subtracted", False)
+                iboost_subtracted = self.iboost_subtract_active()
+                if saved_iboost_subtracted != iboost_subtracted:
+                    self.log("Warn: ML Component: Database iBoost subtraction mismatch (saved={}, current={}), discarding".format(saved_iboost_subtracted, iboost_subtracted))
                     return
 
                 saved_utc = datetime.fromisoformat(metadata["saved_utc"])
