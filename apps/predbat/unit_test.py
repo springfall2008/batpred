@@ -117,6 +117,7 @@ from tests.test_saving_session import (
     test_saving_session_zero_octopoints_joined_is_free_slot,
 )
 from tests.test_secrets import run_secrets_tests
+from tests.test_env_config import run_env_config_tests
 from tests.test_ge_cloud import test_ge_cloud
 from tests.test_teslemetry import test_teslemetry
 from tests.test_compare import test_compare
@@ -483,6 +484,7 @@ def main():
     # Format: (name, function, description, slow)
     TEST_REGISTRY = [
         ("secrets", run_secrets_tests, "Secrets loading tests", False),
+        ("env_config", run_env_config_tests, "Per-instance PREDBAT_APPS_FILE / PREDBAT_SECRETS_FILE config tests", False),
         ("export_encoding", run_export_encoding_tests, "Packed export limit encoding accessor tests", False),
         ("export_more_solar_warning", run_export_more_solar_warning_tests, "export_more_solar / set_export_freeze dependency warning tests", False),
         ("perf", run_perf_test, "Performance tests", False),
