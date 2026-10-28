@@ -337,10 +337,10 @@ pred_bat:
   pv_forecast_d4: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_4|d4))
 
   # ClearSky sensors (Required if clipping_clearsky_source is set to ha_solcast_clearsky)
-  #pv_clearsky_today: re:(sensor.(solcast_|)(pv_forecast_|)clearsky_today)
-  #pv_clearsky_tomorrow: re:(sensor.(solcast_|)(pv_forecast_|)clearsky_tomorrow)
-  #pv_clearsky_d3: re:(sensor.(solcast_|)(pv_forecast_|)clearsky_(day_3|d3))
-  #pv_clearsky_d4: re:(sensor.(solcast_|)(pv_forecast_|)clearsky_(day_4|d4))
+  #pv_clearsky_today: re:(sensor.(solcast_|)(pv_forecast_|)clear_?sky_today)
+  #pv_clearsky_tomorrow: re:(sensor.(solcast_|)(pv_forecast_|)clear_?sky_tomorrow)
+  #pv_clearsky_d3: re:(sensor.(solcast_|)(pv_forecast_|)clear_?sky_(day_3|d3))
+  #pv_clearsky_d4: re:(sensor.(solcast_|)(pv_forecast_|)clear_?sky_(day_4|d4))
 
   # Ohme EV charger cloud direct integration
   #ohme_login: !secret ohme_login
