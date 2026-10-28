@@ -630,6 +630,42 @@ def test_planned_slot_sensor_replaces_the_slot_sensor_plan():
     assert component.charger_control_dispatch_active(0, _now()) is True
 
 
+def test_octopus_charger_filtered_through_a_planned_sensor():
+    """Octopus drives the charger, but with control: true and octopus_intelligent_planned_slot set Predbat
+    stops it outside the dispatches the planned sensor keeps."""
+    running = [{"start": "2026-06-01T00:00:00+00:00", "end": "2026-06-01T01:00:00+00:00"}]
+    component = _octopus_component(FakeOctopus(), is_charger=True, control=True)
+    component.sensors[DISPATCH].update({"state": "on", "planned_dispatches": running})
+
+    # No planned sensor: left to Octopus, control: true or not
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [], component.commands
+    assert any("leaving it to Octopus" in line for line in component.logs), component.logs
+
+    # The planned sensor has left the running dispatch out, so Predbat stops the charger
+    component.args["octopus_intelligent_planned_slot"] = PLANNED
+    component.sensors[PLANNED] = {"state": "on", "planned_dispatches": []}
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "off", 0)], component.commands
+    assert any("no longer left to Octopus" in line for line in component.logs), component.logs
+    component.sensors[PLANNED]["planned_dispatches"] = running
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "off", 0), ("a", "on", 0)], component.commands
+
+    # Control back to unset: handed back to Octopus as usual
+    component.charger_control_config = None
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands[-1] == ("a", "release", True) and component.charger_control_state == {}, component.commands
+
+    # Car 0's slots claimed by the Ohme stay the Ohme's
+    component = _octopus_component(control=True)
+    component.base.car_slot_owner = "ohme"
+    component.args["octopus_intelligent_planned_slot"] = PLANNED
+    component.sensors[PLANNED] = {"state": "on", "planned_dispatches": []}
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [], component.commands
+
+
 def test_is_charger_that_has_lost_its_value_is_not_a_no():
     """A dispatch sensor reporting is_charger as unknown or unavailable is cannot tell, not 'not the charger'."""
     for lost in ("unknown", "unavailable", "none", ""):
@@ -1209,6 +1245,7 @@ def run_car_charger_control_tests(my_predbat=None):
     test_octopus_rule_car_integrated_follows_the_dispatch_sensor()
     test_dispatch_times_judged_against_the_clock()
     test_planned_slot_sensor_replaces_the_slot_sensor_plan()
+    test_octopus_charger_filtered_through_a_planned_sensor()
     test_is_charger_that_has_lost_its_value_is_not_a_no()
     test_guest_switch_toggle()
     test_octopus_rule_explicit_true_never_overrides_a_charge_point()
