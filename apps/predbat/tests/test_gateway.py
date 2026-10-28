@@ -4797,6 +4797,25 @@ class TestGatewayUnitControlBinding:
         gw._process_telemetry(self._pv_and_battery_status().SerializeToString())
         assert gw._pv_only_counters == ("FD0000P001",)
 
+    def test_listed_pv_only_inverter_disconnected_reads_no_generation(self):
+        """Listed path: a disconnected PV-only inverter's frozen power is zeroed, while its counter stays in pv_today."""
+        gw = self._listed_gateway(["FD0000P001", "CH0000B002"])
+        live = self._pv_and_battery_status()
+        live.inverters[0].energy.pv_today_wh = 3000
+        gw._process_telemetry(live.SerializeToString())
+        assert gw._states["sensor.predbat_gateway_00p001_pv_power"] == 1200
+        counted = gw._states["sensor.predbat_gateway_00p001_pv_today"]
+
+        frozen = self._pv_and_battery_status()
+        frozen.inverters[0].energy.pv_today_wh = 3000
+        frozen.inverters[0].connected = False  # the hub repeats its last 1200 W
+        gw._process_telemetry(frozen.SerializeToString())
+
+        assert gw._states["sensor.predbat_gateway_00p001_pv_power"] == 0
+        assert gw._states["sensor.predbat_gateway_00p001_pv_today"] == counted
+        assert gw._pv_only_counters == ("FD0000P001",)
+        assert gw._args["pv_today"] == ["sensor.predbat_gateway_00b002_pv_today", "sensor.predbat_gateway_00p001_pv_today"]
+
     def test_pv_only_inverter_that_reports_a_battery_later_gets_a_slot(self):
         """Having a battery is learned when the hub reports it, and re-runs auto-config; it is never unlearned."""
         gw = self._listed_gateway(["FD0000P001", "CH0000B002"])
