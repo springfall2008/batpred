@@ -2250,12 +2250,12 @@ def test_sigenergy_mqtt_listener_loop(my_predbat):
     api = MockSigenergyAPI()
     api.access_token = "tok"
     api.token_expires_at = 9_999_999_999
-    api.systems["XRTKQ1773829273"] = {"systemName": "Test"}
+    api.systems["TESTA1700000000"] = {"systemName": "Test"}
     api.api_stop = False
 
     period_payload = _json.dumps([{
         "deviceType": "system",
-        "systemId": "XRTKQ1773829273",
+        "systemId": "TESTA1700000000",
         "value": {
             "storageSOC%": "55.0",
             "storageChargeDischargePowerW": "1000.0",
@@ -2266,7 +2266,7 @@ def test_sigenergy_mqtt_listener_loop(my_predbat):
 
     change_payload = _json.dumps([{
         "deviceType": "system",
-        "systemId": "XRTKQ1773829273",
+        "systemId": "TESTA1700000000",
         "value": {
             "backupCutOffSOC%": "20.0",
             "chargeCutOffSOC%": "95.0",
@@ -2283,8 +2283,8 @@ def test_sigenergy_mqtt_listener_loop(my_predbat):
             self.retain = False
 
     messages_to_deliver = [
-        FakeMessage("openapi/period/test_app_key/XRTKQ1773829273", period_payload),
-        FakeMessage("openapi/change/test_app_key/XRTKQ1773829273", change_payload),
+        FakeMessage("openapi/period/test_app_key/TESTA1700000000", period_payload),
+        FakeMessage("openapi/change/test_app_key/TESTA1700000000", change_payload),
     ]
 
     publishes = []
@@ -2337,13 +2337,13 @@ def test_sigenergy_mqtt_listener_loop(my_predbat):
                 _base_run_async(api._mqtt_listener_loop())
 
     # Period message: energy_flow updated
-    flow = api.energy_flow.get("XRTKQ1773829273", {})
+    flow = api.energy_flow.get("TESTA1700000000", {})
     assert abs(flow.get("batterySoc", 0) - 55.0) < 0.01, "batterySoc from MQTT period = 55%"
     # storageChargeDischargePowerW +1000W (charging), negated to -1.0 kW (Predbat convention: negative=charging)
     assert abs(flow.get("batteryPower", 0) - (-1.0)) < 0.01, "batteryPower = -1.0 kW (charging)"
 
     # Change message: controls updated
-    ctrl = api.controls.get("XRTKQ1773829273", {})
+    ctrl = api.controls.get("TESTA1700000000", {})
     assert ctrl.get("reserve") == 10, "reserve = 10 (dischargeCutOffSOC%) from MQTT change"
     assert ctrl.get("charge", {}).get("target_soc") == 95, "charge target_soc = 95"
     assert ctrl.get("export", {}).get("target_soc") is None, "export target_soc is Predbat's own, not the device's discharge cut-off"
@@ -2364,12 +2364,12 @@ def test_sigenergy_mqtt_listener_loop(my_predbat):
     assert publishes[cancel_at + 1][1] > 0, "pause must be non-zero, got {}".format(publishes[cancel_at + 1])
 
     # last_mqtt_update was set per system
-    assert api.last_mqtt_update.get("XRTKQ1773829273", 0) > 0, "last_mqtt_update was set for system"
+    assert api.last_mqtt_update.get("TESTA1700000000", 0) > 0, "last_mqtt_update was set for system"
 
     # MQTT topic subscriptions are scoped to the managed system, not a "#" wildcard
     # across every system on the app_key.
     assert len(subscribed_topics) == 3, "one topic per message type for the single managed system, got {}".format(subscribed_topics)
-    assert all("XRTKQ1773829273" in t for t in subscribed_topics), "topics scoped to the managed system_id: {}".format(subscribed_topics)
+    assert all("TESTA1700000000" in t for t in subscribed_topics), "topics scoped to the managed system_id: {}".format(subscribed_topics)
     assert not any("#" in t for t in subscribed_topics), "no wildcard system_id in subscribed topics: {}".format(subscribed_topics)
 
     return failed
@@ -2395,7 +2395,7 @@ def test_sigenergy_mqtt_listener_loop_ignores_other_systems(my_predbat):
 
     period_payload_other_system = _json.dumps([{
         "deviceType": "system",
-        "systemId": "XRTKQ1773829273",  # not in api.systems - must be ignored
+        "systemId": "TESTA1700000000",  # not in api.systems - must be ignored
         "value": {
             "storageSOC%": "80.0",
             "storageChargeDischargePowerW": "1000.0",
@@ -2412,7 +2412,7 @@ def test_sigenergy_mqtt_listener_loop_ignores_other_systems(my_predbat):
             self.retain = False
 
     messages_to_deliver = [
-        FakeMessage("openapi/period/test_app_key/XRTKQ1773829273", period_payload_other_system),
+        FakeMessage("openapi/period/test_app_key/TESTA1700000000", period_payload_other_system),
     ]
 
     class FakeMQTTClient:
@@ -2451,9 +2451,9 @@ def test_sigenergy_mqtt_listener_loop_ignores_other_systems(my_predbat):
         with patch("sigenergy.ssl.create_default_context", return_value=MagicMock()):
             run_async(api._mqtt_listener_loop())
 
-    assert "XRTKQ1773829273" not in api.energy_flow, "energy_flow not populated for out-of-scope system"
-    assert "XRTKQ1773829273" not in api.last_mqtt_update, "last_mqtt_update not set for out-of-scope system"
-    other_slug = api._system_slug("XRTKQ1773829273")
+    assert "TESTA1700000000" not in api.energy_flow, "energy_flow not populated for out-of-scope system"
+    assert "TESTA1700000000" not in api.last_mqtt_update, "last_mqtt_update not set for out-of-scope system"
+    other_slug = api._system_slug("TESTA1700000000")
     assert "sensor.predbat_sigenergy_{}_battery_soc".format(other_slug) not in api.dashboard_items, "no entities published for out-of-scope system"
 
     return failed

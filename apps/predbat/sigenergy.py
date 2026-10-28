@@ -42,7 +42,7 @@ Registered in components.py under key 'sigenergy'.
 
 Example apps.yaml config:
 
-  sigenergy_system_id: 'XRTKQ1773829273'
+  sigenergy_system_id: 'TESTA1700000000'
   sigenergy_app_key: !secret sigenergy_app_key
   sigenergy_app_secret: !secret sigenergy_app_secret
   sigenergy_client_pem: !secret sigenergy_client_pem
