@@ -10,7 +10,7 @@
 # fmt on
 
 from gecloud import GECloudDirect, GECloudData, regname_to_ha
-from gecloud import GE_API_ACCOUNT, GE_API_DEVICES, GE_API_EVC_SEND_COMMAND, GE_API_INVERTER_WRITE_SETTING, GE_API_SITE
+from gecloud import GE_API_ACCOUNT, GE_API_DEVICES, GE_API_EVC_SEND_COMMAND, GE_API_INVERTER_READ_SETTING, GE_API_INVERTER_WRITE_SETTING, GE_API_SITE
 from gecloud import EVCCommandFailed, GECloudTerminalError, SITE_MAX_AGE_MINUTES, parse_site_export_limit
 from gecloud import DEVICE_REFRESH_SECONDS, SETTINGS_SLOW_REFRESH_SECONDS, find_ems_slot_overrides, normalise_register_time
 from utils import dp4
@@ -243,6 +243,7 @@ def test_ge_cloud(my_predbat=None):
         ("publish_status_auth_unavailable", _test_publish_status_auth_failure_marks_time_unavailable, "Auth failure marks time sensor unavailable"),
         ("run_auth_denied_scoped", _test_run_reports_auth_denied_scoped, "Auth-denied status scoped to inverter poll cycle"),
         ("non_auth_clears_auth_flag", _test_async_get_inverter_data_non_auth_clears_flag, "Non-401/403 response clears api_auth_failed"),
+        ("rejection_logs_name_device", _test_rejection_logs_name_device_and_setting, "Rejected setting reads log the serial and setting id, not the URL template"),
         ("auth_status_transition_only", _test_run_auth_status_reported_on_transition_only, "Auth-denied status reported once per episode"),
         ("api_rate_limit", _test_async_get_inverter_data_rate_limit, "API rate limit handling"),
         ("api_timeout", _test_async_get_inverter_data_timeout, "API timeout handling"),
@@ -649,6 +650,43 @@ def _test_async_get_inverter_data_non_auth_clears_flag(my_predbat):
                     if ge_cloud.api_auth_failed:
                         print("ERROR: a {} response should clear api_auth_failed (not an auth failure)".format(status))
                         return 1
+        return 0
+
+    return run_async(test())
+
+
+def _test_rejection_logs_name_device_and_setting(my_predbat):
+    """A settings read GivEnergy rejects must log the device serial and setting id it was for, not the
+    raw endpoint template with literal {inverter_serial_number}/{setting_id} placeholders (#5777) -
+    for the per-attempt retryable warning, the retries-exhausted warning and the terminal one."""
+
+    async def test():
+        expected = "inverter/inv001/settings/17/read"
+        cases = [
+            # (description, HTTP status, response body, expected log fragments)
+            ("retryable -1", 200, {"data": {"success": True, "value": -1}}, ["Request to {} was rejected: the device did not respond before the request timed out (code -1)".format(expected)]),
+            ("terminal -7", 200, {"data": {"success": False, "value": -7, "message": "Inverter Locked"}}, ["Request to {} was rejected: Inverter Locked (code -7), not retrying".format(expected)]),
+            ("retries exhausted", 500, {"error": "x"}, ["Failed to get data from {}, response code 500".format(expected), "Failed to get data from {}".format(expected)]),
+        ]
+        for description, status, body, fragments in cases:
+            ge_cloud = MockGECloudDirect()
+            mock_response = create_aiohttp_mock_response(status=status, json_data=body)
+            mock_session = create_aiohttp_mock_session(mock_response)
+
+            with patch("aiohttp.ClientSession") as mock_session_class:
+                with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+                    mock_session_class.return_value = mock_session
+                    await ge_cloud.async_get_inverter_data_retry(GE_API_INVERTER_READ_SETTING, serial="inv001", setting_id=17, post=True)
+
+            templated = [message for message in ge_cloud.log_messages if "{inverter_serial_number}" in message or "{setting_id}" in message]
+            if templated:
+                print("ERROR: {}: log printed the unformatted endpoint template: {}".format(description, templated))
+                return 1
+            # Matched as line endings, so the retry wrapper's bare "Failed to get data from <path>" is told apart from the per-request one
+            for fragment in fragments:
+                if not any(message.endswith(fragment) for message in ge_cloud.log_messages):
+                    print("ERROR: {}: expected a log ending '{}', got {}".format(description, fragment, ge_cloud.log_messages))
+                    return 1
         return 0
 
     return run_async(test())

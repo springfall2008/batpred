@@ -50,7 +50,6 @@ from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
 import ast
 import copy
 
-
 # Car state that changes at run time and that the plan reads (the rest is configuration, which a debug yaml holds)
 REPLAY_CAR_FIELDS = (
     "car_charging_planned",
@@ -2370,6 +2369,8 @@ class Fetch:
                     # gives the charger more than one power, the component passes on the lowest (catalogue_value(), #5438)
                     self.log("Car {} rate from Octopus is {}kW and configured rate {}".format(car_n, rate, self.car_charging_rate[car_n]))
                     self.car_charging_rate[car_n] = max(rate, self.car_charging_rate[car_n])
+                    # ...but it must not raise it past the car's own maximum (car_charging_max_rate)
+                    self.car_charging_rate[car_n] = self.car_rate_capped(car_n, self.car_charging_rate[car_n])
 
                 # Get car charging limit again from car based on new battery size
                 self.car_charging_limit[car_n] = dp3((float(self.get_arg("car_charging_limit", 100.0, index=car_n)) * self.car_charging_battery_size[car_n]) / 100.0)
@@ -3687,6 +3688,7 @@ class Fetch:
         self.car_charging_battery_size = [100.0 for c in range(self.num_cars)]
         self.car_charging_limit = [100.0 for c in range(self.num_cars)]
         self.car_charging_rate = [7.4 for c in range(max(self.num_cars, 1))]
+        self.car_charging_max_rate = [0.0 for c in range(max(self.num_cars, 1))]
         self.car_charging_slots = [[] for c in range(self.num_cars)]
         self.car_charging_exclusive = [False for c in range(self.num_cars)]
 
@@ -3709,8 +3711,12 @@ class Fetch:
             self.car_charging_battery_size[car_n] = dp2(float(self.get_arg("car_charging_battery_size", 100.0, index=car_n)))
             car_postfix = "" if car_n == 0 else "_" + str(car_n)
             self.car_charging_rate[car_n] = float(self.get_arg("car_charging_rate" + car_postfix))
+            self.car_charging_max_rate[car_n] = self.car_max_rate_cap(car_n)
+            self.car_max_rate_log_change(car_n, self.car_charging_max_rate[car_n])
+            self.car_charging_rate[car_n] = self.car_rate_capped(car_n, self.car_charging_rate[car_n])
             self.car_charging_limit[car_n] = dp3((float(self.get_arg("car_charging_limit", 100.0, index=car_n)) * self.car_charging_battery_size[car_n]) / 100.0)
             self.car_charging_exclusive[car_n] = self.get_arg("car_charging_exclusive", False, index=car_n)
+        self.car_max_rate_save()
 
         if self.num_cars > 0:
             car_charging_limit_percent = [dp1(limit / size * 100) if size else 0 for limit, size in zip(self.car_charging_limit, self.car_charging_battery_size)]
@@ -3731,6 +3737,135 @@ class Fetch:
                     self.car_charging_exclusive,
                 )
             )
+
+    def car_max_rate_entry(self, car_n):
+        """
+        Return car car_n's raw car_charging_max_rate entry (a number, an entity id, or None).
+
+        A list is one entry per car, and a list shorter than num_cars is normal (the cars past its end
+        are not capped), so only entries that exist are read - get_arg's index lookup would log an
+        "Out of range index" warning every cycle for them. A single value, not a list, applies to
+        every car.
+        """
+        entries = self.get_arg("car_charging_max_rate", None, indirect=False)
+        if isinstance(entries, list):
+            return entries[car_n] if car_n < len(entries) else None
+        return entries
+
+    def car_max_rate_cap(self, car_n):
+        """
+        Return car car_n's own maximum charge rate in kW from car_charging_max_rate, or 0.0 for no cap.
+
+        Each entry is a number or an entity pointer. Absent, blank, 0, negative or a non-numeric fixed
+        value means no cap. A pointed-to entity whose state is not a usable number - unknown,
+        unavailable, none, blank (the states apps.yaml validation lets through) or any other text -
+        holds the last usable cap for that car, so a sensor drop-out can not briefly put the car back
+        on the charger's rate; text other than those states is warned about once per car. A pointer
+        to an entity that does not exist is warned about once (again if it comes back and then goes
+        away) and means no cap.
+        """
+        value = self.car_max_rate_entry(car_n)
+        entity_id = value if is_entity_id(value) else None
+        if entity_id:
+            value = self.get_state_wrapper(entity_id, required_unit="kW")
+            if value is None:
+                if entity_id not in self.car_charging_max_rate_warned:
+                    self.car_charging_max_rate_warned.add(entity_id)
+                    self.log("Warn: car_charging_max_rate for car {} points to {} which does not exist, so the car's charge rate is not capped".format(car_n, entity_id))
+                self.car_charging_max_rate_held.pop(car_n, None)
+                return 0.0
+            self.car_charging_max_rate_warned.discard(entity_id)
+        try:
+            cap = None if isinstance(value, bool) else float(value)
+        except (ValueError, TypeError):
+            cap = None
+        if entity_id:
+            if cap is None:
+                # unknown/unavailable/none/blank is a normal drop-out; any other text is warned about once
+                if str(value).strip().lower() not in ("unknown", "unavailable", "none", "") and car_n not in self.car_charging_max_rate_bad_warned:
+                    self.car_charging_max_rate_bad_warned.add(car_n)
+                    self.log("Warn: car_charging_max_rate for car {} reads {} = {}, which is not a number in kW, so the last cap is kept".format(car_n, entity_id, value))
+                return self.car_charging_max_rate_held.get(car_n, 0.0)
+            self.car_charging_max_rate_bad_warned.discard(car_n)
+        if cap is None or cap != cap or cap <= 0:  # not a number, NaN or non-positive
+            self.car_charging_max_rate_held.pop(car_n, None)
+            return 0.0
+        self.car_charging_max_rate_held[car_n] = cap
+        return cap
+
+    def car_max_rate_log_change(self, car_n, cap):
+        """
+        Log car car_n's car_charging_max_rate cap when it changes, rather than on every cycle.
+        """
+        if cap == self.car_charging_max_rate_logged.get(car_n, 0.0):
+            return
+        self.car_charging_max_rate_logged[car_n] = cap
+        if cap > 0:
+            self.log("Car {} maximum charge rate is {}kW (car_charging_max_rate); it plans at the lower of this and the charger rate".format(car_n, cap))
+        else:
+            self.log("Car {} charge rate no longer capped by car_charging_max_rate".format(car_n))
+
+    def car_rate_capped(self, car_n, rate):
+        """
+        Return rate (kW) limited to car car_n's own maximum charge rate (car_charging_max_rate[car_n]).
+
+        The charger's rate is only what the charger can deliver; a car's on-board charger can take
+        less (e.g. a 3.6 kW plug-in hybrid on a 7.4 kW wallbox). A cap of 0 means no cap.
+        """
+        cap = self.car_charging_max_rate[car_n] if car_n < len(self.car_charging_max_rate) else 0.0
+        if cap > 0 and rate > cap:
+            return cap
+        return rate
+
+    def car_max_rate_save(self):
+        """
+        Save the held caps (car_charging_max_rate_held) to storage when they have changed since the last save,
+        so a car whose cap sensor is not reporting yet after a restart keeps its last cap. Called every cycle,
+        so it costs nothing when nothing has changed.
+        """
+        held = {str(car_n): cap for car_n, cap in self.car_charging_max_rate_held.items()}
+        if held == self.car_charging_max_rate_saved:
+            return
+        storage = self.components.get_component("storage") if self.components else None
+        if not storage:
+            return
+        from ha import run_async
+
+        # Recorded whether or not the write works: a store that is failing is not retried every cycle
+        self.car_charging_max_rate_saved = held
+        try:
+            if not run_async(storage.save("predbat", "car_max_rate", {"held": held}, format="json")):
+                self.log("Warn: car_charging_max_rate: failed to save the held caps")
+        except Exception as e:
+            self.log("Warn: car_charging_max_rate: failed to save the held caps: {}".format(e))
+
+    def car_max_rate_startup(self):
+        """
+        At start up, before the components start: restore the held caps saved by car_max_rate_save(), then
+        work out each car's cap, so the first plan and Load ML's first fetch (a phase 2 component) both see them.
+        """
+        storage = self.components.get_component("storage") if self.components else None
+        if storage:
+            from ha import run_async
+
+            try:
+                data = run_async(storage.load("predbat", "car_max_rate"))
+            except Exception as e:
+                self.log("Warn: car_charging_max_rate: failed to load the held caps: {}".format(e))
+                data = None
+            held = data.get("held") if isinstance(data, dict) else None
+            if not isinstance(held, dict):
+                held = {}
+            for key, cap in held.items():
+                try:
+                    car_n, cap = int(key), float(cap)
+                except (ValueError, TypeError):
+                    continue
+                if cap > 0:
+                    self.car_charging_max_rate_held[car_n] = cap
+            self.car_charging_max_rate_saved = {str(car_n): cap for car_n, cap in self.car_charging_max_rate_held.items()}
+        num_cars = min(self.get_arg("num_cars", 1), PREDBAT_MAX_CARS)
+        self.car_charging_max_rate = [self.car_max_rate_cap(car_n) for car_n in range(max(num_cars, 1))]
 
     def fetch_ml_load_forecast(self, now_utc, save=True):
         """
@@ -4220,7 +4355,9 @@ class Fetch:
         """
         reason = None
         if self.export_more_solar:
-            if not self.calculate_best_export:
+            if not self.battery_export_permitted:
+                reason = "the inverter is not permitted to export battery energy, so export slots are not planned. Turn export_more_solar off."
+            elif not self.calculate_best_export:
                 reason = "Predbat mode is not Control charge & discharge, so export slots are not planned. Change the mode, or turn export_more_solar off."
             elif not self.set_export_freeze:
                 # Ask the inverter rather than the switch: an unsupported inverter forces set_export_freeze off
