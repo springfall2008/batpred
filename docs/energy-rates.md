@@ -672,7 +672,7 @@ hours that neither Octopus nor Nord Pool has published yet - for example the sec
   futurerate_adjust_auto: true
 ```
 
-Predbat fetches the next five days of the forecast and caches it for 30 minutes. AgilePredict is a free community service, so please do not poll it more often.
+Predbat fetches the next five days of the forecast and caches it for three hours. AgilePredict is a free community service, so please do not poll it more often.
 The forecast is only applied to your Agile import/export rates, not to gas or to tariffs being compared.
 
 ## Axle VPP

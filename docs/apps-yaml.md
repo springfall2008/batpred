@@ -1388,6 +1388,16 @@ approval was lower than your maximum inverter power (check your install informat
 
 If you do not set an export limit then it is assumed to be unlimited (and thus limited by your inverter or PV system).
 
+### **battery_export_permitted**
+
+One per inverter (optional), an entity whose state is `on` or `off`.
+
+Set it to an entity that reads `off` when your site may export spare solar but not battery energy, for example a Tesla Powerwall whose
+installer left its export permission at Solar Only. While any inverter reads `off`, Predbat stops planning export windows. The battery
+still covers the house load and spare solar is still exported, so unlike setting `export_limit` to 0 the rest of the plan stays accurate.
+
+A missing or unavailable entity is treated as `on`. The Teslemetry component sets this for you with `teslemetry_automatic` on.
+
 ### **inverter_limit_charge** and **inverter_limit_discharge**
 
 An optional list of values with one entry per inverter.
@@ -2181,6 +2191,7 @@ whether you are within an Octopus Energy "smart charge" slot
 - **car_charging_battery_size** - Car battery size in kWh
 - **car_charging_limit** - Percentage limit the car is set to charge to
 - **car_charging_soc** - Car's current charge level expressed as a percentage
+- **car_charging_max_rate** - Optional, one entry per car: the car's own maximum charge rate in kW (a number or a sensor). The car is planned at whichever is lower, this or its charging rate, for every charger integration. A blank entry, 0, or a list shorter than the number of cars means no cap for those cars; a sensor that is briefly unknown/unavailable/none keeps the last cap. A single sensor rather than a list applies to every car
 - **ohme_login** - Ohme EV charger account login
 - **ohme_password** - Password for above Ohme account
 - **ohme_automatic_octopus_intelligent** - Controls whether Predbat talks directly to the above Ohme account

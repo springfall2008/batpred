@@ -53,7 +53,7 @@ write_git_version_marker()
 import predbat
 from utils import load_apps_yaml, predbat_log_count, predbat_log_name, rotate_predbat_logs
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from multiprocessing import set_start_method
 import concurrent.futures
 import threading
@@ -63,14 +63,15 @@ import traceback
 def check_modified(py_files, start_time):
     """
     Check if .py file was changed since we started
+
+    start_time is a time.time() timestamp, compared with each file's mtime as it is: a naive local time would
+    repeat an hour when the clocks go back, and a file written before a restart in that hour would look newer (#5770)
     """
 
     # Check the last modified timestamp of each .py file
     for file_path in py_files:
         if os.path.exists(file_path):
-            last_modified = os.path.getmtime(file_path)
-            last_modified_timestamp = datetime.fromtimestamp(last_modified)
-            if last_modified_timestamp > start_time:
+            if os.path.getmtime(file_path) > start_time:
                 print("File {} was modified".format(file_path))
                 return True
         else:
@@ -126,7 +127,7 @@ def collect_watch_files(roots, apps_file_path):
 
 async def main():
     print("**** Starting Standalone Predbat ****")
-    start_time = datetime.now()
+    start_time = time.time()
 
     try:
         p_han = predbat.PredBat()
@@ -295,12 +296,17 @@ class Hass(LogRedaction):
         self.run_list.append({"callback": callback, "next_time": next_time, "run_every": run_every, "kwargs": kwargs})
         return True
 
-    async def timer_tick(self):
+    async def timer_tick(self, now=None):
         """
         Timer tick function, executes tasks at the correct time
+
+        Due times are kept in UTC: the local wall clock repeats an hour when the clocks go back, and a due time
+        compared with it would then stall every task for up to an hour (#5770). A naive due time, as some callers
+        pass, is read as the host's local time once and kept in UTC from then on; now likewise.
         """
-        now = datetime.now()
+        now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
         for item in self.run_list:
+            item["next_time"] = item["next_time"].astimezone(timezone.utc)
             if now > item["next_time"]:
                 try:
                     item["callback"](None)

@@ -201,7 +201,7 @@ Per charger, with `<p>` = `{prefix}_hypervolt_{charger_id}`, all through `dashbo
 | Entity | State | Notes |
 |---|---|---|
 | `sensor.<p>_status` | `charging`, `stopped` (released), `connected`, `disconnected`, `unknown` | attributes: `model`, `name`, `firmware_version`, `api_version`, `release_state`, `pilot_status`, `lock_state`, `features`, `stale` |
-| `sensor.<p>_power` | W | `ev_power` when present, else `true_milli_amps` × `voltage` / 1000, else 0; 0 when not charging |
+| `sensor.<p>_power` | W | `ev_power` when present, unless it is under half of `true_milli_amps` × `voltage` / 1000 (and that is at least 500 W) - a V3 charger's `ev_power` lags at the start of a charge - else `true_milli_amps` × `voltage` / 1000; a message with neither keeps the last value; 0 when not charging |
 | `sensor.<p>_session_energy` | kWh | `watt_hours` / 1000, the session maximum; holds the last value between sessions and restarts at the new value when the session id changes, so it is never `unknown`. On the V3 API a message with no session id (it sends none; seen on a Home 3 Pro, firmware 4009) starts a new session when its reading is below the held value, so the sensor drops to 0 at a stop |
 | `binary_sensor.<p>_connected` | on/off/unavailable | pilot B or C → on, A → off; with no pilot status yet: on while charging, else unavailable |
 | `binary_sensor.<p>_plugged` | on/off/unavailable | as `_connected`, but never inferred from charging (see `plugged_state`) |

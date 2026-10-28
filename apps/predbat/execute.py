@@ -1334,6 +1334,7 @@ class Execute:
         inverter_limit = 0.0
         export_limit = 0.0
         inverter_support_feedin_first = True
+        battery_export_permitted = True
 
         # Create the inverters only when we don't already have the right number of them. The objects
         # persist across cycles: rebuilding them every cycle wiped any state they accumulated, which
@@ -1435,6 +1436,10 @@ class Execute:
             # charging during Freeze Export means the fleet as a whole cannot recapture PV.
             if not inverter.inv_support_feedin_first:
                 inverter_support_feedin_first = False
+            # Fleet-wide for the same reason, applied after the loop
+            if not inverter.inv_battery_export_permitted:
+                self.log("Note: Inverter {} is not permitted to export battery energy - export windows disabled".format(inverter.id))
+                battery_export_permitted = False
             current_charge_limit_kwh += dp2(inverter.current_charge_limit * inverter.soc_max / 100.0)
             soc_max += inverter.soc_max
             soc_kw += inverter.soc_kw
@@ -1477,6 +1482,15 @@ class Execute:
         self.battery_temperature = int(dp0(battery_temperature / self.num_inverters))
         self.current_charge_limit = calc_percent_limit(self.current_charge_limit_kwh, self.soc_max)
         self.inverter_support_feedin_first = inverter_support_feedin_first
+        # A site barred from exporting battery energy gets no export windows. Only those are skipped, not the
+        # battery: it still covers the house load and spare solar is still exported, so the rest of the model
+        # stays true (GH#5710). set_export_window stays on so a window already on the inverter is switched off.
+        # A change either way replans this cycle, as a reused or restored plan was made under the other answer.
+        if battery_export_permitted != self.battery_export_permitted:
+            self.plan_valid = False
+        self.battery_export_permitted = battery_export_permitted
+        if not battery_export_permitted:
+            self.calculate_best_export = False
 
         # Additional PVs without inverters
         pv_power_sensors = self.get_arg("pv_power", [], indirect=False)
