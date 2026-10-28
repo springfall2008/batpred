@@ -4655,6 +4655,13 @@ class TestGatewayUnitControlBinding:
         assert gw._pv_only_serials == ("PD0000A002",)
         assert gw._states["sensor.predbat_gateway_00a002_pv_power"] == 0
 
+        # Firmware that flags every unit primary: it is published before auto-config, then zeroed
+        gw = self._listed_gateway([])
+        status.inverters[1].primary = True
+        gw._process_telemetry(status.SerializeToString())
+        assert gw._pv_only_serials == ("PD0000A002",)
+        assert gw._states["sensor.predbat_gateway_00a002_pv_power"] == 0
+
     def test_unlisted_pv_only_inverter_is_not_counted_in_integrated_load(self):
         """Its pv_today is not added to an integrated load: the hybrid's counter may already hold it."""
         gw = self._listed_gateway([])

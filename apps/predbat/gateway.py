@@ -1146,10 +1146,11 @@ class GatewayMQTT(ComponentBase):
             self.automatic_config()
             if self._auto_configured:
                 # The injection above ran before this status's inverters were bound, so one that
-                # is only published once bound has no entities yet. Publish those before the API
-                # is declared started below.
+                # is only published once bound has no entities yet, and a PV-only one that is not
+                # being read went out with its frozen powers. Publish those before the API is
+                # declared started below.
                 for inv in status.inverters:
-                    if not inv.primary and self._is_published(inv):
+                    if (not inv.primary or inv.serial in self._pv_only_serials) and self._is_published(inv):
                         self._publish_inverter(inv)
                 # The integration above ran on the slots as they were before this status changed them
                 self._update_integrated_energy(status, rebase=True)
