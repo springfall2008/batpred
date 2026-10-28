@@ -41,6 +41,7 @@ from tariff_catalogue import (
     merged_export_catalogue,
     merged_import_catalogue,
 )
+from utils import secret_yaml_loader
 from web_helper import get_plan_css, get_plan_renderer_js
 
 # Validated with the dataviz palette checker in BOTH light and dark mode, all pairs.
@@ -308,10 +309,13 @@ class AnnualPage:
     def load_config(self):
         """Return the saved configuration, or a fresh prefill when none exists."""
         path = self._config_path()
+        # annual.yaml may use !secret (e.g. load.octopus.api_key), resolved against this instance's secrets.yaml
+        secrets = getattr(self.base, "secrets", None)
+        loader = secret_yaml_loader(secrets, self.log) if secrets is not None else yaml.SafeLoader
         try:
             if os.path.exists(path):
                 with open(path, "r", encoding="utf-8") as handle:
-                    saved = yaml.safe_load(handle)
+                    saved = yaml.load(handle, Loader=loader)  # nosec B506 - a SafeLoader subclass
                 if isinstance(saved, dict) and saved:
                     return saved.get("annual", saved)
         except (OSError, yaml.YAMLError) as error:

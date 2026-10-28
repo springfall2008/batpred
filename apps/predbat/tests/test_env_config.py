@@ -19,6 +19,7 @@ without either one mutating os.environ.
 
 import os
 import tempfile
+from types import SimpleNamespace
 
 import yaml
 
@@ -26,6 +27,7 @@ import hass as hass_module
 from hass import Hass
 from predbat import PredBat
 from utils import load_apps_yaml
+from web_annual import AnnualPage
 
 ENV_KEYS = ("PREDBAT_APPS_FILE", "PREDBAT_SECRETS_FILE")
 
@@ -235,9 +237,35 @@ def test_secret_tag_not_registered_globally():
     return failed
 
 
+def test_annual_config_resolves_secret():
+    """The Annual tab's saved annual.yaml resolves !secret against the running instance's secrets.yaml."""
+    print("**** Running test_annual_config_resolves_secret ****")
+    failed = False
+    with tempfile.TemporaryDirectory() as tmpdir:
+        apps_path, secrets_path = _write_instance_files(tmpdir, "annual", "fox-secret")
+        with open(secrets_path, "a") as handle:
+            yaml.dump({"octopus_key": "sk-annual-secret"}, handle)
+        engine = PredBat(apps_file=apps_path, secrets_file=secrets_path)
+        engine.config_root = tmpdir
+        with open(os.path.join(tmpdir, "annual.yaml"), "w") as handle:
+            handle.write("annual:\n  load:\n    octopus:\n      api_key: !secret octopus_key\n      account_id: !secret not_in_secrets\n")
+
+        page = AnnualPage(SimpleNamespace(base=engine, log=engine.log))
+        config = page.load_config()
+        octopus = (config.get("load") or {}).get("octopus")
+        if octopus != {"api_key": "sk-annual-secret", "account_id": None}:
+            print("ERROR: annual.yaml !secret should resolve against the instance's secrets (missing -> None), got {}".format(octopus))
+            failed = True
+
+    if not failed:
+        print("**** test_annual_config_resolves_secret PASSED ****")
+    return failed
+
+
 def run_env_config_tests(my_predbat=None):
     """Run all per-instance environment configuration tests."""
     failed = test_env_is_default_source()
     failed |= test_two_instances_in_one_process()
     failed |= test_secret_tag_not_registered_globally()
+    failed |= test_annual_config_resolves_secret()
     return failed
