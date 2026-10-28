@@ -3269,10 +3269,11 @@ def intelligent_device_is_charger(dispatch_attribute, target_attribute=None):
       charger, only the battery size for a car.
     """
     is_charger = dispatch_attribute("is_charger")
-    if isinstance(is_charger, bool):
-        return is_charger
+    if isinstance(is_charger, (bool, int, float)):
+        return bool(is_charger)
     if isinstance(is_charger, str) and is_charger.strip().lower() not in ("", "unknown", "unavailable", "none"):
-        return is_charger.strip().lower() in ("on", "true", "yes")
+        # The strings get_arg() and the charger control read as true
+        return is_charger.strip().lower() in ("on", "true", "yes", "enabled", "enable", "connected")
     for read in (target_attribute, dispatch_attribute):
         if read is None:
             continue

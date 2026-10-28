@@ -230,6 +230,51 @@ def _run_limit(my_predbat):
     return failed
 
 
+def _run_plug_and_owner(my_predbat):
+    """
+    The base SoC is held through a stale low reading, the plug sensor decides plugged where it is set, and a target
+    Ohme has claimed is its own SoC target.
+    """
+    failed = False
+    charger = {"vehicle_battery_size_in_kwh": None, "charge_point_power_in_kw": 7.0}
+    saved_plugged = my_predbat.args.get("car_charging_plugged")
+    plug = "binary_sensor.test_car_plugged"
+    try:
+        print("Test 13: a stale low SoC reading while plugged in does not drag the plug-in SoC down")
+        my_predbat.octopus_charge_target_base = {}
+        _sensor(my_predbat, charger)
+        _fetch(my_predbat, 40, 40, plugged=False)
+        _fetch(my_predbat, 40, 40)
+        _fetch(my_predbat, 5, 40)
+        limit = _fetch(my_predbat, 45, 40)
+        failed |= _check("t13 limit", abs(limit - (24.8 + 24.8)) < 0.01, "limit {}".format(limit))
+
+        print("Test 14: the plug sensor keeps the car plugged in when car_charging_planned turns off at the end of a charge")
+        my_predbat.octopus_charge_target_base = {}
+        my_predbat.args["car_charging_plugged"] = plug
+        my_predbat.ha_interface.set_state(plug, "off")
+        _fetch(my_predbat, 39, 40, plugged=False)
+        my_predbat.ha_interface.set_state(plug, "on")
+        _fetch(my_predbat, 39, 40)
+        limit = _fetch(my_predbat, 79, 40, plugged=False)
+        failed |= _check("t14 base held", abs(limit - (24.18 + 24.8)) < 0.01, "limit {}".format(limit))
+        my_predbat.args.pop("car_charging_plugged", None)
+
+        print("Test 15: a charge limit Ohme has claimed is its own target, a SoC to reach")
+        my_predbat.octopus_charge_target_base = {}
+        my_predbat.car_slot_owner = "ohme"
+        _fetch(my_predbat, 50, 80, plugged=False)
+        limit = _fetch(my_predbat, 50, 80)
+        failed |= _check("t15 not added", abs(limit - 49.6) < 0.01, "limit {}".format(limit))
+    finally:
+        my_predbat.car_slot_owner = None
+        if saved_plugged is None:
+            my_predbat.args.pop("car_charging_plugged", None)
+        else:
+            my_predbat.args["car_charging_plugged"] = saved_plugged
+    return failed
+
+
 def test_octopus_charge_target(my_predbat):
     """
     The Octopus Intelligent charge target is a percentage to add when the charger is linked (#3034).
@@ -240,6 +285,7 @@ def test_octopus_charge_target(my_predbat):
     try:
         failed = _run_detection(my_predbat)
         failed |= _run_target_entity_detection(my_predbat)
+        failed |= _run_plug_and_owner(my_predbat)
         failed |= _run_limit(my_predbat)
     finally:
         for field, value in saved_state.items():

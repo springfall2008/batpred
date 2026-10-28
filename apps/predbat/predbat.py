@@ -587,6 +587,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.dispatch_timeline_last = {}
         self.dispatch_timeline_pending = []
         self.octopus_charge_target_base = {}
+        # car_n -> (target added, base SoC) last logged, so the charger-linked target is logged when it changes
+        self.octopus_charge_target_logged = {}
         self.dispatch_unconfirmed_last = {}
         self.ge_url_cache = {}
         self.github_url_cache = {}

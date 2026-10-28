@@ -153,7 +153,7 @@ For **multiple IOG-enrolled vehicles**, set this to a list with one sensor per c
 - **octopus_charge_limit** - Points to the Octopus Energy integration sensor that provides the car charging limit you want the car to charge to.
 For **multiple IOG-enrolled vehicles**, set this to a list with one sensor per car.
 When Octopus is linked to your charger rather than your car, Octopus's target is how much charge to add, not the level to charge to.
-Predbat detects this from the Octopus dispatch sensor, or from the charge target entity you set as **octopus_charge_limit** where the Octopus Energy integration says which device it belongs to, and adds the target to the car's SoC when it was plugged in, still capped by **car_charging_limit**.
+Predbat detects this from the Octopus dispatch sensor (from Predbat's own Octopus component, or from which of the charge point power and the battery size the Octopus Energy integration fills in), and adds the target to the car's SoC when it was plugged in, still capped by **car_charging_limit**. It also reads a `device_type` attribute on the charge target entity you set as **octopus_charge_limit**, should the integration add one.
 If neither says which is linked (for example a charger model Octopus does not list), the target is read as the level to charge to.
 
 If you are using Octopus-led charging with the [Octopus direct connection](energy-rates.md#octopus-energy-direct) method:
