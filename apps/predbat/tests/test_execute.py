@@ -68,6 +68,7 @@ class ActiveTestInverter:
         self.inv_support_discharge_freeze = True
         self.inv_support_charge_freeze = True
         self.inv_support_feedin_first = False
+        self.inv_battery_export_permitted = True
         self.inv_has_reserve_soc = True
         self.current_charge_limit = 0
         self.charge_rate_now = 1000
@@ -1931,6 +1932,94 @@ def test_control_monitor_invalid_battery_power_not_judged(my_predbat):
     return failed
 
 
+def test_inverter_reads_battery_export_permitted(my_predbat):
+    """
+    refresh_config() bars battery export only on an explicit off/false from battery_export_permitted (GH#5710).
+
+    A missing or unavailable entity must leave export planning as it was, so a Powerwall whose sensor has not
+    been published yet - or any inverter that does not set the arg - keeps planning exports.
+    """
+    print("  - test_inverter_reads_battery_export_permitted")
+    from inverter import Inverter
+
+    failed = False
+    entity = "binary_sensor.predbat_test_battery_export_permitted"
+    saved_type = my_predbat.args.get("inverter_type")
+    had_arg = "battery_export_permitted" in my_predbat.args
+    saved_arg = my_predbat.args.get("battery_export_permitted")
+    saved_state = my_predbat.ha_interface.dummy_items.get(entity)
+    try:
+        my_predbat.args["inverter_type"] = "GE"
+        my_predbat.args.pop("battery_export_permitted", None)
+        inverter = Inverter(my_predbat, 0, quiet=True)
+        if not inverter.inv_battery_export_permitted:
+            print("ERROR: battery export should be permitted when battery_export_permitted is not configured")
+            failed = True
+
+        my_predbat.args["battery_export_permitted"] = [entity]
+        for state, expected in (("off", False), ("on", True), ("unavailable", True), (None, True)):
+            my_predbat.ha_interface.dummy_items[entity] = state
+            inverter.refresh_config(quiet=True)
+            if inverter.inv_battery_export_permitted != expected:
+                print("ERROR: battery_export_permitted entity state {} should give {}, got {}".format(state, expected, inverter.inv_battery_export_permitted))
+                failed = True
+    finally:
+        if saved_type is None:
+            my_predbat.args.pop("inverter_type", None)
+        else:
+            my_predbat.args["inverter_type"] = saved_type
+        if had_arg:
+            my_predbat.args["battery_export_permitted"] = saved_arg
+        else:
+            my_predbat.args.pop("battery_export_permitted", None)
+        if saved_state is None:
+            my_predbat.ha_interface.dummy_items.pop(entity, None)
+        else:
+            my_predbat.ha_interface.dummy_items[entity] = saved_state
+    return failed
+
+
+def test_fetch_inverter_data_battery_export_not_permitted(my_predbat):
+    """
+    An inverter that may not export battery energy turns off export window planning for the fleet (GH#5710).
+
+    Only calculate_best_export goes: set_export_window must stay on, or an export window already on the
+    inverter would never be switched off. Any change in the answer invalidates the plan, since a reused or
+    restored plan may still hold export windows. A permitted inverter is the control and leaves all of it alone.
+    """
+    print("  - test_fetch_inverter_data_battery_export_not_permitted")
+    failed = False
+    saved = (my_predbat.inverters, my_predbat.args.get("num_inverters"), my_predbat.calculate_best_export, my_predbat.set_export_window, my_predbat.plan_valid, my_predbat.battery_export_permitted)
+    try:
+        my_predbat.battery_export_permitted = True
+        # (inverter permitted, calculate_best_export after, plan still valid after)
+        for permitted, expected, plan_valid in ((True, True, True), (False, False, False), (False, False, True), (True, True, False)):
+            inverter = ActiveTestInverter(0, soc_kw=5, soc_max=10, now_utc=my_predbat.now_utc)
+            inverter.inv_battery_export_permitted = permitted
+            my_predbat.inverters = [inverter]
+            my_predbat.args["num_inverters"] = 1
+            my_predbat.calculate_best_export = True
+            my_predbat.set_export_window = True
+            my_predbat.plan_valid = True
+            my_predbat.fetch_inverter_data()
+            if my_predbat.calculate_best_export != expected:
+                print("ERROR: battery export permitted={} should leave calculate_best_export {}, got {}".format(permitted, expected, my_predbat.calculate_best_export))
+                failed = True
+            if not my_predbat.set_export_window:
+                print("ERROR: battery export permitted={} must leave set_export_window on".format(permitted))
+                failed = True
+            if my_predbat.plan_valid != plan_valid:
+                print("ERROR: battery export permitted={} should leave plan_valid {}, got {}".format(permitted, plan_valid, my_predbat.plan_valid))
+                failed = True
+    finally:
+        my_predbat.inverters, num_inverters, my_predbat.calculate_best_export, my_predbat.set_export_window, my_predbat.plan_valid, my_predbat.battery_export_permitted = saved
+        if num_inverters is None:
+            my_predbat.args.pop("num_inverters", None)
+        else:
+            my_predbat.args["num_inverters"] = num_inverters
+    return failed
+
+
 def run_execute_tests(my_predbat):
     print("**** Running execute tests ****\n")
 
@@ -1938,6 +2027,8 @@ def run_execute_tests(my_predbat):
     failed |= test_fetch_inverter_data_extra_pv_sensors(my_predbat)
     failed |= test_fetch_inverter_data_extra_pv_sensors_invalid_value(my_predbat)
     failed |= test_fetch_inverter_data_no_extra_pv_when_sensors_match_inverters(my_predbat)
+    failed |= test_inverter_reads_battery_export_permitted(my_predbat)
+    failed |= test_fetch_inverter_data_battery_export_not_permitted(my_predbat)
     if failed:
         return failed
 

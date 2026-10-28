@@ -4398,7 +4398,7 @@ chart.render();
         for timestamp in sorted(forecast_energy):
             energy = forecast_energy[timestamp]
             if previous_timestamp:
-                hours = (datetime.strptime(timestamp, TIME_FORMAT) - datetime.strptime(previous_timestamp, TIME_FORMAT)).total_seconds() / 3600
+                hours = (strptime_aware(timestamp, TIME_FORMAT) - strptime_aware(previous_timestamp, TIME_FORMAT)).total_seconds() / 3600
                 if hours > 0:
                     forecast_power[timestamp] = dp4(max(energy - previous_energy, 0) / hours)
             previous_timestamp = timestamp

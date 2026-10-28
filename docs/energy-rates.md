@@ -305,6 +305,10 @@ Full details of what to configure are given in the [component documentation](com
 If you have an EV on a smart-charging tariff with Eon.Next (such as Next Drive Smart), Eon bills every half hour of a planned charging dispatch at the cheap rate whether or not the car charged in it, unlike Octopus Intelligent.
 With `kraken_provider: eon` Predbat prices dispatches that way automatically; see **intelligent_dispatch_billing** in the [car charging documentation](car-charging.md) to change it.
 
+With `kraken_provider: edf`, free hours you have booked through EDF Flextras are read from EDF every 30 minutes and priced at 0p in the plan, in the same way as [Octopus free electricity sessions](#octopus-free-power-up-events).
+They are published on `sensor.predbat_kraken_<account>_free_electricity`.
+EDF Power Perks sessions are announced by text message only and are not available from EDF's API, so they are not picked up automatically - use the [manual rate overrides](#manually-over-riding-energy-rates) to add one.
+
 ## Energidataservice Integration
 
 <https://github.com/MTrab/energidataservice>
@@ -648,6 +652,28 @@ Or, if you prefer to set import/export calibration manually rather than auto-det
   futurerate_peak_start: "16:00:00"
   futurerate_peak_end: "19:00:00"
 ```
+
+### AgilePredict forecast
+
+Nord Pool day-ahead prices only reach the end of tomorrow, and only once the day-ahead auction has run (late morning UK time).
+[AgilePredict](https://agilepredict.com) publishes a forecast of Octopus Agile prices for each region up to 14 days ahead, so it can also fill the
+hours that neither Octopus nor Nord Pool has published yet - for example the second day of the plan before 4pm.
+
+- **futurerate_agilepredict** - When `true`, Predbat fetches the AgilePredict forecast and uses it for any future minute that has no published Agile
+  rate and no Nord Pool price. Published rates always take priority, then Nord Pool prices (if `futurerate_url` is set), then the forecast.
+  It uses the same `futurerate_adjust_import`, `futurerate_adjust_export` and `futurerate_adjust_auto` settings to decide whether to apply the
+  forecast to import, export or both. The forecast is already in Agile prices so it is not calibrated.
+- **futurerate_agilepredict_region** - Optional Octopus region letter (A-P). By default the region is taken from the end of the Octopus tariff
+  code of `metric_octopus_import` (or `metric_octopus_export`).
+- **futurerate_agilepredict_url** - Optional, overrides the AgilePredict API address (default `https://prices.fly.dev/api/`).
+
+```yaml
+  futurerate_agilepredict: true
+  futurerate_adjust_auto: true
+```
+
+Predbat fetches the next five days of the forecast and caches it for three hours. AgilePredict is a free community service, so please do not poll it more often.
+The forecast is only applied to your Agile import/export rates, not to gas or to tariffs being compared.
 
 ## Axle VPP
 

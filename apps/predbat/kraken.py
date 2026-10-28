@@ -17,9 +17,19 @@ import aiohttp
 import asyncio
 import types as _types
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from component_base import ComponentBase
-from utils import filter_payment_method
+from const import TIME_FORMAT
+from utils import (
+    filter_payment_method,
+    Backoff,
+    is_edge_block_body,
+    is_kraken_rate_limit_error,
+    parse_retry_after,
+    GRAPHQL_RATE_LIMIT_BACKOFF_BASE_SECONDS,
+    GRAPHQL_RATE_LIMIT_BACKOFF_MAX_SECONDS,
+)
 from mock_base import MockBase as KrakenMockBase
 from utils import str2time
 
@@ -173,10 +183,11 @@ KRAKEN_INTROSPECT_TYPE_QUERY = """{{
 # SmartFlex device discovery — a connected EV / charge point the customer enrolled for provider-
 # managed smart charging (Octopus Intelligent Go, E.ON NextDrive, EDF GoElectric SmartFlex, …).
 # Schema matches the reference EDF/E.ON HA integration. Also used by the CLI --dispatches check.
+# The device provider field is not requested: Kraken deprecated it (removal on or after 2027-04-15)
+# and nothing reads it, so the stored provider is filled from make, as the Octopus component does.
 KRAKEN_DEVICES_QUERY = """{{
   devices(accountNumber: "{account_number}") {{
     id
-    provider
     deviceType
     status {{ current }}
     __typename
@@ -252,6 +263,21 @@ KRAKEN_DISPATCH_REFRESH_MINUTES = 2
 # Drop completed dispatches older than this many days when merging history.
 KRAKEN_DISPATCH_HISTORY_DAYS = 5
 
+# EDF Flextras: free hours the customer books in the EDF app, an hour at a time, and can change
+# up to the Thursday before. They are not in the Kraken API; EDF serve them on an edfenergy.com
+# server-driven UI screen that accepts the same Kraken token, and that screen carries a
+# machine-readable list of the booked slots (BOOKED_HOURS_LIST). The property id in the URL
+# comes from the Kraken properties query. EDF only - E.ON Next has no Flextras.
+KRAKEN_PROPERTIES_QUERY = """{{
+  properties(accountNumber: "{account_number}") {{
+    id
+  }}
+}}"""
+KRAKEN_FLEXTRAS_HOURS_URL = "https://www.edfenergy.com/support/energyhub/api/weekend-saver/v1/{account_id}/{property_id}/ui/hours"
+KRAKEN_FLEXTRAS_REFRESH_MINUTES = 30
+# Booked slot times are UK wall-clock, although the booking call labels them UTC.
+KRAKEN_FLEXTRAS_TZ = ZoneInfo("Europe/London")
+
 
 class KrakenAPI(ComponentBase, _AUTH_BASE):
     """Kraken GraphQL component for EDF/E.ON tariff discovery and rate fetching."""
@@ -290,6 +316,8 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         self.requests_total = 0
         self.failures_total = 0
         self.oauth_failed = False
+        # Running while GraphQL queries are paused after a rate limit - see async_graphql_query
+        self.graphql_backoff = Backoff(GRAPHQL_RATE_LIMIT_BACKOFF_BASE_SECONDS, GRAPHQL_RATE_LIMIT_BACKOFF_MAX_SECONDS)
 
         # Last-fetched data, cached to storage so it survives a restart. Rates are the actual
         # rate-period lists last published to the sensors; the *_fetched_at timestamps drive the
@@ -305,6 +333,14 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         # case of an account with no connected EV/charger. Cached to storage so it survives restart.
         self.intelligent_devices = {}
         self.dispatch_fetched_at = None
+
+        # EDF Flextras booked free hours, published as free electricity sessions. flextras_sessions
+        # is a list of {"start", "end"} UTC strings; flextras_fetched_at stamps every attempt, so an
+        # account that is not on Flextras is asked once per refresh period rather than every cycle.
+        self.flextras_property_id = None
+        self.flextras_sessions = []
+        self.flextras_fetched_at = None
+        self.flextras_last_status = None
 
         # Export account/MPAN from SaaS config (matched by address at onboarding time).
         # Tariff is always discovered dynamically via GraphQL so changes are detected.
@@ -352,8 +388,37 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             return f"{name} authorisation failed - reconnect the {name} account"
         return f"{name} login failed - check the Kraken credentials, then restart the Kraken component"
 
+    def start_graphql_rate_limit_backoff(self, reason, retry_after=None):
+        """Pause GraphQL queries after a rate limit, so the rest of the poll does not run into the same limit, and log why.
+
+        Args:
+            reason: What limited the query - "rate limited" or "edge/WAF blocked".
+            retry_after: Seconds the server asked us to wait, or None.
+        """
+        delay = self.graphql_backoff.start(reason, retry_after)
+        self.log(f"Warn: Kraken: GraphQL {reason} (rate limit {self.graphql_backoff.count}) - pausing GraphQL queries for {delay}s")
+
+    def log_graphql_rate_limit_backoff(self):
+        """Repeat the pause reason occasionally: held queries send nothing, so would otherwise log nothing"""
+        if self.graphql_backoff.due_reminder():
+            self.log(f"Warn: Kraken: GraphQL still rate limited (rate limit {self.graphql_backoff.count}) - holding queries until {self.graphql_backoff.until.strftime(TIME_FORMAT)}")
+
+    def clear_graphql_rate_limit_backoff(self):
+        """Clear the GraphQL pause after a successful query"""
+        count = self.graphql_backoff.clear()
+        if count:
+            self.log(f"Kraken: GraphQL rate limit cleared after {count} rate limit(s)")
+
     async def async_graphql_query(self, query, request_context, _retry_count=0):
-        """Execute a GraphQL query with auth and auto-retry on auth errors."""
+        """Execute a GraphQL query with auth and auto-retry on auth errors.
+
+        While a rate limit pause is running (see start_graphql_rate_limit_backoff) a query is not
+        sent and returns None. A retry after a token refresh is part of the request that was let
+        through, so it is not held.
+        """
+        if _retry_count == 0 and self.graphql_backoff.active():
+            self.log_graphql_rate_limit_backoff()
+            return None
         token_ok = await self.check_and_refresh_oauth_token()
         if not token_ok:
             self.log(f"Warn: Kraken: Auth not available for {request_context}")
@@ -386,8 +451,15 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                             err_body = "<unreadable>"
                         self.log(f"Warn: Kraken: GraphQL HTTP {response.status} for {request_context}: {err_body}")
                         self.failures_total += 1
+                        if response.status == 429:
+                            self.start_graphql_rate_limit_backoff("rate limited", parse_retry_after(response.headers.get("Retry-After")))
+                        elif response.status == 403 and is_edge_block_body(err_body):
+                            self.start_graphql_rate_limit_backoff("edge/WAF blocked", parse_retry_after(response.headers.get("Retry-After")))
                         return None
                     body = await response.json()
+
+            if body and is_kraken_rate_limit_error(body.get("errors")):
+                self.start_graphql_rate_limit_backoff("rate limited")
 
             # Check for auth errors — retry once after token refresh
             if body and "errors" in body and _retry_count == 0:
@@ -408,6 +480,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                 return None
 
             if body and "data" in body:
+                self.clear_graphql_rate_limit_backoff()
                 return body["data"]
 
             return None
@@ -712,6 +785,51 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         if not edges:
             return []
         return [edge.get("node", {}) for edge in edges if edge and edge.get("node")]
+
+    @staticmethod
+    def _standing_charge_covering(rows, now, from_key, to_key):
+        """Pick the standing charge row in force at now (GH#5573).
+
+        Neither the REST /standing-charges/ list nor the GraphQL applicableStandingCharges window
+        promises an order, and both can hold a row that starts after now (a price change published
+        ahead of time) or one that has already ended, so the first row is not necessarily today's.
+        Same rule as OctopusAPI._get_rate_for_time: a row applies when valid_from <= now < valid_to,
+        a null or unparseable bound is open, and the latest valid_from wins if several rows cover
+        now (the first of equals). Rows that are not dicts are ignored, like filter_payment_method().
+
+        Args:
+            rows: Standing charge rows, as dicts.
+            now: Timezone-aware datetime to select for.
+            from_key: Name of the validity start field in each row (REST valid_from, GraphQL validFrom).
+            to_key: Name of the validity end field in each row (REST valid_to, GraphQL validTo).
+
+        Returns the covering row, or None if no row covers now.
+        """
+
+        def bound(row, key):
+            """Parse one validity timestamp, or None when it is missing or unparseable."""
+            text = row.get(key)
+            if not text:
+                return None
+            try:
+                return str2time(text)
+            except (ValueError, TypeError):
+                return None
+
+        open_start = datetime.min.replace(tzinfo=timezone.utc)
+        best_row = None
+        best_start = None
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            start = bound(row, from_key) or open_start
+            end = bound(row, to_key)
+            if start > now or (end is not None and end <= now):
+                continue
+            if best_row is None or start > best_start:
+                best_row = row
+                best_start = start
+        return best_row
 
     @staticmethod
     def _normalize_rate_timestamps(results):
@@ -1032,9 +1150,13 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             self.log("Warn: Kraken: applicableStandingCharges GraphQL returned no results")
             return None
 
-        # Take the first (most applicable) standing charge entry; value is pence/day inc VAT.
+        # The window spans several days, so it can hold both sides of a price change: take the entry
+        # in force now, not the first one listed (GH#5573). value is pence/day inc VAT.
         # Divide by 100 to match the units expected by the caller (pounds/day).
-        charge = applicable_charges[0]
+        charge = self._standing_charge_covering(applicable_charges, now, "validFrom", "validTo")
+        if charge is None:
+            self.log("Warn: Kraken: applicableStandingCharges GraphQL returned no standing charge covering now")
+            return None
         value = charge.get("value")
         if value is None:
             return None
@@ -1102,8 +1224,14 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         # EDF lists the NON_DIRECT_DEBIT one first, so keep the Direct Debit row (GH#5502).
         results = filter_payment_method(data.get("results", []))
         if results:
+            # The list also holds past periods and any change already published, so take the row
+            # in force now rather than the first one (GH#5573).
+            charge = self._standing_charge_covering(results, datetime.now(timezone.utc), "valid_from", "valid_to")
+            if charge is None:
+                self.log("Warn: Kraken: REST standing charges returned no standing charge covering now")
+                return None
             # API returns pence/day; fetch.py multiplies by 100 expecting pounds/day
-            value = results[0].get("value_inc_vat")
+            value = charge.get("value_inc_vat")
             return value / 100.0 if value is not None else None
         return None
 
@@ -1158,6 +1286,10 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         if isinstance(data.get("intelligent_devices"), dict):
             self.intelligent_devices = data.get("intelligent_devices")
         self.dispatch_fetched_at = data.get("dispatch_fetched_at")
+        self.flextras_property_id = data.get("flextras_property_id")
+        if isinstance(data.get("flextras_sessions"), list):
+            self.flextras_sessions = data.get("flextras_sessions")
+        self.flextras_fetched_at = data.get("flextras_fetched_at")
 
         if self.current_tariff:
             self.log(
@@ -1188,6 +1320,9 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             "rates_fetched_at": self.rates_fetched_at,
             "intelligent_devices": self.intelligent_devices,
             "dispatch_fetched_at": self.dispatch_fetched_at,
+            "flextras_property_id": self.flextras_property_id,
+            "flextras_sessions": self.flextras_sessions,
+            "flextras_fetched_at": self.flextras_fetched_at,
         }
         await self.storage.save("kraken", self._cache_filename(), cache, format="yaml", expiry=datetime.now(timezone.utc) + timedelta(days=7))
 
@@ -1330,7 +1465,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             existing = self.intelligent_devices.get(device_id, {})
             live[device_id] = {
                 "device_id": device_id,
-                "provider": dev.get("provider"),
+                "provider": dev.get("make"),
                 "make": dev.get("make"),
                 "model": dev.get("model"),
                 "is_charger": dev.get("__typename") == "SmartFlexChargePoint",
@@ -1470,6 +1605,187 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         if self.get_arg("num_cars", 0) < len(slot_list):
             self.set_arg("num_cars", len(slot_list))
 
+    # ------------------------------------------------------------------
+    # EDF Flextras booked free hours
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _flextras_slot_utc(date_str, time_str):
+        """Convert a Flextras slot's date + UK wall-clock time ("2026-10-10", "09:00") to an aware UTC datetime, or None."""
+        if not isinstance(date_str, str) or not isinstance(time_str, str):
+            return None
+        try:
+            naive = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
+        except ValueError:
+            return None
+        return naive.replace(tzinfo=KRAKEN_FLEXTRAS_TZ).astimezone(timezone.utc)
+
+    @staticmethod
+    def parse_flextras_booked_hours(body, log=None):
+        """Extract the booked free hours from the Flextras hours screen as merged UTC windows.
+
+        Returns a list of {"start", "end"} strings in TIME_FORMAT, sorted, with back-to-back
+        hours joined into one window. Returns None when the payload is not the hours screen at
+        all - or its booked list is the wrong shape, or EDF mark that component as failed - so
+        the caller keeps what it had rather than treating a bad response as "nothing booked";
+        a recognised screen with no bookings returns [].
+
+        Only a slot with status SELECTED (or no status) is a booking. Unbooked entitlement is not
+        listed as slots (it is a count elsewhere on the screen), so any other status is skipped
+        rather than priced at 0p, and reported once per status through log when one is given.
+        """
+        if not isinstance(body, dict) or not isinstance(body.get("components"), list):
+            return None
+        booked = None
+        for component in body["components"]:
+            if isinstance(component, dict) and component.get("type") == "BOOKED_HOURS_LIST" and isinstance(component.get("props"), dict):
+                if component.get("status", "SUCCESS") != "SUCCESS":
+                    return None
+                booked = component["props"]
+                break
+        if booked is None:
+            return None
+
+        items = booked.get("items") or []
+        if not isinstance(items, list):
+            return None
+        windows = []
+        skipped_statuses = set()
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            slots = item.get("rawTimeSlots") or []
+            if not isinstance(slots, list):
+                return None
+            for slot in slots:
+                if not isinstance(slot, dict):
+                    continue
+                status = slot.get("status", "SELECTED")
+                if status != "SELECTED":
+                    if log and status not in skipped_statuses:
+                        log(f"Warn: Kraken: Flextras slot {slot.get('date')} {slot.get('startTime')} has status {status!r}, not SELECTED - not treated as a booked free hour")
+                    skipped_statuses.add(status)
+                    continue
+                start = KrakenAPI._flextras_slot_utc(slot.get("date"), slot.get("startTime"))
+                end = KrakenAPI._flextras_slot_utc(slot.get("date"), slot.get("endTime"))
+                if start is None or end is None:
+                    continue
+                if end <= start:
+                    # An hour that runs over midnight is dated by the day it starts
+                    end += timedelta(days=1)
+                windows.append((start, end))
+
+        merged = []
+        for start, end in sorted(windows):
+            if merged and start <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        return [{"start": start.strftime(TIME_FORMAT), "end": end.strftime(TIME_FORMAT)} for start, end in merged]
+
+    def _merge_flextras_sessions(self, booked):
+        """Combine freshly fetched booked hours with the sessions already held.
+
+        The screen is authoritative for hours that have not started: a customer can move or hand
+        back an hour until the Thursday before, so a future hour that is no longer listed is
+        dropped. A session that has already started is kept until the day after it ends even if the
+        screen stops listing it, so the plan and today's cost do not re-price an hour that was free.
+        """
+        now = datetime.now(timezone.utc)
+        keep_after = self.midnight_utc - timedelta(days=1)
+        by_start = {session["start"]: session for session in booked}
+        for session in self.flextras_sessions or []:
+            try:
+                start = str2time(session["start"])
+                end = str2time(session["end"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if start <= now and end >= keep_after and session["start"] not in by_start:
+                by_start[session["start"]] = session
+        return sorted(by_start.values(), key=lambda session: session["start"])
+
+    async def async_find_property_id(self):
+        """Return the account's first property id (needed by the Flextras URL), or None if it cannot be read."""
+        data = await self.async_graphql_query(KRAKEN_PROPERTIES_QUERY.format(account_number=self.account_id), "properties")
+        for prop in (data or {}).get("properties") or []:
+            if isinstance(prop, dict) and prop.get("id"):
+                return str(prop["id"])
+        return None
+
+    async def _async_get_flextras_screen(self):
+        """GET the Flextras hours screen, looking up the property id first if it is not known yet.
+
+        Returns (status, body): body is the decoded JSON for a 200, otherwise the response text so
+        a caller can show what EDF said. status is None when no request could be made (no property
+        id, no token, or a network error).
+        """
+        if not self.flextras_property_id:
+            self.flextras_property_id = await self.async_find_property_id()
+            if not self.flextras_property_id:
+                return None, None
+
+        token_ok = await self.check_and_refresh_oauth_token()
+        if not token_ok or not self.access_token:
+            return None, None
+
+        url = KRAKEN_FLEXTRAS_HOURS_URL.format(account_id=self.account_id, property_id=self.flextras_property_id)
+        headers = {"Authorization": self.access_token, "Accept": "application/json"}
+        try:
+            self.requests_total += 1
+            timeout = aiohttp.ClientTimeout(total=30)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url, headers=headers) as response:
+                    status = response.status
+                    body = await response.json(content_type=None) if status == 200 else await response.text()
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as e:
+            self.log(f"Warn: Kraken: Flextras hours request failed: {e}")
+            return None, None
+        return status, body
+
+    async def async_fetch_flextras_hours(self):
+        """Fetch the Flextras hours screen and return its booked hours, or None if it could not be read.
+
+        Accounts that are not on Flextras, and tokens edfenergy.com does not accept, both come back
+        as a non-200; that is logged when the status changes (not every refresh) and is not counted
+        as a Kraken failure, because it says nothing about the tariff and rate data this component
+        exists for.
+        """
+        status, body = await self._async_get_flextras_screen()
+        if status is None:
+            return None
+        if status != 200:
+            if status != self.flextras_last_status:
+                self.log(f"Kraken: Flextras hours not available (HTTP {status}) - no booked free hours will be read")
+            self.flextras_last_status = status
+            return None
+        self.flextras_last_status = status
+
+        booked = self.parse_flextras_booked_hours(body, log=self.log)
+        if booked is None:
+            self.log("Warn: Kraken: Flextras hours screen not recognised, keeping the booked hours already held")
+        return booked
+
+    def _publish_free_electricity_sensor(self):
+        """Publish the Flextras sessions as a free electricity sensor and wire octopus_free_electricity.
+
+        The sensor matches OctopusAPI's free_electricity sensor (state on/off, an events attribute of
+        {start, end, code, rate: 0}), so fetch_octopus_sessions() prices the booked hours at 0p exactly
+        as it does Octopus free electricity sessions.
+        """
+        now = datetime.now(timezone.utc)
+        events = []
+        active = False
+        for session in self.flextras_sessions:
+            events.append({"start": session["start"], "end": session["end"], "code": "flextras_" + session["start"][:16], "rate": 0})
+            try:
+                if str2time(session["start"]) <= now < str2time(session["end"]):
+                    active = True
+            except (KeyError, TypeError, ValueError):
+                pass
+        entity = self.get_entity_name("sensor", "free_electricity")
+        self.dashboard_item(entity, "on" if active else "off", attributes={"friendly_name": "EDF Flextras Free Hours", "icon": "mdi:flash", "events": events}, app="kraken")
+        self.set_arg("octopus_free_electricity", entity)
+
     async def run(self, seconds, first):
         """Component run method — called by ComponentBase.start() every 60s.
 
@@ -1479,6 +1795,8 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         - Rates + standing charges: when the cached rates are >= KRAKEN_RATES_REFRESH_MINUTES old (or never fetched)
         - Intelligent dispatches: when >= KRAKEN_DISPATCH_REFRESH_MINUTES old, for accounts with a
           SmartFlex EV device (discovered on the tariff cycle); wired to octopus_intelligent_slot.
+        - EDF Flextras booked free hours: attempted every KRAKEN_FLEXTRAS_REFRESH_MINUTES (EDF only);
+          published as a free electricity sensor wired to octopus_free_electricity.
         Sensors are always (re)published on the first run so HA is populated immediately from cache.
         """
         if first:
@@ -1554,6 +1872,20 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         if self.intelligent_devices and (first or dispatch_due):
             self._publish_dispatch_sensors()
 
+        # EDF Flextras booked free hours. Every attempt is stamped, so an account that is not on
+        # Flextras (or whose token edfenergy.com rejects) is asked once per refresh period, not every cycle.
+        flextras_refreshed = False
+        if self.provider == "edf" and self.current_tariff and self._data_age_minutes(self.flextras_fetched_at) >= KRAKEN_FLEXTRAS_REFRESH_MINUTES:
+            self.flextras_fetched_at = datetime.now()
+            booked = await self.async_fetch_flextras_hours()
+            if booked is not None:
+                if booked != self.flextras_sessions:
+                    self.log(f"Kraken: Flextras booked free hours: {booked}")
+                self.flextras_sessions = self._merge_flextras_sessions(booked)
+                flextras_refreshed = True
+        if self.provider == "edf" and (flextras_refreshed or (first and self.flextras_sessions)):
+            self._publish_free_electricity_sensor()
+
         # Wire import into fetch.py once tariff is discovered (retries until successful)
         if not self.wired and self.current_tariff:
             self.set_arg("metric_octopus_import", self.get_entity_name("sensor", "import_rates"))
@@ -1590,7 +1922,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
 
         # Persist to storage whenever we refreshed something, so the next restart restores it.
         # (Not every cycle — if the cache is lost it is simply re-fetched on the next due check.)
-        if tariff_due or rates_due or dispatches_refreshed:
+        if tariff_due or rates_due or dispatches_refreshed or flextras_refreshed:
             await self.save_kraken_cache()
 
         # Update liveness timestamp if we got data OR tariff is known (prevents
@@ -1622,6 +1954,9 @@ async def test_kraken_api(
     discover=False,
     introspect_type=None,
     dispatches=False,
+    flextras=False,
+    property_id=None,
+    auth_method=None,
 ):  # pragma: no cover
     """Run a live Kraken (EDF/E.ON) API test from the command line.
 
@@ -1631,8 +1966,11 @@ async def test_kraken_api(
     user_id + provider and returns a fresh one; token_hash is only an optional dedup echo.
     With --discover the viewer query lists every account and its import/export tariffs
     (useful for debugging missing export rates); with --introspect-type it prints the fields
-    of a schema type (e.g. an applicableRates connection node); otherwise a single run() runs.
+    of a schema type (e.g. an applicableRates connection node); with --flextras it fetches the
+    EDF Flextras hours screen through the same request the component makes and prints the raw
+    response and the booked hours parsed from it; otherwise a single run() runs.
     """
+    import json
     import os
 
     # Supabase env vars must be set before KrakenAPI is constructed so OAuthMixin sees them.
@@ -1641,7 +1979,10 @@ async def test_kraken_api(
     if supabase_key:
         os.environ["SUPABASE_KEY"] = supabase_key
 
-    if key:
+    if auth_method:
+        # Given explicitly (kraken_auth_method from --config): an OAuth access token also arrives as key
+        pass
+    elif key:
         auth_method = "api_key"
     elif email and password:
         auth_method = "email"
@@ -1674,6 +2015,39 @@ async def test_kraken_api(
         export_mpan=export_mpan,
         base_url=base_url,
     )
+
+    if flextras:
+        print("\n=== EDF Flextras booked free hours ===")
+        if provider != "edf":
+            print(f"Note: Flextras is an EDF scheme - provider is {provider!r}, so the component would never ask for it.")
+        kraken.flextras_property_id = property_id
+        if not property_id:
+            kraken.flextras_property_id = await kraken.async_find_property_id()
+            print(f"Property id (properties query): {kraken.flextras_property_id}")
+            if not kraken.flextras_property_id:
+                print("No property id found - the properties query failed or returned nothing (see log above). Pass --property-id to skip it.")
+                return
+        print(f"GET {KRAKEN_FLEXTRAS_HOURS_URL.format(account_id=account_id, property_id=kraken.flextras_property_id)}")
+        status, body = await kraken._async_get_flextras_screen()
+        if status is None:
+            print("No request was made - auth or network failure (see log above).")
+            return
+        print(f"HTTP {status}")
+        if status != 200:
+            print(f"Body: {str(body)[:2000]}")
+            print("The component treats this as 'Flextras not available' and keeps any booked hours it already holds.")
+            return
+        print(f"Body: {json.dumps(body, indent=2)}")
+        booked = kraken.parse_flextras_booked_hours(body, log=print)
+        if booked is None:
+            print("\nScreen NOT recognised (no usable BOOKED_HOURS_LIST component) - the component would keep what it had.")
+        elif not booked:
+            print("\nScreen recognised, no hours booked.")
+        else:
+            print(f"\nBooked free hours ({len(booked)} session(s), UTC) - these would be priced at 0p:")
+            for session in booked:
+                print(f"  {session['start']} -> {session['end']}")
+        return
 
     if dispatches:
         print("\n=== Discovering SmartFlex devices (intelligent dispatch check) ===")
@@ -1740,8 +2114,78 @@ async def test_kraken_api(
     print(f"Export MPAN            : {kraken.export_mpan}")
     print(f"Export account id      : {kraken.export_account_id}")
     print(f"Export rates available : {kraken.export_rates_available}")
+    print(f"Flextras free hours    : {kraken.flextras_sessions} (property {kraken.flextras_property_id})")
     print(f"OAuth failed           : {kraken.oauth_failed}")
     print(f"Requests={kraken.requests_total}  Failures={kraken.failures_total}")
+
+
+# Kraken settings as they appear in apps.yaml, mapped to the command line fields they stand in for,
+# so --config can supply them instead. Written out by hand rather than read from COMPONENT_LIST:
+# components.py pulls predbat in behind it. test_kraken_cli_config_keys_match_component keeps
+# this in step with what the component actually declares.
+KRAKEN_CLI_CONFIG_KEYS = {
+    "provider": "kraken_provider",
+    "account_id": "kraken_account_id",
+    "api_key": "kraken_key",
+    "email": "kraken_email",
+    "password": "kraken_password",
+    "auth_method": "kraken_auth_method",
+    "token_hash": "kraken_token_hash",
+    "token_expires": "kraken_token_expires_at",
+    "mpan": "kraken_mpan",
+    "export_account_id": "kraken_export_account_id",
+    "export_mpan": "kraken_export_mpan",
+    "base_url": "kraken_base_url",
+}
+
+# The OAuth refresh settings, which are not Kraken component args: oauth_mixin reads
+# SUPABASE_URL/SUPABASE_KEY from the environment and user_id from base.args, so without them an
+# OAuth run cannot refresh its token.
+KRAKEN_CLI_OAUTH_KEYS = {
+    "user_id": "user_id",
+    "supabase_url": "supabase_url",
+    "supabase_key": "supabase_key",
+}
+
+
+def merge_kraken_cli_settings(cli, config):
+    """Fill in any Kraken setting not given on the command line from an apps.yaml pred_bat section.
+
+    An explicit command line value always wins, so a one-off run against another account does not
+    mean editing apps.yaml. Returns (merged, used), where used lists the config keys actually taken
+    so the caller can name them - a key the CLI does not look for otherwise fails silently, with an
+    auth error further down as its only symptom.
+
+    kraken_auth_method decides which credentials apply, as it does in the component: with api_key
+    the email/password are left out, with email the key is, and with oauth kraken_key is the OAuth
+    access token. A command line credential overrides the config's method, so --api-key on top of
+    an OAuth config tests that key.
+    """
+    merged = dict(cli)
+    used = []
+    if merged.get("api_key"):
+        merged["auth_method"] = merged.get("auth_method") or "api_key"
+    elif merged.get("email") and merged.get("password"):
+        merged["auth_method"] = merged.get("auth_method") or "email"
+
+    auth_method = merged.get("auth_method") or config.get("kraken_auth_method")
+    skip = set()
+    if auth_method == "email":
+        skip.add("api_key")
+    elif auth_method in ("api_key", "oauth"):
+        skip.update(("email", "password"))
+    if auth_method != "oauth":
+        skip.update(("token_hash", "token_expires"))
+
+    for mapping in (KRAKEN_CLI_CONFIG_KEYS, KRAKEN_CLI_OAUTH_KEYS):
+        for cli_name, config_key in mapping.items():
+            if merged.get(cli_name) not in (None, "") or cli_name in skip:
+                continue
+            value = config.get(config_key)
+            if value not in (None, "", []):
+                merged[cli_name] = str(value) if cli_name == "token_expires" else value
+                used.append(config_key)
+    return merged, used
 
 
 def main():  # pragma: no cover
@@ -1749,8 +2193,14 @@ def main():  # pragma: no cover
     import argparse
 
     parser = argparse.ArgumentParser(description="Test Kraken (EDF/E.ON) API")
-    parser.add_argument("--provider", default="edf", help="Provider: edf or eon")
-    parser.add_argument("--account-id", required=True, help="Kraken account number (e.g. A-XXXXXXXX)")
+    parser.add_argument("--provider", default=None, help="Provider: edf or eon (default edf)")
+    parser.add_argument("--account-id", help="Kraken account number (e.g. A-XXXXXXXX)")
+    parser.add_argument(
+        "--config",
+        help="Read settings from an apps.yaml-format file instead of passing them here, resolving !secret as Predbat does (a secrets.yaml beside the file is used unless PREDBAT_SECRETS_FILE is set). Reads "
+        + ", ".join(list(KRAKEN_CLI_CONFIG_KEYS.values()) + list(KRAKEN_CLI_OAUTH_KEYS.values()))
+        + ". Anything also given on the command line wins",
+    )
 
     # Local auth: API key, or email+password. OAuth needs no token hash — Supabase
     # url/key + user-id are enough (the edge function fetches the token by user_id + provider).
@@ -1771,32 +2221,59 @@ def main():  # pragma: no cover
     parser.add_argument("--discover", action="store_true", help="List all accounts and their import/export tariffs instead of a full run")
     parser.add_argument("--introspect-type", help="Print the fields of a schema type (e.g. ApplicableRateConnectionType) instead of a full run")
     parser.add_argument("--dispatches", action="store_true", help="Check for SmartFlex devices and print their planned/completed intelligent dispatches")
+    parser.add_argument("--flextras", action="store_true", help="Fetch the EDF Flextras hours screen, print the raw response and the booked free hours parsed from it")
+    parser.add_argument("--property-id", help="Kraken property id for --flextras (default: looked up with the properties query)")
 
     args = parser.parse_args()
+    settings = {name: getattr(args, name, None) for name in list(KRAKEN_CLI_CONFIG_KEYS) + list(KRAKEN_CLI_OAUTH_KEYS)}
 
+    if args.config:
+        import os
+        import yaml
+        from utils import load_apps_yaml
+
+        # load_secrets() looks in the working directory and the Home Assistant config paths, so a
+        # copy of a config kept elsewhere would lose its secrets - use a secrets.yaml beside it.
+        beside = os.path.join(os.path.dirname(os.path.abspath(args.config)), "secrets.yaml")
+        if not os.getenv("PREDBAT_SECRETS_FILE") and os.path.isfile(beside):
+            os.environ["PREDBAT_SECRETS_FILE"] = beside
+        try:
+            config, _ = load_apps_yaml(args.config)
+        except (yaml.YAMLError, KeyError, OSError) as exc:
+            parser.error(f"could not read Kraken settings from {args.config}: {exc}")
+        settings, used = merge_kraken_cli_settings(settings, config or {})
+        print("Read from {}: {}".format(args.config, ", ".join(used) if used else "nothing - no keys the CLI looks for"))
+        if settings.get("auth_method") == "oauth" and not (settings.get("supabase_url") and settings.get("supabase_key") and settings.get("user_id")):
+            print("Warning: an OAuth token cannot be refreshed without supabase_url, supabase_key and user_id - expect auth errors once it expires")
+
+    if not settings.get("account_id"):
+        parser.error("no account: pass --account-id, or --config pointing at an apps.yaml holding kraken_account_id")
     # Require at least one usable auth path.
-    if not (args.api_key or (args.email and args.password) or args.supabase_url or args.user_id):
-        parser.error("provide auth: --api-key, or --email/--password, or OAuth via --supabase-url/--supabase-key/--user-id")
+    if not (settings.get("api_key") or (settings.get("email") and settings.get("password")) or settings.get("supabase_url") or settings.get("user_id")):
+        parser.error("provide auth: --api-key, or --email/--password, or OAuth via --supabase-url/--supabase-key/--user-id, or --config")
 
     asyncio.run(
         test_kraken_api(
-            provider=args.provider,
-            account_id=args.account_id,
-            key=args.api_key,
-            email=args.email,
-            password=args.password,
-            token_hash=args.token_hash,
-            token_expires=args.token_expires,
-            supabase_url=args.supabase_url,
-            supabase_key=args.supabase_key,
-            user_id=args.user_id,
-            mpan=args.mpan,
-            export_account_id=args.export_account_id,
-            export_mpan=args.export_mpan,
-            base_url=args.base_url,
+            provider=settings.get("provider") or "edf",
+            account_id=settings["account_id"],
+            key=settings.get("api_key"),
+            email=settings.get("email"),
+            password=settings.get("password"),
+            token_hash=settings.get("token_hash"),
+            token_expires=settings.get("token_expires"),
+            supabase_url=settings.get("supabase_url"),
+            supabase_key=settings.get("supabase_key"),
+            user_id=settings.get("user_id"),
+            mpan=settings.get("mpan"),
+            export_account_id=settings.get("export_account_id"),
+            export_mpan=settings.get("export_mpan"),
+            base_url=settings.get("base_url"),
+            auth_method=settings.get("auth_method"),
             discover=args.discover,
             introspect_type=args.introspect_type,
             dispatches=args.dispatches,
+            flextras=args.flextras,
+            property_id=args.property_id,
         )
     )
 

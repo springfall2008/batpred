@@ -400,6 +400,10 @@ pred_bat:
   #  - 're:number.tsunami_charge_limit'
   #car_charging_soc:
   #  - 're:sensor.tsunami_battery'
+  # Optional: the car's own maximum charge rate in kW, one entry per car (a number or a sensor).
+  # The car is planned at the lower of this and its charging rate; a blank entry or 0 means no cap.
+  #car_charging_max_rate:
+  #  - 3.6
 
   # One per car, when true only one car can charge at once, when False multiple cars can charge at once
   #car_charging_exclusive:
