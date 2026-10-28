@@ -310,8 +310,7 @@ class AnnualPage:
         """Return the saved configuration, or a fresh prefill when none exists."""
         path = self._config_path()
         # annual.yaml may use !secret (e.g. load.octopus.api_key), resolved against this instance's secrets.yaml
-        secrets = getattr(self.base, "secrets", None)
-        loader = secret_yaml_loader(secrets, self.log) if secrets is not None else yaml.SafeLoader
+        loader = secret_yaml_loader(self.base.secrets, self.log)
         try:
             if os.path.exists(path):
                 with open(path, "r", encoding="utf-8") as handle:
