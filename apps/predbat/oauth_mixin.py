@@ -118,7 +118,7 @@ class OAuthMixin:
             instance_id = getattr(self.base, "args", {}).get("user_id", "") if hasattr(self, "base") else ""
 
             refresh_provider = getattr(getattr(self, "base", None), "oauth_refresh_provider", None)
-            if refresh_provider:
+            if refresh_provider is not None:
                 data = await refresh_provider(instance_id, self.provider_name, self.token_hash)
                 if data is None:
                     self.log(f"Warn: OAuth refresh provider returned no answer for {self.provider_name}")

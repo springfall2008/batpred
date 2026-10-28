@@ -3822,7 +3822,7 @@ class GatewayMQTT(ComponentBase):
             instance_id = self.args.get("user_id", "") if isinstance(self.args, dict) else ""
 
             refresh_provider = getattr(getattr(self, "base", None), "oauth_refresh_provider", None)
-            if refresh_provider:
+            if refresh_provider is not None:
                 data = await refresh_provider(instance_id, "predbat_gateway", "")
                 if data is None:
                     self.log("Warn: GatewayMQTT: Token refresh provider returned no answer")

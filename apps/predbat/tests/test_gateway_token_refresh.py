@@ -130,11 +130,16 @@ class TestTokenRefreshProvider:
         gw.mqtt_token_expires_at = 1.0
         return gw
 
+    def _refresh_without_env_or_http(self, gw):
+        """Run _do_token_refresh with no SUPABASE env and any HTTP call failing the test."""
+        with patch.dict("os.environ", {}, clear=True):
+            with patch("aiohttp.ClientSession", side_effect=AssertionError("no HTTP call expected")):
+                return asyncio.run(gw._do_token_refresh())
+
     def test_default_without_env_is_skipped(self):
         gw = self._gateway(None)
 
-        with patch.dict("os.environ", {}, clear=True):
-            ok = asyncio.run(gw._do_token_refresh())
+        ok = self._refresh_without_env_or_http(gw)
 
         assert ok is False
         assert gw.mqtt_token == "old.jwt.token"
@@ -144,9 +149,7 @@ class TestTokenRefreshProvider:
         provider = AsyncMock(return_value={"success": True, "access_token": "new.jwt.token", "expires_at": 1781700000})
         gw = self._gateway(provider)
 
-        with patch.dict("os.environ", {}, clear=True):
-            with patch("aiohttp.ClientSession", side_effect=AssertionError("no HTTP call expected")):
-                ok = asyncio.run(gw._do_token_refresh())
+        ok = self._refresh_without_env_or_http(gw)
 
         assert ok is True
         provider.assert_awaited_once_with("test-instance-id-1234", "predbat_gateway", "")
@@ -155,27 +158,32 @@ class TestTokenRefreshProvider:
         assert gw._refresh_in_progress is False
 
     def test_provider_no_answer_keeps_token(self):
-        gw = self._gateway(AsyncMock(return_value=None))
+        provider = AsyncMock(return_value=None)
+        gw = self._gateway(provider)
 
-        with patch("aiohttp.ClientSession", side_effect=AssertionError("no HTTP call expected")):
-            ok = asyncio.run(gw._do_token_refresh())
+        ok = self._refresh_without_env_or_http(gw)
 
         assert ok is False
+        provider.assert_awaited_once_with("test-instance-id-1234", "predbat_gateway", "")
         assert gw.mqtt_token == "old.jwt.token"
 
     def test_provider_failure_reply_keeps_token(self):
-        gw = self._gateway(AsyncMock(return_value={"success": False, "error": "needs_reauth"}))
+        provider = AsyncMock(return_value={"success": False, "error": "needs_reauth"})
+        gw = self._gateway(provider)
 
-        ok = asyncio.run(gw._do_token_refresh())
+        ok = self._refresh_without_env_or_http(gw)
 
         assert ok is False
+        provider.assert_awaited_once_with("test-instance-id-1234", "predbat_gateway", "")
         assert gw.mqtt_token == "old.jwt.token"
 
     def test_provider_error_is_caught(self):
-        gw = self._gateway(AsyncMock(side_effect=RuntimeError("host refresh failed")))
+        provider = AsyncMock(side_effect=RuntimeError("host refresh failed"))
+        gw = self._gateway(provider)
 
-        ok = asyncio.run(gw._do_token_refresh())
+        ok = self._refresh_without_env_or_http(gw)
 
         assert ok is False
+        provider.assert_awaited_once_with("test-instance-id-1234", "predbat_gateway", "")
         assert gw.mqtt_token == "old.jwt.token"
         assert gw._refresh_in_progress is False
