@@ -8,7 +8,13 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+import asyncio
+
+from components import Components
 from tests.test_infra import MockConfigProvider
+
+LOCK_LOG = "Info: set_read_only is locked on, ignoring request to turn it off"
+_MISSING = object()
 
 
 def _check(label, got, expected):
@@ -20,17 +26,32 @@ def _check(label, got, expected):
 
 def _save(my_predbat):
     item = my_predbat.config_index["set_read_only"]
-    saved = {name: my_predbat.__dict__.get(name, None) for name in ("read_only_lock", "inverter_needs_reset", "inverter_needs_reset_force")}
+    saved = {name: my_predbat.__dict__.get(name, _MISSING) for name in ("read_only_lock", "inverter_needs_reset", "inverter_needs_reset_force", "log", "components", "update_pending", "plan_valid")}
     return item, item.get("value", None), saved
 
 
 def _restore(my_predbat, item, value, saved):
     item["value"] = value
     for name, old in saved.items():
-        if old is None:
+        if old is _MISSING:
             my_predbat.__dict__.pop(name, None)
         else:
             setattr(my_predbat, name, old)
+
+
+def _capture_log(my_predbat):
+    messages = []
+    my_predbat.log = lambda message, *args, **kwargs: messages.append(message)
+    return messages
+
+
+def _switch_off(my_predbat):
+    """Turn the read-only switch off through switch_event, as HA or the web UI would."""
+    my_predbat.components = Components(my_predbat)
+    my_predbat.update_pending = False
+    my_predbat.plan_valid = True
+    entity = my_predbat.config_index["set_read_only"]["entity"]
+    asyncio.run(my_predbat.switch_event("call_service", {"service": "turn_off", "service_data": {"entity_id": entity}}, {}))
 
 
 def _test_default_unchanged(my_predbat):
@@ -50,6 +71,14 @@ def _test_default_unchanged(my_predbat):
         failed |= _check("default switch off", item["value"], False)
         failed |= _check("default switch off resets inverter", my_predbat.inverter_needs_reset, True)
         failed |= _check("default switch off forces reset", my_predbat.inverter_needs_reset_force, "set_read_only")
+
+        # Turning the switch off through switch_event is a real change and asks for a replan
+        item["value"] = True
+        messages = _capture_log(my_predbat)
+        _switch_off(my_predbat)
+        failed |= _check("default switch_event off", item["value"], False)
+        failed |= _check("default switch_event replan", (my_predbat.update_pending, my_predbat.plan_valid), (True, False))
+        failed |= _check("default no lock log", LOCK_LOG in messages, False)
     finally:
         _restore(my_predbat, item, value, saved)
     return failed
@@ -81,7 +110,9 @@ def _test_lock_expose_config(my_predbat):
         item["value"] = True
         my_predbat.inverter_needs_reset = False
         my_predbat.inverter_needs_reset_force = ""
+        messages = _capture_log(my_predbat)
         my_predbat.expose_config("set_read_only", False, event=True)
+        failed |= _check("locked refusal logged once", messages.count(LOCK_LOG), 1)
         failed |= _check("locked switch stays on", item["value"], True)
         failed |= _check("locked switch off no reset", my_predbat.inverter_needs_reset, False)
         failed |= _check("locked switch off no forced reset", my_predbat.inverter_needs_reset_force, "")
@@ -90,6 +121,22 @@ def _test_lock_expose_config(my_predbat):
         item["value"] = None
         my_predbat.expose_config("set_read_only", False)
         failed |= _check("locked first publish on", item["value"], True)
+
+        # Turning it on is not a refusal, so nothing is logged
+        messages = _capture_log(my_predbat)
+        my_predbat.expose_config("set_read_only", True)
+        failed |= _check("locked turn on not logged", messages.count(LOCK_LOG), 0)
+
+        # switch_event off is refused without a replan
+        item["value"] = True
+        my_predbat.inverter_needs_reset = False
+        my_predbat.inverter_needs_reset_force = ""
+        messages = _capture_log(my_predbat)
+        _switch_off(my_predbat)
+        failed |= _check("locked switch_event stays on", item["value"], True)
+        failed |= _check("locked switch_event no replan", (my_predbat.update_pending, my_predbat.plan_valid), (False, True))
+        failed |= _check("locked switch_event no reset", (my_predbat.inverter_needs_reset, my_predbat.inverter_needs_reset_force), (False, ""))
+        failed |= _check("locked switch_event refusal logged", messages.count(LOCK_LOG), 1)
     finally:
         _restore(my_predbat, item, value, saved)
     return failed

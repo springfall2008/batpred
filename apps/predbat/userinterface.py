@@ -516,6 +516,9 @@ class UserInterface:
                 if item.get("value", None) != value:
                     self.log("switch_event: {} = {}".format(entity, value))
                     await self.async_expose_config(item["name"], value, event=True)
+                    if self.read_only_lock and item["name"] == "set_read_only" and not value:
+                        # Locked on, so nothing changed and there is nothing to replan
+                        continue
                     self.update_pending = True
                     self.plan_valid = False
 
@@ -589,6 +592,8 @@ class UserInterface:
             else:
                 if self.read_only_lock and name == "set_read_only":
                     # Locked on, so a request to turn it off is a no-op rather than a change
+                    if not value:
+                        self.log("Info: set_read_only is locked on, ignoring request to turn it off")
                     value = True
                 entity = item.get("entity")
                 has_changed = ((item.get("value", None) is None) or (value != item.get("value", None))) or force
