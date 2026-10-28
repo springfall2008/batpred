@@ -149,6 +149,7 @@ SIGENERGY_MQTT_PORT = 8883             # TLS MQTT port on the Sigenergy broker
 SIGENERGY_MQTT_TOPIC_CHANGE = "openapi/change/{app_key}/{system_id}"    # system data (device state)
 SIGENERGY_MQTT_TOPIC_PERIOD = "openapi/period/{app_key}/{system_id}"    # telemetry data
 SIGENERGY_MQTT_TOPIC_ALARM = "openapi/alarm/{app_key}/{system_id}"      # alarm data
+SIGENERGY_MQTT_TOPIC_UNSUBSCRIBE_CHANGE = "openapi/unsubscription/change"  # cancel change push (see _mqtt_listener_loop)
 SIGENERGY_MQTT_TOPIC_COMMAND = "openapi/instruction/command"            # battery command publish
 SIGENERGY_MQTT_TOPIC_MODE = "openapi/instruction/mode"                  # V1 operating mode switch (MQTT)
 MQTT_RC_NO_MATCHING_SUBSCRIBERS = 0x10  # MQTT 5 PUBACK: accepted, but no client is subscribed so the message went nowhere
@@ -239,6 +240,11 @@ SIGENERGY_PV_PRESENT_KWH = 1.0
 # load_cached_data()). System/device discovery is deliberately excluded — it is always
 # re-fetched fresh on startup.
 SIGENERGY_CACHE_KEYS = ["energy_flow", "daily_summary", "history_totals", "onboard_status", "grid_export", "device_cutoffs"]
+SIGENERGY_CACHE_EXPIRY_DAYS = 1
+# Plant settings that only an openapi/change snapshot reports - kept for longer so a missed snapshot
+# doesn't silently drop the export limit and SoC cut-offs back to their defaults
+SIGENERGY_SETTINGS_CACHE_KEYS = ["grid_export", "device_cutoffs"]
+SIGENERGY_SETTINGS_CACHE_EXPIRY_DAYS = 28
 
 # Sentinel returned by _request() when the API responds with code=0 but an empty/null data field.
 # Distinguishes "success with no payload" from None which always means "request failed".
@@ -2131,6 +2137,10 @@ class SigenergyAPI(ComponentBase):
                         await client.subscribe(topic)
 
                     sub_payload = json.dumps({"accessToken": token, "systemIdList": system_id_list})
+                    # Sigenergy only sends the full openapi/change snapshot (export limit, SoC cut-offs) when it registers
+                    # a new change subscription - re-subscribing after a restart gets nothing. Cancelling it first makes
+                    # every connect a new registration, so the snapshot comes straight back.
+                    await client.publish(SIGENERGY_MQTT_TOPIC_UNSUBSCRIBE_CHANGE, payload=sub_payload, qos=1)
                     for sub_topic in ("openapi/subscription/period", "openapi/subscription/change", "openapi/subscription/alarm"):
                         await client.publish(sub_topic, payload=sub_payload, qos=1)
                     self.log("SigenergyAPI: MQTT subscriptions published for {} system(s)".format(len(system_id_list)))
@@ -3211,8 +3221,9 @@ class SigenergyAPI(ComponentBase):
         now = datetime.now(self.local_tz)
         self.data_age[key] = now
         if self.storage:
-            # Expire after a day so stale data doesn't linger in the cache forever
-            await self.storage.save("sigenergy", key, data, format="json", expiry=now + timedelta(days=1))
+            # Expire after a day so stale data doesn't linger in the cache forever; plant settings are kept longer
+            days = SIGENERGY_SETTINGS_CACHE_EXPIRY_DAYS if key in SIGENERGY_SETTINGS_CACHE_KEYS else SIGENERGY_CACHE_EXPIRY_DAYS
+            await self.storage.save("sigenergy", key, data, format="json", expiry=now + timedelta(days=days))
 
     async def _load_cache(self, key):
         """Load previously persisted poll-interval system state for a cache key.
@@ -3246,8 +3257,8 @@ class SigenergyAPI(ComponentBase):
         reboot during the API's own nightly dip window can't let a lower reading through. The
         rest (energy_flow, daily_summary, onboard_status) is restored too so entities publish
         sensible values immediately rather than "unknown"/0 while the first poll is in flight.
-        grid_export is restored because nothing but an openapi/change message reports it, and
-        those can be days apart - without it the export limit would read 99999 until the next one.
+        grid_export is restored because nothing but an openapi/change message reports it - without
+        it the export limit would read 99999 until the next one arrives.
         device_cutoffs is restored for the same reason - without it battery_min_soc would fall back to
         the 4% default after every restart and push set_reserve_min back up, and the reserve would
         read the 10% default.
@@ -3427,8 +3438,8 @@ class SigenergyAPI(ComponentBase):
         # every minute and the cache does not need rewriting that often.
         if first or seconds % SIGENERGY_POLL_INTERVAL == 0:
             await self._save_cache("onboard_status", self.onboard_status)
-            # Rewritten every poll, not just when a change message arrives, because the cache expires
-            # after a day and the plant may go longer than that without reporting its export limit again
+            # Rewritten every poll, not just when a change message arrives, so the cache expiry runs from
+            # the last poll rather than the last snapshot
             if self.grid_export:
                 await self._save_cache("grid_export", self.grid_export)
             if self.device_cutoffs:
