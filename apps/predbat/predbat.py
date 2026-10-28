@@ -390,6 +390,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.plan_made_by_version = None
         self.plan_last_updated = None
         self.plan_last_updated_minutes = 0
+        self.plan_version = 0
         self.plugin_system = None
         self.calculate_plan_every = 5
         self.prediction_started = False
@@ -916,6 +917,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             "plan_preclip": self.plan_preclip,
             "plan_last_updated": self.plan_last_updated.isoformat() if self.plan_last_updated else None,
             "plan_last_updated_minutes": self.plan_last_updated_minutes,
+            "plan_version": self.plan_version,
             "predbat_version": self.plan_made_by_version,
         }
         try:
@@ -986,6 +988,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.plan_preclip = None
         self.plan_last_updated = saved_dt
         self.plan_last_updated_minutes = plan_data.get("plan_last_updated_minutes", 0)
+        self.plan_version = plan_data.get("plan_version", 0)
         # Saves from before the version was recorded come back as made by an unknown version
         self.plan_made_by_version = plan_data.get("predbat_version")
         self.plan_valid = True
@@ -1234,12 +1237,16 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         if status is not None and self.current_status != status_before:
             self.record_status_under_warning(status, status_extra)
 
-    def update_pred(self, scheduled=True):
+    def plan_once(self, scheduled=True):
         """
-        Update the prediction state, everything is called from here right now
+        Refresh input data and recompute the plan if required, without executing it.
+
+        Returns None when a pre-condition fails (template configuration, inverter data
+        unavailable or import rates all zero) - the error will already have been recorded.
+        Otherwise returns a plan artifact summary dict with keys recomputed, plan_valid,
+        plan_version and plan_last_updated. Passing scheduled=False forces a recompute.
         """
         recompute = False
-        status_extra = ""
         self.reset_run_status()
 
         self.update_time()
@@ -1253,7 +1260,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         if self.is_template_mode():
             self.log("Error: You have not completed editing the apps.yaml template, Predbat cannot run. Please comment out 'Template: True' line in apps.yaml to start Predbat running")
             self.record_status("Error: Template Configuration, remove 'Template: True' line in apps.yaml to start predbat running", had_errors=True)
-            return
+            return None
 
         self.expose_config("active", True)
         self.fetch_config_options()
@@ -1275,7 +1282,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         if not self.fetch_inverter_data():
             self.log("Error: Failed to fetch inverter data, not able to compute a plan")
             self.record_status("Error: Failed to fetch inverter data, not able to compute a plan", had_errors=True)
-            return
+            return None
         self.check_export_more_solar_effective()
         self.log_replay_state()
         self.log_replay_inverter()
@@ -1284,7 +1291,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         if self.rate_min == self.rate_max == 0:
             self.log("Error: Import rates are all zero, not able to compute a plan")
             self.record_status("Error: Import rates are all zero, not able to compute a plan", had_errors=True)
-            return
+            return None
 
         if self.dynamic_load():
             self.log("Dynamic load adjustment changed, will recompute the plan")
@@ -1303,18 +1310,51 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
         # Persist the plan so it can be restored immediately on next startup
         if recompute and self.plan_valid:
+            self.plan_version += 1
             self.save_plan()
 
         # Publish rate data
         self.publish_rate_and_threshold()
 
-        # Execute the plan, re-read the inverter first if we had to calculate (as time passes during calculations)
-        if recompute:
+        return {
+            "recomputed": recompute,
+            "plan_valid": self.plan_valid,
+            "plan_last_updated": self.plan_last_updated,
+            "plan_version": self.plan_version,
+        }
+
+    def execute_once(self, refetch_inverter=True):
+        """
+        Execute the current plan against the inverters.
+
+        When refetch_inverter is True the inverter data is re-read first, as time passes
+        during plan calculations. Returns None if the inverter data could not be fetched
+        (the error will already have been recorded), otherwise the (status, status_extra)
+        tuple from execute_plan().
+        """
+        if refetch_inverter:
             if not self.fetch_inverter_data():
                 self.log("Error: Failed to fetch inverter data, not able to execute the plan")
                 self.record_status("Error: Failed to fetch inverter data, not able to execute the plan", had_errors=True)
-                return
-        status, status_extra = self.execute_plan()
+                return None
+        return self.execute_plan()
+
+    def update_pred(self, scheduled=True):
+        """
+        Update the prediction state, everything is called from here right now
+        """
+        status_extra = ""
+
+        plan = self.plan_once(scheduled=scheduled)
+        if plan is None:
+            return
+        recompute = plan["recomputed"]
+
+        # Execute the plan, re-read the inverter first if we had to calculate (as time passes during calculations)
+        executed = self.execute_once(refetch_inverter=recompute)
+        if executed is None:
+            return
+        status, status_extra = executed
 
         # If the plan was not updated, and the time has expired lets update it now
         if not recompute:
@@ -1331,13 +1371,25 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                     time.sleep(delay)
                 # Calculate an updated plan, fetch the inverter data again and execute the plan
                 self.calculate_plan(recompute=True)
-                if not self.fetch_inverter_data():
-                    self.log("Error: Failed to fetch inverter data, not able to execute the plan")
-                    self.record_status("Error: Failed to fetch inverter data, not able to execute the plan", had_errors=True)
+                if self.plan_valid:
+                    self.plan_version += 1
+                    self.save_plan()
+                executed = self.execute_once(refetch_inverter=True)
+                if executed is None:
                     return
-                status, status_extra = self.execute_plan()
+                status, status_extra = executed
             else:
                 self.log("Will not recompute the plan, it is {} minutes old and max age is {} minutes".format(dp1(plan_age_minutes), self.calculate_plan_every))
+
+        self._post_run_bookkeeping(status, status_extra, scheduled, recompute)
+
+    def _post_run_bookkeeping(self, status, status_extra, scheduled, recompute):
+        """
+        Post-run bookkeeping shared by every successful update cycle: plugin hooks, iBoost model
+        state, register-write counters, control interference, savings totals, car SoC, holiday
+        countdown, debug capture, status recording, component health, tariff comparison and
+        memory cleanup.
+        """
 
         # Notify listeners that plan has been executed (consumed by gateway, plugins, etc.)
         if self.plugin_system:
