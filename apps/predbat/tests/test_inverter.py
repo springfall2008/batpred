@@ -4434,6 +4434,26 @@ def test_battery_scaling_invalid_value_clamped(test_name, my_predbat):
             print("ERROR: battery_scaling should retain last known-good value 0.72 when source reads {}, got {}".format(bad_scaling, inv.battery_scaling))
             failed = True
 
+    # A source that keeps reading invalid warns once, then logs at Info, until a valid read (#5368)
+    log_messages = []
+    orig_log = my_predbat.log
+    try:
+        my_predbat.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
+        my_predbat.args["battery_scaling"] = [0.0]
+        inv = Inverter(my_predbat, 0)  # __init__ runs the first refresh_config
+        inv.refresh_config(quiet=True)
+        inv.refresh_config(quiet=True)
+        my_predbat.args["battery_scaling"] = [0.8]
+        inv.refresh_config(quiet=True)
+        my_predbat.args["battery_scaling"] = [0.0]
+        inv.refresh_config(quiet=True)
+    finally:
+        my_predbat.log = orig_log
+    levels = [message.split(":")[0] for message in log_messages if "not a valid scaling factor" in message]
+    if levels != ["Warn", "Info", "Info", "Warn"]:
+        print("ERROR: invalid battery_scaling should warn once, then Info, and warn again after a valid read; got levels {}".format(levels))
+        failed = True
+
     del my_predbat.args["battery_scaling"]
     del my_predbat.args["battery_scaling_last_known"]
     return failed
