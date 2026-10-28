@@ -680,6 +680,63 @@ def test_smart_control_off_ignores_planned_dispatches():
     assert component.charger_control_dispatch_active(0, now) is True
 
 
+PLANNED = "binary_sensor.car_planned_dispatches"
+
+
+def test_smart_control_off_keeps_the_planned_slot_sensor_plan():
+    """While Smart Control is off the dispatches from octopus_intelligent_planned_slot are the charger's own
+    schedule, which still runs, so the charger follows them as the car's plan does (Fetch.smart_control_off_slots())."""
+    component = _octopus_component(control=True)
+    now = _now()  # 01:30 London, 00:30 UTC
+    running = {"start": "2026-06-01T00:15:00+00:00", "end": "2026-06-01T01:00:00+00:00"}
+    component.args["octopus_intelligent_planned_slot"] = [PLANNED]
+    component.sensors[PLANNED] = {"state": "on", "planned_dispatches": [running]}
+    component.base.smart_control_off[0] = True
+    assert component.charger_control_dispatch_active(0, now) is True
+    # Without the planned sensor the slot sensor's plan, which Octopus will not act on, is still dropped
+    del component.args["octopus_intelligent_planned_slot"]
+    component.sensors[DISPATCH]["planned_dispatches"] = [running]
+    assert component.charger_control_dispatch_active(0, now) is False
+
+
+def test_planned_slot_sensor_replaces_the_slot_sensor_plan():
+    """With octopus_intelligent_planned_slot set, its dispatches are the plan the charger follows, as they are
+    for the car's plan, so a dispatch it leaves out does not run the charger from the slot sensor."""
+    # The charger whose Octopus arrangement cannot be told, with control set to true
+    component = _octopus_component(control=True)
+    running = [{"start": "2026-06-01T00:00:00+00:00", "end": "2026-06-01T01:00:00+00:00"}]
+    component.sensors[DISPATCH].update({"state": "on", "planned_dispatches": running})
+    component.args["octopus_intelligent_planned_slot"] = [PLANNED]
+    component.sensors[PLANNED] = {"state": "on", "planned_dispatches": []}
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "off", 0)], component.commands
+
+    # Nothing on either sensor: the slot sensor's state does not stand in for the planned sensor's empty plan
+    component.sensors[DISPATCH]["planned_dispatches"] = []
+    assert component.charger_control_dispatch_active(0, _now()) is False
+
+    # The planned sensor keeps the dispatch, and the charger runs before the plan shows it
+    component.sensors[PLANNED]["planned_dispatches"] = running
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "off", 0), ("a", "on", 0)], component.commands
+
+    # One the planned sensor has seen finish counts too, as it does for the car's plan
+    component.sensors[PLANNED] = {"state": "off", "planned_dispatches": [], "completed_dispatches": running}
+    assert component.charger_control_dispatch_active(0, _now()) is True
+
+    # Naming the slot sensor itself, or a regex that matched nothing, leaves the slot sensor as the plan
+    component.sensors[DISPATCH]["planned_dispatches"] = running
+    component.sensors[PLANNED] = {"state": "off", "planned_dispatches": []}
+    for planned in (DISPATCH, [DISPATCH], ["re:(binary_sensor.nothing)"], [None]):
+        component.args["octopus_intelligent_planned_slot"] = planned
+        assert component.charger_control_dispatch_active(0, _now()) is True, planned
+
+    # The car plan does not read the planned sensor while an action config supplies the slots, so neither does the charger
+    component.args["octopus_intelligent_planned_slot"] = [PLANNED]
+    component.args["octopus_intelligent_slot_action_config"] = {"device_id": "x"}
+    assert component.charger_control_dispatch_active(0, _now()) is True
+
+
 def test_is_charger_that_has_lost_its_value_is_not_a_no():
     """A dispatch sensor reporting is_charger as unknown or unavailable is cannot tell, not 'not the charger'."""
     for lost in ("unknown", "unavailable", "none", ""):
@@ -1786,6 +1843,8 @@ def run_car_charger_control_tests(my_predbat=None):
     test_octopus_rule_car_integrated_follows_the_dispatch_sensor()
     test_dispatch_times_judged_against_the_clock()
     test_smart_control_off_ignores_planned_dispatches()
+    test_planned_slot_sensor_replaces_the_slot_sensor_plan()
+    test_smart_control_off_keeps_the_planned_slot_sensor_plan()
     test_is_charger_that_has_lost_its_value_is_not_a_no()
     test_guest_switch_toggle()
     test_octopus_rule_explicit_true_never_overrides_a_charge_point()
