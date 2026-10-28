@@ -2021,6 +2021,18 @@ def test_fetch_inverter_data_battery_export_not_permitted(my_predbat):
     return failed
 
 
+def test_reserve_above_soc_inverter_types():
+    """Only the inverter types that charge up to a reserve above their SoC opt in to a hold reserve that never leads the SoC."""
+    from config import INVERTER_DEF
+
+    failed = False
+    opted_in = sorted(name for name, idef in INVERTER_DEF.items() if idef.get("reserve_above_soc_charges_from_grid", False))
+    if opted_in != ["EnphaseCloud", "TESLA"]:
+        print("ERROR: reserve_above_soc_charges_from_grid should be set for EnphaseCloud and TESLA only, got {}".format(opted_in))
+        failed = True
+    return failed
+
+
 def run_execute_tests(my_predbat):
     print("**** Running execute tests ****\n")
 
@@ -2030,6 +2042,7 @@ def run_execute_tests(my_predbat):
     failed |= test_fetch_inverter_data_no_extra_pv_when_sensors_match_inverters(my_predbat)
     failed |= test_inverter_reads_battery_export_permitted(my_predbat)
     failed |= test_fetch_inverter_data_battery_export_not_permitted(my_predbat)
+    failed |= test_reserve_above_soc_inverter_types()
     if failed:
         return failed
 
