@@ -2306,6 +2306,8 @@ INVERTER_DEF = {
         "can_span_midnight": False,
         "charge_discharge_with_rate": False,
         "target_soc_used_for_discharge": True,
+        # A Powerwall charges from the grid to reach a backup reserve above its SoC, even with grid charging disallowed
+        "reserve_above_soc_charges_from_grid": True,
     },
     "EnphaseCloud": {
         "name": "EnphaseCloud",
@@ -2334,6 +2336,8 @@ INVERTER_DEF = {
         "can_span_midnight": False,
         "charge_discharge_with_rate": False,
         "target_soc_used_for_discharge": True,
+        # Holds on the reserve like a Powerwall, so treated the same: a reserve above the SoC may be met from the grid
+        "reserve_above_soc_charges_from_grid": True,
     },
     "DeyeCloud": {
         "name": "DeyeCloud",
