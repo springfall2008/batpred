@@ -55,6 +55,7 @@ from tests.test_new_install_detection import test_new_install_detection
 from tests.test_config_json_format import test_config_json_format
 from tests.test_history_attribute import test_history_attribute
 from tests.test_previous_value_provider import test_previous_value_provider
+from tests.test_read_only_lock import test_read_only_lock
 from tests.test_inverter import run_inverter_tests
 from tests.test_basic_rates import test_basic_rates
 from tests.test_clock import run_clock_tests
@@ -530,6 +531,7 @@ def main():
         ("prune_today", test_prune_today, "Prune today tests", False),
         ("history_attribute", test_history_attribute, "History attribute tests", False),
         ("previous_value_provider", test_previous_value_provider, "Previous value provider hook tests", False),
+        ("read_only_lock", test_read_only_lock, "Read-only lock tests", False),
         ("minute_data_state", test_minute_data_state, "Minute data state tests", False),
         ("minute_data_copy", run_minute_data_copy_tests, "Minute data history copying tests", False),
         ("format_time_ago", test_format_time_ago, "Format time ago tests", False),

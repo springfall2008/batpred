@@ -126,6 +126,10 @@ class UserInterface:
     # callable(entity, attribute) returning the value, or None to fall back to the HA read.
     previous_value_provider = None
 
+    # When True, set_read_only is held on: the config value, the switch, the web UI and the
+    # apps.yaml value can not turn it off. For hosts and monitor-only installs.
+    read_only_lock = False
+
     def call_notify(self, message):
         """
         Sync wrapper for call_notify
@@ -527,6 +531,8 @@ class UserInterface:
         value: The value of the config if it is set, otherwise the default value.
         default: The default value passed as an argument.
         """
+        if self.read_only_lock and name == "set_read_only":
+            return True, default
         item = self.config_index.get(name)
         if item and item["name"] == name:
             enabled = self.user_config_item_enabled(item)
@@ -581,6 +587,9 @@ class UserInterface:
             if not enabled:
                 item["value"] = None
             else:
+                if self.read_only_lock and name == "set_read_only":
+                    # Locked on, so a request to turn it off is a no-op rather than a change
+                    value = True
                 entity = item.get("entity")
                 has_changed = ((item.get("value", None) is None) or (value != item.get("value", None))) or force
                 if entity and (has_changed or force_ha):
