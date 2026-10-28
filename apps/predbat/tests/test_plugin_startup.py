@@ -9,6 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 import os
 import shutil
+import sys
 import tempfile
 from unittest.mock import MagicMock, patch
 from predbat import PredBat
@@ -233,6 +234,90 @@ def test_plugin_discovery_fallback_skips_imported_base_class(my_predbat):
         else:
             print("OK: attribute-based fallback instantiated the plugin class, not the imported base")
     finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    return failed
+
+
+def test_plugin_discovery_does_not_retry_a_failed_class(my_predbat):
+    """
+    A plugin class that raises in __init__ must be constructed ONCE, not twice.
+
+    The class ends in "Plugin" and inherits PREDBAT_PLUGIN from the base, so it
+    matches both strategy 1 and strategy 2. Strategy 1 tries it and it raises;
+    unless strategy 2 skips classes strategy 1 already attempted, it constructs
+    the same class again, and any side effect before the raising line (a hook
+    registered, state written) happens twice.
+    """
+    print("*** Running test: Plugin discovery does not retry a class that failed")
+    failed = 0
+
+    base = MagicMock()
+    base.log = MagicMock()
+
+    tmpdir = tempfile.mkdtemp()
+    try:
+        with open(os.path.join(tmpdir, "zz_raises_plugin.py"), "w", encoding="utf-8") as fh:
+            fh.write("from plugin_system import PredBatPlugin\n\n\nclass ZzRaisesPlugin(PredBatPlugin):\n    def __init__(self, base):\n        raise ValueError('bad config')\n")
+
+        plugin_system = PluginSystem(base)
+        plugin_system.discover_plugins([tmpdir])
+        attempts = [c for c in base.log.call_args_list if "Initialising plugin class" in str(c) and "ZzRaisesPlugin" in str(c)]
+
+        if len(attempts) != 1:
+            print("ERROR: ZzRaisesPlugin was constructed {} times, expected 1".format(len(attempts)))
+            failed = 1
+        elif plugin_system.plugins:
+            print("ERROR: expected no plugin loaded, got {}".format(list(plugin_system.plugins)))
+            failed = 1
+        else:
+            print("OK: the failing plugin class was constructed once and not retried")
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    return failed
+
+
+def test_plugin_discovery_names_a_reexported_class(my_predbat):
+    """
+    A plugin class imported into the _plugin.py file, rather than defined there, is
+    not loaded, and the log must say which class was skipped and where it came from.
+
+    Discovery only takes classes defined in the plugin file, so a layout that keeps
+    the class in a helper module and re-exports it does not load. Without naming
+    the skipped class, the only log line is "No plugin class ... found", which
+    points nowhere.
+    """
+    print("*** Running test: Plugin discovery names a re-exported plugin class")
+    failed = 0
+
+    base = MagicMock()
+    base.log = MagicMock()
+
+    tmpdir = tempfile.mkdtemp()
+    sys.path.insert(0, tmpdir)
+    try:
+        with open(os.path.join(tmpdir, "zz_reexport_core.py"), "w", encoding="utf-8") as fh:
+            fh.write("from plugin_system import PredBatPlugin\n\n\nclass ZzReexportPlugin(PredBatPlugin):\n    pass\n")
+        with open(os.path.join(tmpdir, "zz_reexport_plugin.py"), "w", encoding="utf-8") as fh:
+            fh.write("from plugin_system import PredBatPlugin\nfrom zz_reexport_core import ZzReexportPlugin\n")
+
+        plugin_system = PluginSystem(base)
+        plugin_system.discover_plugins([tmpdir])
+        messages = [str(c.args[0]) for c in base.log.call_args_list if c.args]
+        expected = "Plugin classes in zz_reexport_plugin that are imported, not defined there, are not loaded: ZzReexportPlugin (from zz_reexport_core)"
+
+        if plugin_system.plugins:
+            print("ERROR: expected no plugin loaded, got {}".format(list(plugin_system.plugins)))
+            failed = 1
+        elif expected not in messages:
+            print("ERROR: expected log line not found: {}".format(expected))
+            failed = 1
+        else:
+            print("OK: the skipped re-exported class is named in the log")
+    finally:
+        sys.path.remove(tmpdir)
+        sys.modules.pop("zz_reexport_core", None)
         shutil.rmtree(tmpdir, ignore_errors=True)
 
     return failed

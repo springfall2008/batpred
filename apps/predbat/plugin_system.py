@@ -118,6 +118,7 @@ class PluginSystem:
 
         # Look for plugin classes or initialisation functions
         plugin_instance = None
+        attempted = set()
 
         # Plugin discovery fallthrough (try in order of preference):
 
@@ -131,6 +132,7 @@ class PluginSystem:
         # not depend on the alphabet.
         for name, obj in inspect.getmembers(plugin_module, inspect.isclass):
             if name.endswith("Plugin") and obj.__module__ == plugin_module.__name__:
+                attempted.add(obj)
                 try:
                     self.log(f"Initialising plugin class (name-based): {name}")
                     plugin_instance = obj(self.base)
@@ -148,9 +150,12 @@ class PluginSystem:
         # not end in "Plugin", or it raised during __init__ and left plugin_instance
         # None. Both end with the abstract base constructed, the plugin logged as
         # loaded, and nothing registered.
+        # Classes strategy 1 already tried are skipped: a "Plugin" class inherits the
+        # marker, so without this one that raised in __init__ is constructed twice and
+        # any side effect before the raise happens twice.
         if plugin_instance is None:
             for name, obj in inspect.getmembers(plugin_module, inspect.isclass):
-                if getattr(obj, "PREDBAT_PLUGIN", False) and obj.__module__ == plugin_module.__name__:
+                if getattr(obj, "PREDBAT_PLUGIN", False) and obj.__module__ == plugin_module.__name__ and obj not in attempted:
                     try:
                         self.log(f"Initialising plugin class (attribute-based): {name}")
                         plugin_instance = obj(self.base)
@@ -178,6 +183,16 @@ class PluginSystem:
                     self.log(f"Failed to register hooks for plugin {plugin_name}: {e}")
         else:
             self.log(f"No plugin class or initialisation function found in {plugin_name}")
+            # A plugin class must be DEFINED in the _plugin.py file; one imported from
+            # another module is skipped. Name any that were, so a re-exported class is
+            # diagnosable from the log rather than silently not loading.
+            imported = [
+                f"{name} (from {obj.__module__})"
+                for name, obj in inspect.getmembers(plugin_module, inspect.isclass)
+                if (name.endswith("Plugin") or getattr(obj, "PREDBAT_PLUGIN", False)) and obj.__module__ not in (plugin_module.__name__, PredBatPlugin.__module__)
+            ]
+            if imported:
+                self.log(f"Plugin classes in {plugin_name} that are imported, not defined there, are not loaded: {', '.join(imported)}")
 
     def get_plugin(self, plugin_name: str):
         """
