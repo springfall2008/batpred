@@ -39,6 +39,7 @@ STATE_FIELDS = (
     "octopus_intelligent_charging",
     "octopus_intelligent_ignore_unplugged",
     "octopus_charge_target_base",
+    "octopus_charge_target_logged",
     "dispatch_timeline_pending",
     "rate_import",
 )
@@ -259,6 +260,23 @@ def _run_plug_and_owner(my_predbat):
         limit = _fetch(my_predbat, 79, 40, plugged=False)
         failed |= _check("t14 base held", abs(limit - (24.18 + 24.8)) < 0.01, "limit {}".format(limit))
         my_predbat.args.pop("car_charging_plugged", None)
+
+        print("Test 14b: the plug-in SoC is logged once at plug-in, and not on every cycle of a drive")
+        my_predbat.octopus_charge_target_base = {}
+        my_predbat.octopus_charge_target_logged = {}
+        logged = []
+        saved_log = my_predbat.log
+        my_predbat.log = lambda message, *args, **kwargs: logged.append(message)
+        try:
+            for soc in (60, 55, 50, 45):
+                _fetch(my_predbat, soc, 40, plugged=False)
+            failed |= _check("t14b quiet while unplugged", not [m for m in logged if "when plugged in" in m], "logged {}".format(logged))
+            _fetch(my_predbat, 45, 40)
+            _fetch(my_predbat, 50, 40)
+        finally:
+            my_predbat.log = saved_log
+        plug_in = [m for m in logged if "when plugged in" in m]
+        failed |= _check("t14b logged once at plug-in", len(plug_in) == 1 and "27.9kWh the car had" in plug_in[0], "logged {}".format(plug_in))
 
         print("Test 15: a charge limit Ohme has claimed is its own target, a SoC to reach")
         my_predbat.octopus_charge_target_base = {}

@@ -2420,10 +2420,12 @@ class Fetch:
                     if octopus_limit:
                         octopus_limit = dp3(float(octopus_limit) * self.car_charging_battery_size[car_n] / 100.0)
                         added = self.octopus_charge_target_is_added(entity_id, car_n)
-                        if save and (added, base_soc) != self.octopus_charge_target_logged.get(car_n):
-                            # Said when it changes, not on every cycle
-                            self.octopus_charge_target_logged[car_n] = (added, base_soc)
-                            if added:
+                        # Said when it changes, not on every cycle. While unplugged the base follows the SoC, so it
+                        # is not a plug-in SoC yet and is left out
+                        logged_key = (added, base_soc if plugged else None)
+                        if save and logged_key != self.octopus_charge_target_logged.get(car_n):
+                            self.octopus_charge_target_logged[car_n] = logged_key
+                            if added and plugged:
                                 self.log("Car {} Octopus is linked to the charger, so its target adds {}kWh to the {}kWh the car had when plugged in".format(car_n, octopus_limit, base_soc))
                         if added:
                             octopus_limit = dp3(base_soc + octopus_limit)
