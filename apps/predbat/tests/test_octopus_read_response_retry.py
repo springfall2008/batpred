@@ -5,7 +5,7 @@ Tests for Octopus async_read_response_retry function
 import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
-from octopus import OctopusAPI, OCTOPUS_MAX_RETRIES
+from octopus import OctopusAPI
 
 
 def test_octopus_read_response_retry_wrapper(my_predbat):
@@ -14,17 +14,15 @@ def test_octopus_read_response_retry_wrapper(my_predbat):
 
 async def test_octopus_read_response_retry(my_predbat):
     """
-    Test OctopusAPI async_read_response_retry method with exponential backoff.
+    Test OctopusAPI async_read_response_retry, which reads a response once.
 
     Tests:
     - Test 1: Successful response on first attempt (no retry)
-    - Test 2: Successful response on second attempt (1 retry)
-    - Test 3: Successful response on last attempt (max retries - 1)
-    - Test 4: All retries fail, returns None and increments failures_total
-    - Test 5: Exponential backoff timing is correct
+    - Test 2: A failed read is read once, without sleeping
+    - Test 3: HTTP 429 sets last_read_rate_limited
     - Test 6: ignore_errors parameter is passed through correctly
-    - Test 7: Rate limit errors trigger retry with backoff
-    - Test 8: Auth errors trigger retry with backoff
+    - Test 7: A rate limit is not re-read or slept on
+    - Test 8: Auth errors are not re-read
     """
     print("**** Running Octopus async_read_response_retry tests ****")
     failed = False
@@ -70,118 +68,58 @@ async def test_octopus_read_response_retry(my_predbat):
     else:
         print("PASS: Successful response on first attempt, no retry needed")
 
-    # Test 2: Successful response on second attempt (1 retry)
-    print("\n*** Test 2: Successful response on second attempt (1 retry) ***")
+    # Test 2: A failed read is not re-read. aiohttp caches the body, so a second read of the same
+    # response returns the same failure - the old loop only stalled ~15s and repeated the warning,
+    # even when (as mocked here) a later read could have been made to succeed.
+    print("\n*** Test 2: A failed read is read once, without sleeping ***")
     api = OctopusAPI(my_predbat, key="test-key", account_id="test-account", automatic=False)
     api.failures_total = 0
-
-    successful_data = {"data": {"result": "success"}}
-    response = create_mock_response(200, json.dumps(successful_data))
-
-    # Mock async_read_response to fail once, then succeed
-    api.async_read_response = AsyncMock(side_effect=[None, successful_data])
-
-    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-        result = await api.async_read_response_retry(response, url, ignore_errors=False)
-
-        if result != successful_data:
-            print(f"ERROR: Expected successful data, got {result}")
-            failed = True
-        elif api.async_read_response.call_count != 2:
-            print(f"ERROR: Expected 2 calls to async_read_response, got {api.async_read_response.call_count}")
-            failed = True
-        elif mock_sleep.call_count != 1:
-            print(f"ERROR: Expected 1 sleep call, got {mock_sleep.call_count}")
-            failed = True
-        elif mock_sleep.call_args[0][0] != 1:  # 2^0 = 1 second
-            print(f"ERROR: Expected 1 second sleep, got {mock_sleep.call_args[0][0]}")
-            failed = True
-        elif api.failures_total != 0:
-            print(f"ERROR: failures_total should be 0 after eventual success, got {api.failures_total}")
-            failed = True
-        else:
-            print("PASS: Successful response on second attempt with exponential backoff")
-
-    # Test 3: Successful response on last attempt (max retries - 1)
-    print("\n*** Test 3: Successful response on last attempt (max retries - 1) ***")
-    api = OctopusAPI(my_predbat, key="test-key", account_id="test-account", automatic=False)
-    api.failures_total = 0
-
-    successful_data = {"data": {"result": "success"}}
-    response = create_mock_response(200, json.dumps(successful_data))
-
-    # Mock async_read_response to fail (OCTOPUS_MAX_RETRIES - 1) times, then succeed
-    side_effects = [None] * (OCTOPUS_MAX_RETRIES - 1) + [successful_data]
-    api.async_read_response = AsyncMock(side_effect=side_effects)
-
-    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-        result = await api.async_read_response_retry(response, url, ignore_errors=False)
-
-        if result != successful_data:
-            print(f"ERROR: Expected successful data, got {result}")
-            failed = True
-        elif api.async_read_response.call_count != OCTOPUS_MAX_RETRIES:
-            print(f"ERROR: Expected {OCTOPUS_MAX_RETRIES} calls, got {api.async_read_response.call_count}")
-            failed = True
-        elif mock_sleep.call_count != (OCTOPUS_MAX_RETRIES - 1):
-            print(f"ERROR: Expected {OCTOPUS_MAX_RETRIES - 1} sleep calls, got {mock_sleep.call_count}")
-            failed = True
-        elif api.failures_total != 0:
-            print(f"ERROR: failures_total should be 0 after eventual success, got {api.failures_total}")
-            failed = True
-        else:
-            print(f"PASS: Successful response on last attempt after {OCTOPUS_MAX_RETRIES - 1} retries")
-
-    # Test 4: All retries fail, returns None and increments failures_total
-    print("\n*** Test 4: All retries fail, returns None and increments failures_total ***")
-    api = OctopusAPI(my_predbat, key="test-key", account_id="test-account", automatic=False)
-    api.failures_total = 0
-
     response = create_mock_response(500, "Internal Server Error")
-
-    # Mock async_read_response to always fail
-    api.async_read_response = AsyncMock(return_value=None)
+    api.async_read_response = AsyncMock(side_effect=[None, {"data": {"result": "success"}}])
 
     with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-        result = await api.async_read_response_retry(response, url, ignore_errors=False)
+        result = await api.async_read_response_retry(response, url)
 
         if result is not None:
-            print(f"ERROR: Expected None after all retries fail, got {result}")
+            print(f"ERROR: Expected None for a failed read, got {result}")
             failed = True
-        elif api.async_read_response.call_count != OCTOPUS_MAX_RETRIES:
-            print(f"ERROR: Expected {OCTOPUS_MAX_RETRIES} calls, got {api.async_read_response.call_count}")
+        elif api.async_read_response.call_count != 1:
+            print(f"ERROR: Expected the response to be read once, got {api.async_read_response.call_count}")
             failed = True
-        elif mock_sleep.call_count != (OCTOPUS_MAX_RETRIES - 1):
-            print(f"ERROR: Expected {OCTOPUS_MAX_RETRIES - 1} sleep calls, got {mock_sleep.call_count}")
+        elif mock_sleep.call_count != 0:
+            print(f"ERROR: Expected no sleep, got {mock_sleep.call_count}")
             failed = True
         elif api.failures_total != 1:
-            print(f"ERROR: failures_total should be 1 after all retries fail, got {api.failures_total}")
+            print(f"ERROR: failures_total should be 1, got {api.failures_total}")
             failed = True
         else:
-            print(f"PASS: All {OCTOPUS_MAX_RETRIES} retries failed, returns None and increments failures_total")
+            print("PASS: Failed read returned at once and counted one failure")
 
-    # Test 5: Exponential backoff timing is correct
-    print("\n*** Test 5: Exponential backoff timing is correct ***")
+    # Test 3: An HTTP 429 is reported as a rate limit, so the caller backs off
+    print("\n*** Test 3: HTTP 429 sets last_read_rate_limited ***")
     api = OctopusAPI(my_predbat, key="test-key", account_id="test-account", automatic=False)
-    api.failures_total = 0
+    logged = []
+    api.log = lambda message, *args, **kwargs: logged.append(message)
+    response = create_mock_response(429, "Too Many Requests")
+    result = await api.async_read_response_retry(response, "https://api.octopus.energy/v1/graphql/")
 
-    response = create_mock_response(500, "Internal Server Error")
+    if result is not None or not api.last_read_rate_limited:
+        print(f"ERROR: Expected None with last_read_rate_limited set, got {result} / {api.last_read_rate_limited}")
+        failed = True
+    elif not any("Rate limited: 429" in message for message in logged):
+        print(f"ERROR: Expected the 429 to be logged as a rate limit, got {logged}")
+        failed = True
+    else:
+        print("PASS: HTTP 429 reported as a rate limit")
 
-    # Mock async_read_response to always fail
-    api.async_read_response = AsyncMock(return_value=None)
-
-    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-        result = await api.async_read_response_retry(response, url, ignore_errors=False)
-
-        # Expected backoff: 2^0=1, 2^1=2, 2^2=4, 2^3=8 seconds (for 5 attempts)
-        expected_sleeps = [2**i for i in range(OCTOPUS_MAX_RETRIES - 1)]
-        actual_sleeps = [call[0][0] for call in mock_sleep.call_args_list]
-
-        if actual_sleeps != expected_sleeps:
-            print(f"ERROR: Expected exponential backoff {expected_sleeps}, got {actual_sleeps}")
-            failed = True
-        else:
-            print(f"PASS: Exponential backoff timing correct: {actual_sleeps} seconds")
+    # A read that is not rate limited clears a flag left over from an earlier one
+    api.async_read_response = AsyncMock(return_value={"data": {}})
+    await api.async_read_response_retry(create_mock_response(200, "{}"), url)
+    if api.last_read_rate_limited:
+        print("ERROR: last_read_rate_limited was not cleared by the next read")
+        failed = True
+    else:
+        print("PASS: last_read_rate_limited cleared by the next read")
 
     # Test 6: ignore_errors parameter is passed through correctly
     print("\n*** Test 6: ignore_errors parameter is passed through correctly ***")
@@ -206,39 +144,48 @@ async def test_octopus_read_response_retry(my_predbat):
         else:
             print("PASS: ignore_errors parameter passed through correctly")
 
-    # Test 7: Rate limit errors trigger retry with backoff
-    print("\n*** Test 7: Rate limit errors trigger retry with backoff ***")
+    # Test 7: A rate limit (KT-CT-1199) is definitive for the response and is not re-read. aiohttp
+    # caches the body, so every re-read returned the same rate limit: a single rate-limited request
+    # logged the warning five times and stalled for ~35s (5s + 1/2/4/8s) before giving up anyway.
+    print("\n*** Test 7: Rate limit is not re-read or slept on ***")
     api = OctopusAPI(my_predbat, key="test-key", account_id="test-account", automatic=False)
     api.failures_total = 0
+    logged = []
+    api.log = lambda message, *args, **kwargs: logged.append(message)
 
     rate_limit_error = {
         "errors": [
             {
                 "message": "Too many requests.",
+                "path": ["flexPlannedDispatches"],
                 "extensions": {"errorCode": "KT-CT-1199"},
             }
         ]
     }
-    successful_data = {"data": {"result": "success"}}
     response = create_mock_response(200, json.dumps(rate_limit_error))
-
-    # Mock async_read_response to return None (rate limit), then succeed
-    api.async_read_response = AsyncMock(side_effect=[None, successful_data])
+    graphql_url = "https://api.octopus.energy/v1/graphql/"
 
     with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-        result = await api.async_read_response_retry(response, url, ignore_errors=False)
+        result = await api.async_read_response_retry(response, graphql_url, ignore_errors=True)
 
-        if result != successful_data:
-            print(f"ERROR: Expected successful data after rate limit retry, got {result}")
+        rate_limit_logs = [message for message in logged if "Rate limit error" in message]
+        if result is not None:
+            print(f"ERROR: Expected None for a rate-limited response, got {result}")
             failed = True
-        elif api.async_read_response.call_count != 2:
-            print(f"ERROR: Expected 2 calls (rate limit + retry), got {api.async_read_response.call_count}")
+        elif response.text.await_count != 1:
+            print(f"ERROR: Expected the rate-limited response to be read once, got {response.text.await_count}")
             failed = True
-        elif mock_sleep.call_count != 1:
-            print(f"ERROR: Expected 1 sleep call after rate limit, got {mock_sleep.call_count}")
+        elif mock_sleep.call_count != 0:
+            print(f"ERROR: Expected no sleep on a rate limit, got {mock_sleep.call_count} sleep calls")
+            failed = True
+        elif len(rate_limit_logs) != 1:
+            print(f"ERROR: Expected one rate limit warning, got {len(rate_limit_logs)}: {rate_limit_logs}")
+            failed = True
+        elif api.failures_total != 1:
+            print(f"ERROR: failures_total should be 1, got {api.failures_total}")
             failed = True
         else:
-            print("PASS: Rate limit error triggers retry with exponential backoff")
+            print("PASS: Rate limit returns at once, read once, no sleep, one warning")
 
     # Test 8: Auth/blocked responses are definitive and are not re-read.
     # aiohttp caches the response body, so re-reading the same 401/403 response can only

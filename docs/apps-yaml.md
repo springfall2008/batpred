@@ -4,11 +4,11 @@ The basic Predbat configuration is defined in the `apps.yaml` file.
 
 Depending on how you installed Predbat the `apps.yaml` file will be held in one of three different directories in Home Assistant:
 
-- if you have used the [Predbat app installation method](install.md#predbat-app-install), `apps.yaml` will be in the directory `/addon_configs/6adb4f0d_predbat`,
+- if you have used the [Predbat app installation method](install.md#predbat-app-install), `apps.yaml` will be in the directory `/app_configs/6adb4f0d_predbat`,
 
-- with the [HACS, Appdaemon app then Predbat installation method](install.md#predbat-installation-into-appdaemon), it's in `/config/appdaemon/apps/batpred/config/`, or
+- with the deprecated [HACS, Appdaemon app then Predbat installation method](install.md#predbat-installation-into-appdaemon), it's in `/config/appdaemon/apps/batpred/config/`, or
 
-- if the combined AppDaemon/Predbat app installation method was used, it's in `/addon_configs/46f69597_appdaemon-predbat/apps`.
+- if the deprecated combined AppDaemon/Predbat app installation method was used, it's in `/app_configs/46f69597_appdaemon-predbat/apps`.
 
 You will need to use a file editor within Home Assistant (e.g. either the File editor or Studio Code Server apps)
 to edit the `apps.yaml` file - see [editing configuration files within Home Assistant](install.md#editing-configuration-files-in-home-assistant) if you need to install an editor.
@@ -16,7 +16,7 @@ to edit the `apps.yaml` file - see [editing configuration files within Home Assi
 This section of the documentation describes what the different configuration items in `apps.yaml` do.
 
 When you edit `apps.yaml`, the change will automatically be detected and Predbat will be reloaded with the updated file.
-You don't need to restart the Predbat or AppDaemon app for your edits to take effect.
+You don't need to restart Predbat app for your edits to take effect.
 
 ## Templates
 
@@ -34,7 +34,7 @@ and it's very easy to end up with an incorrectly formatted file that will cause 
 
 The [YAML Basics from This Smart Home](https://www.youtube.com/watch?v=nETF43QJebA) is a good introduction video to how YAML should be correctly structured but as a brief introduction:
 
-At the start of the `apps.yaml` file is the predbat module definition:
+At the start of the `apps.yaml` file is the Predbat module definition:
 
 ```yaml
 pred_bat:
@@ -72,6 +72,28 @@ Child entries can have children of their own, so for example rates_import_overri
 
 The indentation of children being two spaces indented from their parents and there being two spaces before the dash are especially critical. It's easy to mis-edit and have one or three spaces which isn't valid YAML.
 
+CAUTION: If you are configuring a child entry with children of its own, then the sub-children all follow under a single hyphen and  must NOT be individually hyphenated.  i.e.:
+
+```yaml
+forecast_solar:
+  - postcode: SW1A 2AB
+  - kwp: 4.0
+  - azimuth: 148
+  - declination: 30
+  - efficiency: 0.90
+```
+
+Is invalid YAML for Predbat, it must be entered as:
+
+```yaml
+forecast_solar:
+  - postcode: SW1A 2AB
+    kwp: 4.0
+    azimuth: 148
+    declination: 30
+    efficiency: 0.90
+```
+
 NB: the sequence of entries in `apps.yaml` doesn't matter, as long as the YAML itself is structured correctly you can move things and edit things anywhere in the file.
 
 ## Configuration items, entities, lists and regular expressions
@@ -106,7 +128,7 @@ sets the configuration item **battery_temperature_history** to the Home Assistan
 
 note the list items appear on separate lines beneath the configuration item name, with each entry being indented by two spaces, a dash, a space and then the configuration value.
 
-- Entries where the predbat configuration item includes a variable name set earlier in `apps.yaml` that is then expanded, e.g.:
+- Entries where the Predbat configuration item includes a variable name set earlier in `apps.yaml` that is then expanded, e.g.:
 
 ```yaml
   dno_region: "A"
@@ -183,7 +205,8 @@ pred_bat:
   ha_key: !secret ha_key  # Home Assistant Long-Lived Access Token
   octopus_api_key: !secret octopus_api_key  # Octopus API key (if using Octopus direct)
   solcast_api_key: !secret solcast_api_key  # Solcast API key (if using Solcast direct)
-  forecast_solar_api_key: !secret forecast_solar_api_key  # Forecast.solar API key (if using Forecast.solar)
+  forecast_solar:
+    - api_key: !secret forecast_solar_api_key  # Forecast.solar API key, per array (if using a paid Forecast.solar account)
   ge_cloud_key: !secret ge_cloud_key  # GivEnergy API key (if using GE Cloud)
   fox_key: !secret fox_key  # Fox ESS API key and username (if using Fox Cloud)
   myenergi_api_key: !secret myenergi_api_key  # myenergi API key (if using the myenergi direct transport)
@@ -199,6 +222,26 @@ pred_bat:
   axle_api_key: !secret axle_api_key  # Axle API key (if using Axle VPP)
   kraken_key: !secret kraken_key  # Kraken API key (if using Kraken component)
   kraken_password: !secret kraken_password  # Kraken password (if using Kraken component)
+  solis_api_key: !secret solis_api_key  # Solis Cloud API key (if using Solis Cloud)
+  solis_api_secret: !secret solis_api_secret  # Solis Cloud API secret (if using Solis Cloud)
+  solax_client_id: !secret solax_client_id  # SolaX Cloud client id (if using SolaX Cloud)
+  solax_client_secret: !secret solax_client_secret  # SolaX Cloud client secret (if using SolaX Cloud)
+  sunsynk_username: !secret sunsynk_username  # Sunsynk Connect e-mail (if using Sunsynk Cloud)
+  sunsynk_password: !secret sunsynk_password  # Sunsynk Connect password (if using Sunsynk Cloud)
+  sigenergy_app_key: !secret sigenergy_app_key  # Sigenergy app key (if using Sigenergy Cloud)
+  sigenergy_app_secret: !secret sigenergy_app_secret  # Sigenergy app secret (if using Sigenergy Cloud)
+  sigenergy_ca_pem: !secret sigenergy_ca_pem  # Sigenergy CA certificate (if using Sigenergy Cloud)
+  sigenergy_client_pem: !secret sigenergy_client_pem  # Sigenergy client certificate (if using Sigenergy Cloud)
+  sigenergy_client_key: !secret sigenergy_client_key  # Sigenergy client private key (if using Sigenergy Cloud)
+  alphaess_app_id: !secret alphaess_app_id  # AlphaESS developer AppID (if using AlphaESS Cloud)
+  alphaess_app_secret: !secret alphaess_app_secret  # AlphaESS developer AppSecret (if using AlphaESS Cloud)
+  teslemetry_key: !secret teslemetry_key  # Teslemetry token (if using Teslemetry)
+  ohme_login: !secret ohme_login  # Ohme account e-mail (if using Ohme direct)
+  ohme_password: !secret ohme_password  # Ohme account password (if using Ohme direct)
+  wallbox_username: !secret wallbox_username  # Wallbox account e-mail (if using Wallbox direct)
+  wallbox_password: !secret wallbox_password  # Wallbox account password (if using Wallbox direct)
+  hypervolt_username: !secret hypervolt_username  # Hypervolt account e-mail (if using Hypervolt direct)
+  hypervolt_password: !secret hypervolt_password  # Hypervolt account password (if using Hypervolt direct)
 ```
 
 If a credential-like value (matching a key name containing `_key`, `password`, `secret` or `token`) is found written directly in `apps.yaml` instead of via `!secret`, Predbat logs a warning and lists the affected item(s) on the [web interface](web-interface.md) apps.yaml page. This is a warning rather than a validation error - the configuration still works, but moving the value into `secrets.yaml` keeps it out of `apps.yaml`, which is more likely to end up shared, backed up or attached to a bug report.
@@ -213,6 +256,32 @@ If a secret is referenced in `apps.yaml` but not found in `secrets.yaml`, Predba
 - Makes it safer to share your `apps.yaml` for troubleshooting
 - All secrets stored in one centralized location
 - Compatible with Home Assistant's secrets system
+
+### Redaction in logs and debug files
+
+Credential values - whether stored in `secrets.yaml` and referenced with `!secret`, or written directly in `apps.yaml` - are masked wherever Predbat writes them out: `predbat.log`, a `predbat_debug_*.yaml` file, and the apps.yaml downloads on the [web interface](web-interface.md). This happens at the point each line is written, not only when a file is later downloaded, so the on-disk files themselves never carry the plaintext value - including if you copy `predbat.log` directly off a Samba share rather than downloading it through Predbat.
+
+A masked value appears with a label naming which credential it was, e.g. `<octopus_api_key>`, rather than a generic placeholder, so a log line stays useful for diagnosing a problem without ever showing the value itself.
+
+#### redact_strings and redact_strings_labelled
+
+Predbat can only recognise a value as a credential by its `apps.yaml` key name (`_key`, `password`, `secret`, `token`) or from the list of account/meter/serial-number-style identifiers it knows about internally. It has no way to know that a value coming from a third-party Home Assistant integration - an MPAN embedded in a sensor's `entity_id` or attributes, say - is sensitive. For anything like that, list the value yourself, preferably with `redact_strings_labelled` - a name -> value mapping, so the masked line reads with your own label instead of a generic one:
+
+```yaml
+pred_bat:
+  redact_strings_labelled:
+    my_mpan: "1234567890123"  # e.g. an MPAN surfaced by a third-party integration
+```
+
+That masks as `<my_mpan>` wherever it appears. If you don't need a label, `redact_strings` is a bare list instead:
+
+```yaml
+pred_bat:
+  redact_strings:
+    - "1234567890123"
+```
+
+Each entry there is masked generically as `<redact_strings>`. As with any other credential, you can reference a `!secret` here too rather than writing the value inline. Both settings are themselves masked wholesale if they ever appear in a debug dump, so the denylist doesn't leak the very values (or, for the labelled form, the label names) it exists to hide.
 
 ## Basics
 
@@ -277,10 +346,10 @@ In future versions of Predbat, AppDaemon will be removed.
 
 ```yaml
   ha_url: 'http://homeassistant.local:8123'
-  ha_key: 'xxxxxxxxxxx'
+  ha_key: !secret ha_key
 ```
 
-**Note:** It's recommended to store `ha_key` in `secrets.yaml` and reference it as `ha_key: !secret ha_key` - see [Storing secrets](#storing-secrets).
+Keep `ha_key` in `secrets.yaml` rather than in `apps.yaml` - see [Storing secrets](#storing-secrets).
 
 *TIP:* You can replace *homeassistant.local* with the IP address of your Home Assistant server if you have it set to a fixed IP address.
 This will remove the need for a DNS lookup of the IP address every time Predbat talks to Home Assistant and may improve reliability as a result.
@@ -301,6 +370,25 @@ Valid values are:
 
 ```yaml
   threads: auto
+```
+
+### log_count
+
+Sets how many Predbat log files to keep, including the live `predbat.log`. The default is 10, so
+`predbat.log` plus nine rotated copies. Valid values are 2 to 100.
+
+Predbat rotates the log when it reaches 10MB: `predbat.log` becomes `predbat.01.log`, the old
+`predbat.01.log` becomes `predbat.02.log`, and so on, with anything past `log_count` deleted.
+Raising this keeps more history at the cost of disk space - each file can reach 10MB, so
+`log_count: 100` can use around 1GB.
+
+Rotated logs are numbered with two digits (`predbat.01.log` through `predbat.99.log`) so that a
+directory listing sorts them in rotation order. Older Predbat versions used single digits
+(`predbat.1.log`); those files are still read, and are renamed to the two-digit form as they
+rotate, so nothing is lost on upgrade and no manual clean-up is needed.
+
+```yaml
+  log_count: 10
 ```
 
 ### enable_coarse_fine_levels
@@ -436,7 +524,27 @@ back home). This is what makes holiday mode act from the moment you switch it on
 for holiday history to accumulate.
 
 Buckets with no recorded data (zero) are ignored entirely so gaps in the history do not drag the estimate
-down. As with Load ML, this replaces the normal days_previous averaging; if [Load ML](load-ml.md) is enabled
+down.
+
+On a new install, some times of day won't have been recorded on any previous day yet - for example the hours
+before Predbat was installed part-way through yesterday, or every hour when it was installed today. For those
+times Predbat uses today's load instead, so you don't have to wait for a full day of history:
+
+- If that time of day has already passed today, today's load at that time is used. This is how tonight's
+  forecast picks up this morning's overnight load.
+- Otherwise, once at least an hour has been recorded, the average of all the load recorded so far is used.
+  The first hours after an install may not be typical of the whole day, but this is a better guess than base
+  load and it improves every cycle.
+- With less than an hour recorded, the [base load](#base-load) is used.
+- The hours earlier today before Predbat was installed also stay at base load. That way the
+  [in-day adjustment](customisation.md#battery-margins-and-metrics-options) isn't thrown off by comparing a forecast for those hours against
+  load that was never recorded.
+
+As with every other sample, the base load is applied as a minimum and holiday mode is matched or scaled. Today
+is only used while no previous day has data for that time of day, so once a full day is recorded the forecast
+works exactly as described above.
+
+As with Load ML, this replaces the normal days_previous averaging; if [Load ML](load-ml.md) is enabled
 it takes precedence over `days_previous_auto`.
 
 Because the holiday matching above already accounts for [holiday mode](customisation.md#holiday-mode) when
@@ -510,12 +618,12 @@ you will need to wait until you have a few days of history established (at least
   ge_cloud_direct: true
   ge_cloud_automatic: true
   ge_cloud_serial: '{geserial}'
-  ge_cloud_key: 'xxxxx'
+  ge_cloud_key: !secret ge_cloud_key
   ge_cloud_data: true
   ge_cloud_load_today_ignore: false
 ```
 
-**Note:** It's recommended to store `ge_cloud_key` in `secrets.yaml` and reference it as `ge_cloud_key: !secret givenergy_api_key` - see [Storing secrets](#storing-secrets).
+Keep `ge_cloud_key` in `secrets.yaml` rather than in `apps.yaml` - see [Storing secrets](#storing-secrets).
 
 - **ge_cloud_load_today_ignore** - Optional, defaults to false. When set to `true`, Predbat will override the **ge_cloud_automatic** setting and use the **load_today** sensor configured in `apps.yaml`.
 This can be useful if the **load_today** data in the GivEnergy Cloud does not accurately reflect your house load (e.g. multiple inverters that share load) and you want to use a custom load_today sensor.  All other sensors will use either the `apps.yaml` entries or the GivEnergy Cloud entities depending upon **ge_cloud_automatic**.
@@ -528,6 +636,28 @@ See also **ge_cloud_automatic_split_ct** which takes priority over this setting 
 - **ge_cloud_automatic_split_ct** - Optional, defaults to false. When set to `true`, Predbat will treat each inverter as having its own independent CT clamp, summing all inverters' grid and load readings.
 Use this to override automatic shared-CT detection if Predbat incorrectly identifies your system as sharing a CT clamp (e.g. when duplicate meter serials are reported by the cloud API but the inverters actually have separate CT clamps).
 This setting takes priority over **ge_cloud_automatic_shared_ct** if both are set.
+
+- **gateway_display_only** - Optional, defaults to false. Set to `true` to send prices, costs and the plan timeline to a paired Hub while another integration controls the battery.
+The Hub does not need a discovered inverter. This mode does not configure inverter or EV charger entities, change the selected inverter integration, or publish commands or executable schedules.
+Keep the Hub in enforced standby (including passive mode on supported firmware) before enabling this option or handing control to another integration. The option only prevents this Predbat component from sending writes; it cannot stop an old schedule or autonomous fallback already running on the Hub.
+The existing firmware still needs a local inverter connection for live power flow and battery readings; cloud-fed live readings and pairing without inverter discovery are separate changes.
+This is a display option, not automatic backup switching.
+
+- **gateway_shared_ct** - Optional, defaults to true. The equivalent of **ge_cloud_automatic_shared_ct** for inverters controlled through the Predbat Gateway.
+When `true`, Predbat treats multiple inverters as sharing a single physical CT clamp for grid and load measurement,
+so only the first inverter's grid and load power readings are used (the rest are zeroed out), preventing double-counting of grid import/export and house load.
+The import, export and load energy for the day are likewise taken from the first inverter only.
+Battery and solar readings are unaffected and are still taken from, and added up across, each inverter.
+This is the usual arrangement for two or more inverters with no EMS or Gateway coordinating them. The Predbat Gateway cannot detect how the CT clamps are fitted, so
+set this to `false` if each of your inverters has its own CT clamp measuring a separate supply; Predbat then adds up the grid and load power, and the import, export and load energy, of every inverter.
+It has no effect with a single inverter.
+
+- **gateway_integrate_power** - Optional, defaults to false. When set to `true`, Predbat works out today's import, export and house load itself from the power readings, rather than using the Predbat Gateway's energy counters.
+Use this where the Gateway's daily import, export or load figures are wrong for your inverters. GivEnergy AC-coupled inverters sharing a single CT clamp are one known case, and there you would set this together with **gateway_shared_ct**.
+Grid power is split into import and export and each is added up over the day, the battery power of every inverter is added up as charge and discharge in the same way, and the house load is then
+solar + import - export + battery discharge - battery charge. Solar still comes from the Gateway's **pv_today** counters, added up across the inverters.
+With **gateway_shared_ct** the grid power of the first inverter is used; without it the grid power of every inverter is added together.
+These figures return to zero at midnight and also restart from zero if Predbat is restarted during the day.
 
 - **ge_cloud_automatic_split_pv** - Optional, defaults to false. When set to `true`, Predbat will also include any standalone PV-only inverters (e.g. a GivEnergy AC-coupled PV inverter with no battery attached) in **pv_today** and **pv_power**, in addition to the battery inverters.
 Use this if you have a separate PV-only inverter alongside your battery inverter(s) and want its solar generation included in Predbat's totals. Leave this off (the default) if your battery inverters already report all of your solar generation, to avoid duplicating or including unwanted readings.
@@ -544,10 +674,22 @@ See [Components - GivEnergy Cloud Direct](components.md#ev-chargers-gecloud) for
 - **ge_cloud_evc_control** - Optional, defaults to false. When set to `true`, Predbat starts and stops your GivEnergy EV charger from its
 car charging plan, in the same way it can drive a myenergi Zappi or an Ohme charger. Charger N follows car N. Needs **ge_cloud_automatic_evc**,
 since it is that setting which maps each charger to a car.
-A `switch.predbat_gecloud_evc_control` entity appears when this is set, on by default, so you can hand the charger back without editing
+A `switch.predbat_gecloud_evc_control` entity appears when control is on, on by default, so you can hand the charger back without editing
 `apps.yaml`; releasing sends a start command if Predbat had stopped the charger, so a car is never left unable to charge.
 Read only mode releases the chargers in the same way.
 See [Components - Charger control](components.md#charger-control-gecloud) for the details.
+
+- **ge_cloud_inverter_control** - Optional, defaults to true. Set it to `false` to monitor your inverter through GE Cloud without
+letting Predbat control it. Predbat still reads the inverters on your account and publishes their entities, but **ge_cloud_automatic**
+is ignored (with a warning), so Predbat's inverter controls are not wired to GE Cloud, and Predbat writes no settings of its own: the
+daily pass that sets the inverter's default options (SoC limits, power percentages, clearing charge and discharge slots 2 to 10) is
+skipped. A change you make to one of the inverter's `_gecloud_` entities is still sent to the inverter.
+The EV charger settings above are not affected.
+
+- **ge_cloud_evc_direct** - Optional, defaults to false. Set it to `true`, in place of **ge_cloud_direct**, when your inverter is
+controlled by something else, such as GivTCP or the GivEnergy app, and you only want GE Cloud for your EV charger.
+The inverters on your account are then never read, written to or reported; **ge_cloud_automatic_evc** and **ge_cloud_evc_control**
+work as above. See [Components - Monitoring and control](components.md#monitoring-and-control-gecloud).
 
 ### SolaX Cloud Direct
 
@@ -569,21 +711,14 @@ To use SolaX Cloud Direct, you need to obtain API credentials (client ID and cli
 If you set **solax_automatic** to `true`, Predbat will automatically discover your plants, inverters, and batteries, and configure all necessary entities without manual intervention.
 
 ```yaml
-  solax_client_id: 'your_client_id_here'
-  solax_client_secret: 'your_client_secret_here'
+  solax_client_id: !secret solax_client_id
+  solax_client_secret: !secret solax_client_secret
   solax_region: 'eu'  # Options: 'eu', 'us', or 'cn'
   solax_automatic: true
   solax_enable_controls: true
 ```
 
-**Note:** It's **strongly recommended** to store `solax_client_id` and `solax_client_secret` in `secrets.yaml` and reference them as:
-
-```yaml
-  solax_client_id: !secret solax_client_id
-  solax_client_secret: !secret solax_client_secret
-```
-
-See [Storing secrets](#storing-secrets) for more information.
+Keep `solax_client_id` and `solax_client_secret` in `secrets.yaml` rather than in `apps.yaml` - see [Storing secrets](#storing-secrets).
 
 Set **solax_region** based on where your SolaX Cloud account is registered:
 
@@ -630,7 +765,10 @@ When SolaX Cloud is configured, Predbat creates the following entities for each 
 - `sensor.predbat_solax_{plant_id}_battery_max_power` - Battery maximum power (W)
 - `sensor.predbat_solax_{plant_id}_inverter_max_power` - Inverter maximum power (W)
 - `sensor.predbat_solax_{plant_id}_pv_capacity` - PV array capacity (kWp)
-- `sensor.predbat_solax_{plant_id}_total_yield` - Total PV generation (kWh)
+- `sensor.predbat_solax_{plant_id}_pv_power` - Current PV power (W), summed over the plant's inverters and used for **pv_power**
+- `sensor.predbat_solax_{plant_id}_grid_power` - Current grid power (W), summed over the plant's inverters and used for **grid_power**
+- `sensor.predbat_solax_{plant_id}_pv_yield` - Total PV generation (kWh), summed from the plant's inverters and used for **pv_today**. It reads 0 on a plant whose inverters have no PV inputs, such as a lone AC-coupled battery inverter; PV on a separate inverter that SolaX does not measure is not seen, so set **pv_today** from another source if you have one
+- `sensor.predbat_solax_{plant_id}_total_yield` - Total yield as reported by SolaX for the plant (kWh); on a plant with an AC-coupled battery inverter this includes battery discharge
 - `sensor.predbat_solax_{plant_id}_total_charged` - Total battery charged (kWh)
 - `sensor.predbat_solax_{plant_id}_total_discharged` - Total battery discharged (kWh)
 - `sensor.predbat_solax_{plant_id}_total_imported` - Total grid import (kWh)
@@ -710,7 +848,7 @@ Add the following to your `apps.yaml` to configure the Solis Cloud integration:
   solis_cloud_pv_load_ignore: false
 ```
 
-**Note:** It's strongly recommended to store `api_key` and `api_secret` in `secrets.yaml` and reference them as `!secret solis_api_key` - see [Storing secrets](#storing-secrets).
+Keep `solis_api_key` and `solis_api_secret` in `secrets.yaml` rather than in `apps.yaml` - see [Storing secrets](#storing-secrets).
 
 **Configuration options:**
 
@@ -722,7 +860,7 @@ Add the following to your `apps.yaml` to configure the Solis Cloud integration:
 - `solis_control_enable` - Enable/disable control commands (default: `true`, set to `false` for monitoring only)
 - `solis_cloud_pv_load_ignore` - Optional, defaults to false. When set to `true`, Predbat will override the **solis_automatic** setting and use the **load_today**, **load_power**, **pv_today** and **pv_load** sensors configured in `apps.yaml`.<BR>
 This can be useful if the Solis cloud data in the does not accurately reflect your house PV and load (e.g. multiple inverters that share load or PV inverter and micro-inverters) and you want to use a custom sensors.  All other sensors will use either the `apps.yaml` entries or the Solis Cloud entities depending upon **solis_automatic**.
-- `solis_nominal_voltage` - Optional, your battery's nominal pack voltage (e.g. cell count x nominal cell voltage per cell - **not** the live/resting battery voltage reported by the inverter, which varies with charge state). Only used to compute the `battery_capacity` sensor; the max charge/discharge power sensors and `battery_rate_max` use the live measured voltage automatically and don't need this set. Without it, `battery_capacity` is still published but estimated from the live measured voltage instead, and flagged unreliable (a `reliable: false` attribute, plus a log warning) since that value drifts with charge state - set this option for an accurate, stable figure. `soc_max` must still be set manually either way (see below), the `battery_capacity` sensor is informational only and is not auto-bound to it.
+- `solis_nominal_voltage` - Optional, your battery's nominal pack voltage (e.g. cell count x nominal cell voltage per cell - **not** the live/resting battery voltage reported by the inverter, which varies with charge state). The inverter stores its charge and discharge limits as currents, so this is the voltage Predbat uses to convert them to watts: it sets the `battery_capacity` sensor, the max charge/discharge power and slot power sensors, and hence `battery_rate_max`. Without it, Predbat infers the voltage instead: on an LV pack it classifies the pack from the BMS-requested charge voltage the inverter reports (48V below 55V, 51.2V at or above it), and on an HV pack it continues to use the live reading. The LV result is fixed across polls, so nothing drifts as the battery charges and discharges, but it is an inference rather than a stated figure, so `battery_capacity` is flagged unreliable (a `reliable: false` attribute, plus a log warning). Set this option for an accurate figure - and note that on an HV pack it is the only way to stop the derived watt values moving with state of charge. `soc_max` must still be set manually either way (see below), the `battery_capacity` sensor is informational only and is not auto-bound to it.
 
 #### Important notes (Solis)
 
@@ -767,6 +905,8 @@ When `automatic: true` (recommended), Predbat will automatically create and conf
 - Battery protection settings
 
 No manual entity configuration is required when using automatic mode.
+
+Automatic mode plans each direction at the most a charge or discharge slot can actually be set to. Some inverters refuse slot currents well below the maximum current they report, with no way to read the real limit. For example, a 3.6kW inverter reports 100A but only accepts 60A. So when Predbat first sees an inverter, it measures the ceiling itself. It writes test currents to one of slots 2-6 that is not in use: first the inverter's reported maximum charge or discharge current, then lower values until one is accepted. It then puts back the value that slot held. It saves the result, and checks it again at most once a day, starting from the saved value. Until an inverter has been measured, the current it can deliver at its rated power is used as an estimate. Once measured, the measured ceiling replaces that estimate, so a hybrid that can charge from PV above its AC rating is not held back. Predbat only uses slot 1 itself, so the test does not touch the schedule. The results are published as `sensor.predbat_solis_<serial>_slot_charge_power_max` and `..._slot_discharge_power_max`, and used for `inverter_limit_charge` and `inverter_limit_discharge`. `battery_rate_max` is set to the larger of the two, so a battery allowed to discharge faster than it charges is planned at both rates. An `inverter_limit_charge` or `inverter_limit_discharge` you set in `apps.yaml` takes precedence - use it to state a lower limit such as your inverter's AC rating.
 
 #### Manual configuration (solis_automatic: false)
 
@@ -826,7 +966,7 @@ Create a developer app at [developer.deyecloud.com](https://developer.deyecloud.
   deye_automatic: True
 ```
 
-**Note:** It's strongly recommended to store `deye_app_id`, `deye_app_secret`, `deye_username` and `deye_password` in `secrets.yaml` and reference them as `!secret deye_app_id` etc - see [Storing secrets](#storing-secrets).
+Keep `deye_app_id`, `deye_app_secret`, `deye_username` and `deye_password` in `secrets.yaml` rather than in `apps.yaml` - see [Storing secrets](#storing-secrets).
 
 **Configuration options:**
 
@@ -857,14 +997,14 @@ Predbat includes support for Sunsynk (DEYE-family) hybrid inverters via the Suns
 Add your Sunsynk Connect account e-mail and password (the same login used by the Sunsynk phone app) to your `apps.yaml`:
 
 ```yaml
-  sunsynk_username: 'you@example.com'
-  sunsynk_password: 'your-password'
+  sunsynk_username: !secret sunsynk_username
+  sunsynk_password: !secret sunsynk_password
   sunsynk_region: 'sunsynk'
   sunsynk_automatic: true
   sunsynk_control_enable: true
 ```
 
-**Note:** It's strongly recommended to store `sunsynk_username` and `sunsynk_password` in `secrets.yaml` and reference them as `!secret sunsynk_username` etc - see [Storing secrets](#storing-secrets).
+Keep your Sunsynk login in `secrets.yaml` rather than in `apps.yaml` - see [Storing secrets](#storing-secrets).
 
 **Configuration options:**
 
@@ -872,7 +1012,7 @@ Add your Sunsynk Connect account e-mail and password (the same login used by the
 - `sunsynk_password` - Your Sunsynk Connect account password
 - `sunsynk_region` - The API region your account is registered in: `'sunsynk'` (default, `api.sunsynk.net`) or `'inteless'` (`pv.inteless.com`)
 - `sunsynk_auth_method` - The login flow: `'password'` (default, RSA-encrypted login), `'password_legacy'` (the pre-2025 plaintext login, opt-in for regions that still serve it) or `'oauth'` (Predbat.com injects and refreshes the token)
-- `sunsynk_inverter_sn` - Optional, restrict Predbat to specific inverter serial number(s) - a single string or a list. Default is all inverters found on the account
+- `sunsynk_inverter_sn` - Optional, restrict Predbat to specific inverter serial number(s) - a single string or a list. Default is all inverters found on the account. For parallel inverters sharing one battery, list the master only - its slaves are included automatically and the group is controlled as one inverter
 - `sunsynk_automatic` - Set to `true` to automatically configure Predbat entities (recommended, default: `false`)
 - `sunsynk_automatic_ignore_pv` - Optional, defaults to `false`. When `automatic` is enabled, set to `true` to prevent Sunsynk Cloud from overwriting the `pv_power` config
 - `sunsynk_control_enable` - Allow Predbat to write charge/export schedules to the inverter (default: `true`, set to `false` for monitoring only)
@@ -890,7 +1030,20 @@ See [Components - Sunsynk Cloud API](components.md#sunsynk-cloud-api-sunsynk) fo
 
 **EXPERIMENTAL:** Nobody on the Predbat project has AlphaESS hardware, so this integration's wire behaviour is inferred from AlphaESS's published Open API documentation and from the Home Assistant AlphaESS integration, rather than confirmed against real inverters. Every request and response is traced to the log by default, so a tester's log is usable evidence for an issue report - please open one if anything here doesn't match what you see.
 
-Predbat includes support for AlphaESS hybrid inverters via the AlphaESS Open API, providing direct cloud-based monitoring and, once confirmed against your own hardware, battery control - no local Modbus/RS485 access is required.
+Predbat includes support for AlphaESS hybrid inverters via the AlphaESS Open API, providing direct cloud-based monitoring and timed charge control - no local Modbus/RS485 access is required. It **cannot** control export, see below.
+
+#### AlphaESS cannot be used to control export
+
+**The AlphaESS Open API has no way to export your battery to the grid, so Predbat cannot make it do so.** This is a limitation of the API rather than of Predbat - see [issue #4701](https://github.com/springfall2008/batpred/issues/4701) for the field report and the evidence behind this section.
+
+The only battery controls the API offers are a grid-charge window with a target SoC (`updateChargeConfigInfo`) and a discharge window with an SoC floor (`updateDisChargeConfigInfo`), or both together on entitled systems (`setTimeChargeBySn`). There is no forced-export, working-mode or dispatch endpoint of any kind. In practice that means:
+
+- **Force Export does nothing.** AlphaESS's own documentation describes the discharge window as a *permission* window rather than a forced export: during the window the system runs in self-consumption mode, and outside it the battery is only allowed to charge. A programmed export window therefore has the battery cover house load and export nothing beyond genuine solar surplus, which is exactly what testers see.
+- **Freeze Export does nothing either.** Predbat implements Freeze Export by disabling charging while leaving the inverter in Demand mode, so that solar surplus reaches the grid instead of the battery. The API has no way to stop the battery charging from solar - `gridCharge` gates only *timed grid charging*, and with it off the system reverts to self-consumption, where surplus solar charges the battery as usual. The settings Predbat writes for Freeze Export come out identical to the ones it writes for Demand mode.
+
+**So set `select.predbat_mode` to `Control charge` on an AlphaESS system.** Predbat then plans and writes no export windows at all, and the plan contains only what the inverter can actually deliver: charging from the grid at cheap rates, and covering house load the rest of the time. Left in `Control charge & discharge`, Predbat builds a plan around exports that never happen, and it also programs the discharge window up to `plan_interval_minutes` ahead of each planned export slot - which, on the permission-window semantics above, bars the battery from covering house load until that window opens, so a load spike is met from the grid instead. That side effect has been reported separately, on leaving an Axle VPP event, in [issue #4723](https://github.com/springfall2008/batpred/issues/4723).
+
+Forced export *is* achievable on AlphaESS hardware over **local Modbus**, whose dispatch registers offer forced discharge, forced export and a solar-export-priority mode. None of that is reachable from the cloud API. If controlled export matters to you, a local Modbus integration feeding Predbat's standard inverter entities is the route to it, and the AlphaESS Cloud component is still useful for monitoring alongside.
 
 #### AlphaESS Cloud Configuration
 
@@ -903,7 +1056,7 @@ Register a developer application at [open.alphaess.com](https://open.alphaess.co
   alphaess_control_enable: true
 ```
 
-**Note:** It's strongly recommended to store `alphaess_app_id` and `alphaess_app_secret` in `secrets.yaml` and reference them as `!secret alphaess_app_id` etc - see [Storing secrets](#storing-secrets).
+Keep `alphaess_app_id` and `alphaess_app_secret` in `secrets.yaml` rather than in `apps.yaml` - see [Storing secrets](#storing-secrets).
 
 **Configuration options:**
 
@@ -927,7 +1080,7 @@ AlphaESS's charge and discharge endpoints are whole-object replacements, and the
 
 Charge and discharge windows are snapped to the API's 15-minute grid (`:00`, `:15`, `:30`, `:45`) before being written. This is because off-grid values are accepted by the API without an error but then silently ignored by the device, which would otherwise look like a working configuration that quietly does nothing.
 
-Charge/discharge rate handling differs by system entitlement. Systems entitled to AlphaESS's periodic schedule API get a genuine power setpoint alongside up to six windows; systems that are not fall back to the older two-window endpoints, which have no rate field at all, so a **non-zero** rate you configure is simply not honoured there - only the window times and the enable flag reach the inverter. A **zero** rate is meaningful on both paths, however, because there is no separate pause endpoint - Predbat signals freeze charge or freeze export by writing a window with a zero rate, and both the legacy and periodic paths turn that into a disabled/held window rather than an open one.
+Charge/discharge rate handling differs by system entitlement. Systems entitled to AlphaESS's periodic schedule API get a genuine power setpoint alongside up to six windows; systems that are not fall back to the older two-window endpoints, which have no rate field at all, so a **non-zero** rate you configure is simply not honoured there - only the window times and the enable flag reach the inverter. A **zero** rate is meaningful on both paths, however, because there is no separate pause endpoint - Predbat signals a hold by writing a window with a zero rate, and both the legacy and periodic paths turn that into a held window (discharge time control on, with no permitted period) rather than an open one. That holds the battery out of *discharging*; nothing in the API can stop it charging from solar, which is why Freeze Export is not deliverable - see [AlphaESS cannot be used to control export](#alphaess-cannot-be-used-to-control-export).
 
 `battery_rate_max` is not reported by the API at all, so Predbat estimates it from the inverter's nominal AC power (`poinv`) rather than leave it unset - an unset value would silently fall back to a generic 2600W internal default instead. On a well-matched AlphaESS package `poinv` is close to the real battery rate, but where it isn't, correct it either with `battery_rate_max_scaling` (Predbat will suggest a value in the log once it has measured your actual achieved rate) or by setting `alphaess_battery_rate_max` directly to your pack's real limit in Watts.
 
@@ -999,7 +1152,7 @@ and you will need to manually set geserial in `apps.yaml` to your inverter seria
 ```
 
 *TIP:* If you have a single GivEnergy AIO, all control is directly to the AIO and the gateway is not required.<BR>
-Check the GivTCP configuration to determine whether inverter 1 (the givtcp sensors) is the AIO or the gateway, or inverter 2 (the givtcp2 sensors) is the AIO or gateway.<BR>
+Check the GivTCP configuration to determine whether inverter 1 (the 'givtcp' sensors) is the AIO or the gateway, or inverter 2 (the 'givtcp2' sensors) is the AIO or gateway.<BR>
 Then in `apps.yaml` comment out the lines corresponding to the gateway, leaving just the givtcp or givtcp2 lines for the AIO.
 Also, delete the [appropriate givtcp_rest inverter control line](#rest-interface-inverter-control) corresponding to the gateway so that Predbat controls the AIO directly.
 
@@ -1007,7 +1160,7 @@ Also, delete the [appropriate givtcp_rest inverter control line](#rest-interface
 geserial should be manually configured to be your AIO gateway serial number 'gwNNNNgZZZ' and all the geserial2 lines should be commented out in `apps.yaml`.
 You should also delete the [second givtcp_rest inverter control line](#rest-interface-inverter-control) so that Predbat controls the AIOs via the gateway.
 
-GivTCP version 3 is required for multiple AIOs or a 3-phase inverter.
+GivTCP version 3 is required for multiple AIOs or a 3-phase inverter, but it should be noted that GivTCP there are still compatibility issues between GivTCP and the 3-phase inverters.
 
 ## Historical data
 
@@ -1036,10 +1189,6 @@ If you have an AC-coupled inverter then enter the Home Assistant sensor for your
 If you don't have any PV panels, comment or delete this line out of `apps.yaml`.
 
 **Note:**: these '_today' entity names must all be *energy* sensors recording electricity measured over a time period, NOT *power* sensors which measure instantaneous power.  They must increase during the day and not have any gaps or reduce in value (other than at midnight).
-
-The **load_power_fill_enable** feature helps to improve the accuracy of historical load data by using instantaneous power readings to fill gaps and smooth
-out load_today sensors that update infrequently (e.g., sensors that increment in kWh units may only update every hour). This preprocessing happens before
-the main load data analysis and can significantly improve prediction accuracy, especially for systems with coarse-grained energy sensors.
 
 See the [Workarounds](#workarounds) section below for configuration settings for scaling these if required.
 
@@ -1117,12 +1266,12 @@ If you need to create a **ge_cloud_key**, in the GivEnergy cloud portal:
 - Select 'No expiry' for the token expiry duration, or choose a fixed duration but remember to create a new token before it expires as Predbat's access will stop once the token expires
 - Ensure that 'api:inverter' is ticked
 - Create token
-- Finally, copy/paste the token created into **ge_cloud_key** within `apps.yaml`, or [store the GE cloud key in secrets.yaml](#storing-secrets)
+- Finally, copy/paste the token created into `secrets.yaml` as **ge_cloud_key** and reference it from `apps.yaml` - see [Storing secrets](#storing-secrets)
 
 i.e.
 
 ```yaml
-  ge_cloud_key: API_key_consisting_of_long_string_of_numbers_and_letters
+  ge_cloud_key: !secret ge_cloud_key
 ```
 
 ### GivEnergy Cloud controls
@@ -1134,6 +1283,8 @@ the controls of your inverter inside home assistant.
 
 - **ge_cloud_direct** - Set to true to enable GE Cloud direct access
 - **ge_cloud_key** - Set to your API Key for the GE Cloud (long string)
+- **ge_cloud_inverter_control** - Optional, defaults to true. Set to false to monitor the inverter without Predbat controlling it
+- **ge_cloud_evc_direct** - Set to true instead of **ge_cloud_direct** to use GE Cloud for a GivEnergy EV charger only, leaving the inverter alone
 
 ## Load filtering
 
@@ -1144,10 +1295,34 @@ the lowest day's historical load will be discarded.
 - **load_filter_threshold** - Sets the number of minutes of zero load data to be considered a gap (that's filled with average data), the default is 30.
 To disable, set it to 1440.
 
+- **load_power_fill_enable** (default true) helps to improve the accuracy of historical load data by using instantaneous power readings to fill gaps and smooth
+out load_today sensors that update infrequently (e.g., sensors that increment in kWh units may only update every hour). This preprocessing happens before
+the main load data analysis and can significantly improve prediction accuracy, especially for systems with coarse-grained energy sensors. Set to 'false' to turn this feature off.
+
+- **load_history_fill_enable** (default true) fills the days before your load_today sensor's history starts from the history of Predbat's own `predbat.load_energy_h0`
+sensor, which records today's load every cycle and keeps its name when your load sensor changes. This helps when you switch load_today to a different sensor (for example
+after changing inverter), where the new sensor has no history for the days before the switch. Where load_today has no history for at least a day back from the oldest day
+Predbat looks at, that stretch is filled with the load predbat.load_energy_h0 recorded at the time, and those days are counted as available history again. Stretches inside
+load_today's own history where it did not move are not filled this way, because predbat.load_energy_h0 was recorded from the same sensor then; they are left for
+load_power_fill_enable and the average gap filling above. How far back this can reach depends on how long Home Assistant keeps history (10 days by default).
+Set to 'false' to turn this feature off.
+
+e.g.
+
+```yaml
+  load_filter_threshold: 60
+  load_power_fill_enable: false
+  load_history_fill_enable: false
+```
+
+See [Load filtering warning in FAQ's](faq.md#i-see-repeated-log-messages-warn-found-1-periods-of-zero-load-with-power-data-filling-using-power-integration).
+
 ## iBoost energy
 
 - **iboost_energy_today** - Set to a sensor which tracks the amount of energy sent to your solar diverter, which can also be used to subtract from your historical load
 for more accurate predictions.
+
+The iboost energy sensor should reset to zero each day so if your source sensor doesn't, then its recommended to wrap it in a utility meter and configure Predbat to use the utility meter.
 
 ## Inverter control configurations
 
@@ -1212,6 +1387,16 @@ This is used by Predbat in calculating the plan to emulate your inverter's softw
 approval was lower than your maximum inverter power (check your install information for details).
 
 If you do not set an export limit then it is assumed to be unlimited (and thus limited by your inverter or PV system).
+
+### **battery_export_permitted**
+
+One per inverter (optional), an entity whose state is `on` or `off`.
+
+Set it to an entity that reads `off` when your site may export spare solar but not battery energy, for example a Tesla Powerwall whose
+installer left its export permission at Solar Only. While any inverter reads `off`, Predbat stops planning export windows. The battery
+still covers the house load and spare solar is still exported, so unlike setting `export_limit` to 0 the rest of the plan stays accurate.
+
+A missing or unavailable entity is treated as `on`. The Teslemetry component sets this for you with `teslemetry_automatic` on.
 
 ### **inverter_limit_charge** and **inverter_limit_discharge**
 
@@ -1287,7 +1472,7 @@ If this setting is `false` then the inverter will not charge the battery and the
 
 For Freeze Export specifically, this means that during a solar surplus the battery still holds its SoC flat while the export limit alone can absorb all that surplus - it only starts charging once solar genuinely exceeds what load and the export limit together can use.
 
-Freeze Export recapture also depends on your inverter type, not just this setting. Most inverters implement Freeze Export by simply disabling charging, so PV beyond the export limit really is clipped and lost; only inverters with a genuine "Feed-in First" mode - which prioritises house load, then export, then the battery - recapture it. Today that means FoxESS and FoxCloud, plus the four cloud integrations that switch the inverter into an export-first work mode for the freeze: SolisCloud ("Feed-in priority"), SolaxCloud ("Feed-in"), SunsynkCloud and DeyeCloud (both "Selling First"). Predbat knows which is which from your inverter type and models the two differently, so setting `inverter_can_charge_during_export` to `true` will not make a non-Feed-in-First inverter charge during Freeze Export. Force Export is unaffected and is still controlled by this setting alone.
+Freeze Export recapture also depends on your inverter type, not just this setting. Most inverters implement Freeze Export by simply disabling charging, so PV beyond the export limit really is clipped and lost; only inverters with a genuine "Feed-in First" mode - which prioritises house load, then export, then the battery - recapture it. Today that means FoxESS, plus the five cloud integrations that switch the inverter into an export-first work mode for the freeze: FoxCloud ("Feedin", written into the scheduler slots Predbat already programmes), SolisCloud ("Feed-in priority"), SolaxCloud ("Feed-in"), SunsynkCloud and DeyeCloud (both "Selling First"). Predbat knows which is which from your inverter type and models the two differently, so setting `inverter_can_charge_during_export` to `true` will not make a non-Feed-in-First inverter charge during Freeze Export. Force Export is unaffected and is still controlled by this setting alone.
 
 ### **inverter_freeze_export_discharge_rate**
 
@@ -1298,6 +1483,8 @@ Controls the way Predbat models your inverter, this does not change the way it i
 Freeze Export disables charging but leaves the inverter in Demand mode, so by default Predbat models the battery as still discharging to cover house load whenever load exceeds solar - only charging is prevented.
 
 Some inverters (observed on AlphaESS) do not behave that way: instead of covering house load they only leak a small fixed battery discharge during Freeze Export. If your inverter behaves this way, set this to the observed battery-side discharge rate in Watts so Predbat's prediction model matches reality.
+
+This does not apply to the built-in [AlphaESS Cloud](#alphaess-cloud-api) component, which cannot deliver Freeze Export at all - the observation above is necessarily from an AlphaESS controlled by some other means, since the Open API cannot disable charging.
 
 ```yaml
   inverter_freeze_export_discharge_rate: 269
@@ -1350,7 +1537,20 @@ If not set or set to 0, Predbat will attempt to automatically determine the batt
 This requires at least several days of historical data with charging periods of 15% or more SoC change. If automatic detection fails, you must manually set this value.
 - **battery_min_soc** - When set limits the target SoC% setting for charge and discharge to a minimum percentage value
 - **reserve** - sensor name for the reserve SoC % setting. The reserve SoC is the lower limit target % to discharge the battery down to.
+Can also be set to a fixed percentage rather than an entity name for inverters that have no reserve register to point at -
+the supplied Huawei and Sofar templates do this. A fixed value tells Predbat what the inverter is set to so it can be modelled,
+but Predbat cannot then change the reserve, so `switch.predbat_set_reserve_enable` has nothing to write to and Predbat logs a
+warning if something tries. This is true of any setting given a fixed value in place of an entity name.
 - **battery_temperature** - Defined the temperature of the battery in degrees C (default is 20 if not set).
+- **givtcp_battery_dod** - Optional depth of discharge for a GivTCP (REST) battery, one per inverter, default 1.0.
+GivTCP does not report DoD, so set this if your battery cannot use its full nameplate capacity (e.g. 0.8 for an 80% DoD
+battery). Predbat publishes `battery_soh` (measured capacity / design capacity) and combines it with this value into
+`battery_dod_soh`, which `battery_scaling` is pointed at - so the planned battery size is design capacity x SoH x DoD.
+SoH comes from the per-module `Battery_Capacity` vs `Battery_Design_Capacity` the BMS reports under `Battery_Details`.
+- **battery_calibration** - Optional sensor name reporting whether the battery is currently being calibrated (`on`/`off`).
+A calibration cycle deliberately drives the battery outside its normal SoC range, so while one is running any plan would be
+wrong and Predbat disables itself for that inverter. Leave unset if your inverter does not report this - an absent sensor
+means "never calibrating". Set automatically for GivTCP (REST) users.
 
 #### Power Data
 
@@ -1382,6 +1582,8 @@ e.g:
   load_power:
     - sensor.givtcp_{geserial}_load_power
 ```
+
+NB: If you have a GivEnergy inverter and have [configured REST inverter control](#rest-interface-inverter-control) then the above power data sensors configured in `apps.yaml` will be ignored in preference of using data retrieved from the inverter via REST API calls.  To override this behaviour and use the configured sensors, set **givtcp_rest_power_ignore** to `true`.
 
 If you are using the LoadML feature of Predbat and have multiple inverters that share the load, you will need to create a template load power sensor in `configuration.yaml` (you can't currently configure time-pattern trigger templates in the UI):
 
@@ -1427,7 +1629,7 @@ And configure your **load_power** entry in `apps.yaml` to use this sensor:
 
 The dummy '0' entry is required to stop Predbat reporting an `apps.yaml` validation error from **load_power** as it is expecting one sensor per inverter.
 
-If you have multiple GivEnergy inverters and are using REST mode, then also set **givtcp_rest_power_ignore** to `true` in `apps.yaml` for both inverters so Predbat uses your custom power sensor (and not the inverter sensors via REST):
+If you have multiple GivEnergy inverters and are using REST mode, then you should set **givtcp_rest_power_ignore** to `true` in `apps.yaml` for both inverters so Predbat uses your custom load power sensor (and not the inverter sensors via REST which will be incorrect):
 
 ```yaml
   givtcp_rest_power_ignore:
@@ -1435,7 +1637,7 @@ If you have multiple GivEnergy inverters and are using REST mode, then also set 
     - true
 ```
 
-If you have multiple inverters then you need to configure both battery and PV powers in `apps.yaml`, but only a single **grid_power** sensor with a dummy '0' value to prevent an `apps.yaml` validation error:
+If you have multiple inverters then you need to configure both battery and PV powers in `apps.yaml`, but only a single **grid_power** sensor with a dummy '0' value to prevent an `apps.yaml` validation error, e.g.:
 
 ```yaml
   battery_power:
@@ -1507,6 +1709,12 @@ discharge_update_button:
   - button.solis_discharge
 ```
 
+The Predbat Gateway (Hub) sets this up itself: automatic configuration binds **schedule_write_button** to `switch.predbat_gateway_<serial>_schedule_write`.
+A change to a charge or export slot start or end time, and an enable switched alongside it, is held by the Gateway and shown straight away on its select or switch, but not sent to the inverter until the schedule write switch is turned on.
+The Gateway then sends the complete window in one command, followed by the enable, and the switch returns to off.
+If the inverter refuses the window, the selects go back to showing the inverter's own schedule and Predbat writes the window again on its next update.
+If you change a slot time by hand, turn the schedule write switch on afterwards; a change that is never written goes back to the inverter's schedule after 10 minutes.
+
 *TIP:* Some older GivEnergy inverters such as the Gen 1 hybrid and AC3 inverter that have had firmware upgrades to introduce battery pause functionality do not have sufficient memory on the inverter to provide control of battery pause start and end times.
 GivTCP does not recognise this and so still provides the select.givtcp_xxxx_battery_pause_start_time_slot and end_time_slot controls, but they do not work.<BR>
 Predbat can report an error trying to set them, or they revert back to 00:00:00 after being changed by Predbat and there will also be errors setting these controls reported in the GivTCP log.<BR>
@@ -1532,7 +1740,36 @@ To check your REST is working open up the readData API point in a Web browser e.
 
 If you get a bunch of inverter information back then it's working!
 
-Note that Predbat will still retrieve inverter information via REST, this configuration only applies to how Predbat controls the inverter.
+With **givtcp_rest** set, Predbat reads the GivTCP REST API itself and publishes what it finds as its own
+entities (`sensor.predbat_givtcp_0_*` and friends), then points its own settings at them - including
+**inverter_type**, **num_inverters**, the control entities, and the daily energy totals **load_today**,
+**import_today**, **export_today** and **pv_today**. You do not need to configure any of those by hand.
+
+If part of your fleet is not on GivTCP - another vendor's inverter, or one you configure by hand -
+keep **num_inverters** in `apps.yaml` set to the size of the whole fleet. Auto-configuration only ever
+raises it, never lowers it: the inverters that answered on GivTCP take the first slots, and whatever you
+configured for the inverters after them is left as you wrote it.
+
+The four daily energy totals are the one exception to auto-configuration winning: if you name a sensor
+of your own for **load_today**, **import_today**, **export_today** or **pv_today** in `apps.yaml`,
+Predbat keeps yours. It reads days of recorded history back from these to build its load model, and
+repointing them at a sensor it has only just created would throw that history away and leave it
+planning with no load model until the days build back up. This applies per setting, so naming one of
+the four by hand leaves the other three auto-configured. Everything else Predbat auto-configures here
+is read as a current value rather than as history, and anything you set for those is still overridden.
+
+Predbat also publishes the battery flows and the lifetime counters -
+`sensor.predbat_givtcp_<n>_battery_{charge,discharge}_today` and
+`sensor.predbat_givtcp_<n>_{load,import,export,pv,battery_charge,battery_discharge}_total`. Nothing in
+Predbat reads these - they are there for you, since on a REST-only setup (GivTCP's own Home Assistant
+integration not installed) they are the only GivEnergy energy entities in Home Assistant, and grid
+in/out, solar and battery in/out are the set its Energy Dashboard asks for.
+
+- **givtcp_automatic** - Optional, defaults to `true`. Set to `false` to stop Predbat pointing its settings
+at those entities, so you can configure `apps.yaml` yourself. The entities are still published either way,
+so you can name them by hand - or point an individual setting at a sensor of your own.
+
+Note that Predbat will always retrieve inverter information via REST, this configuration only applies to how Predbat controls the inverter.
 
 - **givtcp_rest_power_ignore** - Optional, defaults to false. When set to `true` for a given inverter, Predbat will use the configured sensor entities
 (load_power, pv_power, grid_power, battery_power) instead of reading power values from the GivTCP REST API.
@@ -1619,9 +1856,16 @@ Called when a charge/discharge is cancelled and the inverter goes back to home d
 topic: **topic**/set/auto
 payload: true
 
-## Solcast Solar Forecast
+## Solar Forecast
 
-As described in the [Predbat installation instructions](install.md#solcast-install), Predbat needs a solar forecast
+As described in the [Predbat installation instructions](install.md#solar-forecast-install), Predbat needs a solar forecast
+in order to predict solar generation and battery charging.
+
+The Solar forecast configuration in `apps.yaml` should be configured for either for the [Solcast integration](#solcast-solar-forecast), [Forecast.solar](#forecastsolar-solar-forecast) or [Open-Meteo](#open-meteo-solar-forecast).
+
+### Solcast Solar Forecast
+
+As described in the [Predbat installation instructions](install.md#solar-forecast-install), Predbat needs a solar forecast
 in order to predict solar generation and battery charging which can be provided by the Solcast integration.
 
 By default, the template `apps.yaml` is pre-configured to use the [Solcast forecast integration](install.md#solcast-home-assistant-integration-method) for Home Assistant.
@@ -1650,11 +1894,11 @@ Uncomment the following Solcast cloud interface settings in `apps.yaml` and set 
 
 ```yaml
   solcast_host: 'https://api.solcast.com.au/'
-  solcast_api_key: 'xxxx'
+  solcast_api_key: !secret solcast_api_key
   solcast_poll_hours: 8
 ```
 
-**Note:** It's recommended to store `solcast_api_key` in `secrets.yaml` and reference it as `solcast_api_key: !secret solcast_api_key` - see [Storing secrets](#storing-secrets).
+Keep `solcast_api_key` in `secrets.yaml` rather than in `apps.yaml` - see [Storing secrets](#storing-secrets).
 
 Note that by default the Solcast API will be used to download all sites (up to 2 for hobby accounts), if you want to override this set your sites manually using
 **solcast_sites** as an array of site IDs:
@@ -1695,13 +1939,26 @@ scenario costs planning time, so if your machine is struggling you can turn On *
 while it is Off no PV90 scenario is simulated at all.
 See [Solar PV adjustment options](customisation.md#solar-pv-adjustment-options).
 
-Predbat models cloud coverage by using the difference between the PV and PV10 forecasts to work out a cloud factor,
-this modulates the PV output predictions up and down over the plan slot duration as if there were passing clouds.
-This can have an impact on planning, especially for things like freeze charging which could assume the PV will cover the house load but it might not due to clouds.
+Predbat models cloud coverage by modulating each PV scenario toward the next forecast percentile above it - PV10 toward PV50, PV50 toward PV90 - up and down
+on a 5-minute interval while holding the total over each half hour. This can have an impact on planning, especially for things like freeze charging which could
+assume the PV will cover the house load but it might not due to clouds, and for systems whose array is large enough to clip against the inverter or export limit.
+
+### **pv_array_kwp**
+
+The total DC array size in kWp, used to cap how far the PV90 scenario's modulation may extrapolate above the forecast:
+
+```yaml
+  pv_array_kwp: 18.54
+```
+
+This is detected automatically from the `kwp` figures in your **forecast_solar** or **open_meteo_forecast** configuration, so you only need to set it when using
+Solcast or the Solcast HA integration, neither of which publishes an array size. Leaving it unset with such a source simply leaves the cap inactive.
+
+Set the DC array size, not your inverter rating - on a DC-oversized system these differ, and it is precisely that oversizing which causes clipping.
 
 See also [PV configuration options in Home Assistant](customisation.md#solar-pv-adjustment-options).
 
-## Forecast.solar Solar Forecast
+### Forecast.solar Solar Forecast
 
 The Forecast.solar service can also be used in Predbat, the free version offer access without an API Key but is limited to hourly data and does not provide any 10% or 90% data.
 Predbat Solar calibration can use past data to improve this information and provide both the 10% and the 90% data, each derived from the central forecast
@@ -1739,7 +1996,7 @@ Optionally you can set an api_key for personal or professional accounts and you 
 ``` yaml
   forecast_solar:
     - postcode: SW1A 2AB
-      api_key: 'xxxxx'
+      api_key: !secret forecast_solar_api_key
       days: 3
 ```
 
@@ -1797,7 +2054,11 @@ source changes. Do not judge the accuracy of the new source until the settling p
 
 [Open-Meteo](https://open-meteo.com/) is a free, open-source weather API that provides solar irradiance forecasts with no API key required.
 Predbat fetches the Global Tilted Irradiance (GTI) for each array and converts it to a power estimate using a PVWatts cell-temperature model.
-Ensemble members are used to derive a P10 pessimistic estimate alongside the central P50.
+Ensemble members are used to derive the PV10 pessimistic and PV90 optimistic estimates alongside the central PV50.
+For each hour Predbat takes the ensemble's 10th and 90th percentiles as a ratio of the ensemble's own median, and applies those ratios to the PV50,
+so the gap either side of PV50 is wider when the weather models disagree and narrower when they agree.
+When PV calibration is on, PV10 and PV90 are scaled by the same calibration as the PV50.
+If the ensemble data cannot be downloaded, PV10 and PV90 are created from the worst and best of your recent days instead.
 
 You can define one or more rooftop arrays by providing a list; they will be summed automatically.
 
@@ -1868,7 +2129,8 @@ These are described in detail in [Energy Rates](energy-rates.md) and are listed 
 - **rates_export_override** - Over-ride export rate for specific date and time range
 - **futurerate_url** - URL of future energy market prices for Agile users
 - **futurerate_adjust_import** and **futurerate_adjust_export** - Whether tomorrow's predicted import or export prices should be adjusted based on market prices or not
-- **futurerate_adjust_auto** - Auto-detect which of import/export are Agile and calibrate only those rates; overrides `futurerate_adjust_import` / `futurerate_adjust_export`; requires the Octopus Energy integration or Predbat's Octopus Component
+- **futurerate_adjust_auto** - Auto-detect which of the import/export rates are Agile and calibrate only those rates; overrides `futurerate_adjust_import` / `futurerate_adjust_export`; requires the Octopus Energy integration or Predbat's Octopus Component
+- **futurerate_agilepredict** - Use the AgilePredict Agile price forecast for future minutes with no published or Nord Pool rate; optional **futurerate_agilepredict_region** (A-P, default from the Octopus tariff code) and **futurerate_agilepredict_url**. See [Energy rates](energy-rates.md#agilepredict-forecast)
 - **futurerate_peak_start** and **futurerate_peak_end** - start/end times for peak-rate adjustment
 - **carbon_postcode** - Postcode to retrieve Carbon intensity grid information for
 - **carbon_automatic** - Retrieve Carbon intensity information automatically based upon postcode
@@ -1913,20 +2175,35 @@ Details of configuring `apps.yaml` for EV charging are described in [Configure a
 - **car_charging_power** - Live power drawn by your EV charger, used for display only
 - **octopus_intelligent_slot** - Octopus Energy integration 'intelligent dispatching' sensor that indicates
 whether you are within an Octopus Energy "smart charge" slot
+- **octopus_intelligent_planned_slot** - Optional second sensor to take the planned charging slots from, leaving **octopus_intelligent_slot** to supply the completed ones
+(see [car charging documentation](car-charging.md#taking-planned-slots-from-another-sensor))
 - **octopus_ready_time** - Octopus Energy integration sensor for when the car charging will be completed by
 - **octopus_charge_limit** - Octopus Energy integration sensor for car charging limit
 - **octopus_slot_low_rate** - Whether Octopus Intelligent Slots reported will be at the lowest rate if at home
-- **octopus_slot_max** - Maximum number of 30-minute cheap rate slots per 24-hour period
+- **octopus_slot_max** - Maximum cheap rate dispatch time per 24-hour period, set in 30-minute slots (12 is 6 hours). It is counted in the minutes of each dispatch, so a 10-minute dispatch uses 10 minutes of it. It is per Octopus account, so with more than one car it is shared between all the cars with an `octopus_intelligent_slot` entry, in clock time (see [Multiple cars with Octopus Intelligent Go](car-charging.md#multiple-cars-with-octopus-intelligent-go-iog))
+- **intelligent_dispatch_billing** - `auto` (default), `octopus` or `window`: whether a planned dispatch half hour is billed cheap only when the car charges in it (`octopus`) or whenever the dispatch was in force (`window`, E.ON Next Drive Smart). `auto` picks `window` for the Kraken component on `kraken_provider: eon`
+(see [car charging documentation](car-charging.md))
 - **car_charging_planned** - Indicates when your EV is plugged in and planned to charge during low-rate slots.
 - **car_charging_planned_response** - Values for the car_charging_planned sensor that indicate that the car is plugged in and will charge in the next low rate slot.
-- **car_charging_now** - Sensor to indicate when the EV is charging
-- **car_charging_now_response** - Responses for car_charging_now to indicate that the car is charging
+- **car_charging_plugged** - Optional, indicates only whether your EV is plugged in, even after its charge has finished. Used to reset the manual car SoC when the car is unplugged; **car_charging_planned** is not used for this, as many chargers turn it off when a charge finishes.
+- **car_charging_now** - Sensor to indicate when the EV is charging, used to hold the house battery for the car. Either an on/off sensor or a charging power sensor (W or kW, 200W or more counts as charging)
+- **car_charging_now_response** - Responses for car_charging_now to indicate that the car is charging (default `yes`, `on`, `enable`, `true` and `charging`). The sensor state must match one of them, ignoring case
 - **car_charging_battery_size** - Car battery size in kWh
 - **car_charging_limit** - Percentage limit the car is set to charge to
 - **car_charging_soc** - Car's current charge level expressed as a percentage
+- **car_charging_max_rate** - Optional, one entry per car: the car's own maximum charge rate in kW (a number or a sensor). The car is planned at whichever is lower, this or its charging rate, for every charger integration. A blank entry, 0, or a list shorter than the number of cars means no cap for those cars; a sensor that is briefly unknown/unavailable/none keeps the last cap. A single sensor rather than a list applies to every car
 - **ohme_login** - Ohme EV charger account login
 - **ohme_password** - Password for above Ohme account
 - **ohme_automatic_octopus_intelligent** - Controls whether Predbat talks directly to the above Ohme account
+- **wallbox_username** - Wallbox EV charger account email address
+- **wallbox_password** - Password for the above Wallbox account
+- **wallbox_automatic** - Register the Wallbox chargers with Predbat as cars (default `True`)
+- **wallbox_control** - Let Predbat pause and resume the Wallbox chargers from its own car charging plan (default `False`)
+- **wallbox_poll_seconds** - How often to poll the Wallbox cloud in seconds (default `120`)
+- **hypervolt_username** - Hypervolt EV charger account email address
+- **hypervolt_password** - Password for the above Hypervolt account
+- **hypervolt_automatic** - Register the Hypervolt chargers with Predbat as cars (default `True`)
+- **hypervolt_control** - Let Predbat stop and start the Hypervolt chargers from its own car charging plan (default `False`)
 
 ## myenergi Integration
 
@@ -1956,9 +2233,11 @@ no hub, use the serial of the device acting as one, which is the Zappi or Eddi t
 - **myenergi_token_hash** - OAuth refresh token hash, used to refresh `myenergi_key` automatically - at least one of `myenergi_key` or `myenergi_token_hash` is required when `myenergi_auth_method` is `oauth`
 - **myenergi_token_expires_at** - OAuth access token expiry, used to trigger a refresh
 - **myenergi_automatic** - Set to `false` to stop Predbat wiring the device sensors into **car_charging_energy**, **car_charging_planned** and **iboost_energy_today** automatically (default: `true`)
+- **myenergi_automatic_zappi** - Set to `false` to wire only the Eddi half of the automatic configuration, leaving your Zappis out of **car_charging_energy**, **car_charging_planned**, **car_charging_power** and **car_charging_now** (default: `true`). This is what to use if you have an Eddi but charge your car with a different make of charger - turning **myenergi_automatic** off instead would drop the **iboost_energy_today** wiring too
+- **myenergi_automatic_eddi** - Set to `false` to wire only the Zappi half of the automatic configuration, leaving your Eddi out of **iboost_energy_today** (default: `true`). This is what to use if your hot water diversion is handled elsewhere but you still want your Zappis wired as cars
 - **myenergi_enable_controls** - Set to `false` for monitor-only operation (default: `true`)
 - **myenergi_poll_seconds** - Poll interval in seconds, rounded to the nearest whole multiple of 60, minimum 60 and maximum 1800 (default: `60`)
-- **myenergi_zappi_control** - Set to `true` to let Predbat drive your Zappi from its car charging plan: Fast inside a planned charging window, Stopped outside one (default: `false`). Needs **myenergi_automatic** and **myenergi_enable_controls**, since it is automatic configuration that maps each Zappi to a car. A `switch.predbat_myenergi_zappi_control` entity appears when this is set, on by default, so you can hand the Zappi back without editing apps.yaml; releasing restores the mode the Zappi had before Predbat took over, or Eco+ when nothing was saved. Note the manual boost switch will refuse while control is on, as myenergi only accepts a boost in Eco or Eco+.
+- **myenergi_zappi_control** - Lets Predbat drive your Zappi from its car charging plan: Fast inside a planned charging window, Stopped outside one (default: `false`). Leave it off to keep Eco/Eco+ solar diversion between charging windows. Needs **myenergi_automatic**, **myenergi_automatic_zappi** and **myenergi_enable_controls**, since it is automatic configuration that maps each Zappi to a car. A `switch.predbat_myenergi_zappi_control` entity appears when control is on, on by default, so you can hand the Zappi back without editing apps.yaml; releasing restores the mode the Zappi had before Predbat took over, or Eco+ when nothing was saved. Note the manual boost switch will refuse while control is on, as myenergi only accepts a boost in Eco or Eco+.
 
 The component only starts when at least one of `myenergi_api_key`, `myenergi_key` or `myenergi_token_hash` is set. That test is a plain any-of and does not look at `myenergi_auth_method`, so a credential belonging to the transport you did not select still starts the component — it then logs which setting is missing rather than failing silently.
 
@@ -2121,11 +2400,12 @@ In `apps.yaml`, uncomment (or add) the following lines, customising to the list 
     - '{octopus_saving_session}'
     - '+[car_charging_planned]'
     - '+[car_charging_soc]'
-    - '{car_charging_now}'
 ```
 
 Note the notation for watch_list, a single value `apps.yaml` configuration item such as **octopus_intelligent_slot** is surrounded by curly bracket parenthesis {},
 but for `apps.yaml` configuration items that can be a list such as **car_charging_soc** they are surrounded by +[ and ].
+
+**car_charging_now** does not need to be in the watch list: Predbat already checks it every 15 seconds and re-plans as soon as the car starts or stops charging.
 
 ## Load Forecast
 
@@ -2170,14 +2450,13 @@ Set **load_forecast_only** to `true` if you do not wish to use the Predbat forec
 When you have two or more inverters it's possible they get out of sync so they are at different charge levels or they start to cross-charge (one discharges into another).
 When enabled, balance inverters try to recover this situation by disabling either charging or discharging from one of the batteries until they re-align.
 
-Most of the Predbat configuration for balancing inverters is through a number of [Home Assistant controls for Balancing Inverters](customisation.md#balance-inverters),
-but there is one configuration item in `apps.yaml`:
+The Predbat configuration for balancing inverters is entirely through the
+[Home Assistant controls for Balancing Inverters](customisation.md#balance-inverters); there is nothing to set
+in `apps.yaml`.
 
-```yaml
-  balance_inverters_seconds: seconds
-```
-
-Defines how often to run the inverter balancing, 30 seconds is recommended if your machine is fast enough, but the default is 60 seconds.
+Balancing used to have its own `balance_inverters_seconds` interval. It now runs as part of Predbat's normal
+control cycle, so that setting has been removed - if it is still present in your `apps.yaml` it is ignored and
+can be deleted.
 
 ## Config validation retries
 
@@ -2245,6 +2524,14 @@ Skews the setting of the charge slot registers vs the predicted start time
 
 Skews the setting of the discharge slot registers vs the predicted start time
 
+Predbat compares the inverter's own clock against the computer clock on every update and reports the result in the log
+(`Inverter time ..., Predbat computer time ..., difference N minutes`). None of the `inverter_clock_skew_*` settings are
+applied automatically, so if that difference is 5 minutes or more Predbat also logs a `Warn:` line, repeated at most once
+an hour per inverter, reminding you to correct the inverter clock or to compensate for it with the settings above.
+At 30 minutes or more the warning becomes an error and Predbat will trigger your `auto_restart` commands if configured.
+An uncorrected skew shifts the start and end of every charge and export slot Predbat writes, which typically shows up as
+unexpected grid import at the edges of each window.
+
 ### Battery size scaling
 
 ```yaml
@@ -2274,7 +2561,7 @@ rather than the usual *givtcp_SERIAL_NUMBER_soc* GivTCP entity so everything lin
 Default false. When set to true Predbat will automatically calculate `battery_scaling` based on historical charge data rather than using the static value above.
 
 The calculation uses `find_battery_size()` to estimate the actual usable battery capacity from historical charging periods and
-compares it to the nominal capacity (`soc_max`). A 7-day rolling history of daily estimates is stored in a new sensor
+compares it to the nominal capacity (`soc_max`). A 7-day rolling history of daily estimates is stored in the sensor
 `sensor.predbat_soc_max_calculated` (or `sensor.predbat_soc_max_calculated_N` for inverter N > 0).
 The sensor state is the trimmed mean of the history (the highest and lowest samples are discarded when 3 or more data points exist,
 giving a stable average that is robust to occasional outliers).
@@ -2341,17 +2628,17 @@ This may be useful with GivTCP if you have time sync errors or lose the REST ser
 The auto_restart itself is a list of commands to run to trigger a restart.
 
 - The **shell** command will call a 'sh' shell and can be used to delete files and suchlike.
-- The **service** command is used to call a service and can contain arguments of **addon** and/or **entity_id**. The configuration below is for GivTCP v3.
+- The **service** command is used to call a service and can contain arguments of **app** (or legacy **addon**) and/or **entity_id**. The configuration below is for GivTCP v3.
 
 ```yaml
   auto_restart:
     - shell: 'rm -rf /homeassistant/GivTCP/*.pkl'
-    - service: hassio/addon_restart
-      addon: 533ea71a_givtcp
+    - service: hassio/app_restart
+      app: 533ea71a_givtcp
 ```
 
 NB: If you are running GivTCP v2 then the line '533ea71a_givtcp' must be replaced with 'a6a2857d_givtcp'
-as the slug-id (Home Assistant app identifier) is different between GivTCP v2 and v3.
+as the slug-id (Home Assistant App identifier) is different between GivTCP v2 and v3.
 
 ## Battery charge/discharge curves
 
@@ -2360,7 +2647,7 @@ Note that the charge/discharge curves *only* affect the accuracy of the charging
 Predbat will still instruct the inverter to charge/discharge at full rate regardless of the charging curve so not having these curves only has an impact on plan accuracy.
 
 If you know the battery charge or discharge curves (e.g. manufacturer info or your own testing) then you can manually configure this in `apps.yaml`,
-or Predbat can calculate the curves based on historical inverter charging/discharging data in Home Assistant.
+or Predbat can calculate the curves based on historical inverter charging/discharging data in Home Assistant. Note the battery curves cannot be calculated if Predbat is in Read Only mode.
 
 If the battery has not recently been fully charged or fully discharged *at a charge/discharge rate that is at least 95% of your maximum charge/discharge rate* then Predbat will not be able to calculate the curves and you'll get a warning in the logfile.
 For some inverters you may not be able to practically charge/discharge at full rates so you'll keep getting the curve warning every time Predbat starts. Simply create dummy curves to stop this warning, e.g:
@@ -2387,7 +2674,7 @@ or an edit being made to `apps.yaml`), then Predbat will automatically calculate
 
 You should look at the [Predbat logfile](output-data.md#predbat-logfile) to find the predicted battery charging curve and copy/paste it into your `apps.yaml` file.
 
-The logfile *may* also include an Info recommendation for how to set your **input_number.battery_rate_max_scaling**/**_scaling_discharge** setting in HA if predbat detects that your inverter is charging/discharging at a different maximum rate than is configured in `apps.yaml`.<BR>
+The logfile *may* also include an Info recommendation for how to set your **input_number.battery_rate_max_scaling**/**_scaling_discharge** setting in HA if Predbat detects that your inverter is charging/discharging at a different maximum rate than is configured in `apps.yaml`.<BR>
 If you don't get such a message then Predbat didn't detect any charge/discharge rate discrepancy.
 
 The YouTube video [charging curve and low power charging](https://youtu.be/L2vY_Vj6pQg) explains how the curve works and shows how Predbat automatically creates it.

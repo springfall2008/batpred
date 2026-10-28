@@ -14,6 +14,8 @@ optimiser turns windows on and off but never moves a start or end. These tests p
 hit_charge_window's own contract, and the invariant that lets its result be reused.
 """
 from prediction import Prediction
+from const import EXPORT_MODE_IDLE
+from utils import pack_export_limit
 from tests.test_infra import reset_inverter, reset_rates
 
 
@@ -125,7 +127,7 @@ def test_optimise_threads_does_not_move_window_bounds(my_predbat):
     charge_window = [make_window(my_predbat.minutes_now + 60 * n, my_predbat.minutes_now + 60 * n + 30, 10.0) for n in range(4)]
     export_window = [make_window(my_predbat.minutes_now + 60 * n + 30, my_predbat.minutes_now + 60 * n + 60, 15.0) for n in range(4)]
     charge_limit = [my_predbat.soc_max] * len(charge_window)
-    export_limits = [100.0] * len(export_window)
+    export_limits = [pack_export_limit(EXPORT_MODE_IDLE)] * len(export_window)
 
     my_predbat.charge_window_best = charge_window
     my_predbat.charge_limit_best = charge_limit

@@ -19,6 +19,7 @@ fixed. Where that is the case the expectation says so and names the finding.
 """
 
 from tests.fleet_rig import FLEET_FIXTURES, fleet_balance_power, fleet_spread, setup_fleet, split_fleet_target
+from tests.test_balance_inverters import run_balance as run_balance_pass
 
 # What each fixture aggregates to: (fleet soc_max kWh, per-inverter soc_max, per-inverter rate W).
 # Guards the rig itself - a fleet whose members quietly collapse to the same capacity or the same
@@ -130,7 +131,7 @@ def run_balance(my_predbat):
     ha = my_predbat.ha_interface
     ha.service_store_enable = True
     ha.get_service_store()
-    my_predbat.balance_inverters(test_mode=True)
+    run_balance_pass(my_predbat)
     services = ha.get_service_store()
     ha.service_store_enable = False
     return services

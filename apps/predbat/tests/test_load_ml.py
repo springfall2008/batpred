@@ -64,6 +64,7 @@ def test_load_ml(my_predbat=None):
         ("component_stale_midnight_baseline", _test_component_stale_midnight_baseline, "LoadMLComponent baseline handling when publishing crosses midnight"),
         ("car_subtraction_direct", _test_car_subtraction_direct, "Direct car_subtraction method with interpolation and smoothing"),
         ("component_run_data_merge", _test_component_run_data_merge, "LoadMLComponent run() data fetch, save and merge across two runs"),
+        ("component_retrain_interval", _test_component_retrain_interval, "YAML retraining interval, boundaries, startup and prediction cadence"),
         ("component_init_predictor_last_train_time", _test_component_init_predictor_sets_last_train_time, "LoadMLComponent _init_predictor sets last_train_time from embedded training_timestamp"),
         ("nan_inf_robustness", _test_nan_inf_robustness, "LoadPredictor handles NaN, Inf, and None across input channels without NaN loss"),
         ("database_zero_preservation", _test_database_zero_preservation, "Database save/load preserves 0.0 values across roundtrip"),
@@ -981,6 +982,61 @@ def _test_prediction_with_temp():
         assert max_minute >= 2800, f"Predictions should span ~48h (2880 min), got {max_minute} min"
 
 
+def _test_component_retrain_interval():
+    """Exercise YAML-to-component wiring and age-based scheduling without expensive training."""
+    import asyncio
+    from unittest.mock import AsyncMock, Mock
+    from components import Components
+    from mock_base import MockBase
+
+    async def run_test():
+        """Check defaults, configured bounds, clamping and the independent prediction timer."""
+        key = "load_ml_retrain_interval_hours"
+        for args, expected_hours in (({}, 2), ({key: 24}, 24), ({key: 1}, 1), ({key: 48}, 48), ({key: 0}, 1), ({key: -1}, 1), ({key: 49}, 48)):
+            base = MockBase(config_root=None, load_ml_enable=True, load_ml_database_days=0, load_today=["sensor.load_today"], **args)
+            base.log = Mock()
+            base.prediction_started = False
+            registry = Components(base)
+            registry.initialize(only="load_ml", phase=2)
+            component = registry.get_component("load_ml")
+            assert component is not None, registry.component_errors
+            assert component.ml_retrain_interval_seconds == expected_hours * 3600
+            component.data_ready = True
+            component.load_data_age_days = 7
+            component.database_history_loaded = True
+            component._do_fetch = AsyncMock()
+            component._do_training = AsyncMock()
+            component._get_predictions = Mock(return_value={})
+            component._update_model_status = Mock()
+            component._publish_entity = Mock()
+
+            # Use a non-prediction tick to prove retraining follows model age, not uptime.
+            for age_seconds, seconds, first, expected_train, expected_predict in (
+                (expected_hours * 3600 - 1, 30, False, False, False),
+                (expected_hours * 3600, 30, False, True, True),
+                (expected_hours * 3600 + 1, 30, False, True, True),
+                (1800, 1800, False, False, True),
+                (None, 0, True, False, False),
+                (None, 30, False, True, True),
+            ):
+                component.initial_training_done = age_seconds is not None
+                component.last_train_time = base.now_utc - timedelta(seconds=age_seconds) if age_seconds is not None else None
+                component._do_fetch.reset_mock()
+                component._do_training.reset_mock()
+                component._get_predictions.reset_mock()
+                base.log.reset_mock()
+                assert await component.run(seconds=seconds, first=first)
+                assert component._do_training.await_count == int(expected_train), (args, age_seconds, first)
+                assert component._get_predictions.call_count == int(expected_predict), (args, age_seconds, first)
+                assert component._do_fetch.await_count == int(first or expected_predict), (args, age_seconds, first)
+                if expected_train:
+                    component._do_training.assert_awaited_once_with(age_seconds is None)
+                    if age_seconds is not None:
+                        assert any("({}h interval)".format(expected_hours) in call.args[0] for call in base.log.call_args_list)
+
+    asyncio.run(run_test())
+
+
 def _test_component_run_data_merge():
     """Test LoadMLComponent.run() - mocks _fetch_load_data and verifies:
     1. Run 1 (first=True): data is fetched and stored, but training is deferred (no save).
@@ -1104,7 +1160,7 @@ def _test_component_run_data_merge():
         mock_base.now_utc = mock_base.now_utc + timedelta(minutes=ELAPSED_MINUTES)
 
         # ── Run 2 (first=False, seconds=30) ─────────────────────────────────────
-        # last_train_time is None -> retrain_age_seconds = RETRAIN_INTERVAL_SECONDS -> should_train=True
+        # last_train_time is None -> retrain_age_seconds = configured interval -> should_train=True
         # Expect: shift old keys, merge fresh data, run initial training, save once.
         component._fetch_load_data = AsyncMock(return_value=(fetch_data_2, 7, 3.0, None, None, None, None))
 
@@ -1133,7 +1189,7 @@ def _test_component_run_data_merge():
 
         # ── Run 3 (first=False, seconds=PREDICTION_INTERVAL_SECONDS) ─────────────
         # last_train_time = 30 min ago (set in mock_do_training to component.now_utc of Run 2).
-        # retrain_age_seconds = 30*60 = 1800 < RETRAIN_INTERVAL_SECONDS (7200) -> should_train=False.
+        # retrain_age_seconds = 30*60 = 1800 < default interval (7200) -> should_train=False.
         # seconds % PREDICTION_INTERVAL_SECONDS == 0 -> should_fetch=True.
         # Expect: fetch+predict+save only, no training.
         component._fetch_load_data = AsyncMock(return_value=(fetch_data_3, 7, 3.0, None, None, None, None))
@@ -1831,6 +1887,10 @@ def _test_component_fetch_load_data():
 
     # Create mock base object with all necessary properties
     class MockBase:
+        def car_rate_capped(self, car_n, rate):
+            """Pass-through: no car_charging_max_rate cap in these tests."""
+            return rate
+
         def __init__(self):
             self.prefix = "predbat"
             self.config_root = None
@@ -2039,9 +2099,21 @@ def _test_component_fetch_load_data():
         print("    PASS: Car charging subtraction works")
 
     # Test 3b: Car charging threshold-based detection (without sensor)
-    async def test_car_charging_threshold_detection():
-        """Test that car charging is detected based on load threshold when no sensor is configured."""
+    async def test_car_charging_threshold_detection(car_max_rate=None, rate_changed_to=None):
+        """Test that car charging is detected based on load threshold when no sensor is configured.
+
+        With car_max_rate set, the base caps car 0's rate as Fetch does (car_charging_max_rate), and the
+        estimated car load subtracted must use the capped rate, not car_charging_rate.
+
+        With rate_changed_to set, car_charging_rate changes after the component starts, and the estimate
+        must use the new rate rather than the one read at startup.
+        """
         mock_base_threshold = MockBase()
+        car_rate_kw = 7.5 if rate_changed_to is None else rate_changed_to
+        if car_max_rate is not None:
+            mock_base_threshold.car_rate_capped = lambda car_n, rate: min(rate, car_max_rate) if car_n == 0 else rate
+            car_rate_kw = min(car_rate_kw, car_max_rate)
+        car_step_kwh = car_rate_kw / 60.0 * 5  # estimated car energy per 5-minute step
 
         # Create load data at 5-minute intervals with varying consumption following Predbat convention:
         # minute 0 = now (highest cumulative), minute 1440 = 24h ago (lowest)
@@ -2070,17 +2142,19 @@ def _test_component_fetch_load_data():
         age = 1.0
 
         # Override get_arg to DISABLE car_charging_energy sensor but keep car_charging_hold enabled
+        threshold_args = {
+            "load_today": ["sensor.load_today"],
+            "load_power": None,
+            "car_charging_energy": None,  # No sensor - will use threshold detection
+            "load_scaling": 1.0,
+            "car_charging_energy_scale": 1.0,
+            "car_charging_hold": True,  # Enable threshold-based detection
+            "car_charging_threshold": 6.0,  # 6.0 kW/h threshold (0.5 kWh per 5 min)
+            "car_charging_rate": 7.5,  # 7.5 kW/h charging rate (0.625 kWh per 5 min)
+        }
+
         def mock_get_arg_threshold(key, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
-            return {
-                "load_today": ["sensor.load_today"],
-                "load_power": None,
-                "car_charging_energy": None,  # No sensor - will use threshold detection
-                "load_scaling": 1.0,
-                "car_charging_energy_scale": 1.0,
-                "car_charging_hold": True,  # Enable threshold-based detection
-                "car_charging_threshold": 6.0,  # 6.0 kW/h threshold (0.5 kWh per 5 min)
-                "car_charging_rate": 7.5,  # 7.5 kW/h charging rate (0.625 kWh per 5 min)
-            }.get(key, default)
+            return threshold_args.get(key, default)
 
         mock_base_threshold.get_arg = mock_get_arg_threshold
 
@@ -2090,6 +2164,8 @@ def _test_component_fetch_load_data():
 
         component = LoadMLComponent(mock_base_threshold, load_ml_enable=True)
         # Component will use default thresholds from get_arg
+        if rate_changed_to is not None:
+            threshold_args["car_charging_rate"] = rate_changed_to
 
         result_data, result_age, result_now, result_pv, result_temp, result_import_rates, result_export_rates = await component._fetch_load_data()
 
@@ -2102,12 +2178,13 @@ def _test_component_fetch_load_data():
         # car_charging_rate = 7.5 kW/h / 60 = 0.125 kW/min
         # Estimated car delta per 5-min: 0.125 * 5 = 0.625 kWh
 
+        assert 1440 in result_data and 1420 in result_data, "Threshold minutes 1440/1420 missing from result, so the car-estimate checks below would not run"
         # At minute 1440: load delta = 1.0 kWh (exceeds 0.5 threshold)
         # Should subtract estimated car delta: 1.0 - 0.625 = 0.375 kWh
         if 1440 in result_data:
             value_1440 = result_data[1440]
-            expected = 0.375  # 1.0 - 0.625 (threshold triggered)
-            assert abs(value_1440 - expected) < 0.01, f"At minute 1440 (high load), expected ~{expected} kWh (1.0 - 0.625 car estimate), got {value_1440:.4f}"
+            expected = 1.0 - car_step_kwh  # 1.0 - 0.625 uncapped, 1.0 - 0.3 with a 3.6 kW cap (threshold triggered)
+            assert abs(value_1440 - expected) < 0.01, f"At minute 1440 (high load), expected ~{expected} kWh (1.0 - car estimate {car_step_kwh}), got {value_1440:.4f}"
 
         # Per-step format: each key holds the energy for that single 5-min interval only
         # At minute 1435: load = 0.2 kWh (below 0.5 threshold, no car charging detected)
@@ -2132,10 +2209,10 @@ def _test_component_fetch_load_data():
         # Subtract estimated car delta: 1.0 - 0.625 = 0.375
         if 1420 in result_data:
             value_1420 = result_data[1420]
-            expected = 0.375  # Car detected, subtract estimate
+            expected = 1.0 - car_step_kwh  # Car detected, subtract estimate
             assert abs(value_1420 - expected) < 0.01, f"At minute 1420 (high load again), expected ~{expected} kWh, got {value_1420:.4f}"
 
-        print("    PASS: Car charging threshold detection works")
+        print("    PASS: Car charging threshold detection works (car_max_rate {}, rate_changed_to {})".format(car_max_rate, rate_changed_to))
 
     # Test 4: Load power fill
     async def test_load_power_fill():
@@ -2435,6 +2512,8 @@ def _test_component_fetch_load_data():
     run_async(test_missing_sensor())
     run_async(test_car_charging_subtraction())
     run_async(test_car_charging_threshold_detection())
+    run_async(test_car_charging_threshold_detection(car_max_rate=3.6))
+    run_async(test_car_charging_threshold_detection(rate_changed_to=3.0))
     run_async(test_load_power_fill())
     run_async(test_exception_handling())
     run_async(test_empty_load_data())
@@ -2481,7 +2560,7 @@ def _test_component_publish_entity():
     print("  Testing _publish_entity:")
     mock_base = MockBase()
 
-    component = LoadMLComponent(mock_base, load_ml_enable=True)
+    component = LoadMLComponent(mock_base, load_ml_enable=True, load_ml_source=False)
 
     # Mock dashboard_item to capture calls
     def mock_dashboard_item(entity_id, state, attributes, app):
@@ -2571,6 +2650,9 @@ def _test_component_publish_entity():
     # Check status
     assert "status" in attrs2, "status should be in attributes"
     assert attrs2["status"] == "active", f"Expected status 'active', got {attrs2['status']}"
+
+    # Check load_ml_source
+    assert attrs2["load_ml_source"] is False, f"Expected load_ml_source False, got {attrs2['load_ml_source']}"
 
     # Check model_version
     assert "model_version" in attrs2, "model_version should be in attributes"

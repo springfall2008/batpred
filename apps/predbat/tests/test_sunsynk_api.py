@@ -16,7 +16,7 @@ import signal
 import aiohttp
 import pytz
 from contextlib import redirect_stdout
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import MagicMock, AsyncMock, patch
 from sunsynk import SunsynkAPI, test_sunsynk_api as run_sunsynk_cli_once
 from sunsynk_const import SUNSYNK_REGIONS, SUNSYNK_ENDPOINTS, SUNSYNK_RETRIES, SUNSYNK_MAX_DISCOVERY_PAGES
@@ -38,19 +38,27 @@ class MockSunsynk(SunsynkAPI):
         self.control_enable = control_enable
         self.inverter_sn_filter = inverter_sn or []
         self.device_list = []
+        self.device_roles = {}
         self.device_detail = {}
         self.device_values = {}
         self.device_settings = {}
         self.device_energy = {}
         self.device_rated_power = {}
+        self.bms_charge_limit_max = {}
         self.battery_nominal_voltage = 0.0
         self.local_schedule = {}
         self.applied_payload = {}
         self.settle_count = {}
+        self.battery_energy = {}
+        self._parallel_warned = set()
+        self._slave_startup_waits = 0
         self.control_active = set()
         self._tier_refreshed = {}
         self._cache_restored = False
         self._soc_floor_warned = set()
+        self._stack_size_warned = set()
+        self._discovery_battery_ratings = {}
+        self._discovery_sensors = {}
         # Most recent body-level API failure message (the `msg` field only, never a
         # credential) and whether the last discovery attempt actually reached the API -
         # mirrors the two attributes initialize() sets on the real component.
@@ -60,11 +68,26 @@ class MockSunsynk(SunsynkAPI):
         self.local_tz = pytz.timezone("Europe/London")
         self.base = MagicMock()
         self.base.args = {"user_id": "test-sunsynk-1"}
-        self.base.midnight_utc = datetime.now(pytz.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        self.base.minutes_now = 0  # local minutes-since-midnight; tests set this for time-aware control
+        # A real clock on the mock base, not a MagicMock attribute: ComponentBase.minutes_now
+        # derives from base.now_utc (GH#4804), and MagicMock would answer that arithmetic with a
+        # value of its own rather than failing. Tests wanting a particular time of day call
+        # set_mock_clock(); writing base.minutes_now alone does nothing.
+        self.base.now_utc = datetime.now(pytz.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        self.base.midnight_utc = self.base.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        self.base.minutes_now = 0
         # Straight through, like the component: _init_oauth owns self.auth_method, so
         # collapsing the modes here would hide password_legacy from fetch_token.
         self._init_oauth(auth_method, "test-token", None, "sunsynk")
+
+    def set_mock_clock(self, minutes_now):
+        """Move the mock base's clock to minutes_now past midnight.
+
+        ComponentBase.minutes_now is derived from base.now_utc, so a test that wants a particular
+        time of day moves the clock rather than writing base.minutes_now (GH#4804). Both are set
+        so a direct base.minutes_now read stays honest too.
+        """
+        self.base.now_utc = self.base.midnight_utc + timedelta(minutes=minutes_now)
+        self.base.minutes_now = minutes_now
 
     def log(self, message):
         """Capture logs."""
@@ -690,6 +713,41 @@ def test_nominal_pack_voltage_variants():
     assert not failed, "test_nominal_pack_voltage_variants"
 
 
+def test_nominal_pack_voltage_warns_once_per_unmatched_charge_volt():
+    """A chargeVolt that fits no LiFePO4 stack is warned about once per value, not on every call.
+
+    battery_capacity() and battery_rate_max() both reach nominal_pack_voltage() every cycle, and the
+    discovery reporter reads battery_capacity() too, so an unchanging chargeVolt would otherwise log
+    the same Warn several times a cycle.
+    """
+    failed = False
+    s = MockSunsynk()
+
+    def stack_warnings():
+        return [message for message in s.log_messages if "cannot infer a LiFePO4 stack size" in message]
+
+    # 40V fits no stack: 8 cells charge to 27.2-30V and 15 cells to 51-56.25V
+    for _ in range(3):
+        if s.nominal_pack_voltage(40.0) != 0.0:
+            print("ERROR: a chargeVolt that fits no stack must still give no voltage")
+            failed = True
+    if len(stack_warnings()) != 1:
+        print(f"ERROR: expected one warning for a repeated chargeVolt, got {stack_warnings()}")
+        failed = True
+    # A different value that fits no stack is new information and is warned about
+    s.nominal_pack_voltage(70.0)
+    if len(stack_warnings()) != 2 or "70.0" not in stack_warnings()[-1]:
+        print(f"ERROR: a new chargeVolt that fits no stack must be warned about, got {stack_warnings()}")
+        failed = True
+    # Neither a placeable value nor one already warned about logs again
+    s.nominal_pack_voltage(56.8)
+    s.nominal_pack_voltage(40.0)
+    if len(stack_warnings()) != 2:
+        print(f"ERROR: no further warnings expected, got {stack_warnings()}")
+        failed = True
+    assert not failed, "test_nominal_pack_voltage_warns_once_per_unmatched_charge_volt"
+
+
 def test_battery_capacity_amp_hours_to_kwh():
     """Amp-hour capacity becomes kWh using the inferred pack voltage."""
     failed = False
@@ -1068,6 +1126,141 @@ def test_cli_reports_telemetry_failure_naming_the_serials():
     assert not failed, "test_cli_reports_telemetry_failure_naming_the_serials"
 
 
+def test_battery_rate_max_is_capped_by_the_inverters_own_current_limit():
+    """A single inverter's charge rate is the lower of the BMS limit and its own batteryMaxCurrentCharge.
+
+    The BMS reports what the bank will accept (chargeCurrentLimit 200 A on a live system), but the
+    inverter's own battery current setting (65 A there) is what it actually charges at - ~62 A was
+    measured. Planning on the BMS figure alone promised 10.24 kW where the inverter delivers ~3.3 kW.
+    """
+    failed = False
+    s = MockSunsynk()
+    cases = {
+        # BMS 200 A, inverter 65 A: the inverter binds. 65 A x 51.2 V.
+        "INV1": ({"chargeCurrentLimit": 200.0, "chargeVolt": 58.0}, {"batteryMaxCurrentCharge": "65"}, 65.0 * 51.2),
+        # The inverter set above the BMS limit: the BMS binds.
+        "INV2": ({"chargeCurrentLimit": 200.0, "chargeVolt": 58.0}, {"batteryMaxCurrentCharge": "250"}, 200.0 * 51.2),
+        # No inverter setting read: unchanged, the BMS limit.
+        "INV3": ({"chargeCurrentLimit": 200.0, "chargeVolt": 58.0}, {}, 200.0 * 51.2),
+        # No BMS limit but the inverter's own is known: that is still a real limit.
+        "INV4": ({"chargeCurrentLimit": 0.0, "maxChargeCurrentLimit": 0.0, "chargeVolt": 58.0}, {"batteryMaxCurrentCharge": "65"}, 65.0 * 51.2),
+    }
+    for sn, (values, settings, expected) in cases.items():
+        s.device_values[sn] = values
+        s.device_settings[sn] = settings
+        rate = s.battery_rate_max(sn)
+        if abs(rate - expected) > 1:
+            print(f"ERROR: {sn} battery_rate_max {rate}W, expected {expected}W")
+            failed = True
+    assert not failed, "test_battery_rate_max_is_capped_by_the_inverters_own_current_limit"
+
+
+def test_battery_rate_max_uses_the_highest_bms_limit_seen():
+    """The BMS charge limit tapers as the battery fills, so the rate is built from the highest seen, saved.
+
+    Live on one bank over a day: 200 A at mid SoC, 175 A at 83%, 108 A at 93% and 0 when full,
+    while the bank still charged at 120 A. maxChargeCurrentLimit reads 0 and the settings read's
+    chargeCurrent mirrors the live value, so nothing reports the fixed maximum.
+    """
+    failed = False
+    s = MockSunsynk()
+    day = datetime(2026, 10, 18, 10, 0, tzinfo=pytz.utc)
+    s.device_values["INV1"] = {"chargeCurrentLimit": 200.0, "chargeVolt": 58.0}
+    if not s._note_bms_charge_limit("INV1", day):
+        print("ERROR: the first limit seen should be recorded as a change")
+        failed = True
+    # Tapering near full: the saved maximum still drives the rate.
+    for live in (108.0, 0.0):
+        s.device_values["INV1"]["chargeCurrentLimit"] = live
+        if s._note_bms_charge_limit("INV1", day + timedelta(hours=3)):
+            print(f"ERROR: a lower live limit ({live} A) must not change the saved maximum")
+            failed = True
+        if abs(s.battery_rate_max("INV1") - 200.0 * 51.2) > 1:
+            print(f"ERROR: with {live} A live the rate should use the saved 200 A, got {s.battery_rate_max('INV1')}")
+            failed = True
+    # A higher reading raises it.
+    s.device_values["INV1"]["chargeCurrentLimit"] = 216.0
+    s._note_bms_charge_limit("INV1", day + timedelta(hours=4))
+    if s.bms_charge_limit_max["INV1"]["amps"] != 216.0:
+        print(f"ERROR: a higher limit should raise the saved maximum, got {s.bms_charge_limit_max['INV1']}")
+        failed = True
+    # Not seen again for over a week (a smaller battery fitted, say): it resets to the live value.
+    s.device_values["INV1"]["chargeCurrentLimit"] = 150.0
+    s._note_bms_charge_limit("INV1", day + timedelta(days=8))
+    if s.bms_charge_limit_max["INV1"]["amps"] != 150.0:
+        print(f"ERROR: a stale maximum should reset to the live 150 A, got {s.bms_charge_limit_max['INV1']}")
+        failed = True
+    # The inverter's own cap still binds below it.
+    s.device_settings["INV1"] = {"batteryMaxCurrentCharge": "65"}
+    if abs(s.battery_rate_max("INV1") - 65.0 * 51.2) > 1:
+        print(f"ERROR: the inverter's 65 A cap should still bind, got {s.battery_rate_max('INV1')}")
+        failed = True
+    assert not failed, "test_battery_rate_max_uses_the_highest_bms_limit_seen"
+
+
+def test_bms_charge_limit_maximum_is_saved_and_restored():
+    """The saved maximum rides in the ratings cache, so a restart at full charge still has a rate."""
+    failed = False
+    s = MockSunsynk()
+    s.bms_charge_limit_max = {"INV1": {"amps": 200.0, "seen": "2026-10-18T10:00:00+00:00"}}
+    saved = {}
+
+    async def fake_save(name, data):
+        """Capture the cache write."""
+        saved[name] = data
+
+    async def fake_load(name):
+        """Serve the saved caches back."""
+        return saved.get(name, {})
+
+    async def fake_age(name):
+        """Every cache is fresh."""
+        return 1.0 if name in saved else None
+
+    with patch.object(s, "save_cache", side_effect=fake_save):
+        run_async_local(s.save_ratings())
+    restored = MockSunsynk()
+    with patch.object(restored, "load_cache", side_effect=fake_load), patch.object(restored, "age_cache", side_effect=fake_age):
+        run_async_local(restored.restore_state())
+    if restored.bms_charge_limit_max != s.bms_charge_limit_max:
+        print(f"ERROR: the BMS maximum was not restored, got {restored.bms_charge_limit_max}")
+        failed = True
+    restored.device_values["INV1"] = {"chargeCurrentLimit": 0.0, "chargeVolt": 58.0}
+    if abs(restored.battery_rate_max("INV1") - 200.0 * 51.2) > 1:
+        print(f"ERROR: a full battery after a restart should still rate at the saved 200 A, got {restored.battery_rate_max('INV1')}")
+        failed = True
+    assert not failed, "test_bms_charge_limit_maximum_is_saved_and_restored"
+
+
+def test_refresh_live_records_the_bms_maximum():
+    """Each live poll updates the saved BMS maximum, and saves the ratings only when it changed."""
+    failed = False
+    s = MockSunsynk()
+    s.device_list = ["INV1"]
+    readings = [200.0, 108.0]
+    saves = []
+
+    async def fake_fetch(sn):
+        """Report the next BMS charge limit in the sequence."""
+        s.device_values[sn] = {"chargeCurrentLimit": readings.pop(0), "chargeVolt": 58.0}
+        return s.device_values[sn]
+
+    async def fake_save_ratings():
+        """Count the ratings saves."""
+        saves.append(dict(s.bms_charge_limit_max))
+
+    with patch.object(s, "fetch_device_data", side_effect=fake_fetch), patch.object(s, "save_ratings", side_effect=fake_save_ratings):
+        run_async_local(s.refresh_live())
+        run_async_local(s.refresh_live())
+    if s.bms_charge_limit_max.get("INV1", {}).get("amps") != 200.0:
+        print(f"ERROR: the 200 A maximum should survive the tapered 108 A poll, got {s.bms_charge_limit_max}")
+        failed = True
+    if len(saves) != 1:
+        print(f"ERROR: the ratings should be saved once (when the maximum was first seen), got {len(saves)}")
+        failed = True
+    assert not failed, "test_refresh_live_records_the_bms_maximum"
+
+
 def test_battery_rate_max_prefers_a_populated_current_field():
     """A zero maxChargeCurrentLimit must not mask a populated chargeCurrentLimit.
 
@@ -1184,9 +1377,14 @@ def run_sunsynk_api_tests(my_predbat):
         ("grid_power_sign", test_grid_power_sign_matches_the_live_export_sample),
         ("telemetry_absent", test_fetch_device_data_absent_fields_are_not_invented),
         ("nominal_pack_voltage", test_nominal_pack_voltage_variants),
+        ("nominal_pack_voltage_warns_once", test_nominal_pack_voltage_warns_once_per_unmatched_charge_volt),
         ("capacity_ah_to_kwh", test_battery_capacity_amp_hours_to_kwh),
         ("battery_rate_max", test_battery_rate_max_from_charge_current),
         ("rate_max_field_priority", test_battery_rate_max_prefers_a_populated_current_field),
+        ("rate_max_unit_cap", test_battery_rate_max_is_capped_by_the_inverters_own_current_limit),
+        ("rate_max_bms_maximum", test_battery_rate_max_uses_the_highest_bms_limit_seen),
+        ("bms_maximum_persisted", test_bms_charge_limit_maximum_is_saved_and_restored),
+        ("bms_maximum_from_live_poll", test_refresh_live_records_the_bms_maximum),
         ("pack_voltage_window", test_nominal_pack_voltage_across_the_lifepo4_charge_window),
         ("inverter_limit_vs_export", test_inverter_limit_is_the_rating_and_export_limit_is_the_cap),
         ("battery_reserve_min", test_battery_reserve_min_from_settings),

@@ -429,10 +429,11 @@ class WebChat:
         model_id = body.get("id") or None
         agent.store.set_model(body.get("conversation"), model_id, agent.active_provider)
         # Also remembered as the global choice, so the next new conversation starts on it and it
-        # survives a restart. Only a real selection is remembered - clearing back to the default
-        # should not pin whatever the default happened to be at that moment.
-        if model_id:
-            agent.store.set_selected_model(model_id, agent.active_provider)
+        # survives a restart. Clearing back to the default forgets the remembered choice rather than
+        # recording the default: pinning it would freeze whatever the default happened to be at that
+        # moment, and leaving the old choice in place would let resolve_model() keep answering with
+        # it, so the Default row could never be selected again (#5230).
+        agent.store.set_selected_model(model_id, agent.active_provider)
         _, error = await self._marshal(agent, agent.store.flush(body.get("conversation")))
         if error:
             return error
@@ -702,7 +703,9 @@ class WebChat:
         # Only once the file write has succeeded is the live configuration changed, so a failed
         # save never leaves Predbat running settings that are not in the file.
         block = plain_yaml_value(chat_block)
-        self.base.args["chat"] = block
+        # set_arg() invalidates log()'s cached redaction pattern (hass.py) too - needed here since
+        # a provider entry can carry a nested api_key (#5053 review).
+        self.base.set_arg("chat", block)
         selected, error = await self._marshal(agent, agent.apply_provider_block(copy.deepcopy(block), active))
         if error:
             return error
@@ -2697,6 +2700,12 @@ function closeModelList() {
 
 function selectModel(id) {
     state.currentModel = id || null;
+    if (!id && state.conversation) {
+        // Default makes the server forget the remembered choice (posted below), so forget it here
+        // too before the picker is redrawn - otherwise effectiveModel() falls straight back to it
+        // and the picker keeps naming the model that was just deselected.
+        state.selectedModel = '';
+    }
     closeModelList();
     updateModelNote();
     if (!state.conversation) {
@@ -2853,24 +2862,35 @@ function hideBanner() {
     banner.innerHTML = '';
 }
 
+// The banner exists to say a reply is happening SOMEWHERE ELSE, and to offer a way there. On the
+// conversation already open it would be telling the user about the thing in front of them and
+// offering to switch to where they already are - the transcript is the status there.
+//
+// This is the only place that decides between the two. Callers set state.busy - or clear it - and
+// then ask; none of them call showBanner/hideBanner themselves. The rule used to be restated at
+// each call site, and handleTitle restated it inverted, raising the banner precisely when the busy
+// conversation WAS the one on screen (#4840). One owner is what stops that recurring.
+function refreshBanner() {
+    if (state.busy && state.busy.conversation_id && state.busy.conversation_id !== state.conversation) {
+        showBanner(state.busy.conversation_id, state.busy.title);
+    } else {
+        hideBanner();
+    }
+}
+
 function setBusy(conversationId, title, turnId) {
     state.busy = { conversation_id: conversationId, title: title, turn_id: turnId };
     setComposerDisabled(true);
-    // The banner exists to say a reply is happening SOMEWHERE ELSE, and to offer a way there.
-    // On the conversation already open it was telling the user about the thing in front of them
-    // and offering to switch to where they already are. The transcript is the status here.
-    if (conversationId && conversationId === state.conversation) {
-        hideBanner();
-    } else {
-        showBanner(conversationId, title);
-    }
+    refreshBanner();
     byId('chat-stop').classList.add('visible');
 }
 
 function setIdle() {
     state.busy = null;
     setComposerDisabled(false);
-    hideBanner();
+    // Reached with state.busy already cleared, so this takes the hide branch - the same outcome as
+    // the direct call it replaces, but without a second place that decides for itself.
+    refreshBanner();
     byId('chat-stop').classList.remove('visible');
     // Every caller of setIdle() - the 'idle' SSE event, reconcileBusy() correcting a stale banner
     // on reconnect, and the no-active-turn branch of loadConversationData() - means the server has
@@ -3472,9 +3492,21 @@ function handleTitle(data) {
             setTitleText(titleNode, data.title || '');
         }
     }
-    if (state.busy && state.busy.conversation_id === state.conversation) {
-        showBanner(state.busy.conversation_id, data.title);
+    // The header reads its title from state.titles (updateChatTitle), which nothing updated on a
+    // title event - so it went on saying 'New chat' until the user switched away and back, while
+    // the row in the list already showed the real name.
+    if (state.conversation) {
+        state.titles = state.titles || {};
+        state.titles[state.conversation] = data.title || '';
+        updateChatTitle();
     }
+    // A title event is scoped by the server to the conversation being viewed, so it can only ever
+    // rename the one on screen. Keep the busy record in step so that switching away afterwards
+    // shows the banner with the name the conversation now has, then let refreshBanner decide.
+    if (state.busy && state.busy.conversation_id === state.conversation) {
+        state.busy.title = data.title;
+    }
+    refreshBanner();
 }
 
 // Cached-token counts are diagnostic (proof prompt caching is actually landing hits, not merely

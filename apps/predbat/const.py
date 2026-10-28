@@ -23,6 +23,54 @@ TIME_FORMAT_SOLCAST = "%Y-%m-%dT%H:%M:%S.%f0%z"  # 2024-05-31T18:00:00.0000000Z
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
 TIME_FORMAT_SOLIS = "%Y-%m-%d %H:%M:%S"
 PREDICT_STEP = 5
+
+# Octopus Intelligent slot confirmation (octopus_intelligent_dynamic): how long a car inside a dispatch must
+# show "not charging" before its slots, and their cheap rate, are cancelled. car_charging_now reports the
+# car directly, so two minutes (one charger/integration update) is enough once the start band has passed;
+# the start band covers the car and charger waking up once Octopus starts the dispatch. The load test reads
+# PREDICT_STEP averages that must each lie inside the dispatch, so its grace is one more full window: two
+# low windows in a row, 10 minutes into a dispatch that starts on the 5 minute grid.
+DYNAMIC_LOAD_CAR_SENSOR_MINUTES = 2
+DYNAMIC_LOAD_CAR_START_MINUTES = 3
+DYNAMIC_LOAD_CAR_LOAD_MINUTES = 5
+# The load test reads "low" - no car can be charging - under this fraction of car_charging_threshold. The
+# margin below the threshold allows for a load sensor that under-reads while the battery is charging (GH#5461)
+DYNAMIC_LOAD_CAR_LOW_FACTOR = 0.85
+# A car_charging_now reading only confirms the half hour it is in (keeping that half hour cheap once the car
+# stops, GH#5316) from this many minutes into it: the sensor can lag a car that stopped just before the boundary
+DYNAMIC_LOAD_CAR_CONFIRM_MINUTES = 2
+# How long a half hour an Octopus Intelligent planned dispatch ran in keeps the dispatch rate after it ends,
+# while waiting for Octopus to list it as a completed dispatch - seen to take 15 to 60 minutes (GH#5520)
+OCTOPUS_DISPATCH_HOLD_MINUTES = 90
+# The same hold under the window billing rule (E.ON Next Drive Smart, GH#5521): the supplier bills every half hour a
+# planned dispatch was in force off-peak and never lists the ones the car did not charge in, so the hold is the
+# record - kept for a day, so today's cost and the hours either side of midnight are priced from it
+OCTOPUS_DISPATCH_WINDOW_HOLD_MINUTES = 24 * 60
+# Octopus Intelligent device currentState while it is running a smart charge, and the states in which it dispatches
+# nothing - the car unplugged or out of reach, or smart control turned off - whatever planned dispatches it still lists
+OCTOPUS_STATE_SMART_CONTROL_IN_PROGRESS = "SMART_CONTROL_IN_PROGRESS"
+OCTOPUS_STATES_NOT_DISPATCHING = ("SMART_CONTROL_NOT_AVAILABLE", "SMART_CONTROL_OFF")
+# How long the last known planned dispatches are kept through empty answers while a smart charge is in progress:
+# Octopus answers an empty planned list for a few minutes while it re-plans a running session (seen 2 to 8 minutes)
+OCTOPUS_PLANNED_EMPTY_HOLD_MINUTES = 10
+# The settings of intelligent_dispatch_billing in apps.yaml
+DISPATCH_BILLING_CHOICES = ("auto", "octopus", "window")
+
+# Extra cloud divergence applied to the PV10 scenario on top of the computed cloud factor, so the
+# downside case diverges harder than the central one
+CLOUD_FACTOR_PV10 = 0.2
+# Window the envelope cloud model conserves energy over. Matches the half-hour rate slot so the
+# modulation can never shift PV across a slot boundary, and gives six PREDICT_STEP buckets - enough
+# granularity for the duty cycle to follow the p10/p50/p90 band's own asymmetry.
+CLOUD_WINDOW_MINUTES = 30
+# Ceiling for the p90 series' own modulation, as a multiple of DC array kWp. p90 is the top
+# percentile the forecaster publishes, so its upside has no next percentile to reach for and is
+# extrapolated instead; this rail stops a wide band extrapolating into a physically impossible
+# array output. 1.2 allows for cloud-edge enhancement above nameplate.
+CLOUD_ARRAY_MARGIN = 1.2
+# Sentinel fetch_pv_forecast() returns when the forecast source declares no array size (Solcast and
+# the HA integrations). Treated as "unknown", not as a real 9999 kWp array.
+PV_ARRAY_KWP_UNKNOWN = 9999
 RUN_EVERY = 5
 # Forecast scenarios simulated by the planner.
 # PV_SCENARIO_PV10 must remain 1 so it stays interchangeable with the legacy pv10 boolean.
@@ -30,38 +78,72 @@ PV_SCENARIO_NOMINAL = 0
 PV_SCENARIO_PV10 = 1
 PV_SCENARIO_PV90 = 2
 LOAD_FORECAST_HISTORY_MAX_DAYS = 30  # Max days of history used by the weighted-bucket load forecast (days_previous_auto)
+LOAD_FORECAST_RECORDED_MIN_MINUTES = 60  # Recorded load needed before its average fills slots no history covers (new installs, batpred#5548)
 CONFIG_ROOTS = ["/config", "/conf", "/homeassistant", "./"]
 TIME_FORMAT_HA = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_HA_TZ = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_DAILY = "%Y-%m-%d"
+# Dispatch source for a charger's own schedule on a tariff with no dispatch rate (e.g. Ohme off Octopus
+# Intelligent): the slots are when the car will charge, but they are billed at the normal tariff rate
+DISPATCH_SOURCE_CHARGER_SCHEDULE = "charger-schedule"
+# Source for a half hour held because the car was charging in a smart charge Octopus had not listed a dispatch for:
+# Octopus starts charging when the car is plugged in, and lists that half hour only once it has completed
+DISPATCH_SOURCE_CHARGING_UNLISTED = "charging-unlisted"
 TIMEOUT = 60 * 5
 CONFIG_REFRESH_PERIOD = 60 * 8
 INVERTER_MAX_RETRY = 10  # Maximum number of retries for inverter commands
+# How Inverter spends one write_and_poll_sleep interval while waiting for a written value to appear
+# on an entity Predbat publishes itself. The interval is a timeout, not a known duration, so it is
+# polled with a backoff rather than slept through in one go - see Inverter._poll_after_write. Reads
+# come from the local websocket state cache, so a poll is close to free.
+INVERTER_WRITE_POLL_INTERVAL = 0.25  # Seconds before the second look, doubling after each miss
+INVERTER_WRITE_POLL_MAX_INTERVAL = 2.0  # Ceiling for that backoff
 INVERTER_MAX_RETRY_REST = 5  # Maximum number of retries for inverter REST commands
+# Per-control write backoff, for inverter types that opt in with write_backoff in INVERTER_DEF (only
+# GWMQTT). A control whose write of the same target has failed to verify this many times in a row
+# (one write per plan cycle) is degraded: it is sent once rather than retried in a burst, and at most
+# once per INVERTER_WRITE_DEGRADED_INTERVAL seconds, until a write verifies, it reads back as wanted,
+# or the target changes. Every call still checks the read-back and reports a mismatch as a failure.
+INVERTER_WRITE_BACKOFF_FAILURES = 2
+INVERTER_WRITE_DEGRADED_INTERVAL = 300
+# Inverter clock skew bands, measured as (inverter time - Predbat computer time) in minutes.
+# At or above the restart threshold Predbat warns loudly and triggers auto_restart. Between the warn
+# and restart thresholds nothing used to be said at all, yet the drift still shifts every charge and
+# export slot Predbat writes (compensation via inverter_clock_skew_* is manual only), so a moderate
+# steady skew showed up only as expensive grid import at the edges of every window - see #4989/#4927.
+INVERTER_CLOCK_SKEW_RESTART_MINUTES = 30
+INVERTER_CLOCK_SKEW_WARN_MINUTES = 5
+INVERTER_CLOCK_SKEW_WARN_REPEAT_MINUTES = 60  # Minimum gap between repeats of the moderate-skew warning, per inverter, so it doesn't fire every 5-minute cycle
 INVERTER_REST_TIMEOUT = 10  # Seconds to wait for a REST response before giving up (local network call, should be fast)
-INVERTER_QUICK_UPDATE_SECONDS = 120  # Minimum seconds between quick inverter data updates
+INVERTER_QUICK_UPDATE_SECONDS = 60  # Minimum seconds between quick inverter data updates, also the balance re-apply interval
+INVERTER_LIMIT_DEFAULT_W = 7500.0  # Standing inverter AC limit when the user has not configured inverter_limit
+EXPORT_LIMIT_DEFAULT_W = 99999.0  # Standing export limit when the user has not configured export_limit - effectively unlimited
 PREDBAT_MAX_CARS = 8  # Matches PK_MAX_CARS in prediction_kernel.cpp and the car_charging_rate/_1../_7 config items - the hard ceiling on num_cars
+# A car_charging_now sensor that reports a charging power (in W, after unit conversion) rather than
+# on/off counts as charging from this power: above a charger's standby draw, below the smallest charge
+CAR_CHARGING_NOW_POWER_W = 200
+# A manually tracked car with no charge recorded keeps counting from up to this long ago, for energy its charger's history records late
+CAR_MANUAL_SOC_LATE_MINUTES = 60
+# A manually tracked car is only reset once its plugged-in sensor has read unplugged for this long - a charger reconnecting can read unplugged for a few minutes
+CAR_MANUAL_SOC_UNPLUG_MINUTES = 10
+# A manually tracked car with no car_charging_plugged sensor is reset once it has been idle - nothing charged, entered or written by the plan - for this long
+CAR_MANUAL_SOC_IDLE_MINUTES = 12 * 60
+# Charger energy counted for a manually tracked car is limited to car_charging_rate times the time elapsed, with this margin, plus a little slack for a coarse counter
+CAR_MANUAL_SOC_RATE_MARGIN = 1.1
+CAR_MANUAL_SOC_ENERGY_SLACK = 0.1
+CAR_CHARGING_LIMIT_UNCAPPED = 9999.0  # Model-facing car charge limit (kWh) that makes predict()'s fill clamp inert - larger than any real car battery (#4967)
 DEBUG_ENABLE_MAX_HOURS = 2  # Auto-disable switch.predbat_debug_enable after this long left on, to bound the raw per-cycle debug.yaml disk writes it triggers (and the C++ kernel bypass it forces) if left on by accident - the rotating debug-history buffer covers longer-term history at a coarser interval instead
+# How far ahead a manual override may be placed. The two horizons differ on purpose: a manual
+# charge/export/freeze/demand slot is bounded by the plan, since Predbat can only act on a slot the
+# plan reaches, whereas a rate override is future tariff data that only has to be REMEMBERED until
+# the plan reaches it - e.g. an energy supplier announcing a free-electricity hour several days out.
+# 7 days is the ceiling the 'Day HH:MM' selection format can express anyway.
+MANUAL_TIME_MAX_MINUTES = 48 * 60
+MANUAL_RATE_MAX_MINUTES = 7 * 24 * 60
 
 # 240v x 100 amps x 3 phases / 1000 to kW / 60 minutes in an hour is the maximum kWh in a 1 minute period
 MAX_INCREMENT = 240 * 100 * 3 / 1000 / 60
 MINUTE_WATT = 60 * 1000
-
-# PV production (kWh) forecast across the remainder of a charge window above which low power charging is
-# abandoned in favour of the max charge rate. Throttling the charge rate while the sun is shining stops the
-# PV reaching the battery, the surplus is exported cheaply and the target is then made up with grid import,
-# which increases the cost of the plan over the full rate charge the planner costed the window at.
-LOW_POWER_PV_THRESHOLD = 0.1
-
-# Fraction of the peak forecast PV power above which a plan_interval_minutes bucket is classed as
-# "light" rather than "dark" when deciding where to split a charge window (calc_dawn). A charge window
-# otherwise built from a single long cheap-rate period spanning sunrise would apply LOW_POWER_PV_THRESHOLD
-# across the whole thing and abandon low power charging even for the still-dark hours before the sun is
-# up (#4557) - splitting at dawn keeps the dark portion as its own window, genuinely PV-free, so it stays
-# throttled. A fraction of that forecast's own peak, rather than a fixed Watts figure, scales with the
-# site - a fixed threshold picked for a typical system would be noise-level for a large array and
-# unreachable for a small one.
-LOW_POWER_PV_LIGHT_FRACTION = 0.1
 
 INVERTER_TEST = False  # Run inverter control self test
 
@@ -75,6 +157,32 @@ INVERTER_TEST = False  # Run inverter control self test
 EXPORT_LIMIT_FREEZE = 99.0  # Hold SoC, export only genuine PV surplus - no forced discharge
 EXPORT_LIMIT_IDLE = 100.0  # Export window disabled entirely
 
+# Export modes - the three states an export window can be in. These name what the packed value
+# above already encodes; they are the vocabulary the rest of the code should ask in, rather than
+# each caller re-deriving intent by comparing against the two sentinels (which several modules
+# currently do, inconsistently). See export_mode_of()/export_target_of()/export_power_of() in
+# utils.py for the accessors that read them.
+EXPORT_MODE_TARGET = 0  # Force export down to a target SoC percentage, optionally at reduced power
+EXPORT_MODE_FREEZE = 1  # Hold SoC, export only genuine PV surplus
+EXPORT_MODE_IDLE = 2  # Window disabled entirely
+
+# Full export power - the power level a target window exports at unless the planner has chosen a
+# reduced rate. 1.0 = the inverter's configured maximum export rate.
+FULL_EXPORT_POWER = 1.0
+
+# Export power levels the planner tries for a low-power target export, as a fraction of full rate.
+# These are the powers themselves, not the packed fractions they used to be written as: the
+# encoding stores 1 - power, so the old ladder's 0.3/0.5/0.7 meant 70%/50%/30% rate and read
+# backwards at the call site.
+LOW_EXPORT_POWER_LEVELS = [0.7, 0.5, 0.3]
+
+# Schema version for the debug yaml dump and the persisted plan. Bump when a field's *shape*
+# changes, not when one is added or removed - a reader can detect those itself, but it cannot tell
+# a new encoding from an old one when both are, say, a list of numbers. Absent means "before
+# versioning", which is any dump written before this was introduced; those are still read, so a
+# bug report from an older release keeps working (see export_limit_from_stored).
+DEBUG_SCHEMA_VERSION = 1
+
 # Create an array of times in the day in 5-minute intervals
 BASE_TIME = datetime.strptime("00:00:00", "%H:%M:%S")
 OPTIONS_TIME = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M:%S")) for minute in range(0, 24 * 60, 5)]
@@ -85,3 +193,44 @@ PREDBAT_MODE_MONITOR = 0
 PREDBAT_MODE_CONTROL_SOC = 1
 PREDBAT_MODE_CONTROL_CHARGE = 2
 PREDBAT_MODE_CONTROL_CHARGEDISCHARGE = 3
+
+# The states a run can end in, as execute.py writes them to predbat.status. Each can be followed by its
+# qualifiers - ", Hold for car", " (Holiday)", " [Freeze exporting]", " [Alert]". A run that raised a
+# warning records its state after it in square brackets ("Warn: ... [Exporting]"), and the History view
+# only reads a trailing bracket as the run's state when it starts with one of RUN_STATE_NAMES, as warning
+# text can end in brackets of its own. execute.py uses these names rather than literals so the two can't
+# drift apart: a state missing from RUN_STATE_NAMES would read as no state in History during a warning.
+RUN_STATE_DEMAND = "Demand"
+RUN_STATE_CHARGING = "Charging"
+RUN_STATE_FREEZE_CHARGING = "Freeze charging"
+RUN_STATE_HOLD_CHARGING = "Hold charging"
+RUN_STATE_EXPORTING = "Exporting"
+RUN_STATE_FREEZE_EXPORTING = "Freeze exporting"
+RUN_STATE_HOLD_EXPORTING = "Hold exporting"
+RUN_STATE_CROSS_CHARGING = "Cross-charging"
+RUN_STATE_HOLD_FOR_CAR = "Hold for car"
+RUN_STATE_HOLD_FOR_IBOOST = "Hold for iBoost"
+RUN_STATE_READ_ONLY = "Read-Only"
+RUN_STATE_CALIBRATION = "Calibration"
+
+# Predbat's core charge/export status strings, ordered most-active-first. Used two ways: execute.py
+# resolves one headline status across a multi-inverter fleet (#4446), and output.py breaks a tie when
+# a history slot's dominant state is ambiguous - e.g. an even split between two states (#4843). Both
+# need the same answer to "which of these two states is the more significant one to show".
+CHARGE_STATE_PRECEDENCE = [RUN_STATE_CHARGING, RUN_STATE_FREEZE_CHARGING, RUN_STATE_HOLD_CHARGING]
+EXPORT_STATE_PRECEDENCE = [RUN_STATE_EXPORTING, RUN_STATE_FREEZE_EXPORTING, RUN_STATE_HOLD_EXPORTING]
+
+RUN_STATE_NAMES = [RUN_STATE_DEMAND] + CHARGE_STATE_PRECEDENCE + EXPORT_STATE_PRECEDENCE + [RUN_STATE_CROSS_CHARGING, RUN_STATE_HOLD_FOR_CAR, RUN_STATE_HOLD_FOR_IBOOST, RUN_STATE_READ_ONLY, RUN_STATE_CALIBRATION]
+
+# The status a run records when it completed but a component failed. predbat.py writes it and the
+# History view (output.split_status_warning) unwraps the run's own status back out of it, so both
+# read the wording from here.
+COMPONENT_ERROR_STATUS_PREFIX = "Error: Complete run status "
+COMPONENT_ERROR_STATUS_SUFFIX = " with component errors: "
+
+# Home Assistant rejects entity states over 255 characters
+STATUS_STATE_MAX_LENGTH = 255
+
+# A log text that repeats (an API response, an Intelligent slot list) is logged in full again after this long, so
+# the full text is never only in a rotated-out log file; in between it is logged as one short line
+REPEAT_FULL_LOG_SECONDS = 3600

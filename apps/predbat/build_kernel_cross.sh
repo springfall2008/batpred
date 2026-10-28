@@ -11,7 +11,7 @@
 # matching the platform and machine at runtime, or skip if missing:
 #   prediction_kernel_lib_<machine>.so         (Linux)
 #   prediction_kernel_lib_darwin_<machine>.so  (macOS)
-# where Linux <machine> is x86_64, aarch64, armv7l or i686, covering the addon's
+# where Linux <machine> is x86_64, aarch64, armv7l or i686, covering the app's
 # Ubuntu (glibc) base images (amd64, aarch64, armv7/armhf, i386; glibc floor 2.17),
 # and macOS <machine> is arm64 (Apple Silicon) or x86_64 (Intel).
 #

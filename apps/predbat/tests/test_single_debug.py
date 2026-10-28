@@ -11,6 +11,8 @@ import os
 import json
 import time
 from compare import Compare
+from const import CLOUD_FACTOR_PV10
+from utils import export_limit_sort_key
 from prediction import Prediction
 from tests.test_infra import reset_inverter
 
@@ -65,11 +67,22 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     #     fetch rebuilds both every cycle in the product, but the debug harness never calls fetch, and
     #     debug files written before those fields existed carry neither. Their absent-value defaults
     #     send battery_value_rate back to rate_max / rate_export_max, which the debug file does carry.
+    #   - the saving-session minutes and pre-saving snapshots set_rate_thresholds() reads with --redo,
+    #     and rate_import_tariff_max, which prices a vanished IOG dispatch: debug files written before
+    #     they existed carry none of them. Empty sets and snapshots mean no event, and a missing tariff
+    #     maximum falls back to rate_max, as the live code does before thresholds are worked out.
     my_predbat.dynamic_load_baseline = {}
     my_predbat.battery_rate_max_export = 0.0333
     my_predbat.rate_max_base = 0
     my_predbat.rate_export_max_forward = {}
+    my_predbat.rate_import_saving_minutes = set()
+    my_predbat.rate_export_saving_minutes = set()
+    my_predbat.rate_import_pre_saving = {}
+    my_predbat.rate_export_pre_saving = {}
+    my_predbat.rate_import_tariff_max = None
     my_predbat.read_debug_yaml(debug_file)
+    if my_predbat.rate_import_tariff_max is None:
+        my_predbat.rate_import_tariff_max = my_predbat.rate_max
     my_predbat.config_root = "./"
     my_predbat.save_restore_dir = "./"
     my_predbat.load_user_config()
@@ -150,12 +163,12 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
 
         # Find charging windows
         if my_predbat.rate_import:
-            # Find charging window
+            # Find charging window - mirrors fetch.py's fetch_sensor_data(), including the dawn
+            # light/dark split (#4699: this reimplementation used to omit pv_light_dark entirely,
+            # so a debug.yaml replay could never catch a regression in the split)
+            pv_light_dark = my_predbat.calc_pv_light_dark()
             print("rate scan window import threshold rate {}".format(my_predbat.rate_import_cost_threshold))
-            my_predbat.low_rates, lowest, highest = my_predbat.rate_scan_window(my_predbat.rate_import, 5, my_predbat.rate_import_cost_threshold, False, alt_rates=my_predbat.rate_export)
-            # Update threshold automatically
-            if my_predbat.rate_low_threshold == 0 and highest >= my_predbat.rate_min:
-                my_predbat.rate_import_cost_threshold = highest
+            my_predbat.find_low_rate_windows(alt_rates=my_predbat.rate_export, pv_light_dark=pv_light_dark)
     else:
         print("don't re-do rates")
 
@@ -205,7 +218,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         )
         my_predbat.pv_forecast_minute_step = my_predbat.step_data_history(my_predbat.pv_forecast_minute, my_predbat.minutes_now, forward=True, cloud_factor=my_predbat.metric_cloud_coverage)
         my_predbat.pv_forecast_minute10_step = my_predbat.step_data_history(
-            my_predbat.pv_forecast_minute10, my_predbat.minutes_now, forward=True, cloud_factor=min(my_predbat.metric_cloud_coverage + 0.2, 1.0) if my_predbat.metric_cloud_coverage else None, flip=True
+            my_predbat.pv_forecast_minute10, my_predbat.minutes_now, forward=True, cloud_factor=min(my_predbat.metric_cloud_coverage + CLOUD_FACTOR_PV10, 1.0) if my_predbat.metric_cloud_coverage else None, flip=True
         )
 
     pv_step = my_predbat.pv_forecast_minute_step
@@ -275,7 +288,15 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     print("Wrote plan to {} metric {}".format(filename, metric))
 
     # Expected
-    actual_data = {"charge_limit_best": my_predbat.charge_limit_best, "charge_window_best": my_predbat.charge_window_best, "export_window_best": my_predbat.export_window_best, "export_limits_best": my_predbat.export_limits_best}
+    # The committed .expected.json goldens hold export limits as the bare packed numbers they were
+    # before the fields were split. Compare in that form deliberately - regenerating them would
+    # destroy their value as a regression against historical plans.
+    actual_data = {
+        "charge_limit_best": my_predbat.charge_limit_best,
+        "charge_window_best": my_predbat.charge_window_best,
+        "export_window_best": my_predbat.export_window_best,
+        "export_limits_best": [float(export_limit_sort_key(limit)) for limit in my_predbat.export_limits_best],
+    }
     actual_json = json.dumps(actual_data)
     if expected_file:
         print("Compare with {}".format(expected_file))

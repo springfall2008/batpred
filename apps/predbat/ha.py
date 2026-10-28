@@ -28,7 +28,7 @@ import requests
 import traceback
 import threading
 import time
-from utils import str2time
+from utils import str2time, strptime_aware
 from const import TIME_FORMAT_HA, TIMEOUT, TIME_FORMAT_HA_TZ
 from component_base import ComponentBase
 
@@ -422,10 +422,15 @@ class HAInterface(ComponentBase):
                 self.log("Info: Using SQL Lite database as primary data source, no HA interface available")
 
         if self.ha_key:
-            # Get the current addon info, but suppress warning message if the API call fails as non-HAOS installs won't have supervisor running
+            # Get the current app info, but suppress warning message if the API call fails as non-HAOS installs won't have supervisor running
+            #
+            # HA changed terminology from 'addons' to 'apps' in HA 2026.2 but retained the old service calls for transition
+            #
+            # At present have not changed Predbat API call in order to not break installations that are still using an older HA supervisor
+            # Propose in Feb 2027 that Predbat be changed to use the new service call
             res = self.api_call("/addons/self/info", core=False, silent=True)
             if res:
-                # get app slug name which is the actual directory name under /addon_configs that /config is mounted to
+                # get app slug name which is the actual directory name under /app_configs that /config is mounted to
                 self.slug = res["data"]["slug"]
                 self.log("Info: App slug is {}".format(self.slug))
 
@@ -756,7 +761,7 @@ class HAInterface(ComponentBase):
 
                 # Fail all pending requests on connection drop
                 with self.ws_pending_lock:
-                    for req_id, req_info in list(self.ws_pending_requests.items()):
+                    for _req_id, req_info in list(self.ws_pending_requests.items()):
                         req_info["result_holder"]["error"] = "connection_lost"
                         req_info["result_holder"]["success"] = False
                         req_info["event"].set()
@@ -853,16 +858,16 @@ class HAInterface(ComponentBase):
                 # Instead of appending to a local mirror_updates list, call the database manager to schedule the update
                 if last_changed:
                     try:
-                        last_changed = datetime.strptime(last_changed, TIME_FORMAT_HA_TZ)
+                        last_changed = strptime_aware(last_changed, TIME_FORMAT_HA_TZ)
                     except (ValueError, TypeError):
                         # Try fallback format without microseconds
                         try:
-                            last_changed = datetime.strptime(last_changed, "%Y-%m-%dT%H:%M:%S%z")
+                            last_changed = strptime_aware(last_changed, "%Y-%m-%dT%H:%M:%S%z")
                         except (ValueError, TypeError) as e:
                             self.log("Warn: Failed to parse last_changed time {} for entity {} : {}".format(last_changed, entity_id, e))
-                            last_changed = datetime.now()
+                            last_changed = datetime.now(timezone.utc)
                 else:
-                    last_changed = datetime.now()
+                    last_changed = datetime.now(timezone.utc)
 
                 self.db_manager.set_state_db(entity_id, state, attributes, timestamp=last_changed)
 
@@ -971,10 +976,12 @@ class HAInterface(ComponentBase):
 
         return [history] if history else None
 
-    async def set_state_external(self, entity_id, state, attributes={}):
+    async def set_state_external(self, entity_id, state, attributes=None):
         """
         Used for external changes to Predbat state data
         """
+        if attributes is None:
+            attributes = {}
         new_value = state
         new_state = {"entity_id": entity_id, "state": state, "attributes": attributes}
         old_value = self.get_state(entity_id)
@@ -1057,10 +1064,12 @@ class HAInterface(ComponentBase):
         if (old_value is None) or (new_value != old_value):
             await self.base.trigger_watch_list(entity_id, attributes, old_state, new_state)
 
-    def set_state(self, entity_id, state, attributes={}):
+    def set_state(self, entity_id, state, attributes=None):
         """
         Set the state of an entity in Home Assistant.
         """
+        if attributes is None:
+            attributes = {}
         self.db_mirror_list[entity_id] = True
 
         if self.db_enable and (self.db_mirror_ha or self.db_primary):

@@ -18,12 +18,52 @@ launch_run_prediction_* and the first handle read flushes them all through one
 call to the C++ prediction kernel, which is where the threading now lives.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from multiprocessing import cpu_count
-from const import PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, TIME_FORMAT, MINUTE_WATT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE
+from const import (
+    CLOUD_FACTOR_PV10,
+    CLOUD_WINDOW_MINUTES,
+    DYNAMIC_LOAD_CAR_CONFIRM_MINUTES,
+    DYNAMIC_LOAD_CAR_LOAD_MINUTES,
+    DYNAMIC_LOAD_CAR_LOW_FACTOR,
+    DYNAMIC_LOAD_CAR_SENSOR_MINUTES,
+    DYNAMIC_LOAD_CAR_START_MINUTES,
+    PREDICT_STEP,
+    PV_SCENARIO_NOMINAL,
+    PV_SCENARIO_PV10,
+    PV_SCENARIO_PV90,
+    TIME_FORMAT,
+    MINUTE_WATT,
+    FULL_EXPORT_POWER,
+    LOW_EXPORT_POWER_LEVELS,
+    EXPORT_MODE_TARGET,
+    EXPORT_MODE_FREEZE,
+    EXPORT_MODE_IDLE,
+)
 
-from utils import calc_percent_limit, clone_windows, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, in_car_slot
+from utils import (
+    calc_percent_limit,
+    clone_windows,
+    dp0,
+    dp1,
+    dp2,
+    dp3,
+    dp4,
+    remove_intersecting_windows,
+    in_car_slot,
+    export_mode_of,
+    export_power_of,
+    export_target_of,
+    export_limit_sort_key,
+    pack_export_limit,
+    export_limit_exports_no_battery,
+    export_limit_is_full_discharge,
+    is_entity_id,
+    round_out_to_period,
+)
+from config import INVERTER_DEF
 from prediction import Prediction
+from prediction_batch import export_end_soc_from_series, prediction_cache_key
 from prediction_kernel import kernel_status_summary, set_window_start
 from predbat_metrics import metrics
 import time
@@ -117,6 +157,11 @@ IO_ADJUST_MAX_DISCOUNT = 3.0  # Maximum pence discount applied to the earliest I
 IO_ADJUST_MAX_PENALTY = 10.0  # Maximum pence penalty applied to the latest IOG slots
 IO_ADJUST_DISCOUNT_HORIZON_HOURS = 3.0  # Only discount IOG slots that start within this many hours of now
 
+# Octopus Intelligent "bird in hand" credit (see io_confirmed_credit_update()): score only, pence per kWh
+# stored in the current half hour of the dispatch run a car is charging in, divided by 1 + n for the nth half hour after
+# it. Kept well below any real price step so it only settles ties.
+IO_CONFIRMED_CREDIT = 0.1
+
 
 def slots_around(target_slots, slot_lengths):
     """
@@ -195,20 +240,14 @@ class Plan:
         Return True if load status has changed and hence we need to re-plan
         """
         prev_last_load_status = self.load_last_status
-        prev_last_load_car_slot = self.load_last_car_slot
+        prev_car_charging_now_modelled = {car_n for car_n, slots in enumerate(self.car_charging_now_slots) if slots}
+        self.car_charging_now_slots = [[] for car_n in range(self.num_cars)]
 
         threshold_battery = self.battery_rate_max_discharge * MINUTE_WATT / 1000
-        threshold_car = self.car_charging_threshold * MINUTE_WATT / 1000
+        threshold_car = self.car_charging_threshold_kw()
 
         # Last period load analysis
-        self.load_last_status = "baseline"
-        if self.load_last_period >= threshold_battery:
-            self.load_last_status = "high"
-        elif (self.load_last_period < (threshold_battery * 0.9)) and (self.load_last_period < (threshold_car * 0.9)):
-            # Check if the load is less than car charging threshold
-            self.load_last_status = "low"
-        else:
-            self.load_last_status = "baseline"
+        self.load_last_status = self.dynamic_load_classify()
 
         # Update entity for last load
         self.dashboard_item(
@@ -218,17 +257,6 @@ class Plan:
         )
         self.log("Dynamic load last period {:.2f}kW, status {}, threshold_battery {}kWh, threshold_car {}kWh,".format(self.load_last_period, self.load_last_status, threshold_battery, dp1(threshold_car)))
 
-        # Is the car currently planned to charge?
-        load_car_slot = False
-        if self.car_energy_reported_load:
-            for car_n in range(0, self.num_cars):
-                for slot_n in range(0, len(self.car_charging_slots[car_n])):
-                    slot = self.car_charging_slots[car_n][slot_n]
-                    # Don't include the exact start minute as it may take a few for the load to filter through
-                    if slot["start"] <= self.minutes_now < slot["end"]:
-                        load_car_slot = True
-                        self.log("Dynamic load adjust sees car {} charging now slot {}-{}, previous car slot {}".format(car_n, slot["start"], slot["end"], self.load_last_car_slot))
-        self.load_last_car_slot = load_car_slot
         self.dynamic_load_baseline = {}
 
         # Dynamic load baselines are stored as kWh per PREDICT_STEP. When the car is inside the
@@ -241,10 +269,15 @@ class Plan:
         # Planned car energy is also an upper-bound estimate for a sensor that has not caught up
         # yet. Calculate it over the same trailing period as load_last_period, including partial
         # slot overlaps, then convert the per-minute kW values to kWh.
+        # A car reporting car_charging_now outside any slot is drawing power too, at its charging rate.
         car_load_planned = 0.0
         if self.car_energy_reported_load:
             for minute in range(self.minutes_now - PREDICT_STEP, self.minutes_now):
-                car_load_planned += sum(in_car_slot(minute, self.num_cars, self.car_charging_slots)[0]) / 60
+                car_load = in_car_slot(minute, self.num_cars, self.car_charging_slots)[0]
+                for car_n in range(self.num_cars):
+                    if not car_load[car_n] and self.car_charging_now_active(car_n) and car_n < len(self.car_charging_rate):
+                        car_load[car_n] = self.car_charging_rate[car_n]
+                car_load_planned += sum(car_load) / 60
 
         car_energy_sensor_used = False
         if self.car_energy_reported_load and self.car_charging_hold and self.car_charging_energy:
@@ -261,24 +294,16 @@ class Plan:
         if self.car_energy_reported_load and not car_energy_sensor_used:
             load_last_period_energy = max(load_last_period_energy - car_load_planned, 0)
 
+        minutes_end_slot = int((self.minutes_now + self.plan_interval_minutes) / self.plan_interval_minutes) * self.plan_interval_minutes
+        # A car charging now outside its plan is modelled whether or not dynamic load is on: execute_plan() holds the battery for it
+        # either way, and an export window the plan picked over it would skip that hold
+        self.dynamic_load_car_charging_now(minutes_end_slot)
         if self.metric_dynamic_load_adjust:
             minutes_now = self.minutes_now
-            minutes_end_slot = int((self.minutes_now + self.plan_interval_minutes) / self.plan_interval_minutes) * self.plan_interval_minutes
-            # When dynamic load is enabled we try can do two things
-            # 1. Increase the load prediction in the current self.plan_interval_minutes minute period to match the actual load (if the load is higher than expected),
-            #    extending into the following period too once the load has been high for two consecutive checks in a row (mirrors the low-load debounce below)
-            # 2. If the load is low and car charging is predicted then cancel off future car slots
-            # Note never do this just after midnight due to the load sensor reset
-            if self.load_last_status == "low" and self.minutes_now > 5:
-                if load_car_slot and prev_last_load_car_slot:
-                    for car_n in range(0, self.num_cars):
-                        for slot_n in range(0, len(self.car_charging_slots[car_n])):
-                            slot = self.car_charging_slots[car_n][slot_n]
-                            if slot["end"] > minutes_now:
-                                # If the slot is in the future
-                                self.log("Dynamic load adjust is cancelling car {} slot {}-{} due to low load".format(car_n, slot["start"], slot["end"]))
-                                self.car_charging_slots[car_n][slot_n]["kwh"] = 0
-
+            # When dynamic load is enabled, increase the load prediction in the current self.plan_interval_minutes minute period to match the
+            # actual load (if the load is higher than expected), extending into the following period too once the load has been high for two
+            # consecutive checks in a row. Cancelling the slots of a car that is not charging is done earlier in the cycle, before the rates
+            # are built, by dynamic_load_car_check().
             if self.load_last_status == "high":
                 have_printed = False
                 minutes_end_baseline = minutes_end_slot
@@ -297,7 +322,696 @@ class Plan:
                 self.log("Dynamic load status changed from {} to {}".format(prev_last_load_status, self.load_last_status))
                 return True
 
+        # Which cars are modelled charging now - not the slots themselves, whose start moves every cycle
+        car_charging_now_modelled = {car_n for car_n, slots in enumerate(self.car_charging_now_slots) if slots}
+        if car_charging_now_modelled != prev_car_charging_now_modelled:
+            self.log("Dynamic load cars modelled charging now changed from {} to {}".format(sorted(prev_car_charging_now_modelled), sorted(car_charging_now_modelled)))
+            return True
         return False
+
+    def car_charging_now_active(self, car_n):
+        """
+        Whether car_n reports charging now (car_charging_now, as read at the start of this cycle).
+        """
+        return car_n < len(self.car_charging_now) and bool(self.car_charging_now[car_n])
+
+    def dynamic_load_car_charging_now(self, minutes_end_slot):
+        """
+        Model a car that reports charging now, but that no slot with energy covers, as charging at its rate
+        until minutes_end_slot - the end of the current plan interval. Runs every cycle, whether or not
+        dynamic load is on, as execute_plan() holds the battery for such a car either way.
+
+        The slot goes into car_charging_now_slots, never car_charging_slots: that is the published car plan,
+        which drives binary_sensor.predbat_car_charging_slot and so the charger, and a slot there would keep
+        the charge going on its own. The live plan's prediction and export windows read it through
+        car_charging_slots_model(), so the battery is held for the car there as execute_plan() holds it.
+        """
+        for car_n in range(self.num_cars):
+            if not self.car_charging_now_active(car_n) or car_n >= len(self.car_charging_rate):
+                continue
+            covered = any(slot["start"] <= self.minutes_now < slot["end"] and slot.get("kwh", 0) > 0 for slot in (self.car_charging_slots[car_n] if car_n < len(self.car_charging_slots) else []))
+            if covered or minutes_end_slot <= self.minutes_now:
+                continue
+            kwh = dp3(self.car_charging_rate[car_n] * (minutes_end_slot - self.minutes_now) / 60)
+            self.car_charging_now_slots[car_n] = [{"start": self.minutes_now, "end": minutes_end_slot, "kwh": kwh, "octopus": False}]
+            self.log("Car {} is charging now outside its plan, modelling {}kWh until {}".format(car_n, kwh, self.time_abs_str(minutes_end_slot)))
+
+    def car_charging_slots_model(self):
+        """
+        The car slots the live plan models: car_charging_slots with any car_charging_now_slots in front, so
+        in_car_slot() - which stops at the first slot covering a minute - finds the charging-now slot ahead
+        of a covering slot with no energy left. The lists are new, the slot dicts are shared.
+        """
+        now_slots = self.car_charging_now_slots
+        # Always a fresh list per car, so a caller that edits the model can never edit the published plan
+        return [(now_slots[car_n] if car_n < len(now_slots) else []) + list(slots) for car_n, slots in enumerate(self.car_charging_slots)]
+
+    def car_charging_threshold_kw(self):
+        """
+        car_charging_threshold in kW, the unit of load_last_period - it is held in kWh per minute.
+        """
+        return self.car_charging_threshold * MINUTE_WATT / 1000
+
+    def dynamic_load_classify(self):
+        """
+        Classify load_last_period as "high" (above the battery's discharge rate), "low" (below both the
+        battery rate and the car's low-load cut-off, so no car can be charging) or "baseline".
+
+        Shared by dynamic_load(), which runs after the inverter fetch, and dynamic_load_car_check(), which
+        runs before it and so uses the previous cycle's battery_rate_max_discharge - it barely moves
+        between cycles, and the car grace period spans several of them.
+        """
+        threshold_battery = self.battery_rate_max_discharge * MINUTE_WATT / 1000
+        if self.load_last_period >= threshold_battery:
+            return "high"
+        if (self.load_last_period < (threshold_battery * 0.9)) and (self.load_last_period < self.dynamic_load_car_low_kw()):
+            return "low"
+        return "baseline"
+
+    def dynamic_load_car_low_kw(self):
+        """
+        The load in kW under which no car can be charging: DYNAMIC_LOAD_CAR_LOW_FACTOR of car_charging_threshold.
+        """
+        return self.car_charging_threshold_kw() * DYNAMIC_LOAD_CAR_LOW_FACTOR
+
+    def dynamic_load_car_live_load(self):
+        """
+        The live house load from the load_power sensors, as (configured, kW): the total across inverters,
+        or None when any of them has no reading ("unknown", "unavailable", missing from HA) - part of the
+        load is not the load. configured is False when load_power is not set at all.
+
+        Summed as Inverter.update_status() sums it: load_power plus the inverter type's extra load_power_N
+        sensors (Solis reports the bypass load on load_power_1), where one left out of apps.yaml counts as
+        nothing, then load_power_invert.
+
+        Read from the sensors rather than the inverters: dynamic_load_car_check() runs before
+        fetch_inverter_data(), where their load_power is still the previous cycle's.
+        """
+        entities = self.args.get("load_power", None)
+        if not entities:
+            return False, None
+        if not isinstance(entities, list):
+            entities = [entities]
+        total = 0.0
+        for inverter_n in range(len(entities)):
+            inverter_type = self.get_arg("inverter_type", "GE", indirect=False, index=inverter_n)
+            num_load_entities = INVERTER_DEF.get(inverter_type, {}).get("num_load_entities", 1)
+            power = 0.0
+            for arg in ["load_power"] + ["load_power_{}".format(extra_n) for extra_n in range(1, num_load_entities)]:
+                value = self.args.get(arg, None)
+                if isinstance(value, list):
+                    value = value[inverter_n] if inverter_n < len(value) else None
+                if not value:
+                    continue
+                try:
+                    power += float(self.resolve_arg(arg, value, default=None, quiet=True, required_unit="W"))
+                except (ValueError, TypeError):
+                    return True, None
+            if self.get_arg("load_power_invert", default=False, index=inverter_n):
+                power = -power
+            total += power
+        return True, total / 1000.0
+
+    def dynamic_load_car_evidence(self, car_n, minute, now, dispatch_start, dispatch_end):
+        """
+        Whether car_n, inside a dispatch running dispatch_start to dispatch_end, is not charging at minute
+        (exact) / now, and how long that must hold before its slots are cancelled.
+
+        Returns (not_charging, grace_minutes, timed_at): not_charging is True (not charging), False
+        (charging) or None (no evidence either way), and timed_at is the clock the grace is measured on.
+
+        car_charging_now is used whenever it names a real entity - a static literal in apps.yaml can never
+        report the car stopping. An "unknown"/"unavailable" reading is no evidence, rather than a stop. A
+        "not charging" reading only counts from DYNAMIC_LOAD_CAR_START_MINUTES into the dispatch, while the
+        car and charger wake up; "charging" counts anywhere. The grace is timed on the exact clock.
+
+        Any car's car_charging_now reading "charging" counts as charging for every car (see
+        dynamic_load_any_car_charging_now()), whatever the car's own sensor says.
+
+        Without a sensor the low-load test stands in, but only when the car is inside the CT clamp
+        (car_energy_reported_load): otherwise its charging never shows in the load at all. load_last_period
+        averages the PREDICT_STEP minutes up to minutes_now, so it only counts when that whole window lies
+        inside the dispatch, and the grace is timed on that 5 minute grid. It is skipped just after
+        midnight, when the load_today sensor resets, and without load history.
+
+        A low load_last_period alone is not enough where load_power is set: it lags a car that is still
+        ramping up, and a cloud inverter's late readings, so a car at full power can read low (GH#5461).
+        The live load has to be low too. Live load that is not low, or has no reading, makes a low window
+        no evidence either way - it neither cancels the car nor resumes it.
+        """
+        if self.dynamic_load_any_car_charging_now():
+            return False, DYNAMIC_LOAD_CAR_SENSOR_MINUTES, now
+        if car_n in self.dynamic_load_car_sensors:
+            charging = self.car_charging_now_reading(car_n)
+            if charging is None:
+                return None, DYNAMIC_LOAD_CAR_SENSOR_MINUTES, now
+            if minute < dispatch_start + DYNAMIC_LOAD_CAR_START_MINUTES:
+                return None, DYNAMIC_LOAD_CAR_SENSOR_MINUTES, now
+            return True, DYNAMIC_LOAD_CAR_SENSOR_MINUTES, now
+        grid_now = self.midnight_utc + timedelta(minutes=self.minutes_now)
+        if self.car_energy_reported_load:
+            # No load history (e.g. a load_forecast-only install, where load_last_period is a hard-coded
+            # 0) is not low load - it is no reading at all
+            if self.minutes_now <= 5 or not self.load_minutes:
+                return None, DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
+            if self.minutes_now - PREDICT_STEP < dispatch_start or self.minutes_now > dispatch_end:
+                return None, DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
+            if self.dynamic_load_classify() != "low":
+                return False, DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
+            live_configured, live_load = self.dynamic_load_car_live_load()
+            live_low = not live_configured or (live_load is not None and live_load < self.dynamic_load_car_low_kw())
+            self.log(
+                "Octopus Intelligent: car {} load last period {:.2f}kW is low (under {:.2f}kW), live load {} - {}".format(
+                    car_n, self.load_last_period, self.dynamic_load_car_low_kw(), "{:.2f}kW".format(live_load) if live_load is not None else ("unavailable" if live_configured else "not configured"), "not charging" if live_low else "no evidence"
+                )
+            )
+            if not live_low:
+                return None, DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
+            return True, DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
+        return None, DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
+
+    def dynamic_load_any_car_charging_now(self):
+        """
+        Whether any car's car_charging_now entity reads charging right now.
+
+        Octopus links a dispatch to one car, but with two chargers Predbat cannot tell which one that car
+        is plugged into - myenergi automatic set-up numbers the Zappis by serial - so the car Predbat
+        calls 0 can read idle while the dispatch's car charges on the charger it calls 1. Any car charging
+        is taken as the dispatch running, so it is never cancelled for being on the other charger.
+        """
+        return any(self.car_charging_now_reading(car_n) for car_n in self.dynamic_load_car_sensors)
+
+    def car_charging_now_reading(self, car_n):
+        """
+        Read car_n's car_charging_now entity live: True (charging), False (not charging) or None (no
+        entity, or no evidence).
+
+        Reads the entity cached by dynamic_load_car_refresh_sensors() rather than get_arg(index=...): the
+        polls call this every 15 seconds, and an indexed read of a single (non-list) sensor shared by
+        several cars logs a set-up warning each time. No default: an entity HA does not have (deleted,
+        renamed, integration reloading) must read as no evidence, not resolve to a "no" that looks like
+        the car has stopped.
+        """
+        entity_id = self.dynamic_load_car_sensors.get(car_n)
+        if not entity_id:
+            return None
+        # required_unit: a charging power sensor is compared in watts (see car_charging_now_value())
+        return self.car_charging_now_value(self.resolve_arg("car_charging_now", entity_id, default=None, required_unit="W"))
+
+    def dynamic_load_car_minute(self, now):
+        """
+        now as minutes since midnight_utc on the exact clock (clock skew added, not floored to PREDICT_STEP as
+        minutes_now is) - Octopus dispatches start and end at any minute, and a slot judged on the floored
+        minute still looked in progress for up to 5 minutes after it ended.
+        """
+        return (now + timedelta(minutes=self.args.get("clock_skew", 0)) - self.midnight_utc).total_seconds() / 60
+
+    def dynamic_load_car_dispatch(self, car_n, minute):
+        """
+        The dispatch car_n is in at minute, as (start, end), or None. Slots that touch or overlap are one
+        dispatch, so a long dispatch split into half hours has no start band at each join. A slot the check
+        has already cancelled still counts - the car is meant to be charging in it.
+        """
+        slots = car_n < len(self.car_charging_slots) and self.car_charging_slots[car_n] or []
+        run = None
+        for slot in sorted(slots, key=lambda slot: slot["start"]):
+            if run and slot["start"] <= run[1]:
+                run[1] = max(run[1], slot["end"])
+                continue
+            if run and run[0] <= minute < run[1]:
+                return (run[0], run[1])
+            run = [slot["start"], slot["end"]]
+        if run and run[0] <= minute < run[1]:
+            return (run[0], run[1])
+        return None
+
+    def dynamic_load_car_is_octopus(self, car_n):
+        """
+        Whether car_n's slots were built by Octopus Intelligent charging (load_octopus_slots() marks them).
+
+        Only those are ever cancelled. Predbat-led charging is a different mechanism: Predbat itself
+        decides when the car charges and its car_charging_slot sensor drives the charger, so cancelling
+        a slot would stop the very charge the check is waiting to see.
+        """
+        slots = self.car_charging_slots[car_n] if car_n < len(self.car_charging_slots) else []
+        return any(slot.get("octopus", False) for slot in slots)
+
+    def dynamic_load_car_trusted_by_default(self, car_n):
+        """
+        Whether car_n's slots are trusted while there is no evidence about them - outside a slot, or
+        before the car has been seen either way inside one.
+
+        Trusted unless octopus_intelligent_trust_slots is Off, which reverses that for an Octopus
+        Intelligent car: its slots are assumed not to happen until the car is seen charging in one.
+        """
+        return self.octopus_intelligent_trust_slots or not self.dynamic_load_car_is_octopus(car_n)
+
+    def dynamic_load_car_active(self, car_n):
+        """
+        Whether slot confirmation applies to car_n: an Octopus Intelligent car, with octopus_intelligent_dynamic
+        on (the default). It is independent of metric_dynamic_load_adjust, which is only the load estimate.
+
+        Never under the window billing rule (dispatch_billing_window()): the supplier bills the whole planned
+        dispatch off-peak whether the car charges in it or not, so there is nothing to cancel (GH#5521).
+        """
+        return self.octopus_intelligent_dynamic and self.dynamic_load_car_is_octopus(car_n) and not self.dispatch_billing_window()
+
+    def io_confirmed_credit_update(self, save=True):
+        """
+        Build io_confirmed_credit, the "bird in hand" credit the prediction gives the battery for charging in
+        the dispatch run a car is charging in now: {minute: pence per kWh stored}, empty when there is none.
+
+        A dispatch only makes the house cheap if the car really charges in it, and the car can be unplugged at
+        any time, so the half hour it is charging in now is the one certain part of the run. Charging there
+        scored the same as waiting for the fixed off-peak window when the battery looked able to wait, so the
+        planner waited and a house could run out first.
+
+        The run is boosted while a car is in one of its dispatches and the dispatch check has not cancelled it
+        (dynamic_load_car_effective) - the same decision that shows a cancelled slot with a "?". With
+        octopus_intelligent_trust_slots Off that means the car has been seen charging in it; where the check
+        does not apply (octopus_intelligent_dynamic Off, or the window billing rule) it means the dispatch has
+        started.
+
+        The run is the minutes from now that a dispatch made cheap (io_adjusted): a dispatch inside the fixed
+        off-peak window risks nothing. The credit is IO_CONFIRMED_CREDIT for the current half hour, divided by
+        1 + n for the nth after it, so the charge lands where it is least likely to vanish. It is score only
+        (metric_keep): cost is never touched, so a genuinely cheaper slot still wins.
+
+        Returns True when a run has just become boosted, so the fetch asks for a replan: with
+        octopus_intelligent_trust_slots On nothing else does, as a trusted dispatch starting changes no rates.
+        The incumbent plan was optimised without the credit, which is far smaller than
+        metric_min_improvement_plan, so io_confirmed_tiebreak lets should_replace_plan() take a plan that costs
+        no more on that one replan. Later replans compare two plans both scored with the credit, so the usual
+        hysteresis applies and the plan is not replaced every cycle of the run. With save False (compare.py)
+        the credit is built but the state is not advanced.
+        """
+        minute = self.dynamic_load_car_minute(self.now_utc_real)
+        boosted = any(self.dynamic_load_car_is_octopus(car_n) and not self.dynamic_load_car_effective.get(car_n, False) and self.dynamic_load_car_dispatch(car_n, minute) is not None for car_n in range(self.num_cars))
+
+        credit = {}
+        if boosted:
+            period_start = (self.minutes_now // 30) * 30
+            run_minute = self.minutes_now
+            while self.io_adjusted.get(run_minute, False) and run_minute < self.minutes_now + self.forecast_minutes:
+                credit[run_minute] = IO_CONFIRMED_CREDIT / (1 + (run_minute - period_start) // 30)
+                run_minute += 1
+        self.io_confirmed_credit = credit
+
+        active = bool(credit)
+        if not save:
+            return False
+        newly = active and not self.io_confirmed_active
+        if active != self.io_confirmed_active:
+            if active:
+                self.log("Octopus Intelligent: car charging in its dispatch, preferring battery charge in the run to {}".format(self.time_abs_str(max(credit) + 1)))
+            else:
+                self.log("Octopus Intelligent: dispatch run over or cancelled, no longer preferring battery charge in it")
+            self.io_confirmed_active = active
+        if newly:
+            self.io_confirmed_tiebreak = True
+        return newly
+
+    def dynamic_load_car_strip_from(self, car_n):
+        """
+        The first minute (since midnight_utc) from which car_n's dispatches lose their cheap rate, or None
+        when the car is not cancelled this cycle and they keep it. The one place that decides it, for
+        everything that removes the rate (rate_add_io_slots() and dynamic_load_car_strip_feed_rates()).
+
+        Normally now, but not before the end of the half hour the car was last seen charging in: once a
+        dispatch has started, Octopus bills that whole half hour off-peak, so a car that reaches its
+        planned kWh and stops part-way through it leaves the rest still cheap for the house (GH#5316).
+        The car's own slots are cancelled as usual - it is no longer charging.
+
+        The confirmation is never cleared, only outlived: it is a time, so once that half hour is over this
+        is simply now again. It has to outlast the dispatch, which can end (or be cut short by Octopus as
+        the car finishes) part-way through the half hour, leaving the car outside any dispatch and, with
+        octopus_intelligent_trust_slots Off, not trusted for the rest of it.
+        """
+        if not self.dynamic_load_car_effective.get(car_n, False):
+            return None
+        confirmed = self.dynamic_load_car_confirmed.get(car_n)
+        if confirmed is None or self.midnight_utc is None:
+            return self.minutes_now
+        return max(self.minutes_now, int((confirmed - self.midnight_utc).total_seconds() // 60))
+
+    def dynamic_load_car_target(self, car_n, minute, now, record=True):
+        """
+        Whether car_n's slots should be cancelled at minute and now (both on the exact clock).
+
+        - Detection not active for the car: never cancelled.
+        - Outside any of the car's slots: the default - trusted, unless octopus_intelligent_trust_slots
+          is Off for an Octopus car (see dynamic_load_car_trusted_by_default()).
+        - Inside a slot, charging: trusted, straight away.
+        - Inside a slot, not charging for the grace period (see dynamic_load_car_evidence()): cancelled.
+        - Otherwise (still inside the grace period, or no evidence): unchanged, starting from the default.
+
+        With record True the "not charging since" clock is started and cleared; with record False
+        (compare.py runs) it is only read.
+        """
+        active = self.dynamic_load_car_active(car_n)
+        default_cancelled = active and not self.dynamic_load_car_trusted_by_default(car_n)
+        cancelled = self.dynamic_load_car_cancelled.get(car_n, default_cancelled)
+        dispatch = self.dynamic_load_car_dispatch(car_n, minute) if active else None
+        if dispatch is None:
+            if record:
+                self.dynamic_load_car_since.pop(car_n, None)
+                self.dynamic_load_car_run.pop(car_n, None)
+            return default_cancelled
+
+        # An in-progress dispatch's start can be advanced to now each cycle, so keep the earliest start seen
+        # for this dispatch - identified by its end, which does not move - for the start band
+        dispatch_start, dispatch_end = dispatch
+        run = self.dynamic_load_car_run.get(car_n)
+        if run and run["end"] == dispatch_end:
+            dispatch_start = min(dispatch_start, run["start"])
+        if record:
+            self.dynamic_load_car_run[car_n] = {"start": dispatch_start, "end": dispatch_end}
+
+        not_charging, grace_minutes, timed_at = self.dynamic_load_car_evidence(car_n, minute, now, dispatch_start, dispatch_end)
+        if not_charging is False:
+            if record:
+                self.dynamic_load_car_since.pop(car_n, None)
+                # The dispatch has started, so Octopus bills the whole of this half hour off-peak even if the car
+                # finishes early in it (GH#5316) - keep the house's cheap rate to the end of it whatever follows.
+                # The half hour is the one the evidence covers: the load test averages the PREDICT_STEP minutes
+                # before minutes_now, so a cycle just past a boundary saw the previous one. A sensor reads now, but
+                # can still show charging for a car that stopped just before the boundary, so it only confirms
+                # from DYNAMIC_LOAD_CAR_CONFIRM_MINUTES into the half hour - the slot is trusted straight away
+                # either way. The load test only needs load that is not low to trust the slot, which a cooker or
+                # hot tub also gives; keeping the cheap rate needs load at the car's own charging rate
+                if car_n in self.dynamic_load_car_sensors or self.dynamic_load_any_car_charging_now():
+                    seen_minute = minute if minute % 30 >= DYNAMIC_LOAD_CAR_CONFIRM_MINUTES else None
+                elif self.load_last_period >= self.car_charging_threshold_kw():
+                    seen_minute = self.minutes_now - 1
+                else:
+                    seen_minute = None
+                if seen_minute is not None:
+                    period_end = self.midnight_utc + timedelta(minutes=round_out_to_period(int(seen_minute), int(seen_minute) + 1)[1])
+                    self.dynamic_load_car_confirmed[car_n] = max(self.dynamic_load_car_confirmed.get(car_n, period_end), period_end)
+                    # Every confirmed half hour too, not only the latest: a dispatch too short to trust is only cheap
+                    # in one (dispatch_too_short()), and must stay so once a later half hour is confirmed as well
+                    periods = self.dynamic_load_car_confirmed_periods.setdefault(car_n, set())
+                    periods.add(period_end)
+                    oldest = self.midnight_utc - timedelta(days=2)
+                    periods.difference_update([period for period in periods if period < oldest])
+            return False
+        if not_charging:
+            since = self.dynamic_load_car_since.setdefault(car_n, timed_at) if record else self.dynamic_load_car_since.get(car_n)
+            if since is not None and (timed_at - since).total_seconds() >= grace_minutes * 60:
+                return True
+        elif record:
+            # No evidence: the car may have been charging through it, so a "not charging" reading after
+            # it starts a fresh grace period rather than counting the unknown stretch towards the old one
+            self.dynamic_load_car_since.pop(car_n, None)
+        return cancelled
+
+    def dynamic_load_car_state(self):
+        """
+        The dispatch-check state worth keeping across a restart, in a form storage can hold, keyed by car:
+        - confirmed: the end of the half hour the car was last seen charging in (dynamic_load_car_strip_from()),
+          while that half hour is still to come;
+        - run: the dispatch the car is in, with the earliest start seen for it - the start band is timed from it;
+        - cancelled: the decision so far, which stands while there is no evidence either way;
+        - periods: every half hour the car was confirmed charging in (dynamic_load_car_confirmed_periods), as a
+          dispatch too short to trust stays cheap in one after it is over - today's cost is priced from them.
+
+        All times are absolute, as minutes since midnight_utc mean something else after midnight. The "not
+        charging since" clock is deliberately not kept: a restart is a stretch with no evidence, after which
+        the running check starts the grace period afresh too (see dynamic_load_car_target()) - the car may
+        have charged in it - and the clock changes with every flap of an unreliable sensor, which would
+        rewrite the store every 15 seconds. The rest (which cars have a sensor, what has been warned about,
+        this cycle's decision) is rebuilt every cycle.
+        """
+        now_minute = self.dynamic_load_car_minute(self.now_utc_real)
+        confirmed_cars = {car_n: confirmed for car_n, confirmed in self.dynamic_load_car_confirmed.items() if self.dynamic_load_car_minutes_of(confirmed) > now_minute}
+        period_cars = {car_n: periods for car_n, periods in self.dynamic_load_car_confirmed_periods.items() if periods}
+        cars = {}
+        for car_n in sorted(set(confirmed_cars) | set(self.dynamic_load_car_run) | set(period_cars)):
+            confirmed = confirmed_cars.get(car_n)
+            run = self.dynamic_load_car_run.get(car_n)
+            cars[str(car_n)] = {
+                "confirmed": confirmed.isoformat() if confirmed else None,
+                "run": {key: (self.midnight_utc + timedelta(minutes=run[key])).isoformat() for key in ("start", "end")} if run else None,
+                "cancelled": bool(self.dynamic_load_car_cancelled.get(car_n, False)),
+                "periods": [period.isoformat() for period in sorted(period_cars.get(car_n, []))],
+            }
+        return cars
+
+    def dynamic_load_car_minutes_of(self, when):
+        """
+        A time saved by the dispatch check as minutes since midnight_utc, the axis of dynamic_load_car_minute():
+        the times are built from that axis, so it includes clock_skew and must be compared on it, not with
+        now_utc_real.
+        """
+        return (when - self.midnight_utc).total_seconds() / 60
+
+    def dynamic_load_car_save(self):
+        """
+        Save the dispatch-check state (see dynamic_load_car_state()) to storage when it has changed since
+        the last save, so a restart part-way through a dispatch carries on from it. Called every cycle and
+        from the 15 second poll, so it must cost nothing when nothing has changed - and an install with no
+        Octopus Intelligent car has no state, so never writes.
+        """
+        state = self.dynamic_load_car_state()
+        if state == self.dynamic_load_car_saved:
+            return
+        storage = self.components.get_component("storage") if self.components else None
+        if not storage:
+            return
+        from ha import run_async
+
+        # Recorded whether or not the write works: a store that is failing is not retried every 15 seconds
+        self.dynamic_load_car_saved = state
+        try:
+            # Expiry is on the real clock, as storage.load() checks it (see save_plan()). It only tidies up:
+            # dynamic_load_car_load() decides what is still current
+            expiry = datetime.now(timezone.utc) + timedelta(days=2)
+            if not run_async(storage.save("predbat", "dynamic_load_car", {"cars": state}, format="json", expiry=expiry)):
+                self.log("Warn: Octopus Intelligent: failed to save the car dispatch state")
+        except Exception as e:
+            self.log("Warn: Octopus Intelligent: failed to save the car dispatch state: {}".format(e))
+
+    def dynamic_load_car_load(self):
+        """
+        Restore the dispatch-check state saved by dynamic_load_car_save(), at start up.
+
+        Only what is still current is taken: a confirmed half hour that has not ended yet, and the run and
+        decision of a dispatch that has not ended yet. Anything older belongs to a dispatch the car has since
+        left, where the running check would have dropped it too. The confirmed half hours of the last two days
+        are taken whole, as the running check keeps them that long.
+        """
+        storage = self.components.get_component("storage") if self.components else None
+        if not storage or self.midnight_utc is None:
+            return
+        from ha import run_async
+
+        try:
+            data = run_async(storage.load("predbat", "dynamic_load_car"))
+        except Exception as e:
+            self.log("Warn: Octopus Intelligent: failed to load the car dispatch state: {}".format(e))
+            return
+        cars = data.get("cars") if isinstance(data, dict) else None
+        if not isinstance(cars, dict):
+            return
+
+        now_minute = self.dynamic_load_car_minute(self.now_utc_real)
+        restored = []
+        for key, car in cars.items():
+            try:
+                car_n = int(key)
+                confirmed = datetime.fromisoformat(car["confirmed"]) if car.get("confirmed") else None
+                run = {name: self.dynamic_load_car_minutes_of(datetime.fromisoformat(car["run"][name])) for name in ("start", "end")} if car.get("run") else None
+                confirmed_current = confirmed is not None and self.dynamic_load_car_minutes_of(confirmed) > now_minute
+                run_current = run is not None and run["end"] > now_minute
+                oldest = self.midnight_utc - timedelta(days=2)
+                periods = {period for period in (datetime.fromisoformat(value) for value in car.get("periods") or []) if period >= oldest}
+            except (ValueError, TypeError, KeyError, AttributeError):
+                continue
+            if periods:
+                self.dynamic_load_car_confirmed_periods.setdefault(car_n, set()).update(periods)
+            if confirmed_current:
+                self.dynamic_load_car_confirmed[car_n] = confirmed
+            if run_current:
+                # Whole minutes stay ints, as the slots they are compared with are
+                self.dynamic_load_car_run[car_n] = {name: int(value) if value == int(value) else value for name, value in run.items()}
+                self.dynamic_load_car_cancelled[car_n] = bool(car.get("cancelled", False))
+            if confirmed_current or run_current or periods:
+                restored.append(car_n)
+        if restored:
+            self.log("Octopus Intelligent: restored the dispatch state of car(s) {} from storage".format(restored))
+
+    def dynamic_load_car_refresh_sensors(self):
+        """
+        Work out, once per cycle, which cars have car_charging_now set to a real entity, keeping the
+        entity id for dynamic_load_car_evidence(). A static literal in apps.yaml can never report the car
+        stopping, so it does not count.
+        """
+        self.dynamic_load_car_sensors = {}
+        for car_n in range(self.num_cars):
+            entity_id = self.get_arg("car_charging_now", None, indirect=False, index=car_n)
+            if is_entity_id(entity_id):
+                self.dynamic_load_car_sensors[car_n] = entity_id
+
+    def dynamic_load_car_check_config(self):
+        """
+        Refresh which cars have a car_charging_now entity, and warn about settings that leave
+        octopus_intelligent_trust_slots Off without effect, or unable to confirm a slot - each logged only when it changes:
+        - octopus_intelligent_dynamic Off too: nothing confirms a slot, so Off has no effect;
+        - octopus_intelligent_charging Off: the dispatch rates are used as before;
+        - cars with no car_charging_now entity and not inside the CT clamp, whose slots can never be trusted.
+
+        Returns that list of cars.
+        """
+        self.dynamic_load_car_refresh_sensors()
+        dynamic_off = (not self.octopus_intelligent_trust_slots) and (not self.octopus_intelligent_dynamic)
+        if dynamic_off != self.dynamic_load_car_warned_dynamic_off:
+            if dynamic_off:
+                # Off needs the confirmation that trusts a slot again, which octopus_intelligent_dynamic turns off
+                self.log("Warn: octopus_intelligent_trust_slots is Off but octopus_intelligent_dynamic is Off too, so it has no effect - slots are trusted as normal")
+            self.dynamic_load_car_warned_dynamic_off = dynamic_off
+        iog_off = (not self.octopus_intelligent_trust_slots) and (not self.octopus_intelligent_charging) and ("octopus_intelligent_slot" in self.args)
+        if iog_off != self.dynamic_load_car_warned_iog_off:
+            if iog_off:
+                # Off only governs the slots Octopus Intelligent charging turns into the car plan; with that
+                # off the dispatches still feed the rate overlay, which this switch does not touch
+                self.log("Warn: octopus_intelligent_trust_slots is Off but octopus_intelligent_charging is Off too, so it has no effect - the Intelligent dispatch rates are still used")
+            self.dynamic_load_car_warned_iog_off = iog_off
+
+        cars = []
+        if not self.octopus_intelligent_trust_slots and self.octopus_intelligent_dynamic and self.octopus_intelligent_charging and not self.car_energy_reported_load:
+            # Only cars on Octopus Intelligent (with a slot sensor of their own, as fetch_sensor_data_cars()
+            # reads them) have Intelligent slots to distrust
+            iog_entities = self.get_arg("octopus_intelligent_slot", indirect=False)
+            if iog_entities and not isinstance(iog_entities, list):
+                iog_entities = [iog_entities]
+            iog_entities = iog_entities or []
+            cars = [car_n for car_n in range(self.num_cars) if car_n < len(iog_entities) and iog_entities[car_n] and car_n not in self.dynamic_load_car_sensors]
+        if cars != self.dynamic_load_car_warned:
+            if cars:
+                self.log("Warn: octopus_intelligent_trust_slots is Off but car(s) {} have no car_charging_now sensor and are outside the CT clamp, so their Intelligent slots will never be trusted".format(cars))
+            self.dynamic_load_car_warned = cars
+        return cars
+
+    def dynamic_load_car_check(self, save=True):
+        """
+        Cancel the slots of an Octopus Intelligent car that is inside one of its charging slots but not
+        charging - or, with octopus_intelligent_trust_slots Off, until it is seen charging in one. Slots
+        Predbat plans itself are never cancelled (see dynamic_load_car_is_octopus()).
+
+        Runs in fetch_sensor_data() after the Octopus slots are built and before the rates, so that a
+        cancelled dispatch never gets its cheap rate (rate_add_io_slots() and
+        dynamic_load_car_strip_feed_rates() consult dynamic_load_car_cancelled). Every car is decided,
+        including one whose slots have gone, so a stale cancellation cannot outlive them.
+
+        A cancelled car has every slot ending after now set to 0 kWh, which releases "Hold for car" and the
+        predicted car load; the kWh it had is kept in the slot's kwh_cancelled so the plan can still show
+        it. See dynamic_load_car_target() for the decision. It is re-derived every cycle from freshly
+        built slots, so nothing needs clearing when a cancellation ends.
+
+        With save False (compare.py re-running the fetch for another tariff) the decision is re-derived
+        for the current slot and reading, but the saved state is not advanced.
+
+        Returns True when a car's cancellation changed, so the plan is recomputed.
+        """
+        changed = False
+        # This run's decision, which the rates read - in a compare.py run (save False) it can differ from
+        # the saved state, and the rates must follow the same decision as the slots
+        self.dynamic_load_car_effective = {}
+        minute = self.dynamic_load_car_minute(self.now_utc_real)
+        for car_n in range(self.num_cars):
+            cancelled = self.dynamic_load_car_target(car_n, minute, self.now_utc_real, record=save)
+            self.dynamic_load_car_effective[car_n] = cancelled
+            if save:
+                was_cancelled = self.dynamic_load_car_cancelled.get(car_n, False)
+                if cancelled != was_cancelled:
+                    changed = True
+                    if cancelled and self.dynamic_load_car_dispatch(car_n, minute) is not None:
+                        reason = "is in a dispatch but not charging, cancelling its slots"
+                    elif cancelled:
+                        reason = "has not been seen charging in its dispatches yet, not trusting them"
+                    else:
+                        reason = "slots resumed"
+                    strip_from = self.dynamic_load_car_strip_from(car_n)
+                    if strip_from is not None and strip_from > self.minutes_now:
+                        reason += " - keeping the dispatch rate until {} as it charged in this half hour".format(self.time_abs_str(strip_from))
+                    self.log("Octopus Intelligent: car {} {}".format(car_n, reason))
+                self.dynamic_load_car_cancelled[car_n] = cancelled
+
+            if cancelled and car_n < len(self.car_charging_slots):
+                for slot in self.car_charging_slots[car_n]:
+                    if slot["end"] > self.minutes_now:
+                        if slot.get("kwh", 0) > 0:
+                            slot["kwh_cancelled"] = slot["kwh"]
+                        slot["kwh"] = 0
+                        # No cost for energy the plan no longer counts, so the published car plan stays
+                        # self-consistent
+                        if "cost" in slot:
+                            slot["cost"] = 0
+        if save:
+            self.dynamic_load_car_save()
+        return changed
+
+    def dynamic_load_car_poll(self, now=None):
+        """
+        Called from the 15 second loop between plan cycles: ask for a replan as soon as a car's
+        cancellation is due to change, rather than waiting up to 5 minutes for the next cycle.
+
+        Only cars with a car_charging_now sensor are polled - the load test needs the fetch. The clock is
+        started here too, so a slot that begins between cycles is timed from when the car was first seen
+        idle in it. The decision is dynamic_load_car_target(), the same one the replan will make.
+
+        Returns True when it set update_pending.
+        """
+        if not self.num_cars or self.midnight_utc is None or not self.octopus_intelligent_dynamic:
+            return False
+        if now is None:
+            now = datetime.now(self.local_tz)
+        # The exact clock, as dynamic_load_car_check() judges it, so the two agree on when a dispatch ends
+        minute = self.dynamic_load_car_minute(now)
+
+        due = False
+        for car_n in range(self.num_cars):
+            if car_n not in self.dynamic_load_car_sensors:
+                continue
+            if self.dynamic_load_car_target(car_n, minute, now) != self.dynamic_load_car_cancelled.get(car_n, False):
+                due = True
+        # The poll starts the grace clock and confirms half hours too
+        self.dynamic_load_car_save()
+        # ...and holds the half hour a dispatch is running in: one too short for any 5 minute cycle to see
+        # running, once confirmed, is otherwise at the day rate until Octopus lists it as completed (#5520)
+        self.octopus_held_update(now)
+
+        if due:
+            self.log("Octopus Intelligent: car charging state changed, will re-plan")
+            self.update_pending = True
+        return due
+
+    def car_charging_now_poll(self):
+        """
+        Called from the 15 second loop between plan cycles: ask for a replan as soon as a car_charging_now
+        entity flips, so "Hold for car" starts and stops with the charge rather than up to 5 minutes later.
+
+        A flip always changes the plan, which models a car charging now outside its plan, as well as the hold.
+        A static literal in apps.yaml is never polled and "unknown"/"unavailable" is no evidence (see
+        car_charging_now_reading()).
+
+        Returns True when it set update_pending.
+        """
+        if not self.num_cars:
+            return False
+
+        due = False
+        for car_n in self.dynamic_load_car_sensors:
+            if car_n >= len(self.car_charging_now):
+                continue
+            charging = self.car_charging_now_reading(car_n)
+            if charging is not None and charging != self.car_charging_now[car_n]:
+                due = True
+
+        if due:
+            self.log("Car charging now changed, will re-plan")
+            self.update_pending = True
+        return due
 
     def find_price_levels(
         self,
@@ -355,7 +1069,7 @@ class Plan:
                 elif typ == "d":
                     if price == real_lowest_price_export:
                         continue
-                    if export_limits[window_n] < EXPORT_LIMIT_FREEZE:
+                    if export_mode_of(export_limits[window_n]) == EXPORT_MODE_TARGET:
                         if lowest_price_export is None:
                             lowest_price_export = export_window[window_n]["average"]
                         else:
@@ -503,11 +1217,13 @@ class Plan:
                         else:
                             price_set_export.append([price, window_n, typ == "df"])
                             valid_export_windows[window_n] = True
-                            best_export_limits_reset[window_n] = EXPORT_LIMIT_IDLE
+                            best_export_limits_reset[window_n] = pack_export_limit(EXPORT_MODE_IDLE)
 
         FINE_SLOT_LENGTHS = [48, 32, 24, 16, 14, 12, 10, 8, 6, 5, 4, 3, 2, 1, 0]
         COARSE_SLOT_LENGTHS = [32, 16, 8, 4, 2, 1, 0]
-        min_freeze_percent = calc_percent_limit(self.best_soc_min, self.soc_max)
+        # The alternative to a freeze is a real export down to the SoC floor - a target instruction,
+        # not the bare percentage it used to be expressed as
+        min_freeze_limit = pack_export_limit(EXPORT_MODE_TARGET, calc_percent_limit(self.best_soc_min, self.soc_max))
 
         # Scenario deduplication uses an incremental hash of the absolute limit configuration: one
         # hash contribution per (window, value) pair, summed. A candidate scenario's hash is then the
@@ -527,7 +1243,7 @@ class Plan:
         export_hash_delta = {}
         for window_n in valid_export_windows:
             reset_contribution = scenario_hash_entry(1, window_n, best_export_limits_reset[window_n])
-            export_hash_delta[window_n] = {True: scenario_hash_entry(1, window_n, EXPORT_LIMIT_FREEZE) - reset_contribution, False: scenario_hash_entry(1, window_n, min_freeze_percent) - reset_contribution}
+            export_hash_delta[window_n] = {True: scenario_hash_entry(1, window_n, pack_export_limit(EXPORT_MODE_FREEZE)) - reset_contribution, False: scenario_hash_entry(1, window_n, min_freeze_limit) - reset_contribution}
 
         # Which charge window an export window collides with is a purely geometric question, and this
         # function only ever turns windows on and off - it never moves a window's start or end. So the
@@ -693,7 +1409,7 @@ class Plan:
                                     try_charge_limit[window_n] = self.reserve if freeze else self.soc_max
                                 try_export = best_export_limits_reset.copy()
                                 for window_n, freeze in export_mods.items():
-                                    try_export[window_n] = EXPORT_LIMIT_FREEZE if freeze else min_freeze_percent
+                                    try_export[window_n] = pack_export_limit(EXPORT_MODE_FREEZE) if freeze else min_freeze_limit
 
                                 pred_item = {}
                                 pred_item["handle"] = self.launch_run_prediction_single(try_charge_limit, charge_window, export_window, try_export, PV_SCENARIO_NOMINAL, end_record=end_record, step=step)
@@ -927,7 +1643,7 @@ class Plan:
             export_window_n = -1
             for try_minute in range(this_minute_absolute, minute_absolute + self.plan_interval_minutes, 5):
                 export_window_n = self.in_charge_window(self.export_window_best, try_minute)
-                if export_window_n >= 0 and self.export_limits_best[export_window_n] == EXPORT_LIMIT_IDLE:
+                if export_window_n >= 0 and export_mode_of(self.export_limits_best[export_window_n]) == EXPORT_MODE_IDLE:
                     export_window_n = -1
                 if export_window_n >= 0:
                     break
@@ -946,8 +1662,8 @@ class Plan:
                     value = "Chrg"
             elif export_window_n >= 0:
                 export_target = self.export_limits_best[export_window_n]
-                if export_target >= soc_percent_max:
-                    if export_target == EXPORT_LIMIT_FREEZE:
+                if export_limit_sort_key(export_target) >= soc_percent_max:
+                    if export_mode_of(export_target) == EXPORT_MODE_FREEZE:
                         value = "FrzExp"
                     else:
                         value = "HldExp"
@@ -1046,47 +1762,11 @@ class Plan:
         if end_record is None:
             end_record = self.forecast_minutes
 
-        # Run pv90 first (when active), and the nominal scenario last. Plan.run_prediction
-        # unconditionally overwrites self.predict_soc, self.car_charging_soc_next, self.iboost_next
-        # and self.iboost_running* on every call - so whichever scenario runs last is the one those
-        # attributes are left holding. Every traced consumer only reads them after this function's
-        # final (nominal, save=save) run anyway, so this ordering does not change any output; it just
-        # removes the latent trap of pv90 being the one left behind when pv_metric90_weight > 0.
-        soc90 = None
-        cost90 = None
-        final_iboost90 = 0.0
-        if self.pv_metric90_weight > 0 and not nominal_only:
-            (cost90, _, _, _, _, soc90, _, _, _, final_iboost90, _) = self.run_prediction(
-                charge_limit_best,
-                charge_window_best,
-                export_window_best,
-                export_limits_best,
-                PV_SCENARIO_PV90,
-                end_record=end_record,
-            )
-
-        if not nominal_only:
-            (
-                cost10,
-                import_kwh_battery10,
-                import_kwh_house10,
-                export_kwh10,
-                soc_min10,
-                soc10,
-                soc_min_minute10,
-                battery_cycle10,
-                metric_keep10,
-                final_iboost10,
-                final_carbon_g10,
-            ) = self.run_prediction(
-                charge_limit_best,
-                charge_window_best,
-                export_window_best,
-                export_limits_best,
-                True,
-                end_record=end_record,
-            )
-        # Run new plan
+        # The nominal scenario runs first: pv10 floors each target export at where this plan's nominal
+        # run ends (Prediction.run_prediction / floor_export_limits), so the nominal window-end SoCs are
+        # recorded for it here rather than simulated a second time. Plan.run_prediction overwrites
+        # self.predict_soc, car_charging_soc_next, iboost_next and iboost_running* on every call, and
+        # every consumer reads the nominal run's, so those are put back after the other scenarios.
         (
             cost,
             import_kwh_battery,
@@ -1108,6 +1788,44 @@ class Plan:
             end_record=end_record,
             save=save,
         )
+        soc90 = None
+        cost90 = None
+        final_iboost90 = 0.0
+        if not nominal_only:
+            nominal_state = (self.predict_soc, self.car_charging_soc_next, self.iboost_next, self.iboost_running, self.iboost_running_solar, self.iboost_running_full)
+            if export_window_best:
+                key = prediction_cache_key(charge_limit_best, charge_window_best, export_limits_best, export_window_best, PV_SCENARIO_NOMINAL, end_record, PREDICT_STEP)
+                self.prediction.prediction_cache_export_end[key] = export_end_soc_from_series(self.predict_soc, export_window_best, self.minutes_now, export_limits_best)
+            if self.pv_metric90_weight > 0:
+                (cost90, _, _, _, _, soc90, _, _, _, final_iboost90, _) = self.run_prediction(
+                    charge_limit_best,
+                    charge_window_best,
+                    export_window_best,
+                    export_limits_best,
+                    PV_SCENARIO_PV90,
+                    end_record=end_record,
+                )
+            (
+                cost10,
+                import_kwh_battery10,
+                import_kwh_house10,
+                export_kwh10,
+                soc_min10,
+                soc10,
+                soc_min_minute10,
+                battery_cycle10,
+                metric_keep10,
+                final_iboost10,
+                final_carbon_g10,
+            ) = self.run_prediction(
+                charge_limit_best,
+                charge_window_best,
+                export_window_best,
+                export_limits_best,
+                True,
+                end_record=end_record,
+            )
+            self.predict_soc, self.car_charging_soc_next, self.iboost_next, self.iboost_running, self.iboost_running_solar, self.iboost_running_full = nominal_state
         if nominal_only:
             # Mirror the nominal outputs into the pv10 slots so the pv10 adjustment cancels to zero
             cost10 = cost
@@ -1154,7 +1872,7 @@ class Plan:
         """
         intervals = []
         for window, limit in zip(export_window, export_limits):
-            if limit < EXPORT_LIMIT_FREEZE:
+            if export_mode_of(limit) == EXPORT_MODE_TARGET:
                 intervals.append((window["start"], window["end"], "export"))
         for window, limit in zip(charge_window, charge_limit):
             if limit > self.reserve:
@@ -1172,18 +1890,26 @@ class Plan:
             prev_mode = mode
         return segments
 
-    def should_replace_plan(self, metric_prev, metric_new, fragmentation_prev, fragmentation_new):
+    def should_replace_plan(self, metric_prev, metric_new, fragmentation_prev, fragmentation_new, cost_prev=None, cost_new=None):
         """Decide whether to adopt the freshly optimised plan over the incumbent.
 
         The new plan is adopted when it is better by at least metric_min_improvement_plan (the existing
         anti-jitter behaviour). On a near-tie within that band it is also adopted when it is no worse on cost
         and strictly less fragmented, so a cleaner single export block can replace a locked-in split schedule
         without churning the plan for tiny cost changes. Lower metric is better, so improvement is prev - new.
+
+        On the first replan after a dispatch run becomes boosted (io_confirmed_tiebreak, see
+        io_confirmed_credit_update()) a near-tie is also won by a plan that scores better and costs no more
+        (cost_prev/cost_new, to a hundredth of a penny): the incumbent was optimised before the score-only
+        credit existed, and the credit is far smaller than the band, so it would otherwise never take effect.
+        Only that once - later in the run both plans carry the credit, and the band keeps the plan steady.
         """
         improvement = metric_prev - metric_new
         if improvement >= self.metric_min_improvement_plan:
             return True
         if improvement >= 0 and fragmentation_new < fragmentation_prev:
+            return True
+        if self.io_confirmed_tiebreak and improvement > 0 and cost_prev is not None and cost_new is not None and dp2(cost_new) <= dp2(cost_prev):
             return True
         return False
 
@@ -1394,7 +2120,7 @@ class Plan:
             self.prefill_charge_limit_best()
 
             # Pre-fill best export enable with Off
-            self.export_limits_best = [EXPORT_LIMIT_IDLE for i in range(len(self.export_window_best))]
+            self.export_limits_best = [pack_export_limit(EXPORT_MODE_IDLE) for i in range(len(self.export_window_best))]
 
             self.end_record = self.forecast_minutes
         # Show best windows
@@ -1404,6 +2130,11 @@ class Plan:
         # Created optimised step data
         self.metric_cloud_coverage = self.get_cloud_factor(self.minutes_now, self.pv_forecast_minute, self.pv_forecast_minute10)
         self.metric_load_divergence = self.get_load_divergence(self.minutes_now, self.load_minutes)
+        if publish:
+            # Exactly as the plan uses it (None when divergence is off): the human-readable line rounds the percentage,
+            # which can round the other way. Not for a tariff comparison run (publish=False).
+            self.log("Replay input: load divergence {!r}".format(self.metric_load_divergence))
+            self.log_replay_baseline()
 
         # Clamp the three load scalings so load_scaling90 <= load_scaling <= load_scaling10 always
         # holds: the PV90 case can never end up with more load than the central case, and the PV10
@@ -1472,10 +2203,32 @@ class Plan:
             load_adjust=self.manual_load_adjust,
             load_baseline=self.dynamic_load_baseline,
         )
-        pv_forecast_minute_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
-        pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_factor=min(self.metric_cloud_coverage + 0.2, 1.0) if self.metric_cloud_coverage else None, flip=True)
+        # The p90 refresh has to happen before the p50 series is stepped, not after it: the envelope
+        # model modulates p50 toward p90, so a stale or missing p90 would silently pick the
+        # amplitude for the central scenario.
         self.refresh_pv_forecast_minute90()
-        pv_forecast_minute90_step = self.step_data_history(self.pv_forecast_minute90, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
+
+        # Each scenario reaches for the next percentile up - p10 toward p50, p50 toward p90 - and
+        # p90 toward an extrapolation of its own band, capped at what the array can produce. The
+        # duty cycle comes from the band's asymmetry so peaks and troughs reach both edges at once;
+        # p10 takes the complementary duty with flip, so it lowers exactly where p50 raises.
+        cloud_duty = self.get_cloud_duty(self.minutes_now, self.pv_forecast_minute, self.pv_forecast_minute10, self.pv_forecast_minute90) if self.metric_cloud_coverage else None
+        if cloud_duty:
+            n_up, n_down = cloud_duty
+            self.log("PV cloud model: envelope, {} of every {} steps raised per {} minute window".format(n_up, n_up + n_down, CLOUD_WINDOW_MINUTES))
+            pv_forecast_minute_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True, cloud_ceiling=self.pv_forecast_minute90, cloud_duty=cloud_duty)
+            pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_ceiling=self.pv_forecast_minute, cloud_duty=(n_down, n_up), flip=True)
+            pv_forecast_minute90_step = self.step_data_history(
+                self.pv_forecast_minute90, self.minutes_now, forward=True, cloud_ceiling=self.get_pv90_cloud_ceiling(self.minutes_now, self.pv_forecast_minute, self.pv_forecast_minute90), cloud_duty=cloud_duty
+            )
+        else:
+            # No usable p90 band (a forecast source that publishes none falls back to a copy of the
+            # p50), so keep the legacy proportional model rather than losing the cloud model.
+            if self.metric_cloud_coverage:
+                self.log("PV cloud model: proportional fallback, no PV90 data to modulate toward - check your solar forecast source publishes a PV90 estimate (pv_estimate90)")
+            pv_forecast_minute_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
+            pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_factor=min(self.metric_cloud_coverage + CLOUD_FACTOR_PV10, 1.0) if self.metric_cloud_coverage else None, flip=True)
+            pv_forecast_minute90_step = self.step_data_history(self.pv_forecast_minute90, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
 
         # Save step data for debug
         self.load_minutes_step = load_minutes_step
@@ -1490,7 +2243,7 @@ class Plan:
             self.calculate_yesterday()
 
         # Creation prediction object
-        self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, pv_forecast_minute90_step, load_minutes_step90)
+        self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, pv_forecast_minute90_step, load_minutes_step90, car_charging_slots=self.car_charging_slots_model())
         # The kernel spreads one batched fan-out across threads with the GIL released for the whole
         # call, so these are real cores - unlike a Python ThreadPool, which peaked at 1.15x on two
         # threads and then degraded below serial (perf/threadpool-prototype).
@@ -1572,6 +2325,9 @@ class Plan:
 
                     # Filter out the windows we disabled during clipping
                     self.export_limits_best, self.export_window_best = self.discard_unused_export_slots(self.export_limits_best, self.export_window_best)
+
+                    # Merge the per-slot steps the export floor pins into one export at the end target
+                    self.merge_export_staircase()
                 self.log("Export windows filtered {}".format(self.window_as_text(self.export_window_best, self.export_limits_best)))
 
             # Filter out any unused charge slots
@@ -1618,7 +2374,12 @@ class Plan:
                     self.log("Unfiltered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, calc_percent_limit(self.charge_limit_best, self.soc_max)), self.reserve))
 
             # Plan comparison
-            if charge_window_best_prev is not None and not debug_mode:
+            if charge_window_best_prev is not None and not debug_mode and self.plan_made_by_version != self.running_version:
+                # An incumbent made by another version (typically restored after an upgrade) carries that code's
+                # clip and prune decisions, while its pre-clip snapshot can tie with the new plan's - so comparing
+                # would keep the old decisions in force. Always replace it.
+                self.log("Previous plan was made by Predbat {}, now running {} - using new plan".format(self.plan_made_by_version or "(unknown version)", self.running_version))
+            elif charge_window_best_prev is not None and not debug_mode:
                 # Score the plans as optimised rather than as clipped - see plan_scoring_pair()
                 score_new, score_prev = self.plan_scoring_pair(
                     (self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best),
@@ -1634,7 +2395,7 @@ class Plan:
                 self.log("Previous plan best metric is {} (cost {}) and new plan best metric is {} (cost {})".format(dp2(metric_prev), dp2(cost_prev), dp2(metric), dp2(cost)))
                 fragmentation_prev = self.plan_fragmentation(score_prev[1], score_prev[0], score_prev[2], score_prev[3])
                 fragmentation_new = self.plan_fragmentation(score_new[1], score_new[0], score_new[2], score_new[3])
-                if not self.should_replace_plan(metric_prev, metric, fragmentation_prev, fragmentation_new):
+                if not self.should_replace_plan(metric_prev, metric, fragmentation_prev, fragmentation_new, cost_prev=cost_prev, cost_new=cost):
                     self.log("New plan metric is not significantly better (metric_min_improvement_plan {}) than previous plan, using previous plan".format(self.metric_min_improvement_plan))
                     self.charge_window_best = clone_windows(charge_window_best_prev)
                     self.charge_limit_best = charge_limit_best_prev.copy()
@@ -1645,11 +2406,17 @@ class Plan:
                     preclip_new = preclip_prev
                 elif (metric_prev - metric) >= self.metric_min_improvement_plan:
                     self.log("New plan metric is significantly better from previous plan, using new plan")
+                elif fragmentation_new >= fragmentation_prev:
+                    self.log("New plan costs no more and prefers the Intelligent dispatch run now in hand, using new plan")
                 else:
                     self.log("New plan is a cost-neutral improvement but less fragmented ({} vs {} segments), using new plan".format(fragmentation_new, fragmentation_prev))
 
             # Carry the pre-clip snapshot of whichever plan we kept into the next cycle
             self.plan_preclip = preclip_new
+            # Either way the plan in force was made, or kept, by the version running now
+            self.plan_made_by_version = self.running_version
+            # The plan now in force has been weighed with the bird-in-hand credit, so its one-off tie-break is spent
+            self.io_confirmed_tiebreak = False
 
             # Plan is now valid
             self.log("Plan valid is now true after recompute was {}".format(self.plan_valid))
@@ -2256,7 +3023,10 @@ class Plan:
         """
         Optimise a single export window for best export %
         """
-        best_export = False
+        # No option beating the baseline means "do not export in this window", which is an idle
+        # instruction - not False. It used to be returned as a bare False and compared numerically,
+        # where it read as 0: a full discharge, the opposite of the intent.
+        best_export = pack_export_limit(EXPORT_MODE_IDLE)
         best_metric = 9999999
         best_metric_plan = 9999999
         off_metric = 9999999
@@ -2268,7 +3038,7 @@ class Plan:
         best_cycle = 0
         best_import = 0
         best_carbon = 0
-        this_export_limit = EXPORT_LIMIT_IDLE
+        this_export_limit = pack_export_limit(EXPORT_MODE_IDLE)
         window = export_window[window_n]
         # A shallow copy is enough: nothing here writes to a window dict, and the one write that does
         # happen downstream - the trial start - is applied copy-on-write by _prepare_export, which
@@ -2285,18 +3055,22 @@ class Plan:
         if not self.set_export_freeze:
             allow_freeze = False
 
-        # loop on each export option
+        # The rungs this window is tried at, as (mode, power) rather than a list of floats mixing
+        # the two: EXPORT_MODE_IDLE and EXPORT_MODE_FREEZE are complete instructions carrying no
+        # power level, while a target rung is only half of one - its SoC comes from the clamp
+        # below. Written as bare floats these read as one ladder of six comparable options, which
+        # is what made "is this a low power export?" get asked as "does it have a fraction?".
         if allow_freeze and (freeze_only or self.set_export_freeze_only):
-            loop_options = [EXPORT_LIMIT_IDLE, EXPORT_LIMIT_FREEZE]
+            loop_options = [(EXPORT_MODE_IDLE, FULL_EXPORT_POWER), (EXPORT_MODE_FREEZE, FULL_EXPORT_POWER)]
         elif allow_freeze and not self.set_export_freeze_only:
-            # If we support freeze, try a 99% option which will freeze at any SoC level below this
-            loop_options = [EXPORT_LIMIT_IDLE, EXPORT_LIMIT_FREEZE, 0.0]
+            # If we support freeze, try a freeze option which will hold at any SoC level below this
+            loop_options = [(EXPORT_MODE_IDLE, FULL_EXPORT_POWER), (EXPORT_MODE_FREEZE, FULL_EXPORT_POWER), (EXPORT_MODE_TARGET, FULL_EXPORT_POWER)]
             if self.set_export_low_power:
-                loop_options.extend([0.3, 0.5, 0.7])
+                loop_options.extend([(EXPORT_MODE_TARGET, power) for power in LOW_EXPORT_POWER_LEVELS])
         else:
-            loop_options = [EXPORT_LIMIT_IDLE, 0.0]
+            loop_options = [(EXPORT_MODE_IDLE, FULL_EXPORT_POWER), (EXPORT_MODE_TARGET, FULL_EXPORT_POWER)]
             if self.set_export_low_power:
-                loop_options.extend([0.3, 0.5, 0.7])
+                loop_options.extend([(EXPORT_MODE_TARGET, power) for power in LOW_EXPORT_POWER_LEVELS])
 
         # Collect all options
         results = []
@@ -2304,11 +3078,10 @@ class Plan:
         results90 = []
         run_pv90 = self.pv_metric90_weight > 0
         try_options = []
-        for loop_limit in loop_options:
+        for loop_mode, loop_power in loop_options:
             # Loop on window size
             loop_start = window["end"] - 5  # Minimum export window size 5 minutes
             while loop_start >= window["start"]:
-                this_export_limit = loop_limit
                 start = loop_start
 
                 # Move the loop start back to full size
@@ -2324,16 +3097,16 @@ class Plan:
                     continue
 
                 # Don't allow slow export for small windows
-                if this_export_limit > int(this_export_limit) and (try_export_window[window_n]["end"] - start) < 15:
+                if loop_power < FULL_EXPORT_POWER and (try_export_window[window_n]["end"] - start) < 15:
                     continue
 
                 # Don't optimise start of disabled windows or freeze only windows, just for export ones
-                if (this_export_limit in [EXPORT_LIMIT_IDLE, EXPORT_LIMIT_FREEZE]) and (start != window["start"]):
+                if loop_mode != EXPORT_MODE_TARGET and (start != window["start"]):
                     continue
 
-                # Never go below the minimum level
-                this_export_limit = max(calc_percent_limit(self.best_soc_min, self.soc_max), int(this_export_limit))
-                this_export_limit = this_export_limit + loop_limit - int(loop_limit)
+                # Never go below the minimum level. Only a target rung carries a SoC to clamp - the
+                # modes are whole instructions and pack_export_limit ignores the target for them.
+                this_export_limit = pack_export_limit(loop_mode, calc_percent_limit(self.best_soc_min, self.soc_max), loop_power)
                 try_options.append([start, this_export_limit])
 
                 results.append(self.launch_run_prediction_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, PV_SCENARIO_NOMINAL, all_n, end_record))
@@ -2385,16 +3158,16 @@ class Plan:
             # caller checking whether the plan actually improved has to compare on this instead
             metric_plan = metric
 
-            if this_export_limit == EXPORT_LIMIT_IDLE:
+            if export_mode_of(this_export_limit) == EXPORT_MODE_IDLE:
                 # Minor weighting to off
                 metric -= 0.002
-            elif this_export_limit == 0:
+            elif export_limit_is_full_discharge(this_export_limit):
                 # Minor weighting to 0%
                 metric -= 0.001
 
             # Adjust to try to keep existing windows
             keep_export = False
-            if window_n < 2 and this_export_limit < EXPORT_LIMIT_FREEZE and self.export_window and self.isExporting:
+            if window_n < 2 and export_mode_of(this_export_limit) == EXPORT_MODE_TARGET and self.export_window and self.isExporting:
                 pwindow = export_window[window_n]
                 dwindow = self.export_window[0]
                 if self.minutes_now >= pwindow["start"] and self.minutes_now < pwindow["end"] and ((self.minutes_now >= dwindow["start"] and self.minutes_now < dwindow["end"]) or (dwindow["end"] == pwindow["start"])):
@@ -2437,14 +3210,14 @@ class Plan:
                 )
 
             window_size = try_export_window[window_n]["end"] - start
-            window_key = str(dp2(this_export_limit)) + "_" + str(window_size)
+            window_key = str(this_export_limit) + "_" + str(window_size)
             window_results[window_key] = [metric, cost]
 
             # Only select an export if it makes a notable improvement has defined by min_improvement (divided in M windows)
             # Scale back in the case of freeze export as improvements will be smaller
-            rate_scale = 1 - (this_export_limit - int(this_export_limit))
+            rate_scale = export_power_of(this_export_limit)
 
-            if this_export_limit == EXPORT_LIMIT_FREEZE:
+            if export_mode_of(this_export_limit) == EXPORT_MODE_FREEZE:
                 min_improvement_scaled = self.metric_min_improvement_export_freeze
             elif all_n:
                 min_improvement_scaled = self.metric_min_improvement_export * rate_scale * len(all_n)
@@ -2873,10 +3646,28 @@ class Plan:
         Each active charge/export slot inside the record window is trialled in turn: the slot is
         removed (export -> 100, charge -> 0) and the whole plan re-simulated in the nominal (50%)
         scenario only - one simulation per trial via run_prediction_metric(nominal_only=True). The
-        removal is kept when the nominal metric does not get worse, so slots whose value exists only
-        in the pv10/pv90 branches (or nowhere at all - phantom exports, dead freezes) are dropped.
-        If the pessimistic scenario materialises in reality, the next plan recompute re-creates a
-        genuine slot from actual state, so nothing is permanently lost.
+        removal is kept when the nominal metric does not get worse.
+
+        A removal that leaves the nominal metric unchanged (within eps), from a slot that does not do
+        its own job in its own window (see below), means the slot is dead in the central forecast -
+        phantom exports, dead freezes, charges that never charge, a charge to 50% while nominal sits at
+        55%, a hold that only limits discharge - and it is dropped on that alone, whatever the pv10/pv90
+        branches say (the #4453 phantoms only looked valuable through a pv10 modelling quirk). If the
+        battery really is lower than nominal when such a slot comes round, the replan then puts it back.
+
+        A removal that makes the nominal metric better is a trade-off, not a dead slot: the slot moves
+        real energy, and its value lies in the pv10/pv90 branches - a charge that buffers against a
+        load overrun, or an export that makes room for pv90 solar. Such a slot is only dropped when
+        the full blended metric does not get worse either. The window it uses can close before the
+        risk it covers would arrive (a cheap overnight rate ends hours before the evening shortfall),
+        so a later replan cannot be relied on to put it back.
+
+        A slot that does its own job in its own window is a trade-off too, even when the nominal metric
+        does not move: in nominal, a charge raises the SoC across its window and an export lowers it,
+        each by more than soc_eps and by more than the SoC would move there without the slot. That is
+        a charge that charges, but whose energy a later limit cuts off the end of the same night. A
+        replan when the slot comes round sees the same battery as now, so it would not put the slot
+        back either.
 
         Runs after the pre-clip scoring snapshot (see calculate_plan), so plan selection still
         compares plans as optimised (#4403). Manual windows are preserved. Later removals are
@@ -2891,15 +3682,18 @@ class Plan:
         trial uses. An in-progress export worth anything at all fails the gate and is kept.
         """
         eps = 0.02
+        soc_eps = 0.1
         record_limit = self.end_record + self.minutes_now
         baseline = None
+        baseline_soc = {}
+        blended_baseline = None
         start_metric = None
         pruned = 0
         trials = 0
-        for typ, windows, limits, off_value in (("export", self.export_window_best, self.export_limits_best, EXPORT_LIMIT_IDLE), ("charge", self.charge_window_best, self.charge_limit_best, 0)):
+        for typ, windows, limits, off_value in (("export", self.export_window_best, self.export_limits_best, pack_export_limit(EXPORT_MODE_IDLE)), ("charge", self.charge_window_best, self.charge_limit_best, 0)):
             for window_n, window in enumerate(windows):
                 limit = limits[window_n]
-                active = (limit < EXPORT_LIMIT_IDLE) if typ == "export" else (limit > 0)
+                active = (export_mode_of(limit) != EXPORT_MODE_IDLE) if typ == "export" else (limit > 0)
                 if not active:
                     continue
                 if window["end"] <= self.minutes_now or window["start"] >= record_limit:
@@ -2908,17 +3702,67 @@ class Plan:
                     continue
                 if baseline is None:
                     baseline = self.run_prediction_metric(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record, nominal_only=True)[0]
+                    baseline_soc = dict(self.predict_soc)
                     start_metric = baseline
                 limits[window_n] = off_value
                 trial = self.run_prediction_metric(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record, nominal_only=True)[0]
+                trial_soc = dict(self.predict_soc)
                 trials += 1
-                if trial <= baseline + eps:
+                if trial > baseline + eps:
+                    limits[window_n] = limit
+                    continue
+
+                # Does the slot do its own job in its own window in nominal - a charge that raises the
+                # SoC across it, or an export that lowers it, by more than it would move without the
+                # slot? A hold that only limits discharge does neither.
+                window_start_minute = int((max(window["start"], self.minutes_now) - self.minutes_now) / 5) * 5
+                window_end_minute = int((min(window["end"], record_limit) - self.minutes_now) / 5) * 5
+                # predict_soc stops one step short of the forecast, so a window reaching the end of it
+                # (end_record is the whole forecast when the plan has no charge windows) reads the last step
+                window_end_minute = min(window_end_minute, self.forecast_minutes - PREDICT_STEP)
+                soc_start = baseline_soc.get(window_start_minute)
+                soc_with = baseline_soc.get(window_end_minute)
+                soc_without = trial_soc.get(window_end_minute)
+                moves_soc = False
+                if soc_start is not None and soc_with is not None and soc_without is not None:
+                    if typ == "charge":
+                        moves_soc = (soc_with - soc_start) > soc_eps and (soc_with - soc_without) > soc_eps
+                    else:
+                        moves_soc = (soc_start - soc_with) > soc_eps and (soc_without - soc_with) > soc_eps
+
+                if trial < baseline - eps or moves_soc:
+                    # The slot changes the nominal outcome, so it is a trade-off rather than dead -
+                    # only drop it if the blended plan does not pay for it
+                    blended_trial = self.run_prediction_metric(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record)[0]
+                    if blended_baseline is None:
+                        limits[window_n] = limit
+                        blended_baseline = self.run_prediction_metric(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record)[0]
+                        limits[window_n] = off_value
+                    if blended_trial > blended_baseline + eps:
+                        if self.debug_enable:
+                            self.log(
+                                "Prune kept hedge {} slot {} {}-{} limit {} - nominal metric {} vs baseline {} but blended metric {} vs baseline {}".format(
+                                    typ, window_n, self.time_abs_str(window["start"]), self.time_abs_str(window["end"]), limit, dp2(trial), dp2(baseline), dp2(blended_trial), dp2(blended_baseline)
+                                )
+                            )
+                        limits[window_n] = limit
+                        continue
+                    if self.debug_enable:
+                        self.log(
+                            "Prune trade-off {} slot {} {}-{} limit {} - nominal metric {} vs baseline {}, blended metric {} vs baseline {}".format(
+                                typ, window_n, self.time_abs_str(window["start"]), self.time_abs_str(window["end"]), limit, dp2(trial), dp2(baseline), dp2(blended_trial), dp2(blended_baseline)
+                            )
+                        )
+                    blended_baseline = blended_trial
+                else:
+                    # Dead slot - the blended metric may still move, so measure it afresh if needed
+                    blended_baseline = None
                     if self.debug_enable:
                         self.log("Prune dead {} slot {} {}-{} limit {} - nominal metric {} vs baseline {}".format(typ, window_n, self.time_abs_str(window["start"]), self.time_abs_str(window["end"]), limit, dp2(trial), dp2(baseline)))
-                    baseline = trial
-                    pruned += 1
-                else:
-                    limits[window_n] = limit
+
+                baseline = trial
+                baseline_soc = trial_soc
+                pruned += 1
         if pruned:
             # The trials run on the nominal scenario only, so report the full metric and cost of the
             # pruned plan rather than the nominal figure the trials compared on
@@ -3017,13 +3861,22 @@ class Plan:
         for window_n in range(min(record_export_windows, len(export_window_best))):
             window = export_window_best[window_n]
             limit = export_limits_best[window_n]
-            limit_soc = self.soc_max * limit / 100.0
+            # The SoC this window aims at. Only a target carries one - and it must come from the
+            # target field, not from float(limit): the packed value also carries the export power in
+            # its fraction, so a 50% target at 70% power reads as 50.3 and inflates the SoC by 0.3%
+            # of the battery. That made a slower export stop slightly early, for no reason connected
+            # to where the user asked it to stop. A mode has no target, and every use of limit_soc
+            # below is already inside the "not a freeze" branch, so None is safe here.
+            limit_target = export_target_of(limit)
+            limit_soc = self.soc_max * limit_target / 100.0 if limit_target is not None else 0.0
             window_start = max(window["start"], minutes_now)
             window_end = max(window["end"], minutes_now)
             window_length = window_end - window_start
-            window["target"] = limit
+            # The window's target is the SoC percentage the plan displays and the clip pass compares
+            # against, not the packed legacy sort key's power-bearing fraction.
+            window["target"] = float(limit_target) if limit_target is not None else float(export_limit_sort_key(limit))
 
-            if limit == EXPORT_LIMIT_IDLE:
+            if export_mode_of(limit) == EXPORT_MODE_IDLE:
                 # Ignore disabled windows
                 pass
             elif window_length > 0:
@@ -3049,17 +3902,18 @@ class Plan:
                     # no-SoC-above-reserve (#4171/#4434), phantom export (#4453/#4487) and target-unreachable.
                     # That includes the window covering the current minute, so a dead slot is never left
                     # commanding the inverter.
-                    if limit != EXPORT_LIMIT_FREEZE and soc_min > limit_soc:
+                    if export_mode_of(limit) != EXPORT_MODE_FREEZE and soc_min > limit_soc:
                         # Give it 10 minute margin
                         target_soc = max(limit_soc, soc_min)
                         limit_soc = max(limit_soc, soc_min - 10 * self.battery_rate_max_discharge * self.battery_rate_max_scaling_discharge)
                         window["target"] = calc_percent_limit(target_soc, self.soc_max)
-                        export_limits_best[window_n] = calc_percent_limit(limit_soc, self.soc_max) + (limit - int(limit))
+                        # Rebuild the instruction with the clipped-up target, keeping the export power the pass never touches
+                        export_limits_best[window_n] = pack_export_limit(EXPORT_MODE_TARGET, calc_percent_limit(limit_soc, self.soc_max), export_power_of(limit))
                         if limit != export_limits_best[window_n] and self.debug_enable:
                             self.log("Clip up export window {} from {} - {} from limit {} to new limit {} target set to {}".format(window_n, window_start, window_end, limit, export_limits_best[window_n], window["target"]))
             else:
                 self.log("Warn: Clip export window {} as it's already passed".format(window_n))
-                export_limits_best[window_n] = EXPORT_LIMIT_IDLE
+                export_limits_best[window_n] = pack_export_limit(EXPORT_MODE_IDLE)
         return export_window_best, export_limits_best
 
     def discard_unused_export_slots(self, export_limits_best, export_window_best):
@@ -3069,7 +3923,7 @@ class Plan:
         new_best = []
         new_enable = []
         for window_n in range(len(export_limits_best)):
-            if export_limits_best[window_n] < EXPORT_LIMIT_IDLE:
+            if export_mode_of(export_limits_best[window_n]) != EXPORT_MODE_IDLE:
                 # Also merge contiguous enabled windows
                 if (
                     new_best
@@ -3077,6 +3931,8 @@ class Plan:
                     and (export_limits_best[window_n] == new_enable[-1])
                     and (export_window_best[window_n]["start"] not in self.manual_all_times)
                     and (new_best[-1]["start"] not in self.manual_all_times)
+                    and (export_window_best[window_n]["start"] not in self.all_active_keep_max)
+                    and (new_best[-1]["start"] not in self.all_active_keep_max)
                 ):
                     new_best[-1]["end"] = export_window_best[window_n]["end"]
                     new_best[-1]["target"] = export_window_best[window_n].get("target", export_limits_best[window_n])
@@ -3087,6 +3943,67 @@ class Plan:
                     new_enable.append(export_limits_best[window_n])
 
         return new_enable, new_best
+
+    def merge_export_staircase(self):
+        """Merge runs of contiguous target exports that step down into one export at the last step's target.
+
+        The pv10 export floor pins each half-hour export at the SoC nominal reaches by its end, so a long
+        export becomes a staircase of targets. Executing it as one export to the end target behaves the
+        same, because a replan every few minutes shortens the export if the battery is lower than planned,
+        and it keeps the plan reading as one export.
+
+        A step can also be a hold the plan stops at on purpose - exporting to 50% now and the rest in a
+        later, better-paid slot. Merging that would move export earlier, so each merge is kept only if the
+        nominal metric does not move (within eps), the same nominal-only check prune_dead_plan_slots uses.
+        Manual and keep-max windows are never merged, as in discard_unused_export_slots.
+
+        Returns the number of merges made.
+        """
+        eps = 0.02
+        windows = list(self.export_window_best)
+        limits = list(self.export_limits_best)
+        baseline = None
+        merged = 0
+        window_n = 0
+        while window_n + 1 < len(windows):
+            this_window, next_window = windows[window_n], windows[window_n + 1]
+            this_limit, next_limit = limits[window_n], limits[window_n + 1]
+            mergeable = (
+                export_mode_of(this_limit) == EXPORT_MODE_TARGET
+                and export_mode_of(next_limit) == EXPORT_MODE_TARGET
+                and this_window["end"] == next_window["start"]
+                and export_power_of(this_limit) == export_power_of(next_limit)
+                and (export_target_of(next_limit) or 0) <= (export_target_of(this_limit) or 0)
+                and this_window["start"] not in self.manual_all_times
+                and next_window["start"] not in self.manual_all_times
+                and this_window["start"] not in self.all_active_keep_max
+                and next_window["start"] not in self.all_active_keep_max
+            )
+            if not mergeable:
+                window_n += 1
+                continue
+
+            if baseline is None:
+                baseline = self.run_prediction_metric(self.charge_limit_best, self.charge_window_best, windows, limits, end_record=self.end_record, nominal_only=True)[0]
+            combined = dict(this_window, end=next_window["end"], target=next_window.get("target", export_target_of(next_limit)))
+            trial_windows = windows[:window_n] + [combined] + windows[window_n + 2 :]
+            trial_limits = limits[:window_n] + [next_limit] + limits[window_n + 2 :]
+            trial = self.run_prediction_metric(self.charge_limit_best, self.charge_window_best, trial_windows, trial_limits, end_record=self.end_record, nominal_only=True)[0]
+            if abs(trial - baseline) <= eps:
+                if self.debug_enable:
+                    self.log(
+                        "Merge export step {} - {} limit {} into {} - {} limit {}".format(
+                            self.time_abs_str(this_window["start"]), self.time_abs_str(this_window["end"]), this_limit, self.time_abs_str(next_window["start"]), self.time_abs_str(next_window["end"]), next_limit
+                        )
+                    )
+                windows, limits, baseline = trial_windows, trial_limits, trial
+                merged += 1
+            else:
+                window_n += 1
+
+        self.export_window_best = windows
+        self.export_limits_best = limits
+        return merged
 
     def update_target_values(self):
         """
@@ -3303,14 +4220,14 @@ class Plan:
 
                 # An existing freeze export slot may have been trimmed earlier (start moved later) -
                 # restore it to its original full size so it covers the whole solar period
-                if self.export_limits_best[window_n] == EXPORT_LIMIT_FREEZE:
+                if export_mode_of(self.export_limits_best[window_n]) == EXPORT_MODE_FREEZE:
                     start_orig = self.export_window_best[window_n].get("start_orig", window_start)
                     if start_orig < window_start:
                         set_window_start(self.export_window_best[window_n], start_orig)
                     continue
 
                 # Only enable currently idle (disabled) export windows
-                if self.export_limits_best[window_n] != EXPORT_LIMIT_IDLE:
+                if export_mode_of(self.export_limits_best[window_n]) != EXPORT_MODE_IDLE:
                     continue
 
                 # Don't freeze export where a charge is already planned - we can't charge the battery
@@ -3331,7 +4248,7 @@ class Plan:
                 if pv_period < 0.01:
                     continue
 
-                self.export_limits_best[window_n] = EXPORT_LIMIT_FREEZE
+                self.export_limits_best[window_n] = pack_export_limit(EXPORT_MODE_FREEZE)
                 added += 1
 
             if not added:
@@ -3350,7 +4267,7 @@ class Plan:
                     continue
                 if window_start in self.manual_all_times:
                     continue
-                if self.export_limits_best[window_n] >= EXPORT_LIMIT_FREEZE:
+                if export_mode_of(self.export_limits_best[window_n]) != EXPORT_MODE_TARGET:
                     continue
                 if window_start <= first_solar_minute:
                     continue
@@ -3431,8 +4348,8 @@ class Plan:
                         continue
 
                     # Try to drop the target
-                    if drop and export_limit_target < EXPORT_LIMIT_IDLE:
-                        self.export_limits_best[window_n_target] = EXPORT_LIMIT_IDLE
+                    if drop and export_mode_of(export_limit_target) != EXPORT_MODE_IDLE:
+                        self.export_limits_best[window_n_target] = pack_export_limit(EXPORT_MODE_IDLE)
                         best_metric_drop, best_battery_value_drop, best_cost_drop, best_keep_drop, best_cycle_drop, best_carbon_drop, best_import_drop, best_export_drop = self.run_prediction_metric(
                             self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
                         )
@@ -3462,7 +4379,7 @@ class Plan:
                             selected_carbon = best_carbon_drop
                             selected_import = best_import_drop
                             swapped = True
-                            export_limit_target = EXPORT_LIMIT_IDLE
+                            export_limit_target = pack_export_limit(EXPORT_MODE_IDLE)
                         else:
                             self.export_limits_best[window_n_target] = export_limit_target
 
@@ -3500,32 +4417,34 @@ class Plan:
                             # Don't swap if the windows are the same
                             continue
 
-                        if export_limit < EXPORT_LIMIT_FREEZE and window_length <= orig_length_target:
+                        if export_mode_of(export_limit) == EXPORT_MODE_TARGET and window_length <= orig_length_target:
                             # Don't optimise a charge window that hits an export window if this is disallowed
                             if not self.allow_this_export_window(window_n_target):
                                 continue
 
                             is_combined = False
-                            if export_limit_target < EXPORT_LIMIT_FREEZE and (window_length_target + window_length) <= orig_length_target:
+                            if export_mode_of(export_limit_target) == EXPORT_MODE_TARGET and (window_length_target + window_length) <= orig_length_target:
                                 # Full combine
-                                self.export_limits_best[window_n] = EXPORT_LIMIT_IDLE
+                                self.export_limits_best[window_n] = pack_export_limit(EXPORT_MODE_IDLE)
                                 set_window_start(self.export_window_best[window_n], window_start_orig)
                                 self.export_limits_best[window_n_target] = export_limit
                                 set_window_start(self.export_window_best[window_n_target], self.export_window_best[window_n_target]["end"] - (window_length + window_length_target))
                                 is_combined = True
-                            elif export_limit_target < EXPORT_LIMIT_FREEZE and window_length_target < orig_length_target:
-                                # Partial combine
+                            elif export_mode_of(export_limit_target) == EXPORT_MODE_TARGET and window_length_target < orig_length_target:
+                                # Partial combine - move export time from this window into the target, so
+                                # this window shrinks by what the target gains. Growing it instead pushed
+                                # its start back into the slot before, through any manual override there (#5423)
                                 amount_to_move = min(orig_length_target - window_length_target, window_length)
                                 window_length_target_new = amount_to_move + window_length_target
-                                window_length_new = amount_to_move + window_length
-                                self.export_limits_best[window_n] = min(export_limit, export_limit_target)
+                                window_length_new = window_length - amount_to_move
+                                self.export_limits_best[window_n] = min(export_limit, export_limit_target, key=export_limit_sort_key)
                                 set_window_start(self.export_window_best[window_n], self.export_window_best[window_n]["end"] - window_length_new)
                                 set_window_start(self.export_window_best[window_n_target], self.export_window_best[window_n_target]["end"] - window_length_target_new)
-                                self.export_limits_best[window_n_target] = min(export_limit, export_limit_target)
+                                self.export_limits_best[window_n_target] = min(export_limit, export_limit_target, key=export_limit_sort_key)
                                 is_combined = True
                             else:
                                 # Swap
-                                if export_limit_target < EXPORT_LIMIT_IDLE and window_length < window_length_target:
+                                if export_mode_of(export_limit_target) != EXPORT_MODE_IDLE and window_length < window_length_target:
                                     # Don't swap if we move a smaller window later
                                     continue
 
@@ -3565,7 +4484,7 @@ class Plan:
                                     )
                                 )
 
-                            if ((selected_metric - best_metric) >= self.metric_min_improvement_swap) and (best_metric <= selected_metric or ((export_limit_target == EXPORT_LIMIT_IDLE or is_combined))):
+                            if ((selected_metric - best_metric) >= self.metric_min_improvement_swap) and (best_metric <= selected_metric or ((export_mode_of(export_limit_target) == EXPORT_MODE_IDLE or is_combined))):
                                 if self.debug_enable:
                                     self.log(
                                         "Swap export window {} {}-{} limit {} with {} => {}-{} metric {}{}, selected_metric {}{}, min_improvement_swap {}, cost {}{}, keep {}kWh, cycle {}kWh, carbon {}kg, import {}kWh".format(
@@ -3724,7 +4643,7 @@ class Plan:
         if self.calculate_best_charge and (window_start not in self.manual_all_times):
             if not self.calculate_export_oncharge:
                 hit_export = self.hit_charge_window(self.export_window_best, self.charge_window_best[charge_window_n]["start"], self.charge_window_best[charge_window_n]["end"])
-                if hit_export >= 0 and self.export_limits_best[hit_export] < EXPORT_LIMIT_IDLE:
+                if hit_export >= 0 and export_mode_of(self.export_limits_best[hit_export]) != EXPORT_MODE_IDLE:
                     return False
             return True
         return False
@@ -3965,28 +4884,28 @@ class Plan:
                             continue
 
                         # Don't remove exports during freeze pass
-                        if pass_type == "freeze" and self.export_limits_best[window_n] == 0:
+                        if pass_type == "freeze" and export_limit_is_full_discharge(self.export_limits_best[window_n]):
                             continue
 
                         # Don't trim a window that is already off
-                        if pass_type in ["trim_export"] and (self.export_limits_best[window_n] == EXPORT_LIMIT_IDLE):
+                        if pass_type in ["trim_export"] and (export_mode_of(self.export_limits_best[window_n]) == EXPORT_MODE_IDLE):
                             continue
 
                         # In normal don't do trimming of export
-                        if pass_type in ["normal"] and (self.export_limits_best[window_n] == 0):
+                        if pass_type in ["normal"] and export_limit_is_full_discharge(self.export_limits_best[window_n]):
                             continue
 
                         # Do highest price first
                         # Second pass to tune down any excess exports only
-                        if pass_type == "low" and (self.export_limits_best[window_n] == EXPORT_LIMIT_IDLE):
+                        if pass_type == "low" and (export_mode_of(self.export_limits_best[window_n]) == EXPORT_MODE_IDLE):
                             continue
 
                         # Don't trim freeze, that can be done in the freeze pass
-                        if pass_type == "trim_export" and self.export_limits_best[window_n] == EXPORT_LIMIT_FREEZE:
+                        if pass_type == "trim_export" and export_mode_of(self.export_limits_best[window_n]) == EXPORT_MODE_FREEZE:
                             continue
 
                         # Ignore prices below the threshold if not already selected during levelling
-                        if (price_key < best_price_export_level) and (self.export_limits_best[window_n] == EXPORT_LIMIT_IDLE):
+                        if (price_key < best_price_export_level) and (export_mode_of(self.export_limits_best[window_n]) == EXPORT_MODE_IDLE):
                             if self.debug_enable:
                                 self.log("Skip low window {} best limit {} price_set {} price {} level {}".format(window_n, self.export_limits_best[window_n], price_key, price, best_price_export_level))
                             continue
@@ -4041,9 +4960,9 @@ class Plan:
                             # shed any levels over-export before the high-priced peak is touched. A reduction is
                             # a shallower discharge (higher SoC limit) and/or a smaller window (later start) -
                             # never a deeper discharge nor an earlier start (a bigger window exports more, even
-                            # when the SoC limit rises). Off/freeze (limit >= 99) export no battery and force the
-                            # start back to the full window, so they are exempt from the earlier-start check.
-                            trim_export_ok = pass_type != "trim_export" or (n_best_soc >= self.export_limits_best[window_n] and (n_best_soc >= EXPORT_LIMIT_FREEZE or n_best_start >= keep_start))
+                            # when the SoC limit rises). Off/freeze export no battery and force the start back to
+                            # the full window, so they are exempt from the earlier-start check.
+                            trim_export_ok = pass_type != "trim_export" or (export_limit_sort_key(n_best_soc) >= export_limit_sort_key(self.export_limits_best[window_n]) and (export_limit_exports_no_battery(n_best_soc) or n_best_start >= keep_start))
                             if n_best_metric < best_metric and (n_best_soc != self.export_limits_best[window_n] or n_best_start != self.export_window_best[window_n]["start"]) and trim_export_ok:
                                 # Only a strict improvement drives another refinement iteration (see
                                 # the charge block above for why equal-metric flips must not).
@@ -4364,7 +5283,7 @@ class Plan:
         if self.export_window_best and self.calculate_best_export:
             for window_n in range(len(self.export_window_best)):
                 if self.export_window_best[window_n]["start"] in self.manual_demand_times:
-                    self.export_limits_best[window_n] = EXPORT_LIMIT_IDLE
+                    self.export_limits_best[window_n] = pack_export_limit(EXPORT_MODE_IDLE)
                 elif self.export_window_best[window_n]["start"] in self.manual_export_times:
                     if self.set_export_freeze_only:
                         # A manual "export now" request can't be honoured as an active export when
@@ -4377,11 +5296,22 @@ class Plan:
                         # override entirely, since freeze is the closest available approximation of
                         # "export what you can right now".
                         self.log("Warn: Manual export time {} clamped to freeze export as set_export_freeze_only is enabled".format(self.time_abs_str(self.export_window_best[window_n]["start"])))
-                        self.export_limits_best[window_n] = EXPORT_LIMIT_FREEZE
+                        self.export_limits_best[window_n] = pack_export_limit(EXPORT_MODE_FREEZE)
                     else:
-                        self.export_limits_best[window_n] = 0.0
+                        # A manual export is a full discharge at full power - target 0%
+                        self.export_limits_best[window_n] = pack_export_limit(EXPORT_MODE_TARGET, 0)
                 elif self.export_window_best[window_n]["start"] in self.manual_freeze_export_times:
-                    self.export_limits_best[window_n] = EXPORT_LIMIT_FREEZE
+                    if not self.set_export_freeze:
+                        # set_export_freeze is False either because execute.py forced it off for an
+                        # inverter whose INVERTER_DEF says support_discharge_freeze is False, or because
+                        # the user turned off the non-expert "Set Export Freeze" switch - but this
+                        # override wrote a freeze anyway, so the plan assumed a hold that will not
+                        # happen. Drop to demand rather than a forced export: the user asked to hold
+                        # the battery, and exporting it is the opposite of that request (GH#4892).
+                        self.log("Warn: Manual freeze export time {} dropped to demand as set_export_freeze is disabled (inverter capability or user setting)".format(self.time_abs_str(self.export_window_best[window_n]["start"])))
+                        self.export_limits_best[window_n] = pack_export_limit(EXPORT_MODE_IDLE)
+                    else:
+                        self.export_limits_best[window_n] = pack_export_limit(EXPORT_MODE_FREEZE)
 
     def prefill_charge_limit_best(self):
         """
@@ -4423,9 +5353,9 @@ class Plan:
             for window_n in range(len(self.export_window_best)):
                 if self.export_window_best[window_n]["start"] < (self.minutes_now + self.end_record):
                     if reset_all:
-                        self.export_limits_best[window_n] = EXPORT_LIMIT_IDLE
+                        self.export_limits_best[window_n] = pack_export_limit(EXPORT_MODE_IDLE)
                 else:
-                    self.export_limits_best[window_n] = EXPORT_LIMIT_IDLE
+                    self.export_limits_best[window_n] = pack_export_limit(EXPORT_MODE_IDLE)
 
     def run_prediction(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, save=None, step=PREDICT_STEP):
         """
@@ -4499,6 +5429,7 @@ class Plan:
                 self.predict_metric_best = pred.predict_metric_best
                 self.predict_carbon_best = pred.predict_carbon_best
                 self.predict_clipped_best = pred.predict_clipped_best
+                self.predict_car_hold_best = pred.predict_car_hold_best
 
             if save:
                 self.log(
@@ -4633,7 +5564,7 @@ class Plan:
                 self.dashboard_item(
                     self.prefix + ".load_energy_h0",
                     state=dp3(load_kwh_h0),
-                    attributes={"friendly_name": "Current load", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:home-lightning-bolt"},
+                    attributes={"friendly_name": "Current load", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:home-lightning-bolt", "source": self.load_minutes_source},
                 )
                 self.dashboard_item(
                     self.prefix + ".pv_energy",
@@ -4765,6 +5696,14 @@ class Plan:
                         "soc_now": dp3(self.soc_kw),
                         "soc_max": dp3(self.soc_max),
                         "soc_now_percent": dp2(calc_percent_limit(self.soc_kw, self.soc_max)),
+                        # What this plan expects the battery to hold one and eight hours out. Recorded as
+                        # plain attributes so Home Assistant keeps them in history: results/today are
+                        # rewritten every cycle, so the forecast made for a given moment is gone by the
+                        # time that moment arrives and there is nothing left to score the plan against.
+                        # Read back with a matching time offset these sit alongside the measured SoC and
+                        # show whether the model tracks the hardware.
+                        "soc_h1": dp3(self.predict_soc_best.get(60, final_soc)),
+                        "soc_h8": dp3(self.predict_soc_best.get(60 * 8, final_soc)),
                     },
                 )
                 self.dashboard_item(
@@ -5310,30 +6249,11 @@ class Plan:
         if ready_minutes < self.minutes_now:
             ready_minutes += 24 * 60
 
-        # Car charging now override
-        extra_slot = {}
-        if self.car_charging_now[car_n]:
-            start = int(self.minutes_now / self.plan_interval_minutes) * self.plan_interval_minutes
-            end = start + self.plan_interval_minutes
-            extra_slot["start"] = start
-            extra_slot["end"] = end
-            extra_slot["average"] = self.rate_import.get(start, self.rate_min)
-            self.log("Car is charging now slot {}".format(extra_slot))
-
-            for window_p in price_sorted:
-                window = low_rates[window_p]
-                if window["start"] == start:
-                    price_sorted.remove(window_p)
-                    self.log("Remove old window {}".format(window_p))
-                    break
-
-            price_sorted = [-1] + price_sorted
-
+        # car_charging_now never adds a slot here: this plan drives binary_sensor.predbat_car_charging_slot,
+        # which starts the charger, so a slot for "charging now" kept a charge going on its own. The hold
+        # for a car charging outside the plan is execute_plan()'s, and dynamic load models its load.
         for window_n in price_sorted:
-            if window_n == -1:
-                window = extra_slot
-            else:
-                window = low_rates[window_n]
+            window = low_rates[window_n]
 
             start = max(window["start"], self.minutes_now)
             end = min(window["end"], ready_minutes)
@@ -5378,6 +6298,11 @@ class Plan:
                 new_slot = {}
                 new_slot["start"] = start
                 new_slot["end"] = end
+                # start is clamped to minutes_now above so the kWh maths only counts time the car
+                # can still charge for, but that makes an in-progress window's start walk forward
+                # by plan_interval_minutes every cycle. Keep the window's real start for display
+                # and for anything driving a charger off the published plan (issue #269).
+                new_slot["start_orig"] = window["start"]
                 new_slot["kwh"] = dp3(kwh)
                 new_slot["average"] = window["average"]
                 new_slot["cost"] = dp2(new_slot["average"] * kwh)
@@ -5407,6 +6332,24 @@ class Plan:
                                 car_charging_kwh += kwh * PREDICT_STEP
             car_charging_kwh = dp2(car_charging_kwh)
         return car_charging_kwh
+
+    def car_charge_slot_kwh_cancelled(self, minute_start, minute_end):
+        """
+        Car charging in kWh that dynamic load has cancelled for the given self.plan_interval_minutes-minute
+        slot - the car was not charging, so the plan does not count on it, but it is still shown with a "?".
+        """
+        car_charging_kwh = 0.0
+        for car_n in range(self.num_cars):
+            for window in self.car_charging_slots[car_n] if car_n < len(self.car_charging_slots) else []:
+                start = window["start"]
+                end = window["end"]
+                kwh_cancelled = window.get("kwh_cancelled", 0)
+                if kwh_cancelled and start < minute_end and end > minute_start and end != start:
+                    kwh = dp2(kwh_cancelled) / (end - start)
+                    for minute_offset in range(minute_start, minute_end, PREDICT_STEP):
+                        if start <= minute_offset < end:
+                            car_charging_kwh += kwh * PREDICT_STEP
+        return dp2(car_charging_kwh)
 
     def car_charge_slot_rate(self, minute_start, minute_end):
         """
@@ -5463,8 +6406,9 @@ class Plan:
                 return hit
 
         hit = False
+        car_slots = self.car_charging_slots_model()
         for car_n in range(self.num_cars):
-            for window in self.car_charging_slots[car_n]:
+            for window in car_slots[car_n]:
                 if window["end"] > window_start and window["start"] < window_end and dp2(window["kwh"]) > 0:
                     hit = True
                     break

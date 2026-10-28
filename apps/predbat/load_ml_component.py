@@ -15,7 +15,7 @@
 
 ComponentBase wrapper that manages the LoadPredictor lifecycle including
 data fetching, periodic training/fine-tuning, prediction generation, and
-status sensor publishing. Retrains every 2 hours and updates predictions
+status sensor publishing. Retrains every 2 hours by default and updates predictions
 every 30 minutes.
 """
 
@@ -31,7 +31,6 @@ import traceback
 import numpy as np
 
 # Training intervals
-RETRAIN_INTERVAL_SECONDS = 2 * 60 * 60  # 2 hours between training cycles
 PREDICTION_INTERVAL_SECONDS = 30 * 60  # 30 minutes between predictions
 
 # Database schema version - increment when the saved format changes to force a clean rebuild
@@ -51,7 +50,7 @@ class LoadMLComponent(ComponentBase):
     - Falls back to empty predictions when validation fails or model is stale
     """
 
-    def initialize(self, load_ml_enable, load_ml_source=True, load_ml_max_days_history=28, load_ml_database_days=90):
+    def initialize(self, load_ml_enable, load_ml_source=True, load_ml_max_days_history=28, load_ml_database_days=90, load_ml_retrain_interval_hours=2):
         """
         Initialise the ML load forecaster component.
 
@@ -60,6 +59,7 @@ class LoadMLComponent(ComponentBase):
             load_ml_source: Whether using ML as the data source is enabled or not
             load_ml_max_days_history: Maximum number of days of load history to fetch
             load_ml_database_days: Number of days of historical data to store in the database, maximum length for training
+            load_ml_retrain_interval_hours: Hours between training cycles, clamped to 1-48
         """
 
         self.ml_enable = load_ml_enable
@@ -74,7 +74,6 @@ class LoadMLComponent(ComponentBase):
             self.car_charging_hold = False
         self.car_charging_threshold = float(self.get_arg("car_charging_threshold", 6.0)) / 60.0
         self.car_charging_energy_scale = self.get_arg("car_charging_energy_scale", 1.0)
-        self.car_charging_rate = float(self.get_arg("car_charging_rate", 7.5)) / 60.0
 
         self.ml_learning_rate = 0.001
         self.ml_epochs_initial = 100
@@ -86,6 +85,7 @@ class LoadMLComponent(ComponentBase):
         self.ml_time_decay_days = 30
         self.ml_max_load_kw = 50.0
         self.ml_max_model_age_hours = 48
+        self.ml_retrain_interval_seconds = max(1, min(self.ml_max_model_age_hours, load_ml_retrain_interval_hours)) * 60 * 60
         self.ml_weight_decay = 0.01
         self.ml_dropout_rate = 0.1
         self.ml_max_days_history = load_ml_max_days_history
@@ -353,12 +353,17 @@ class LoadMLComponent(ComponentBase):
             else:
                 # Filter car charging based on threshold if enabled
                 total_load_energy = 0
+                car_rate_per_minute = 0.0
+                if car_charging_hold:
+                    # The estimated car load is the car's charging rate capped at its own maximum (car_charging_max_rate)
+                    # as Fetch does; both are read now, as either can change at runtime
+                    car_rate_per_minute = self.car_rate_capped(0, float(self.get_arg("car_charging_rate", 7.5))) / 60.0
                 for minute in range(max_minute, -PREDICT_STEP, -PREDICT_STEP):
                     car_delta = 0.0
                     if car_charging_hold:
                         load_now = self.get_from_incrementing(load_minutes, minute, PREDICT_STEP, backwards=True)
                         if load_now >= self.car_charging_threshold * PREDICT_STEP:
-                            car_delta = self.car_charging_rate * PREDICT_STEP
+                            car_delta = car_rate_per_minute * PREDICT_STEP
 
                     # Work out load delta and subtract car delta
                     load_delta = self.get_from_incrementing(load_minutes, minute, PREDICT_STEP, backwards=True)
@@ -721,8 +726,8 @@ class LoadMLComponent(ComponentBase):
         is_initial = not self.initial_training_done
 
         # Retrain if the model is older than the retrain interval (rather than on a fixed tick)
-        retrain_age_seconds = (self.now_utc - self.last_train_time).total_seconds() if self.last_train_time else RETRAIN_INTERVAL_SECONDS
-        should_train = not first and (retrain_age_seconds >= RETRAIN_INTERVAL_SECONDS)
+        retrain_age_seconds = (self.now_utc - self.last_train_time).total_seconds() if self.last_train_time else self.ml_retrain_interval_seconds
+        should_train = not first and (retrain_age_seconds >= self.ml_retrain_interval_seconds)
 
         # Fetch fresh load data periodically (every N minutes)
         should_fetch = first or should_train or ((seconds % PREDICTION_INTERVAL_SECONDS) == 0)
@@ -756,7 +761,7 @@ class LoadMLComponent(ComponentBase):
                 self.log("ML Component: Initial training is required, delaying until component has started")
                 return True
         elif should_train:
-            self.log("ML Component: Starting fine-tune training (2h interval), model age is {} hours".format(retrain_age_seconds / 3600.0))
+            self.log("ML Component: Starting fine-tune training ({:g}h interval), model age is {} hours".format(self.ml_retrain_interval_seconds / 3600.0, retrain_age_seconds / 3600.0))
         elif should_fetch:
             # If not training either then no need to print anything
             self.log("ML Component: No training needed, model age is {} hours".format(dp2(retrain_age_seconds / 3600.0)))
@@ -1152,6 +1157,7 @@ class LoadMLComponent(ComponentBase):
                 "model_age_hours": round(model_age_hours, 1) if model_age_hours is not None else None,
                 "training_days": self.load_data_age_days,
                 "status": self.model_status,
+                "load_ml_source": self.ml_source,
                 "model_version": MODEL_VERSION,
                 "epochs_trained": self.predictor.epochs_trained if self.predictor else 0,
                 "friendly_name": "ML Load Stats",

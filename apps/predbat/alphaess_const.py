@@ -175,6 +175,14 @@ ALPHAESS_TIME_STEP_MINUTES = 15
 ALPHAESS_TIME_MAX = "23:45"
 ALPHAESS_TIME_DISABLED = "00:00"
 
+# The Open API has no pause/hold operation. Live SMILE G3 testing established that an
+# enabled charge schedule whose target is already below SOC is the only available hold
+# primitive. Ten percent is the API's minimum accepted charge target. A zero power value is
+# not sent by our periodic builder and the inverter's omitted/default behaviour is unknown,
+# so 100 W is a deliberately small positive setpoint rather than an assumed zero-power mode.
+ALPHAESS_HOLD_SOC = 10
+ALPHAESS_HOLD_POWER = 100
+
 
 def hhmmss_to_hhmm(value):
     """Convert Predbat's HH:MM:SS control-entity value to the API's HH:mm.

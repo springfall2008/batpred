@@ -16,12 +16,15 @@ import re
 import aiohttp
 import pytz
 from datetime import timedelta, datetime, timezone
-from utils import str2time, dp1, dp2, dp4, parse_car_plan_windows, in_car_plan_window
+from utils import str2time, dp1, dp2, dp4
+from car_charger_control import CarChargerControl, parse_control_setting
 from predbat_metrics import record_api_call
 import asyncio
+import math
 import json
 import random
 from component_base import ComponentBase
+from coordinator import inverter_record
 from mock_base import MockBase as SharedMockBase
 
 """
@@ -36,6 +39,7 @@ GE_API_INVERTER_SETTINGS = "inverter/{inverter_serial_number}/settings"
 GE_API_INVERTER_READ_SETTING = "inverter/{inverter_serial_number}/settings/{setting_id}/read"
 GE_API_INVERTER_WRITE_SETTING = "inverter/{inverter_serial_number}/settings/{setting_id}/write"
 GE_API_DEVICES = "communication-device"
+GE_API_SITE = "site/{uuid}"
 GE_API_DEVICE_INFO = "communication-device"
 GE_API_SMART_DEVICES = "smart-device"
 GE_API_SMART_DEVICE = "smart-device/{uuid}"
@@ -54,6 +58,26 @@ GE_REGISTER_BATTERY_CUTOFF_LIMIT = 75
 ACCOUNT_MAX_AGE_MINUTES = 24 * 60
 # How long to wait before retrying a failed account fetch
 ACCOUNT_RETRY_MINUTES = 30
+
+# How long the cached site details (including its export limit) stay valid for before they are fetched again
+SITE_MAX_AGE_MINUTES = 12 * 60
+# How long to wait before retrying a failed site fetch
+SITE_RETRY_MINUTES = 30
+
+# Under EMS control Predbat drives the plant device's slot 1 registers, so the battery inverters' own
+# settings do not need re-reading every settings cycle - but they are not static either, and a slot
+# changed behind Predbat's back silently overrides the EMS, so they are re-read on a slow cadence (#5103).
+SETTINGS_SLOW_REFRESH_SECONDS = 60 * 60
+# How often the device list is re-read, so an inverter, EMS, Gateway or EV charger added to or removed
+# from the account is picked up without a restart (#5294). Must be a multiple of 60, as run() is only
+# called once a minute; a cycle that finds a change polls and reads settings whatever else is due.
+DEVICE_REFRESH_SECONDS = 60 * 60
+
+# An inverter under EMS control is expected to leave its own slot 1 windows spanning the whole day so
+# that they never override a command from the EMS (see #3781). Anything else is reported.
+EMS_SLOT_FULL_DAY_START = "00:00"
+EMS_SLOT_FULL_DAY_END = "23:59"
+EMS_SLOT_FAMILIES = ("ac_charge_1", "dc_discharge_1")
 
 # 0	Current.Export	Instantaneous current flow from EV
 # 1	Current.Import	Instantaneous current flow to EV
@@ -120,6 +144,10 @@ EVC_CONNECTED_STATUSES = {"preparing", "charging", "suspendedev", "suspendedevse
 # unrecognised value can be reported instead of silently reading as "nothing plugged in",
 # which would look exactly like a working charger that Predbat quietly ignores.
 EVC_DISCONNECTED_STATUSES = {"available", "idle", "offline", "unavailable", "faulted", "reserved", "unknown"}
+
+# The subset of those that positively mean nothing is plugged in, rather than that the charger
+# cannot say - used to end guest charging, which a comms blip must not do
+EVC_EMPTY_STATUSES = {"available", "idle"}
 
 
 def evc_status_key(status):
@@ -189,7 +217,7 @@ EVC_SELECT_VALUE_KEY = {
 }
 
 # The two commands Predbat-led charge control drives a charger between. They are commands
-# rather than modes, so there is nothing to restore on release - see release_evc_devices().
+# rather than modes, so there is nothing to restore on release - see charger_control_release_one().
 EVC_COMMAND_START = "start-charge"
 EVC_COMMAND_STOP = "stop-charge"
 
@@ -205,6 +233,156 @@ RETRIES = 10
 RETRY_FACTOR = 1
 MAX_THREADS = 2
 MAX_START_TIME = 10 * 60
+
+
+# GivEnergy setting read/write result codes. "retry" mirrors the API documentation's own
+# "Potentially Successful?" column - a code marked False never clears on a repeat attempt, so
+# retrying it only burns the retry budget and its backoff (issue #4896). "reason" is the label
+# the failure is recorded under in the API metrics. -2 is documented as not potentially
+# successful too, but an offline device does come back, so it stays retryable as it always was.
+GE_SETTING_ERROR_CODES = {
+    -1: {"retry": True, "reason": "device_timeout", "text": "the device did not respond before the request timed out"},
+    -2: {"retry": True, "reason": "device_offline", "text": "the device is offline"},
+    -3: {"retry": False, "reason": "device_not_found", "text": "the device does not exist or your account does not have access to it"},
+    -4: {"retry": False, "reason": "validation_error", "text": "there were one or more validation errors"},
+    -5: {"retry": True, "reason": "server_error", "text": "there was a server error"},
+    -6: {"retry": True, "reason": "no_response", "text": "there was no response from the server the device was last connected to"},
+    -7: {"retry": False, "reason": "inverter_locked", "text": "inverter locked - the device is currently locked and cannot be modified"},
+}
+GE_SETTING_RETRY_CODES = [code for code, info in GE_SETTING_ERROR_CODES.items() if info["retry"]]
+# The endpoints whose "value" carries a result code rather than a reading
+GE_SETTING_ENDPOINTS = [GE_API_INVERTER_READ_SETTING, GE_API_INVERTER_WRITE_SETTING]
+
+# The behaviour of the two GE Cloud inverter types, for the discovery record's `capabilities`: the
+# seven INVERTER_DEF behaviour keys, valued as the "GEC" and "GEE" rows state them today
+# (support_feedin_first is absent from both rows and defaults to False in inverter.py). Literal on
+# purpose - reading the rows back would make the discovery completeness test prove nothing.
+# The percentage charge rate registers, as their HA-style names carry them
+GE_CHARGE_RATE_PERCENT_REGISTERS = ["inverter_charge_power_percentage", "charge_power_rate"]
+
+
+def is_charge_rate_percent_register(ha_name):
+    """Whether an HA-style register name is a percentage charge rate - "discharge_power_rate" contains "charge_power_rate" and is not one."""
+    if "discharge_power_rate" in ha_name:
+        return False
+    return any(candidate in ha_name for candidate in GE_CHARGE_RATE_PERCENT_REGISTERS)
+
+
+def charge_rate_grid_only(ha_names):
+    """
+    Whether a device with these HA-style register names can only limit charging from the grid.
+
+    True for the 3-phase class (GIV-3HY): it has no Battery Pause and no battery charge power
+    register, only the percentage charge rate, which limits AC (grid) charging and leaves PV
+    charging the battery at full power. Freeze Export cannot be carried out there (#5082).
+    """
+    has_percent = any(is_charge_rate_percent_register(ha_name) for ha_name in ha_names)
+    has_power = any("battery_charge_power" in ha_name for ha_name in ha_names)
+    has_pause = any("pause_battery" in ha_name for ha_name in ha_names)
+    return has_percent and not has_power and not has_pause
+
+
+GE_CLOUD_CAPABILITIES = {
+    "GEC": {
+        "support_charge_freeze": True,
+        "support_discharge_freeze": True,
+        "support_feedin_first": False,
+        "can_span_midnight": True,
+        "charge_discharge_with_rate": False,
+        "charge_control_immediate": False,
+        "target_soc_used_for_discharge": False,
+    },
+    "GEE": {
+        "support_charge_freeze": True,
+        "support_discharge_freeze": False,
+        "support_feedin_first": False,
+        "can_span_midnight": False,
+        "charge_discharge_with_rate": False,
+        "charge_control_immediate": True,
+        "target_soc_used_for_discharge": False,
+    },
+}
+
+# Settings async_automatic_config() binds that inverter.py replaces with a dummy entity for the type
+# (the row's presence flag is False), so the discovery record leaves them out. Behind an EMS the
+# battery inverters' own charge/discharge enables, pause and eco switches are never driven.
+GE_CLOUD_DUMMIED_SETTINGS = {
+    "GEC": frozenset(),
+    "GEE": frozenset({"scheduled_charge_enable", "scheduled_discharge_enable", "pause_mode", "inverter_mode"}),
+}
+
+# publish_registers() publishes every "date_format:H:i" register as a select whose options and state
+# are HH:MM:SS
+GE_CLOUD_TIME_SELECT_FORMAT = "HH:MM:SS"
+
+# The format of the inverter_time sensor: publish_status() publishes the API's ISO timestamp
+# ("2025-02-09T15:00:03Z") unchanged. The GEC/GEE rows keep "%H:%M:%S" for installs that do not use
+# this component (spec D13), so the discovery record describes the sensor, not the row.
+GE_CLOUD_CLOCK_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
+
+
+def ge_code_message(data, code):
+    """Describe a GivEnergy result code, preferring the plain-English message the API returned."""
+    message = data.get("message", None) if isinstance(data, dict) else None
+    if not message:
+        info = GE_SETTING_ERROR_CODES.get(code, None)
+        message = info["text"] if info else "unknown error"
+    return message
+
+
+def classify_ge_failure(data, endpoint=None):
+    """Classify a response body that reports a device-level failure.
+
+    GivEnergy reports these with HTTP 200, either flagging the body with success=false or just
+    returning a negative result code in "value" alongside a plain-English "message" (for example
+    -7 "Inverter Locked"); the setting endpoints use both shapes. Returns None when the body
+    reports no failure, otherwise a dict holding the code, its message, the metrics reason and
+    whether the code is worth retrying.
+    """
+    if not isinstance(data, dict):
+        return None
+    code = data.get("value", None)
+    if not isinstance(code, int) or isinstance(code, bool):
+        code = None
+    known = GE_SETTING_ERROR_CODES.get(code, None) if code is not None else None
+    # A bare code only means failure on the setting endpoints, where the table applies -
+    # anywhere else a negative "value" could be a genuine reading
+    if data.get("success", True) and not (known and endpoint in GE_SETTING_ENDPOINTS):
+        return None
+    # An unrecognised failure keeps the caller's existing retry behaviour rather than giving up
+    reason = known["reason"] if known else "api_error"
+    retry = known["retry"] if known else True
+    return {"code": code, "message": ge_code_message(data, code), "reason": reason, "retry": retry}
+
+
+def format_ge_endpoint(endpoint, serial="", setting_id="", uuid="", meter_ids="", start_time="", end_time="", command=""):
+    """Fill an endpoint template's placeholders, giving the request path that is sent and logged (#5777)."""
+    return endpoint.format(inverter_serial_number=serial, setting_id=setting_id, uuid=uuid, start_time=start_time, end_time=end_time, meter_ids=meter_ids, command=command)
+
+
+class EVCCommandFailed(Exception):
+    """An EV charger command GivEnergy Cloud refused or never confirmed.
+
+    async_send_evc_command() reports failure by returning None; charger control raises this
+    instead so the command is not recorded as done and is tried again next cycle.
+    """
+
+
+class GECloudTerminalError(Exception):
+    """Raised when the GE Cloud API reports a failure that no retry can clear.
+
+    Only codes GivEnergy documents as never succeeding on a repeat attempt (-3, -4 and -7) are
+    raised. A retryable failure (-1, -2, -5, -6) is recorded but its body is handed back to the
+    caller, so a caller that catches this can give up immediately without re-checking the code.
+    """
+
+    def __init__(self, code, message, reason):
+        """Record the GivEnergy result code, its message and the metrics failure reason."""
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.reason = reason
+
 
 attribute_table = {
     "time": {"friendly_name": "Time", "icon": "mdi:clock", "unit_of_measurement": "Time", "state_class": "timestamp"},
@@ -236,6 +414,7 @@ attribute_table = {
     "grid_export_total": {"friendly_name": "Grid Export Total", "icon": "mdi:transmission-tower", "unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total"},
     "max_charge_rate": {"friendly_name": "Max Charge Rate", "icon": "mdi:battery", "unit_of_measurement": "W", "device_class": "power"},
     "max_inverter_rate": {"friendly_name": "Max Inverter Rate", "icon": "mdi:flash", "unit_of_measurement": "W", "device_class": "power"},
+    "export_limit": {"friendly_name": "Export Limit", "icon": "mdi:transmission-tower-export", "unit_of_measurement": "W", "device_class": "power"},
     "battery_size": {"friendly_name": "Battery Size", "icon": "mdi:battery", "unit_of_measurement": "kWh", "device_class": "energy"},
     "battery_dod": {"friendly_name": "Battery Depth of Discharge", "icon": "mdi:battery", "unit_of_measurement": "*", "device_class": "battery"},
     "battery_soh": {"friendly_name": "Battery State of Health", "icon": "mdi:battery", "unit_of_measurement": "*", "device_class": "battery"},
@@ -256,6 +435,151 @@ def regname_to_ha(name):
     """
     name = name.lower().replace(" ", "_").replace("%", "percent").replace("-", "_")
     return name
+
+
+def register_switch_on(value):
+    """
+    Is a switch register value on, read the same way publish_registers() reads it for the HA entity
+    """
+    if isinstance(value, bool):
+        return value
+    return isinstance(value, str) and value in ["on", "true", "True"]
+
+
+VALIDATION_OPTIONS_PREFIX = "Value must be one of:"
+
+
+def parse_validation_options(validation):
+    """
+    Return the option labels from a 'Value must be one of: (a, b, c)' validation string, or None when it cannot be parsed
+    """
+    if not isinstance(validation, str) or not validation.startswith(VALIDATION_OPTIONS_PREFIX) or "(" not in validation:
+        return None
+    # Split on the first '(' and drop only the final ')' so option labels that contain brackets survive intact
+    post = validation.split("(", 1)[1]
+    post = post.rsplit(")", 1)[0]
+    if not post.strip():
+        return None
+    # Split only on commas outside brackets so a label such as 'Pause (Battery, Grid)' stays whole
+    options = []
+    label = ""
+    depth = 0
+    for char in post:
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth = max(depth - 1, 0)
+        elif char == "," and depth == 0:
+            options.append(label)
+            label = ""
+            continue
+        label += char
+    options.append(label)
+    return [option[1:] if index > 0 and option.startswith(" ") else option for index, option in enumerate(options)]
+
+
+def normalise_register_time(value):
+    """
+    Return a register time value as an HH:MM string, or None when it is not a time
+    """
+    if not isinstance(value, str):
+        return None
+    parts = value.strip().split(":")
+    if len(parts) < 2:
+        return None
+    try:
+        return "{:02d}:{:02d}".format(int(parts[0]), int(parts[1]))
+    except ValueError:
+        return None
+
+
+def find_ems_slot_overrides(registers):
+    """
+    Return the slot 1 charge/DC discharge window registers that do not span the whole day, keyed by HA name
+    """
+    overrides = {}
+    for key in registers:
+        entry = registers[key]
+        if not isinstance(entry, dict):
+            continue
+        ha_name = regname_to_ha(entry.get("name", None) or "")
+        value = normalise_register_time(entry.get("value", None))
+        if value is None:
+            continue
+        for family in EMS_SLOT_FAMILIES:
+            if "{}_start_time".format(family) in ha_name:
+                expected = EMS_SLOT_FULL_DAY_START
+            elif "{}_end_time".format(family) in ha_name:
+                expected = EMS_SLOT_FULL_DAY_END
+            else:
+                continue
+            if value != expected:
+                overrides[ha_name] = value
+    return overrides
+
+
+def coerce_watts(value):
+    """Return a non-negative power in watts taken from an API value, or None when it is not one."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        try:
+            value = float(value.strip())
+        except (TypeError, ValueError):
+            return None
+    if not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+        return None
+    return float(value)
+
+
+def parse_site_export_limit(limits):
+    """
+    Read a site's enforced grid export power limit, in watts, from the GivEnergy site metadata.
+
+    The published API schema says a site carries import/export limits but not how one is
+    encoded, so every shape GivEnergy plausibly returns is accepted - a bare number, a numeric
+    string, or a nested object - and anything else is reported as not understood rather than
+    guessed at, leaving the configured/default limit in place.
+
+    The object's "enabled" flag separates an enforced curtailment from a merely declared
+    connection capacity, and only an enforced one is applied - confirmed across a fleet survey.
+    A site reports its supply rating the same way it reports a limit, so
+    {"import": {"enabled": False, "power": {"watts": 46000, "amps": 200}},
+     "export": {"enabled": True, "power": {"watts": 4500, "amps": 19.6}}} is a 200A supply whose
+    export really is curtailed to 4.5kW, while a disabled export at 6kW is the connection's
+    declared capacity and no restriction on Predbat. A site with no limit at all reports a null
+    import/export, which is what the published examples show.
+
+    An enforced zero is a real zero-export connection and is applied as one.
+
+    Returns:
+        A (watts, reason) tuple. watts is a float when an enforced limit was found and None
+        otherwise, with reason saying why for the log.
+    """
+    if not isinstance(limits, dict):
+        return None, "the site data carries no limits"
+
+    export = limits.get("export", None)
+    if export is None:
+        return None, "the site has no export limit"
+
+    if isinstance(export, dict):
+        enabled = export.get("enabled", True)
+        if isinstance(enabled, str):
+            enabled = enabled.strip().lower() not in ("false", "0", "no", "off", "")
+        if not enabled:
+            return None, "the site export limit is not enforced, so it states the connection capacity rather than a curtailment"
+        power = export.get("power", None)
+        candidates = [power.get("watts", None), power.get("value", None)] if isinstance(power, dict) else [power]
+        candidates += [export.get("watts", None), export.get("value", None), export.get("limit", None)]
+    else:
+        candidates = [export]
+
+    for candidate in candidates:
+        watts = coerce_watts(candidate)
+        if watts is not None:
+            return watts, ""
+    return None, "the site export limit {} was not understood".format(export)
 
 
 def merge_non_null(fresh, previous):
@@ -287,31 +611,40 @@ def merge_non_null(fresh, previous):
     return merged
 
 
-class GECloudDirect(ComponentBase):
+class GECloudDirect(ComponentBase, CarChargerControl):
     """
     GivEnergy Cloud Direct API interface
     """
 
-    def initialize(self, ge_cloud_direct, api_key, automatic, automatic_evc=False, evc_control=False):
+    # GivEnergy's cloud applies a write some seconds after accepting it; the GEC and GEE rows wait 10
+    WRITE_AND_POLL_SLEEP = 10
+
+    def initialize(self, ge_cloud_direct, api_key, automatic, automatic_evc=False, evc_control=False, inverter_control=True, evc_direct=False):
         """Initialise the GE Cloud Direct component"""
         self.api_key = api_key
         self.automatic = automatic
+        # Each role has a monitor switch and a control switch, so neither has to know about the other.
+        # Inverter: ge_cloud_direct monitors it, ge_cloud_inverter_control also lets Predbat control it -
+        # wire it up with ge_cloud_automatic and write its default settings. Off, a change the user makes
+        # to one of its entities is still sent; Predbat just adds no write of its own.
+        # EV charger: ge_cloud_direct or ge_cloud_evc_direct monitors it, ge_cloud_evc_control drives it.
+        # ge_cloud_evc_direct alone is for a site whose inverter is run by something else (GivTCP, the
+        # GivEnergy app): the inverters are then never read, written or reported.
+        self.inverter_monitor = bool(ge_cloud_direct)
+        self.inverter_control = bool(inverter_control) and self.inverter_monitor
+        # evc_direct needs nothing further here: it is one of the settings that start this component at all
         # Kept apart from automatic, which existing users already have on: wiring the
         # chargers into the car planning registers a car and moves num_cars, so it has to
         # be something a user turns on rather than something an upgrade does to them.
         self.automatic_evc = automatic_evc
-        self.evc_control = evc_control
-        self.evc_control_active = False
-        # The runtime switch, on unless the user turns it off. Restored from storage at startup.
-        self.evc_control_enabled = True
-        self.evc_control_released = False
-        # What Predbat last asked each charger to do, so a poll that changes nothing sends
-        # nothing - every command goes through async_send_evc_command's retry loop.
-        self.evc_control_state = {}
-        self.evc_control_windows = {}
+        self.evc_control = parse_control_setting(evc_control)
+        # Remembering what each charger was last asked to do means a poll that changes nothing
+        # sends nothing - every command goes through async_send_evc_command's retry loop.
+        self.charger_control_setup("GECloud", "EV charger", EVC_STORAGE_MODULE, EVC_CONTROL_STATE, "evc_control_enabled", control=self.evc_control, switch_prefix="gecloud", control_setting="ge_cloud_evc_control")
         self.register_list = {}
         self.settings = {}
         self.status = {}
+        self.live_display_samples = {}  # unmerged measured samples, never sensor defaults
         self.meter = {}
         self.info = {}
         self.register_entity_map = {}
@@ -324,6 +657,13 @@ class GECloudDirect(ComponentBase):
         self.api_fatal = False
         self.api_auth_failed = False
         self.auth_denied_reported = False
+        # Battery inverters already reported as overriding the EMS, so a standing misconfiguration
+        # raises the Predbat status once rather than on every settings refresh
+        self.ems_slot_warned = set()
+        # (device, key) registers whose option validation text could not be parsed, so the warning is logged once
+        self.validation_parse_warned = set()
+        # Hybrid model names whose inverter rating could not be parsed, so the fallback warning is logged once
+        self.model_rate_warned = set()
         self.devices_dict = {}
         self.device_list = []
         self.ems_device = None
@@ -332,6 +672,12 @@ class GECloudDirect(ComponentBase):
         self.evc_device_list = []
         self.settings_from_cache = False
         self.default_options_stamp = None
+        # Devices found by the periodic device check still waiting for their default options, kept across
+        # cycles so a device found while read only is set up once read only ends
+        self.pending_default_options = set()
+        # An EMS turns GE Cloud Data off; what it replaced is kept so it can be put back if the EMS leaves
+        self.ems_disabled_ge_cloud_data = False
+        self.ge_cloud_data_before_ems = None
 
         # Customer account details, including the timezone the inverter register times are expressed in
         self.account = {}
@@ -339,6 +685,14 @@ class GECloudDirect(ComponentBase):
         self.account_timezone_name = None
         self.account_stamp = None
         self.account_fetch_stamp = None
+
+        # Site details, including the grid export limit, cached in storage between restarts
+        self.site = {}
+        self.site_id = None
+        self.site_export_limit = None
+        self.site_inverters = []
+        self.site_stamp = None
+        self.site_fetch_stamp = None
 
         # API request metrics for monitoring
         self.requests_total = 0
@@ -422,9 +776,9 @@ class GECloudDirect(ComponentBase):
         Switch event
         """
         if entity_id.endswith("_gecloud_evc_control"):
-            self.evc_control_enabled = service == "turn_on"
-            self.log("GECloud: EV charger control switched {}".format("on" if self.evc_control_enabled else "off"))
-            await self.save_evc_control_enabled()
+            await self.charger_control_set_enabled(service == "turn_on")
+            return
+        if await self.charger_control_guest_event(entity_id, service):
             return
 
         mapping = self.register_entity_map.get(entity_id, None)
@@ -434,9 +788,7 @@ class GECloudDirect(ComponentBase):
             if device and key:
                 setting = self.settings.get(device, {}).get(key, None)
                 if setting:
-                    value = setting.get("value", None)
-                    if not isinstance(value, bool):
-                        value = value == "on"
+                    value = register_switch_on(setting.get("value", None))
 
                     new_value = value
                     if service == "turn_on":
@@ -452,8 +804,78 @@ class GECloudDirect(ComponentBase):
                     if result and ("value" in result):
                         setting["value"] = result["value"]
                         await self.publish_registers(device, self.settings[device], select_key=key)
+                        # Starting a force charge only imports if the AC charge gate is also on (GH#5269)
+                        if new_value is True and regname_to_ha(setting.get("name", "")) == "enable_force_charge":
+                            await self.ensure_ac_charge_gate(device)
                     else:
                         self.log("GECloud: Warn: Failed to write setting {} {} to {}".format(device, key, new_value))
+
+    def ac_charge_gate_keys(self, device):
+        """
+        Return the enable_ac_charge register keys that gate grid charging alongside enable_force_charge.
+
+        Only a device that also exposes enable_force_charge has the two-switch gate (GH#5040); on any
+        other device enable_ac_charge is itself the scheduled charge control, so an empty list is
+        returned. The AC charge upper limit switches share the prefix but are a different control, so
+        they are excluded as enable_default_options() does. A write-only register is cached as off on
+        every settings read, so its state cannot be checked and it is left to enable_default_options().
+        """
+        registers = self.settings.get(device, {})
+        ha_names = {key: regname_to_ha(registers[key].get("name", "")) for key in registers}
+        if "enable_force_charge" not in ha_names.values():
+            return []
+        return [key for key, ha_name in ha_names.items() if ("enable_ac_charge" in ha_name) and ("limit" not in ha_name) and ("writeonly" not in (registers[key].get("validation_rules", None) or []))]
+
+    def force_charge_is_charge_control(self, device):
+        """
+        Is this device's enable_force_charge switch the one Predbat drives as scheduled_charge_enable
+
+        Only then is enable_ac_charge a static gate; if scheduled_charge_enable was bound to
+        enable_ac_charge by hand, Predbat turns it off to end a charge and must not turn it back on.
+        """
+        scheduled_charge_enable = self.get_arg("scheduled_charge_enable", default=None, indirect=False)
+        if not isinstance(scheduled_charge_enable, list):
+            scheduled_charge_enable = [scheduled_charge_enable] if scheduled_charge_enable else []
+        force_entity = "switch.{}_gecloud_{}_enable_force_charge".format(self.prefix, device).lower()
+        return force_entity in {str(entity).lower() for entity in scheduled_charge_enable if entity}
+
+    def force_charge_on(self, device):
+        """
+        Is the device's enable_force_charge register on in the cached settings
+        """
+        registers = self.settings.get(device, {})
+        return any(regname_to_ha(register.get("name", "")) == "enable_force_charge" and register_switch_on(register.get("value", None)) for register in registers.values())
+
+    async def ensure_ac_charge_gate(self, device):
+        """
+        Turn the AC charge gate back on for a device that is force charging, if something else turned it off.
+
+        enable_default_options() holds the gate on only once every 24 hours, so an Axle event, the
+        GivEnergy app or another integration clearing it in between left every planned grid charge
+        importing nothing (GH#5269). Reads the cached settings, so costs no API call when the gate is
+        already on. Returns True if a write was made.
+
+        Uses the live read only attribute, not just the switch, because an active Axle VPP event
+        forces read only through the attribute alone and the gate must be left to Axle then.
+        """
+        if not self.inverter_control or self.read_only_now() or not self.force_charge_is_charge_control(device):
+            return False
+        registers = self.settings.get(device, {})
+        changed = False
+        for key in self.ac_charge_gate_keys(device):
+            value = registers[key].get("value", None)
+            if register_switch_on(value):
+                continue
+            ha_name = regname_to_ha(registers[key].get("name", ""))
+            self.log("GECloud: Warn: {} is off for {} while force charge is on, so grid charging would import nothing - turning it back on".format(ha_name, device))
+            result = await self.async_write_inverter_setting(device, key, True)
+            if result and ("value" in result):
+                registers[key]["value"] = result["value"]
+                await self.publish_registers(device, registers, select_key=key)
+                changed = True
+            else:
+                self.log("GECloud: Warn: Failed to enable AC charge for {}".format(device))
+        return changed
 
     async def number_event(self, entity_id, value):
         """
@@ -510,11 +932,12 @@ class GECloudDirect(ComponentBase):
                             if validation_rule.startswith("in:"):
                                 options_values = validation_rule.split(":")[1].split(",")
 
-                    if validation and validation.startswith("Value must be one of:"):
-                        pre, post = validation.split("(")
-                        post = post.replace(")", "")
-                        post = post.replace(", ", ",")
-                        options_text = post.split(",")
+                    if isinstance(validation, str) and validation.startswith(VALIDATION_OPTIONS_PREFIX):
+                        options_text = parse_validation_options(validation)
+                        if options_text is None:
+                            self.log("GECloud: Warn: Unable to parse options for setting {} {} from validation '{}'".format(device, key, validation))
+
+                    if options_text is not None:
                         if new_value not in options_text:
                             self.log("GECloud: Error: Invalid option {} for setting {} {}, valid values are {}".format(new_value, device, key, options_text))
                             return
@@ -548,18 +971,40 @@ class GECloudDirect(ComponentBase):
         - GIV-HY3.6         - 3.6kW inverter
         - GIV-HY5.0         - 5.0kW inverter
         - GIV-HY-8.0-G3-HV. - 8kW inverter
+        - GIV-3HY-11        - 11kW 3-phase hybrid (integer rating as its own segment after 3HY)
+        - GIV-AIO-GW2       - Gateway variant, the trailing 2 is not a rating
         - Plant EMS   - Not an inverter, should use the individual inverter values
         """
 
+        # GE Cloud can send an explicit null model, which would crash every regex below
+        if not isinstance(model, str):
+            return max_charge_rate
+
+        # Trailing whitespace or a trailing '.' (GIV-HY-8.0-G3-HV.) must not defeat the segment anchors below
+        model_clean = model.strip().rstrip(".")
+
+        # Integer rating only as a whole segment straight after the 3-phase hybrid token (GIV-3HY-11),
+        # bounded by '-' or end of string so suffixes such as GW2 / G3 are never read as a rating.
+        # Checked before the decimal pass so a later decimal segment cannot hide the explicit 3HY rating
+        match = re.search(r"(?:^|-)3HY-(\d{1,2})(?=-|$)", model_clean, re.IGNORECASE)
+        if match:
+            return int(match.group(1)) * 1000
+
         # Find all decimal numbers anywhere in the model string (e.g. 3.6, 10.0, 12.0)
         # Use the last match so that e.g. GIV-AIO-AC-13.5-12.0 resolves to 12kW not 13.5kW
-        matches = re.findall(r"\d+\.\d+", model)
+        matches = re.findall(r"\d+\.\d+", model_clean)
         if matches:
             try:
                 max_inverter_rate = int(float(matches[-1]) * 1000)
                 return max_inverter_rate
             except ValueError:
                 pass
+
+        # A hybrid with no parseable rating is using a battery rate as its AC rating, warn once per model
+        if "HY" in model_clean.upper() and model not in self.model_rate_warned:
+            fallback = "max charge rate {}W".format(max_charge_rate) if max_charge_rate is not None else "no rating"
+            self.log("GECloud: Warn: Unable to determine inverter rating from model '{}', using {} instead - set inverter_limit in apps.yaml if this is wrong".format(model, fallback))
+            self.model_rate_warned.add(model)
         return max_charge_rate
 
     async def publish_account(self, account):
@@ -654,6 +1099,21 @@ class GECloudDirect(ComponentBase):
             self.dashboard_item(entity_name + "_max_inverter_rate", max_inverter_rate, attributes=attribute_table.get("max_inverter_rate", {}), app="gecloud")
             self.dashboard_item(entity_name + "_last_updated", last_updated, attributes=attribute_table.get("time", {}), app="gecloud")
 
+    async def publish_site_export_limit(self, device):
+        """
+        Publish this inverter's share of the site grid export limit.
+
+        Predbat sums export_limit across its logical inverters, so the site budget is divided between
+        them - including the single logical controller a Gateway presents. Nothing is published until
+        the site has actually reported an enabled limit, so the sensor never invents one.
+        """
+        if self.site_export_limit is None or device not in self.site_inverters:
+            return
+
+        share = self.site_export_limit / len(self.site_inverters)
+        entity_name = "sensor.{}_gecloud_{}_export_limit".format(self.prefix, device).lower()
+        self.dashboard_item(entity_name, dp2(share), attributes=attribute_table.get("export_limit", {}), app="gecloud")
+
     def evc_car_connected(self, status):
         """Is a car plugged into the charger, judged from its status string.
 
@@ -669,6 +1129,21 @@ class GECloudDirect(ComponentBase):
             self.evc_status_unknown.add(key)
             self.log("GECloud: Warn: Unrecognised EV charger status '{}', treating it as no car connected - please report it so it can be added".format(status))
         return False
+
+    def evc_car_plugged(self, status):
+        """
+        binary_sensor.<prefix>_evc_car_plugged, for car_charging_plugged: on with a car connected, off only when the
+        status positively says nothing is plugged in, and unavailable otherwise (offline, faulted, a status not known).
+
+        Unlike _evc_car_connected, a charger dropping offline is no reading rather than an unplug, so it does not reset
+        the manual car SoC.
+        """
+        key = evc_status_key(status)
+        if key in EVC_CONNECTED_STATUSES:
+            return "on"
+        if key in EVC_EMPTY_STATUSES:
+            return "off"
+        return "unavailable"
 
     async def publish_evc_device(self, serial, evc_device):
         """Publish the charger's own status, and whether a car is connected.
@@ -689,6 +1164,12 @@ class GECloudDirect(ComponentBase):
             "binary_sensor." + entity_name + "_evc_car_connected",
             state="on" if self.evc_car_connected(status) else "off",
             attributes={"friendly_name": "EV Charger Car Connected", "icon": "mdi:ev-plug-type2"},
+            app="gecloud",
+        )
+        self.dashboard_item(
+            "binary_sensor." + entity_name + "_evc_car_plugged",
+            state=self.evc_car_plugged(status),
+            attributes={"friendly_name": "EV Charger Car Plugged In", "icon": "mdi:ev-plug-type2"},
             app="gecloud",
         )
 
@@ -842,6 +1323,29 @@ class GECloudDirect(ComponentBase):
                         self.dashboard_item(entity_name + "_grid_import_total", state=meter[key][subkey].get("import", 0), attributes=attribute_table.get("grid_import_total", {}), app="gecloud")
                         self.dashboard_item(entity_name + "_grid_export_total", state=meter[key][subkey].get("export", 0), attributes=attribute_table.get("grid_export_total", {}), app="gecloud")
 
+    def check_ems_inverter_slots(self, device, registers):
+        """
+        Report a battery inverter under EMS control whose own slot 1 window would override the EMS
+        """
+        if not self.ems_device or device == self.ems_device or device == self.gateway_device:
+            return
+        if device not in self.devices_dict.get("battery", []):
+            return
+
+        overrides = find_ems_slot_overrides(registers)
+        if not overrides:
+            self.ems_slot_warned.discard(device)
+            return
+
+        detail = ", ".join("{} is {}".format(ha_name, overrides[ha_name]) for ha_name in sorted(overrides))
+        message = "Inverter {} slot 1 is not {}-{} ({}), it will override the EMS and can stop charging or discharging early".format(device, EMS_SLOT_FULL_DAY_START, EMS_SLOT_FULL_DAY_END, detail)
+        self.log("GECloud: Warn: " + message)
+        # Reported once per episode, like the auth-denied status above, so a standing misconfiguration
+        # does not inflate error_count on every refresh
+        if device not in self.ems_slot_warned and getattr(self.base, "record_status", None):
+            self.base.record_status("Warn: GE Cloud: " + message, had_errors=True)
+        self.ems_slot_warned.add(device)
+
     async def enable_default_options(self, device, registers):
         """Enable default options for the device."""
         changed = False
@@ -851,6 +1355,10 @@ class GECloudDirect(ComponentBase):
         device_ha_names = {regname_to_ha(registers[key].get("name", "")) for key in registers}
         has_charge_power = "battery_charge_power" in device_ha_names
         has_discharge_power = "battery_discharge_power" in device_ha_names
+        # When this device exposes both charge switches, async_automatic_config binds
+        # enable_force_charge as scheduled_charge_enable, so enable_ac_charge is a second gate that
+        # must be held on or the timed grid charge silently imports nothing (GH#5040).
+        has_force_charge = "enable_force_charge" in device_ha_names
         # Predbat drives the export target register itself (discharge_target_soc, the DC discharge
         # lower SoC limit) and tracks the minimum reserve SoC there, so leave that one alone rather
         # than resetting it and fighting adjust_force_export.
@@ -949,6 +1457,23 @@ class GECloudDirect(ComponentBase):
                             changed = True
                         else:
                             self.log("GECloud: Warn: Failed to set {} for {}".format(ha_name, device))
+            # Matched by substring as GE spells this family inconsistently across firmware, but the
+            # AC charge *upper limit* switch shares the prefix under at least three names
+            # (enable_ac_charge_upper_percent_limit, enable_ac_charge_1_upper_soc_percent_limit and
+            # enable_ac_charge_upper_limit) and is a different control, so limit registers are excluded.
+            if ("enable_ac_charge" in ha_name) and ("limit" not in ha_name) and has_force_charge:
+                if value:
+                    # Already on, so nothing was written and there is no change to report.
+                    continue
+                self.log("GECloud: Enabling AC charge for {} as enable_force_charge is the scheduled charge control, current value is {}".format(device, value))
+                result = await self.async_write_inverter_setting(device, key, True)
+                if result and ("value" in result):
+                    registers[key]["value"] = result["value"]
+                    await self.publish_registers(device, self.settings[device], select_key=key)
+                    changed = True
+                else:
+                    self.log("GECloud: Warn: Failed to enable AC charge for {}".format(device))
+                continue
             if "real_time_control" in ha_name:
                 if self.ems_device:
                     # RTC is on the EMS, not the individual inverters — skip
@@ -972,6 +1497,7 @@ class GECloudDirect(ComponentBase):
         """
         Publish the registers
         """
+        grid_only = charge_rate_grid_only([regname_to_ha(registers[key].get("name", None) or "") for key in registers])
         for key in registers:
             if select_key and key != select_key:
                 continue
@@ -1025,12 +1551,19 @@ class GECloudDirect(ComponentBase):
                     elif "_power" in ha_name:
                         attributes["device_class"] = "power"
                         attributes["unit_of_measurement"] = "W"
+                    # Tells Predbat this rate cannot stop solar charging, so no Freeze Export (#5082)
+                    if grid_only and is_charge_rate_percent_register(ha_name):
+                        attributes["grid_charge_only"] = True
 
-            if validation and validation.startswith("Value must be one of:"):
-                pre, post = validation.split("(")
-                post = post.replace(")", "")
-                post = post.replace(", ", ",")
-                options_text = post.split(",")
+            if isinstance(validation, str) and validation.startswith(VALIDATION_OPTIONS_PREFIX):
+                validation_options = parse_validation_options(validation)
+                if validation_options is None:
+                    # Warn once per register, this runs on every settings refresh
+                    if (device, key) not in self.validation_parse_warned:
+                        self.log("GECloud: Warn: Unable to parse options for setting {} {} from validation '{}'".format(device, key, validation))
+                        self.validation_parse_warned.add((device, key))
+                else:
+                    options_text = validation_options
 
             if is_select_time or is_select_options:
                 entity_name = f"select.{self.prefix}_gecloud_{device}"
@@ -1049,12 +1582,7 @@ class GECloudDirect(ComponentBase):
                 entity_name = f"switch.{self.prefix}_gecloud_{device}"
                 entity_id = entity_name + "_" + ha_name
                 entity_id = entity_id.lower()
-                state = False
-                if isinstance(value, str):
-                    if value in ["on", "true", "True"]:
-                        state = True
-                elif isinstance(value, bool):
-                    state = value
+                state = register_switch_on(value)
                 self.dashboard_item(entity_id, state="on" if state else "off", attributes=attributes, app="gecloud")
                 self.register_entity_map[entity_id] = {"device": device, "key": key}
 
@@ -1070,15 +1598,10 @@ class GECloudDirect(ComponentBase):
             self.log("GECloud: Warn: No battery devices found, cannot auto-configure")
             return
 
-        batteries = devices["battery"]
         batteries_real = devices["battery"]
-        num_inverters = len(batteries)
         pvs = devices.get("pv", [])
-
-        if not devices["ems"] and devices["gateway"] and len(batteries) > 1:
-            # Only use gateway as main control if we have multiple batteries
-            num_inverters = 1
-            batteries = [devices["gateway"]]
+        # Only use the gateway as main control if we have multiple batteries
+        batteries, num_inverters = self.logical_inverters(devices)
 
         # Do we have a charge/discharge power percentage setting?
         has_charge_rate = False
@@ -1088,6 +1611,7 @@ class GECloudDirect(ComponentBase):
         has_pause_start_time = False
         has_discharge_target_soc = False
         has_pause_battery = False
+        has_force_charge = False
         for device in batteries:
             registers = self.settings.get(device, {})
             for key in registers:
@@ -1107,6 +1631,8 @@ class GECloudDirect(ComponentBase):
                     has_discharge_target_soc = True
                 if "pause_battery" in ha_name:
                     has_pause_battery = True
+                if "enable_force_charge" in ha_name:
+                    has_force_charge = True
 
         def register_names(device):
             """Return HA-format register names for a specific device."""
@@ -1135,14 +1661,14 @@ class GECloudDirect(ComponentBase):
 
         self.log("GECloud: Auto-configuring Predbat and not using apps.yaml entries for control")
         self.log(
-            "GECloud: detected features - charge rate: {}, discharge rate: {}, charge power percent: {}, discharge power percent: {}, pause battery: {}, pause start time: {}, discharge target soc: {}".format(
-                has_charge_rate, has_discharge_rate, has_charge_power_percent, has_discharge_power_percent, has_pause_battery, has_pause_start_time, has_discharge_target_soc
+            "GECloud: detected features - charge rate: {}, discharge rate: {}, charge power percent: {}, discharge power percent: {}, pause battery: {}, pause start time: {}, discharge target soc: {}, force charge: {}".format(
+                has_charge_rate, has_discharge_rate, has_charge_power_percent, has_discharge_power_percent, has_pause_battery, has_pause_start_time, has_discharge_target_soc, has_force_charge
             )
         )
 
         self.set_arg("inverter_type", ["GEC" for _ in range(num_inverters)])
         self.set_arg("num_inverters", num_inverters)
-        self.set_arg("inverter_mode", build_entities("switch", ["enable_eco_mode"]))
+        self.set_arg_auto("inverter_mode", build_entities("switch", ["enable_eco_mode"]), overwrite=False)
         if not self.get_arg("ge_cloud_load_today_ignore", default=False):
             self.set_arg("load_today", [f"sensor.{self.prefix}_gecloud_{device}_consumption_total" for device in batteries])
         self.set_arg("import_today", [f"sensor.{self.prefix}_gecloud_{device}_grid_import_total" for device in batteries])
@@ -1163,11 +1689,24 @@ class GECloudDirect(ComponentBase):
         self.set_arg("charge_limit_enable", build_entities("switch", ["enable_ac_charge_upper_percent_limit", "enable_ac_charge_1_upper_soc_percent_limit"]))
         self.set_arg("discharge_start_time", [f"select.{self.prefix}_gecloud_{device}_dc_discharge_1_start_time" for device in batteries])
         self.set_arg("discharge_end_time", [f"select.{self.prefix}_gecloud_{device}_dc_discharge_1_end_time" for device in batteries])
-        self.set_arg("scheduled_charge_enable", build_entities("switch", ["ac_charge_enable", "enable_ac_charge"]))
+        # On devices that expose both charge switches ("Enable AC Charge" and "Enable Force Charge")
+        # it is Force Charge that gates the timed grid charge, so bind that as the per-slot control and
+        # let enable_default_options hold AC Charge on as a static enable. Devices without a
+        # enable_force_charge register keep their existing AC-charge binding (GH#5040).
+        self.set_arg("scheduled_charge_enable", build_entities("switch", ["enable_force_charge", "ac_charge_enable", "enable_ac_charge"]))
         self.set_arg("scheduled_discharge_enable", build_entities("switch", ["enable_dc_discharge", "enable_force_discharge"]))
         self.set_arg("battery_temperature", [f"sensor.{self.prefix}_gecloud_{device}_battery_temperature" for device in batteries])
         self.set_arg("battery_scaling", [f"sensor.{self.prefix}_gecloud_{device}_battery_dod_soh" for device in batteries])
         self.set_arg("inverter_limit", [f"sensor.{self.prefix}_gecloud_{device}_max_inverter_rate" for device in batteries])
+
+        # The site's grid export limit, published per inverter as its share of the site total. An
+        # export_limit the user wrote in apps.yaml wins, including a zero one, which set_arg_auto
+        # reports for us, and a site with no enabled limit leaves Predbat's own default in place.
+        if self.site_export_limit is not None:
+            self.set_arg_auto("export_limit", [f"sensor.{self.prefix}_gecloud_{device}_export_limit" for device in batteries], overwrite=False)
+            self.log("GECloud: Auto-configured export_limit from site {}: {}W shared across {} logical inverter(s)".format(self.site_id, self.site_export_limit, num_inverters))
+        elif self.get_arg("export_limit", default=None, indirect=False) is None:
+            self.log("GECloud: No site grid export limit found and none configured; set export_limit explicitly if your grid connection is capped below the inverter rating")
 
         pv_devices = batteries + pvs if self.get_arg("ge_cloud_automatic_split_pv", default=False) else batteries
         self.set_arg("pv_today", [f"sensor.{self.prefix}_gecloud_{device}_solar_total" for device in pv_devices])
@@ -1194,14 +1733,17 @@ class GECloudDirect(ComponentBase):
         # The percentage rate registers only win as the control when the direct power register is
         # absent. When both a power register and its percentage equivalent exist, the power register
         # is the primary control and the percentage is left at 100% (reset by enable_default_options).
-        if has_charge_power_percent and not has_charge_rate:
-            self.set_arg("charge_rate_percent", build_entities("number", ["inverter_charge_power_percentage", "charge_power_rate"]))
-        else:
-            self.set_arg("charge_rate_percent", None)
-        if has_discharge_power_percent and not has_discharge_rate:
-            self.set_arg("discharge_rate_percent", build_entities("number", ["inverter_discharge_power_percentage", "discharge_power_rate"]))
-        else:
-            self.set_arg("discharge_rate_percent", None)
+        # Decided for each device on its own registers: a fleet can mix a unit with a power register
+        # and a 3-phase one with only the percentage, and each then gets the control it has (#5359).
+        def build_percent_entities(power_register, candidates):
+            """Per-device percentage rate entity IDs for the devices with no power register, or None if none qualify."""
+            entities = [None if power_register in register_names_by_device.get(device, set()) else first_existing_entity("number", device, candidates) for device in batteries]
+            if all(entity is None for entity in entities):
+                return None
+            return entities
+
+        self.set_arg("charge_rate_percent", build_percent_entities("battery_charge_power", ["inverter_charge_power_percentage", "charge_power_rate"]))
+        self.set_arg("discharge_rate_percent", build_percent_entities("battery_discharge_power", ["inverter_discharge_power_percentage", "discharge_power_rate"]))
 
         self.set_arg("givtcp_rest", None)
 
@@ -1247,6 +1789,9 @@ class GECloudDirect(ComponentBase):
             ems = devices["ems"]
             self.set_arg("inverter_type", ["GEE" for _ in range(num_inverters)])
             self.set_arg("ge_cloud_serial", ems)
+            if not self.ems_disabled_ge_cloud_data:
+                self.ge_cloud_data_before_ems = self.get_arg("ge_cloud_data", default=None, indirect=False)
+                self.ems_disabled_ge_cloud_data = True
             self.set_arg("ge_cloud_data", False)
             if not self.get_arg("ge_cloud_load_today_ignore", default=False):
                 self.set_arg("load_today", [f"sensor.{self.prefix}_gecloud_{ems}_consumption_total"])
@@ -1266,6 +1811,10 @@ class GECloudDirect(ComponentBase):
             self.set_arg("pv_power", [f"sensor.{self.prefix}_gecloud_{ems}_solar_power"] + [0 for _ in range(num_inverters - 1)])
             self.set_arg("load_power", [f"sensor.{self.prefix}_gecloud_{ems}_consumption_power"] + [0 for _ in range(num_inverters - 1)])
             self.set_arg("grid_power", [f"sensor.{self.prefix}_gecloud_{ems}_grid_power"] + [0 for _ in range(num_inverters - 1)])
+        elif self.ems_disabled_ge_cloud_data:
+            # The EMS has left the account since it turned GE Cloud Data off, so put back what it replaced
+            self.set_arg("ge_cloud_data", self.ge_cloud_data_before_ems)
+            self.ems_disabled_ge_cloud_data = False
 
         # Determine the model of the inverter, if at least one inverter has AC or AIO in the name then we assume AC coupled and turn off the hybrid switch
         # First fetch "model"
@@ -1286,51 +1835,375 @@ class GECloudDirect(ComponentBase):
 
         self.log("GECloud: Automatic configuration complete")
 
+    def _register_features(self, device):
+        """
+        The register features async_automatic_config() sniffs for, as this one device reports them.
+
+        The same substrings as its sniffing loop, but scoped to this device's own settings rather
+        than ORed across the fleet: automatic_config() gates pause_mode, pause_start_time/end_time
+        and discharge_target_soc for every device on what ANY device reports, while a discovery
+        record describes only its own device (spec D10). The percentage rate controls are bound
+        per device by both (#5359).
+        """
+        features = {"charge_rate": False, "discharge_rate": False, "charge_power_percent": False, "discharge_power_percent": False, "pause_start_time": False, "discharge_target_soc": False, "pause_battery": False}
+        for register in self.settings.get(device, {}).values():
+            ha_name = regname_to_ha(register.get("name", ""))
+            if "battery_charge_power" in ha_name:
+                features["charge_rate"] = True
+            if "battery_discharge_power" in ha_name:
+                features["discharge_rate"] = True
+            if "inverter_charge_power_percentage" in ha_name or "charge_power_rate" in ha_name:
+                features["charge_power_percent"] = True
+            if "inverter_discharge_power_percentage" in ha_name or "discharge_power_rate" in ha_name:
+                features["discharge_power_percent"] = True
+            if "pause_battery_start_time" in ha_name:
+                features["pause_start_time"] = True
+            if "dc_discharge_1_lower_soc_percent_limit" in ha_name:
+                features["discharge_target_soc"] = True
+            if "pause_battery" in ha_name:
+                features["pause_battery"] = True
+        return features
+
+    def _first_register(self, device, candidates):
+        """The first candidate register name this device's own settings report, or None - the choice async_automatic_config()'s first_existing_entity() makes."""
+        names = {regname_to_ha(register.get("name", "")) for register in self.settings.get(device, {}).values()}
+        return next((candidate for candidate in candidates if candidate in names), None)
+
+    def _shared_ct(self, devices, batteries):
+        """
+        Whether async_automatic_config() reads grid and load from the first inverter only, as it does
+        when several inverters share one CT clamp. A copy of its detection (a duplicated meter serial)
+        and of its two override settings, split winning over shared.
+        """
+        if len(batteries) <= 1 or devices.get("ems"):
+            return False
+        battery_meters = devices.get("battery_meters") or {}
+        meter_serials = []
+        for battery in batteries:
+            meter_serials.extend(battery_meters.get(battery) or [])
+        if self.get_arg("ge_cloud_automatic_split_ct", default=False):
+            return False
+        if self.get_arg("ge_cloud_automatic_shared_ct", default=False):
+            return True
+        return len(meter_serials) != len(set(meter_serials))
+
+    def _export_limit_share(self, device):
+        """This logical inverter's equal share of the site grid export limit - the value publish_site_export_limit() publishes - or None."""
+        if self.site_export_limit is None or device not in self.site_inverters:
+            return None
+        return dp2(self.site_export_limit / len(self.site_inverters))
+
+    def _device_entities(self, devices, batteries, index, inverter_type):
+        """
+        The `entities` discovery container for logical inverter `index`: every setting
+        async_automatic_config() binds for it, keyed by Predbat setting name.
+
+        Built with the entity-name patterns and the per-device register choice async_automatic_config()
+        uses, applied in its order and with its later overrides (the shared-CT and EMS
+        reconfigurations), so each descriptor records the entity actually chosen for this device. Where
+        it binds a list shorter than the fleet (import_today on a shared CT), this device has no
+        entry; where it binds 0 in place of a sensor, the descriptor is a value stand-in.
+
+        Two deliberate differences, both spec decisions: the pause, discharge-target and percentage
+        rate controls follow this device's own registers, not automatic_config()'s "any device has it"
+        gate (D10), and load_today is carried even when the user set ge_cloud_load_today_ignore (D11).
+
+        Left out: settings inverter.py replaces with a dummy for this type
+        (GE_CLOUD_DUMMIED_SETTINGS), and those that are not facts about the inverter (inverter_type,
+        num_inverters, ge_cloud_serial, ge_cloud_data, givtcp_rest and the None resets).
+        """
+        device = batteries[index]
+        stem = "{}_gecloud_".format(self.prefix)
+        features = self._register_features(device)
+        time_select = {"domain": "select", "format": GE_CLOUD_TIME_SELECT_FORMAT}
+        entities = {}
+
+        def sensor(setting, serial, suffix, **fields):
+            """Bind a setting Predbat only reads to one of this component's sensors."""
+            entities[setting] = dict({"entity_id": "sensor.{}{}_{}".format(stem, serial, suffix), "access": "r"}, **fields)
+
+        def control(setting, platform, serial, suffix, **fields):
+            """Bind a setting Predbat writes to one of this component's register entities."""
+            entities[setting] = dict({"entity_id": "{}.{}{}_{}".format(platform, stem, serial, suffix), "access": "rw"}, **fields)
+
+        def register(setting, platform, candidates, **fields):
+            """Bind the first candidate register this device reports, as build_entities() does; nothing when it reports none."""
+            name = self._first_register(device, candidates)
+            if name is not None:
+                control(setting, platform, device, name, **fields)
+
+        register("inverter_mode", "switch", ["enable_eco_mode"], domain="switch")
+        sensor("load_today", device, "consumption_total")
+        sensor("import_today", device, "grid_import_total")
+        sensor("export_today", device, "grid_export_total")
+        register("charge_rate", "number", ["battery_charge_power"], unit="W")
+        sensor("battery_rate_max", device, "max_charge_rate")
+        register("discharge_rate", "number", ["battery_discharge_power"], unit="W")
+        sensor("battery_power", device, "battery_power")
+        sensor("load_power", device, "consumption_power")
+        sensor("grid_power", device, "grid_power")
+        sensor("soc_percent", device, "battery_percent")
+        sensor("soc_max", device, "battery_size")
+        register("reserve", "number", ["battery_reserve_percent_limit", "battery_reserve_percent"])
+        sensor("inverter_time", device, "time", format=GE_CLOUD_CLOCK_FORMAT)
+        control("charge_start_time", "select", device, "ac_charge_1_start_time", **time_select)
+        control("charge_end_time", "select", device, "ac_charge_1_end_time", **time_select)
+        register("charge_limit", "number", ["ac_charge_upper_percent_limit", "ac_charge_1_upper_soc_percent_limit"])
+        register("charge_limit_enable", "switch", ["enable_ac_charge_upper_percent_limit", "enable_ac_charge_1_upper_soc_percent_limit"])
+        control("discharge_start_time", "select", device, "dc_discharge_1_start_time", **time_select)
+        control("discharge_end_time", "select", device, "dc_discharge_1_end_time", **time_select)
+        register("scheduled_charge_enable", "switch", ["enable_force_charge", "ac_charge_enable", "enable_ac_charge"])
+        register("scheduled_discharge_enable", "switch", ["enable_dc_discharge", "enable_force_discharge"])
+        sensor("battery_temperature", device, "battery_temperature")
+        sensor("battery_scaling", device, "battery_dod_soh")
+        sensor("inverter_limit", device, "max_inverter_rate")
+        if self.site_export_limit is not None:
+            sensor("export_limit", device, "export_limit")
+        sensor("pv_today", device, "solar_total")
+        sensor("pv_power", device, "solar_power")
+        if index == 0:
+            sensor("battery_temperature_history", device, "battery_temperature")
+        if features["pause_battery"]:
+            control("pause_mode", "select", device, "pause_battery", domain="select")
+            if features["pause_start_time"]:
+                control("pause_start_time", "select", device, "pause_battery_start_time", domain="select")
+                control("pause_end_time", "select", device, "pause_battery_end_time", domain="select")
+        if features["discharge_target_soc"]:
+            control("discharge_target_soc", "number", device, "dc_discharge_1_lower_soc_percent_limit")
+        if features["charge_power_percent"] and not features["charge_rate"]:
+            register("charge_rate_percent", "number", ["inverter_charge_power_percentage", "charge_power_rate"], unit="%")
+        if features["discharge_power_percent"] and not features["discharge_rate"]:
+            register("discharge_rate_percent", "number", ["inverter_discharge_power_percentage", "discharge_power_rate"], unit="%")
+
+        if self._shared_ct(devices, batteries) and index > 0:
+            entities["grid_power"] = {"value": 0, "access": "r"}
+            entities["load_power"] = {"value": 0, "access": "r"}
+            for setting in ("import_today", "export_today", "load_today"):
+                entities.pop(setting, None)
+
+        ems = devices.get("ems")
+        if ems:
+            for setting, suffix in (("load_today", "consumption_total"), ("import_today", "grid_import_total"), ("export_today", "grid_export_total"), ("pv_today", "solar_total")):
+                entities.pop(setting, None)
+                if index == 0:
+                    sensor(setting, ems, suffix)
+            control("charge_start_time", "select", ems, "charge_start_time_slot_1", **time_select)
+            control("charge_end_time", "select", ems, "charge_end_time_slot_1", **time_select)
+            control("idle_start_time", "select", ems, "discharge_start_time_slot_1", **time_select)
+            control("idle_end_time", "select", ems, "discharge_end_time_slot_1", **time_select)
+            control("charge_limit", "number", ems, "charge_soc_percent_limit_1")
+            control("discharge_start_time", "select", ems, "export_start_time_slot_1", **time_select)
+            control("discharge_end_time", "select", ems, "export_end_time_slot_1", **time_select)
+            for setting, suffix in (("battery_power", "battery_power"), ("pv_power", "solar_power"), ("load_power", "consumption_power"), ("grid_power", "grid_power")):
+                if index == 0:
+                    sensor(setting, ems, suffix)
+                else:
+                    entities[setting] = {"value": 0, "access": "r"}
+
+        for setting in GE_CLOUD_DUMMIED_SETTINGS[inverter_type]:
+            entities.pop(setting, None)
+        return entities
+
+    def _device_info_and_ratings(self, device):
+        """
+        The `info` and `ratings` discovery containers for one device, from its own device info blob.
+
+        Drawn from the same self.info[device] blob publish_info() already turns into HA
+        attributes, so a fact reported here can never disagree with what was published.
+        Firmware is reported there as a per-board {"ARM": n, "DSP": n} dict; the `info`
+        container only accepts strings, so it is flattened into one descriptive string here
+        rather than silently dropped by the catalogue's validator. Ratings are keyed by the
+        Predbat setting they rate: battery_rate_max (W) is the figure the max_charge_rate sensor
+        publishes, soc_max (kWh) the figure the battery_size sensor publishes.
+        """
+        device_info = self.info.get(device, {}) or {}
+        fields = device_info.get("info", {}) or {}
+        info = {}
+        model = fields.get("model")
+        if isinstance(model, str) and model:
+            info["model"] = model
+        firmware = device_info.get("firmware_version")
+        if isinstance(firmware, dict) and firmware:
+            info["firmware"] = " ".join("{} {}".format(board, version) for board, version in sorted(firmware.items()))
+
+        ratings = {}
+        max_charge_rate = fields.get("max_charge_rate")
+        if isinstance(max_charge_rate, (int, float)) and not isinstance(max_charge_rate, bool):
+            ratings["battery_rate_max"] = max_charge_rate
+        battery = fields.get("battery", {}) or {}
+        capacity, voltage = battery.get("nominal_capacity"), battery.get("nominal_voltage")
+        if isinstance(capacity, (int, float)) and isinstance(voltage, (int, float)) and not isinstance(capacity, bool) and not isinstance(voltage, bool):
+            ratings["soc_max"] = dp2(capacity * voltage / 1000.0)
+        return info, ratings
+
+    def _device_meter_serial(self, devices, device):
+        """The first CT/meter serial GE Cloud's own device-connections data reports for this device, or None."""
+        meter_serials = (devices.get("battery_meters") or {}).get(device) or []
+        return meter_serials[0] if meter_serials else None
+
+    def _meter_cross_link(self, devices, device):
+        """
+        The `measures_meter` cross-link for this device, from its own CT/meter serial, or None when GE Cloud reports none.
+
+        Computed before the record is built and passed to inverter_record(), so the record's whole
+        shape is decided by the builder and nothing is patched into it afterwards. It reads only
+        this device's own entry in GE Cloud's device-connections data (see _device_meter_serial).
+
+        Deliberately a dangling cross-link, not a fabricated `meters` record: a `meters` section
+        record in this design is a utility supply point (a direction, an MPAN in `account_ids`, a
+        tariff) with its `device_id` derived from that account identity - a CT clamp physically
+        attached to an inverter is hardware that measures a circuit, not a billing point, and does
+        not fit that identity model. GivTCP, the reference reporter, reports no `meters` key at all
+        for the same reason. Two devices agreeing on the same CT serial is still real, useful
+        information - the shared-CT case gecloud.py's own automatic_config() detects - so the
+        cross-link is set regardless; resolving it against a real supply-point meter once one is
+        reported is exactly what the catalogue's `observations` layer is for, not this reporter.
+        Devices GE Cloud never reported a meter serial for (PV-only devices, a gateway or EMS
+        device fronting others) get None here, which the builder omits.
+        """
+        meter_serial = self._device_meter_serial(devices, device)
+        if meter_serial is None:
+            return None
+        return "gecloud:meter:{}".format(meter_serial)
+
+    def build_discovery(self):
+        """
+        Describe the discovered GE Cloud devices for the discovery catalogue.
+
+        One inverter record per controlled battery device plus one per sensor-only PV device in
+        `devices["pv"]` (`functions: ["solar"]`, no `inverter_type` - these are the extra devices
+        `ge_cloud_automatic_split_pv` optionally wires in, but the catalogue reports them
+        regardless of that flag, since it describes what is physically there, not how Predbat's
+        apps.yaml happens to be wired).
+
+        `composition` mirrors the exact precedence async_automatic_config() applies (its own
+        `devices["ems"]` / `devices["gateway"]` checks at the top of that method, not
+        re-implemented differently here): "ems" when an EMS device is present, "gateway" when a
+        gateway fronts more than one battery - collapsing those battery records into one for the
+        gateway itself, with the fronted serials recorded in the structural `serials` field -
+        else "direct". async_automatic_config() itself is not called or modified.
+
+        `measures_meter` is set from the device's own CT/meter serial where GE Cloud's device
+        connections data reports one (see _meter_cross_link) - the same data
+        async_automatic_config()'s shared-CT detection reads - so two devices sharing a meter
+        serial show up in the catalogue as two inverters measuring the same meter. It is
+        deliberately a dangling cross-link: `meters` is always returned empty here, since a CT
+        clamp serial is not a utility supply point and does not fit that section's identity model
+        (see _meter_cross_link).
+
+        Each controlled record carries the type's literal `capabilities` (GE_CLOUD_CAPABILITIES) -
+        less support_discharge_freeze where the device's own registers cannot hold one (#5082) -
+        an `entities` map of every setting async_automatic_config() binds for that device (see
+        _device_entities), and `ratings` under Predbat's setting names - including export_limit,
+        this inverter's equal share of the site grid export limit (spec decision D7). PV-only
+        records carry no capabilities - Predbat drives nothing on them - but do carry their
+        generation, pv_power and pv_today, as read-only entities: the ids async_automatic_config()
+        binds for them under ge_cloud_automatic_split_pv, reported whether or not that is set
+        (spec D11, D12).
+
+        Reporting is independent of self.automatic: the catalogue records what hardware GE Cloud
+        found, not whether this component wired Predbat's apps.yaml to it - that distinction is
+        what the report's own "automatic" flag is for.
+        """
+        devices = self.devices_dict or {}
+        battery_devices = list(devices.get("battery") or [])
+        gateway = devices.get("gateway")
+        ems = devices.get("ems")
+
+        composition = "direct"
+        fronted_serials = None
+        controlled = battery_devices
+        if ems:
+            composition = "ems"
+        elif gateway and len(battery_devices) > 1:
+            composition = "gateway"
+            fronted_serials = list(battery_devices)
+            controlled = [gateway]
+
+        inverter_type = "GEE" if composition == "ems" else "GEC"
+
+        inverters = []
+
+        for index, device in enumerate(controlled):
+            info, ratings = self._device_info_and_ratings(device)
+            share = self._export_limit_share(device)
+            if share is not None:
+                ratings["export_limit"] = share
+            capabilities = dict(GE_CLOUD_CAPABILITIES[inverter_type])
+            if charge_rate_grid_only([regname_to_ha(register.get("name", None) or "") for register in self.settings.get(device, {}).values()]):
+                # The type's row says Freeze Export works; this device's registers say it cannot (#5082)
+                capabilities["support_discharge_freeze"] = False
+            inverters.append(
+                inverter_record(
+                    "gecloud:{}".format(device),
+                    inverter_type=inverter_type,
+                    composition=composition,
+                    measures_meter=self._meter_cross_link(devices, device),
+                    functions=["solar", "battery"],
+                    capabilities=capabilities,
+                    hardware_ids={"serial": device},
+                    serials=fronted_serials,
+                    info=info,
+                    ratings=ratings,
+                    entities=self._device_entities(devices, controlled, index, inverter_type),
+                )
+            )
+
+        for device in devices.get("pv") or []:
+            info, ratings = self._device_info_and_ratings(device)
+            stem = "sensor.{}_gecloud_{}".format(self.prefix, device)
+            inverters.append(
+                inverter_record(
+                    "gecloud:{}".format(device),
+                    composition="direct",
+                    functions=["solar"],
+                    hardware_ids={"serial": device},
+                    info=info,
+                    ratings=ratings,
+                    entities={"pv_power": {"entity_id": stem + "_solar_power", "access": "r"}, "pv_today": {"entity_id": stem + "_solar_total", "access": "r"}},
+                )
+            )
+
+        # Always empty - see _meter_cross_link for why a CT clamp does not become a
+        # fabricated meters record.
+        return {"automatic": self.automatic and self.inverter_control, "inverters": inverters, "meters": []}
+
+    @property
+    def inverter_source(self):
+        """Whether this component supplies inverter state, for Components.inverter_source_active() - not when it only serves the EV charger"""
+        return self.inverter_monitor
+
+    async def async_get_inverter_devices(self):
+        """
+        The inverter device list, or an empty one without asking the API when ge_cloud_direct is not set.
+
+        Every inverter poll, write and report works from the list this returns, so leaving it empty is
+        what keeps an EV charger only setup off the inverters entirely.
+        """
+        if not self.inverter_monitor:
+            return {"gateway": None, "ems": None, "battery": [], "battery_meters": {}, "pv": [], "site_ids": {}}
+        return await self.async_get_devices()
+
     def evc_control_enable(self):
         """Decide whether Predbat-led charger control should run, and say why when it will not.
 
         Control needs the EVC automatic configuration because a charger is driven from its
         own car's plan, and it is that configuration which establishes which charger is
         which car - without it, charger 1 could be told to follow a car it is not attached to.
+
+        Only an explicit ge_cloud_evc_control: true turns it on. ge_cloud_automatic_evc alone
+        does not, so an upgrade never starts driving a charger nobody asked Predbat to drive.
         """
-        self.evc_control_active = False
+        self.charger_control_active = False
         if not self.evc_control:
             return
         if not self.automatic_evc:
             self.log("GECloud: Warn: ge_cloud_evc_control needs ge_cloud_automatic_evc to map each charger to a car, EV charger control is disabled")
             return
-        self.evc_control_active = True
+        self.charger_control_active = True
         self.log("GECloud: Predbat-led EV charger control enabled")
 
-    async def save_evc_control_enabled(self):
-        """Persist the control switch so an off survives a restart.
-
-        Without this a restart would silently take back a charger the user had deliberately
-        released, which they would only notice when the car charged at the wrong time.
-        Fails soft: no Storage component just means the switch is not sticky.
-        """
-        if self.storage is None:
-            return
-        try:
-            await self.storage.save(EVC_STORAGE_MODULE, EVC_CONTROL_STATE, {"evc_control_enabled": self.evc_control_enabled})
-        except Exception as exc:
-            self.log("GECloud: Warn: Could not save the EV charger control switch state: {}".format(exc))
-
-    async def load_evc_control_enabled(self):
-        """Restore the control switch from storage, leaving it on when nothing is saved."""
-        if self.storage is None:
-            return
-        try:
-            saved = await self.storage.load(EVC_STORAGE_MODULE, EVC_CONTROL_STATE)
-        except Exception as exc:
-            self.log("GECloud: Warn: Could not read the EV charger control switch state: {}".format(exc))
-            return
-        if isinstance(saved, dict) and "evc_control_enabled" in saved:
-            self.evc_control_enabled = bool(saved["evc_control_enabled"])
-            if not self.evc_control_enabled:
-                self.log("GECloud: EV charger control is switched off from the last session")
-
-    def evc_read_only_now(self):
+    def read_only_now(self):
         """Is Predbat in read only mode - the live attribute rather than just the config arg.
 
         Other components force read only by setting the attribute without touching the arg,
@@ -1340,29 +2213,6 @@ class GECloudDirect(ComponentBase):
         if read_only is None:
             return self.get_state_wrapper("switch.{}_set_read_only".format(self.prefix), default="off") == "on"
         return bool(read_only)
-
-    def refresh_evc_car_windows(self, now):
-        """Read Predbat's planned car charging windows for every car into evc_control_windows.
-
-        Returns True once at least one car's plan has been read, False while no slot sensor
-        has ever been published - which is what stops a restart stopping a charge before
-        Predbat has decided anything.
-        """
-        windows = {}
-        found = False
-        for car_n in range(self.num_cars):
-            postfix = "" if car_n == 0 else "_{}".format(car_n)
-            planned = self.get_state_wrapper("binary_sensor.{}_car_charging_slot{}".format(self.prefix, postfix), attribute="planned")
-            if planned is None:
-                continue
-            found = True
-            windows[car_n] = parse_car_plan_windows(planned, now, self.local_tz)
-        self.evc_control_windows = windows
-        return found
-
-    def evc_should_charge_now(self, car_n, now):
-        """Is now inside one of the planned charging windows for this car."""
-        return in_car_plan_window(self.evc_control_windows.get(car_n, []), now)
 
     def controlled_evc_devices(self):
         """The chargers to drive, in serial order, so charger N is auto-config's Nth car.
@@ -1374,68 +2224,39 @@ class GECloudDirect(ComponentBase):
         known = [uuid for uuid in self.evc_device_list if self.evc_device.get(uuid, {}).get("serial_number", None)]
         return sorted(known, key=lambda uuid: str(self.evc_device[uuid]["serial_number"]))
 
-    async def evc_control_tick(self, now):
-        """Run one cycle of EV charger control, releasing rather than just going quiet.
+    def charger_control_chargers(self):
+        """The chargers to drive, in car order - see controlled_evc_devices()."""
+        return [(uuid, uuid) for uuid in self.controlled_evc_devices()]
 
-        Read only mode and the control switch are both releases: Predbat may have left a
-        charger stopped, and walking away from that would strand the car unable to charge.
-        """
-        if not self.evc_control_active:
-            return
-        reason = None
-        if self.evc_read_only_now():
-            reason = "Predbat is in read only mode"
-        elif not self.evc_control_enabled:
-            reason = "the EV charger control switch is off"
-        if reason:
-            if not self.evc_control_released:
-                self.log("GECloud: Releasing the EV chargers because {}".format(reason))
-                await self.release_evc_devices()
-                self.evc_control_released = True
-            return
-        if self.evc_control_released:
-            self.log("GECloud: Resuming EV charger control")
-            self.evc_control_released = False
-        await self.evc_control_charge(now)
+    def charger_control_car_plugged(self, uuid):
+        """Is a car plugged in, for ending guest charging - only a status known to mean an empty
+        charger counts as unplugged, so an offline or unknown blip does not end it."""
+        return evc_status_key(self.evc_device[uuid].get("status", None)) not in EVC_EMPTY_STATUSES
 
-    async def release_evc_devices(self):
-        """Hand every held charger back by starting it again.
+    def charger_control_connected(self, uuid):
+        """A charger with no car plugged in is left alone - commanding it would achieve nothing and every command costs a retry loop."""
+        return self.evc_car_connected(self.evc_device[uuid].get("status", None))
+
+    async def charger_control_send(self, uuid, charge, car_n):
+        """Start the charger inside a planned window, stop it outside one."""
+        command = EVC_COMMAND_START if charge else EVC_COMMAND_STOP
+        self.log("GECloud: Sending {} to EV charger {} for car {}".format(command, self.evc_device[uuid]["serial_number"], car_n))
+        if await self.async_send_evc_command(uuid, command, {}) is None:
+            raise EVCCommandFailed("{} was not accepted by EV charger {}".format(command, self.evc_device[uuid]["serial_number"]))
+
+    async def charger_control_release_one(self, uuid, charge):
+        """Hand a held charger back by starting it again.
 
         start-charge and stop-charge are commands rather than modes, so unlike a Zappi
         there is no previous mode to restore - releasing means undoing the only thing
         Predbat did, which is the stop. A charger Predbat had left running needs nothing.
         The charger's own mode still decides what happens next.
         """
-        for uuid in self.controlled_evc_devices():
-            if self.evc_control_state.get(uuid, None) != EVC_COMMAND_STOP:
-                continue
-            self.log("GECloud: Releasing EV charger {}".format(self.evc_device[uuid]["serial_number"]))
-            await self.async_send_evc_command(uuid, EVC_COMMAND_START, {})
-        self.evc_control_state = {}
-
-    async def evc_control_charge(self, now):
-        """Drive every controlled charger from its car's charge plan.
-
-        Predbat holds the charger for as long as it is in control: charging inside a
-        planned window, stopped outside one. A charger with no car plugged in is left
-        alone - commanding it would achieve nothing and every command costs a retry loop.
-        """
-        if not self.refresh_evc_car_windows(now):
+        if charge:
             return
-        # Only as far as there are cars to follow. async_automatic_config_evc() raises
-        # num_cars to the charger count, but that reaches the base object a cycle later,
-        # so there is a window where a charger has no plan of its own - and a charger with
-        # no plan would read as "not planned" and be stopped while its car was charging.
-        for car_n, uuid in enumerate(self.controlled_evc_devices()[: self.num_cars]):
-            device = self.evc_device[uuid]
-            if not self.evc_car_connected(device.get("status", None)):
-                continue
-            wanted = EVC_COMMAND_START if self.evc_should_charge_now(car_n, now) else EVC_COMMAND_STOP
-            if self.evc_control_state.get(uuid, None) == wanted:
-                continue
-            self.log("GECloud: Sending {} to EV charger {} for car {}".format(wanted, device["serial_number"], car_n))
-            await self.async_send_evc_command(uuid, wanted, {})
-            self.evc_control_state[uuid] = wanted
+        self.log("GECloud: Releasing EV charger {}".format(self.evc_device[uuid]["serial_number"]))
+        if await self.async_send_evc_command(uuid, EVC_COMMAND_START, {}) is None:
+            raise EVCCommandFailed("the release was not accepted by EV charger {}".format(self.evc_device[uuid]["serial_number"]))
 
     async def async_automatic_config_evc(self):
         """Wire the EV chargers into Predbat's car charging inputs.
@@ -1449,12 +2270,14 @@ class GECloudDirect(ComponentBase):
         devices in a different order. car_charging_energy lets car_charging_hold subtract
         the charging precisely instead of falling back to the car_charging_threshold
         heuristic; car_charging_planned tells Predbat when there is actually a car to plan
-        for; car_charging_power is display-only and drives the web power flow diagram. Both go through set_arg_auto so an apps.yaml entry that auto-discovery is
+        for; car_charging_plugged whether the cable is in, for the manual car SoC's reset on
+        unplug (see evc_car_plugged()); car_charging_power is display-only and drives the web power flow diagram. Both go through set_arg_auto so an apps.yaml entry that auto-discovery is
         about to override is logged rather than silently discarded.
         """
         energy_entities = []
         power_entities = []
         connected_entities = []
+        plugged_entities = []
         for uuid in sorted(self.evc_device_list, key=lambda item: str(self.evc_device.get(item, {}).get("serial_number", "") or "")):
             serial = self.evc_device.get(uuid, {}).get("serial_number", None)
             if not serial:
@@ -1467,6 +2290,7 @@ class GECloudDirect(ComponentBase):
             energy_entities.append("sensor." + entity_name + "_evc_energy_active_import_register")
             power_entities.append("sensor." + entity_name + "_evc_power_active_import")
             connected_entities.append("binary_sensor." + entity_name + "_evc_car_connected")
+            plugged_entities.append("binary_sensor." + entity_name + "_evc_car_plugged")
 
         if not energy_entities:
             return
@@ -1481,8 +2305,122 @@ class GECloudDirect(ComponentBase):
         self.set_arg_auto("car_charging_energy", energy_entities)
         self.log("GECloud: Setting car_charging_planned to {}".format(connected_entities))
         self.set_arg_auto("car_charging_planned", connected_entities)
+        # The cable alone, for the manual car SoC's reset on unplug - unavailable while the charger is offline
+        self.log("GECloud: Setting car_charging_plugged to {}".format(plugged_entities))
+        self.set_arg_auto("car_charging_plugged", plugged_entities)
         self.log("GECloud: Setting car_charging_power to {}".format(power_entities))
         self.set_arg_auto("car_charging_power", power_entities)
+
+    def select_poll_devices(self, devices):
+        """
+        Work out which devices to poll from an async_get_devices() result.
+
+        Returns (device_list, ems_device, gateway_device). Every battery and PV inverter is polled, plus
+        the EMS when there is one. With no EMS and a Gateway fronting more than one battery, the Gateway
+        is polled in place of the batteries.
+        """
+        device_list = devices["battery"][:] + devices["pv"][:]
+        ems_device = devices["ems"] or None
+        if ems_device and ems_device not in device_list:
+            device_list.append(ems_device)
+        gateway_device = None
+        if not ems_device and devices["gateway"] and len(devices["battery"]) > 1:
+            gateway_device = devices["gateway"]
+            device_list = [gateway_device] + devices["pv"][:]
+        return device_list, ems_device, gateway_device
+
+    def apply_devices(self, devices, evc_devices):
+        """
+        Adopt a device list read from the API: rebuild what is polled, and drop everything held for a
+        device or EV charger that is no longer polled. Kept, its last readings would go on being
+        republished, and its registers written to, as if it were still there (#5294).
+        """
+        device_list, ems_device, gateway_device = self.select_poll_devices(devices)
+        evc_device_list = [device.get("uuid", None) for device in evc_devices]
+
+        # Every store rather than just the devices polled until now, so entries that never were polled
+        # (settings restored from the storage cache for hardware that has since gone) are dropped too
+        stores = (self.status, self.meter, self.info, self.settings, self.pending_writes, self.register_list)
+        for device in set().union(*stores, self.ems_slot_warned) - set(device_list):
+            for store in stores:
+                store.pop(device, None)
+            self.ems_slot_warned.discard(device)
+        if ems_device != self.ems_device:
+            # A different EMS is a new episode, so a standing slot override is reported again
+            self.ems_slot_warned.clear()
+        self.register_entity_map = {entity_id: entry for entity_id, entry in self.register_entity_map.items() if entry.get("device") in device_list}
+        for uuid in set(self.evc_device_list) - set(evc_device_list):
+            for store in (self.evc_device, self.evc_data, self.evc_sessions, self.charger_control_state):
+                store.pop(uuid, None)
+
+        self.devices_dict = devices
+        self.evc_devices_dict = evc_devices
+        self.device_list = device_list
+        self.ems_device = ems_device
+        self.gateway_device = gateway_device
+        self.evc_device_list = evc_device_list
+        # Under an EMS the plant device is the control point, so the inverters are not polled for control
+        self.polling_mode = not ems_device
+        for device in device_list:
+            self.pending_writes.setdefault(device, [])
+
+        if ems_device:
+            self.log("GECloud: Found EMS device {} and disabled polling on inverters".format(ems_device))
+        elif gateway_device:
+            self.log("GECloud: Found Gateway device {} and multiple batteries, using only the gateway device".format(gateway_device))
+        elif devices["gateway"]:
+            self.log("GECloud: Found Gateway device {} but only one battery, using the battery device for polling".format(devices["gateway"]))
+
+    @staticmethod
+    def device_serials(devices):
+        """Every inverter, EMS and Gateway serial in an async_get_devices() result, as a set"""
+        return set(devices.get("battery", []) + devices.get("pv", []) + [devices.get("ems"), devices.get("gateway")]) - {None}
+
+    @staticmethod
+    def device_signature(devices):
+        """What automatic config and the polled device list depend on in an async_get_devices() result, independent of the API's ordering"""
+        # battery_meters decides async_automatic_config()'s shared-CT detection, so a CT rewiring is a change too
+        meters = sorted((serial, sorted(str(meter) for meter in (serials or []))) for serial, serials in (devices.get("battery_meters") or {}).items())
+        return (sorted(devices.get("battery", [])), sorted(devices.get("pv", [])), devices.get("ems"), devices.get("gateway"), meters)
+
+    async def refresh_devices(self):
+        """
+        Re-read the device list and adopt it if it has changed, so hardware added to or removed from the
+        account is picked up without a restart (#5294).
+
+        Returns the devices newly added to device_list, or None when nothing changed. async_get_devices()
+        reports a failed read as no devices at all, and async_get_evc_devices() hands back the list it was
+        given, so a failed read keeps the current devices rather than dropping them - on an API blip that
+        would take the whole system off the plan.
+
+        A read that leaves no battery inverters is not adopted either. It cannot be told apart from a
+        failed read, and even if the hardware really has gone, async_automatic_config() cannot wire up a
+        plant with no batteries, so the configuration would still name the removed ones. The warning
+        says to restart in that case.
+        """
+        devices = await self.async_get_inverter_devices()
+        evc_devices = await self.async_get_evc_devices(previous=self.evc_devices_dict)
+        if not self.device_serials(devices) or (self.devices_dict.get("battery") and not devices["battery"]):
+            if self.device_list:
+                self.log("GECloud: Warn: Device list refresh found no battery inverters, keeping the current devices {} - if they really have been removed from the account, restart Predbat to reconfigure".format(self.device_list))
+            devices = self.devices_dict
+
+        old_serials = self.device_serials(self.devices_dict)
+        new_serials = self.device_serials(devices)
+        old_evc = set(self.evc_device_list)
+        new_evc = {device.get("uuid", None) for device in evc_devices}
+        if old_evc == new_evc and self.device_signature(devices) == self.device_signature(self.devices_dict):
+            return None
+
+        old_device_list = self.device_list
+        self.apply_devices(devices, evc_devices)
+        added = [device for device in self.device_list if device not in old_device_list]
+        self.log(
+            "GECloud: Device list changed - devices added {} removed {}, EV chargers added {} removed {}; now polling devices {}, evc_devices {}".format(
+                sorted(new_serials - old_serials), sorted(old_serials - new_serials), sorted(new_evc - old_evc, key=str), sorted(old_evc - new_evc, key=str), self.device_list, self.evc_device_list
+            )
+        )
+        return added
 
     async def run(self, seconds, first):
         """
@@ -1492,49 +2430,32 @@ class GECloudDirect(ComponentBase):
         # The account details change rarely, so they are cached in storage and only re-fetched once a day
         await self.update_account(first)
 
+        # Devices found by the periodic device check in this cycle; their settings are read now rather
+        # than waiting for the next slow refresh
+        devices_changed = False
+        new_devices = []
+
         if first:
-            self.polling_mode = True
-            # Get devices using the modified auto-detection (returns dict)
-            self.devices_dict = await self.async_get_devices()
-            self.evc_devices_dict = await self.async_get_evc_devices()
-
-            # Build a list of devices to poll:
-            # Use all battery inverter serials and also add the EMS device if it's distinct.
-            self.device_list = self.devices_dict["battery"][:] + self.devices_dict["pv"][:]
-
-            self.ems_device = None
-            if self.devices_dict["ems"]:
-                self.ems_device = self.devices_dict["ems"]
-                self.polling_mode = False
-                self.log("GECloud: Found EMS device {} and disabled polling on inverters".format(self.ems_device))
-                if self.ems_device not in self.device_list:
-                    self.device_list.append(self.ems_device)
-
-            self.gateway_device = None
-            if not self.ems_device and self.devices_dict["gateway"] and len(self.devices_dict["battery"]) > 1:
-                self.gateway_device = self.devices_dict["gateway"]
-                self.log("GECloud: Found Gateway device {} and multiple batteries, using only the gateway device".format(self.gateway_device))
-                self.device_list = [self.gateway_device] + self.devices_dict["pv"][:]
-            elif not self.ems_device and self.devices_dict["gateway"] and len(self.devices_dict["battery"]) <= 1:
-                self.log("GECloud: Found Gateway device {} but only one battery, using the battery device for polling".format(self.devices_dict["gateway"]))
-
-            self.evc_device_list = []
-            for device in self.evc_devices_dict:
-                uuid = device.get("uuid", None)
-                # device_name = device.get("alias", None)
-                self.evc_device_list.append(uuid)
+            devices = await self.async_get_inverter_devices()
+            evc_devices = await self.async_get_evc_devices()
+            self.apply_devices(devices, evc_devices)
             self.log("GECloud: Starting up, found devices {}, evc_devices {}".format(self.device_list, self.evc_device_list))
 
             # Before the first control cycle: the switch has to carry its restored state from
             # the start, or a restart with control switched off would take the charger back
             # for a cycle and then hand it over again
-            await self.load_evc_control_enabled()
+            await self.charger_control_load_enabled()
             self.evc_control_enable()
-            for device in self.device_list:
-                self.pending_writes[device] = []
+            if self.automatic and not self.inverter_monitor:
+                self.log("GECloud: Warn: ge_cloud_automatic is ignored because ge_cloud_direct is not set, Predbat will not read or write to the inverter")
+            elif self.automatic and not self.inverter_control:
+                self.log("GECloud: Warn: ge_cloud_automatic is ignored because ge_cloud_inverter_control is false, Predbat will not wire up the inverter's controls or write its default settings")
 
             if not self.device_list and not self.evc_device_list:
-                self.log("GECloud: Error: No devices found, check your GE Cloud credentials")
+                if self.inverter_monitor:
+                    self.log("GECloud: Error: No devices found, check your GE Cloud credentials")
+                else:
+                    self.log("GECloud: Error: No EV chargers found, check your GE Cloud credentials (ge_cloud_direct is not set, so inverters are not looked for)")
                 self.api_fatal = True
                 return False
 
@@ -1545,15 +2466,27 @@ class GECloudDirect(ComponentBase):
                 if isinstance(cached_settings, dict) and cached_settings:
                     settings_age = await self.storage.age("gecloud", "settings")
                     if settings_age is not None and settings_age < 10:
-                        self.settings = cached_settings
+                        # Only the devices found now, or departed hardware would be saved back to the cache forever
+                        self.settings = {device: settings for device, settings in cached_settings.items() if device in self.device_list}
                         self.settings_from_cache = True
                         self.log("GECloud: Restored settings from storage cache (age {:.1f} minutes), skipping initial poll".format(settings_age))
                     else:
                         self.log("GECloud: Storage cache for settings is stale (age {}), will re-poll".format("{:.1f} minutes".format(settings_age) if settings_age is not None else "unknown"))
                 else:
                     self.log("GECloud: No valid settings found in storage cache, will poll")
+        elif seconds % DEVICE_REFRESH_SECONDS == 0:
+            refreshed = await self.refresh_devices()
+            if refreshed is not None:
+                devices_changed = True
+                new_devices = refreshed
+                self.pending_default_options.update(refreshed)
 
-        if first or (seconds % 120 == 0):
+        # The site details change rarely, so they are cached in storage and only re-fetched every 12 hours.
+        # They describe the inverters, so are not wanted when the inverters are not monitored.
+        if self.inverter_monitor:
+            await self.update_site(first)
+
+        if first or devices_changed or (seconds % 120 == 0):
             inverter_auth_denied = False
             for device in self.device_list:
                 self.status[device] = await self.async_get_inverter_status(device, self.status.get(device, {}))
@@ -1566,6 +2499,7 @@ class GECloudDirect(ComponentBase):
                 await self.publish_meter(device, self.meter[device])
                 self.info[device] = await self.async_get_device_info(device, self.info.get(device, {}))
                 await self.publish_info(device, self.info[device])
+                await self.publish_site_export_limit(device)
 
             # Surface a clear, correct status when the GivEnergy cloud API denied access to the core
             # inverter data, rather than letting stale data be misdiagnosed downstream (e.g. as
@@ -1589,22 +2523,35 @@ class GECloudDirect(ComponentBase):
                 await self.publish_evc_data(serial, self.evc_data[uuid])
                 await self.publish_evc_device(serial, self.evc_device[uuid])
 
-            if self.evc_control_active:
+            if self.charger_control_active:
                 # Published only when control could actually act on it - a switch reading
                 # "on" for a feature that cannot run would be a lie
                 self.dashboard_item(
                     "switch.{}_gecloud_evc_control".format(self.prefix),
-                    state="on" if self.evc_control_enabled else "off",
+                    state="on" if self.charger_control_enabled else "off",
                     attributes={"friendly_name": "EV Charger Control", "icon": "mdi:ev-station"},
                     app="gecloud",
                 )
-                await self.evc_control_tick(self.now_utc_exact)
+                self.charger_control_publish_guest("gecloud")
+            try:
+                # Every cycle, whether or not control is on: with ge_cloud_evc_control since turned off,
+                # a charger an earlier session stopped is still released (#5788)
+                await self.charger_control_tick(self.now_utc_exact)
+            except EVCCommandFailed as exc:
+                # Already logged as an error by async_send_evc_command; nothing is recorded as
+                # done, so the next cycle tries again - for a release, that is what stops a
+                # stopped car being stranded
+                self.log("GECloud: Warn: EV charger control failed, will retry: {}".format(exc))
 
-        if first or (seconds % (10 * 60) == 0):
+        if first or devices_changed or (seconds % (10 * 60) == 0):
             # Get All registers every now and again in case user changes them
             settings_updated = False
             for device in self.device_list:
-                if seconds == 0 or self.polling_mode or (device == self.ems_device) or (device == self.gateway_device):
+                # Under EMS control (polling_mode off) the battery inverters are not the control device, but
+                # their own registers still have to be re-read periodically or a slot changed behind Predbat's
+                # back stays invisible until a restart (#5103). `first` rather than `seconds == 0` so a startup
+                # that only succeeds on a backoff retry still takes the snapshot.
+                if first or (device in new_devices) or (seconds % SETTINGS_SLOW_REFRESH_SECONDS == 0) or self.polling_mode or (device == self.ems_device) or (device == self.gateway_device):
                     if first and self.settings_from_cache and device in self.settings:
                         # Fresh cache loaded on startup — skip the slow poll for this device
                         await self.publish_registers(device, self.settings[device])
@@ -1612,23 +2559,49 @@ class GECloudDirect(ComponentBase):
                         self.settings[device] = await self.async_get_inverter_settings(device, first=False, previous=self.settings.get(device, {}))
                         await self.publish_registers(device, self.settings[device])
                         settings_updated = True
+                    self.check_ems_inverter_slots(device, self.settings.get(device, {}))
 
             if settings_updated and self.storage:
                 await self.storage.save("gecloud", "settings", self.settings, format="json", expiry=None)
 
-            # One shot tasks
-            if first:
-                if self.automatic:
+            # Run at startup, and again whenever the periodic device check finds the hardware has changed
+            if first or devices_changed:
+                if self.automatic and self.inverter_control:
                     await self.async_automatic_config(self.devices_dict)
                 if self.automatic_evc:
                     await self.async_automatic_config_evc()
 
+            # Independent of self.automatic: the catalogue describes what hardware GE Cloud found,
+            # not whether this component wired Predbat's apps.yaml to it - that distinction is
+            # recorded in the report's own "automatic" flag. Placed after both settings (populated
+            # for every device in self.device_list, above) and self.info (populated earlier this
+            # same cycle, in the seconds % 120 block) are in hand, so build_discovery()'s
+            # capabilities/info/ratings never see stale or empty data. Outside "if first:" above,
+            # so a failed report is retried rather than lost - see refresh_discovery().
+            self.refresh_discovery()
+
             now_utc = self.now_utc_exact
             options_due = self.default_options_stamp is None or (now_utc - self.default_options_stamp) >= timedelta(hours=24)
-            if options_due and self.get_state_wrapper(f"switch.{self.prefix}_set_read_only", default="off") != "on":
-                self.default_options_stamp = now_utc
-                for device in self.device_list:
+            # read_only_now() rather than the switch alone, so an active Axle event (which forces read only
+            # through the attribute) defers the pass instead of writing over Axle's control (GH#5269)
+            if self.inverter_control and not self.read_only_now():
+                if options_due:
+                    self.default_options_stamp = now_utc
+                    option_devices = self.device_list
+                else:
+                    # A device found by the periodic device check is set up now, not at the next 24 hour pass -
+                    # or, when it was found while read only, on the first settings cycle after read only ends
+                    option_devices = [device for device in self.device_list if device in self.pending_default_options]
+                self.pending_default_options.clear()
+                for device in option_devices:
                     await self.enable_default_options(device, self.settings[device])
+
+            # The 24 hour pass above is only a backstop for the AC charge gate: while a force charge is
+            # running, re-assert it on every settings refresh in case it was cleared mid-charge (GH#5269).
+            # Nothing is written while Predbat is not force charging, so an external controller is not fought.
+            for device in self.device_list:
+                if self.force_charge_on(device):
+                    await self.ensure_ac_charge_gate(device)
 
         # Clear pending writes
         for device in self.device_list:
@@ -1642,14 +2615,19 @@ class GECloudDirect(ComponentBase):
         """
         Send a command to the EVC
         """
+        data = None
         for retry in range(RETRIES):
-            data = await self.async_get_inverter_data(
-                GE_API_EVC_SEND_COMMAND,
-                uuid=uuid,
-                command=command,
-                post=True,
-                datain=params,
-            )
+            try:
+                data = await self.async_get_inverter_data(
+                    GE_API_EVC_SEND_COMMAND,
+                    uuid=uuid,
+                    command=command,
+                    post=True,
+                    datain=params,
+                )
+            except GECloudTerminalError as e:
+                self.log("GECloud: Error: EVC command {} was rejected: {} (code {})".format(command, e.message, e.code))
+                return None
             if data and "success" in data:
                 if not data["success"]:
                     data = None
@@ -1679,14 +2657,17 @@ class GECloudDirect(ComponentBase):
                 if pending["setting_id"] == setting_id:
                     return {"value": pending["value"], "context": "predbat"}
 
+        data = None
         for retry in range(RETRIES):
-            data = await self.async_get_inverter_data(GE_API_INVERTER_READ_SETTING, serial, setting_id, post=True)
+            try:
+                data = await self.async_get_inverter_data(GE_API_INVERTER_READ_SETTING, serial, setting_id, post=True)
+            except GECloudTerminalError as e:
+                self.log("GECloud: Warn: Device {} read of setting id {} was rejected: {} (code {})".format(serial, setting_id, e.message, e.code))
+                return None
             data_value = None
             if data:
                 data_value = data.get("value", -1)
-            if data and data_value in [-3, -4, -7]:
-                data = None
-            elif data and data_value in [-1, -2, -5, -6]:
+            if data and data_value in GE_SETTING_RETRY_CODES:
                 data = None
                 # Inverter timeout, try to spread requests out
                 await asyncio.sleep(random.random() * (3 + retry))
@@ -1701,20 +2682,24 @@ class GECloudDirect(ComponentBase):
         """
         Write a setting to the inverter
         """
+        data = None
         for retry in range(RETRIES):
-            data = await self.async_get_inverter_data(
-                GE_API_INVERTER_WRITE_SETTING,
-                serial,
-                setting_id,
-                post=True,
-                datain={"value": str(value), "context": "predbat"},
-            )
-            if data and "success" in data:
-                if not data["success"]:
-                    data = None
+            try:
+                data = await self.async_get_inverter_data(
+                    GE_API_INVERTER_WRITE_SETTING,
+                    serial,
+                    setting_id,
+                    post=True,
+                    datain={"value": str(value), "context": "predbat"},
+                )
+            except GECloudTerminalError as e:
+                # GivEnergy will never accept this write on a repeat attempt (for example -7
+                # "Inverter Locked"), so abort it here instead of burning the retry budget
+                self.log("GECloud: Error: Device {} write of setting id {} to {} was rejected: {} (code {})".format(serial, setting_id, value, e.message, e.code))
+                return None
             if data:
                 data_value = data.get("value", -1)
-                if data_value in [-1, -2, -5, -6]:
+                if data_value in GE_SETTING_RETRY_CODES:
                     data = None
                     # Inverter timeout, try to spread requests out
                     await asyncio.sleep(random.random() * (3 + retry))
@@ -1726,16 +2711,20 @@ class GECloudDirect(ComponentBase):
             self.log("GECloud: Warn: Failed to write setting id {}, value {}".format(setting_id, value))
         return data
 
-    async def async_get_inverter_settings(self, serial, first=False, previous={}):
+    async def async_get_inverter_settings(self, serial, first=False, previous=None):
         """
         Get settings for account
         """
-        if serial not in self.register_list:
+        if previous is None:
+            previous = {}
+        # A failed fetch leaves None, which is fetched again on the next read rather than kept as the device's
+        # register list - otherwise one transient failure would break every later settings read for it
+        if self.register_list.get(serial) is None:
             self.register_list[serial] = await self.async_get_inverter_data_retry(GE_API_INVERTER_SETTINGS, serial)
 
         results = previous.copy()
 
-        if serial in self.register_list:
+        if self.register_list.get(serial):
             # Async read for all the registers
             futures = []
             pending = []
@@ -1818,10 +2807,12 @@ class GECloudDirect(ComponentBase):
             return point
         return {}
 
-    async def async_get_evc_sessions(self, uuid, previous=[]):
+    async def async_get_evc_sessions(self, uuid, previous=None):
         """
         Get list of EVC sessions
         """
+        if previous is None:
+            previous = []
         now = self.now_utc_exact.astimezone(timezone.utc)
         start = now - timedelta(hours=24)
         start_time = start.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1832,10 +2823,12 @@ class GECloudDirect(ComponentBase):
             return data
         return previous
 
-    async def async_get_evc_device_data(self, uuid, previous={}):
+    async def async_get_evc_device_data(self, uuid, previous=None):
         """
         Get smart device data points
         """
+        if previous is None:
+            previous = {}
         now = self.now_utc_exact.astimezone(timezone.utc)
         start = now - timedelta(minutes=10)
         start_time = start.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1908,10 +2901,12 @@ class GECloudDirect(ComponentBase):
 
         return command_info
 
-    async def async_get_evc_device(self, uuid, previous={}):
+    async def async_get_evc_device(self, uuid, previous=None):
         """
         Get EVC device
         """
+        if previous is None:
+            previous = {}
         device = await self.async_get_inverter_data_retry(GE_API_EVC_DEVICE, uuid=uuid)
         self.log("GECloud: Device {}".format(device))
         if device:
@@ -1925,10 +2920,12 @@ class GECloudDirect(ComponentBase):
             return {"uuid": uuid, "alias": alias, "serial_number": serial_number, "status": status, "online": online, "type": type, "went_offline_at": went_offline_at}
         return previous
 
-    async def async_get_smart_devices(self, previous=[]):
+    async def async_get_smart_devices(self, previous=None):
         """
         Get list of smart devices
         """
+        if previous is None:
+            previous = []
         device_list = await self.async_get_inverter_data_retry(GE_API_SMART_DEVICES)
         devices = previous
         if device_list is not None:
@@ -1941,10 +2938,12 @@ class GECloudDirect(ComponentBase):
                 devices.append({"uuid": uuid, "alias": alias, "local_key": local_key})
         return devices
 
-    async def async_get_evc_devices(self, previous=[]):
+    async def async_get_evc_devices(self, previous=None):
         """
         Get list of smart devices
         """
+        if previous is None:
+            previous = []
         device_list = await self.async_get_inverter_data_retry(GE_API_EVC_DEVICES)
         devices = previous
         if device_list is not None:
@@ -1956,10 +2955,12 @@ class GECloudDirect(ComponentBase):
                 devices.append({"uuid": uuid, "alias": alias})
         return devices
 
-    async def async_get_device_info(self, serial, previous={}):
+    async def async_get_device_info(self, serial, previous=None):
         """
         Get the device info
         """
+        if previous is None:
+            previous = {}
         device_list = await self.async_get_inverter_data_retry(GE_API_DEVICE_INFO)
         if device_list is not None:
             for device in device_list:
@@ -2044,6 +3045,134 @@ class GECloudDirect(ComponentBase):
         self.set_account_timezone(account)
         return account
 
+    def logical_inverters(self, devices):
+        """
+        Work out which serials Predbat drives as inverters, and how many logical inverters they form.
+
+        A Gateway in front of more than one battery is a single logical inverter, which is what the
+        automatic configuration wires up and what any whole-site limit has to be divided between.
+        """
+        batteries = devices.get("battery", []) or []
+        if not devices.get("ems", None) and devices.get("gateway", None) and len(batteries) > 1:
+            return [devices["gateway"]], 1
+        return batteries, len(batteries)
+
+    def site_id_from_devices(self, devices):
+        """
+        Return the one site all the contributing inverters belong to, or None when that is not clear.
+
+        Combining unrelated sites would hide their individual limits, so a mapping that is missing or
+        that spans more than one site is treated as unknown rather than picking one of them.
+        """
+        serials = (devices.get("battery", []) or []) + (devices.get("pv", []) or [])
+        site_ids = devices.get("site_ids", {}) or {}
+        sites = {site_ids.get(serial, None) for serial in serials}
+        if not serials or None in sites or len(sites) != 1:
+            return None
+        return sites.pop()
+
+    async def async_get_site(self, site_id):
+        """
+        Get one site's details from GE Cloud, including its import and export limits.
+
+        Reading a site is an optional extra permission on the API key, so a denial must not overwrite
+        the authentication state of the inverter endpoints that drive optimisation and health reporting.
+        """
+        inverter_auth_failed = self.api_auth_failed
+        try:
+            site = await self.async_get_inverter_data_retry(GE_API_SITE, uuid=site_id)
+        finally:
+            self.api_auth_failed = inverter_auth_failed
+        if not isinstance(site, dict) or not site:
+            self.log("GECloud: Site details unavailable for site {}; the API key may not have site read permission".format(site_id))
+            return None
+        return site
+
+    def apply_site(self, site):
+        """Record a site payload and the grid export limit read from it."""
+        self.site = site
+        limits = site.get("limits", None)
+        watts, reason = parse_site_export_limit(limits)
+        self.site_export_limit = watts
+        if watts is None:
+            self.log("GECloud: Site {} export limit not applied: {} (raw limits {}); retaining the configured/default export limit".format(self.site_id, reason, limits))
+        else:
+            self.log("GECloud: Site {} reports a {}W grid export limit (raw limits {})".format(self.site_id, watts, limits))
+
+    async def load_site_from_storage(self):
+        """
+        Restore the site details cached by a previous run so a restart does not have to fetch them again.
+        """
+        if not self.storage:
+            return
+
+        cached_site = await self.storage.load("gecloud", "site")
+        if not isinstance(cached_site, dict) or not cached_site:
+            self.log("GECloud: No valid site details found in storage cache, will fetch")
+            return
+
+        cached_id = cached_site.get("id", None)
+        if cached_id is not None and self.site_id is not None and cached_id != self.site_id:
+            self.log("GECloud: Storage cache holds site {} but the inverters are on site {}, will fetch".format(cached_id, self.site_id))
+            return
+
+        site_age = await self.storage.age("gecloud", "site")
+
+        # Keep the cached details even when stale so that a failed fetch still leaves something usable
+        self.apply_site(cached_site)
+
+        if site_age is not None and site_age < SITE_MAX_AGE_MINUTES:
+            self.site_stamp = self.now_utc_exact - timedelta(minutes=site_age)
+            self.log("GECloud: Restored site details from storage cache (age {:.1f} minutes)".format(site_age))
+        else:
+            self.log("GECloud: Storage cache for the site details is stale (age {}), will re-fetch".format("{:.1f} minutes".format(site_age) if site_age is not None else "unknown"))
+
+    async def update_site(self, first):
+        """
+        Keep the site details, and the grid export limit taken from them, up to date.
+
+        On startup they are restored from storage and they are only re-fetched from the API every
+        SITE_MAX_AGE_MINUTES, so a restart normally costs no extra API call.
+        """
+        self.site_inverters, _ = self.logical_inverters(self.devices_dict)
+
+        site_id = self.site_id_from_devices(self.devices_dict)
+        if site_id is None:
+            if first:
+                self.log("GECloud: Site details not read: the inverter site mapping is missing or spans multiple sites; set export_limit explicitly if your grid connection is capped")
+            return
+
+        if site_id != self.site_id:
+            # A different site invalidates whatever we were holding for the previous one
+            self.site_id = site_id
+            self.site_stamp = None
+            self.site_fetch_stamp = None
+
+        if first:
+            await self.load_site_from_storage()
+
+        now_utc = self.now_utc_exact
+
+        # Nothing to do while the details we hold are still within their lifetime
+        if self.site_stamp is not None and (now_utc - self.site_stamp) < timedelta(minutes=SITE_MAX_AGE_MINUTES):
+            return
+
+        # A failed fetch retries after a short delay rather than a full retention period, but not on
+        # every run() tick, so a sustained API outage does not turn into a poll loop
+        if self.site_fetch_stamp is not None and (now_utc - self.site_fetch_stamp) < timedelta(minutes=SITE_RETRY_MINUTES):
+            return
+
+        self.site_fetch_stamp = now_utc
+        site = await self.async_get_site(site_id)
+        if not site:
+            return
+
+        # Only treat the details as fresh once we actually have them
+        self.site_stamp = now_utc
+        self.apply_site(site)
+        if self.storage:
+            await self.storage.save("gecloud", "site", site, format="json", expiry=None)
+
     async def async_get_devices(self):
         """
         Get list of inverters from GE Cloud.
@@ -2088,7 +3217,7 @@ class GECloudDirect(ComponentBase):
         """
 
         device_list = await self.async_get_inverter_data_retry(GE_API_DEVICES)
-        result = {"gateway": None, "ems": None, "battery": [], "battery_meters": {}, "pv": []}
+        result = {"gateway": None, "ems": None, "battery": [], "battery_meters": {}, "pv": [], "site_ids": {}}
         if device_list is None:
             return result
 
@@ -2114,6 +3243,12 @@ class GECloudDirect(ComponentBase):
                             continue
                     except (ValueError, TypeError):
                         self.log("GECloud: Warn: Could not parse last_updated {} for device {}, skipping age check".format(last_updated, serial))
+                site_id = device.get("site_id", None)
+                if site_id is None:
+                    site_id = (inverter.get("connections", {}) or {}).get("datalog", {}) or {}
+                    site_id = site_id.get("site_id", None)
+                if isinstance(site_id, int) and not isinstance(site_id, bool) and site_id > 0:
+                    result["site_ids"][serial] = site_id
                 if "plant ems" in model:
                     result["ems"] = serial
                 elif "gateway" in model or "gw2" in model:
@@ -2127,19 +3262,27 @@ class GECloudDirect(ComponentBase):
                 self.log("GECloud: Warn: Device without serial found: {}".format(device))
         return result
 
-    async def async_get_inverter_status(self, serial, previous={}):
+    async def async_get_inverter_status(self, serial, previous=None):
         """
         Get basis status for inverter
         """
+        if previous is None:
+            previous = {}
         result = await self.async_get_inverter_data_retry(GE_API_INVERTER_STATUS, serial)
+        # Display provenance must retain neither missing fields nor an old
+        # field under a new timestamp. The ordinary merged control cache stays
+        # unchanged; the optional display adapter consumes only this raw sample.
+        self.live_display_samples[serial.lower()] = result
         if result is None:
             return previous
         return merge_non_null(result, previous)
 
-    async def async_get_inverter_meter(self, serial, previous={}):
+    async def async_get_inverter_meter(self, serial, previous=None):
         """
         Get meter data for inverter
         """
+        if previous is None:
+            previous = {}
         meter = await self.async_get_inverter_data_retry(GE_API_INVERTER_METER, serial)
         if meter is None:
             return previous
@@ -2157,13 +3300,19 @@ class GECloudDirect(ComponentBase):
         """
         Retry API call
         """
+        data = None
+        path = format_ge_endpoint(endpoint, serial, setting_id, uuid, meter_ids, start_time, end_time, command)
         for retry in range(RETRIES):
-            data = await self.async_get_inverter_data(endpoint, serial, setting_id, post, datain, uuid, meter_ids, start_time=start_time, end_time=end_time, command=command, measurands=measurands)
+            try:
+                data = await self.async_get_inverter_data(endpoint, serial, setting_id, post, datain, uuid, meter_ids, start_time=start_time, end_time=end_time, command=command, measurands=measurands)
+            except GECloudTerminalError as e:
+                self.log("GECloud: Warn: Request to {} was rejected: {} (code {}), not retrying".format(path, e.message, e.code))
+                return None
             if data is not None:
                 break
             await asyncio.sleep(RETRY_FACTOR * (retry + 1))
         if data is None:
-            self.log("GECloud: Warn: Failed to get data from {}".format(endpoint))
+            self.log("GECloud: Warn: Failed to get data from {}".format(path))
         return data
 
     async def async_get_inverter_data(self, endpoint, serial="", setting_id="", post=False, datain=None, uuid="", meter_ids="", start_time="", end_time="", command="", measurands=""):
@@ -2173,7 +3322,8 @@ class GECloudDirect(ComponentBase):
         # Increment request counter
         self.requests_total += 1
 
-        url = GE_API_URL + endpoint.format(inverter_serial_number=serial, setting_id=setting_id, uuid=uuid, start_time=start_time, end_time=end_time, meter_ids=meter_ids, command=command)
+        path = format_ge_endpoint(endpoint, serial, setting_id, uuid, meter_ids, start_time, end_time, command)
+        url = GE_API_URL + path
 
         # Add measurands parameters if provided (for EV charger endpoints)
         if measurands:
@@ -2233,6 +3383,21 @@ class GECloudDirect(ComponentBase):
         if status in [200, 201]:
             if data is None:
                 data = {}
+            # A 200 does not mean the request reached the device: GivEnergy reports device-level
+            # failures in the body, with a negative code and a message (for example -7 "Inverter
+            # Locked"). Those must not refresh the component health timestamp or be recorded as
+            # a successful API call (issue #4896).
+            failure = classify_ge_failure(data, endpoint)
+            if failure:
+                self.failures_total += 1
+                record_api_call("givenergy", False, failure["reason"])
+                self.log("GECloud: Warn: Request to {} was rejected: {} (code {})".format(path, failure["message"], failure["code"]))
+                if not failure["retry"]:
+                    # Terminal: raise so the caller aborts rather than retrying
+                    raise GECloudTerminalError(failure["code"], failure["message"], failure["reason"])
+                # Retryable: hand the body back unchanged so the caller's own retry, and its
+                # request-spreading jitter for the timeout codes, work exactly as before
+                return data
             self.update_success_timestamp()
             record_api_call("givenergy")
             return data
@@ -2241,12 +3406,12 @@ class GECloudDirect(ComponentBase):
             # covers accounts without an active GivEnergy Premium subscription, which (since
             # May 2026) is required for cloud API access.
             self.failures_total += 1
-            self.log("GECloud: Warn: API access denied from {}, response code {} — check your GivEnergy API key; a GivEnergy Premium subscription may now be required for API access".format(endpoint, status))
+            self.log("GECloud: Warn: API access denied from {}, response code {} — check your GivEnergy API key; a GivEnergy Premium subscription may now be required for API access".format(path, status))
             record_api_call("givenergy", False, "auth_error")
             return {}
         elif status in [404, 422]:
             self.failures_total += 1
-            self.log("GECloud: Warn: Failed to get data from {}, response code {}".format(endpoint, status))
+            self.log("GECloud: Warn: Failed to get data from {}, response code {}".format(path, status))
             record_api_call("givenergy", False, "client_error")
             return {}
         elif status == 429:
@@ -2257,7 +3422,7 @@ class GECloudDirect(ComponentBase):
             return None
         else:
             self.failures_total += 1
-            self.log("GECloud: Warn: Failed to get data from {}, response code {}".format(endpoint, status))
+            self.log("GECloud: Warn: Failed to get data from {}, response code {}".format(path, status))
             record_api_call("givenergy", False, "server_error")
         return None
 
@@ -2596,7 +3761,7 @@ async def test_gecloud_direct(api_key, write_entity=None, write_value=None, writ
             distinct_devices = {device for _, device, _, _ in matches}
             if not write_register_device and len(distinct_devices) > 1:
                 print(f"Warn: Register '{write_register_name}' matched {len(distinct_devices)} devices ({', '.join(sorted(distinct_devices))}) - writing to all of them. Pass --device to target just one.")
-            for entity_id, device, key, raw_name in matches:
+            for _entity_id, device, key, raw_name in matches:
                 print(f"Writing register '{raw_name}' (device={device}, setting_id={key}) = {write_register_value}")
                 result = await gecloud_direct.async_write_inverter_setting(device, key, write_register_value)
                 if result:

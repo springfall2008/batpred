@@ -199,7 +199,8 @@ def setup_fleet(
     if aggregate:
         # Re-run the real accumulation over the inverters just built, so the fleet totals a test
         # asserts against are the ones the executor computes rather than ones the test invented.
-        my_predbat.fetch_inverter_data(create=False)
+        # fetch_inverter_data() keeps existing Inverter objects when their count matches num_inverters.
+        my_predbat.fetch_inverter_data()
 
     return my_predbat.inverters
 

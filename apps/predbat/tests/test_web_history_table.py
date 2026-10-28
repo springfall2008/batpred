@@ -146,7 +146,8 @@ def run_web_history_table_tests(my_predbat):
     }
     filled_30, filled_5, sorted_ts_30, display_slots_5 = build_entity_history_table_data(selections, fetch)
 
-    expected_30 = {utc(10, 0), utc(23, 30)}
+    # 10:30 is the row that first reports the 10:07 reading; 00:00 would be past the newest record
+    expected_30 = {utc(10, 0), utc(10, 30), utc(23, 30)}
     if set(sorted_ts_30) != expected_30:
         print(f"  ERROR: expected 30-min rows {expected_30}, got {set(sorted_ts_30)}")
         failed += 1
@@ -200,6 +201,64 @@ def run_web_history_table_tests(my_predbat):
         failed += 1
     if len(sorted_ts_30) != 1:
         print(f"  ERROR: expected the unusable records to be skipped, got rows {sorted_ts_30}")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    # predbat.status only records on a change, so a window nothing was recorded in gets no row and
+    # the page folds it into "N unchanged slots hidden". A change part way through a window (23:10)
+    # is therefore never reported by a row: 23:00 still reads Exporting, 23:30 to 04:00 are hidden as
+    # "unchanged" beneath it, and the 04:30 row is the first to say Charging - flagged as a change
+    # five hours late, in the very window the charge ended. The timeline chart showed it correctly.
+    print("Test: a change part way through a window is reported by the next row, not hidden as unchanged")
+    selections = [{"entity_id": "predbat.status", "attribute": None}]
+
+    def stamp(day, hour, minute):
+        """Build a UTC timestamp on 2026-10-<day>."""
+        return datetime(2026, 10, day, hour, minute, 0, tzinfo=timezone.utc)
+
+    transitions = [
+        (stamp(1, 22, 0), "Exporting"),
+        (stamp(1, 23, 10), "Charging"),
+        (stamp(2, 4, 35), "Demand"),
+        (stamp(2, 13, 35), "Freeze exporting"),
+    ]
+    records = [{"last_updated": when.strftime("%Y-%m-%dT%H:%M:%S%z"), "state": state} for when, state in transitions]
+    filled_30, filled_5, sorted_ts_30, display_slots_5 = build_entity_history_table_data(selections, {"predbat.status": make_history(records)})
+
+    def actual_state(when):
+        """Return the state the entity really held at the given time."""
+        held = "-"
+        for changed_at, state in transitions:
+            if changed_at <= when:
+                held = state
+        return held
+
+    row_2330 = stamp(1, 23, 30)
+    if row_2330 not in sorted_ts_30:
+        print(f"  ERROR: the status became Charging at 23:10 so the 23:30 row must be shown, rows are {[ts.strftime('%d %H:%M') for ts in sorted_ts_30]}")
+        failed += 1
+    else:
+        value, changed, prev_value = filled_30[0][row_2330]
+        if value != "Charging" or not changed or prev_value != "Exporting":
+            print(f"  ERROR: expected the 23:30 row to flag the Exporting->Charging change, got value={value} changed={changed} prev={prev_value}")
+            failed += 1
+
+    value, changed, prev_value = filled_30[0][stamp(2, 4, 30)]
+    if value != "Charging" or changed:
+        print(f"  ERROR: Charging began at 23:10, so the 04:30 row should read 'Charging' without flagging a change, got value={value} changed={changed} prev={prev_value}")
+        failed += 1
+
+    # The page presents every 30-min slot missing between two rows as unchanged from the older row
+    misreported = []
+    for newer, older in zip(sorted_ts_30, sorted_ts_30[1:]):
+        shown = filled_30[0][older][0]
+        slot = older + timedelta(minutes=30)
+        while slot < newer:
+            if actual_state(slot) != shown:
+                misreported.append("{} was {} but is hidden as unchanged from {}".format(slot.strftime("%d %H:%M"), actual_state(slot), shown))
+            slot += timedelta(minutes=30)
+    if misreported:
+        print(f"  ERROR: {len(misreported)} hidden slots did not hold the value of the row beneath them, e.g. {misreported[0]}")
         failed += 1
 
     return failed

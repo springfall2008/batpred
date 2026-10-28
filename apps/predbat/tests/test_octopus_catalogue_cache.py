@@ -142,7 +142,8 @@ async def test_octopus_catalogue_cache(my_predbat):
         print("\n*** Test 3: battery size resolved from cached catalogue ***")
         device = (result or {}).get("device-1", {})
         battery = device.get("vehicle_battery_size_in_kwh")
-        if battery != "57.5":
+        # The catalogue's "57.5" string comes back as a number (catalogue_value(), issue #5438)
+        if battery != 57.5:
             print("ERROR: Expected battery size 57.5 from the cached catalogue, got {}".format(battery))
             failed = True
         else:

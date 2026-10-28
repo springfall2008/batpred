@@ -55,6 +55,7 @@ _SNAPSHOT_ATTRS = [
     "rate_export_min",
     "rate_min",
     "rate_max",
+    "rate_import_tariff_max",
     "rate_min_base",
     "rate_max_base",
     "combine_charge_slots",
@@ -67,6 +68,11 @@ _SNAPSHOT_ATTRS = [
     "charge_window",
     "export_window",
     "export_limits",
+    "pv_metric10_weight",
+    "pv_metric90_weight",
+    "load_minutes_step90",
+    "pv_forecast_minute90_step",
+    "io_confirmed_credit",
 ]
 # Objects with back-references to my_predbat must not be deep-copied (would clone the whole instance)
 _SNAPSHOT_BY_REFERENCE = {"prediction", "inverters"}
@@ -198,12 +204,22 @@ def run_iog_skew_scenario(
     load_amount=0.1,
     rate_import_base=30.0,
     rate_export=1.0,
+    load_scaling=None,
+    losses=(1.0, 1.0, 1.0),
+    prepare=None,
+    kernel=False,
 ):
     """
     Run a single IOG scenario through optimise_all_windows and return charge_limit_best.
 
     charge_window_best: list of {"start","end","average"} charge windows (the low-rate period).
     io_adjusted_starts: iterable of window["start"] minutes to flag as Octopus Intelligent.
+    load_scaling: optional (nominal, pv10, pv90) multipliers of load_amount, which also turns on the
+    PV90 scenario; by default every scenario sees load_amount and PV90 is the nominal one.
+    losses: (inverter_loss, battery_loss, battery_loss_discharge), lossless by default.
+    prepare: optional callable run once io_adjusted is set and before the Prediction is built.
+    kernel: optimise with the C++ prediction kernel instead of the Python engine (much faster; kernel_parity
+    pins the two engines to the same answer).
     """
     print("\n  -- scenario: {} --".format(name))
     end_record = my_predbat.forecast_minutes
@@ -213,15 +229,14 @@ def run_iog_skew_scenario(
     my_predbat.soc_max = battery_size
     my_predbat.soc_kw = battery_soc
     my_predbat.inverter_hybrid = False
-    my_predbat.inverter_loss = 1.0
-    my_predbat.battery_loss = 1.0
+    my_predbat.inverter_loss, my_predbat.battery_loss, my_predbat.battery_loss_discharge = losses
     my_predbat.best_soc_keep = 0.0
     my_predbat.best_soc_keep_weight = 0.5
     my_predbat.reserve = 0.0
     my_predbat.set_charge_freeze = True
     my_predbat.calculate_second_pass = False
     my_predbat.debug_enable = False
-    my_predbat.prediction_kernel_enable = False
+    my_predbat.prediction_kernel_enable = kernel
     my_predbat.rate_min_forward = {}
 
     my_predbat.battery_rate_max_charge = charge_rate_kw / 60.0
@@ -236,17 +251,28 @@ def run_iog_skew_scenario(
     my_predbat.io_adjusted = {}
     for start in io_adjusted_starts:
         my_predbat.io_adjusted[start] = True
+    my_predbat.io_confirmed_credit = {}
+    if prepare:
+        prepare()
 
     pv_step = {}
     load_step = {}
     for minute in range(0, my_predbat.forecast_minutes, 5):
         pv_step[minute] = 0.0
         load_step[minute] = load_amount / (60 / 5)
-    my_predbat.load_minutes_step = load_step
-    my_predbat.load_minutes_step10 = load_step
     my_predbat.pv_forecast_minute_step = pv_step
     my_predbat.pv_forecast_minute10_step = pv_step
-    my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step)
+    if load_scaling:
+        load_step, load_step10, load_step90 = ({minute: value * scale for minute, value in load_step.items()} for scale in load_scaling)
+        my_predbat.load_minutes_step = load_step
+        my_predbat.load_minutes_step10 = load_step10
+        my_predbat.load_minutes_step90 = load_step90
+        my_predbat.pv_forecast_minute90_step = pv_step
+        my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step10, pv_step, load_step90)
+    else:
+        my_predbat.load_minutes_step = load_step
+        my_predbat.load_minutes_step10 = load_step
+        my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step)
 
     export_window_best = []
     charge_limit_best = [0 for _ in range(len(charge_window_best))]
@@ -275,7 +301,7 @@ def _charge_averages_by_index(my_predbat, charge_windows):
     """
     window_sort, window_links, price_set, price_links = my_predbat.sort_window_by_price_combined(charge_windows, [])
     by_index = {}
-    for key, link in window_links.items():
+    for _key, link in window_links.items():
         if link["type"] == "c":
             by_index[link["id"]] = link["average"]
     return by_index

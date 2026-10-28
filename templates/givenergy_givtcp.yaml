@@ -45,6 +45,9 @@ pred_bat:
   #
   # For pv_today if you have multiple solar inverter inputs then you should include one entry for each inverter
   #
+  # Only needed if you are NOT using givtcp_rest below - with REST set Predbat publishes these four
+  # itself from GivTCP's own daily totals and points itself at them.
+  #
   load_today:
     - sensor.givtcp_{geserial}_load_energy_today_kwh
   import_today:
@@ -75,30 +78,38 @@ pred_bat:
     - "GE"
   num_inverters: 1
   #
-  # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
-  balance_inverters_seconds: 60
+  # Set this and Predbat talks to GivTCP's REST API directly - the recommended setup, and the only
+  # thing you need for a GivEnergy system. Predbat creates its own entities from what GivTCP reports
+  # and configures itself from them, so with this set you can delete everything below in the
+  # sensors and Controls sections, as well as inverter_type and num_inverters: all of it is
+  # discovered, including how many inverters you have.
   #
-  # When set use the REST API rather than HA entity for control, should be more reliable/faster to control
   # Set one per inverter, uncomment out the :6346 line if you have two inverters
   # If using Docker then change homeassistant.local to the Docker IP address
   givtcp_rest:
     - 'http://homeassistant.local:6345'
   #  - 'http://homeassistant.local:6346'
 
+  # Set this to False to keep control of apps.yaml yourself - Predbat still publishes its GivTCP
+  # entities, but stops pointing the settings below at them, so you can name them by hand or point
+  # a setting somewhere else entirely. Defaults to True.
+  #givtcp_automatic: False
+
   # When enabled automatic restart will restart the app if communication fails
   # Example below is an auto-restart for the GivTCP v3 app
   #
   #auto_restart:
   #  - shell: 'rm -rf /homeassistant/GivTCP/*.pkl'
-  #  - service: hassio/addon_restart
-  #    addon: 533ea71a_givtcp
+  #  - service: hassio/app_restart
+  #    app: 533ea71a_givtcp
 
   #  Example on how to restart the inverter via GivTCP
   #  - service: button.press
   #    entity_id: button.givtcp_{geserial}_reboot_invertor
 
-  # If not using REST then instead set the Control here (one for each inverter)
-  # You should keep this section even when using REST as a fallback if it fails and for charge curve calculations
+  # Only needed if you are NOT using givtcp_rest above - with REST set, Predbat publishes and
+  # configures all of these itself and anything you put here is overridden.
+  # Set one entry for each inverter.
   charge_rate:
     - number.givtcp_{geserial}_battery_charge_rate
   #  - number.givtcp2_{geserial2}_battery_charge_rate
@@ -147,12 +158,18 @@ pred_bat:
   scheduled_charge_enable:
     - switch.givtcp_{geserial}_enable_charge_schedule
   #  - switch.givtcp2_{geserial2}_enable_charge_schedule
+  scheduled_discharge_enable:
+    - switch.givtcp_{geserial}_enable_discharge_schedule
+  #  - switch.givtcp2_{geserial2}_enable_discharge_schedule
   discharge_start_time:
     - select.givtcp_{geserial}_discharge_start_time_slot_1
   #  - select.givtcp2_{geserial2}_discharge_start_time_slot_1
   discharge_end_time:
     - select.givtcp_{geserial}_discharge_end_time_slot_1
   #  - select.givtcp2_{geserial2}_discharge_end_time_slot_1
+  battery_calibration:
+    - select.givtcp_{geserial}_battery_calibration
+  #  - select.givtcp2_{geserial2}_battery_calibration
 
   # Pause mode is not supported by all firmware's and will be ignored if not present
   pause_mode:
@@ -291,17 +308,29 @@ pred_bat:
     - 'locked'
     - 'plugged in'
 
-  # In some cases car planning is difficult (e.g. Ohme with Intelligent doesn't report slots)
-  # The car charging now can be set to a sensor to indicate the car is charging and to plan
-  # for it to charge during this 30 minute slot
-  #car_charging_now:
-  #  - off
+  # car_charging_plugged can be set to a sensor that says only whether the car is plugged in - staying on after
+  # its charge has finished - matched against car_charging_planned_response. Predbat resets the manual car SoC
+  # (input_number.predbat_car_charging_manual_soc_kwh) to 0 when it reads unplugged, and with car_charging_energy
+  # set it tracks the SoC of a car that has no car_charging_soc sensor. One entry per car - e.g. for a myenergi Zappi:
+  #car_charging_plugged:
+  #  - 're:(sensor.myenergi_zappi_[0-9a-z]+_plug_status)'
 
-  # Positive responses for car_charging_now
+  # car_charging_now can be set to a sensor that shows the car is charging right now, so that
+  # Predbat holds the house battery for the car while it charges. It never adds a charging slot.
+  # Use an on/off sensor (matched against car_charging_now_response), or a charging power sensor
+  # in W or kW where 200W or more counts as charging - e.g. for a Wallbox charger:
+  #car_charging_now:
+  #  - sensor.wallbox_portal_charging_power
+
+  # Positive responses for car_charging_now, for an on/off or status sensor. Its state must match one
+  # of these (ignoring case) for Predbat to see the car charging - e.g. 'charging' for a myenergi Zappi
+  # plug_status sensor. If it never matches while the car charges, Predbat cancels the car's Octopus Intelligent
+  # dispatches (switch.predbat_octopus_intelligent_dynamic, On by default) and the house battery can lose their cheap rate.
   car_charging_now_response:
     - 'yes'
     - 'on'
     - 'true'
+    - 'charging'
 
   # To make planned car charging more accurate, either using car_charging_planned or the Octopus Energy plugin,
   # specify your battery size in kwh, charge limit % and current car battery soc % sensors/values.
@@ -474,4 +503,3 @@ pred_bat:
   #  - '{octopus_saving_session}'
   #  - '+[car_charging_planned]'
   #  - '+[car_charging_soc]'
-  #  - '{car_charging_now}'

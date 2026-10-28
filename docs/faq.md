@@ -5,8 +5,8 @@
 - First look at **predbat.status** in Home Assistant and the Predbat App log (which can be found in the list of log files in the System/Log area of the GUI).
 See if any errors are warnings are found. If you see an error something is likely configured incorrectly,
 check your entity settings are correct.
-- Make sure Solcast is installed and it's auto-updated at least a couple of times a day (see the [Solcast instructions](install.md#solcast-install)).
-The default Solcast sensor names may be wrong, you might need to update the `apps.yaml` config to match your own names
+- Make sure a Solar Forecast is installed and it's auto-updated at least a couple of times a day (see the [Solar Forecast instructions](install.md#solar-forecast-install)).
+If you are using the Solcast Integration then the default Solcast sensor names may be wrong, you might need to update the `apps.yaml` config to match your own names
 (some people don't have the solcast_ bit in their entity names).
 
 ## Predbat is failing with Warn: Service call select/select_option data failed
@@ -117,6 +117,25 @@ To reverse the direction of your [grid power entity](apps-yaml.md#power-data) in
 
 If this is your situation, create a template sensor in Home Assistant that combines the two into one signed value (e.g. `export - import`, or `-import` when only importing) and point **grid_power** at that combined template instead of either sensor directly.
 
+## I see repeated log messages "Warn: Found 1 periods of zero load with power data, filling using power integration"
+
+This is often normal behaviour for coarse or infrequently changing house energy load sensors!
+
+With the Predbat configuration **load_power_fill_enable** set to the default value of 'true', on every 5 minute Predbat cycle it scans your historic house load sensor for stretches of at least **load_filter_threshold** duration (default = plan_interval_minutes = 30 minutes) where the house load didn't move while load_power recorded consumption.
+When predbat finds a period where there is no change in house load energy it fills those stretches by integrating the house load power sensor to fill the gap, and logs the above warning every time it finds one.
+
+The log line immediately after the warning names the exact window: "Zero load period starting at *timestamp* (N minutes) for M minutes with base value V" and you can check your load_today helper's history at that time to confirm this behaviour.
+
+There are two scenarios where these warnings are often logged:
+
+- A long region with base value 0.0 — the part of the history window before/around when you first setup Predbat or your house load helper started counting. This is normal for a fresh counter; it ages out as days_previous history accumulates in Home Assistant.
+- ~30-40 minute flat plateaus (e.g. "for 34 minutes with base value 1.9"): a daily load energy counter that steps in 0.1 kWh increments only moves that often at low load — at 200 W base load overnight for example, one 0.1kWh step takes 30 minutes, so the counter reads constant for half an hour while the power sensor shows the real draw.
+
+What you can do
+
+Doing nothing is fine: the fill reconstructs the missing consumption and the plan is using it, so it is self-healing rather than an error.
+If you want the log file to be quiet: set load_power_fill_enable: false in apps.yaml or increase load_filter_threshold.  See [load filtering in apps.yaml](apps-yaml.md#load-filtering) for more details. The trade-off is that genuine gaps in your load_today sensor will no longer be auto-filled.
+
 ## I have a second solar array that Predbat doesn't manage as an inverter - how do I include its generation?
 
 The [Power Data](apps-yaml.md#power-data) **pv_power**/**pv_today** lists take one entry per inverter Predbat is actually configured to manage (`num_inverters`) - you can't just add an extra line for a second array that has no corresponding managed inverter (e.g. a separate FIT-metered string, or a second hybrid system Predbat isn't controlling), Predbat will still only look for as many sensors as it has inverters defined.
@@ -179,7 +198,7 @@ Predbat can only work on the information it's given, although it does run every 
 
 The plan Predbat produces assumes that your average load and PV forecasts are accurate and Predbat will aim to give you the maximum return.
 
-Make sure you have set up your [Solcast solar forecast correctly](install.md#solcast-install) with the number of panels, orientation, output, etc.
+Make sure you have set up your [Solar forecast correctly](install.md#solar-forecast-install) with the number of panels, orientation, output, etc.
 
 Projected daily load is determined from historical load information so make sure you have set [days_previous and days_previous_weight in apps.yaml](apps-yaml.md#basics)
 to give appropriately representative load history to Predbat, and read the [longer explanation of how days_previous works](apps-yaml.md#understanding-how-days_previous-works).
@@ -252,7 +271,10 @@ recorder:
       - sensor.predbat_pv_d3
       - sensor.predbat_temperature
   include:
+    entity_globs: #The history of these entities is used by Predbat's Compare tab
+      - predbat.compare_tariff_*
     entities: #The history of these entities is used by Predbat
+      - predbat.car_charging_power
       - predbat.carbon_today
       - predbat.cost_today
       - predbat.cost_today_car
@@ -270,6 +292,7 @@ recorder:
       - predbat.pv_power
       - predbat.rates
       - predbat.rates_export
+      - predbat.soc_kw_best
       - predbat.soc_kw_h0
       - predbat.savings_yesterday_predbat
       - predbat.savings_yesterday_pvbat
@@ -287,11 +310,13 @@ Two things to be careful of if you adapt the example above:
 
 - Don't drop entries from the `include` list without checking what reads them. Predbat needs the recorded history of
 every entity listed there and quietly loses a feature for each one it can no longer read - `predbat.cost_today`, for
-instance, is what the Plan tab's *History* and *Yesterday Without Predbat* views are built from.
-- Don't add further Predbat sensors to the `exclude` list for the same reason. `sensor.predbat_pv_forecast_h0` and
-`sensor.predbat_pv_today` are deliberately left out of it because PV calibration and the PV accuracy chart compare
-against their history. Adding a `sensor.*` entity to `exclude` and to `include` does not rescue it either - an entry
-under `include` only overrides the exclusion of its whole *domain*, which here is `predbat`, not `sensor`.
+instance, is what the Plan tab's *History* and *Yesterday Without Predbat* views are built from. Likewise the `predbat.compare_tariff_*`
+sensors are what the [Compare tab](compare.md) builds its day-by-day history from; without them it only ever shows the latest run.
+- Don't add further Predbat sensors to the `exclude` list for the same reason. `sensor.predbat_pv_forecast_h0`,
+`sensor.predbat_pv_forecast_h0_uncalibrated` and `sensor.predbat_pv_today` are deliberately left out of it because PV
+calibration, the PV chart and the PV accuracy chart compare against their history. Adding a `sensor.*` entity to
+`exclude` and to `include` does not rescue it either - an entry under `include` only overrides the exclusion of its
+whole *domain*, which here is `predbat`, not `sensor`.
 
 When the serialized attributes payload for a Predbat entity state exceeds 16384 bytes, the recorder will not store any attributes for that state (only the state value itself is stored). States whose serialized attributes payload is below this limit are stored normally.
 You can suppress these warnings by adding the following to your `configuration.yaml` file:
@@ -327,7 +352,7 @@ delete all the old Octopus sensors, and [re-install the Octopus Integration](ins
 
 If you get this warning message in the Predbat log file or you see that the 'PV kWh' column in the [Predbat plan card](predbat-plan-card.md) is completely blank:
 
-- Ensure that you have [installed and configured Solcast correctly](install.md#solcast-install)
+- Ensure that you have [installed and configured a Solar Forecast correctly](install.md#solar-forecast-install)
 - Check the Solcast integration in Home Assistant is configured and enabled (go to Settings / Integrations / Solcast)
 - Check that there are no errors relating to Solcast in the Home Assistant log (go to Settings / System / Logs and view the 'Home Assistant Core' log).
 If you see an error 429 message in the log then this is as a result of  Solcast's rate limiting for Hobbyist accounts.
@@ -345,14 +370,19 @@ If you've run out of API calls you will have to wait until midnight GMT for the 
 It's recommended that you don't include the Solcast forecast within your GivEnergy portal to avoid running out of API calls.
 - Check the [Solcast server API status](https://status.solcast.com/) is OK
 
-## Info: Cannot find battery charge curve
+## Warn: Cannot find battery charge curve
 
-If you get the message "Info: Cannot find battery charge curve, one of the required settings for soc_kw, battery_power and charge_rate are missing from apps.yaml" in the logfile
-then Predbat is trying to create a battery charge curve but does not have access to the required history information in Home Assistant.
+If you get one of these messages in the logfile then Predbat is trying to create a battery charge (or discharge) curve but does not have access to the required history information in Home Assistant:
+
+- "Warn: Inverter 0 Cannot find battery charge curve (settings missing), soc_kw, charge_rate not set in apps.yaml" - the settings listed are not configured in `apps.yaml`
+- "Warn: Inverter 0 Cannot find battery charge curve (missing history), no history found for battery_power (sensor.givtcp_xxxx_battery_power) - check the entity name in apps.yaml and that Home Assistant is recording its history" - the settings are configured,
+but the entities listed in brackets returned no history. It is followed by a "Sensor history record counts" line giving the number of history records found for each setting
+
+**Note:** The battery charge curve cannot be calculated if Predbat is in Read Only mode. Even though required history may be available, the log message will continue to appear until Predbat is out of read only mode and has calculated the curve.
 
 [Creating the battery charge curve](apps-yaml.md#battery-chargedischarge-curves) is described in the `apps.yaml` document.
 
-One cause of the above message appearing in the logfile is that you are controlling a GivEnergy inverter in REST mode
+One cause of the "settings missing" message appearing in the logfile is that you are controlling a GivEnergy inverter in REST mode
 but have not uncommented the following entities in `apps.yaml` that Predbat needs to obtain history from to create the battery charge curve:
 
 ```yaml
@@ -366,7 +396,8 @@ but have not uncommented the following entities in `apps.yaml` that Predbat need
     - sensor.givtcp_{geserial}_soc_kwh
 ```
 
-The other main cause of the above message appearing is that one or more of the entities that Predbat is trying to use to create the charge curve does not have suitable history.  You should check the history on the entities Predbat highlights that it is using, and that the charging/discharging goes to full/empty as described in the battery curve documentation.
+The "missing history" message means one or more of the entities that Predbat is trying to use to create the charge curve does not have any history - check the entity named in the message exists in Home Assistant and is not excluded from the recorder.
+Even with history present, you should check the history on the entities Predbat highlights that it is using, and that the charging/discharging goes to full/empty as described in the battery curve documentation.
 If the charging/discharging is not at near full rate, or doesn't go to near full/empty then Predbat will be unable to create the curves.
 
 ## WARN: Inverter is in calibration mode
@@ -398,7 +429,7 @@ In the GivEnergy portal, go to My Inverters / Remote Control (cog symbol) / clic
 - Finally, check how often your inverter integration is polling your inverter for new data. For [GivTCP the Self Run Loop Timer](apps-yaml.md#rest-interface-inverter-control)
 is recommended to be set to a value of between 20 and 60 seconds.
 
-If you have checked the above and keep getting “time is skewed” warnings then it means Home Assistant/predbat isn’t getting the same time from the inverter as it is expecting.
+If you have checked the above and keep getting “time is skewed” warnings then it means Home Assistant/Predbat isn’t getting the same time from the inverter as it is expecting.
 Either GivTCP has lost communications with the inverter or the inverter has stopped talking to the world.
 
 If you look at the Logbook in Home Assistant you should see a steady stream of entities changing in HA.

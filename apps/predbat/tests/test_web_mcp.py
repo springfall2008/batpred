@@ -23,8 +23,11 @@ from datetime import datetime, timedelta
 
 import agent_tools
 import web
+from aiohttp import web as aiohttp_web
+from aiohttp.test_utils import make_mocked_request
 from web import WebInterface
 from web_mcp import (
+    PredbatMCPServer,
     MCPServerWrapper,
     LOG_FILTER_TYPES,
     MCP_LOG_DEFAULT_LINES,
@@ -517,7 +520,8 @@ class FakeBase:
         self.html_plan = "x" * (MCP_STATE_DEFAULT_MAX_BYTES + 500)
 
         # Values a plain json.dumps would choke on
-        self.midnight_utc = datetime(2026, 8, 27, 0, 0, 0)
+        self.now_utc = datetime(2026, 8, 27, 12, 0, 0)
+        self.midnight_utc = self.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
         self.inverter_object = object()
 
         # Legitimately-None state - a great deal of Predbat's is, so None must not double as
@@ -615,7 +619,7 @@ def test_debug_excluded_keys(my_predbat):
     failed = False
     print("**** Testing is_debug_excluded_key ****")
 
-    for key in ["ha_interface", "components", "secrets", "octopus_url_cache", "github_url_cache", "inverters", "CONFIG_ITEMS", "logfile"]:
+    for key in ["ha_interface", "components", "coordinator", "secrets", "octopus_url_cache", "github_url_cache", "inverters", "CONFIG_ITEMS", "logfile"]:
         if not is_debug_excluded_key(key):
             print("  ERROR: expected {} to be excluded".format(key))
             failed = True
@@ -1018,6 +1022,63 @@ def test_web_api_log_unchanged(my_predbat):
     return failed
 
 
+def test_mcp_oauth_routes(my_predbat):
+    """The OAuth route table answers the RFC 9728 /mcp-scoped metadata probe and the CORS
+    preflight requests on the token/register endpoints, rather than letting them fall through to the
+    404 default route and failing claude.ai's handshake (#3807).
+    """
+    failed = False
+    print("**** Testing MCP OAuth route table ****")
+
+    server = PredbatMCPServer.__new__(PredbatMCPServer)
+    server.log = my_predbat.log
+    app = aiohttp_web.Application()
+    server.add_routes(app)
+
+    def resolve(method, path):
+        """Return the handler the router picks for method and path."""
+        request = make_mocked_request(method, path, headers={"Host": "predbat.example:8199"}, app=app)
+        return asyncio.run(app.router.resolve(request)).handler, request
+
+    expected = [
+        ("GET", "/.well-known/oauth-protected-resource/mcp", server.oauth_protected_resource_metadata),
+        ("OPTIONS", "/.well-known/oauth-protected-resource/mcp", server.handle_options),
+        ("GET", "/.well-known/oauth-protected-resource", server.oauth_protected_resource_metadata),
+        ("GET", "/.well-known/oauth-authorization-server/mcp", server.oauth_metadata_mcp),
+        ("OPTIONS", "/oauth/token", server.handle_options),
+        ("OPTIONS", "/token", server.handle_options),
+        ("OPTIONS", "/oauth/register", server.handle_options),
+        ("OPTIONS", "/register", server.handle_options),
+        ("POST", "/oauth/token", server.oauth_token),
+        ("POST", "/oauth/register", server.oauth_register),
+        ("POST", "/mcp", server.html_mcp_post),
+        ("GET", "/no-such-path", server.default_route),
+    ]
+    for method, path, handler in expected:
+        got, _ = resolve(method, path)
+        if got != handler:
+            print("  ERROR: {} {} routed to {}, expected {}".format(method, path, getattr(got, "__name__", got), handler.__name__))
+            failed = True
+
+    print("Test: the /mcp-scoped metadata probe returns the protected resource metadata")
+    handler, request = resolve("GET", "/.well-known/oauth-protected-resource/mcp")
+    if handler == server.oauth_protected_resource_metadata:
+        response = asyncio.run(handler(request))
+        data = json.loads(response.text)
+        if response.status != 200 or data.get("authorization_servers") != ["http://predbat.example:8199"]:
+            print("  ERROR: unexpected metadata response {} {}".format(response.status, data))
+            failed = True
+
+    print("Test: the token endpoint preflight carries CORS headers")
+    handler, request = resolve("OPTIONS", "/oauth/token")
+    response = asyncio.run(handler(request))
+    if response.status != 200 or response.headers.get("Access-Control-Allow-Origin") != "*" or "POST" not in response.headers.get("Access-Control-Allow-Methods", ""):
+        print("  ERROR: token preflight returned {} with headers {}".format(response.status, dict(response.headers)))
+        failed = True
+
+    return failed
+
+
 def run_web_mcp_tests(my_predbat):
     """Run every MCP log/apps.yaml test, returning True if any of them failed."""
     failed = False
@@ -1040,6 +1101,7 @@ def run_web_mcp_tests(my_predbat):
     failed |= test_log_encoding(my_predbat)
     failed |= test_mcp_tools_list(my_predbat)
     failed |= test_web_api_log_unchanged(my_predbat)
+    failed |= test_mcp_oauth_routes(my_predbat)
     return failed
 
 
@@ -1218,7 +1280,7 @@ def _fat_log(now):
     stamp = now.replace(microsecond=0)
     lines = [
         "{}: Info: short line before".format(stamp - timedelta(minutes=3)),
-        "{}: OctopusAPI: Fetched saving sessions data from GraphQL API: {}".format(stamp - timedelta(minutes=2), "x" * 20000),
+        "{}: OctopusAPI: GraphQL response for get-saving-sessions (status 200): {}".format(stamp - timedelta(minutes=2), "x" * 20000),
         "{}: Info: short line after".format(stamp - timedelta(minutes=1)),
     ]
     return "\n".join(lines) + "\n"

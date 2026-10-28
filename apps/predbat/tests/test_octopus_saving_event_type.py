@@ -1,0 +1,137 @@
+"""
+Tests for how OctopusAPI classifies savingSessions events by eventType
+"""
+
+from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock
+from octopus import OctopusAPI, octoplus_saving_session_query
+
+
+def test_octopus_saving_event_type(my_predbat):
+    """
+    Test get_saving_session_data() splits events by eventType.
+
+    Octopus publishes Power Up and Power Down through the same savingSessions feed and tells them
+    apart with eventType. A WEEKEND_HAPPY_HOUR cannot be joined through the API - Octopus either
+    allocates one or the user books it on the website - so it must not be offered as available,
+    matching BottleCapDave's integration from v19.0.1. It must still reach joined_events carrying
+    its type, because that is what the planner uses to price it as free (issue #4851).
+    """
+    print("**** Running Octopus saving session eventType tests ****")
+    failed = False
+
+    def make_api(events, joined):
+        api = OctopusAPI(my_predbat, key="test-key", account_id="A-TEST", automatic=False)
+        api.dashboard_item = MagicMock()
+        api.expose_config = MagicMock()
+        api.saving_sessions = {"events": events, "account": {"hasJoinedCampaign": True, "joinedEvents": joined, "signedUpMeterPoint": {"regionId": 6}}}
+        return api
+
+    # A national Happy Hour the account was allocated, three more it was not, and a real Power Down
+    happy_joined = {"id": 5797, "code": "EVENT_56", "rewardPerKwhInOctoPoints": 0, "startAt": "2099-01-05T10:00:00+00:00", "endAt": "2099-01-05T11:00:00+00:00", "eventType": "WEEKEND_HAPPY_HOUR", "targetRegion": []}
+    happy_offered = {"id": 5798, "code": "EVENT_57", "rewardPerKwhInOctoPoints": 0, "startAt": "2099-01-05T11:00:00+00:00", "endAt": "2099-01-05T12:00:00+00:00", "eventType": "WEEKEND_HAPPY_HOUR", "targetRegion": []}
+    power_down = {"id": 5799, "code": "EVENT_58", "rewardPerKwhInOctoPoints": 93, "startAt": "2099-01-06T17:00:00+00:00", "endAt": "2099-01-06T18:00:00+00:00", "eventType": "TURN_DOWN", "targetRegion": []}
+
+    api = make_api(
+        [happy_joined, happy_offered, power_down],
+        [{"eventId": 5797, "startAt": happy_joined["startAt"], "endAt": happy_joined["endAt"], "rewardGivenInOctoPoints": None}],
+    )
+    available, joined = api.get_saving_session_data()
+
+    available_codes = [event.get("code") for event in available]
+    if available_codes != ["EVENT_58"]:
+        print("ERROR: Expected only the TURN_DOWN to be offered as available, got {}".format(available_codes))
+        failed = True
+    elif len(joined) != 1 or joined[0].get("id") != 5797:
+        print("ERROR: Expected the allocated Happy Hour in joined_events, got {}".format(joined))
+        failed = True
+    elif joined[0].get("event_type") != "WEEKEND_HAPPY_HOUR":
+        # The type is looked up from the events list, which is also where the skip happens - if the
+        # skip were applied before the lookup map is filled, the planner would price this as a
+        # saving session instead of as free
+        print("ERROR: The joined Happy Hour lost its event_type, got {}".format(joined[0]))
+        failed = True
+    elif available[0].get("event_type") != "TURN_DOWN":
+        print("ERROR: Expected the available TURN_DOWN to carry its event_type, got {}".format(available[0]))
+        failed = True
+    else:
+        print("PASS: Happy Hours are withheld from available_events but keep their type when joined")
+
+    # Each Happy Hour is logged as not offered once, not on every poll of the event list
+    api = make_api([happy_joined, happy_offered, power_down], [])
+    log_lines = []
+    api.log = lambda message: log_lines.append(str(message))
+    api.get_saving_session_data()
+    api.get_saving_session_data()
+    happy_logs = [line for line in log_lines if "Not offering Weekend Happy Hour" in line]
+    if len(happy_logs) != 2 or not any("EVENT_56" in line for line in happy_logs) or not any("EVENT_57" in line for line in happy_logs):
+        print("ERROR: Expected each Happy Hour logged once across two polls, got {}".format(happy_logs))
+        failed = True
+    else:
+        print("PASS: Each Happy Hour is logged once")
+
+    # A Happy Hour with no code is still skipped, and does not stop the rest of the events being read
+    uncoded = dict(happy_offered, id=5801, code=None)
+    api = make_api([uncoded, power_down], [])
+    available, _ = api.get_saving_session_data()
+    if [event.get("code") for event in available] != ["EVENT_58"]:
+        print("ERROR: a Happy Hour with no code should be skipped without breaking the event list, got {}".format(available))
+        failed = True
+    else:
+        print("PASS: A Happy Hour with no code is skipped")
+
+    # Two Happy Hours with no code are each logged, told apart by their id
+    api = make_api([uncoded, dict(uncoded, id=5802)], [])
+    log_lines = []
+    api.log = lambda message: log_lines.append(str(message))
+    api.get_saving_session_data()
+    happy_logs = [line for line in log_lines if "Not offering Weekend Happy Hour" in line]
+    if len(happy_logs) != 2:
+        print("ERROR: Expected two uncoded Happy Hours each logged once, got {}".format(happy_logs))
+        failed = True
+    else:
+        print("PASS: Uncoded Happy Hours are each logged")
+
+    # The query asks Octopus for eventType on the joined events themselves, not only on the events list
+    joined_block = octoplus_saving_session_query.split("joinedEvents", 1)[1].split("}", 1)[0]
+    if "eventType" not in joined_block:
+        print("ERROR: Expected the saving sessions query to request eventType on joinedEvents, got {}".format(joined_block))
+        failed = True
+    else:
+        print("PASS: The saving sessions query requests eventType on joinedEvents")
+
+    # A joined event carries its own eventType, so a Happy Hour keeps its type and leaves the saving
+    # session sensor off even when the events list has no entry for it to look the type up from (#5615)
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    active_start = (now - timedelta(minutes=10)).isoformat()
+    active_end = (now + timedelta(minutes=50)).isoformat()
+    api = make_api([], [{"eventId": 7724, "startAt": active_start, "endAt": active_end, "rewardGivenInOctoPoints": None, "eventType": "WEEKEND_HAPPY_HOUR"}])
+    _, joined = api.get_saving_session_data()
+    sensor_states = [call.args[1] for call in api.dashboard_item.call_args_list if call.args[0].startswith("binary_sensor.") and call.args[0].endswith("_saving_session")]
+    if len(joined) != 1 or joined[0].get("event_type") != "WEEKEND_HAPPY_HOUR":
+        print("ERROR: Expected the joined Happy Hour to carry its own event_type, got {}".format(joined))
+        failed = True
+    elif sensor_states != ["off"]:
+        print("ERROR: Expected the saving session sensor off during a joined Happy Hour typed on the joined event, got {}".format(sensor_states))
+        failed = True
+    else:
+        print("PASS: A joined event's own eventType is used without the events list")
+
+    # An event with no eventType is unchanged - older API responses must keep working
+    untyped = {"id": 5900, "code": "EVENT_59", "rewardPerKwhInOctoPoints": 200, "startAt": "2030-01-07T17:00:00+00:00", "endAt": "2030-01-07T18:00:00+00:00", "targetRegion": []}
+    api = make_api([untyped], [])
+    available, _ = api.get_saving_session_data()
+    if [event.get("code") for event in available] != ["EVENT_59"]:
+        print("ERROR: An event with no eventType must still be offered, got {}".format(available))
+        failed = True
+    elif available[0].get("event_type") is not None:
+        print("ERROR: Expected event_type None for an untyped event, got {}".format(available[0]))
+        failed = True
+    else:
+        print("PASS: An event with no eventType is unaffected")
+
+    if failed:
+        print("\n**** Octopus saving session eventType tests FAILED ****")
+        return 1
+    print("\n**** All Octopus saving session eventType tests PASSED ****")
+    return 0

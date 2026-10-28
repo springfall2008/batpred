@@ -30,6 +30,7 @@ import web_chat
 from chat import AgentNotReadyError, PROVIDER_DEFAULT_URLS
 from components import Components
 from tests.test_chat import _make_agent
+from utils import compile_log_secret_pattern
 from web import WebInterface
 from web_chat import WebChat, format_sse_event
 
@@ -1142,6 +1143,13 @@ def test_model_catalogue(my_predbat):
         return {"data": [{"id": "good/model", "name": "Good", "supported_parameters": ["tools", "temperature"], "context_length": 1000000}, {"id": "bad/model", "name": "Bad", "supported_parameters": ["temperature"]}]}
 
     agent._fetch_model_catalogue = fake_catalogue
+    # list_models() will not dial an endpoint no usable provider is configured for - see
+    # test_the_catalogue_is_not_fetched_with_no_provider_configured in test_chat.py - and this
+    # bare instance never reached initialize(), so it starts with none. Built by the real builder
+    # rather than hand-rolled, so the entry is the shape provider_ready() actually reads.
+    agent.providers = chat_module.build_providers({"openrouter": {"url": "https://openrouter.example/api/v1", "api_key": "test-key"}})
+    agent.active_provider = "openrouter"
+
     models = asyncio.run(agent.list_models())
     ids = [entry["id"] for entry in models]
     if "good/model" not in ids:
@@ -2620,23 +2628,41 @@ def test_busy_banner_only_points_at_another_conversation(my_predbat):
     offer a way there. On the conversation already open it was describing the transcript directly
     below it and offering to switch to where the user already was.
 
+    The decision now lives in refreshBanner() rather than in setBusy(), because restating it at
+    each call site is what let handleTitle restate it inverted (#4840). setBusy() is still checked
+    for delegating to it, so the rule cannot quietly move back into one caller and drift again.
+
     Mutation check: calling showBanner() unconditionally fails this.
     """
     failed = False
     print("**** Testing the busy banner only points elsewhere ****")
     script = web_chat.get_chat_script()
 
-    body = _extract_function_body(script, "setBusy")
+    body = _extract_function_body(script, "refreshBanner")
     if body is None:
-        print("ERROR: there is no setBusy() to inspect")
+        print("ERROR: there is no refreshBanner() to inspect")
         return True
     if "state.conversation" not in body:
-        print("ERROR: setBusy() does not compare the busy conversation with the open one: {!r}".format(body))
+        print("ERROR: refreshBanner() does not compare the busy conversation with the open one: {!r}".format(body))
         failed = True
     # Both outcomes must be reachable: shown for another conversation, hidden for this one.
     if "showBanner" not in body or "hideBanner" not in body:
-        print("ERROR: setBusy() cannot both show and hide the banner: {!r}".format(body))
+        print("ERROR: refreshBanner() cannot both show and hide the banner: {!r}".format(body))
         failed = True
+
+    for name in ("setBusy", "setIdle"):
+        caller = _extract_function_body(script, name)
+        if caller is None or "refreshBanner" not in caller:
+            print("ERROR: {}() no longer routes the banner decision through refreshBanner(): {!r}".format(name, caller))
+            failed = True
+        # A direct hideBanner()/showBanner() call is the shape the inverted rule grew in: whoever
+        # calls one decides for themselves, and that decision drifted. refreshBanner() is the only
+        # place allowed to choose. Comments are stripped first - naming the old call while
+        # explaining why it is no longer made must not read as making it.
+        code = re.sub(r"//[^\n]*", "", caller or "")
+        if "hideBanner" in code or "showBanner" in code:
+            print("ERROR: {}() still reaches for the banner directly instead of leaving the decision to refreshBanner(): {!r}".format(name, caller))
+            failed = True
 
     return failed
 
@@ -2881,6 +2907,53 @@ def test_provider_save_keeps_a_key_the_dialog_never_saw(my_predbat):
             failed = True
     finally:
         web_chat.APPS_YAML_PATH = original
+    return failed
+
+
+def test_provider_save_invalidates_log_secret_cache(my_predbat):
+    """Saving a provider block must invalidate log()'s cached redaction pattern (#5053 review).
+
+    The block can carry a nested api_key (test_provider_save_keeps_a_key_the_dialog_never_saw
+    above shows one is routinely written), but this route writes straight to
+    self.base.args["chat"] rather than through set_arg() or the web apps.yaml editor's batch
+    apply - both of which already invalidate the cache - so it was its own separate gap: a saved
+    provider key would keep leaking into the log under the stale pattern until restart.
+    """
+    failed = False
+    print("**** Testing that saving a provider invalidates the cached log redaction pattern ****")
+
+    path = _apps_yaml_fixture(APPS_YAML_WITH_PROVIDERS)
+    original = web_chat.APPS_YAML_PATH
+    web_chat.APPS_YAML_PATH = path
+    saved_cache = my_predbat._log_secret_pattern_cache
+    # The save route assigns my_predbat.args["chat"], and the runner passes this one instance
+    # through the whole registry - left unrestored, the saved provider and its API key stay in
+    # shared args for every later test (#5053 review).
+    unset = object()
+    saved_chat = my_predbat.args.get("chat", unset)
+    try:
+        agent = _run_inline_on_agent(_make_agent(my_predbat, providers={"openrouter": {"type": "openrouter", "url": "https://openrouter.ai/api/v1", "api_key": "sk-or-secret-value", "model": "a/model"}}))
+        page = _make_web(my_predbat, agent=agent).chat_page
+
+        # A stale value built the real way, not an arbitrary sentinel - matches the convention in
+        # test_web_apps_edit.py's equivalent cache-invalidation test.
+        stale_cache_marker = compile_log_secret_pattern({"stale-pattern-marker-5053xx": "marker"})
+        my_predbat._log_secret_pattern_cache = stale_cache_marker
+
+        status, body = _save_providers(page, [{"name": "openrouter", "type": "openrouter", "url": "https://openrouter.ai/api/v1", "model": "b/model", "api_key": "sk-or-new-secret", "original_name": "openrouter"}], active="openrouter")
+        if status != 200 or not body.get("ok"):
+            print("ERROR: saving a provider failed: {} {}".format(status, body))
+            failed = True
+        if my_predbat._log_secret_pattern_cache is stale_cache_marker:
+            print("ERROR: a successful provider save left the cached log redaction pattern stale")
+            failed = True
+    finally:
+        web_chat.APPS_YAML_PATH = original
+        my_predbat._log_secret_pattern_cache = saved_cache
+        if saved_chat is unset:
+            my_predbat.args.pop("chat", None)
+        else:
+            my_predbat.args["chat"] = saved_chat
     return failed
 
 
@@ -3457,6 +3530,57 @@ def test_picker_drops_a_model_the_provider_does_not_serve(my_predbat):
     return failed
 
 
+def test_default_model_can_be_reselected_after_picking_another(my_predbat):
+    """Choosing the picker's Default row goes back to the apps.yaml model after another was picked.
+
+    The Default row posts an empty id. The route cleared the conversation's own override for it
+    but only ever remembered a real selection, so the model picked earlier stayed remembered and
+    resolve_model() kept answering with it - every model could be chosen except the default (#5230).
+    The browser mirror has to forget it too, or the picker keeps naming the deselected model.
+    """
+    failed = False
+    print("**** Testing that the Default model can be reselected after picking another ****")
+
+    agent = _run_inline_on_agent(_make_agent(my_predbat, providers={"openrouter": {"type": "openrouter", "url": "https://openrouter.ai/api/v1", "api_key": "k", "model": "apps/default"}}))
+    page = _make_web(my_predbat, agent=agent).chat_page
+    cid = asyncio.run(agent.store.create())
+
+    response = asyncio.run(page.html_chat_model(FakeRequest(body={"conversation": cid, "id": "other/model"})))
+    if response.status != 200 or agent.resolve_model(cid) != "other/model":
+        print("ERROR: picking a model did not take effect: {} / {}".format(response.status, agent.resolve_model(cid)))
+        failed = True
+
+    # The Default row, exactly as selectModel('') posts it.
+    response = asyncio.run(page.html_chat_model(FakeRequest(body={"conversation": cid, "id": None})))
+    if response.status != 200:
+        print("ERROR: selecting Default answered {}".format(response.status))
+        failed = True
+    if agent.store.get_selected_model(agent.active_provider) is not None:
+        print("ERROR: selecting Default left the earlier pick remembered: {}".format(agent.store.get_selected_model(agent.active_provider)))
+        failed = True
+    if agent.resolve_model(cid) != "apps/default":
+        print("ERROR: selecting Default still resolves to {}, expected apps/default".format(agent.resolve_model(cid)))
+        failed = True
+    # And a new conversation starts on the default too, not the forgotten pick.
+    fresh = asyncio.run(agent.store.create())
+    if agent.resolve_model(fresh) != "apps/default":
+        print("ERROR: a new conversation after selecting Default resolves to {}".format(agent.resolve_model(fresh)))
+        failed = True
+
+    # The browser must forget its copy before redrawing, or effectiveModel() falls back to it.
+    body = _extract_function_body(web_chat.get_chat_script(), "selectModel")
+    if body is None:
+        print("ERROR: could not find selectModel()")
+        return True
+    if "state.selectedModel = ''" not in body:
+        print("ERROR: selectModel() never forgets the remembered model for the Default row: {!r}".format(body))
+        failed = True
+    elif body.index("state.selectedModel = ''") > body.index("closeModelList()"):
+        print("ERROR: selectModel() redraws the picker before forgetting the remembered model")
+        failed = True
+    return failed
+
+
 def test_text_inputs_are_hinted_against_password_autofill(my_predbat):
     """No text field on the Chat tab invites a password manager to fill it.
 
@@ -3761,6 +3885,62 @@ def test_provider_selector_sits_in_the_footer_beside_the_model_picker(my_predbat
     return failed
 
 
+def test_title_event_does_not_offer_to_switch_to_the_open_conversation(my_predbat):
+    """A title arriving mid-turn must not raise the 'replying elsewhere' banner (#4840).
+
+    The banner exists to say a reply is happening in a conversation the user is NOT looking at, and
+    offers a link to switch to it. 'title' events are scoped server-side to the conversation being
+    viewed, so `state.busy.conversation_id === state.conversation` inside handleTitle is true
+    exactly when the busy conversation is the one already on screen - the case setBusy deliberately
+    hides the banner for. Showing it there offered to switch the user to the transcript in front of
+    them, captioned with a title the header had not caught up with yet.
+    """
+    failed = False
+    print("**** Testing title event does not raise the switch-to banner ****")
+
+    script = web_chat.get_chat_script()
+
+    body = _extract_function_body(script, "handleTitle")
+    if body is None:
+        print("ERROR: no handleTitle function found")
+        return True
+
+    if "showBanner" in body:
+        print("ERROR: handleTitle still calls showBanner, which offers to switch to the conversation already open: {!r}".format(body))
+        failed = True
+
+    # The header reads its title from state.titles (see updateChatTitle), which handleTitle never
+    # updated - so the header went on saying 'New chat' until the user switched away and back.
+    if "state.titles" not in body:
+        print("ERROR: handleTitle does not update state.titles, so the header keeps the old title: {!r}".format(body))
+        failed = True
+    if "updateChatTitle" not in body:
+        print("ERROR: handleTitle does not refresh the header title: {!r}".format(body))
+        failed = True
+
+    # One place decides whether the banner belongs on screen, so setBusy and handleTitle cannot
+    # drift apart again.
+    decide = _extract_function_body(script, "refreshBanner")
+    if decide is None:
+        print("ERROR: no refreshBanner function - the show/hide rule still lives in more than one place")
+        return True
+    if "!==" not in decide:
+        print("ERROR: refreshBanner does not test that the busy conversation is a DIFFERENT one: {!r}".format(decide))
+        failed = True
+    if "showBanner" not in decide or "hideBanner" not in decide:
+        print("ERROR: refreshBanner should own both sides of the decision: {!r}".format(decide))
+        failed = True
+
+    busy = _extract_function_body(script, "setBusy")
+    if busy is None or "refreshBanner" not in busy:
+        print("ERROR: setBusy no longer delegates the banner decision to refreshBanner: {!r}".format(busy))
+        failed = True
+
+    if not failed:
+        print("✓ Test passed: a title event leaves the banner alone and refreshes the header")
+    return failed
+
+
 def test_own_message_is_shown_without_waiting_for_the_server_echo(my_predbat):
     """Hitting send must render your own message immediately, not only when the SSE echo lands.
 
@@ -3836,6 +4016,7 @@ def run_web_chat_tests(my_predbat):
     """Run every Chat tab web layer test, returning True if any of them failed."""
     failed = False
     failed |= test_routes_always_registered_handlers_404_unconfigured(my_predbat)
+    failed |= test_title_event_does_not_offer_to_switch_to_the_open_conversation(my_predbat)
     failed |= test_own_message_is_shown_without_waiting_for_the_server_echo(my_predbat)
     failed |= test_chat_routes_survive_the_real_phase_order(my_predbat)
     failed |= test_send_is_busy_and_unknown_is_404(my_predbat)
@@ -3887,6 +4068,7 @@ def run_web_chat_tests(my_predbat):
     failed |= test_retry_status_element_takes_its_colour_from_theme_variables(my_predbat)
     failed |= test_provider_list_route_never_hands_a_key_to_the_browser(my_predbat)
     failed |= test_provider_save_keeps_a_key_the_dialog_never_saw(my_predbat)
+    failed |= test_provider_save_invalidates_log_secret_cache(my_predbat)
     failed |= test_provider_save_does_not_rewrap_long_values(my_predbat)
     failed |= test_provider_save_migrates_the_loose_block_without_losing_its_key(my_predbat)
     failed |= test_provider_save_refuses_bad_input_before_touching_the_file(my_predbat)
@@ -3897,6 +4079,7 @@ def run_web_chat_tests(my_predbat):
     failed |= test_every_route_answers_503_while_the_component_is_starting(my_predbat)
     failed |= test_history_reports_the_override_only_for_its_own_provider(my_predbat)
     failed |= test_picker_drops_a_model_the_provider_does_not_serve(my_predbat)
+    failed |= test_default_model_can_be_reselected_after_picking_another(my_predbat)
     failed |= test_text_inputs_are_hinted_against_password_autofill(my_predbat)
     failed |= test_unavailable_catalogue_says_why(my_predbat)
     failed |= test_switching_provider_writes_nothing_and_restarts_nothing(my_predbat)

@@ -138,6 +138,13 @@ def get_metrics_dashboard_body(data_json):
   <div class="md-card-grid" id="mdConflictCards"></div>
   <div style="margin-top:1rem;" id="mdConflictTable"></div>
 </section>
+
+<!-- Section 7: Control Failures -->
+<section>
+  <h2>Control Failures</h2>
+  <div class="md-card-grid" id="mdFailureCards"></div>
+  <div style="margin-top:1rem;" id="mdFailureTable"></div>
+</section>
 </div>
 
 <script>
@@ -358,6 +365,42 @@ function mdRenderControlConflicts(d) {
   document.getElementById('mdConflictTable').innerHTML = t;
 }
 
+function mdClock(ts) {
+  if (!ts) return '—';
+  var t = new Date(ts * 1000);
+  return ('0' + t.getHours()).slice(-2) + ':' + ('0' + t.getMinutes()).slice(-2);
+}
+
+function mdRenderControlFailures(d) {
+  var events = d.control_failures_events || [];
+  var count = d.control_failures_24h || 0;
+  var cards = [
+    {label:'Failed Slots (24h)',  value: mdFmt(count, 0),                         cls: count > 0 ? 'md-status-warn' : 'md-status-ok'},
+    {label:'Failed Slots (Total)', value: mdFmt(d.control_failures_total || 0, 0), cls: ''},
+  ];
+  var h = '';
+  cards.forEach(function (c) {
+    h += '<div class="md-card"><div class="md-label">' + c.label + '</div>'
+      + '<div class="md-value ' + c.cls + '">' + c.value + '</div></div>';
+  });
+  document.getElementById('mdFailureCards').innerHTML = h;
+
+  if (events.length === 0) {
+    document.getElementById('mdFailureTable').innerHTML = '<div class="md-card" style="text-align:center;">No control failures in the last 24h</div>';
+    return;
+  }
+  var t = '<table><thead><tr><th>When</th><th>Inverter</th><th>Mode</th><th>Slot</th><th>Requested</th><th>Measured</th><th>Failed Minutes</th></tr></thead><tbody>';
+  /* Newest first for reading, even though the source list is oldest-first for storage. */
+  events.slice().reverse().forEach(function (e) {
+    t += '<tr><td>' + mdAgo(e.at) + '</td><td>' + e.inverter + '</td><td>' + (e.mode || '—') + '</td>'
+      + '<td>' + mdClock(e.slot_start) + '–' + mdClock(e.slot_end) + '</td>'
+      + '<td>' + (e.requested_w === null || e.requested_w === undefined ? '—' : mdFmt(e.requested_w, 0) + 'W') + '</td>'
+      + '<td>' + mdFmt(e.measured_w, 0) + 'W</td><td>' + mdFmt(e.failed_minutes, 1) + '</td></tr>';
+  });
+  t += '</tbody></table>';
+  document.getElementById('mdFailureTable').innerHTML = t;
+}
+
 function mdRebuildCharts(d) {
   if (mdSocChart)    { mdSocChart.destroy();    mdSocChart    = null; }
   if (mdPowerChart)  { mdPowerChart.destroy();  mdPowerChart  = null; }
@@ -371,6 +414,7 @@ function mdRenderAll(d) {
   mdRenderAPI(d);
   mdRenderSolar(d);
   mdRenderControlConflicts(d);
+  mdRenderControlFailures(d);
   if (!mdSocChart) {
     mdInitSOCChart(d); mdInitPowerChart(d); mdInitEnergyChart(d);
   } else {

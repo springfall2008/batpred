@@ -22,6 +22,7 @@ def run_discard_unused_export_slots_tests(my_predbat):
     failed |= test_no_combine_non_contiguous(my_predbat)
     failed |= test_no_combine_manual_times_start(my_predbat)
     failed |= test_no_combine_manual_times_prev(my_predbat)
+    failed |= test_no_combine_active_keep_max(my_predbat)
     failed |= test_mixed_slots(my_predbat)
     failed |= test_all_disabled(my_predbat)
     failed |= test_freeze_export_kept(my_predbat)
@@ -39,6 +40,7 @@ def setup(my_predbat):
     reset_inverter(my_predbat)
     my_predbat.debug_enable = False
     my_predbat.manual_all_times = []
+    my_predbat.all_active_keep_max = {}
 
 
 def test_discard_disabled(my_predbat):
@@ -185,6 +187,27 @@ def test_no_combine_manual_times_prev(my_predbat):
 
     if len(result_limits) != 2:
         print("ERROR: Expected 2 slots (prev start is manual time) but got {}".format(len(result_limits)))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_no_combine_active_keep_max(my_predbat):
+    """Slots should not combine across a manual_soc_max (all_active_keep_max) boundary - issue #1578"""
+    print("**** test_no_combine_export_active_keep_max ****")
+    failed = False
+    setup(my_predbat)
+    my_predbat.all_active_keep_max = {750: 4.0}
+
+    windows = [make_window(720, 750), make_window(750, 780)]
+    limits = [50.0, 50.0]
+
+    result_limits, result_windows = my_predbat.discard_unused_export_slots(limits, windows)
+
+    if len(result_limits) != 2:
+        print("ERROR: Expected 2 slots (all_active_keep_max boundary) but got {}".format(len(result_limits)))
         failed = True
 
     if not failed:

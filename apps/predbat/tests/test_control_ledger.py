@@ -26,6 +26,7 @@ from control_ledger import (
     EXTERNAL,
     UNAVAILABLE,
     PENDING,
+    MIN_DIVERGENCE_S,
 )
 from const import INVERTER_MAX_RETRY
 
@@ -545,6 +546,7 @@ def _stub_inverter(state_sequence, ledger=None, generation=1000.0):
     stub.log = stub.base.log
     stub.id = 0
     stub.count_register_writes = 0
+    stub.registers_moved = 0
     stub.created_attributes = {}
     stub.inv_write_and_poll_sleep = 0
     stub.sleep = lambda seconds: None
@@ -1793,9 +1795,11 @@ def test_divergence_without_timing_metadata_must_repeat():
         if ledger.observe("number.reserve", "reserve", 50.0, now=210.0, generation=read_generation) != PENDING:
             print(f"ERROR: a repeat within one cycle ({label}) was treated as persistence")
             failed = True
-        # A distinct cycle does.
+        # A distinct cycle does - once MIN_DIVERGENCE_S has also elapsed. The timestamp here
+        # clears that floor; cycle count alone is deliberately no longer sufficient, because
+        # cycle rate depends on how often Predbat's entry points run.
         ledger.begin_cycle()
-        if ledger.observe("number.reserve", "reserve", 50.0, now=300.0, generation=read_generation) != EXTERNAL:
+        if ledger.observe("number.reserve", "reserve", 50.0, now=100.0 + MIN_DIVERGENCE_S, generation=read_generation) != EXTERNAL:
             print(f"ERROR: a divergence persisting across cycles ({label}) was not reported")
             failed = True
         if len(ledger.events) != 1:
@@ -1845,8 +1849,10 @@ def test_every_entry_point_opens_its_own_cycle():
     stub = Execute.__new__(Execute)
     ledger = ControlLedger()
     stub.control_ledger = ledger
+    # The template-mode guard reads config before anything else; answer with the default (off)
+    stub.get_arg = lambda arg, default=None, **kwargs: default
     stub.inverters = []
-    stub.fetch_inverter_data = lambda create=True: False
+    stub.fetch_inverter_data = lambda quick=False: False
     before = ledger.cycle
     stub.quick_inverter_data_update()
     if ledger.cycle != before + 1:
@@ -1861,6 +1867,16 @@ def test_every_entry_point_opens_its_own_cycle():
         print("ERROR: quick_inverter_data_update opened a cycle with no inverters to read")
         failed = True
 
+    # Template mode must return before begin_cycle() - it would otherwise burn a ledger cycle on
+    # every tick of update_time_loop, since nothing stamps inverter_data_last_fetch there.
+    stub.get_arg = lambda arg, default=None, **kwargs: True if arg == "template" else default
+    stub.inverters = []
+    before = ledger.cycle
+    if stub.quick_inverter_data_update() is not False or ledger.cycle != before:
+        print("ERROR: template mode did not return False before opening a control-ledger cycle")
+        failed = True
+    stub.get_arg = lambda arg, default=None, **kwargs: default
+
     # A missing ledger must not take the path out.
     stub.inverters = []
     stub.control_ledger = None
@@ -1870,6 +1886,69 @@ def test_every_entry_point_opens_its_own_cycle():
         print(f"ERROR: quick_inverter_data_update raised with no ledger configured: {e}")
         failed = True
     assert not failed, "test_every_entry_point_opens_its_own_cycle"
+
+
+def test_divergence_needs_elapsed_time_not_just_cycles():
+    """A cached read must not be reported EXTERNAL just because cycles ticked fast.
+
+    The fail-open path (no generation on either side) falls back to "the divergence repeated in
+    a later cycle". Cycles are advanced by every entry point that observes - the plan run AND the
+    inverter poll - so the wall-clock tolerance for a vendor serving a stale cached read is set by
+    however often those happen to run. Halving the poll interval halved it, which would make
+    Predbat accuse the customer's inverter of external interference twice as readily.
+
+    The rule therefore needs a floor in seconds as well: two distinct cycles AND real time passing.
+    """
+    failed = False
+
+    # Cycles tick quickly (60s apart) - not enough time since our write to convict.
+    ledger = ControlLedger()
+    ledger.begin_cycle()
+    ledger.record_write("number.reserve", "reserve", 4.0, now=0.0, generation=None)
+    ledger.begin_cycle()
+    if ledger.observe("number.reserve", "reserve", 50.0, now=60.0, generation=None) != PENDING:
+        print("ERROR: a first divergence was not held pending")
+        failed = True
+    ledger.begin_cycle()
+    if ledger.observe("number.reserve", "reserve", 50.0, now=120.0, generation=None) != PENDING:
+        print("ERROR: a divergence only 60s old was convicted on cycle count alone")
+        failed = True
+    if ledger.events:
+        print("ERROR: a divergence inside the time floor was reported: {}".format(ledger.events))
+        failed = True
+
+    # Once enough real time has passed, it still convicts - the rule is a floor, not a mute.
+    ledger.begin_cycle()
+    if ledger.observe("number.reserve", "reserve", 50.0, now=MIN_DIVERGENCE_S, generation=None) != EXTERNAL:
+        print("ERROR: a divergence past the time floor was not reported")
+        failed = True
+
+    return failed
+
+
+def test_divergence_floor_matches_the_previous_cadence_behaviour():
+    """The floor must not quietly extend how long a real external change goes unreported.
+
+    The previous cycle-only rule, at the 120s poll cadence in use before this change, held the
+    first divergent read at t=120 pending and reported at t=240. Measuring MIN_DIVERGENCE_S from
+    the confirming write reproduces that exactly, so 240 really is a no-op at that cadence.
+    Measuring it from the first divergent read instead would have pushed this out to t=360.
+    """
+    failed = False
+    ledger = ControlLedger()
+    ledger.begin_cycle()
+    ledger.record_write("number.reserve", "reserve", 4.0, now=0.0, generation=None)
+
+    ledger.begin_cycle()
+    if ledger.observe("number.reserve", "reserve", 50.0, now=120.0, generation=None) != PENDING:
+        print("ERROR: the first divergent read at t=120 should still be pending")
+        failed = True
+
+    ledger.begin_cycle()
+    if ledger.observe("number.reserve", "reserve", 50.0, now=240.0, generation=None) != EXTERNAL:
+        print("ERROR: a divergence persisting to t=240 must be reported, as it was before the floor")
+        failed = True
+    return failed
 
 
 def run_control_ledger_tests(my_predbat):
@@ -1915,6 +1994,8 @@ def run_control_ledger_tests(my_predbat):
         ("sustained_controls", test_sustained_lists_repeat_offenders),
         ("newest_events_contract", test_newest_events_honours_its_contract),
         ("cycle_per_entry_point", test_every_entry_point_opens_its_own_cycle),
+        ("divergence_time_floor", test_divergence_needs_elapsed_time_not_just_cycles),
+        ("divergence_floor_cadence_parity", test_divergence_floor_matches_the_previous_cadence_behaviour),
         ("re_arms_no_write_needed", test_ownership_re_arms_when_no_write_is_needed),
         ("divergence_must_repeat", test_divergence_without_timing_metadata_must_repeat),
         ("restore_string_at_safe", test_restored_event_with_string_at_does_not_raise),

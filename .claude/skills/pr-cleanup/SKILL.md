@@ -45,7 +45,8 @@ If the conflicts are extensive enough that a safe resolution would mean re-imple
 - CI status: `gh pr checks <pr-number>`. For any failing check, read its actual log (`gh run view <run-id> --job <job-id> --log`, or fetch the job log directly) to find the real failure, not just the pass/fail summary.
 - Skip anything already resolved: a review thread that already has a reply from you addressing it, or a check that's since gone green.
 
-If there is genuinely nothing new to address — step 2's merge was a no-op, every thread already has a reply, every check is green — say so in a brief comment and stop; this is a normal, successful outcome, not a failure.
+If there is genuinely nothing new to address — step 2's merge was a no-op, every thread already has a reply, every check is green — post a brief comment saying so, opening with a line disclosing this is an automated cleanup check (nothing for a maintainer to act on),
+and stop; this is a normal, successful outcome, not a failure.
 
 ## 4. Evaluate before implementing
 
@@ -53,11 +54,13 @@ Per `receiving-code-review`: for each remaining item, verify it's technically co
 
 ## 5. Implement confirmed fixes
 
-Same conventions as `/issue-pr`: `CLAUDE.md` (already loaded automatically for this session), `lower_case_with_underscores` naming, 256-character line length, a one-line docstring on every new function or class, and a unit test for any new code.
+Same conventions as `/issue-pr`: `CLAUDE.md` (already loaded automatically for this session), `lower_case_with_underscores` naming, 256-character line length, a one-line docstring on every new function or class,
+and a unit test for any new code.
 
 ## 6. Quality gate
 
-Both of these must pass before you push anything - this covers step 2's merge as much as any fix from step 5, so run it even if step 5 had nothing to do. `run_pre_commit` must run with `coverage/` as the working directory (it sources `coverage/setup.csh` internally); `tools/triage_test.sh` must run from the repo root:
+Both of these must pass before you push anything - this covers step 2's merge as much as any fix from step 5, so run it even if step 5 had nothing to do. `run_pre_commit` must run with `coverage/` as the working directory
+(it sources `coverage/setup.csh` internally); `tools/triage_test.sh` must run from the repo root:
 
 ```bash
 cd coverage
@@ -66,7 +69,13 @@ cd ..
 tools/triage_test.sh <name> <scratch>/test.log
 ```
 
-Use the test module the changed area maps to in `TEST_REGISTRY` (`apps/predbat/unit_test.py`), or `./run_all --quick` (from `coverage/`, same as above) if there's no clean single-module mapping. If either still fails, go to step 7 and report what's still broken — do not push a change that doesn't pass its own quality gate, even if step 2's merge commit already exists locally: an unpushed local commit is discarded automatically the next time this runs.
+Use the test module the changed area maps to in `TEST_REGISTRY` (`apps/predbat/unit_test.py`), or `./run_all --quick` (from `coverage/`, same as above) if there's no clean single-module mapping.
+If either still fails, go to step 7 and report what's still broken — do not push a change that doesn't pass its own quality gate,
+even if step 2's merge commit already exists locally.
+
+Run both in the foreground and wait for them to finish; the pre-commit run plus the quick suite takes a few minutes, well inside a single command's timeout. This is a non-interactive run: once you write your final message the session is over, and nothing comes back later to read a result or finish the job. Never end on "still running, I'll push when it finishes". PR #5216's cleanup did exactly that on 2026-09-26: its fixes were never committed, and the leftover edits blocked every later bot run until they were cleared by hand.
+
+The daemon checks the clone after you exit. Uncommitted changes or unpushed commits mark the run failed (`BOT_FAILED`), and they are stashed rather than discarded. A run that stops at a failed quality gate is therefore reported as a failure even after posting its summary comment, which is correct, because the cleanup did not complete.
 
 ## 7. Commit, push, and reply
 
@@ -76,17 +85,19 @@ git commit -m "<one-line summary of the fixes>"
 git push
 ```
 
-Skip the commit if step 5 had nothing to implement — step 2's merge commit (if any) is already complete and just needs pushing.
+`git push` with no arguments, and nothing else. The branch already has an upstream from `gh pr checkout`, so naming a remote or a ref is never necessary — and if a bare push fails, that is information, not something to route around. **Do not retry with a different target.** A push that fails because the PR's head branch lives in a fork cannot be made to work: the credential can only write to `springfall2008/batpred`, and retrying against `origin` means pushing to *this* repo, whose default branch is `main`. That is exactly how an unreviewed commit reached upstream `main` on 2026-09-06. Stop at step 7 and report the failure instead; the daemon now filters fork-head PRs out before they reach you, so hitting this at all means something is wrong.
 
-Reply to each review thread you addressed, in the thread itself, not as a new top-level comment:
+Skip the commit if step 5 had nothing to implement — step 2's merge commit (if any) is already complete and just needs pushing.
+Reply to each review thread you addressed, in the thread itself, not as a new top-level comment. Open every reply with a short line disclosing it is an automated reply from the triage bot, then state what changed:
 
 ```bash
 gh api repos/springfall2008/batpred/pulls/<pr-number>/comments/<comment-id>/replies -f body="..."
 ```
 
-State what changed, or push back with your reasoning if you didn't implement the suggestion — never a bare "done" with no explanation. If anything is unclear, technically wrong, or you can't verify a suggestion, say so in the reply rather than guessing or implementing something you don't understand.
+Or push back with your reasoning if you didn't implement the suggestion — never a bare "done" with no explanation. If anything is unclear, technically wrong, or you can't verify a suggestion, say so in the reply rather than guessing or implementing something you don't understand.
 
-If step 6's quality gate never passed, post one summary comment via `gh pr comment <pr-number> --body "..."` explaining what's still failing and why you didn't push, instead of doing the commit/push/reply steps above.
+If step 6's quality gate never passed, post one summary comment via `gh pr comment <pr-number> --body "..."` opening with the same automated-reply disclosure line, explaining what's still failing and why you didn't push,
+instead of doing the commit/push/reply steps above.
 
 ## Guardrails
 

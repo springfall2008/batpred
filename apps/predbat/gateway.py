@@ -11,15 +11,18 @@ import datetime
 import json
 import math
 import os
+import re
 import ssl
+import threading
 import time
 import uuid
 import traceback
-from utils import calc_percent_limit
-from const import EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE
+from utils import calc_percent_limit, export_mode_of, export_target_of, export_power_of, parse_car_plan_windows, in_car_plan_window, strptime_aware
+from const import EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, MINUTE_WATT, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_MONITOR
 import pytz as _pytz
 
 from component_base import ComponentBase
+from live_display import live_display_payload, validated_binding, visibility_payload
 
 try:
     import gateway_status_pb2 as pb
@@ -55,6 +58,74 @@ _PLAN_REPUBLISH_INTERVAL = 5 * 60
 # Telemetry staleness threshold (seconds)
 _TELEMETRY_STALE_THRESHOLD = 120
 
+# How long an identical control command waits for the hub's ack (or, after an ack,
+# for telemetry to catch up) before it may be published again (seconds). Covers the
+# GWMQTT write_and_poll loop (3 attempts of up to 10 s each, see INVERTER_DEF), so one
+# write sends the command once.
+_COMMAND_ACK_WINDOW = 30
+
+# Ids kept per tracked command, so an ack for an earlier send of the same value still
+# counts (matches the number of recent ids the hub remembers for replay protection)
+_COMMAND_ACK_IDS_KEPT = 16
+
+# EVC control: attempts allowed per planned-window state and direction (start or stop) before giving
+# up until the window state next changes, and the minimum gap between attempts so the charger's
+# telemetry can catch up with the last command first
+_EV_COMMAND_ATTEMPTS = 3
+_EV_COMMAND_RETRY_SECONDS = 120
+
+# OCPP StatusNotification values meaning a car is plugged in
+_EV_CAR_CONNECTED_STATUSES = frozenset({"Preparing", "Charging", "SuspendedEV", "SuspendedEVSE", "Finishing"})
+
+# Charger states in which a start cannot work. Any other status is tried: the hub's status string
+# cannot be trusted to show a plugged-in car on older firmware - it reads "Available" after StopTransaction until
+# the charger next sends a StatusNotification, so a car left plugged in between two windows looks
+# unplugged. The attempt cap bounds the cost when no car is there.
+_EV_START_BLOCKED_STATUSES = frozenset({"Unavailable", "Faulted", "Offline"})
+
+# A slot window staged by a select write is shown in place of the Hub's schedule until the
+# schedule write switch sends it. One nobody sends (a manual edit with no press) is dropped
+# after this long, so the selects show the Hub's own schedule again (seconds).
+_STAGED_EXPIRY_SECONDS = 600
+
+# Sends of one schedule-write command before it is given up as unanswered, one per
+# _COMMAND_ACK_WINDOW, and how often the commit looks for its ack (seconds)
+_COMMIT_ATTEMPTS = 3
+_COMMIT_POLL_SECONDS = 0.5
+
+
+def _split_same_day_plan_entries(entries):
+    """Split native EMS windows into same-day pieces on the plan's absolute timeline.
+
+    The EMS requires a 23:59 end followed by a separate 00:00 start. Keep hours
+    above 23 on later days so the Hub still expires each piece on its intended day.
+    """
+    split_entries = []
+    for entry in entries:
+        start = max(0, entry["start_hour"] * 60 + entry["start_minute"])
+        end = entry["end_hour"] * 60 + entry["end_minute"]
+        while start < end:
+            next_midnight = (start // (24 * 60) + 1) * (24 * 60)
+            piece_end = min(end, next_midnight - 1)
+            if start < piece_end:
+                piece = entry.copy()
+                piece["start_hour"], piece["start_minute"] = divmod(start, 60)
+                piece["end_hour"], piece["end_minute"] = divmod(piece_end, 60)
+                split_entries.append(piece)
+            start = next_midnight
+    return split_entries
+
+
+def _monotonic():
+    """Clock for the ack window: immune to wall-clock corrections, and patchable in tests."""
+    return time.monotonic()
+
+
+async def _commit_pause():
+    """Wait before looking again for a schedule-write command's ack (patchable in tests)."""
+    await asyncio.sleep(_COMMIT_POLL_SECONDS)
+
+
 # Total startup wait budget, in 0.5 s ticks, shared by the connection and auto-config waits
 _STARTUP_WAIT_TICKS = 120 * 2
 _STARTUP_WAIT_SECONDS = _STARTUP_WAIT_TICKS * 0.5
@@ -83,10 +154,24 @@ PLAN_MODE_AUTO = 0
 PLAN_MODE_CHARGE = 1
 PLAN_MODE_DISCHARGE = 2
 
+# GivEnergy holds the charge and discharge rates as a whole percent of nominal battery capacity,
+# rounded down - 1300W on a 13.41kWh battery reads back 1206W (#5324)
+GIVENERGY_RATE_STEP_PERCENT_OF_CAPACITY = 1
+# What the hub's model name carries for a GivEnergy 3-phase unit, lower case
+GIVENERGY_3PH_MODEL_TOKEN = "3ph"
+GIVENERGY_INVERTER_TYPES = (pb.INVERTER_TYPE_GIVENERGY, pb.INVERTER_TYPE_GIVENERGY_EMS, pb.INVERTER_TYPE_GIVENERGY_GATEWAY)
+# Coordinators: a Plant EMS or a GivEnergy Gateway manages battery inverters and has no battery of its own
+GATEWAY_COORDINATOR_TYPES = (pb.INVERTER_TYPE_GIVENERGY_EMS, pb.INVERTER_TYPE_GIVENERGY_GATEWAY)
+# Where the discovery record of each inverter in gateway_inverter_serial is kept (see _update_discovery)
+GATEWAY_STORAGE_MODULE = "gateway"
+# How long a failed save of the discovery records waits before it is tried again
+GATEWAY_DISCOVERY_SAVE_RETRY_SECONDS = 5 * 60
+
 # Entity attribute table — keyed by the semantic suffix used in dashboard_item calls
 GATEWAY_ATTRIBUTE_TABLE = {
     # Binary sensors
     "gateway_online": {"friendly_name": "Gateway Online", "device_class": "connectivity"},
+    "gateway_read_only": {"friendly_name": "Gateway Read-Only (enforced)", "icon": "mdi:lock"},
     # Timestamps
     "inverter_time": {"friendly_name": "Inverter Time", "icon": "mdi:clock", "device_class": "timestamp"},
     # Battery state
@@ -127,6 +212,7 @@ GATEWAY_ATTRIBUTE_TABLE = {
     "reserve_soc": {"friendly_name": "Reserve SOC", "icon": "mdi:battery-lock", "unit_of_measurement": "%", "min": 0, "max": 100, "step": 1},
     "target_soc": {"friendly_name": "Target SOC", "icon": "mdi:battery-arrow-up", "unit_of_measurement": "%", "min": 0, "max": 100, "step": 1},
     # Schedule selects (HH:MM:SS options)
+    "schedule_write": {"friendly_name": "Schedule Write", "icon": "mdi:calendar-sync"},
     "charge_slot1_start": {"friendly_name": "Charge Slot 1 Start", "icon": "mdi:clock-start", "options": _GATEWAY_OPTIONS_TIME},
     "charge_slot1_end": {"friendly_name": "Charge Slot 1 End", "icon": "mdi:clock-end", "options": _GATEWAY_OPTIONS_TIME},
     "discharge_slot1_start": {"friendly_name": "Discharge Slot 1 Start", "icon": "mdi:clock-start", "options": _GATEWAY_OPTIONS_TIME},
@@ -143,7 +229,9 @@ GATEWAY_ATTRIBUTE_TABLE = {
     # EV charger (OCPP) — device-level entities, present when a charge point is connected
     "ev_online": {"friendly_name": "EV Charger Online", "icon": "mdi:ev-station", "device_class": "connectivity"},
     "ev_connected": {"friendly_name": "EV Car Connected", "icon": "mdi:car-electric", "device_class": "plug"},
+    "ev_plugged": {"friendly_name": "EV Car Plugged In", "icon": "mdi:ev-plug-type2", "device_class": "plug"},
     "ev_session_active": {"friendly_name": "EV Charging Active", "icon": "mdi:ev-station", "device_class": "battery_charging"},
+    "ev_charging": {"friendly_name": "EV Drawing Power", "icon": "mdi:ev-station", "device_class": "battery_charging"},
     "ev_status": {"friendly_name": "EV Charger Status", "icon": "mdi:ev-station"},
     "ev_power": {"friendly_name": "EV Charge Power", "icon": "mdi:ev-station", "unit_of_measurement": "W", "device_class": "power", "state_class": "measurement"},
     "ev_session_energy": {"friendly_name": "EV Session Energy", "icon": "mdi:ev-station", "unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total"},
@@ -177,6 +265,31 @@ def extract_rate_anchors(rate_min, rate_max, import_rate, export_rate):
     return {"rate_min": rate_min, "rate_max": rate_max, "import_rate": rate_import, "export_rate": rate_export}
 
 
+# gateway_integrate_power: power is not taken to have held across a telemetry gap longer than this,
+# so nothing is integrated over it
+GATEWAY_INTEGRATE_MAX_GAP_SECONDS = 15 * 60
+# gateway_integrate_power: the most PV a hub pv_today counter can gain between two samples, as a rate
+# plus one counter step. A larger rise is the counter returning from a dropped sample, not generation
+GATEWAY_INTEGRATE_MAX_PV_W = 50000
+GATEWAY_INTEGRATE_PV_STEP_WH = 200
+
+
+def parse_display_flag(name, value):
+    """Parse a display role flag, raising ValueError for anything not clearly true or false.
+
+    These flags decide whether the engine controls an inverter or only feeds a display, so a
+    typo or a stray 0/1 must fail loudly rather than quietly pick a mode.
+    """
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text not in ("true", "false", "1", "0", "yes", "no", "on", "off"):
+            raise ValueError(f"{name} must be a boolean")
+        return text in ("true", "1", "yes", "on")
+    if not isinstance(value, bool):
+        raise ValueError(f"{name} must be a boolean")
+    return value
+
+
 class GatewayMQTT(ComponentBase):
     """ESP32 Gateway MQTT component for PredBat.
 
@@ -184,11 +297,58 @@ class GatewayMQTT(ComponentBase):
     Instance methods handle MQTT lifecycle and ComponentBase integration.
     """
 
-    def initialize(self, gateway_device_id=None, mqtt_host=None, mqtt_port=8883, mqtt_token=None, gateway_inverter_serial=None, gateway_evc_automatic=False, gateway_evc_control=False, **kwargs):
+    # Guards the command id counter and the in-flight command map, which are touched both by
+    # control writes (engine thread) and by acks arriving on the MQTT listener's loop.
+    _command_lock = threading.Lock()
+    # Guards _staged: select and switch events arrive on Home Assistant's thread, commits and
+    # telemetry run on the gateway's own loop
+    _staged_lock = threading.Lock()
+
+    # Defaults for an instance built without initialize()
+    gateway_shared_ct = True
+    gateway_integrate_power = False
+    gateway_inverter_serial = ()
+    gateway_display_only = False
+    gateway_display_enabled = True
+    gateway_display_visibility = None
+    gateway_live_display = False
+    gateway_live_display_binding = None
+    _integrated_energy = None
+    _unavailable_inverters = ((), ())
+    _discovery = {}  # replaced, never changed in place, so this default is not shared state
+    _discovery_dirty = False
+    _discovery_save_retry_at = 0
+    _pv_only_serials = ()
+    _inverter_slot_serials = ()
+    _slots_without_capacity = frozenset()
+    _ev_last_soc = {}  # replaced, never changed in place
+    _last_ratings = {}  # replaced, never changed in place
+    _assumed_ratings = frozenset()
+    _commanded_serials_sent = None  # the declaration last sent with set_commanded_serials
+    _commanded_serials_sent_time = 0
+    _reserve_before_zero = {}  # replaced, never changed in place
+    gateway_device_id = None
+
+    def initialize(
+        self,
+        gateway_device_id=None,
+        mqtt_host=None,
+        mqtt_port=8883,
+        mqtt_token=None,
+        gateway_inverter_serial=None,
+        gateway_evc_automatic=False,
+        gateway_evc_control=False,
+        gateway_shared_ct=True,
+        gateway_integrate_power=False,
+        gateway_display_only=False,
+        **kwargs,
+    ):
         """Initialize gateway configuration and build MQTT topic strings.
 
         Args:
             gateway_device_id: The gateway's device ID (e.g. "pbgw_abc123").
+            gateway_display_only: Publish display data without registering or controlling any inverter
+                or EV charger. The hub must already be parked by its standby controller.
             mqtt_host: MQTT broker hostname.
             mqtt_port: MQTT broker port (default 8883 for TLS).
             mqtt_token: JWT access token for MQTT authentication.
@@ -197,15 +357,35 @@ class GatewayMQTT(ComponentBase):
             gateway_evc_automatic: When True, automatically register a connected OCPP EV charger as a
                 PredBat car so the optimizer plans for it. Off by default so existing gateway users are
                 unaffected. Set to ``true`` in apps.yaml to enable.
-            gateway_evc_control: When True (requires gateway_evc_automatic), check once per minute whether
-                the current time falls inside a planned car-charging window and send RemoteStartTransaction
-                plus SetChargingProfile on window entry, or RemoteStopTransaction on window exit. When
-                enabled, car_charging_now is omitted from auto-config to prevent a feedback loop.
+            gateway_evc_control: When True (requires gateway_evc_automatic), reconcile the charger once per
+                minute against the planned car-charging windows: inside a window with no session, when the
+                charger is not Unavailable/Faulted/Offline, send SetChargingProfile plus RemoteStartTransaction;
+                outside every window with a session active, send RemoteStopTransaction - whoever started that session.
+            gateway_shared_ct: When True (the default), several inverters are taken to share one grid CT
+                clamp, so each reports the same grid and load. Only the first inverter's grid and load
+                readings are then used, so the house's grid and load are not counted once per inverter.
+                Set to False where each inverter has its own clamp, and the readings are summed.
+            gateway_integrate_power: When True, today's import, export and load are integrated from grid
+                and battery power instead of taken from the hub's energy counters, for inverters whose
+                counters cannot be trusted (see _update_integrated_energy()). Off by default.
             **kwargs: Additional keyword arguments (ignored).
         """
         self.gateway_device_id = gateway_device_id
+        self.gateway_display_enabled = parse_display_flag("gateway_display_enabled", kwargs.get("gateway_display_enabled", True))
+        self.gateway_display_visibility = kwargs.get("gateway_display_visibility")
+        self.gateway_live_display = parse_display_flag("gateway_live_display", kwargs.get("gateway_live_display", False))
+        self.gateway_live_display_binding = kwargs.get("gateway_live_display_binding")
+        self._last_live_display_publish = 0
+        self._last_live_binding = None
+        self._last_live_binding_publish = 0
+        self.gateway_display_only = parse_display_flag("gateway_display_only", gateway_display_only)
         self.gateway_evc_automatic = bool(gateway_evc_automatic)
         self.gateway_evc_control = bool(gateway_evc_control)
+        self.gateway_shared_ct = bool(gateway_shared_ct)
+        self.gateway_integrate_power = bool(gateway_integrate_power)
+        # Today's import, export and load integrated from power while gateway_integrate_power is on
+        # (see _update_integrated_energy()). None while it is off or no inverter is bound yet.
+        self._integrated_energy = None
         self.mqtt_host = mqtt_host
         self.mqtt_port = mqtt_port
         self.mqtt_token = mqtt_token
@@ -239,7 +419,8 @@ class GatewayMQTT(ComponentBase):
         self.topic_online = f"{self._topic_base}/online"
         self.topic_schedule = f"{self._topic_base}/schedule"
         self.topic_command = f"{self._topic_base}/command"
-        self.topic_ev_command = f"{self._topic_base}/ev/command"
+        self.topic_ack = f"{self._topic_base}/ack/+"
+        self._ack_topic_prefix = f"{self._topic_base}/ack/"
 
         # Runtime state
         self._mqtt_client = None
@@ -254,6 +435,8 @@ class GatewayMQTT(ComponentBase):
         self._loop = None
         self._gateway_online = False
         self._last_telemetry_time = 0
+        self._last_ev_status = None  # the last /status that carried EV chargers, for EVC control
+        self._last_ev_status_time = 0  # time.time() it arrived - also refreshed when it has no inverters
         self._last_plan_data = None
         self._last_plan_publish_time = 0
         # Entries and timezone of the last built plan, kept so the periodic re-publish
@@ -272,20 +455,58 @@ class GatewayMQTT(ComponentBase):
         self._last_status = None
         self._auto_configured = False
         self._configured_inverter_serials = frozenset()  # serials discovered at the last auto-config
+        self._inverter_slot_serials = []  # serial bound to each PredBat inverter slot at the last auto-config
+        self._pv_only_serials = ()  # listed inverters with no battery: counted for PV, never written to
+        self._slots_without_capacity = frozenset()  # slots bound with no battery size sensor, re-bound once the hub reports a size
+        self._last_ratings = {}  # (entity suffix, rating name) -> the last real value the hub reported
+        self._assumed_ratings = frozenset()  # entity suffixes of inverters whose maximum rate has never been reported
+        self._reserve_before_zero = {}  # entity suffix -> the last real reserve, set aside when Predbat wrote a reserve of 0
+        self._discovery = {}  # upper-case serial -> what the hub last reported it to be (see _update_discovery)
+        self._discovery_dirty = False
+        self._discovery_save_retry_at = 0
+        self._unavailable_inverters = ((), ())
         self._configured_ev_chargers = frozenset()  # EV charge point ids registered at the last auto-config
+        self._ev_control_cp_id = None  # charge point id _register_ev_car() registered as car 1, the one gateway_evc_control drives
+        self._ev_last_soc = {}  # EV charge point id -> the last SoC the charger reported for the car
         self._last_published_plan = None
         self._pending_plan = None
         self._ev_windows: list = []  # parsed (start_dt, end_dt) charge windows from HA plan attribute
-        self._ev_charging_active: bool = False  # last commanded state; avoids duplicate start/stop sends
+        self._ev_desired = None  # planned-window state at the last reconcile; a change resets the attempts
+        self._ev_attempts = {"start": 0, "stop": 0}  # commands published per direction since that change
+        self._ev_last_attempt = 0.0  # time.time() of the last published start/stop
+        self._ev_unknown_warned = False  # warned that the charger state is unknown in this window state
         self._ev_max_current: dict = {}  # charge_point_id → last known max_current_a from telemetry
         self._suffix_to_serial = {}  # maps entity suffix (last 6 chars of serial) -> full serial string
-        self._command_id = 0  # incrementing counter included in every published command
+        # Incrementing counter included in every published command, seeded from the clock so
+        # ids do not restart at PBAT1 after a restart: the hub rejects ids it has recently seen
+        # as replays, and a late ack for the previous process's PBAT1 must not match ours.
+        self._command_id = int(time.time() * 1000)
+
+        # Command acks (predbat/devices/<id>/ack/<command_id>). Control writes are
+        # tracked per entity so an identical re-send can wait for the hub's ack
+        # instead of queueing another Modbus write every poll. See _send_control().
+        self._pending_commands = {}  # entity_id -> {command_ids, outcomes, command, kwargs, state, sent_at, resent, cached (id that updated the cache)}
+        self._ack_subscribed = False  # broker granted the ack subscription on this connection
+        self._acks_seen = False  # at least one ack matched a tracked command on this connection
+        self._ack_subscribe_warned = False  # the denied-subscription warning is logged once
+        # Slot windows written but not yet sent to the Hub: (serial suffix, "charge"|"discharge") ->
+        # {start, end (HHMM or None), enable (bool or None), at (_monotonic)}. See _stage_slot().
+        self._staged = {}
+        self._commit_inflight = set()  # (serial suffix, side) being written to the Hub right now
+        self._commit_tasks = set()  # commits started on this loop, kept until done
 
         # Predbat data publish state (price/timeline for device display)
         self._last_predbat_data = None
 
         # Track which inverter serials have received an inverter_reset command
         self._inverter_reset_done = set()
+        # Rate caps last sent to the hub with set_rate_cap: serial -> (charge_w, discharge_w)
+        self._rate_caps_sent = {}
+
+        # Serials last declared to the hub with set_commanded_serials (None until the first
+        # send) and when, so the declaration is repeated periodically even when unchanged
+        self._commanded_serials_sent = None
+        self._commanded_serials_sent_time = 0
 
         # Last read-only state sent to the gateway (None until the first send,
         # so the current state is always pushed once on startup)
@@ -293,6 +514,9 @@ class GatewayMQTT(ComponentBase):
         # Monotonic-ish timestamp of the last set_read_only send, used to force a
         # periodic re-send so the gateway re-syncs even if a command was missed
         self._last_read_only_sent_time = 0
+        # Latch so a gateway whose reported read-only state disagrees with what PredBat
+        # requested is logged once per transition, not on every status cycle
+        self._read_only_mismatch_logged = False
 
         # Set once the first MQTT connection attempt has completed (success or failure)
         self._first_connection_attempted = False
@@ -316,6 +540,8 @@ class GatewayMQTT(ComponentBase):
         the optimizer's charge/export windows into ExecutionPlan entries and
         queues them for MQTT publishing on the next run() cycle.
         """
+        if self.gateway_display_only:
+            return
         plan_entries = []
 
         # Reserve as a percentage — used to detect freeze charge (charge limit == reserve)
@@ -364,23 +590,21 @@ class GatewayMQTT(ComponentBase):
         # Convert export/discharge windows to plan entries
         for i, window in enumerate(export_windows or []):
             limit = export_limits[i] if i < len(export_limits or []) else 0
-            if limit >= EXPORT_LIMIT_IDLE:
+            mode = export_mode_of(limit)
+            if mode == EXPORT_MODE_IDLE:
                 continue
-            target_soc = int(limit)
-            export_power_w = discharge_rate_w
-            # Freeze export (export limit == EXPORT_LIMIT_FREEZE): hold SoC and export only surplus PV
-            # rather than force-discharge. There is no freeze mode, so express it as a
-            # discharge entry with rate 0 and target = reserve. Match core's exact ==
-            # check — a fractional limit (e.g. 99.5) is a normal export, not a freeze.
-            if limit == EXPORT_LIMIT_FREEZE:
+            if mode == EXPORT_MODE_FREEZE:
+                # Freeze export: hold SoC and export only surplus PV rather than force-discharge.
+                # There is no freeze mode here, so express it as a discharge entry with rate 0
+                # and target = reserve.
                 target_soc = reserve_percent
                 export_power_w = 0
             else:
-                # Low-power export: the planner encodes the chosen export rate in the
-                # fractional part of the limit (e.g. 5.3 -> 70% of max), and execute applies
-                # rate_scale = 1 - frac (see plan.py / execute.py). With low power off there
-                # is no fraction, so this is full rate.
-                export_power_w = round(discharge_rate_w * (1 - (limit - int(limit))))
+                # Low-power export: the planner encodes the chosen export rate in the limit and
+                # execute applies the same scaling (see plan.py / execute.py). With low power off
+                # there is no fraction, so this is full rate.
+                target_soc = export_target_of(limit)
+                export_power_w = round(discharge_rate_w * export_power_of(limit))
             start_minutes = window.get("start", 0)
             end_minutes = window.get("end", 0)
             # Work out hours and minutes
@@ -406,6 +630,11 @@ class GatewayMQTT(ComponentBase):
                     "use_native": True,
                 }
             )
+
+        # The cached plan also drives native registers if the cloud goes away.
+        # Restrict its windows for the same Hub devices as the live executor.
+        if any(inv.inverter_type == "GWMQTT" and inv.inv_can_span_midnight is False for inv in getattr(self.base, "inverters", [])):
+            plan_entries = _split_same_day_plan_entries(plan_entries)
 
         # Sort entries chronologically (earliest start first) — charge and export windows
         # are appended in separate passes above, so without this the gateway would receive
@@ -435,76 +664,142 @@ class GatewayMQTT(ComponentBase):
         with datetime strings in ``"%m-%d %H:%M:%S"`` format (produced by output.py).
 
         Datetimes are localized using ``self.local_tz`` so comparisons respect the component
-        timezone and DST transitions.  Year boundaries are handled: if a parsed start is more
-        than 23 hours in the past (i.e. the plan was built on Dec 31 and contains Jan 1
-        windows), the year is bumped forward.  Similarly, if end falls before start after
-        localization the end year is incremented to handle windows that straddle midnight
-        on New Year's Eve.
+        timezone and DST transitions.  The plan carries no year; ``utils.parse_car_plan_windows()``
+        (shared with the other charger components) rebuilds it around now, so a window that straddles
+        New Year is anchored correctly whichever side of midnight it is read (#269).
         """
         planned = self.get_state_wrapper(f"binary_sensor.{self.prefix}_car_charging_slot", attribute="planned") or []
         now = datetime.datetime.now(self.local_tz)
-        current_year = now.year
-        windows = []
-        for w in planned:
-            try:
-                start_naive = datetime.datetime.strptime(w["start"], "%m-%d %H:%M:%S").replace(year=current_year)
-                end_naive = datetime.datetime.strptime(w["end"], "%m-%d %H:%M:%S").replace(year=current_year)
-                start_dt = self.local_tz.localize(start_naive)
-                end_dt = self.local_tz.localize(end_naive)
-                # If start is far in the past the plan crossed a year boundary (Dec 31 → Jan 1)
-                if start_dt < now - datetime.timedelta(hours=23):
-                    start_dt = start_dt.replace(year=start_dt.year + 1)
-                    end_dt = end_dt.replace(year=end_dt.year + 1)
-                elif end_dt < start_dt:
-                    # end crossed into the new year but start did not (e.g. 23:30 → 00:30)
-                    end_dt = end_dt.replace(year=end_dt.year + 1)
-                windows.append((start_dt, end_dt))
-            except (KeyError, ValueError):
-                continue
-        self._ev_windows = windows
+        self._ev_windows = parse_car_plan_windows(planned, now, self.local_tz)
 
     def _should_ev_charge_now(self):
         """Return True if the current local time falls inside any planned charge window."""
-        now = datetime.datetime.now(self.local_tz)
-        for start_dt, end_dt in self._ev_windows:
-            if start_dt <= now < end_dt:
-                return True
-        return False
+        return in_car_plan_window(self._ev_windows, datetime.datetime.now(self.local_tz))
+
+    def _ev_charger_status(self, cp_id):
+        """Return the latest telemetry for charge point ``cp_id``, or None when it is not usable.
+
+        Not usable means no EV telemetry yet, EV telemetry older than ``_TELEMETRY_STALE_THRESHOLD``, or the
+        charger not connected to the hub - its session fields are then stale and it cannot take a command.
+        """
+        if self._last_ev_status is None or time.time() - self._last_ev_status_time >= _TELEMETRY_STALE_THRESHOLD:
+            return None
+        ev = next((c for c in self._last_ev_status.ev_chargers if c.charge_point_id == cp_id), None)
+        if ev is None or not ev.connected:
+            return None
+        return ev
+
+    def _ev_control_read_only(self):
+        """Use the live read-only override, falling back to config during startup."""
+        read_only = getattr(self.base, "set_read_only", None)
+        if read_only is None:
+            read_only = self.get_arg("set_read_only", False)
+        return bool(read_only)
 
     async def _apply_ev_charging_state(self):
-        """Start or stop EVC charging when the window state transitions.
+        """Reconcile the charger's reported session against the planned charge windows.
 
-        Called every run() cycle (once per minute).  On a start transition, sets the
-        charging profile to the configured max current then issues RemoteStartTransaction
-        so the charger begins a session at that rate.  On a stop transition, issues
-        RemoteStopTransaction; the firmware falls back to its internal transaction ID when
-        none is supplied.  No command is sent when the desired state already matches
-        ``self._ev_charging_active``.
+        Called every run() cycle (once per minute). The charger's own telemetry is the state, not a
+        remembered command, so a restart, a lost publish or a charger that refused a command all heal
+        on a later cycle:
+
+        - inside a window with no session, unless the charger is Unavailable/Faulted/Offline:
+          SetChargingProfile at the charger's max current, then RemoteStartTransaction. The status is
+          not used to look for a plugged-in car, as older Hub firmware reads "Available" after a stop
+        - outside every window with a session active: RemoteStopTransaction. Telemetry does not say who
+          started a session, so this stops any session outside the plan, including one started by hand
+          or by the charger's own schedule, while gateway_evc_control is on
+        - otherwise nothing is sent
+
+        Each direction is tried at most ``_EV_COMMAND_ATTEMPTS`` times, ``_EV_COMMAND_RETRY_SECONDS``
+        apart, until the window state next changes; then a warning is logged once, and for a stop
+        also recorded in the Predbat status as an error (a refused start is normal with no car plugged in). An attempt only counts once it was actually published. When the charger's
+        state is unknown (no fresh EV telemetry, or the charger offline) nothing is sent and, once the
+        hub has reported EV chargers at least once, a warning is logged once per window state. Only the charger
+        _register_ev_car() registered as car 1 is controlled, so the plan being enforced is that charger's own.
         """
-        if not self._configured_ev_chargers:
+        if self._ev_control_read_only():
+            # Resume with a fresh retry budget when read only ends.
+            self._ev_desired = None
+            return
+        cp_id = self._ev_control_cp_id
+        if not cp_id:
             return
         should_charge = self._should_ev_charge_now()
-        if should_charge == self._ev_charging_active:
+        if should_charge != self._ev_desired:
+            self._ev_desired = should_charge
+            self._ev_attempts = {"start": 0, "stop": 0}
+            self._ev_last_attempt = 0.0
+            self._ev_unknown_warned = False
+        ev = self._ev_charger_status(cp_id)
+        if ev is None:
+            # Silent until the first EV status has arrived: at startup the hub simply has not reported yet
+            if self._last_ev_status is not None and not self._ev_unknown_warned:
+                self.log(f"Warn: GatewayMQTT: EVC control cannot see charger '{cp_id}' (offline, or no EV telemetry in the last {_TELEMETRY_STALE_THRESHOLD}s) - not starting or stopping it")
+                self._ev_unknown_warned = True
             return
-        # min() gives a deterministic choice when multiple chargers are present
-        cp_id = min(self._configured_ev_chargers)
-        if should_charge:
-            current_a = self._ev_max_current.get(cp_id, 32)
-            self.log(f"Info: GatewayMQTT: EVC start charging — current_a={current_a} for '{cp_id}'")
-            await self._send_ev_command({"action": "SetChargingProfile", "current_a": int(current_a)})
-            await self._send_ev_command({"action": "RemoteStartTransaction", "id_tag": "predbat"})
+        if should_charge and not ev.session_active and ev.status not in _EV_START_BLOCKED_STATUSES:
+            direction = "start"
+        elif not should_charge and ev.session_active:
+            direction = "stop"
         else:
-            self.log(f"Info: GatewayMQTT: EVC stop charging for '{cp_id}'")
-            await self._send_ev_command({"action": "RemoteStopTransaction"})
-        self._ev_charging_active = should_charge
+            return
 
-    async def _send_ev_command(self, command):
-        """Publish a single EV command dict as JSON to the EV command topic.
+        attempts = self._ev_attempts[direction]
+        if attempts >= _EV_COMMAND_ATTEMPTS:
+            if attempts == _EV_COMMAND_ATTEMPTS:
+                message = f"Warn: GatewayMQTT: EVC {direction} for '{cp_id}' not taken by the charger after {attempts} attempts (status {ev.status or 'unknown'}), giving up until the plan changes"
+                self.log(message)
+                # A start that does not take is normal - nobody plugged a car in for the window. A session
+                # that will not stop is a fault: the charger keeps drawing outside the plan
+                if direction == "stop":
+                    self.base.record_status(message, had_errors=True)
+                self._ev_attempts[direction] += 1  # warn once
+            return
+        if time.time() - self._ev_last_attempt < _EV_COMMAND_RETRY_SECONDS:
+            return
+
+        if direction == "start":
+            current_a = self._ev_max_current.get(cp_id, 32)
+            self.log(f"Info: GatewayMQTT: EVC start charging — current_a={current_a} for '{cp_id}' (attempt {attempts + 1})")
+            sent = await self._send_ev_command(cp_id, {"action": "SetChargingProfile", "current_a": int(current_a)})
+            sent = sent and await self._send_ev_command(cp_id, {"action": "RemoteStartTransaction", "id_tag": "predbat"})
+        else:
+            self.log(f"Info: GatewayMQTT: EVC stop charging for '{cp_id}' (attempt {attempts + 1})")
+            sent = await self._send_ev_command(cp_id, {"action": "RemoteStopTransaction"})
+        if sent:
+            self._ev_attempts[direction] += 1
+            self._ev_last_attempt = time.time()
+
+    async def _send_ev_command(self, charge_point_id, command):
+        """Publish a single EV command to the shared device command topic.
+
+        The hub only subscribes to ``/command``; EV commands are recognised there by
+        ``"command": "ev"`` and routed to its OCPP server, which targets the charger
+        named by ``charge_point_id``. The hub answers with a transport ack on
+        ``/ack/<command_id>``.
 
         Args:
+            charge_point_id: OCPP charge point id of the charger to control.
             command: Dict with ``action`` key and any command-specific fields.
+
+        Returns:
+            True when the command was published, False when it could not be (not connected,
+            read-only mode, display mode, or the publish failed).
         """
-        await self._publish_raw(self.topic_ev_command, json.dumps(command).encode())
+        if self._ev_control_read_only():
+            return False
+        if self.gateway_display_only or not (self._mqtt_client and self._mqtt_connected):
+            self.log(f"Warn: GatewayMQTT: Not connected — cannot send EV command {command.get('action')} for '{charge_point_id}'")
+            return False
+        payload = {"command": "ev", "command_id": "PBAT" + str(self._next_command_id()), "charge_point_id": charge_point_id}
+        payload.update(command)
+        try:
+            await self._publish_raw(self.topic_command, json.dumps(payload).encode())
+        except Exception as e:
+            self.log(f"Warn: GatewayMQTT: Failed to publish EV command {command.get('action')} for '{charge_point_id}': {e}")
+            return False
+        return True
 
     async def _startup_wait(self, ticks, ready):
         """Poll ``ready`` at 0.5 s intervals until it is true or the startup budget is spent.
@@ -547,9 +842,17 @@ class GatewayMQTT(ComponentBase):
             # Capture the loop that will own the MQTT client/listener task, so
             # cross-loop callers (ha.py::run_async()) can dispatch onto it later.
             self._loop = asyncio.get_running_loop()
+            await self._load_discovery()
             # Start MQTT listener as a background task
             self._mqtt_task = asyncio.ensure_future(self._mqtt_loop())
             self.log("Info: GatewayMQTT: MQTT listener task started")
+            if self.gateway_display_only:
+                # The selected inverter provider must not wait for an optional
+                # display's broker connection or first telemetry. Component
+                # startup and actual display availability are separate states.
+                self.api_started = True
+                self._update_display_health()
+                return True
             # Wait for the first connection attempt and then for the first telemetry →
             # auto-config, so the inverter args are wired up before startup continues.
             # Both waits share the single _STARTUP_WAIT_TICKS budget so an offline gateway
@@ -577,6 +880,19 @@ class GatewayMQTT(ComponentBase):
                 self.log("Info: GatewayMQTT: Restarting MQTT listener task")
                 self._mqtt_task = asyncio.ensure_future(self._mqtt_loop())
 
+            if self._mqtt_connected:
+                await self._publish_display_binding()
+
+            if self.gateway_display_only:
+                # The JSON display topic is separate from the executable schedule. Never
+                # refresh schedules, release read-only, reset inverters or control EVs here.
+                if self._mqtt_connected:
+                    if self.gateway_display_enabled and self._last_status is not None:
+                        await self._publish_predbat_data()
+                await self._check_token_refresh()
+                self._update_display_health()
+                return True
+
             # Publish any queued plan from on_plan_executed hook
             if self._pending_plan:
                 plan_entries, tz = self._pending_plan
@@ -594,6 +910,12 @@ class GatewayMQTT(ComponentBase):
             # Send inverter_reset for any inverter not yet reset when not in read-only mode
             await self._check_inverter_resets()
 
+            # Tell the gateway each inverter's charge/discharge rate cap (once, then on change)
+            await self._check_rate_caps()
+
+            # Tell the gateway which inverters PredBat drives (on connect, change, and periodically)
+            await self._check_commanded_serials()
+
             # Publish predbat data (price, timeline) to device display
             if self._mqtt_connected and self._auto_configured:
                 await self._publish_predbat_data()
@@ -604,8 +926,9 @@ class GatewayMQTT(ComponentBase):
             # Re-publish the plan periodically so its embedded timestamp stays fresh
             await self._republish_plan_if_stale()
 
-            # Mark component as alive on successful housekeeping
-            self.update_success_timestamp()
+            # Housekeeping is deliberately not a success: only telemetry from the hub records one
+            # (_process_telemetry), so a hub that has sent nothing for an hour reads as unhealthy
+            # in the components check even while its LWT says it is offline
 
         except Exception as e:
             self.log(f"Warn: GatewayMQTT: housekeeping error: {e}")
@@ -642,11 +965,18 @@ class GatewayMQTT(ComponentBase):
                     self._first_connection_attempted = True
                     backoff = 5  # Reset backoff on successful connection
                     self.log(f"Info: GatewayMQTT: Connected to {self.mqtt_host}:{self.mqtt_port}")
+                    await self._publish_display_binding(force=True)
 
                     # Subscribe to status and LWT topics
                     await client.subscribe(self.topic_status, qos=1)
                     await client.subscribe(self.topic_online, qos=1)
                     self.log(f"Info: GatewayMQTT: Subscribed to {self.topic_status} and {self.topic_online}")
+
+                    # Command acks are optional: without them control writes behave as before
+                    with self._command_lock:
+                        self._pending_commands = {}
+                        self._acks_seen = False
+                    self._ack_subscribed = await self._subscribe_acks(client)
 
                     async for message in client.messages:
                         if self.api_stop:
@@ -661,6 +991,7 @@ class GatewayMQTT(ComponentBase):
                 self.log(f"Warn: GatewayMQTT: MQTT connection error: {e}")
                 self._mqtt_connected = False
                 self._mqtt_client = None
+                self._ack_subscribed = False
                 self._first_connection_attempted = True
 
                 if self.api_stop:
@@ -677,6 +1008,28 @@ class GatewayMQTT(ComponentBase):
 
         self._mqtt_connected = False
         self._mqtt_client = None
+        self._ack_subscribed = False
+
+    async def _subscribe_acks(self, client):
+        """Subscribe to the hub's per-command acks, tolerating a broker that refuses it.
+
+        Returns:
+            bool: True if the broker granted the subscription.
+        """
+        try:
+            result = await client.subscribe(self.topic_ack, qos=0)
+            code = result[0] if result else 0x80
+            code = int(getattr(code, "value", code))
+            if code < 0x80:
+                self.log(f"Info: GatewayMQTT: Subscribed to {self.topic_ack}")
+                return True
+            reason = f"refused by broker, code {code}"
+        except Exception as e:
+            reason = str(e)
+        if not self._ack_subscribe_warned:
+            self._ack_subscribe_warned = True
+            self.log(f"Warn: GatewayMQTT: Cannot subscribe to command acks ({reason}) - control writes will be re-sent until telemetry confirms them")
+        return False
 
     async def _handle_message(self, message):
         """Dispatch an incoming MQTT message to the appropriate handler.
@@ -689,12 +1042,21 @@ class GatewayMQTT(ComponentBase):
         try:
             if topic == self.topic_status:
                 self._process_telemetry(message.payload)
+                await self._save_discovery()
+            elif topic.startswith(getattr(self, "_ack_topic_prefix", "\0")):
+                self._process_ack(message.payload)
             elif topic == self.topic_online:
                 payload = message.payload.decode("utf-8", errors="replace").strip()
                 was_online = self._gateway_online
-                self._gateway_online = payload == "1"
+                # The firmware publishes "online", and "offline" as its LWT. "1" was what this code expected; still accepted
+                self._gateway_online = payload in ("online", "1")
                 if self._gateway_online != was_online:
                     self.log(f"Info: GatewayMQTT: Gateway is {'online' if self._gateway_online else 'offline'}")
+                    # A hub that has been away may be on new firmware or have lost its stored
+                    # rate caps, so send them again. Done here, not only in _check_rate_caps():
+                    # a reboot is quicker than the gap between two run() cycles.
+                    self._rate_caps_sent.clear()
+                    self._commanded_serials_sent = None
                     self.dashboard_item(
                         f"binary_sensor.{self.prefix}_gateway_online",
                         self._gateway_online,
@@ -746,17 +1108,50 @@ class GatewayMQTT(ComponentBase):
 
         self._debug_dump("RX telemetry", status, raw=data)
 
-        if len(status.inverters) == 0:
+        if self.gateway_display_only:
+            # A desk display need not discover an inverter. Do not inject the hub's
+            # inverter entities or register hardware against the selected provider.
+            self._last_status = status
+            self._last_telemetry_time = time.time()
+            self.update_success_timestamp()
+            self.api_started = True
             return
 
-        self._last_status = status
-        self._last_telemetry_time = time.time()
-        self.update_success_timestamp()
+        # EVC control reads the chargers from here: a status with no inverters still carries them,
+        # and is returned from below before it can refresh _last_status
+        if status.ev_chargers:
+            self._last_ev_status = status
+            self._last_ev_status_time = time.time()
 
+        if len(status.inverters) == 0:
+            if not (self.gateway_inverter_serial and self._discovery):
+                return
+            # With a serial list the discovered inverters are the site whatever the hub reports,
+            # so a status naming none of them is every one of them unread, not nothing to do
+            # (#5471). It is not fresh data though, so it does not count towards being alive.
+        else:
+            self._last_telemetry_time = time.time()
+            self.update_success_timestamp()
+        self._last_status = status
+
+        self._update_discovery(status)
+        self._update_integrated_energy(status)
         self._inject_entities(status)
 
         if self._needs_reconfigure(status):
             self.automatic_config()
+            if self._auto_configured:
+                # The injection above ran before this status's inverters were bound, so one that
+                # is only published once bound has no entities yet. Publish those before the API
+                # is declared started below.
+                for inv in status.inverters:
+                    if not inv.primary and self._is_published(inv):
+                        self._publish_inverter(inv)
+                # The integration above ran on the slots as they were before this status changed them
+                self._update_integrated_energy(status, rebase=True)
+                self._inject_unreported_inverters(status)
+                self._inject_shared_site_metering(status)
+        self._check_configured_inverters(status)
 
         # Declare the API started only once auto-config has wired up the inverter args.
         # ComponentManager.start() polls api_started from the main thread while this
@@ -792,13 +1187,28 @@ class GatewayMQTT(ComponentBase):
         """
         device_id = status.device_id
         firmware = status.firmware
+        self._prune_staged()
+
+        # Read-only as the gateway actually enforces it. Absent on firmware predating
+        # the field, which is UNKNOWN and not False — publishing False there would claim
+        # the gateway is controllable when nothing has reported either way.
+        read_only = status.read_only if status.HasField("read_only") else None
 
         self.dashboard_item(
             f"binary_sensor.{self.prefix}_gateway_online",
             True,
-            attributes={**GATEWAY_ATTRIBUTE_TABLE.get("gateway_online", {}), "device_id": device_id, "firmware": firmware},
+            attributes={**GATEWAY_ATTRIBUTE_TABLE.get("gateway_online", {}), "device_id": device_id, "firmware": firmware, "read_only": read_only},
             app="gateway",
         )
+
+        if read_only is not None:
+            self.dashboard_item(
+                f"binary_sensor.{self.prefix}_gateway_read_only",
+                read_only,
+                attributes=GATEWAY_ATTRIBUTE_TABLE.get("gateway_read_only", {}),
+                app="gateway",
+            )
+            self._check_read_only_mismatch(read_only)
 
         # Inverter time from gateway timestamp — write it under the suffix PredBat
         # actually reads (the control target), not the primary's, or the bound
@@ -817,15 +1227,11 @@ class GatewayMQTT(ComponentBase):
             )
 
         for inv in status.inverters:
-            # Inject primary (battery-bearing) units, plus whichever unit automatic_config
-            # bound PredBat's args to. On a multi-AIO site the control target is the
-            # Gateway/EMS, which firmware never flags primary — skipping it left every
-            # bound arg unwritten and frozen at its last value. Non-primary units that are
-            # NOT the control target stay skipped: they report overlapping power readings
-            # that would double up on the dashboard.
-            if not inv.primary and not self._is_bound_target(inv):
-                continue
-            self._inject_inverter_entities(inv, _serial_suffix(inv.serial))
+            if self._is_published(inv):
+                self._publish_inverter(inv)
+
+        self._inject_unreported_inverters(status)
+        self._inject_shared_site_metering(status)
 
         # EV charger entities (device-level, present only when a charge point is connected)
         self._inject_ev_entities(status)
@@ -852,10 +1258,268 @@ class GatewayMQTT(ComponentBase):
                 self.dashboard_item(f"{sp}_grid_power", sub.grid_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("grid_power", {}), app="gateway")
                 self.dashboard_item(f"{sp}_temp", sub.temp_c, attributes=GATEWAY_ATTRIBUTE_TABLE.get("temp", {}), app="gateway")
 
-    def _inject_inverter_entities(self, inv, suffix):
+    def _is_published(self, inv):
+        """Whether this unit's entities are published.
+
+        Primary (battery-bearing) units are, plus whichever unit automatic_config bound
+        PredBat's args to and any PV-only inverter it configured. On a multi-AIO site the
+        control target is the Gateway/EMS, which firmware never flags primary — skipping it
+        left every bound arg unwritten and frozen at its last value. Other non-primary units
+        stay skipped: they report overlapping power readings that would double up on the
+        dashboard.
+
+        Args:
+            inv: A ``predbat_InverterEntry`` from the gateway status.
+
+        Returns:
+            bool: True if the unit's entities are published.
+        """
+        return inv.primary or self._is_bound_target(inv) or inv.serial in self._pv_only_serials
+
+    def _publish_inverter(self, inv):
+        """Publish one unit's entities from its status entry.
+
+        An inverter the hub is not reading keeps the values it last reported, like one behind
+        a cloud API that has gone offline: publishing the empty message would read as a flat
+        battery. Only its power readings go to zero (see ``_inject_unread_inverter``). One with
+        no entities yet still gets its defaults (#5471).
+
+        Args:
+            inv: A ``predbat_InverterEntry`` from the gateway status.
+        """
+        suffix = _serial_suffix(inv.serial)
+        if not self._has_telemetry(inv):
+            if self.get_state_wrapper(f"sensor.{self.prefix}_gateway_{suffix}_soc") is not None:
+                self._inject_unread_inverter(suffix)
+                return
+            record = self._discovery.get(inv.serial.upper())
+            if record is not None:
+                # Its battery size is known from when it was last read
+                inv = self._stored_unit(record)
+        self._inject_inverter_entities(inv, suffix, site_energy=self._integrated_site_energy(inv))
+
+    def _inject_unread_inverter(self, suffix):
+        """Zero the power readings of an inverter the hub is not reading.
+
+        Its state of charge, battery size and settings are left as last reported, but a
+        power is a rate: left alone, an inverter that dropped out while discharging at 3kW
+        would be read as discharging at 3kW for as long as it is away.
+
+        Args:
+            suffix: The inverter's entity suffix.
+        """
+        pfx = f"{self.prefix}_gateway_{suffix}"
+        for name in ("battery_power", "pv_power", "grid_power", "load_power", "inverter_power"):
+            self.dashboard_item(f"sensor.{pfx}_{name}", 0, attributes=GATEWAY_ATTRIBUTE_TABLE.get(name, {}), app="gateway")
+
+    def _inject_shared_site_metering(self, status):
+        """Keep the site's grid and load readings going when the inverter that carries them is not being read.
+
+        On one shared CT clamp (gateway_shared_ct) Predbat reads grid and load power, and
+        today's import, export and load, from the first inverter's entities only. Every
+        inverter on the clamp reports the same readings, so while the first is not being read
+        its entities are filled from the next one that is. With gateway_integrate_power the
+        day's figures are the integrated ones, which are published as they stand.
+
+        Args:
+            status: A decoded GatewayStatus protobuf message.
+        """
+        slots = self._inverter_slot_serials
+        if not self.gateway_shared_ct or len(slots) < 2:
+            return
+        by_serial = {inv.serial: inv for inv in status.inverters}
+        first = by_serial.get(slots[0])
+        if first is not None and self._has_telemetry(first):
+            return
+        pfx = f"{self.prefix}_gateway_{_serial_suffix(slots[0])}"
+        donor = next((by_serial[serial] for serial in slots[1:] if serial in by_serial and self._has_telemetry(by_serial[serial])), None)
+        if donor is not None:
+            self.dashboard_item(f"sensor.{pfx}_grid_power", donor.grid.power_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("grid_power", {}), app="gateway")
+            self.dashboard_item(f"sensor.{pfx}_load_power", donor.load.power_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("load_power", {}), app="gateway")
+        state = self._integrated_energy
+        if state is not None:
+            today = {"import": state["import_wh"], "export": state["export_wh"], "load": state["load_published_wh"]}
+        elif donor is not None and donor.energy.ByteSize() > 0:
+            today = {"import": donor.energy.grid_import_today_wh, "export": donor.energy.grid_export_today_wh, "load": donor.energy.consumption_today_wh}
+        else:
+            return
+        for name, wh in today.items():
+            self.dashboard_item(f"sensor.{pfx}_{name}_today", round(wh / 1000.0, 2), attributes=GATEWAY_ATTRIBUTE_TABLE.get(f"{name}_today", {}), app="gateway")
+
+    def _update_integrated_energy(self, status, rebase=False):
+        """Integrate grid and battery power into today's import, export and load (gateway_integrate_power).
+
+        Some inverters do not keep usable grid energy counters. GivEnergy AC inverters sharing one
+        grid CT clamp are one case: the hub's import/export "today" figures for them run at many times
+        the real rate and its load, which is derived from them, is wrong with them. The power readings
+        are sound, so with the option on the day's figures are built from those instead, once per
+        telemetry message:
+
+        - the site's grid power is split by sign, positive to export and negative to import, and each
+          side is integrated. It is the first inverter's reading on a shared clamp (gateway_shared_ct,
+          where they all read the same one), otherwise the sum of every inverter's;
+        - each inverter's battery power is split into charge and discharge the same way and summed, so
+          one battery charging from the other counts on both sides;
+        - PV is the rise in each inverter's pv_today counter, which is sound, summed;
+        - load = pv + import - export + battery discharge - battery charge.
+
+        Each interval uses the mean of the readings at its two ends. The figures return to zero at
+        local midnight. They are kept in memory only, so they also restart from zero when Predbat
+        restarts, which Predbat reads the same way as the midnight reset.
+
+        Args:
+            status: A decoded GatewayStatus protobuf message.
+            rebase: True when auto-config has just run on a status that was already integrated.
+                Nothing is added: its readings become the baseline for the inverters now in the
+                slots, so one that has just joined is counted from this status and not the next.
+        """
+        if not self.gateway_integrate_power:
+            return
+        serials = self._inverter_slot_serials
+        if not serials:
+            self._integrated_energy = None
+            return
+        by_serial = {inv.serial: inv for inv in status.inverters}
+        inverters = [by_serial[serial] for serial in serials if serial in by_serial]
+        now = status.timestamp if status.timestamp > 0 else int(time.time())
+        local_now = datetime.datetime.fromtimestamp(now, tz=self.local_tz)
+        day = local_now.date()
+        zeroed = {"import_wh": 0.0, "export_wh": 0.0, "charge_wh": 0.0, "discharge_wh": 0.0, "load_wh": 0.0, "load_published_wh": 0.0}
+        if len(inverters) != len(serials) or not all(inv.connected for inv in inverters):
+            # A missing or disconnected unit reports no power or a stale one. Drop the baseline too,
+            # so the next good status starts a new interval rather than filling in the time away
+            state = self._integrated_energy
+            if state is not None:
+                state["time"] = None
+                if day != state["day"]:
+                    # Midnight still ends the day: an inverter kept configured while the hub cannot
+                    # read it can be away for days, and yesterday's figures are not today's
+                    state.update(zeroed)
+                    state["day"] = day
+            return
+
+        grid_w = inverters[0].grid.power_w if self.gateway_shared_ct else sum(inv.grid.power_w for inv in inverters)
+        power = {
+            "import": max(-grid_w, 0),
+            "export": max(grid_w, 0),
+            # The hub reports battery power as positive = charging
+            "charge": sum(max(inv.battery.power_w, 0) for inv in inverters),
+            "discharge": sum(max(-inv.battery.power_w, 0) for inv in inverters),
+        }
+        # By serial and not by slot: auto-config can re-run and change the slots, and a counter
+        # must go on being compared with its own last value
+        pv_wh = {inv.serial: inv.energy.pv_today_wh for inv in inverters}
+        # A PV-only inverter's generation is part of the load too. It has no slot, so it is not
+        # needed for the site to be complete: one that is away simply adds nothing meanwhile.
+        pv_wh.update({serial: by_serial[serial].energy.pv_today_wh for serial in self._pv_only_serials if serial in by_serial and by_serial[serial].energy.ByteSize() > 0})
+
+        state = self._integrated_energy
+        if state is None:
+            state = {"day": day, "time": None, **zeroed}
+            self._integrated_energy = state
+        previous = state["time"]
+        if previous is not None and now <= previous and not rebase:
+            # The same status again (a re-inject), or the hub's clock stepping back
+            return
+
+        # The share of this interval that belongs to today: all of it, unless it began before midnight
+        today_share = 1.0
+        if day != state["day"]:
+            state.update(zeroed)
+            state["day"] = day
+            if previous is not None:
+                midnight = local_now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+                today_share = min(max((now - midnight) / (now - previous), 0.0), 1.0)
+
+        if previous is None:
+            state["pv"] = {serial: {"base": wh, "high": None, "high_time": 0} for serial, wh in pv_wh.items()}
+        elif rebase:
+            for serial, wh in pv_wh.items():
+                state["pv"].setdefault(serial, {"base": wh, "high": None, "high_time": 0})
+        else:
+            elapsed = now - previous
+            hours = elapsed / 3600.0
+            # Per inverter, so one counter dropping a sample does not hide the others' generation
+            pv_rise_limit_wh = GATEWAY_INTEGRATE_MAX_PV_W * hours + GATEWAY_INTEGRATE_PV_STEP_WH
+            pv_rise_wh = 0.0
+            for serial, wh in pv_wh.items():
+                if serial in state["pv"]:
+                    pv_rise_wh += self._pv_counter_rise(state["pv"][serial], wh, now, pv_rise_limit_wh)
+                else:
+                    # First seen since the integration began: counted from here on
+                    state["pv"][serial] = {"base": wh, "high": None, "high_time": 0}
+            if elapsed <= GATEWAY_INTEGRATE_MAX_GAP_SECONDS:
+                energy = {name: (state["power"][name] + power[name]) / 2.0 * hours * today_share for name in power}
+                for name in energy:
+                    state[name + "_wh"] += energy[name]
+                state["load_wh"] += pv_rise_wh * today_share + energy["import"] - energy["export"] + energy["discharge"] - energy["charge"]
+                # Grid and battery are read moments apart, so the sum can dip; a counter that goes
+                # backwards would read as a reset
+                state["load_published_wh"] = max(state["load_published_wh"], state["load_wh"])
+        state["time"] = now
+        state["power"] = power
+
+    @staticmethod
+    def _pv_counter_rise(track, wh, now, limit_wh):
+        """The generation one pv_today counter shows since its last sample, in Wh.
+
+        track holds the counter's last value ("base") and, after a drop, the value it dropped from
+        ("high") and when. A counter that drops and comes back to where it was has only dropped a
+        sample, so nothing is counted until it passes "high" again. One that drops and stays down has
+        reset for the day, so it counts from its new start straight away; "high" is forgotten once a
+        return would no longer be a dropped sample. A rise above limit_wh is never generation.
+        """
+        if wh < track["base"]:
+            if track["high"] is None:
+                track["high"] = track["base"]
+                track["high_time"] = now
+            track["base"] = wh
+            return 0
+        base = track["base"]
+        if track["high"] is not None:
+            if now - track["high_time"] > GATEWAY_INTEGRATE_MAX_GAP_SECONDS:
+                track["high"] = None
+            elif wh >= track["high"]:
+                base = track["high"]
+                track["high"] = None
+        track["base"] = wh
+        rise = wh - base
+        return rise if rise <= limit_wh else 0
+
+    def _integrated_site_energy(self, inv):
+        """Today's integrated import, export and load in Wh for the inverter that carries the site
+        figures, the first one - or None for any other inverter, or while gateway_integrate_power is
+        not integrating (see _update_integrated_energy())."""
+        state = self._integrated_energy
+        if state is None or not self._inverter_slot_serials or inv.serial != self._inverter_slot_serials[0]:
+            return None
+        return {"import_wh": state["import_wh"], "export_wh": state["export_wh"], "load_wh": state["load_published_wh"]}
+
+    def _last_rating(self, suffix, name, value):
+        """A rating as the hub reports it, or the last real value it reported when it leaves it out.
+
+        Args:
+            suffix: The inverter's entity suffix.
+            name: Which rating.
+            value: The value in this status; zero is the hub's "not reported".
+
+        Returns:
+            The value, the last non-zero one for this inverter, or None if there has never been one.
+        """
+        key = (suffix, name)
+        if value:
+            if self._last_ratings.get(key) != value:
+                self._last_ratings = {**self._last_ratings, key: value}
+            return value
+        return self._last_ratings.get(key)
+
+    def _inject_inverter_entities(self, inv, suffix, site_energy=None):
         """Inject entities for a single inverter using HA-style naming.
 
         Entity naming pattern: {type}.{prefix}_gateway_{suffix}_{attribute}
+
+        site_energy, when given, replaces the hub's import/export/load today counters for this
+        inverter (see _integrated_site_energy()).
         """
         pfx = f"{self.prefix}_gateway_{suffix}"
 
@@ -866,11 +1530,23 @@ class GatewayMQTT(ComponentBase):
         self.dashboard_item(f"sensor.{pfx}_battery_voltage", bat.voltage_v, attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_voltage", {}), app="gateway")
         self.dashboard_item(f"sensor.{pfx}_battery_current", bat.current_a, attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_current", {}), app="gateway")
         self.dashboard_item(f"sensor.{pfx}_battery_temperature", bat.temperature_c, attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_temperature", {}), app="gateway")
-        if bat.capacity_wh:
-            self.dashboard_item(f"sensor.{pfx}_battery_capacity", round(bat.capacity_wh / 1000.0, 2), attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_capacity", {}), app="gateway")
+        # A size the hub leaves out keeps the last one known, as the ratings below do
+        capacity_wh = bat.capacity_wh or self._discovery.get(inv.serial.upper(), {}).get("capacity_wh")
+        if capacity_wh:
+            self.dashboard_item(f"sensor.{pfx}_battery_capacity", round(capacity_wh / 1000.0, 2), attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_capacity", {}), app="gateway")
         if bat.soh_percent:
             self.dashboard_item(f"sensor.{pfx}_battery_soh", bat.soh_percent, attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_soh", {}), app="gateway")
-        battery_rate_max = bat.rate_max_w or 6000
+        # A rating the hub leaves out keeps the last real value it reported. A status with the
+        # ratings unpopulated (seen for a few minutes after a hub restart) otherwise turned a 3kW
+        # inverter into a 6kW one with no export limit, and those rates were written to it (#5478).
+        record = self._discovery.get(inv.serial.upper(), {})
+        battery_rate_max = self._last_rating(suffix, "battery_rate_max", bat.rate_max_w) or record.get("rate_max_w")
+        # With no rating ever reported the plan still needs a figure, but it is only an assumption:
+        # rate writes for the inverter are held until the real one arrives (see _rate_write_held)
+        assumed = not battery_rate_max and inv.type not in GATEWAY_COORDINATOR_TYPES
+        if assumed != (suffix in self._assumed_ratings):
+            self._assumed_ratings = self._assumed_ratings | {suffix} if assumed else self._assumed_ratings - {suffix}
+        battery_rate_max = battery_rate_max or 6000
         self.dashboard_item(f"sensor.{pfx}_battery_rate_max", battery_rate_max, attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_rate_max", {}), app="gateway")
 
         self.dashboard_item(f"sensor.{pfx}_pv_power", inv.pv.power_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("pv_power", {}), app="gateway")
@@ -887,20 +1563,49 @@ class GatewayMQTT(ComponentBase):
         self.dashboard_item(f"sensor.{pfx}_inverter_power", inv.inverter.active_power_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("inverter_power", {}), app="gateway")
         if inv.inverter.temperature_c:
             self.dashboard_item(f"sensor.{pfx}_inverter_temperature", inv.inverter.temperature_c, attributes=GATEWAY_ATTRIBUTE_TABLE.get("inverter_temperature", {}), app="gateway")
-        inverter_rate_max = inv.inverter.rate_max_w or battery_rate_max
+        inverter_rate_max = self._last_rating(suffix, "inverter_rate_max", inv.inverter.rate_max_w) or record.get("inverter_rate_max_w") or battery_rate_max
         if inverter_rate_max:
             self.dashboard_item(f"sensor.{pfx}_inverter_rate_max", inverter_rate_max, attributes=GATEWAY_ATTRIBUTE_TABLE.get("inverter_rate_max", {}), app="gateway")
 
         control = inv.control
-        self.dashboard_item(f"switch.{pfx}_charge_enabled", "on" if control.charge_enabled else "off", attributes=GATEWAY_ATTRIBUTE_TABLE.get("charge_enabled", {}), app="gateway")
-        self.dashboard_item(f"switch.{pfx}_discharge_enabled", "on" if control.discharge_enabled else "off", attributes=GATEWAY_ATTRIBUTE_TABLE.get("discharge_enabled", {}), app="gateway")
-        # Proto sentinel: 0=undefined→publish 99999 (unlimited), 1=zero limit→publish 0, otherwise use value as-is
-        _raw_export_limit = control.export_limit_w
+        # A window waiting for the schedule write shows its staged values, not telemetry
+        for side, enabled in (("charge", control.charge_enabled), ("discharge", control.discharge_enabled)):
+            staged = self._staged_entry(suffix, side)
+            if staged is not None and staged["enable"] is not None:
+                enabled = staged["enable"]
+            self.dashboard_item(f"switch.{pfx}_{side}_enabled", "on" if enabled else "off", attributes=GATEWAY_ATTRIBUTE_TABLE.get(f"{side}_enabled", {}), app="gateway")
+        # Proto sentinel: 0=undefined→publish 99999 (unlimited), 1=zero limit→publish 0, otherwise use value as-is.
+        # Undefined only means unlimited for an inverter that has never reported a limit.
+        _raw_export_limit = self._last_rating(suffix, "export_limit", control.export_limit_w) or record.get("export_limit_w") or 0
         export_limit_publish = 99999 if _raw_export_limit == 0 else (0 if _raw_export_limit == 1 else _raw_export_limit)
         self.dashboard_item(f"sensor.{pfx}_export_limit_w", export_limit_publish, attributes=GATEWAY_ATTRIBUTE_TABLE.get("export_limit_w", {}), app="gateway")
-        self.dashboard_item(f"number.{pfx}_charge_rate", control.charge_rate_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("charge_rate", {}), app="gateway")
-        self.dashboard_item(f"number.{pfx}_discharge_rate", control.discharge_rate_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("discharge_rate", {}), app="gateway")
-        self.dashboard_item(f"number.{pfx}_reserve_soc", control.reserve_soc, attributes=GATEWAY_ATTRIBUTE_TABLE.get("reserve_soc", {}), app="gateway")
+        # The hub reports the rate the inverter holds, so a GivEnergy one reads back short of the rate written
+        # (#5324). Marked per inverter, on a copy of the table entry: GWMQTT is one type for every brand
+        charge_rate_attributes = dict(GATEWAY_ATTRIBUTE_TABLE.get("charge_rate", {}))
+        discharge_rate_attributes = dict(GATEWAY_ATTRIBUTE_TABLE.get("discharge_rate", {}))
+        if inv.type in GIVENERGY_INVERTER_TYPES:
+            charge_rate_attributes["step_percent_of_capacity"] = GIVENERGY_RATE_STEP_PERCENT_OF_CAPACITY
+            discharge_rate_attributes["step_percent_of_capacity"] = GIVENERGY_RATE_STEP_PERCENT_OF_CAPACITY
+            # A 3-phase unit ("Hybrid 3ph", "AC 3ph") has no Battery Pause, so the hub carries a zero charge
+            # rate as the percentage charge limit, which only limits charging from the grid. Marked so that
+            # PredBat does not plan a Freeze Export it cannot carry out (#5082)
+            if GIVENERGY_3PH_MODEL_TOKEN in (inv.model or "").lower():
+                charge_rate_attributes["grid_charge_only"] = True
+        self.dashboard_item(f"number.{pfx}_charge_rate", control.charge_rate_w, attributes=charge_rate_attributes, app="gateway")
+        self.dashboard_item(f"number.{pfx}_discharge_rate", control.discharge_rate_w, attributes=discharge_rate_attributes, app="gateway")
+        # The reserve ceiling is per-inverter, so it overrides the table's 100: GivEnergy
+        # firmware refuses a reserve of 100 and the gateway reports 98 for it (gateway
+        # issue #346). adjust_reserve() honours this entity's "max" through
+        # reserve_device_bounds(), so publishing it is what stops PredBat asking a full
+        # battery to hold at a value the inverter will not take and reading the unchanged
+        # register back as a failed write. 0 is firmware predating the field: assume 100.
+        reserve_attributes = dict(GATEWAY_ATTRIBUTE_TABLE.get("reserve_soc", {}))
+        reserve_soc_max = getattr(control, "reserve_soc_max", 0)
+        reserve_attributes["max"] = reserve_soc_max if 1 <= reserve_soc_max <= 100 else 100
+        # A reserve the hub leaves out keeps the last real one, like the ratings above: read as 0% it
+        # is rewritten by Predbat for nothing (#5478). A 0% that Predbat wrote is real (see number_event).
+        reserve_soc = self._last_rating(suffix, "reserve", control.reserve_soc) or 0
+        self.dashboard_item(f"number.{pfx}_reserve_soc", reserve_soc, attributes=reserve_attributes, app="gateway")
         self.dashboard_item(f"number.{pfx}_target_soc", control.target_soc, attributes=GATEWAY_ATTRIBUTE_TABLE.get("target_soc", {}), app="gateway")
         # Schedule times (convert HHMM uint32 → HH:MM:SS string)
         # Always set with defaults so PredBat doesn't crash on missing charge_start_time
@@ -912,12 +1617,13 @@ class GatewayMQTT(ComponentBase):
             ("discharge_end", "discharge_slot1_end"),
         ]:
             hhmm = getattr(sched, field, 0) if sched else 0
-            hours = hhmm // 100
-            minutes = hhmm % 100
-            if hours >= 24:
-                hours = 0  # firmware sends 2400 for midnight end-of-day
-            time_str = f"{hours:02d}:{minutes:02d}:00"
-            self.dashboard_item(f"select.{pfx}_{name}", time_str, attributes=GATEWAY_ATTRIBUTE_TABLE.get(name, {}), app="gateway")
+            side, endpoint = field.split("_")
+            staged = self._staged_entry(suffix, side)
+            if staged is not None and staged[endpoint] is not None:
+                hhmm = staged[endpoint]
+            self.dashboard_item(f"select.{pfx}_{name}", self._hhmm_to_time_str(hhmm), attributes=self._slot_attributes(name, inv.type), app="gateway")
+        # Pressed (turned on) by Predbat once it has written the slot selects: sends what is staged
+        self.dashboard_item(f"switch.{pfx}_schedule_write", "off", attributes=GATEWAY_ATTRIBUTE_TABLE.get("schedule_write", {}), app="gateway")
 
         # Inverter time (from GatewayStatus timestamp for clock drift detection)
         if self._last_status and self._last_status.timestamp:
@@ -935,10 +1641,17 @@ class GatewayMQTT(ComponentBase):
         # Energy counters (Wh → kWh)
         # Always set with defaults so PredBat doesn't crash on missing load_today
         energy = inv.energy if inv.energy.ByteSize() > 0 else None
+        import_today_wh = getattr(energy, "grid_import_today_wh", 0) if energy else 0
+        export_today_wh = getattr(energy, "grid_export_today_wh", 0) if energy else 0
+        load_today_wh = getattr(energy, "consumption_today_wh", 0) if energy else 0
+        if site_energy is not None:
+            import_today_wh = site_energy["import_wh"]
+            export_today_wh = site_energy["export_wh"]
+            load_today_wh = site_energy["load_wh"]
         self.dashboard_item(f"sensor.{pfx}_pv_today", round(getattr(energy, "pv_today_wh", 0) / 1000.0, 2) if energy else 0, attributes=GATEWAY_ATTRIBUTE_TABLE.get("pv_today", {}), app="gateway")
-        self.dashboard_item(f"sensor.{pfx}_import_today", round(getattr(energy, "grid_import_today_wh", 0) / 1000.0, 2) if energy else 0, attributes=GATEWAY_ATTRIBUTE_TABLE.get("import_today", {}), app="gateway")
-        self.dashboard_item(f"sensor.{pfx}_export_today", round(getattr(energy, "grid_export_today_wh", 0) / 1000.0, 2) if energy else 0, attributes=GATEWAY_ATTRIBUTE_TABLE.get("export_today", {}), app="gateway")
-        self.dashboard_item(f"sensor.{pfx}_load_today", round(getattr(energy, "consumption_today_wh", 0) / 1000.0, 2) if energy else 0, attributes=GATEWAY_ATTRIBUTE_TABLE.get("load_today", {}), app="gateway")
+        self.dashboard_item(f"sensor.{pfx}_import_today", round(import_today_wh / 1000.0, 2), attributes=GATEWAY_ATTRIBUTE_TABLE.get("import_today", {}), app="gateway")
+        self.dashboard_item(f"sensor.{pfx}_export_today", round(export_today_wh / 1000.0, 2), attributes=GATEWAY_ATTRIBUTE_TABLE.get("export_today", {}), app="gateway")
+        self.dashboard_item(f"sensor.{pfx}_load_today", round(load_today_wh / 1000.0, 2), attributes=GATEWAY_ATTRIBUTE_TABLE.get("load_today", {}), app="gateway")
         if energy:
             self.dashboard_item(f"sensor.{pfx}_battery_charge_today", round(energy.battery_charge_today_wh / 1000.0, 2), attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_charge_today", {}), app="gateway")
             self.dashboard_item(f"sensor.{pfx}_battery_discharge_today", round(energy.battery_discharge_today_wh / 1000.0, 2), attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_discharge_today", {}), app="gateway")
@@ -1019,31 +1732,55 @@ class GatewayMQTT(ComponentBase):
             pfx = f"{self.prefix}_gateway_{suffix}"
 
             self.dashboard_item(f"binary_sensor.{pfx}_online", ev.connected, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_online", {}), app="gateway")
-            ev_car_connected = ev.connected and ev.status in {"Preparing", "Charging", "SuspendedEV", "SuspendedEVSE", "Finishing"}
+            ev_car_connected = ev.connected and ev.status in _EV_CAR_CONNECTED_STATUSES
             self.dashboard_item(f"binary_sensor.{pfx}_connected", ev_car_connected, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_connected", {}), app="gateway")
+            # Whether a car is plugged in, for car_charging_plugged. Unlike _connected it does not read "no" while the
+            # charger itself is offline - that says nothing about the cable - so a charger dropping out is not an unplug
+            self.dashboard_item(f"binary_sensor.{pfx}_plugged", ev_car_connected if ev.connected else "unavailable", attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_plugged", {}), app="gateway")
             # Live-session fields are only meaningful while the charger is connected.
             # The gateway now reports known-but-offline chargers instead of omitting
             # them, and older firmware can leave session_active/power/energy at their
-            # last values. car_charging_now is wired to session_active and PredBat
-            # plans whenever it is true, so an offline charger with a stale
-            # session_active would create a charging slot for a charger that is not
+            # last values. car_charging_now is wired to the charging sensor below and
+            # PredBat holds the battery for the car whenever it is true, so an offline
+            # charger with a stale session would hold it for a charger that is not
             # there. Force them to their idle values rather than trusting the payload.
             session_active = ev.connected and ev.session_active
             power_w = ev.power_w if ev.connected else 0
             session_energy_wh = ev.session_energy_wh if ev.connected else 0
+            # Whether the car is actually drawing power, which is what car_charging_now needs. session_active
+            # stays true in SuspendedEV (the car is full, or paused, and draws nothing), so it would hold the
+            # battery for as long as a full car stayed connected. "Charging" is the OCPP status for energy
+            # flowing; firmware that sends no status falls back to an active session with power.
+            if ev.status:
+                ev_charging = ev.connected and ev.status == "Charging"
+            else:
+                ev_charging = bool(session_active and power_w > 0)
             self.dashboard_item(f"binary_sensor.{pfx}_session_active", session_active, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_session_active", {}), app="gateway")
+            self.dashboard_item(f"binary_sensor.{pfx}_charging", ev_charging, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_charging", {}), app="gateway")
             if ev.status:
                 self.dashboard_item(f"sensor.{pfx}_status", ev.status, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_status", {}), app="gateway")
             self.dashboard_item(f"sensor.{pfx}_power", power_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_power", {}), app="gateway")
-            self.dashboard_item(f"sensor.{pfx}_session_energy", round(session_energy_wh / 1000.0, 2), attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_session_energy", {}), app="gateway")
+            # Unavailable while the charger is offline, not 0: car_charging_energy's history would read the drop to 0 and back as
+            # a new session, and count the session's energy again - toward the manual car SoC as well as the load
+            session_energy = round(session_energy_wh / 1000.0, 2) if ev.connected else "unavailable"
+            self.dashboard_item(f"sensor.{pfx}_session_energy", session_energy, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_session_energy", {}), app="gateway")
             if ev.current_limit_a:
                 self.dashboard_item(f"sensor.{pfx}_current_limit", ev.current_limit_a, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_current_limit", {}), app="gateway")
             if ev.soc_percent:
                 ev_soc = ev.soc_percent
+                if self._ev_last_soc.get(ev.charge_point_id) != ev_soc:
+                    self._ev_last_soc = {**self._ev_last_soc, ev.charge_point_id: ev_soc}
+            elif ev.charge_point_id in self._ev_last_soc:
+                # A charger that has reported the car's SoC and stopped, between sessions or while offline: the last
+                # report is a better guess than an estimate from the session energy, which starts from 0% every session
+                ev_soc = self._ev_last_soc[ev.charge_point_id]
             else:
                 # SoC not reported by this charger — estimate from session energy and configured battery size
                 # so the sensor always exists and the optimizer sees progress rather than a stuck 0%.
-                battery_size_kwh = self.get_arg("car_charging_battery_size", 100)
+                # car_charging_battery_size is a per-car list (entries: num_cars) and auto-config
+                # puts the gateway charger in car slot 0, so read that slot. A float default keeps
+                # a fractional size such as 10.5 kWh; an int default would truncate it to 10.
+                battery_size_kwh = self.get_arg("car_charging_battery_size", 100.0, index=0)
                 try:
                     battery_size_kwh = float(battery_size_kwh)
                 except (ValueError, TypeError):
@@ -1065,9 +1802,11 @@ class GatewayMQTT(ComponentBase):
     def _needs_reconfigure(self, status):
         """Whether automatic_config should (re-)run for this status.
 
-        Runs on first telemetry, and again when a *new* inverter serial appears — e.g.
-        a second AIO is discovered later, which (per GivTCP) moves the control point
-        from the AIO to the Gateway. Removals are deliberately ignored so a transient
+        Runs on first telemetry, and again when an inverter auto-config could act on
+        appears for the first time (see ``_usable_serials``) — e.g. a second AIO is
+        discovered later, which (per GivTCP) moves the control point from the AIO to
+        the Gateway, or an inverter the hub could not read at start-up starts reporting
+        battery data (#5471). Removals are deliberately ignored so a transient
         drop-out does not thrash the config; a permanent removal is handled by the
         onboarding/restart path. (NOTE: re-running re-selects the control target and
         rewrites the inverter args; whether PredBat core re-reads ``num_inverters`` at
@@ -1075,7 +1814,11 @@ class GatewayMQTT(ComponentBase):
         """
         if not self._auto_configured:
             return True
-        new_serials = frozenset(inv.serial for inv in status.inverters) - self._configured_inverter_serials
+        sized = sorted(inv.serial for inv in status.inverters if inv.serial in self._slots_without_capacity and inv.battery.capacity_wh > 0)
+        if sized:
+            self.log(f"Info: GatewayMQTT: inverter(s) {sized} now report a battery size — re-running auto-config")
+            return True
+        new_serials = self._usable_serials(status) - self._configured_inverter_serials
         if new_serials:
             self.log(f"Info: GatewayMQTT: new inverter(s) discovered {sorted(new_serials)} — re-running auto-config")
             return True
@@ -1087,6 +1830,268 @@ class GatewayMQTT(ComponentBase):
             return True
         return False
 
+    def _usable_serials(self, status):
+        """What auto-config could act on in this status, as a set of keys.
+
+        A coordinator (Plant EMS / Gateway) and a battery inverter that is reporting battery
+        data, by serial. An inverter the hub lists but is not yet reading is not usable, so it
+        is still new - and re-runs auto-config - on the first status in which it is (#5471).
+
+        With ``gateway_inverter_serial`` set, the listed inverters count by their discovery
+        record instead (see ``_update_discovery``): the serial for a battery inverter and
+        ``<serial>:pv`` for one with no battery, so one that turns out to have a battery
+        after all is new again.
+
+        Args:
+            status: A decoded GatewayStatus protobuf message.
+
+        Returns:
+            frozenset: The keys.
+        """
+        any_primary = any(inv.primary for inv in status.inverters if inv.type not in GATEWAY_COORDINATOR_TYPES)
+        usable = set()
+        for inv in status.inverters:
+            if inv.type in GATEWAY_COORDINATOR_TYPES:
+                usable.add(inv.serial)
+            elif inv.battery.ByteSize() > 0 and (inv.primary or not any_primary):
+                usable.add(inv.serial)
+        if self.gateway_inverter_serial:
+            for record in self._discovery.values():
+                usable.add(record["serial"] if record.get("battery") else record["serial"] + ":pv")
+        return frozenset(usable)
+
+    def _discovery_filename(self):
+        """Storage name of this hub's discovery records."""
+        return f"discovery_{self.gateway_device_id}"
+
+    def _listed_serials(self):
+        """The serials in ``gateway_inverter_serial``, upper-cased."""
+        return set(serial.upper() for serial in self.gateway_inverter_serial)
+
+    def _update_discovery(self, status):
+        """Record what the hub reports each inverter to be.
+
+        The record - type, whether it has a battery, its size, ratings and model - is what lets a
+        listed inverter keep its place when the hub cannot read it, including across a
+        restart (#5471). It is taken only from an inverter the hub is reading, so an offline
+        one never overwrites what is known about it. Having a battery only ever turns on: an
+        early status can carry an inverter's other readings before its battery ones.
+
+        With no serial list every inverter is recorded, for its last known size, ratings and
+        export limit only: there auto-config uses the inverters it finds, and one that is in
+        the records but not in the status is simply not there.
+
+        Args:
+            status: A decoded GatewayStatus protobuf message.
+        """
+        listed = self._listed_serials()
+        for inv in status.inverters:
+            key = inv.serial.upper()
+            if not key or (listed and key not in listed) or not self._has_telemetry(inv):
+                continue
+            known = self._discovery.get(key, {})
+            record = {
+                "serial": inv.serial,
+                "type": int(inv.type),
+                "battery": bool(known.get("battery")) or inv.battery.ByteSize() > 0,
+                "capacity_wh": int(inv.battery.capacity_wh) or int(known.get("capacity_wh", 0)),
+                "rate_max_w": int(inv.battery.rate_max_w) or int(known.get("rate_max_w", 0)),
+                "inverter_rate_max_w": int(inv.inverter.rate_max_w) or int(known.get("inverter_rate_max_w", 0)),
+                # The hub's own value: 1 means a limit of zero, 0 means it has never reported one
+                "export_limit_w": int(inv.control.export_limit_w) or int(known.get("export_limit_w", 0)),
+                "model": inv.model or known.get("model", ""),
+            }
+            if record != known:
+                self._discovery = {**self._discovery, key: record}
+                self._discovery_dirty = True
+
+    async def _load_discovery(self):
+        """Load the stored discovery records.
+
+        With ``gateway_inverter_serial`` set, a record for a serial that is not listed is
+        dropped: the list is the setting, and it wins over what was stored for an earlier one.
+        """
+        listed = self._listed_serials()
+        storage = self.storage
+        if storage is None:
+            return
+        try:
+            saved = await storage.load(GATEWAY_STORAGE_MODULE, self._discovery_filename())
+        except Exception as e:
+            self.log(f"Warn: GatewayMQTT: failed to load stored inverter discovery: {e}")
+            return
+        records = saved.get("inverters") if isinstance(saved, dict) else None
+        if not isinstance(records, dict):
+            return
+        loaded = {}
+        for key, stored in records.items():
+            record = self._valid_record(stored)
+            if record is None:
+                self.log(f"Warn: GatewayMQTT: ignoring unreadable stored discovery for inverter {key}")
+            elif not listed or record["serial"].upper() in listed:
+                loaded[record["serial"].upper()] = record
+        # Anything already learned from live telemetry is newer than the stored copy
+        self._discovery = {**loaded, **self._discovery}
+        if loaded:
+            self.log(f"Info: GatewayMQTT: loaded stored discovery for inverter(s) {sorted(loaded)}")
+
+    @staticmethod
+    def _valid_record(stored):
+        """A stored discovery record with every field checked, or None if it cannot be used.
+
+        The file can be edited or cut short, and a record auto-config cannot read would stop
+        it on every status message.
+
+        Args:
+            stored: One record as loaded from storage.
+
+        Returns:
+            dict: The record (see ``_update_discovery``), or None.
+        """
+        try:
+            serial = str(stored["serial"]).strip()
+            record = {
+                "serial": serial,
+                "type": int(stored.get("type", pb.INVERTER_TYPE_GIVENERGY)),
+                "battery": stored.get("battery") is True,
+                "capacity_wh": max(int(stored.get("capacity_wh") or 0), 0),
+                "rate_max_w": max(int(stored.get("rate_max_w") or 0), 0),
+                "inverter_rate_max_w": max(int(stored.get("inverter_rate_max_w") or 0), 0),
+                "export_limit_w": max(int(stored.get("export_limit_w") or 0), 0),
+                "model": str(stored.get("model") or ""),
+            }
+        except (AttributeError, KeyError, TypeError, ValueError):
+            return None
+        return record if serial else None
+
+    async def _save_discovery(self):
+        """Save the discovery records when they have changed.
+
+        A save that fails stays pending and is tried again after
+        GATEWAY_DISCOVERY_SAVE_RETRY_SECONDS: without the stored record a configured
+        inverter the hub cannot read would be left out after the next restart.
+        """
+        storage = self.storage
+        if not self._discovery_dirty or storage is None or _monotonic() < self._discovery_save_retry_at:
+            return
+        # Cleared before the save so a record that changes while it is being written is saved again
+        self._discovery_dirty = False
+        try:
+            saved = await storage.save(GATEWAY_STORAGE_MODULE, self._discovery_filename(), {"inverters": self._discovery}, format="json")
+        except Exception as e:
+            self.log(f"Warn: GatewayMQTT: failed to save inverter discovery: {e}")
+            saved = False
+        else:
+            if not saved:
+                self.log("Warn: GatewayMQTT: failed to save inverter discovery, will retry")
+        if saved:
+            self._discovery_save_retry_at = 0
+        else:
+            self._discovery_dirty = True
+            self._discovery_save_retry_at = _monotonic() + GATEWAY_DISCOVERY_SAVE_RETRY_SECONDS
+
+    @staticmethod
+    def _stored_unit(record):
+        """An inverter entry built from a discovery record, standing in for one the hub is not reporting.
+
+        Args:
+            record: A discovery record (see ``_update_discovery``).
+
+        Returns:
+            predbat_InverterEntry: The entry, with no readings other than the battery size.
+        """
+        inv = pb.InverterEntry()
+        inv.serial = record["serial"]
+        inv.type = int(record.get("type", pb.INVERTER_TYPE_GIVENERGY))
+        inv.model = str(record.get("model", ""))
+        if record.get("capacity_wh"):
+            inv.battery.capacity_wh = int(record["capacity_wh"])
+        return inv
+
+    def _inject_unreported_inverters(self, status):
+        """Give a configured inverter the hub is not reporting its entities, if it has none.
+
+        After a restart a configured inverter, with a slot or PV only, can be known only from
+        its discovery record. The core reads its entities all the same, so they are published
+        once with defaults and the stored battery size. Ones that already exist are left as
+        they are, stale, apart from the power readings (see ``_inject_unread_inverter``).
+
+        Args:
+            status: A decoded GatewayStatus protobuf message.
+        """
+        reported = set(inv.serial.upper() for inv in status.inverters)
+        for serial in list(self._inverter_slot_serials) + list(self._pv_only_serials):
+            if serial.upper() in reported:
+                continue
+            record = self._discovery.get(serial.upper())
+            suffix = _serial_suffix(serial)
+            if self.get_state_wrapper(f"sensor.{self.prefix}_gateway_{suffix}_soc") is not None:
+                self._inject_unread_inverter(suffix)
+            elif record is not None:
+                self._inject_inverter_entities(self._stored_unit(record), suffix)
+
+    @staticmethod
+    def _has_telemetry(inv):
+        """Whether the hub is reporting any readings for this unit.
+
+        A coordinator is always taken to be reporting: it has no battery of its own, and
+        what it sends differs by type.
+
+        Args:
+            inv: A ``predbat_InverterEntry`` from the gateway status.
+
+        Returns:
+            bool: False for a battery or PV inverter whose battery, PV, grid, load and inverter readings are all absent.
+        """
+        if inv.type in GATEWAY_COORDINATOR_TYPES:
+            return True
+        return any(block.ByteSize() > 0 for block in (inv.battery, inv.pv, inv.grid, inv.load, inv.inverter))
+
+    def _check_configured_inverters(self, status):
+        """Report the configured inverters that the hub is not reading, when ``gateway_inverter_serial`` is set.
+
+        The serial list is the user's (or the cloud's) statement of what the site has. A
+        listed inverter the hub has not discovered yet is left out until it is, with a
+        warning. Once it has a slot it keeps it: if the hub then stops reporting it, its
+        data goes stale and its writes fail, and that is an error for as long as it lasts
+        (#5471). Discovered means the hub has reported readings for it at least once, now or
+        in a stored record. Both are logged when the set changes, and every status with a configured
+        inverter unread marks the run as having had errors.
+
+        Args:
+            status: A decoded GatewayStatus protobuf message.
+        """
+        if not self.gateway_inverter_serial or not self._auto_configured:
+            return
+
+        by_serial = {inv.serial.upper(): inv for inv in status.inverters}
+        bound = set(serial.upper() for serial in self._inverter_slot_serials)
+        undiscovered = sorted(serial for serial in self._listed_serials() if serial not in self._discovery and serial not in bound)
+        # Every battery inverter the hub has discovered counts, not only the ones with a slot:
+        # behind a Gateway or Plant EMS the coordinator holds the only slot, and one of its
+        # inverters going unread would otherwise pass unnoticed
+        watched = list(self._inverter_slot_serials)
+        watched += [record["serial"] for key, record in sorted(self._discovery.items()) if key not in bound and record.get("battery") and record.get("type") not in GATEWAY_COORDINATOR_TYPES]
+        unread = []
+        for serial in watched:
+            inv = by_serial.get(serial.upper())
+            # The connected flag is only relied on for an inverter with a slot, as it was before
+            disconnected = inv is not None and serial.upper() in bound and inv.type not in GATEWAY_COORDINATOR_TYPES and not inv.connected
+            if inv is None or not self._has_telemetry(inv) or disconnected:
+                unread.append(serial)
+
+        unavailable = (tuple(undiscovered), tuple(unread))
+        if unavailable != self._unavailable_inverters:
+            if undiscovered:
+                self.log(f"Warn: GatewayMQTT: inverter(s) {undiscovered} in gateway_inverter_serial have not been read by the hub yet; they are configured as soon as it reports their readings")
+            if unread:
+                self.log(f"Error: GatewayMQTT: configured inverter(s) {unread} are not being read by the hub; they stay configured with their last reported data, check the hub's connection to them")
+            if self._unavailable_inverters[1] and not unread:
+                self.log("Info: GatewayMQTT: every configured inverter is being read by the hub again")
+            self._unavailable_inverters = unavailable
+        if unread:
+            self.non_fatal_error_occurred()
+
     def automatic_config(self):
         """Register gateway entities with PredBat's inverter model.
 
@@ -1094,12 +2099,23 @@ class GatewayMQTT(ComponentBase):
         (see ``_needs_reconfigure``). Maps proto fields to PredBat args so the plan
         engine has data to work with.
         """
+        if self.gateway_display_only:
+            return
         if not self._last_status:
             self.log("Error: GatewayMQTT: automatic_config called with no status data")
             return
 
         status = self._last_status
         all_inverters = list(status.inverters)
+
+        # With gateway_inverter_serial set, a listed inverter the hub has reported before is
+        # part of the site even when this status leaves it out (#5471). The records are brought
+        # up to date here as well as in _process_telemetry(), for a caller that comes straight here.
+        self._update_discovery(status)
+        serial_set = self._listed_serials()
+        reported = set(inv.serial.upper() for inv in all_inverters)
+        if serial_set:
+            all_inverters += [self._stored_unit(record) for key, record in sorted(self._discovery.items()) if key not in reported]
 
         if not all_inverters:
             self.log("Error: GatewayMQTT: no inverters in gateway status")
@@ -1120,8 +2136,7 @@ class GatewayMQTT(ComponentBase):
         # charge window — and broke control after an NVS wipe re-ordered discovery.)
         ems_units = [inv for inv in all_inverters if inv.type == pb.INVERTER_TYPE_GIVENERGY_EMS]
         gateway_units = [inv for inv in all_inverters if inv.type == pb.INVERTER_TYPE_GIVENERGY_GATEWAY]
-        coordinator_types = (pb.INVERTER_TYPE_GIVENERGY_EMS, pb.INVERTER_TYPE_GIVENERGY_GATEWAY)
-        candidate_aios = [inv for inv in all_inverters if inv.type not in coordinator_types]
+        candidate_aios = [inv for inv in all_inverters if inv.type not in GATEWAY_COORDINATOR_TYPES]
 
         # Filter AIOs to primary units with battery data for planning.
         any_primary = any(inv.primary for inv in candidate_aios)
@@ -1134,29 +2149,51 @@ class GatewayMQTT(ComponentBase):
             # Old firmware: no primary flags, use all with battery data
             aios = [inv for inv in candidate_aios if inv.battery.ByteSize() > 0]
 
+        pv_only = []
+        gateway_coordinates = len(aios) > 1
+        if serial_set:
+            # gateway_inverter_serial wins: every listed inverter the hub has discovered is
+            # used, by its discovery record and not by what the hub reports for it right now.
+            # Judging a listed inverter on its start-up telemetry dropped one the hub could
+            # not read until the next restart (#5471). One with no battery is a PV source only.
+            aios = [inv for inv in candidate_aios if self._discovery.get(inv.serial.upper(), {}).get("battery")]
+            pv_only = [inv for inv in candidate_aios if inv.serial.upper() in self._discovery and not self._discovery[inv.serial.upper()].get("battery")]
+            gateway_coordinates = gateway_coordinates or len(aios) > 1
+
         if ems_units:
             # A Plant EMS is the single control point for the whole system.
             inverters = ems_units[:1]
-        elif gateway_units and len(aios) > 1:
+        elif gateway_units and gateway_coordinates:
             # Multiple AIOs behind a Gateway: the Gateway is the single control point.
             # NOTE: control commands are addressed to the Gateway/EMS serial — the firmware
             # must fan these out to the AIOs (tracked separately in command_handler.cpp).
             inverters = gateway_units[:1]
-        else:
+        elif aios:
             inverters = aios
-        if not inverters:
-            inverters = candidate_aios or list(all_inverters)  # last resort
+        elif serial_set and not any(inv.serial.upper() in serial_set for inv in all_inverters):
+            # A serial list naming none of the inverters, reported below
+            inverters = []
+        else:
+            # A retained startup frame can contain the discovered inverter list before
+            # battery telemetry has been populated.  Treating every discovered unit as
+            # a last-resort control target makes a PV-only inverter writable and the
+            # decision then stays sticky because its serial is not new on later frames.
+            # Keep auto-config incomplete so _needs_reconfigure() retries when the next
+            # status supplies enough capability data to identify a battery inverter.
+            available = [inv.serial for inv in candidate_aios]
+            self.log(f"Warn: GatewayMQTT: no battery-capable inverter telemetry yet (discovered serials: {available}); auto-config deferred")
+            self._auto_configured = False
+            return
 
         # Apply serial filter if configured. A no-match is an error — configuring the
         # wrong inverter set is worse than not configuring at all. Leave _auto_configured
         # False so the run loop stays blocked and we retry on the next telemetry.
-        if self.gateway_inverter_serial:
-            serial_set = set(s.upper() for s in self.gateway_inverter_serial)
+        if serial_set:
             filtered = [inv for inv in inverters if inv.serial.upper() in serial_set]
             if filtered:
                 inverters = filtered
             else:
-                available = [inv.serial for inv in inverters]
+                available = [inv.serial for inv in (inverters or all_inverters)]
                 self.log(f"Error: GatewayMQTT: gateway_inverter_serial filter {self.gateway_inverter_serial} matched no inverters" f" (available serials: {available}); auto-config aborted — will retry on next telemetry")
                 self._auto_configured = False
                 return
@@ -1166,8 +2203,11 @@ class GatewayMQTT(ComponentBase):
         # re-discovery (NVS wipe, gateway reboot, repair). PredBat core is positional;
         # sorting by serial makes the slot index a deterministic function of identity.
         inverters = sorted(inverters, key=lambda inv: inv.serial)
+        pv_only = sorted(pv_only, key=lambda inv: inv.serial)
 
         num_inverters = len(inverters)
+        self._inverter_slot_serials = [inv.serial for inv in inverters]
+        self._pv_only_serials = tuple(inv.serial for inv in pv_only)
         self.log(f"Info: GatewayMQTT: auto-config: {num_inverters} primary inverter(s) of {len(all_inverters)} total")
 
         # Set inverter type
@@ -1192,9 +2232,14 @@ class GatewayMQTT(ComponentBase):
         discharge_end_entities = []
         charge_enable_entities = []
         discharge_enable_entities = []
+        schedule_write_entities = []
         export_limit_entities = []
         inverter_limit_entities = []
+        battery_scaling_entities = []
+        battery_rate_max_entities = []
+        inverter_time_entities = []
 
+        slots_without_capacity = []
         for inv in inverters:
             suffix = inv.serial[-6:].lower()
             base = f"{self.prefix}_gateway_{suffix}"
@@ -1216,22 +2261,42 @@ class GatewayMQTT(ComponentBase):
             discharge_end_entities.append(f"select.{base}_discharge_slot1_end")
             charge_enable_entities.append(f"switch.{base}_charge_enabled")
             discharge_enable_entities.append(f"switch.{base}_discharge_enabled")
+            schedule_write_entities.append(f"switch.{base}_schedule_write")
             export_limit_entities.append(f"sensor.{base}_export_limit_w")
 
             # soc_max: from battery capacity entity
-            if inv.battery.capacity_wh > 0:
+            if inv.battery.capacity_wh > 0 or self._discovery.get(inv.serial.upper(), {}).get("capacity_wh"):
                 soc_max_entities.append(f"sensor.{base}_battery_capacity")
             else:
                 soc_max_entities.append(None)
+                slots_without_capacity.append(inv.serial)
                 self.log(f"Warn: GatewayMQTT: inverter {inv.serial} has no battery capacity, setting to None for automatic discovery")
 
             inverter_limit_entities.append(f"sensor.{base}_inverter_rate_max")
+            battery_scaling_entities.append(f"sensor.{base}_battery_dod")
+            battery_rate_max_entities.append(f"sensor.{base}_battery_rate_max")
+            # Clock drift detection — uses GatewayStatus.timestamp
+            inverter_time_entities.append(f"sensor.{base}_inverter_time")
+
+        # A listed inverter with no battery is a PV source and nothing else: it has no slot, so it
+        # is never written to, and its generation is counted through the entries past num_inverters
+        # in pv_power and pv_today, which Predbat sums (as solis.py does for the same case).
+        pv_only_bases = [f"{self.prefix}_gateway_{_serial_suffix(inv.serial)}" for inv in pv_only]
+        if pv_only_bases:
+            self.log(f"Info: GatewayMQTT: inverter(s) {list(self._pv_only_serials)} have no battery — configured as PV only")
+            pv_power_entities += [f"sensor.{base}_pv_power" for base in pv_only_bases]
 
         # Map entity lists to PredBat args
         self.set_arg("soc_percent", soc_entities)
         self.set_arg("soc_max", soc_max_entities)
         self.set_arg("battery_power", battery_power_entities)
         self.set_arg("pv_power", pv_power_entities)
+        # Inverters sharing one grid CT clamp each report the same grid and load reading, so they must
+        # not be summed. Same "single source + zeros" pattern as gecloud.py's ge_cloud_automatic_shared_ct.
+        if self.gateway_shared_ct and num_inverters > 1:
+            self.log("Info: GatewayMQTT: Multiple inverters sharing a single CT clamp (gateway_shared_ct) — using first inverter only for grid and load measurements")
+            grid_power_entities = grid_power_entities[:1] + [0 for _ in range(num_inverters - 1)]
+            load_power_entities = load_power_entities[:1] + [0 for _ in range(num_inverters - 1)]
         self.set_arg("grid_power", grid_power_entities)
         self.set_arg("load_power", load_power_entities)
         self.set_arg("charge_rate", charge_rate_entities)
@@ -1245,26 +2310,31 @@ class GatewayMQTT(ComponentBase):
         self.set_arg("discharge_end_time", discharge_end_entities)
         self.set_arg("scheduled_charge_enable", charge_enable_entities)
         self.set_arg("scheduled_discharge_enable", discharge_enable_entities)
+        self.set_arg("schedule_write_button", schedule_write_entities)
         self.set_arg("export_limit", export_limit_entities)
         self.set_arg("inverter_limit", inverter_limit_entities)
 
-        # Energy counters (first inverter)
+        # Energy counters. PV is measured by each inverter itself, so every inverter's counter is
+        # bound and Predbat sums them. Import, export and load are the same when each inverter has its
+        # own clamp. Only the first inverter's are bound where they describe the whole site once: on
+        # one shared clamp (gateway_shared_ct), and when _update_integrated_energy() fills them in
+        # (gateway_integrate_power).
         suffix0 = inverters[0].serial[-6:].lower()
         base0 = f"{self.prefix}_gateway_{suffix0}"
-        self.set_arg("pv_today", [f"sensor.{base0}_pv_today"])
-        self.set_arg("import_today", [f"sensor.{base0}_import_today"])
-        self.set_arg("export_today", [f"sensor.{base0}_export_today"])
-        self.set_arg("load_today", [f"sensor.{base0}_load_today"])
+        bases = [f"{self.prefix}_gateway_{inv.serial[-6:].lower()}" for inv in inverters]
+        site_bases = bases[:1] if self.gateway_shared_ct or self.gateway_integrate_power else bases
+        self.set_arg("pv_today", [f"sensor.{base}_pv_today" for base in bases + pv_only_bases])
+        self.set_arg("import_today", [f"sensor.{base}_import_today" for base in site_bases])
+        self.set_arg("export_today", [f"sensor.{base}_export_today" for base in site_bases])
+        self.set_arg("load_today", [f"sensor.{base}_load_today" for base in site_bases])
 
         # Battery health (first inverter)
         self.set_arg("battery_temperature_history", f"sensor.{base0}_battery_temperature")
-        self.set_arg("battery_scaling", [f"sensor.{base0}_battery_dod"])
 
-        # Battery rate max
-        self.set_arg("battery_rate_max", [f"sensor.{base0}_battery_rate_max"])
-
-        # Inverter time (clock drift detection — uses GatewayStatus.timestamp)
-        self.set_arg("inverter_time", [f"sensor.{base0}_inverter_time"])
+        # Per-inverter: inverter.py reads these at index=self.id, so each needs one entry per inverter
+        self.set_arg("battery_scaling", battery_scaling_entities)
+        self.set_arg("battery_rate_max", battery_rate_max_entities)
+        self.set_arg("inverter_time", inverter_time_entities)
 
         # EMS aggregate entities (GivEnergy EMS only)
         inv0 = inverters[0]
@@ -1276,18 +2346,13 @@ class GatewayMQTT(ComponentBase):
             self.set_arg("ems_total_grid", f"sensor.{pfx}_ems_total_grid")
             self.set_arg("ems_total_pv", f"sensor.{pfx}_ems_total_pv")
             self.set_arg("ems_total_load", f"sensor.{pfx}_ems_total_load")
-            # EMS idle slots (discharge pause windows) — use same slot entities for all inverters
-            self.set_arg(
-                "idle_start_time",
-                [f"select.{base0}_discharge_slot1_start" for _ in range(num_inverters)],
-            )
-            self.set_arg(
-                "idle_end_time",
-                [f"select.{base0}_discharge_slot1_end" for _ in range(num_inverters)],
-            )
             self.log(f"Info: GatewayMQTT: EMS mode with {inv0.ems.num_inverters} sub-inverters")
 
         # Explicitly set unsupported features to None
+        # The Hub manages idle (demand) time itself. On an EMS the discharge slot selects are
+        # the export slot, so binding idle time to them overwrote the export window.
+        self.set_arg("idle_start_time", None)
+        self.set_arg("idle_end_time", None)
         self.set_arg("givtcp_rest", None)
         self.set_arg("charge_rate_percent", None)
         self.set_arg("discharge_rate_percent", None)
@@ -1324,7 +2389,8 @@ class GatewayMQTT(ComponentBase):
         self._register_ev_car(status)
 
         self._auto_configured = True
-        self._configured_inverter_serials = frozenset(inv.serial for inv in all_inverters)
+        self._slots_without_capacity = frozenset(slots_without_capacity)
+        self._configured_inverter_serials = self._usable_serials(status) | frozenset(self._inverter_slot_serials)
         self._configured_ev_chargers = frozenset(ev.charge_point_id for ev in status.ev_chargers if ev.charge_point_id)
         self.log(f"Info: GatewayMQTT: auto-config complete: {num_inverters} inverter(s) registered")
         return num_inverters
@@ -1355,18 +2421,25 @@ class GatewayMQTT(ComponentBase):
 
         # For now we overwrite the first charger only; multi-charger support needs work
         ev = next((c for c in chargers if c.connected), chargers[0])
+        # gateway_evc_control drives this charger and no other, so it enforces the plan made for it
+        self._ev_control_cp_id = ev.charge_point_id or None
         pfx = f"{self.prefix}_gateway_{self._ev_suffix(ev, multi=False)}"
         self.set_arg("num_cars", 1)
         # Entity-reference args (resolved by get_arg indirect lookup at fetch time).
         # Battery size and target limit are deliberately left to the existing
         # car_charging_battery_size / car_charging_limit settings — the charger cannot
         # report them, so overwriting them here would only swap one default for another.
-        # "Planned"/"now" both derive from the connected binary sensor; many OCPP cars do
-        # not report SoC, so the manual-SoC path supplies a starting value.
+        # "Planned" derives from the connected binary sensor and "now" from the charging sensor (the car
+        # drawing power); many OCPP cars do not report SoC, so the manual-SoC path tracks it from the session energy.
         self.set_arg("car_charging_planned", [f"binary_sensor.{pfx}_connected"])
-        if not self.gateway_evc_control:
-            self.set_arg("car_charging_now", [f"binary_sensor.{pfx}_session_active"])
-        self.set_arg("car_charging_soc", [f"sensor.{pfx}_soc"])
+        # The cable alone, for the manual SoC's reset on unplug - unavailable while the charger is offline, not "no"
+        self.set_arg("car_charging_plugged", [f"binary_sensor.{pfx}_plugged"])
+        # Holds the battery for the car while it draws power; it never adds a charging slot, so it cannot
+        # keep a session going through gateway_evc_control's window start/stop
+        self.set_arg("car_charging_now", [f"binary_sensor.{pfx}_charging"])
+        # No car_charging_soc: a charger rarely knows the car's SoC, and when it does only during a session, so
+        # sensor.{pfx}_soc is mostly an estimate from the session energy that starts from 0% every session. With the
+        # energy and plugged-in sensors the car is tracked as a manual SoC car instead, which the user can set to its real level
         self.set_arg("car_charging_energy", f"sensor.{pfx}_session_energy")
         # Live charge power - display only, for the web power flow diagram
         self.set_arg("car_charging_power", f"sensor.{pfx}_power")
@@ -1411,7 +2484,7 @@ class GatewayMQTT(ComponentBase):
                 slot_idx = 0
                 for row in rows:
                     try:
-                        row_time = datetime.datetime.strptime(row.get("time", ""), "%Y-%m-%dT%H:%M:%S%z")
+                        row_time = strptime_aware(row.get("time", ""), "%Y-%m-%dT%H:%M:%S%z")
                     except (ValueError, TypeError):
                         continue
 
@@ -1540,16 +2613,38 @@ class GatewayMQTT(ComponentBase):
                 "export_rate": (rate_anchors or {}).get("export_rate"),
             }
 
-            # Only publish if data changed
-            if payload == self._last_predbat_data:
+            live_enabled = self.gateway_display_only and self.gateway_live_display
+            if live_enabled:
+                payload["live_display"] = live_display_payload(self.base, self.gateway_device_id, self.gateway_inverter_serial, int(time.time()))
+                if not self._live_display_binding()["enabled"]:
+                    payload["live_display"] = {"v": 1, "enabled": True, "device_id": self.gateway_device_id, "available": False}
+                # Bound existing optional strings/matrices too: predbat_data's
+                # MQTT decoder receives a single chunk, not a reassembled blob.
+                payload["predbat_status"] = str(payload["predbat_status"])[:31]
+                payload["predbat_status_detail"] = str(payload["predbat_status_detail"])[:63]
+                payload["block_state"] = str(payload["block_state"])[:15]
+
+            # Live readings need a heartbeat even at genuine zero/unchanged SOC.
+            if payload == self._last_predbat_data and (not live_enabled or time.time() - self._last_live_display_publish < 60):
                 return
 
-            self._last_predbat_data = dict(payload)  # store copy without timestamp so dedup works next cycle
+            dedup_payload = dict(payload)
             payload["timestamp"] = int(time.time())
-            payload_json = json.dumps(payload)
             topic = f"{self._topic_base}/predbat_data"
+            payload_json = json.dumps(payload, separators=(",", ":")) if live_enabled else json.dumps(payload)
+            # Include UTF-8 topic bytes and a conservative MQTT header budget.
+            if live_enabled and len(payload_json.encode()) + len(topic.encode()) + 16 > 1400:
+                payload["marginal_costs"] = []
+                payload["marginal_time_labels"] = []
+                payload_json = json.dumps(payload, separators=(",", ":"))
+                if len(payload_json.encode()) + len(topic.encode()) + 16 > 1400:
+                    self.log("Warn: Live Hub display packet exceeds 1400-byte limit; not published")
+                    return
 
             await self._publish_raw(topic, payload_json.encode(), retain=True)
+            self._last_predbat_data = dedup_payload  # store after the publish call completes
+            if live_enabled:
+                self._last_live_display_publish = time.time()
             self.log(f"Info: Published predbat_data: price={payload['current_price']}p avg={payload['avg_price']}p cost=£{payload['total_cost']}")
 
         except Exception as e:
@@ -1582,6 +2677,27 @@ class GatewayMQTT(ComponentBase):
         self._last_read_only_sent_time = now
         self.log(f"Info: GatewayMQTT: set_read_only command sent (read_only={read_only})")
 
+    def _check_read_only_mismatch(self, reported):
+        """Warn when the gateway's enforced read-only state differs from what PredBat asked for.
+
+        Observe-only: called from the telemetry path with the value the gateway reports in
+        its status, and never sends a command. _last_read_only holds the value of the last
+        set_read_only command PredBat published, so the two are directly comparable; it is
+        None before the first send (and after a disconnect forces a re-send), in which case
+        there is nothing to compare against yet.
+
+        The status arrives every cycle, so the warning is latched and logged once per
+        transition into disagreement, and the latch is cleared as soon as the two agree
+        again — otherwise a stuck gateway would fill the log.
+        """
+        requested = self._last_read_only
+        if requested is None or reported == requested:
+            self._read_only_mismatch_logged = False
+            return
+        if not self._read_only_mismatch_logged:
+            self.log(f"Warn: GatewayMQTT: gateway reports read_only={reported} but PredBat requested {requested}")
+            self._read_only_mismatch_logged = True
+
     async def _check_inverter_resets(self):
         """Send inverter_reset for each configured inverter not yet reset in control mode.
 
@@ -1594,11 +2710,134 @@ class GatewayMQTT(ComponentBase):
             return
         if not self.is_alive() or not self._auto_configured:
             return
-        for suffix, serial in self._suffix_to_serial.items():
+        for _suffix, serial in self._suffix_to_serial.items():
             if serial not in self._inverter_reset_done:
                 await self.publish_command("inverter_reset", serial=serial)
                 self._inverter_reset_done.add(serial)
                 self.log(f"Info: GatewayMQTT: inverter_reset sent for inverter {serial}")
+
+    def _inverter_rate_caps(self):
+        """Return {serial: (charge_w, discharge_w)} - the rate cap of each inverter the hub drives.
+
+        The cap is the inverter's own battery_rate_max_charge / discharge, which is already
+        limited by inverter_limit_charge / inverter_limit_discharge and battery_rate_max.
+
+        Which serial an inverter is comes from auto-config, which binds PredBat inverter slot N
+        to a hub inverter (_inverter_slot_serials). An inverter of another type has no hub slot
+        and is left out, as is one whose limits PredBat has not read yet - a cap of 0 would
+        tell the hub there is no cap.
+        """
+        inverters = getattr(self.base, "inverters", None)
+        if not isinstance(inverters, (list, tuple)):
+            return {}
+        caps = {}
+        for inverter in inverters:
+            slot = getattr(inverter, "id", None)
+            if getattr(inverter, "inverter_type", None) != "GWMQTT" or not isinstance(slot, int) or not 0 <= slot < len(self._inverter_slot_serials):
+                continue
+            charge_cap_w = int(round((inverter.battery_rate_max_charge or 0) * MINUTE_WATT))
+            discharge_cap_w = int(round((inverter.battery_rate_max_discharge or 0) * MINUTE_WATT))
+            if charge_cap_w <= 0 or discharge_cap_w <= 0:
+                continue
+            caps[self._inverter_slot_serials[slot]] = (charge_cap_w, discharge_cap_w)
+        return caps
+
+    def _driven_serials(self):
+        """Return the sorted serials of the inverters PredBat drives through the hub.
+
+        Auto-config binds PredBat inverter slot N to a hub inverter (_inverter_slot_serials);
+        an inverter of another type has no hub slot and is left out.
+        """
+        inverters = getattr(self.base, "inverters", None)
+        if not isinstance(inverters, (list, tuple)):
+            return []
+        serials = set()
+        for inverter in inverters:
+            slot = getattr(inverter, "id", None)
+            if getattr(inverter, "inverter_type", None) != "GWMQTT" or not isinstance(slot, int) or not 0 <= slot < len(self._inverter_slot_serials):
+                continue
+            serial = self._inverter_slot_serials[slot]
+            if serial:
+                serials.add(serial)
+        return sorted(serials)
+
+    async def _check_commanded_serials(self):
+        """Send set_commanded_serials: the set of inverters PredBat drives through the hub.
+
+        The hub only acts on its own (running the cached plan when the cloud link is lost,
+        restoring a safe state after a power cut) for inverters PredBat drives. Without this it
+        learns them one control command at a time, so a hub that has been reset or replaced, or
+        a newly fitted inverter, gets no such cover until PredBat next changes a setting on it.
+
+        The declaration means "PredBat controls these inverters", not "PredBat is configured",
+        so it is sent only in a control mode and never in Monitor mode. Control is judged from
+        the mode alone - one attribute, written once per cycle - rather than from the control
+        flags, which fetch.py rewrites one by one on another thread. PredBat starts in Monitor
+        mode, so a half-loaded configuration only ever means "do not send yet". An empty
+        declaration is never sent: nothing here may clear the hub's set.
+
+        Nothing is sent in read-only mode (including a read-only hold during a VPP event),
+        while the gateway is not online or alive, or before auto-config. Sent when the set
+        changes, when the hub comes back online, and at least every 30 minutes, since the
+        command is not retained.
+        """
+        if self.get_arg("set_read_only", False) or bool(getattr(self.base, "set_read_only", False)) or not self._gateway_online:
+            self._commanded_serials_sent = None  # send afresh once control resumes
+            return
+        if not self.is_alive() or not self._auto_configured:
+            return
+        mode = getattr(self.base, "predbat_mode", None)
+        if mode not in PREDBAT_MODE_OPTIONS or mode == PREDBAT_MODE_OPTIONS[PREDBAT_MODE_MONITOR]:
+            self._commanded_serials_sent = None
+            return
+        inverters = getattr(self.base, "inverters", None)
+        hub_inverters = [inv for inv in inverters if getattr(inv, "inverter_type", None) == "GWMQTT"] if isinstance(inverters, (list, tuple)) else []
+        if len(hub_inverters) != len(self._inverter_slot_serials):
+            return  # PredBat's hub inverters and the hub's slots disagree mid-rebuild: a subset would drop units
+        serials = self._driven_serials()
+        if not serials:
+            return  # no inverter bound to the hub yet
+        now = time.time()
+        if serials == self._commanded_serials_sent and now - self._commanded_serials_sent_time < 30 * 60:
+            return
+        await self.publish_command("set_commanded_serials", serials=serials)
+        self._commanded_serials_sent = serials
+        self._commanded_serials_sent_time = now
+        self.log(f"Info: GatewayMQTT: set_commanded_serials sent: {', '.join(serials)}")
+
+    async def _check_rate_caps(self):
+        """Send set_rate_cap for each inverter whose charge/discharge rate cap the hub does not have yet.
+
+        When the hub loses the cloud it runs the cached plan itself, and outside a charge or
+        export window it has to choose a rate. Without this it only knows the inverter's rated
+        power, which can be above the limit PredBat works to (predbat-gateway#424).
+
+        Called on every run() cycle and gated like _check_inverter_resets(): nothing is sent in
+        read-only mode, while the gateway is not alive, or before auto-config. Each inverter's
+        cap is sent once, and again only if it changes, read-only mode is switched off, or the
+        hub comes back online. The hub stores it, so it is not repeated with every plan.
+        """
+        if self.get_arg("set_read_only", False):
+            self._rate_caps_sent.clear()  # re-send once read-only is later disabled
+            return
+        if not self._gateway_online:
+            # The command is not retained, so one sent now would be lost. Forget what was
+            # sent so a hub that comes back - possibly on new firmware, or with its stored
+            # caps wiped - is told again.
+            self._rate_caps_sent.clear()
+            return
+        if not self.is_alive() or not self._auto_configured:
+            return
+        for serial, caps in self._inverter_rate_caps().items():
+            if self._rate_caps_sent.get(serial) == caps:
+                continue
+            if _serial_suffix(serial) in self._assumed_ratings:
+                # The cap comes from a rating the inverter has not reported yet (see _rate_write_held)
+                continue
+            charge_cap_w, discharge_cap_w = caps
+            await self.publish_command("set_rate_cap", serial=serial, charge_cap_w=charge_cap_w, discharge_cap_w=discharge_cap_w)
+            self._rate_caps_sent[serial] = caps
+            self.log(f"Info: GatewayMQTT: set_rate_cap sent for inverter {serial}: charge {charge_cap_w}W discharge {discharge_cap_w}W")
 
     def _plan_changed(self, plan_entries):
         """Check if the plan differs from the last published plan."""
@@ -1613,6 +2852,8 @@ class GatewayMQTT(ComponentBase):
             plan_entries: List of plan entry dicts.
             timezone_str: IANA timezone string (e.g. "Europe/London").
         """
+        if self.gateway_display_only:
+            return
         if not self._plan_changed(plan_entries):
             return  # No change, skip publish
 
@@ -1657,15 +2898,23 @@ class GatewayMQTT(ComponentBase):
         self._last_plan_publish_time = time.time()
         self.log("Info: GatewayMQTT: Re-published execution plan (refreshed timestamp)")
 
-    async def publish_command(self, command, **kwargs):
+    def _next_command_id(self):
+        """Allocate the next command id number (callers may be on different threads)."""
+        with self._command_lock:
+            self._command_id += 1
+            return self._command_id
+
+    async def publish_command(self, command, command_id=None, **kwargs):
         """Build and publish a JSON command to the gateway.
 
         Args:
             command: Command name (set_charge_rate, set_reserve, etc.)
+            command_id: Pre-allocated id number (from _next_command_id); allocated here when None.
             **kwargs: Command-specific fields (power_w, target_soc, etc.).
         """
-        self._command_id += 1
-        cmd_json = self.build_command(command, command_id=self._command_id, **kwargs)
+        if command_id is None:
+            command_id = self._next_command_id()
+        cmd_json = self.build_command(command, command_id=command_id, **kwargs)
 
         self.log("Info: GatewayMQTT: publish_command: command={}, payload={}".format(command, cmd_json))
 
@@ -1674,6 +2923,50 @@ class GatewayMQTT(ComponentBase):
             self.log(f"Info: GatewayMQTT: Published command: {command} payload={cmd_json}")
         else:
             self.log(f"Warn: GatewayMQTT: Not connected — cannot publish command: {command}")
+
+    def _live_display_binding(self):
+        """Validate only the server-issued binding for this selected display role."""
+        return validated_binding(self.gateway_live_display_binding, self.gateway_device_id, self.gateway_inverter_serial, self.gateway_live_display)
+
+    async def _publish_display_binding(self, force=False):
+        """Publish whitelist-only display metadata, never general config or control.
+
+        The existing raw publisher remains restricted to predbat_data in display
+        mode. This private path constructs its topic and every payload field,
+        validates presentation preferences, and cannot carry bus/control config.
+        """
+        if not self._mqtt_connected or self._mqtt_client is None:
+            return
+        if not re.fullmatch(r"pbgw_[a-f0-9]{12}", self.gateway_device_id) or self._topic_base != f"predbat/devices/{self.gateway_device_id}":
+            return
+        now = time.time()
+        visibility = visibility_payload(self.gateway_display_visibility, self.gateway_device_id, int(now))
+        binding = {"live_display": self._live_display_binding()} if self.gateway_display_only else {}
+        if visibility is not None:
+            binding["display_visibility"] = visibility
+        if not binding:
+            return
+        # Ignore refreshed timestamps for the 60s duplicate suppression.
+        preference = {**binding}
+        if visibility is not None:
+            preference["display_visibility"] = {k: v for k, v in visibility.items() if k not in ("issued_at", "expires_at")}
+        if not force and preference == self._last_live_binding and now - self._last_live_binding_publish < 60:
+            return
+        topic = f"{self._topic_base}/config"
+        payload = json.dumps(binding, separators=(",", ":")).encode()
+        if len(topic.encode()) + len(payload) + 16 > 1400:
+            return
+        try:
+            if self._loop is not None and self._loop is not asyncio.get_running_loop():
+                future = asyncio.run_coroutine_threadsafe(self._mqtt_client.publish(topic, payload, qos=1, retain=False), self._loop)
+                await asyncio.wrap_future(future)
+            else:
+                await self._mqtt_client.publish(topic, payload, qos=1, retain=False)
+        except Exception as error:
+            self.log(f"Warn: GatewayMQTT: Display binding publish failed: {error}")
+            return
+        self._last_live_binding = preference
+        self._last_live_binding_publish = now
 
     async def _publish_raw(self, topic, payload, retain=False):
         """Publish raw bytes to an MQTT topic.
@@ -1692,6 +2985,9 @@ class GatewayMQTT(ComponentBase):
             payload: Bytes to publish.
             retain: Whether to set the retain flag.
         """
+        if self.gateway_display_only and (not self.gateway_display_enabled or topic != f"{self._topic_base}/predbat_data"):
+            self.log(f"Warn: GatewayMQTT: Display mode blocked publish to {topic}")
+            return
         if not (self._mqtt_client and self._mqtt_connected):
             return
 
@@ -1704,6 +3000,20 @@ class GatewayMQTT(ComponentBase):
         else:
             await self._mqtt_client.publish(topic, payload, qos=1, retain=retain)
 
+    def _update_display_health(self):
+        """Report optional display connectivity separately from the component loop's health."""
+        online = self._mqtt_connected and self._gateway_online and self._last_telemetry_time > 0 and time.time() - self._last_telemetry_time < _TELEMETRY_STALE_THRESHOLD
+        self.dashboard_item(
+            f"binary_sensor.{self.prefix}_gateway_display_online",
+            state="on" if online else "off",
+            attributes={"friendly_name": "PredBat Hub display online", "device_class": "connectivity"},
+            app="gateway",
+        )
+        # A disconnected desk display cannot make the working inverter provider
+        # fail its run or liveness probe. Components still checks the owning
+        # thread and timestamp; a stopped component thread remains unhealthy.
+        self.update_success_timestamp()
+
     def is_alive(self):
         """Check if the gateway component is alive and receiving data.
 
@@ -1711,14 +3021,20 @@ class GatewayMQTT(ComponentBase):
         offline (LWT says so — we're still connected, just no data) OR
         we've received telemetry within the last 2 minutes.
 
+        In display mode only the component must be started: optional transport
+        availability is reported separately by _update_display_health().
+
         Returns:
             bool: True if healthy, False otherwise.
         """
+        if self.gateway_display_only:
+            return self.api_started
         if not self._mqtt_connected:
             return False
 
         if not self._gateway_online:
-            # Gateway is offline but we're connected to broker — that's OK
+            # Gateway is offline but we're connected to broker — that's OK here. How long it may stay
+            # away is bounded by the components check, as only telemetry records a success
             return True
 
         # Gateway is online — check telemetry freshness
@@ -1755,6 +3071,10 @@ class GatewayMQTT(ComponentBase):
     async def select_event(self, entity_id, value):
         """Handle schedule select entity changes.
 
+        A slot start or end is staged, not sent: the Hub only ever gets the complete window,
+        when the schedule write switch is pressed. A start sent on its own that equals the
+        old end is a zero-length window, which an enabled EMS refuses.
+
         Args:
             entity_id: The entity ID that changed.
             value: The new selected value (HH:MM:SS).
@@ -1765,39 +3085,91 @@ class GatewayMQTT(ComponentBase):
         if serial is None:
             self.log(f"Warn: GatewayMQTT: select_event: cannot resolve serial for entity '{entity_id}' — command not sent")
             return
-        # Schedule time changes — convert HH:MM:SS to HHMM and send slot command
-        time_str = str(value).strip()
-        parts = time_str.split(":")
-        if len(parts) >= 2:
-            try:
-                hhmm = int(parts[0]) * 100 + int(parts[1])
-            except (ValueError, IndexError):
-                return
+        hhmm = self._time_str_to_hhmm(value)
+        if hhmm is None:
+            return
+        for side in ("discharge", "charge"):
+            for field in ("start", "end"):
+                if entity_id.endswith(f"_{side}_slot1_{field}"):
+                    self._stage_slot(entity_id, serial, side, field, hhmm)
+                    return
 
-            if "_discharge_slot1_start" in entity_id or "_discharge_slot1_end" in entity_id:
-                await self._update_discharge_slot(entity_id, hhmm, serial=serial)
-            elif "_charge_slot1_start" in entity_id or "_charge_slot1_end" in entity_id:
-                # Read current charge slot times to send both start and end
-                await self._update_charge_slot(entity_id, hhmm, serial=serial)
+    @staticmethod
+    def _time_str_to_hhmm(value):
+        """Convert an HH:MM[:SS] string to an HHMM integer, or None if it does not parse."""
+        parts = str(value).strip().split(":")
+        if len(parts) < 2:
+            return None
+        try:
+            return int(parts[0]) * 100 + int(parts[1])
+        except ValueError:
+            return None
 
-    async def _update_charge_slot(self, entity_id, hhmm, serial):
-        """Send set_charge_slot command with updated start or end time."""
-        # Determine which field changed
-        if "_start" in entity_id:
-            schedule = {"start": hhmm}
-        else:
-            schedule = {"end": hhmm}
-        await self.publish_command("set_charge_slot", schedule_json=json.dumps(schedule), serial=serial)
-        self.log(f"Info: GatewayMQTT: Charge slot update: {schedule}")
+    @staticmethod
+    def _slot_attributes(name, inv_type):
+        """Attributes for a slot select; an EMS only accepts same-day windows, unlike other Hub inverters."""
+        attributes = GATEWAY_ATTRIBUTE_TABLE.get(name, {}).copy()
+        if inv_type == pb.INVERTER_TYPE_GIVENERGY_EMS:
+            attributes["can_span_midnight"] = False
+        return attributes
 
-    async def _update_discharge_slot(self, entity_id, hhmm, serial):
-        """Send set_discharge_slot command with updated start or end time."""
-        if "_start" in entity_id:
-            schedule = {"start": hhmm}
-        else:
-            schedule = {"end": hhmm}
-        await self.publish_command("set_discharge_slot", schedule_json=json.dumps(schedule), serial=serial)
-        self.log(f"Info: GatewayMQTT: Discharge slot update: {schedule}")
+    def _staged_entry(self, suffix, side):
+        """The staged window for one side of an inverter, or None. Expiry is _prune_staged()'s job."""
+        return getattr(self, "_staged", {}).get((suffix, side))
+
+    def _prune_staged(self):
+        """Drop staged windows nobody wrote to the Hub within _STAGED_EXPIRY_SECONDS.
+
+        Called once per status frame and before each commit or new staged write, so an entry
+        for an inverter that has left the status frame is dropped too.
+        """
+        now = _monotonic()
+        with self._staged_lock:
+            staged = getattr(self, "_staged", {})
+            expired = [key for key, entry in staged.items() if now - entry["at"] > _STAGED_EXPIRY_SECONDS]
+            if expired:
+                self._staged = {key: entry for key, entry in staged.items() if key not in expired}
+        for suffix, side in expired:
+            self.log(f"Warn: GatewayMQTT: staged {side} window for {suffix} was never written to the Hub, showing the Hub's schedule again")
+
+    def _stage_slot(self, entity_id, serial, side, field, hhmm):
+        """Hold one slot endpoint until the schedule write switch sends the complete window.
+
+        The other endpoint starts from what its select shows, so the staged pair is always the
+        complete window the Hub should end up with.
+        """
+        suffix = _serial_suffix(serial)
+        other = "end" if field == "start" else "start"
+        self._prune_staged()
+        with self._staged_lock:
+            entry = self._staged_entry(suffix, side)
+            if entry is None:
+                entry = {"start": None, "end": None, "enable": None}
+                entry[other] = self._time_str_to_hhmm(self.get_state_wrapper(entity_id[: -len(field)] + other))
+            entry = {**entry, field: hhmm, "at": _monotonic()}
+            self._staged = {**getattr(self, "_staged", {}), (suffix, side): entry}
+        if entry[other] is None:
+            self.log(f"Warn: GatewayMQTT: {side} slot {other} for {serial} is unknown, so the staged {side} window stays incomplete until it is written too")
+        inv_type = getattr(self, "_discovery", {}).get(serial.upper(), {}).get("type")
+        self.dashboard_item(entity_id, self._hhmm_to_time_str(hhmm), attributes=self._slot_attributes(f"{side}_slot1_{field}", inv_type), app="gateway")
+        self.log(f"Info: GatewayMQTT: {side} slot {field} {hhmm:04d} for {serial} staged until the schedule is written")
+
+    def _clear_staged(self, serial, side, entry=None):
+        """Forget a staged window, so its selects follow the Hub's schedule again.
+
+        Given the entry that was sent, only that entry is cleared: a window staged after it
+        stays, to be sent in turn.
+
+        Returns:
+            bool: True if the side has nothing staged now.
+        """
+        key = (_serial_suffix(serial), side)
+        with self._staged_lock:
+            staged = getattr(self, "_staged", {})
+            if entry is not None and staged.get(key) is not entry:
+                return key not in staged
+            self._staged = {kept_key: kept for kept_key, kept in staged.items() if kept_key != key}
+        return True
 
     async def number_event(self, entity_id, value):
         """Handle number entity changes (e.g. charge rate, target SOC).
@@ -1818,14 +3190,46 @@ class GatewayMQTT(ComponentBase):
         if serial is None:
             self.log(f"Warn: GatewayMQTT: number_event: cannot resolve serial for entity '{entity_id}' — command not sent")
             return
+        if ("_discharge_rate" in entity_id or "_charge_rate" in entity_id) and self._rate_write_held(serial, val):
+            return
         if "_discharge_rate" in entity_id:
-            await self.publish_command("set_discharge_rate", power_w=val, serial=serial)
+            await self._send_control(entity_id, "set_discharge_rate", power_w=val, serial=serial)
         elif "_charge_rate" in entity_id:
-            await self.publish_command("set_charge_rate", power_w=val, serial=serial)
+            await self._send_control(entity_id, "set_charge_rate", power_w=val, serial=serial)
         elif "_reserve" in entity_id:
-            await self.publish_command("set_reserve", target_soc=val, serial=serial)
+            await self._send_control(entity_id, "set_reserve", target_soc=val, serial=serial)
+            if val == 0:
+                # A reserve of 0% asked for here is real, so the next 0 from the hub is not a gap
+                # to fill with the last value (see _last_rating). Only once the write has gone
+                # out, and the value is set aside in case the hub refuses it (see _process_ack).
+                key = (_serial_suffix(serial), "reserve")
+                self._reserve_before_zero = {suffix: kept for suffix, kept in self._reserve_before_zero.items() if suffix != key[0]}
+                if key in self._last_ratings:
+                    self._reserve_before_zero = {**self._reserve_before_zero, key[0]: self._last_ratings[key]}
+                    self._last_ratings = {kept_key: kept for kept_key, kept in self._last_ratings.items() if kept_key != key}
         elif "_target_soc" in entity_id:
-            await self.publish_command("set_target_soc", target_soc=val, serial=serial)
+            await self._send_control(entity_id, "set_target_soc", target_soc=val, serial=serial)
+
+    def _rate_write_held(self, serial, power_w):
+        """Whether a charge or discharge rate write must wait for the inverter's rating.
+
+        Until an inverter has reported its maximum rate, the rate Predbat works to is the 6000W
+        default, and writing that to a 3kW inverter is the fault in #5478. Such a write is not
+        sent. Predbat reads the unchanged rate back as a write that did not complete and tries
+        again, so it goes through once the rating is known. A rate of zero is safe on any
+        inverter and is always sent, so a charge or discharge can still be stopped.
+
+        Args:
+            serial: The inverter the write is for.
+            power_w: The rate being written.
+
+        Returns:
+            bool: True if the write is held.
+        """
+        if power_w <= 0 or _serial_suffix(serial) not in self._assumed_ratings:
+            return False
+        self.log(f"Warn: GatewayMQTT: inverter {serial} has not reported its maximum rate — rate write of {power_w}W held until it does")
+        return True
 
     async def switch_event(self, entity_id, service):
         """Handle switch entity service calls (charge/discharge enable).
@@ -1853,12 +3257,460 @@ class GatewayMQTT(ComponentBase):
         if serial is None:
             self.log(f"Warn: GatewayMQTT: switch_event: cannot resolve serial for entity '{entity_id}' — command not sent")
             return
-        if "_charge_enabled" in entity_id:
-            await self.publish_command("set_charge_enable", enable=is_on, serial=serial)
-            self.log(f"Info: GatewayMQTT: Charge {'enabled' if is_on else 'disabled'}")
-        elif "_discharge_enabled" in entity_id:
-            await self.publish_command("set_discharge_enable", enable=is_on, serial=serial)
-            self.log(f"Info: GatewayMQTT: Discharge {'enabled' if is_on else 'disabled'}")
+        if entity_id.endswith("_schedule_write"):
+            self.dashboard_item(entity_id, "off", attributes=GATEWAY_ATTRIBUTE_TABLE.get("schedule_write", {}), app="gateway")
+            if is_on:
+                await self._start_commit(serial)
+            return
+        side = "charge" if "_charge_enabled" in entity_id else "discharge" if "_discharge_enabled" in entity_id else None
+        if side is None:
+            return
+        suffix = _serial_suffix(serial)
+        self._prune_staged()
+        with self._staged_lock:
+            entry = self._staged_entry(suffix, side)
+            if entry is not None:
+                # Written alongside a staged window: an EMS will not enable onto a window it does
+                # not have yet, so the enable goes after the window when the schedule is written
+                self._staged = {**self._staged, (suffix, side): {**entry, "enable": is_on, "at": _monotonic()}}
+        if entry is not None:
+            self.dashboard_item(entity_id, "on" if is_on else "off", attributes=GATEWAY_ATTRIBUTE_TABLE.get(f"{side}_enabled", {}), app="gateway")
+            self.log(f"Info: GatewayMQTT: {side.capitalize()} {'enable' if is_on else 'disable'} for {serial} staged until the schedule is written")
+            return
+        await self._send_control(entity_id, f"set_{side}_enable", enable=is_on, serial=serial)
+        self.log(f"Info: GatewayMQTT: {side.capitalize()} {'enabled' if is_on else 'disabled'}")
+
+    async def _start_commit(self, serial):
+        """Write what is staged for an inverter to the Hub, without making the caller wait.
+
+        The press comes from Predbat's control loop, which must not block on Hub acks, so the
+        commit runs on the gateway's own loop. With no loop running (tests), or one that has
+        closed with the component, it runs inline, where a stopped connection fails it at once.
+        """
+        if self._loop is None or self._loop.is_closed():
+            await self._commit_staged(serial)
+        elif self._loop is not asyncio.get_running_loop():
+            asyncio.run_coroutine_threadsafe(self._commit_staged(serial), self._loop)
+        else:
+            task = asyncio.ensure_future(self._commit_staged(serial))
+            self._commit_tasks.add(task)
+            task.add_done_callback(self._commit_tasks.discard)
+
+    async def _commit_staged(self, serial):
+        """Write each staged side of an inverter to the Hub. A side already being written is left to that commit."""
+        suffix = _serial_suffix(serial)
+        self._prune_staged()
+        for side in ("charge", "discharge"):
+            key = (suffix, side)
+            if key in self._commit_inflight or self._staged_entry(suffix, side) is None:
+                continue
+            self._commit_inflight.add(key)
+            try:
+                await self._commit_side(serial, side)
+            except Exception as error:
+                self.log(f"Error: GatewayMQTT: writing the {side} window for {serial} failed: {error}")
+                self._clear_staged(serial, side)
+            finally:
+                self._commit_inflight.discard(key)
+
+    async def _commit_side(self, serial, side):
+        """Send one staged window, and its enable, to the Hub.
+
+        The window always goes as a complete start/end pair. An EMS that is off only records it
+        (ack "recorded"), and does not enable onto a window it does not have, so a staged enable
+        goes after the window. A staged disable goes first, so a refused window cannot leave the
+        side enabled. A staged enable is always sent: Predbat only writes one when it saw the
+        other state, and the last status frame may predate a disable sent this cycle. Success or
+        failure, the staged entry that was sent is then dropped: on failure the selects show the
+        Hub's schedule again, so Predbat sees the mismatch on its next cycle and writes it again.
+        A window staged while this one was in flight is sent next.
+
+        Returns:
+            bool: True if the Hub took the window (and enable).
+        """
+        suffix = _serial_suffix(serial)
+        base = f"{self.prefix}_gateway_{suffix}"
+        slot_entity = f"select.{base}_{side}_slot1_start"
+        enable_entity = f"switch.{base}_{side}_enabled"
+        while True:
+            entry = self._staged_entry(suffix, side)
+            if entry is None:
+                return True
+            if entry["start"] is None or entry["end"] is None:
+                if await self._commit_failed(serial, side, entry, f"incomplete window {entry['start']}-{entry['end']}"):
+                    return False
+                continue
+            confirmed = True
+            if entry["enable"] is False:
+                state, _ = await self._send_and_await(enable_entity, f"set_{side}_enable", enable=False, serial=serial)
+                if state not in ("applied", "published"):
+                    if await self._commit_failed(serial, side, entry, f"disable {state or 'not acknowledged'}"):
+                        return False
+                    continue
+                confirmed = state == "applied"
+            window = f"{entry['start']:04d}-{entry['end']:04d}"
+            state, outcome = await self._send_and_await(slot_entity, f"set_{side}_slot", **{"schedule_json": json.dumps({"start": entry["start"], "end": entry["end"]}), "serial": serial})
+            if state not in ("applied", "published"):
+                if await self._commit_failed(serial, side, entry, f"window {window} {state or 'not acknowledged'}", window_refused=state == "refused"):
+                    return False
+                continue
+            confirmed = confirmed and state == "applied"
+            recorded = bool(outcome.get("recorded"))
+            slot_kwargs = {"schedule_json": json.dumps({"start": entry["start"], "end": entry["end"]}), "serial": serial}
+            if entry["enable"] is True and self._attempt_outcome(slot_entity, f"set_{side}_slot", slot_kwargs)[0] == "refused":
+                # Another unit refused the window after one applied it: do not enable onto it
+                if await self._commit_failed(serial, side, entry, f"window {window} refused by another unit", window_refused=True):
+                    return False
+                continue
+            if entry["enable"] is True:
+                state, _ = await self._send_and_await(enable_entity, f"set_{side}_enable", enable=True, serial=serial)
+                if state not in ("applied", "published"):
+                    if await self._commit_failed(serial, side, entry, f"enable after window {window} {state or 'not acknowledged'}"):
+                        return False
+                    continue
+                confirmed = confirmed and state == "applied"
+            if not self._clear_staged(serial, side, entry):
+                continue  # written again while this was in flight: send the newer window too
+            if confirmed:
+                self.log(f"Info: GatewayMQTT: {side} window {window} for {serial} written to the Hub{' (recorded while off)' if recorded else ''}")
+            else:
+                self.log(f"Info: GatewayMQTT: {side} window {window} for {serial} published to the Hub without an ack; the next status frame shows whether it landed")
+            return True
+
+    async def _commit_failed(self, serial, side, entry, reason, window_refused=False):
+        """Give up on a staged window: show the Hub's schedule again so the next cycle retries.
+
+        If a newer window was staged while this one was in flight, that one is sent instead.
+
+        An export window the Hub refused to move while the old one may still be armed would
+        export on a schedule the plan has left, so export is turned off until a window lands
+        (#5532). Telemetry is not consulted: the last status frame can predate an enable ack,
+        and turning export off when it is already off changes nothing. Only an explicit
+        refusal does this: an unanswered window may well have applied (a slow EMS write), and
+        the plan still wants to export, so it is left running.
+
+        Returns:
+            bool: True if the commit has given up, False if a newer staged window is to be sent.
+        """
+        self.log(f"Warn: GatewayMQTT: {side} window for {serial} not written to the Hub: {reason}")
+        if not self._clear_staged(serial, side, entry):
+            self.log(f"Info: GatewayMQTT: a newer {side} window for {serial} was staged meanwhile, sending that")
+            return False
+        if window_refused and side == "discharge":
+            await self._export_fail_safe(serial)
+        if self._last_status is not None:
+            self._inject_entities(self._last_status)
+        return True
+
+    async def _export_fail_safe(self, serial):
+        """Turn scheduled export off after the Hub refused an export window (#5532)."""
+        self.log(f"Warn: GatewayMQTT: turning off scheduled export for {serial} until its window is written")
+        try:
+            await self._send_control(f"switch.{self.prefix}_gateway_{_serial_suffix(serial)}_discharge_enabled", "set_discharge_enable", enable=False, serial=serial)
+        except Exception as error:
+            self.log(f"Warn: GatewayMQTT: turning off scheduled export for {serial} failed: {error}")
+
+    def _spawn(self, coro):
+        """Run a coroutine from synchronous code: as a task on the running loop, else to completion."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(coro)
+            return
+        task = loop.create_task(coro)
+        self._commit_tasks.add(task)
+        task.add_done_callback(self._commit_tasks.discard)
+
+    async def _send_and_await(self, entity_id, command, **kwargs):
+        """Send a schedule-write command and wait for the Hub to apply it.
+
+        Unanswered, it is sent again, up to _COMMIT_ATTEMPTS sends one ack window apart. With
+        the Hub disconnected nothing can be sent, so it fails at once. Without an ack
+        subscription there is nothing to wait for, and on a connection where nothing has been
+        acknowledged yet the Hub gets one ack window to answer: after that the command counts as
+        published, and the next status frame shows whether it landed.
+
+        Returns:
+            tuple: ("applied", the ack's applied payload or {}), ("published", {}) when sent with
+            no ack to wait for, ("refused", None), or (None, None) if unanswered or not sent.
+        """
+        answered_before = self._acks_seen  # a Hub that stops answering mid-commit is not one that never sends acks
+        for _attempt in range(_COMMIT_ATTEMPTS):
+            if not self._mqtt_connected:
+                return None, None
+            try:
+                await self._send_control(entity_id, command, **kwargs)
+            except Exception as error:
+                self.log(f"Warn: GatewayMQTT: {command} for {kwargs.get('serial')} could not be published: {error}")
+                return None, None
+            if not getattr(self, "_ack_subscribed", False):
+                return "published", {}
+            state, applied = await self._await_command_outcome(entity_id, command, kwargs)
+            if state == "applied":
+                return state, applied if isinstance(applied, dict) else {}
+            if state == "refused":
+                return state, None
+            if not answered_before and not self._acks_seen:
+                return "published", {}
+        return None, None
+
+    def _attempt_outcome(self, entity_id, command, kwargs):
+        """The outcome of the latest attempt at a tracked command, judged on that attempt's ids only.
+
+        The tracked entry keeps the outcomes of earlier attempts at the same value (so a late ack
+        still matches), which makes its overall state "applied" after any earlier success: a
+        refused retry of a window applied in an earlier cycle would read as applied. Any refusal
+        in the attempt outranks an ok, as when one unit applies a fanned-out command and another
+        refuses it.
+
+        Returns:
+            tuple: ("applied" or "refused", the ack's applied payload), (None, None) while unanswered,
+            or ("gone", None) if the entry was dropped (a replay) or replaced by another value.
+        """
+        with self._command_lock:
+            entry = self._pending_commands.get(entity_id)
+            if entry is None or entry["command"] != command or entry["kwargs"] != kwargs:
+                return "gone", None
+            outcomes = [entry["outcomes"].get(ref) for ref in entry["attempt_ids"]]
+            if "refused" in outcomes:
+                return "refused", None
+            if "ok" in outcomes:
+                return "applied", entry.get("applied")
+        return None, None
+
+    async def _await_command_outcome(self, entity_id, command, kwargs, timeout=_COMMAND_ACK_WINDOW):
+        """Wait up to one ack window for the latest attempt's outcome (see _attempt_outcome()).
+
+        Returns:
+            tuple: ("applied" or "refused", the ack's applied payload), or (None, None) if unanswered.
+        """
+        deadline = _monotonic() + timeout
+        while True:
+            state, applied = self._attempt_outcome(entity_id, command, kwargs)
+            if state == "gone":
+                return None, None
+            if state is not None:
+                return state, applied
+            if _monotonic() >= deadline:
+                return None, None
+            await _commit_pause()
+
+    async def _send_control(self, entity_id, command, **kwargs):
+        """Publish a control write once and let the hub's ack confirm it.
+
+        The generic write_and_poll loop calls the event handlers again on every retry
+        until the read-back matches. Publishing on every call queued a fresh
+        Modbus write on the hub each time, so a slow dongle write turned into a storm.
+        Once the hub has shown it acks commands on this connection, an identical command
+        (same entity, command and payload) is published only once per _COMMAND_ACK_WINDOW:
+        while it waits for its ack, after an ok ack (telemetry may lag), and after a
+        refusal (re-sending cannot change the answer). A different value is published
+        immediately and replaces the tracked one. A command still unanswered after the window
+        is re-sent once; if that goes unanswered too, acks stop being relied on until the
+        next one arrives. With no ack subscription, or before any ack has been seen,
+        every call publishes exactly as before.
+
+        Args:
+            entity_id: The entity being written, used as the tracking key.
+            command: Command name (set_charge_slot, set_charge_enable, ...).
+            **kwargs: Command fields passed on to publish_command.
+        """
+        if not (getattr(self, "_ack_subscribed", False) and self._mqtt_connected):
+            await self.publish_command(command, **kwargs)
+            return
+
+        now = _monotonic()
+        with self._command_lock:
+            entry = self._pending_commands.get(entity_id)
+            same = entry is not None and entry["command"] == command and entry["kwargs"] == kwargs
+            if same and self._acks_seen:
+                if now - entry["sent_at"] < _COMMAND_ACK_WINDOW:
+                    self.log(f"Info: GatewayMQTT: {command} for {kwargs.get('serial')} already sent as {entry['command_ids'][-1]} ({entry['state']}), not re-sending")
+                    return
+                if entry["state"] == "sent" and entry["resent"]:
+                    self._acks_seen = False
+                    self.log(f"Warn: GatewayMQTT: {command} for {kwargs.get('serial')} was never acknowledged, re-sending until telemetry confirms it")
+            if not same:
+                entry = {"command_ids": [], "outcomes": {}, "command": command, "kwargs": dict(kwargs), "state": "sent", "sent_at": now, "resent": False, "cached": None, "cached_ids": [], "attempt_ids": [], "acks": 0, "applied": None}
+                self._pending_commands[entity_id] = entry
+            previous = {"attempt_ids": list(entry["attempt_ids"]), "state": entry["state"], "sent_at": entry["sent_at"], "resent": entry["resent"], "cached": entry["cached"]}
+            if entry["state"] != "sent":
+                # A fresh attempt after the previous one was answered. Earlier ids and their
+                # outcomes stay, so a late ack from another unit is still logged and acted on and
+                # a refusal still outranks that id's later ok.
+                entry.update(state="sent", resent=False, cached=None, attempt_ids=[], applied=None)
+            elif self._acks_seen and entry["command_ids"]:
+                entry["resent"] = True  # the one re-send after an unanswered window
+            command_id = self._command_id = self._command_id + 1
+            command_ref = f"PBAT{command_id}"
+            # Earlier ids of the same value stay matchable: an ack for any of them confirms it.
+            # The oldest id is only pruned once this send has gone out (see below).
+            entry["command_ids"] = entry["command_ids"] + [command_ref]
+            entry["attempt_ids"] = entry["attempt_ids"] + [command_ref]
+            entry["sent_at"] = now
+            acks_before = entry["acks"]
+
+        try:
+            await self.publish_command(command, command_id=command_id, **kwargs)
+        except BaseException:
+            # This id was never sent, so it must not hold back the next attempt; ids that
+            # were sent earlier stay matchable
+            with self._command_lock:
+                # An ack for this id may already have arrived while the publish was awaiting its
+                # broker confirmation: then the command did reach the hub, so keep it
+                if self._pending_commands.get(entity_id) is entry and command_ref in entry["command_ids"] and command_ref not in entry["outcomes"]:
+                    entry["command_ids"].remove(command_ref)
+                    entry["attempt_ids"].remove(command_ref)
+                    if not entry["command_ids"]:
+                        del self._pending_commands[entity_id]
+                    elif entry["acks"] == acks_before:
+                        # No ack arrived meanwhile: back to how the earlier attempt left it
+                        entry.update(previous)
+            raise
+
+        with self._command_lock:
+            # Keep the id history bounded now that this send is out
+            if self._pending_commands.get(entity_id) is entry and len(entry["command_ids"]) > _COMMAND_ACK_IDS_KEPT:
+                entry["command_ids"] = entry["command_ids"][-_COMMAND_ACK_IDS_KEPT:]
+                entry["outcomes"] = {key: value for key, value in entry["outcomes"].items() if key in entry["command_ids"]}
+                entry["attempt_ids"] = [ref for ref in entry["attempt_ids"] if ref in entry["command_ids"]]
+                entry["cached_ids"] = [ref for ref in entry["cached_ids"] if ref in entry["command_ids"]]
+
+    def _process_ack(self, data):
+        """Handle a command ack from the hub.
+
+        Every id sent for a tracked value carries the same payload, so an ok for any of
+        them means the value was applied. A command reaching several units acks once per
+        unit under the same id: there a refusal outranks an ok.
+
+        Args:
+            data: Raw JSON payload from predbat/devices/<id>/ack/<command_id>.
+        """
+        try:
+            ack = json.loads(data)
+        except (ValueError, TypeError) as e:
+            self.log(f"Warn: GatewayMQTT: Failed to decode command ack: {e}")
+            return
+        if not isinstance(ack, dict):
+            return
+        command_id = str(ack.get("command_id", ""))
+        ok = ack.get("ok") is True
+        error = ack.get("error") or "unknown"
+        replay = not ok and error == "replay"
+        apply_cache = restore_status = keep_entry = late_refusal = False
+
+        with self._command_lock:
+            entity_id, entry = next(((e, r) for e, r in self._pending_commands.items() if command_id in r["command_ids"]), (None, None))
+            # Acks for other senders or superseded values are ignored
+            if entry is None or ack.get("command", entry["command"]) != entry["command"]:
+                return
+            self._acks_seen = True
+            entry["acks"] += 1  # lets a failing publish tell whether any ack arrived meanwhile
+            # A replay for the newest id, before any unit answered it, means the hub has seen that
+            # id before and never considered this send. Drop the id; if nothing else has answered
+            # the value, let the next attempt go out under a fresh id straight away. For an older
+            # or already-answered id a replay is just another unit's refusal.
+            drop_replay = replay and entry["command_ids"][-1] == command_id and command_id not in entry["outcomes"]
+            keep_entry = drop_replay and any(entry["outcomes"].get(ref) == "ok" for ref in entry["attempt_ids"])
+            if keep_entry:
+                # Another send in this attempt already applied the value: only forget this id
+                entry["command_ids"].remove(command_id)
+                entry["attempt_ids"].remove(command_id)
+                entry["sent_at"] = _monotonic()  # still a refusal: the window runs from it
+            elif drop_replay:
+                del self._pending_commands[entity_id]
+            else:
+                if ok and entry["outcomes"].get(command_id) == "refused":
+                    return  # a refusal for this id outranks any other unit's ok
+                # A refusal after this attempt was already applied by another unit: a commit may
+                # have moved on and armed export onto the window, so the fail-safe must run here
+                late_refusal = not ok and any(entry["outcomes"].get(ref) == "ok" for ref in entry["attempt_ids"])
+                entry["outcomes"][command_id] = "ok" if ok else "refused"
+                entry["state"] = "applied" if "ok" in entry["outcomes"].values() else "refused"
+                if ok:
+                    entry["applied"] = ack.get("applied")  # e.g. {"recorded": true} from an EMS that is off
+                if not ok:
+                    entry["sent_at"] = _monotonic()  # the window runs from the latest refusal
+                    # Another unit refused an id whose ok updated the cache (in this attempt or an
+                    # earlier one): that update overstated what was applied, so put back the last
+                    # telemetry until the next status arrives
+                    restore_status = command_id in entry["cached_ids"]
+                    if restore_status:
+                        entry["cached_ids"].remove(command_id)
+                    if entry["cached"] == command_id:
+                        entry["cached"] = None
+                apply_cache = ok and entry["cached"] is None
+            command = entry["command"]
+            serial = entry["kwargs"].get("serial")
+            zero_reserve = entry["kwargs"].get("target_soc") == 0
+
+        if ok:
+            self.log(f"Info: GatewayMQTT: {command} for {serial} acknowledged by hub ({command_id}) applied={ack.get('applied')}")
+            if apply_cache and self._apply_ack(entity_id, command, ack.get("applied")):
+                with self._command_lock:
+                    if self._pending_commands.get(entity_id) is entry and entry["outcomes"].get(command_id) == "ok":
+                        entry["cached"] = command_id
+                        entry["cached_ids"] = entry["cached_ids"][-(_COMMAND_ACK_IDS_KEPT - 1) :] + [command_id]
+        elif drop_replay:
+            action = "already applied by another send" if keep_entry else "re-sending with a new id"
+            self.log(f"Warn: GatewayMQTT: {command} for {serial} refused by hub: replay ({command_id} already used), {action}")
+        else:
+            self.log(f"Warn: GatewayMQTT: {command} for {serial} refused by hub: {error}")
+            if late_refusal and command == "set_discharge_slot" and serial:
+                self._spawn(self._export_fail_safe(serial))
+            if command == "set_reserve" and zero_reserve and serial:
+                # The reserve of 0 was not applied, so a 0 from the hub is a gap again and the
+                # reserve it had before is still the last real one
+                key = (_serial_suffix(serial), "reserve")
+                if key[0] in self._reserve_before_zero and key not in self._last_ratings:
+                    self._last_ratings = {**self._last_ratings, key: self._reserve_before_zero[key[0]]}
+                    restore_status = True
+            if restore_status and self._last_status is not None:
+                self._inject_entities(self._last_status)
+
+    def _apply_ack(self, entity_id, command, applied):
+        """Update the cached entity from an ok ack so the write's read-back matches without waiting for telemetry.
+
+        Only the values that map cleanly are applied: slot start/end actually written and
+        charge/discharge enables. Staged or recorded EMS slot endpoints are not written to
+        the inverter, and numbers wait for telemetry.
+
+        Returns:
+            bool: True if a cached entity was updated.
+        """
+        if not isinstance(applied, dict):
+            return False
+        if command in ("set_charge_slot", "set_discharge_slot"):
+            if applied.get("staged") or applied.get("recorded"):
+                return False
+            start, end = applied.get("start"), applied.get("end")
+            if not all(isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 2400 for v in (start, end)):
+                return False
+            name = "discharge_slot1" if command == "set_discharge_slot" else "charge_slot1"
+            suffix = next((f"_{name}_{field}" for field in ("start", "end") if entity_id.endswith(f"_{name}_{field}")), None)
+            if suffix is None:
+                return False
+            base = entity_id[: -len(suffix)]
+            for field, hhmm in (("start", start), ("end", end)):
+                self.dashboard_item(f"{base}_{name}_{field}", self._hhmm_to_time_str(hhmm), attributes=GATEWAY_ATTRIBUTE_TABLE.get(f"{name}_{field}", {}), app="gateway")
+            return True
+        elif command in ("set_charge_enable", "set_discharge_enable"):
+            enable = applied.get("enable")
+            if not isinstance(enable, bool):
+                return False
+            name = "discharge_enabled" if command == "set_discharge_enable" else "charge_enabled"
+            self.dashboard_item(entity_id, "on" if enable else "off", attributes=GATEWAY_ATTRIBUTE_TABLE.get(name, {}), app="gateway")
+            return True
+        return False
+
+    @staticmethod
+    def _hhmm_to_time_str(hhmm):
+        """Convert an HHMM integer to the HH:MM:SS string the schedule selects use (2400 -> 00:00:00)."""
+        hours = hhmm // 100
+        minutes = hhmm % 100
+        if hours >= 24:
+            hours = 0  # firmware sends 2400 for midnight end-of-day
+        return f"{hours:02d}:{minutes:02d}:00"
 
     async def final(self):
         """Cleanup: cancel listener task, disconnect."""
@@ -1872,6 +3724,12 @@ class GatewayMQTT(ComponentBase):
 
         self._mqtt_connected = False
         self._mqtt_client = None
+        # Staged windows can no longer be written, and a commit in flight dies with this loop
+        for task in list(self._commit_tasks):
+            task.cancel()
+        with self._staged_lock:
+            self._staged = {}
+        self._commit_inflight = set()
         self.log("Info: GatewayMQTT: Finalized")
 
     async def _check_token_refresh(self):
@@ -2151,10 +4009,16 @@ class GatewayMQTT(ComponentBase):
             cmd["power_w"] = kwargs["power_w"]
         if "target_soc" in kwargs:
             cmd["target_soc"] = kwargs["target_soc"]
+        if "charge_cap_w" in kwargs:
+            cmd["charge_cap_w"] = kwargs["charge_cap_w"]
+        if "discharge_cap_w" in kwargs:
+            cmd["discharge_cap_w"] = kwargs["discharge_cap_w"]
         if "schedule_json" in kwargs:
             cmd["schedule_json"] = kwargs["schedule_json"]
         if "enable" in kwargs:
             cmd["enable"] = bool(kwargs["enable"])
+        if "serials" in kwargs:
+            cmd["serials"] = list(kwargs["serials"])
         if "serial" in kwargs:
             # The value here is the inverter serial (e.g. "CH2330G499"), not the
             # dongle serial, so the wire key is "serial". The gateway resolver

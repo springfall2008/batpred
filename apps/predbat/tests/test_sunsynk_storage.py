@@ -8,7 +8,7 @@
 
 """Tests for Sunsynk cache save, restore and per-tier age tracking."""
 
-from sunsynk_const import SUNSYNK_CACHE_STATIC, SUNSYNK_CACHE_CONFIG, SUNSYNK_CACHE_RATINGS, SUNSYNK_CACHE_CONTROL, SUNSYNK_RESTORE_MAX_CONTROL, SUNSYNK_TTL_STATIC, SUNSYNK_TTL_LIVE
+from sunsynk_const import SUNSYNK_CACHE_STATIC, SUNSYNK_CACHE_CONFIG, SUNSYNK_CACHE_RATINGS, SUNSYNK_CACHE_CONTROL, SUNSYNK_CACHE_APPLIED_PAYLOAD, SUNSYNK_RESTORE_MAX_CONTROL, SUNSYNK_RESTORE_MAX_CONTROL_ACTIVE, SUNSYNK_TTL_STATIC, SUNSYNK_TTL_LIVE
 from tests.test_sunsynk_api import MockSunsynk
 from tests.test_infra import run_async as run_async_local
 
@@ -114,34 +114,137 @@ def test_restore_reinstates_static_and_config():
 
 
 def test_control_cache_restore_is_time_bounded():
-    """A stale applied-payload cache is discarded so the next write is forced.
+    """A stale applied-payload cache is discarded, but control_active survives the restart.
 
-    It is a change-detection cache with no read-back, so restoring it asserts the inverter
-    still holds what Predbat last wrote. After a long outage that assertion is false, the
-    next write would be wrongly skipped and the battery would silently diverge.
+    The write guard is a local re-arming flag, not a proof the inverter still holds the
+    exact payload Predbat last sent. After a restart, a stale applied_payload must not be
+    trusted and must be cleared so the next write is forced, but control_active must be
+    kept so _reconcile_control() re-applies the current plan instead of waiting for an
+    unrelated entity event to press the write button again.
     """
     failed = False
     fresh = StoredSunsynk(ages={SUNSYNK_CACHE_CONTROL: SUNSYNK_RESTORE_MAX_CONTROL - 1})
-    fresh.storage.files[SUNSYNK_CACHE_CONTROL] = {"applied_payload": {"INV1": {"sysWorkMode": "1"}}}
+    fresh.storage.files[SUNSYNK_CACHE_CONTROL] = {"applied_payload": {"INV1": {"sysWorkMode": "1"}}, "control_active": ["INV1"]}
     run_async_local(fresh.restore_state())
     if fresh.applied_payload.get("INV1") != {"sysWorkMode": "1"}:
         print("ERROR: a fresh control cache should be restored")
         failed = True
+    if fresh.control_active != {"INV1"}:
+        print(f"ERROR: a fresh control_active should be restored, got {fresh.control_active}")
+        failed = True
 
     stale = StoredSunsynk(ages={SUNSYNK_CACHE_CONTROL: SUNSYNK_RESTORE_MAX_CONTROL + 1})
-    stale.storage.files[SUNSYNK_CACHE_CONTROL] = {"applied_payload": {"INV1": {"sysWorkMode": "1"}}}
+    stale.storage.files[SUNSYNK_CACHE_CONTROL] = {"applied_payload": {"INV1": {"sysWorkMode": "1"}}, "control_active": ["INV1"]}
     run_async_local(stale.restore_state())
     if stale.applied_payload:
-        print(f"ERROR: a stale control cache was restored: {stale.applied_payload}")
+        print(f"ERROR: a stale applied_payload was restored: {stale.applied_payload}")
+        failed = True
+    if stale.control_active != {"INV1"}:
+        print(f"ERROR: a stale control_active should survive the restart so re-arming still happens, got {stale.control_active}")
         failed = True
     assert not failed, "test_control_cache_restore_is_time_bounded"
+
+
+def test_save_control_persists_control_active():
+    """save_control must persist control_active, not just applied_payload.
+
+    Regression test for #5138: without this, _reconcile_control(), which is gated on
+    control_active, silently stops writing to every inverter after a restart, until an
+    unrelated event happens to re-add it - including one meant to stop an export already
+    in progress. alphaess.py's save_control already persists control_active for the same
+    reason; this asserts sunsynk.py's matches it.
+    """
+    failed = False
+    s = StoredSunsynk(ages={SUNSYNK_CACHE_CONTROL: 1.0})
+    s.applied_payload = {"INV1": {"sysWorkMode": "1"}}
+    s.control_active = {"INV1"}
+    run_async_local(s.save_control())
+    saved = s.storage.files.get(SUNSYNK_CACHE_CONTROL, {})
+    if sorted(saved.get("control_active") or []) != ["INV1"]:
+        print(f"ERROR: control_active was not persisted by save_control: {saved}")
+        failed = True
+
+    restored = StoredSunsynk(ages={SUNSYNK_CACHE_CONTROL: 1.0})
+    restored.storage.files[SUNSYNK_CACHE_CONTROL] = saved
+    run_async_local(restored.restore_state())
+    if restored.control_active != {"INV1"}:
+        print(f"ERROR: control_active did not round-trip through save_control/restore_state, got {restored.control_active}")
+        failed = True
+    assert not failed, "test_save_control_persists_control_active"
+
+
+def test_pre_upgrade_control_cache_infers_control_active():
+    """A cache predating the control_active key infers it from applied_payload, rather than restoring half the state.
+
+    Without this, upgrading to the #5138 fix would still lose control_active on the one
+    restart that installs it: the cache on disk was written by the old save_control, so it
+    carries applied_payload alone, and restoring that half on its own leaves
+    _reconcile_control gated off exactly as before. Inferring cannot arm an inverter Predbat
+    never drove - every applied_payload key got there through a path that adds to
+    control_active first - so it restores a subset, never a superset.
+
+    An explicitly empty list is honoured rather than inferred, which is why the restore
+    tests isinstance() and not truthiness: "the new format saved nothing armed" and "this
+    cache predates the key" are different states and only the second may be guessed at.
+    """
+    failed = False
+    old_format = StoredSunsynk(ages={SUNSYNK_CACHE_CONTROL: 1.0})
+    old_format.storage.files[SUNSYNK_CACHE_CONTROL] = {"applied_payload": {"INV1": {"sysWorkMode": "1"}}}
+    run_async_local(old_format.restore_state())
+    if old_format.applied_payload != {"INV1": {"sysWorkMode": "1"}}:
+        print(f"ERROR: a pre-upgrade cache should restore applied_payload, got {old_format.applied_payload}")
+        failed = True
+    if old_format.control_active != {"INV1"}:
+        print(f"ERROR: a pre-upgrade cache should infer control_active from applied_payload, got {old_format.control_active}")
+        failed = True
+
+    new_format = StoredSunsynk(ages={SUNSYNK_CACHE_CONTROL: 1.0, SUNSYNK_CACHE_APPLIED_PAYLOAD: 1.0})
+    new_format.storage.files[SUNSYNK_CACHE_CONTROL] = {"applied_payload": {"INV1": {"sysWorkMode": "legacy"}}, "control_active": ["INV1"]}
+    new_format.storage.files[SUNSYNK_CACHE_APPLIED_PAYLOAD] = {"applied_payload": {"INV1": {"sysWorkMode": "new"}}}
+    run_async_local(new_format.restore_state())
+    if new_format.applied_payload != {"INV1": {"sysWorkMode": "new"}}:
+        print(f"ERROR: the new payload cache should take precedence over the legacy cache, got {new_format.applied_payload}")
+        failed = True
+
+    empty_new_format = StoredSunsynk(ages={SUNSYNK_CACHE_CONTROL: 1.0, SUNSYNK_CACHE_APPLIED_PAYLOAD: 1.0})
+    empty_new_format.storage.files[SUNSYNK_CACHE_CONTROL] = {"applied_payload": {"INV1": {"sysWorkMode": "legacy"}}, "control_active": ["INV1"]}
+    empty_new_format.storage.files[SUNSYNK_CACHE_APPLIED_PAYLOAD] = {"applied_payload": {}}
+    run_async_local(empty_new_format.restore_state())
+    if empty_new_format.applied_payload and empty_new_format.applied_payload != {"INV1": {"sysWorkMode": "legacy"}}:
+        print(f"ERROR: an intentionally empty new payload cache must not restore the legacy payload, got {empty_new_format.applied_payload}")
+        failed = True
+
+    stale_legacy = StoredSunsynk(ages={SUNSYNK_CACHE_CONTROL: SUNSYNK_RESTORE_MAX_CONTROL + 1})
+    stale_legacy.storage.files[SUNSYNK_CACHE_CONTROL] = {"applied_payload": {"INV1": {"sysWorkMode": "1"}}}
+    run_async_local(stale_legacy.restore_state())
+    if stale_legacy.applied_payload:
+        print(f"ERROR: stale legacy applied_payload must be discarded: {stale_legacy.applied_payload}")
+        failed = True
+    if stale_legacy.control_active != {"INV1"}:
+        print(f"ERROR: stale legacy cache should infer control_active within the ownership window, got {stale_legacy.control_active}")
+        failed = True
+
+    expired_legacy = StoredSunsynk(ages={SUNSYNK_CACHE_CONTROL: SUNSYNK_RESTORE_MAX_CONTROL_ACTIVE + 1})
+    expired_legacy.storage.files[SUNSYNK_CACHE_CONTROL] = {"applied_payload": {"INV1": {"sysWorkMode": "1"}}}
+    run_async_local(expired_legacy.restore_state())
+    if expired_legacy.control_active:
+        print(f"ERROR: legacy control ownership must expire after eight hours, got {expired_legacy.control_active}")
+        failed = True
+
+    explicit_empty = StoredSunsynk(ages={SUNSYNK_CACHE_CONTROL: 1.0})
+    explicit_empty.storage.files[SUNSYNK_CACHE_CONTROL] = {"applied_payload": {"INV1": {"sysWorkMode": "1"}}, "control_active": []}
+    run_async_local(explicit_empty.restore_state())
+    if explicit_empty.control_active:
+        print(f"ERROR: an explicitly empty control_active must be honoured, not inferred, got {explicit_empty.control_active}")
+        failed = True
+    assert not failed, "test_pre_upgrade_control_cache_infers_control_active"
 
 
 def test_tier_expiry_uses_the_seeded_clock():
     """Tier clocks are seeded from storage age, so cadence survives a restart."""
     failed = False
     s = StoredSunsynk(ages={SUNSYNK_CACHE_STATIC: 10.0})
-    s.storage.files[SUNSYNK_CACHE_STATIC] = {"device_list": ["INV1"]}
+    s.storage.files[SUNSYNK_CACHE_STATIC] = {"device_list": ["INV1"], "device_roles": {}}
     run_async_local(s.restore_state())
     # 10 minutes old against an 8-hour TTL: not expired, so no re-poll on startup.
     if s.tier_expired("static", SUNSYNK_TTL_STATIC):
@@ -316,6 +419,8 @@ def run_sunsynk_storage_tests(my_predbat):
         ("tier_files", test_each_tier_saves_to_its_own_file),
         ("restore_static_config", test_restore_reinstates_static_and_config),
         ("control_restore_bounded", test_control_cache_restore_is_time_bounded),
+        ("save_control_persists_control_active", test_save_control_persists_control_active),
+        ("pre_upgrade_infers_control_active", test_pre_upgrade_control_cache_infers_control_active),
         ("tier_expiry", test_tier_expiry_uses_the_seeded_clock),
         ("telemetry_not_cached", test_telemetry_is_not_cached),
         ("restore_survives_raising_storage", test_restore_state_survives_a_raising_storage_and_retries_once_recovered),

@@ -82,6 +82,27 @@ console output just says which issue it is working on and where that log is;
 `tail -f` it to watch a triage in progress. Logs are never pruned, so clear the
 directory out yourself if it grows.
 
+An issue the bot has triaged and parked with `waiting_for_user` is woken automatically:
+when its reporter comments after the bot's last comment, the daemon swaps
+`waiting_for_user` for BOT_REVIEW, and the follow-up review re-applies it if the reply
+still falls short. Only the reporter's comments count, and a `waiting_for_user` on an
+issue the bot never commented on is left for a human to clear.
+
+A substantial comment on a bot-triaged issue from someone other than the reporter or a
+maintainer - a "me too", often a different problem - gets one `/issue-me-too` run. Posts are trusted
+as related by default; one that is clearly a different problem is recorded as unrelated
+and its author is asked to file their own issue. The first poll only sets
+the watermark, so the backlog is never swept.
+
+Every flow also carries JOURNAL_CAPTURE_PROMPT, asking it to leave any finding a future
+run would want in ~/predbat-triage-bot/journal-queue/ - outside the clone, because
+sync_repo() resets and cleans the checkout before every flow and would otherwise destroy
+it. Once a day, if anything is queued, the daemon runs `/journal-update` under
+ALLOWED_TOOLS_JOURNAL: the only flow that can both edit a file and push, and correspondingly
+the narrowest edit scope of any (the debug journal and the cspell dictionary, named by exact
+path, nothing else). It opens a PR against main and cannot merge it - a human merge is the
+review gate, because every other flow reads that journal and trusts it.
+
 The allowlist deliberately includes general-purpose tools (python3,
 curl, ./run_all), which together amount to arbitrary code execution
 inside the clone - the triage skill needs to open a reporter's log,
@@ -93,20 +114,43 @@ against the obvious mistakes, not a sandbox boundary.
 """
 
 import argparse
+import functools
 import json
 import os
+import re
 import shutil
+import signal
 import subprocess
 import time
+import traceback
 from pathlib import Path
 
 REPO = "springfall2008/batpred"
+# Bounds the best-effort gh calls that link a bot PR to its requester, so a stalled call
+# can't hang the single-threaded poll loop.
+GH_LINK_TIMEOUT_SECONDS = 120
 BASE_DIR = Path.home() / "predbat-triage-bot"
 CLONE_DIR = BASE_DIR / "batpred"
 SCRATCH_DIR = BASE_DIR / "scratch"
 LOG_DIR = BASE_DIR / "logs"
 STATE_FILE = BASE_DIR / "state.json"
 POLL_SECONDS = 300
+# CLAUDE.md requires an impact() call before editing any symbol, and no flow could make one:
+# mcp__* was denied outright, so the tools it names were never available and runs fell back
+# to grepping for callers by hand and saying so in their reports. The index lives under
+# .gitnexus/, which the clone's .git/info/exclude lists, so `git clean -fd` leaves it alone.
+GITNEXUS_RUNNER = CLONE_DIR / ".gitnexus" / "run.cjs"
+# The commit the index was last built from. analyze takes ~37s on this repo and sync_repo()
+# runs before every flow, so re-analyzing unconditionally would spend minutes an hour
+# rebuilding an index for a tree that had not moved. HEAD is the only input that changes it.
+GITNEXUS_HEAD_FILE = BASE_DIR / "gitnexus-head"
+# Set once refresh_gitnexus_index() has reported a missing runner, so it says so per process
+# rather than on every sync.
+_GITNEXUS_RUNNER_WARNED = False
+# A dedicated MCP config, passed with --strict-mcp-config. The operator's own configuration
+# carries unrelated servers and a bot session has no business reaching those; scoping the
+# subprocess to this one server is what makes lifting the blanket mcp__* denial safe.
+MCP_CONFIG_FILE = BASE_DIR / "mcp-gitnexus.json"
 # Set from --ollama/--ollama_review by main() - see effective_ollama_model() for how the
 # two interact. OLLAMA_BASE_URL is Ollama's own Claude Code compatible endpoint
 # (https://docs.ollama.com/integrations/claude-code); a :cloud-suffixed model is still
@@ -115,9 +159,86 @@ POLL_SECONDS = 300
 OLLAMA_MODEL = None
 OLLAMA_REVIEW_MODEL = None
 OLLAMA_BASE_URL = "http://localhost:11434"
+# Real context window per Ollama model, in tokens. Claude Code does not recognise these
+# model names, so it assumes 200k and auto-compacts to fit - and every compaction costs
+# turns, which is a plausible route to the "Reached max turns (150)" that failed the #4992
+# cleanup on 2026-09-07. Telling it the real window stops the premature compaction.
+#
+# Keyed by model rather than set as one constant on purpose: overstating a window is worse
+# than understating it. Too low only compacts early; too high lets a request run past what
+# the model will accept and fail outright. A model absent from this map keeps Claude Code's
+# 200k assumption, which is wrong but safe - add an entry when you know the real number.
+OLLAMA_CONTEXT_TOKENS = {
+    "glm-5.3-flash:cloud": "1000000",
+}
 
 EDIT_SCOPE = f"//{CLONE_DIR.relative_to('/')}/**"
 SCRATCH_SCOPE = f"//{SCRATCH_DIR.relative_to('/')}/**"
+# Findings destined for the debug journal are parked here, deliberately OUTSIDE the clone:
+# sync_repo() runs `git reset --hard origin/main` and `git clean -fd` before every flow, so a
+# note written inside the checkout is destroyed before anything can pick it up. That, more
+# than any permission rule, is why the journal never got maintained by the bot.
+QUEUE_DIR = BASE_DIR / "journal-queue"
+QUEUE_SCOPE = f"//{QUEUE_DIR.relative_to('/')}/**"
+# The two files the daily flush may touch. Scoped to the exact paths rather than the clone,
+# because this is the only flow that can both edit and push.
+# The journal must NOT live under .claude/: Claude Code refuses the Edit and Write tools
+# anywhere in that directory and no allowlist entry overrides it, so a journal kept beside
+# the skill that reads it verifies fine and then silently fails to be written. Reads are
+# unaffected, which is what made that failure so quiet. See test_triage_daemon.py's
+# test_the_journal_lives_outside_the_dot_claude_directory.
+JOURNAL_RELPATH = "tools/debug-journal.md"
+DICTIONARY_RELPATH = ".cspell/custom-dictionary-workspace.txt"
+JOURNAL_SCOPE = f"//{(CLONE_DIR / JOURNAL_RELPATH).relative_to('/')}"
+DICTIONARY_SCOPE = f"//{(CLONE_DIR / DICTIONARY_RELPATH).relative_to('/')}"
+JOURNAL_BRANCH_PREFIX = "bot/debug-journal-"
+# How many queued candidates one flush is asked to fold in. Every other flow handles exactly
+# one issue or one pull request; the flush is the only one whose workload is unbounded,
+# because the queue fills from all five flows and drains only when a flush succeeds. On
+# 2026-09-13 it first outran its turn budget - seven candidates against a journal that had
+# grown from 73KB to 128KB in a week - and since archiving waits for a PR, the failure fed
+# itself: seven candidates became sixty-two over six nights and no later run stood a chance.
+# A cap makes a bad night cost a day of latency instead of permanently outrunning the budget.
+JOURNAL_MAX_CANDIDATES_PER_FLUSH = 15
+# Where the flush writes its pull request body, and what it finds there to replace.
+# A body is many lines of markdown. Assembling one in the shell means getting both the
+# permission matcher and the quoting right - `--body-file` needs a file the flush has no
+# grant to create, and a `--body "$(cat <<EOF ...)"` heredoc does work but puts the whole
+# body through shell quoting. PR #5011 shipped a one-line body promising a per-candidate
+# list that never arrived. Editing a file avoids the question: tool parameters carry
+# newlines and quoting untouched, and having the daemon open the PR means a flush that
+# skips this step still produces a reviewable pull request rather than none.
+# Pre-created with a placeholder because Edit needs an existing file to work on, and a
+# Write grant is not an option: Write() rules do not match a path, and bare Write would
+# hand the one flow that can push the ability to write anywhere in the clone.
+JOURNAL_BODY_FILE = SCRATCH_DIR / "journal-pr-body.md"
+JOURNAL_BODY_SCOPE = f"//{JOURNAL_BODY_FILE.relative_to('/')}"
+JOURNAL_BODY_PLACEHOLDER = "<!-- Replace this line with the pull request body. -->\n"
+# Branch prefixes the PR flow may create, matching issue-pr/SKILL.md.
+PR_BRANCH_PREFIXES = ("fix/", "feat/")
+# How many times one issue may fail triage before the daemon gives up and moves past it.
+# Retrying is worth doing - #4899 and #5003 each failed twice and succeeded on the third
+# attempt - but it has to be bounded: with no limit, #5004 burned a full 60-turn run every
+# ten minutes on 2026-09-08 and never advanced.
+TRIAGE_MAX_ATTEMPTS = 3
+# The clone's own refusal to update main, and the only layer that actually enforces it.
+# Permission rules are prefix globs over a command string: they cannot see what a ref
+# expression resolves to, so "git push origin HEAD:main" reads to them as an ordinary
+# push. That is precisely how an unreviewed commit reached upstream main on 2026-09-06 -
+# a cleanup run could not push to a fork-owned PR branch, improvised a push to origin,
+# and the CI credential's branch-protection bypass let it through. A pre-push hook is
+# handed the resolved remote ref by git itself, so it holds however the command is spelled.
+PUSH_GUARD_HOOK = """#!/bin/sh
+# Installed by tools/triage_daemon.py before every flow - edits will be overwritten.
+# The triage bot opens pull requests; a human merges them. It never updates main.
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+    if [ "$remote_ref" = "refs/heads/main" ]; then
+        echo "pre-push: refusing to update main - the triage bot opens pull requests, it does not merge them." >&2
+        exit 1
+    fi
+done
+exit 0
+"""
 _ALLOWED_TOOLS_NON_GH = [
     # Git history, and the re-sync/discard the skill does before investigating
     "Bash(git log*)",
@@ -175,10 +296,26 @@ _ALLOWED_TOOLS_NON_GH = [
     "Bash(tr *)",
     "Bash(tee *)",
     "Bash(echo *)",
+    # Under dontAsk every command in a pipeline must match a rule, so the scoped gh api grant
+    # alone does not cover `printf '%s' '<json>' | gh api repos/.../comments --input -` - which
+    # is how PR #5250's review wrote every comment, and so posted none of them.
+    "Bash(printf *)",
     # Edit rules cover every file-editing tool (Write included) - a Write(path)
     # rule is not matched by the file permission check, so don't add one.
     f"Edit({EDIT_SCOPE})",
     f"Edit({SCRATCH_SCOPE})",
+    # Every flow may leave a journal finding behind. In the shared base list rather than
+    # added per flow, so a new flow inherits it instead of silently losing its findings.
+    f"Edit({QUEUE_SCOPE})",
+    # Only this server's tools, never a blanket mcp__*. Two independent layers keep the
+    # operator's other MCP servers out of a bot session: --strict-mcp-config stops them being
+    # loaded at all, and under dontAsk anything not named here is denied even if one were.
+    "mcp__gitnexus__*",
+    # Write is what makes shell redirection work: `printf ... > file` is refused with a Bash
+    # grant alone and permitted once Write is present (checked both ways). Every flow holding
+    # this already has clone-wide Edit, so it is not new reach - it is the same reach without
+    # the workarounds runs kept having to invent. The journal flush drops it below.
+    "Write",
     "WebFetch",
     "Read",
     "Grep",
@@ -189,10 +326,16 @@ _ALLOWED_TOOLS_BASE = ["Bash(gh *)"] + _ALLOWED_TOOLS_NON_GH
 ALLOWED_TOOLS = ",".join(_ALLOWED_TOOLS_BASE)
 # The /issue-pr invocation needs everything the read-only triage flow has, plus
 # committing/pushing its branch, opening the PR, and running pre-commit as a quality gate.
+# One entry per (flag, prefix) spelling rather than a bare "git push*": prefix-glob
+# matching is literal, and an unscoped push grant is what let "git push origin HEAD:main"
+# through on 2026-09-06. The bare "git push" form is kept for a follow-up push once the
+# branch has an upstream. PUSH_GUARD_HOOK is the layer that actually enforces this; these
+# rules stop the attempt earlier and say why.
+_PR_PUSH_ALLOWED = ["Bash(git push)"] + [f"Bash(git push{flag} origin {prefix}*)" for prefix in PR_BRANCH_PREFIXES for flag in ("", " -u")]
 _ALLOWED_TOOLS_PR_EXTRA = [
     "Bash(git add*)",
     "Bash(git commit*)",
-    "Bash(git push*)",
+    *_PR_PUSH_ALLOWED,
     "Bash(gh pr create*)",
     "Bash(./run_pre_commit*)",
     "Bash(./run_pre_commit)",
@@ -201,7 +344,6 @@ ALLOWED_TOOLS_PR = ",".join(_ALLOWED_TOOLS_BASE + _ALLOWED_TOOLS_PR_EXTRA)
 # Deny wins over allow, so these carve the publishing commands back out of
 # the broad "Bash(gh *)" / "Bash(git ...)" entries above.
 _DISALLOWED_TOOLS_BASE = [
-    "mcp__*",
     "Bash(git push*)",
     "Bash(git commit*)",
     "Bash(git remote add*)",
@@ -219,7 +361,9 @@ _DISALLOWED_TOOLS_BASE = [
 DISALLOWED_TOOLS = ",".join(_DISALLOWED_TOOLS_BASE)
 # The PR flow needs to push its branch and open the PR - carve those three back out of
 # the base denial list. Everything else (merge, close, repo/release/workflow/auth/secret/
-# api admin, all mcp__*) stays denied.
+# api admin) stays denied. MCP is no longer denied wholesale: the allowlist names
+# mcp__gitnexus__* specifically, so every other server's tools are denied by omission under
+# dontAsk, and --strict-mcp-config stops them being loaded in the first place.
 _PR_REMOVED_DENIALS = {"Bash(git push*)", "Bash(git commit*)", "Bash(gh pr create*)"}
 # Even though the PR flow can push, force-push variants stay denied - defense in depth
 # against a prompt-injected instruction attempting to rewrite history. Prefix-glob
@@ -234,7 +378,19 @@ _PR_REMOVED_DENIALS = {"Bash(git push*)", "Bash(git commit*)", "Bash(gh pr creat
 # ...", "git push ... -f" and "--force"/"--force-with-lease", without also catching
 # "-flow", "-fix", "-format" or any other word that merely contains "-f".
 _PR_FORCE_PUSH_DENIALS = ["Bash(git push* --force*)", "Bash(git push* -f)", "Bash(git push* -f *)"]
-DISALLOWED_TOOLS_PR = ",".join([item for item in _DISALLOWED_TOOLS_BASE if item not in _PR_REMOVED_DENIALS] + _PR_FORCE_PUSH_DENIALS)
+# --no-verify skips the pre-push hook, so it has to be denied wherever pushing is granted
+# or the guard is one flag away from being off. The rest name main directly: belt and
+# braces with the hook, and they fail the run with a legible reason rather than a hook
+# rejection buried in git output. "*" matches the empty string, so each covers the form
+# with and without trailing arguments.
+_PUSH_TO_MAIN_DENIALS = [
+    "Bash(git push* --no-verify*)",
+    "Bash(git push* origin main*)",
+    "Bash(git push*:main)",
+    "Bash(git push*:main *)",
+    "Bash(git push*refs/heads/main*)",
+]
+DISALLOWED_TOOLS_PR = ",".join([item for item in _DISALLOWED_TOOLS_BASE if item not in _PR_REMOVED_DENIALS] + _PR_FORCE_PUSH_DENIALS + _PUSH_TO_MAIN_DENIALS)
 # The review and cleanup flows do NOT inherit the broad "Bash(gh *)" grant: with it
 # present, carving a scoped exception out of the gh api denial below would do nothing,
 # since "Bash(gh *)" already allows every gh api call once that denial is lifted, and
@@ -246,12 +402,16 @@ _ALLOWED_GH_PR_READ = [
     "Bash(gh pr diff*)",
     "Bash(gh pr list*)",
     "Bash(gh pr comment*)",
+    # Enough to correct a PR body or answer a thread. Deliberately not "gh issue edit": the
+    # daemon owns the BOT_* labels, and a flow relabelling itself would race its own driver.
+    "Bash(gh pr edit*)",
+    "Bash(gh issue comment*)",
     "Bash(gh issue view*)",
     "Bash(gh issue list*)",
     "Bash(gh search*)",
 ]
-# /code-review posts findings as inline PR comments, which needs gh api against the
-# PR-comments endpoint - scoped to this repo only. No write/push/commit access, and
+# /pr-review posts findings as a PR review, which needs gh api against the PR-reviews
+# endpoint - scoped to this repo only. No write/push/commit access, and
 # deliberately no "gh pr review*" either: that would also allow --approve/
 # --request-changes, a governance action beyond "post a comment."
 _REVIEW_REMOVED_DENIALS = {"Bash(gh api*)"}
@@ -293,32 +453,112 @@ _CLEANUP_EXTRA_MERGE = [
     "Bash(git merge --no-edit origin/main*)",
     "Bash(git merge --abort)",
 ]
+# Only the bare "git push" - the one form pr-cleanup/SKILL.md uses. Cleanup works on a
+# branch `gh pr checkout` has already given an upstream, so it never needs to name a remote
+# or a ref, and naming one is how the 2026-09-06 push to main was spelled. A PR whose head
+# is a fork cannot be pushed to with this credential at all; fetch_bot_cleanup_prs() now
+# filters those out rather than leaving the run to improvise a target.
 _CLEANUP_EXTRA_WRITE = [
     "Bash(git add*)",
     "Bash(git commit*)",
-    "Bash(git push*)",
+    "Bash(git push)",
     "Bash(./run_pre_commit*)",
     "Bash(./run_pre_commit)",
 ]
 ALLOWED_TOOLS_CLEANUP = ",".join(_ALLOWED_GH_PR_READ + _CLEANUP_EXTRA_GH + _ALLOWED_TOOLS_NON_GH + _CLEANUP_EXTRA_MERGE + _CLEANUP_EXTRA_WRITE + _REVIEW_EXTRA_ALLOWED)
 _CLEANUP_REMOVED_DENIALS = {"Bash(git push*)", "Bash(git commit*)"} | _REVIEW_REMOVED_DENIALS
-DISALLOWED_TOOLS_CLEANUP = ",".join([item for item in _DISALLOWED_TOOLS_BASE if item not in _CLEANUP_REMOVED_DENIALS] + _PR_FORCE_PUSH_DENIALS)
+DISALLOWED_TOOLS_CLEANUP = ",".join([item for item in _DISALLOWED_TOOLS_BASE if item not in _CLEANUP_REMOVED_DENIALS] + _PR_FORCE_PUSH_DENIALS + _PUSH_TO_MAIN_DENIALS)
 # The other half of the #4758 fix. /code-review is a built-in skill, so the command form it
 # has to use cannot be pinned in a SKILL.md we own - it goes in as an appended system prompt
 # on the two flows holding the scoped gh api grant. Belt and braces with _REVIEW_EXTRA_ALLOWED
 # above: the allowlist covers the spellings we enumerated, this keeps the agent on the one
 # spelling that is certain to be covered, and asks it to say so loudly when a call is denied
 # anyway - #4758 quietly degraded to printing the comments it could not post, which reads like
-# a finished review in the log.
+# a finished review in the log. It also moves comment bodies into a scratch file: PR #5229's
+# POSTs were endpoint-first and still denied, because a double-quoted body holding backticks is
+# command substitution to the shell, and the permission check denies the substituted commands
+# that no rule allows. It also closes /code-review's own escape hatch: with its preferred
+# mcp__github_inline_comment tool missing (never loaded, see --strict-mcp-config), the skill
+# says "fall back to gh api ... or print the findings instead", and PR #5283's run (2026-09-28)
+# took the print branch without trying gh api at all - nothing was denied, so the denial rule
+# alone never fired. Also carries the bot-disclosure requirement for these two flows:
+# /code-review's own instructions live in a skill we don't own, so this prompt is the only
+# lever available for it; /pr-cleanup's SKILL.md already asks for disclosure directly, and
+# this is the belt-and-braces backup for it, same reasoning as the endpoint-first steer.
+# Correction, found on PR #5304 (2026-09-29): none of the above ever reached /code-review.
+# It reviews in a forked subagent, and --append-system-prompt only reaches the main session
+# (checked with a codeword: the main session saw it, the fork did not) - no review comment
+# ever carried the disclosure line. The review flow now runs /pr-review, which does the
+# review itself in the main session and posts from there, where this prompt does apply.
+# The daily journal flush. This is the only flow that can edit a file AND push, so its edit
+# scope is the narrowest of any: the journal itself, the cspell dictionary (a new vendor term
+# in an entry fails the pre-commit hook without it), and the queue it consumes. It gets no
+# broad "Bash(gh *)" - same reasoning as the review and cleanup flows - and its push grant
+# names the bot branch prefix, so it cannot push to main even though main is where the file
+# lives. A human merging the PR is the review gate on journal content, and the journal being
+# wrong is worse than it being stale: an entry asserting a fixed credential leak would have a
+# later triage run tell a reporter to rotate keys that never leaked.
+# No "gh pr create" here any more: open_journal_pr() does it, so the flow that can push
+# no longer also opens pull requests, and the body no longer depends on what fits on a
+# command line.
+_ALLOWED_TOOLS_JOURNAL_EXTRA = [
+    "Bash(git add*)",
+    "Bash(git commit*)",
+    f"Bash(git push origin {JOURNAL_BRANCH_PREFIX}*)",
+    f"Bash(git push -u origin {JOURNAL_BRANCH_PREFIX}*)",
+    "Bash(./run_pre_commit*)",
+    "Bash(./run_pre_commit)",
+]
+# Write goes too: this is the one flow whose edit scope is deliberately a few exact files
+# rather than the clone, precisely because it is also the one that can push. A bare Write
+# would let it author anything in the clone and then commit it, which is the whole thing
+# the narrow scope exists to prevent. It does not need redirection anyway - the PR body
+# below is written with the Edit tool.
+_JOURNAL_DROPPED_EDITS = {"Write", f"Edit({EDIT_SCOPE})", f"Edit({SCRATCH_SCOPE})", f"Edit({QUEUE_SCOPE})"}
+ALLOWED_TOOLS_JOURNAL = ",".join([rule for rule in _ALLOWED_TOOLS_NON_GH if rule not in _JOURNAL_DROPPED_EDITS] + [f"Edit({JOURNAL_SCOPE})", f"Edit({DICTIONARY_SCOPE})", f"Edit({JOURNAL_BODY_SCOPE})"] + _ALLOWED_TOOLS_JOURNAL_EXTRA)
+# gh pr merge/close stay denied from the base list - the bot never merges its own journal PR.
+# "Bash(gh pr create*)" deliberately stays denied: open_journal_pr() does that job now, so
+# the flow needs no grant for it, and the denial is what stops a future broad gh allow rule
+# quietly handing it back.
+_JOURNAL_REMOVED_DENIALS = {"Bash(git push*)", "Bash(git commit*)"}
+DISALLOWED_TOOLS_JOURNAL = ",".join([rule for rule in _DISALLOWED_TOOLS_BASE if rule not in _JOURNAL_REMOVED_DENIALS] + _PR_FORCE_PUSH_DENIALS + _PUSH_TO_MAIN_DENIALS)
+
+# Appended to every flow's system prompt. Until this existed no skill asked for a journal
+# finding at all, so upkeep was self-motivated and happened in maybe one run in ten - and
+# a SKILL.md cannot carry it for every flow at once. It reaches the review flow too, now
+# that /pr-review reviews in the main session rather than in a forked /code-review.
+JOURNAL_CAPTURE_PROMPT = (
+    "Before you finish, consider whether this investigation turned up something a future triage run would have wanted to know "
+    "- a config item that explains a whole class of report, an API or firmware quirk, a symptom that maps to a module, a trap "
+    "that wasted your time, or an existing debug-journal entry you found to be out of date. "
+    "Keep it to what would save time on a different issue - not the story of this ticket (what you tried, the fix, the alternatives), which belongs in the issue or PR. "
+    f"If so, write it as a single markdown file in {QUEUE_DIR} named <issue-or-pr-number>-<short-slug>.md. "
+    "Record only what you actually verified, and say how you verified it (read the symbol, ran the test, replayed the debug "
+    "file, probed the live API) - separate that from anything you merely suspect, and name the issue or PR number so the next "
+    "reader can check the original. A daily job folds these into the journal after re-checking each one against main. "
+    "If this run learned nothing that generalises beyond the ticket in front of you, write nothing at all - that is the "
+    "normal outcome, and an empty queue is much better than one full of restatements of what the journal already says."
+)
+
 GH_API_ENDPOINT_FIRST_PROMPT = (
+    "The `mcp__github_inline_comment__create_inline_comment` tool is never available in this session, so post every PR comment "
+    "with `gh api` - that is the required path, not one option among several. Printing the findings instead of posting them is "
+    "not an acceptable substitute, even where a skill's instructions offer it as a fallback; it is permitted only after a `gh api` "
+    "call has actually been denied. "
     "Permission rules in this session match a literal command prefix, so `gh api` calls are only permitted when the current allowlist covers the exact spelling you use. "
     "Prefer the endpoint-first, unquoted form (endpoint immediately after `gh api`) and put flags after the endpoint - for example "
-    f"`gh api repos/{REPO}/pulls/123/comments --method POST -f path=apps/predbat/example.py`. "
+    f"`gh api repos/{REPO}/pulls/123/comments --method POST -f path=apps/predbat/example.py -F body=@{SCRATCH_DIR}/comment-1.md`. "
     'Other spellings (e.g. `gh api --method POST repos/...`, `gh api -X POST repos/...`, `gh api -H ... repos/...` or `gh api "repos/..."`) may be denied in restricted sessions even when the same request is allowed in endpoint-first form. '
+    f"Never put a comment body on the command line: write it to a file in {SCRATCH_DIR} with the Write tool first and pass it as `-F body=@<file>`. "
+    "An inline body in double quotes turns any backticks or `$(...)` in it into command substitution, which the permission check "
+    "sees as extra commands and denies - that is what blocked every comment in PR #5229's review. "
     "Keep each call to a single command: piping into head/tail/grep is fine, but redirecting output anywhere outside "
     f"{SCRATCH_DIR} or the repository clone - /tmp included - is denied as well. "
     "If a call is denied regardless, state that plainly in your final message and name the command; do not quietly fall back "
-    "to printing the comments you would have posted."
+    "to printing the comments you would have posted. "
+    "Every comment or reply you post in this session - an inline review comment, a review-thread reply - must open with a "
+    "short line disclosing it is automated, e.g. '_Automated comment from the triage bot._', so a maintainer can tell "
+    "bot-authored feedback apart from a human reviewer's, without needing to check the author field."
 )
 
 
@@ -458,18 +698,31 @@ def is_actionable(issue_number):
     return bool(label_names & {"bug", "enhancement"})
 
 
-def flag_pr_for_review(pr_number):
-    """Add BOT_REVIEW to a PR, so the next poll cycle runs /code-review against it.
-    Idempotent - adding a label the PR already carries is a no-op, not an error.
+def flag_pr_for_review(pr_number, cleanup=False, opened_by_bot=False):
+    """Add BOT_REVIEW to a PR, so the next poll cycle runs /pr-review against it - and
+    with cleanup, BOT_CLEANUP too, so /pr-cleanup then acts on what the review found.
+    Both go in one edit: a cycle that saw BOT_CLEANUP alone would run the cleanup before
+    the review existed. Idempotent - adding a label the PR already carries is a no-op.
+
+    opened_by_bot adds BOT_PR_OPENED to the PR as well (not just the issue), so PRs the
+    BOT_PR flow opened can be listed by label - their author is always the bot's credential.
     """
-    subprocess.run(["gh", "pr", "edit", str(pr_number), "--repo", REPO, "--add-label", "BOT_REVIEW"], check=True)
+    labels = ["--add-label", "BOT_REVIEW"] + (["--add-label", "BOT_CLEANUP"] if cleanup else []) + (["--add-label", "BOT_PR_OPENED"] if opened_by_bot else [])
+    subprocess.run(["gh", "pr", "edit", str(pr_number), "--repo", REPO] + labels, check=True)
 
 
-def mark_pr_opened(issue_number):
+def mark_pr_opened(issue_number, cleanup=False, opened_by_bot=False):
     """Swap BOT_PR for BOT_PR_OPENED once the draft PR has been confirmed open, and
     flag the PR itself with BOT_REVIEW so a code review runs against it automatically -
     /issue-pr's own quality gate (step 4 of its SKILL.md) is pre-commit and a targeted
     test, not an LLM review of the diff.
+
+    cleanup also queues BOT_CLEANUP. Only process_bot_pr_issue() passes it, and only for a
+    PR its own create_pr() just opened: a PR found already open on entry may be someone's
+    own branch, and BOT_CLEANUP is the label that commits and pushes to it.
+
+    opened_by_bot, passed under the same condition, labels the PR as the bot's and assigns
+    it to whoever added BOT_PR (assign_bot_pr_requester()).
     """
     subprocess.run(
         ["gh", "issue", "edit", str(issue_number), "--repo", REPO, "--remove-label", "BOT_PR", "--add-label", "BOT_PR_OPENED"],
@@ -477,7 +730,215 @@ def mark_pr_opened(issue_number):
     )
     pr_number = find_pr_number_for_issue(issue_number)
     if pr_number is not None:
-        flag_pr_for_review(pr_number)
+        flag_pr_for_review(pr_number, cleanup=cleanup, opened_by_bot=opened_by_bot)
+        if opened_by_bot:
+            assign_bot_pr_requester(pr_number, issue_number)
+
+
+def find_bot_pr_requester(issue_number):
+    """Return the login of whoever last added BOT_PR to the issue, or None if it can't be found.
+
+    The PR is always authored by the bot's credential, so the issue's label event is the only
+    record of who asked for it. Read after mark_pr_opened() has swapped BOT_PR off: the
+    labeled event stays in the issue's history either way. Events come oldest first and
+    --paginate walks the pages in order, so the last line is the latest request.
+    """
+    result = subprocess.run(
+        ["gh", "api", "--paginate", f"repos/{REPO}/issues/{issue_number}/events", "--jq", '.[] | select(.event == "labeled" and .label.name == "BOT_PR" and .actor != null) | .actor.login'],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=GH_LINK_TIMEOUT_SECONDS,
+    )
+    if result.returncode != 0:
+        # Said why, so a failed lookup (auth expiry, rate limit) is not mistaken for an issue nobody asked on
+        print(f"[pr] issue #{issue_number}: BOT_PR requester lookup failed: {(result.stderr or '').strip() or 'exit ' + str(result.returncode)}", flush=True)
+        return None
+    logins = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+    return logins[-1] if logins else None
+
+
+def assign_bot_pr_requester(pr_number, issue_number):
+    """Assign a PR the BOT_PR flow just opened to whoever added BOT_PR to its issue.
+
+    The PR's author is always the bot's credential, so this is what makes it show up under
+    the requester's assigned PRs. Best effort: the PR is already open and labelled, so any
+    failure - no requester found, an unassignable login, gh erroring or hanging - is logged
+    and must not fail the flow.
+    """
+    try:
+        requester = find_bot_pr_requester(issue_number)
+        if requester is None:
+            print(f"[pr] PR #{pr_number}: no BOT_PR requester found on issue #{issue_number}, not assigning", flush=True)
+            return
+        assign = subprocess.run(["gh", "pr", "edit", str(pr_number), "--repo", REPO, "--add-assignee", requester], capture_output=True, text=True, check=False, timeout=GH_LINK_TIMEOUT_SECONDS)
+        if assign.returncode != 0:
+            print(f"[pr] PR #{pr_number}: could not assign requester {requester}: {(assign.stderr or '').strip()}", flush=True)
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"[pr] PR #{pr_number}: assigning the BOT_PR requester failed: {exc}", flush=True)
+
+
+class FlowFailed(subprocess.CalledProcessError):
+    """A claude run that exited non-zero, carrying the log its output went to.
+
+    A CalledProcessError on its own says only that something exited non-zero. Keeping the log
+    path lets failure_cause() look inside the run for why, and lets the comment name the file
+    a maintainer on the bot's host should open.
+    """
+
+    def __init__(self, returncode, cmd, log_path):
+        """Record the log the failed run wrote to alongside the usual exit status and command."""
+        super().__init__(returncode, cmd)
+        self.log_path = log_path
+
+
+# What a failed claude run says in its own log, most specific first. Matched only against the
+# end of the last run's output (see failure_log_cause), because the agent quotes the issue it is
+# reading and an issue about "Reached max turns" must not classify its own triage. These are the
+# strings Claude Code prints at the point it gives up; an unrecognised failure falls back to the
+# exit status, so a wrong or stale entry costs a less specific comment, not a wrong label.
+FAILURE_LOG_SIGNATURES = (
+    (re.compile(r"Reached max turns", re.IGNORECASE), "Claude ran out of turns before finishing (--max-turns)"),
+    (re.compile(r"Exceeded USD budget|budget .{0,40}exceeded", re.IGNORECASE), "Claude hit the spend limit set for this run (--max-budget-usd)"),
+    (re.compile(r"credit balance is too low|usage limit reached|usage limit exceeded", re.IGNORECASE), "The bot's Claude account is out of credit or at its usage limit"),
+    (re.compile(r"Invalid API key|authentication_error|OAuth token has expired|API Error: 401|Please run /login", re.IGNORECASE), "Claude could not authenticate - the bot's login has expired or been revoked"),
+    (re.compile(r"API Error: 429|rate_limit_error", re.IGNORECASE), "Claude was rate limited by the API"),
+    (re.compile(r"API Error: 529|overloaded_error", re.IGNORECASE), "The Claude API reported it was overloaded"),
+    (re.compile(r"ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|Connection error|fetch failed", re.IGNORECASE), "Claude lost its network connection to the API"),
+)
+FAILURE_LOG_SECTION_CHARS = 4000
+FAILURE_LOG_READ_BYTES = 262144
+FAILURE_RUN_START = re.compile(r"^==== .* started .* ====$", re.MULTILINE)
+
+
+def failure_log_cause(log_path):
+    """Name why the last run in a flow's log gave up, or "" if the log says nothing recognisable.
+
+    The log is appended to across retries, so only the text after the final "started" marker
+    belongs to this failure, and only its last few thousand characters are searched.
+    """
+    try:
+        with open(log_path, "rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            handle.seek(max(0, handle.tell() - FAILURE_LOG_READ_BYTES))
+            text = handle.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+    starts = list(FAILURE_RUN_START.finditer(text))
+    if starts:
+        text = text[starts[-1].end() :]
+    text = text[-FAILURE_LOG_SECTION_CHARS:]
+    for pattern, reason in FAILURE_LOG_SIGNATURES:
+        if pattern.search(text):
+            return reason
+    return ""
+
+
+def failure_cause(exc):
+    """Say in a sentence what failed, from the exit status, the command and the run's log.
+
+    Commands are named by their leading words only: the arguments of a `gh ... --body` call can
+    be a whole comment, and these sentences are posted publicly.
+    """
+    status = exc.returncode
+    command = exc.cmd if isinstance(exc.cmd, (list, tuple)) else str(exc.cmd).split()
+    program = Path(str(command[0])).name if command else "a command"
+    if status < 0:
+        try:
+            name = signal.Signals(-status).name
+        except ValueError:
+            name = f"signal {-status}"
+        return f"`{program}` was killed by {name}, which usually means the bot's host ran out of memory or the process was stopped by hand"
+    if program in ("gh", "git"):
+        words = [str(word) for word in command[1:] if not str(word).startswith("-")][:2]
+        return f"`{' '.join([program] + words)}` exited with status {status}"
+    cause = failure_log_cause(exc.log_path) if isinstance(exc, FlowFailed) else ""
+    if cause:
+        return f"{cause} (exit status {status})"
+    return f"The Claude run exited with status {status} and its log shows no recognised cause"
+
+
+@functools.lru_cache(maxsize=1)
+def daemon_version():
+    """Short commit of the checkout the daemon is running from, so a line number can be read
+    against the right file, or "" when it is not in a git checkout."""
+    try:
+        result = subprocess.run(["git", "-C", str(Path(__file__).resolve().parent), "rev-parse", "--short", "HEAD"], capture_output=True, text=True, check=False)
+    except OSError:
+        return ""
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def failure_origin(exc=None):
+    """Return "file:line in function()" for where in this file a failure arose.
+
+    With an exception, the innermost frame in this file: a subprocess.run(check=True) fails
+    inside the subprocess module, but the line that matters is the call in the daemon. Without
+    one - a run that exited 0 and left its work undone - the place that spotted the problem,
+    which is the caller of the mark_*_failed() function that called failure_detail().
+    """
+    this_file = Path(__file__).resolve()
+    if exc is not None and exc.__traceback__ is not None:
+        frames = [frame for frame in traceback.extract_tb(exc.__traceback__) if Path(frame.filename).resolve() == this_file]
+    else:
+        frames = [frame for frame in traceback.extract_stack() if Path(frame.filename).resolve() == this_file]
+        while frames and (frames[-1].name in ("failure_origin", "failure_detail") or frames[-1].name.startswith("mark_")):
+            frames.pop()
+    if not frames:
+        return ""
+    frame = frames[-1]
+    version = daemon_version()
+    return f"{this_file.name}:{frame.lineno} in {frame.name}(){f' (daemon {version})' if version else ''}"
+
+
+def failure_detail(reason="", exc=None):
+    """Build the part of a BOT_FAILED comment that says why, where and which log.
+
+    `reason` is a specific explanation a caller already has; `exc` adds what the exception
+    itself shows. Never includes log text - only a classification of it - because a log can
+    hold a reporter's attachment, a token or the bot's paths.
+    """
+    causes = [text for text in (reason, failure_cause(exc) if exc is not None else "") if text]
+    parts = []
+    if causes:
+        parts.append("**Reason:** " + "; ".join(text.rstrip(".") for text in causes) + ".")
+    origin = failure_origin(exc)
+    if origin:
+        parts.append(f"**Failed at:** `{origin}`.")
+    if isinstance(exc, FlowFailed):
+        parts.append(f"**Log:** `{Path(exc.log_path).name}` in the bot's logs directory.")
+    return (" " + " ".join(parts)) if parts else ""
+
+
+def mark_triage_failed(issue_number, attempts, exc=None):
+    """Note on an issue that triage never completed, label it, and let the queue move on.
+
+    The watermark advances past the issue afterwards, so nothing re-triages it by itself.
+    BOT_REVIEW is the documented way back in - that is the label the follow-up flow watches.
+    Unlike the other markers there is no label to swap out: a new issue carries no trigger
+    label, so BOT_FAILED is added rather than exchanged. That makes saying "remove BOT_FAILED
+    first" load-bearing - remove_review_label() clears only BOT_REVIEW on success, and nothing
+    in this file ever removes BOT_FAILED, so it would otherwise outlive the failure it records.
+    """
+    subprocess.run(
+        [
+            "gh",
+            "issue",
+            "comment",
+            str(issue_number),
+            "--repo",
+            REPO,
+            "--body",
+            f"Automated triage did not complete for this issue after {attempts} attempts.{failure_detail(exc=exc)} "
+            "It has been skipped so that it does not hold up triage of later issues. Remove `BOT_FAILED` and add `BOT_REVIEW` "
+            "to have the bot look at it again - nothing removes `BOT_FAILED` on its own, so leaving it on would outlive a later successful run.",
+        ],
+        check=True,
+    )
+    subprocess.run(
+        ["gh", "issue", "edit", str(issue_number), "--repo", REPO, "--add-label", "BOT_FAILED"],
+        check=True,
+    )
 
 
 def mark_pr_failed(issue_number):
@@ -501,11 +962,114 @@ def mark_pr_not_actionable(issue_number):
             "--repo",
             REPO,
             "--body",
-            "`BOT_PR` was added but this issue isn't actionable for an automated implementation " "(closed, or not classified `bug`/`enhancement`) - not attempting a PR. Remove `BOT_PR_FAILED` " "and re-add `BOT_PR` once the classification changes.",
+            "Automated PR creation skipped: `BOT_PR` was added but this issue isn't actionable for an automated implementation " "(closed, or not classified `bug`/`enhancement`). Remove `BOT_PR_FAILED` and re-add `BOT_PR` once the classification changes.",
         ],
         check=True,
     )
     mark_pr_failed(issue_number)
+
+
+def install_push_guard():
+    """Write the clone's pre-push hook, which refuses any update to main.
+
+    Rewritten before every flow rather than once at setup. `.git/hooks` is not tracked, so
+    `git clean -fd` never restores it and a hook removed by hand would stay removed - and
+    this is the only layer that sees what a ref expression actually resolves to, so it must
+    not be possible for it to be quietly missing.
+    """
+    hooks_dir = CLONE_DIR / ".git" / "hooks"
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+    hook_path = hooks_dir / "pre-push"
+    hook_path.write_text(PUSH_GUARD_HOOK)
+    hook_path.chmod(0o755)
+
+
+def write_mcp_config():
+    """Write the one-server MCP config every flow is pinned to.
+
+    Generated rather than checked in: the gitnexus executable is wherever this machine put
+    it. A missing binary leaves the file absent, the flags unset, and the flows running
+    exactly as they did before - degraded, not broken.
+    """
+    executable = shutil.which("gitnexus")
+    if not executable:
+        # Delete rather than merely decline to write: claude_mcp_args() keys off the file
+        # existing, so a config left over from when gitnexus was installed would keep being
+        # passed with --strict-mcp-config, pointing every flow at a command that is gone.
+        MCP_CONFIG_FILE.unlink(missing_ok=True)
+        print("[triage] gitnexus not on PATH - flows will run without the MCP tools CLAUDE.md expects", flush=True)
+        return False
+    BASE_DIR.mkdir(parents=True, exist_ok=True)
+    MCP_CONFIG_FILE.write_text(json.dumps({"mcpServers": {"gitnexus": {"command": executable, "args": ["mcp"]}}}, indent=2))
+    return True
+
+
+def claude_mcp_args():
+    """Pin a claude invocation to the gitnexus server and nothing else.
+
+    --strict-mcp-config is the load-bearing half: without it the subprocess inherits every
+    server in the operator's own configuration, which for a bot session is far too much.
+    """
+    if not MCP_CONFIG_FILE.exists():
+        return []
+    return ["--mcp-config", str(MCP_CONFIG_FILE), "--strict-mcp-config"]
+
+
+def refresh_gitnexus_index():
+    """Re-analyze the clone when HEAD has moved since the last index build.
+
+    Guarded on HEAD rather than run unconditionally: analyze takes about 37 seconds on this
+    repo and sync_repo() runs before every flow, so an unguarded call would spend minutes an
+    hour rebuilding an index for a tree that had not changed. Failures are reported and
+    ignored - a stale index degrades a flow's answers, a raised exception would stop the
+    daemon, and check=False keeps this from becoming the latter.
+    """
+    global _GITNEXUS_RUNNER_WARNED
+    if not GITNEXUS_RUNNER.exists():
+        # Once per process, not once per sync: this runs before every flow, and a clone that
+        # has never been analyzed would otherwise print the same line every few minutes.
+        if not _GITNEXUS_RUNNER_WARNED:
+            print(f"[triage] gitnexus: no runner at {GITNEXUS_RUNNER} - flows will run without an index", flush=True)
+            _GITNEXUS_RUNNER_WARNED = True
+        return
+    head = subprocess.run(["git", "-C", str(CLONE_DIR), "rev-parse", "HEAD"], capture_output=True, text=True, check=False).stdout.strip()
+    if not head:
+        # Without a HEAD there is no way to tell whether the index is stale, and no marker
+        # worth writing afterwards - an empty one would never match and would re-analyze on
+        # every sync from then on. sync_repo()'s own git calls use check=True, so reaching
+        # here at all means git is unwell; leave the existing index alone.
+        print("[triage] gitnexus: could not read HEAD - leaving the existing index alone", flush=True)
+        return
+    if GITNEXUS_HEAD_FILE.exists() and GITNEXUS_HEAD_FILE.read_text().strip() == head:
+        return
+    print(f"[triage] gitnexus: re-analyzing at {head[:8] or 'unknown'}", flush=True)
+    result = subprocess.run(["node", str(GITNEXUS_RUNNER), "analyze"], cwd=str(CLONE_DIR), capture_output=True, text=True, check=False)
+    if result.returncode == 0:
+        BASE_DIR.mkdir(parents=True, exist_ok=True)
+        GITNEXUS_HEAD_FILE.write_text(head)
+    else:
+        print(f"[triage] gitnexus: analyze failed ({result.returncode}) - flows will use the previous index", flush=True)
+
+
+def set_aside_leftovers():
+    """Stash whatever the previous flow left uncommitted in the clone, so main can be checked out.
+
+    `git checkout main` refuses to overwrite local changes to a file that differs between the
+    two branches, and sync_repo() runs before every flow - so one run that exits with its edits
+    uncommitted wedges the daemon for good. PR #5216's cleanup did exactly that on 2026-09-26
+    and every later flow failed at the checkout. Stashing, rather than `checkout --force`, keeps
+    the work recoverable: the daemon has no way to tell a half-finished fix from noise.
+
+    An unfinished merge is aborted first, because `git stash` refuses a tree with unmerged paths
+    and `git checkout` refuses one mid-merge. The merge itself is always origin/main into a PR
+    branch, so nothing is lost that cannot be redone.
+    """
+    if (CLONE_DIR / ".git" / "MERGE_HEAD").exists():
+        subprocess.run(["git", "-C", str(CLONE_DIR), "merge", "--abort"], check=False)
+    label = f"triage-daemon: left behind by the previous flow, set aside {time.strftime('%Y-%m-%d %H:%M:%S')}"
+    result = subprocess.run(["git", "-C", str(CLONE_DIR), "stash", "push", "-m", label], capture_output=True, text=True, check=True)
+    if "Saved working directory" in result.stdout:
+        print(f"[triage] warning: the previous flow left uncommitted changes in the clone - stashed as '{label}' (see `git stash list` in {CLONE_DIR})", flush=True)
 
 
 def sync_repo():
@@ -513,14 +1077,18 @@ def sync_repo():
 
     A crashed BOT_PR run can leave the clone checked out on a fix/*|feat/* branch;
     without an explicit checkout, reset --hard would reset that branch instead of
-    main, leaving the clone stuck off main for every subsequent operation.
+    main, leaving the clone stuck off main for every subsequent operation. Anything
+    such a run left uncommitted is stashed first - see set_aside_leftovers().
     """
     subprocess.run(["git", "-C", str(CLONE_DIR), "fetch", "origin", "main"], check=True)
+    set_aside_leftovers()
     subprocess.run(["git", "-C", str(CLONE_DIR), "checkout", "main"], check=True)
     subprocess.run(["git", "-C", str(CLONE_DIR), "reset", "--hard", "origin/main"], check=True)
     # Drop untracked leftovers from the previous run's investigation. Not -x:
     # coverage/venv/ is gitignored and expensive to rebuild every issue.
     subprocess.run(["git", "-C", str(CLONE_DIR), "clean", "-fd"], check=True)
+    install_push_guard()
+    refresh_gitnexus_index()
 
 
 def reset_scratch():
@@ -553,19 +1121,32 @@ def claude_model_args(review_only=False):
 
 
 def claude_env(review_only=False):
-    """Return the subprocess environment for a 'claude' invocation: None (inherit
-    the daemon's own environment unchanged) unless this invocation is using an
-    Ollama model, in which case add the Anthropic-compatible overrides Ollama's
-    Claude Code integration documents, so the CLI talks to the local Ollama server
-    instead of Anthropic's API.
+    """Return the subprocess environment for a 'claude' invocation: the daemon's own
+    environment with background tasks switched off, plus - when this invocation is using
+    an Ollama model - the Anthropic-compatible overrides Ollama's Claude Code integration
+    documents, so the CLI talks to the local Ollama server instead of Anthropic's API,
+    and the model's real context window where we know it.
     """
+    env = os.environ.copy()
+    # A `claude -p` run is over the moment it writes its final message, and a command it put
+    # in the background dies with it - nothing ever comes back to read the result. PR #5216's
+    # cleanup (2026-09-26) backgrounded its pre-commit run, ended on "I'll push and reply once
+    # it finishes", and exited 0 with its fixes uncommitted, which then wedged the clone for
+    # every later flow. This removes run_in_background from the Bash tool outright (checked
+    # against Claude Code 2.1.283). Assigned rather than setdefault: it is a correctness guard,
+    # not a tuning knob, so an exported value must not turn backgrounding back on.
+    env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
     model = effective_ollama_model(review_only)
     if not model:
-        return None
-    env = os.environ.copy()
+        return env
     env["ANTHROPIC_BASE_URL"] = OLLAMA_BASE_URL
     env["ANTHROPIC_AUTH_TOKEN"] = "ollama"
     env["ANTHROPIC_API_KEY"] = ""
+    context_tokens = OLLAMA_CONTEXT_TOKENS.get(model)
+    if context_tokens:
+        # setdefault, not assignment: an operator who has exported their own value for a
+        # one-off run keeps it rather than having it silently overridden here.
+        env.setdefault("CLAUDE_CODE_MAX_CONTEXT_TOKENS", context_tokens)
     return env
 
 
@@ -584,12 +1165,248 @@ def claude_budget_args(amount, review_only=False):
     return ["--max-budget-usd", amount]
 
 
+def append_system_prompt(*parts):
+    """Return the --append-system-prompt CLI pair carrying every non-empty part.
+
+    Joined into one value rather than passed as repeated flags: two
+    --append-system-prompt flags is not a documented way to supply two prompts, and the
+    review/cleanup flows need both the gh-api endpoint steer and the journal capture text.
+    """
+    joined = "\n\n".join(part for part in parts if part)
+    return ["--append-system-prompt", joined] if joined else []
+
+
+def journal_queue_entries():
+    """Return the queued journal candidates, oldest filename first.
+
+    Filtered to *.md so a stray download or editor swap file left in the directory is not
+    mistaken for a finding, and sorted so the flush reads them in a stable order.
+    """
+    if not QUEUE_DIR.exists():
+        return []
+    return sorted(path for path in QUEUE_DIR.glob("*.md") if path.is_file())
+
+
+def should_flush_journal(state, today):
+    """True when there is something queued and today's flush has not run yet.
+
+    The daemon polls every POLL_SECONDS, so without the date gate a non-empty queue would
+    open a pull request on every poll. One finding is enough to justify a PR - the daily
+    gate already bounds how often a maintainer is asked to review one.
+    """
+    if not journal_queue_entries():
+        return False
+    return state.get("last_journal_flush") != today
+
+
+def archive_journal_queue(entries):
+    """Move consumed candidates into QUEUE_DIR/processed/.
+
+    Moved rather than deleted: no `rm` grant is needed anywhere, a dropped candidate stays
+    auditable next to the PR that dropped it, and journal_queue_entries()'s non-recursive
+    glob stops an archived finding being folded in twice.
+    """
+    if not entries:
+        return
+    archive_dir = QUEUE_DIR / "processed"
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    for entry in entries:
+        entry.replace(archive_dir / entry.name)
+
+
+def journal_pr_opened(today):
+    """True when a pull request exists for today's journal branch.
+
+    The flush is only allowed to consume the queue once its findings are safely on a
+    branch a maintainer can see. A `claude -p` run that is denied the permissions it needs
+    still exits 0 - it stops and explains rather than crashing - so the exit code alone
+    cannot distinguish "folded everything in" from "could not write a single byte". Asking
+    GitHub whether the PR exists is the only check that actually means the work landed.
+    """
+    branch = f"{JOURNAL_BRANCH_PREFIX}{today}"
+    result = subprocess.run(
+        ["gh", "pr", "list", "--repo", REPO, "--head", branch, "--state", "all", "--json", "number"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        # Treat an unreachable API as "no PR": leaving the queue intact costs a re-verify
+        # tomorrow, whereas archiving on a failed check silently loses the findings.
+        return False
+    return bool(json.loads(result.stdout or "[]"))
+
+
+def prepare_journal_body():
+    """Put the placeholder body file in place for the flush to edit."""
+    SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
+    JOURNAL_BODY_FILE.write_text(JOURNAL_BODY_PLACEHOLDER)
+
+
+def journal_pr_body():
+    """Return the body the flush wrote, or a fallback if it left the placeholder alone."""
+    try:
+        body = JOURNAL_BODY_FILE.read_text().strip()
+    except OSError:
+        body = ""
+    if not body or body == JOURNAL_BODY_PLACEHOLDER.strip():
+        return "Automated debug-journal update. The flush did not write a summary this run - see the triage bot's journal-update log for what changed and why."
+    return body
+
+
+def open_journal_pr(today):
+    """Open the draft PR for a journal branch the flush pushed, if it did not already exist.
+
+    Done here rather than inside the flush because the body is written to a pre-created file: the flush
+    can edit it but has no grant to create it for --body-file. Building a real
+    per-candidate list into a --body argument would also require careful shell quoting over many
+    lines of markdown. Opening it from the daemon also means the one flow that can push no
+    longer needs a `gh pr create` grant at all.
+
+    A flush that deliberately landed nothing pushes no branch, so there is nothing to open.
+    """
+    branch = f"{JOURNAL_BRANCH_PREFIX}{today}"
+    exists = subprocess.run(
+        ["git", "-C", str(CLONE_DIR), "ls-remote", "--exit-code", "--heads", "origin", branch],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if exists.returncode != 0:
+        print(f"[triage] journal: no {branch} pushed - nothing to open", flush=True)
+        return
+    if journal_pr_opened(today):
+        return
+    # The local branch, not origin/<branch>: both are present after either granted push form
+    # (checked), but the local ref is the one the flush definitely created, so reading it needs
+    # no assumption about what a push does to remote-tracking refs.
+    title = subprocess.run(
+        ["git", "-C", str(CLONE_DIR), "log", "-1", "--format=%s", branch],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.strip()
+    # Re-use the one body path rather than a second file, and re-create the directory: the
+    # resolved body has to land somewhere for --body-file, and an OSError here is not a
+    # CalledProcessError, so it would escape the daemon's poll loop and kill the process
+    # rather than merely failing to open the PR.
+    body_path = JOURNAL_BODY_FILE
+    body = journal_pr_body()
+    SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
+    body_path.write_text(f"{body}\n")
+    result = subprocess.run(
+        [
+            "gh",
+            "pr",
+            "create",
+            "--repo",
+            REPO,
+            "--draft",
+            "--base",
+            "main",
+            "--head",
+            branch,
+            "--title",
+            title or f"docs(debug-journal): update {today}",
+            "--body-file",
+            str(body_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        print(f"[triage] journal: opened {result.stdout.strip()}", flush=True)
+    else:
+        print(f"[triage] journal: could not open the PR for {branch}: {result.stderr.strip()}", flush=True)
+
+
+def flush_journal(today):
+    """Fold the queued findings into the debug journal and open a PR for a human to merge.
+
+    Deliberately not a straight append. The skill re-checks each candidate against current
+    main before folding it in, and re-checks the entries already in the journal against
+    what has merged since - a journal that only ever grows becomes wrong, and a wrong entry
+    is worse than a missing one because every later triage run trusts it.
+    """
+    cmd = (
+        [
+            "claude",
+            "-p",
+            f"/journal-update queue={QUEUE_DIR} limit={JOURNAL_MAX_CANDIDATES_PER_FLUSH}",
+            "--permission-mode",
+            "dontAsk",
+            "--allowedTools",
+            ALLOWED_TOOLS_JOURNAL,
+            "--disallowedTools",
+            DISALLOWED_TOOLS_JOURNAL,
+            "--verbose",
+            # The queue lives outside the clone, so it needs to be in scope for Read/Grep
+            # as well as covered by the Edit rule.
+            "--add-dir",
+            str(QUEUE_DIR),
+            # The body file lives in the scratch directory, outside the clone, so that has to
+            # be in scope for the Edit grant above to be usable.
+            "--add-dir",
+            str(SCRATCH_DIR),
+            # 150, matching issue-pr and pr-cleanup - the other flows that edit, commit and
+            # push. 80 was set when the journal was 30KB and the flush was a near-append;
+            # it reads a 130KB file end to end and verifies every candidate against main,
+            # and from 2026-09-13 every single run died on "Reached max turns (80)".
+            "--max-turns",
+            "150",
+        ]
+        + claude_model_args(review_only=True)
+        + claude_budget_args("10.00", review_only=True)
+        + claude_mcp_args()
+    )
+    # The same slice the prompt above asks the skill to fold in, so what gets archived below
+    # is what was offered. Both ends take it from the front of journal_queue_entries()'s
+    # filename order, which means a candidate that missed one flush leads the next rather
+    # than being skipped indefinitely.
+    consumed = journal_queue_entries()[:JOURNAL_MAX_CANDIDATES_PER_FLUSH]
+    prepare_journal_body()
+    log_path = LOG_DIR / "journal-update.log"
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"[triage] journal: folding {len(consumed)} finding(s) in, logging to {log_path}", flush=True)
+    with log_path.open("a") as log_handle:
+        log_handle.write(f"\n==== journal update started {time.strftime('%Y-%m-%d %H:%M:%S')} ====\n")
+        log_handle.flush()
+        result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT, env=claude_env(review_only=True))
+        log_handle.write(f"==== journal update exited {result.returncode} ====\n")
+    # Deliberately not gated on the exit code. A flush can finish the entire job - journal
+    # edited, pre-commit run, branch committed and pushed - and still exit non-zero by
+    # exhausting --max-turns on the way out. That is exactly what happened on 2026-09-14:
+    # commit 78d396c7 folded in 14 findings and reached the remote, the exit-code gate
+    # skipped the one step that would have made it reviewable, and the branch sat there
+    # unnoticed for five days. open_journal_pr() already no-ops when no branch was pushed
+    # and when a PR exists, so the pushed branch is the honest test of what to open.
+    open_journal_pr(today)
+    # Archive only once the findings are on a branch a maintainer can review. Exit 0 from a
+    # blocked run would otherwise sweep verified candidates into processed/ having landed
+    # nothing, and journal_queue_entries()'s non-recursive glob means they are never
+    # offered again - the failure mode that lost GH#4965/#4967/#4973 on 2026-09-07. The
+    # exit code was only ever a weaker proxy for the same question, and demanding both
+    # means a run that landed its work but died on the last turn never drains the queue.
+    if journal_pr_opened(today):
+        archive_journal_queue(consumed)
+    else:
+        print(
+            f"[triage] journal: no PR for {JOURNAL_BRANCH_PREFIX}{today} - leaving {len(consumed)} finding(s) queued for the next flush",
+            flush=True,
+        )
+    print(f"[triage] journal: exited {result.returncode}", flush=True)
+
+
 def triage(issue_number):
     cmd = (
         [
             "claude",
             "-p",
             f"/issue-triage {issue_number} scratch={SCRATCH_DIR}",
+        ]
+        + append_system_prompt(JOURNAL_CAPTURE_PROMPT)
+        + [
             "--permission-mode",
             "dontAsk",
             "--allowedTools",
@@ -603,8 +1420,12 @@ def triage(issue_number):
             # directory in scope for Read/Grep as well as for the Bash rules above.
             "--add-dir",
             str(SCRATCH_DIR),
+            # Raised from 60 on 2026-09-08: triage had the smallest budget of any flow while
+            # doing the most open-ended work, and five separate issues have exhausted it
+            # (#4899, #4900, #4984, #5003, #5004). A long issue body plus a debug-file replay
+            # spends turns quickly.
             "--max-turns",
-            "60",
+            "100",
             # Client-side token-usage estimate, not a real spend cap under subscription
             # auth (see agent-sdk/cost-tracking) - just a circuit-breaker against a
             # runaway invocation, sized generously since one issue can need several
@@ -612,6 +1433,7 @@ def triage(issue_number):
         ]
         + claude_model_args(review_only=True)
         + claude_budget_args("10.00", review_only=True)
+        + claude_mcp_args()
     )
     log_path = LOG_DIR / f"issue-{issue_number}.log"
     LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -624,7 +1446,7 @@ def triage(issue_number):
         result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT, env=claude_env(review_only=True))
         log_handle.write(f"==== issue #{issue_number} exited {result.returncode} ====\n")
     if result.returncode != 0:
-        raise subprocess.CalledProcessError(result.returncode, cmd)
+        raise FlowFailed(result.returncode, cmd, log_path)
     print(f"[triage] issue #{issue_number}: exited {result.returncode}", flush=True)
 
 
@@ -638,6 +1460,9 @@ def triage_followup(issue_number):
             "claude",
             "-p",
             f"/issue-triage-followup {issue_number} scratch={SCRATCH_DIR}",
+        ]
+        + append_system_prompt(JOURNAL_CAPTURE_PROMPT)
+        + [
             "--permission-mode",
             "dontAsk",
             "--allowedTools",
@@ -652,6 +1477,7 @@ def triage_followup(issue_number):
         ]
         + claude_model_args(review_only=True)
         + claude_budget_args("10.00", review_only=True)
+        + claude_mcp_args()
     )
     log_path = LOG_DIR / f"issue-{issue_number}-followup.log"
     LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -662,7 +1488,7 @@ def triage_followup(issue_number):
         result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT, env=claude_env(review_only=True))
         log_handle.write(f"==== issue #{issue_number} follow-up exited {result.returncode} ====\n")
     if result.returncode != 0:
-        raise subprocess.CalledProcessError(result.returncode, cmd)
+        raise FlowFailed(result.returncode, cmd, log_path)
     print(f"[review] issue #{issue_number}: follow-up exited {result.returncode}", flush=True)
 
 
@@ -679,6 +1505,9 @@ def create_pr(issue_number):
             "claude",
             "-p",
             f"/issue-pr {issue_number} scratch={SCRATCH_DIR}",
+        ]
+        + append_system_prompt(JOURNAL_CAPTURE_PROMPT)
+        + [
             "--permission-mode",
             "dontAsk",
             "--allowedTools",
@@ -693,6 +1522,7 @@ def create_pr(issue_number):
         ]
         + claude_model_args()
         + claude_budget_args("25.00")
+        + claude_mcp_args()
     )
     log_path = LOG_DIR / f"issue-{issue_number}-pr.log"
     LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -727,7 +1557,7 @@ def process_bot_pr_issue(issue):
         return
     create_pr(issue_number)
     if has_existing_pr(issue_number):
-        mark_pr_opened(issue_number)
+        mark_pr_opened(issue_number, cleanup=True, opened_by_bot=True)
     else:
         mark_pr_failed(issue_number)
 
@@ -743,6 +1573,210 @@ def fetch_bot_review_issues():
     return json.loads(result.stdout)
 
 
+# The follow-up flow's disclosure line, alongside TRIAGE_DISCLOSURE_MARKER - between them they
+# identify every comment the bot's own skills post, which is how the waiting_for_user wake-up
+# finds where the bot last spoke. Matched on body text rather than author because the bot
+# posts under a maintainer's credential.
+FOLLOWUP_DISCLOSURE_MARKER = "automated follow-up triage review"
+WAITING_FOR_USER_LABEL = "waiting_for_user"
+
+
+def fetch_waiting_for_user_issues():
+    """Return open, bot-triaged issues labelled waiting_for_user, with labels and author.
+
+    BOT_TRIAGED is required as well so the wake-up only ever leads to a follow-up review: an
+    issue without it would get a first-pass /issue-triage from the BOT_REVIEW flow instead.
+    """
+    result = subprocess.run(
+        ["gh", "issue", "list", "--repo", REPO, "--state", "open", "--label", WAITING_FOR_USER_LABEL, "--label", "BOT_TRIAGED", "--json", "number,labels,title,author", "--limit", "100"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(result.stdout)
+
+
+def reporter_replied_since_bot(issue_number, reporter):
+    """Return True if the issue's reporter has commented after the bot's most recent comment.
+
+    Only the reporter counts: a maintainer's or a bystander's comment is not the answer the
+    label is waiting for. False when the bot has never commented, since then the label is a
+    human's request the bot knows nothing about.
+    """
+    result = subprocess.run(
+        ["gh", "issue", "view", str(issue_number), "--repo", REPO, "--json", "comments"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    comments = json.loads(result.stdout).get("comments", [])
+    markers = (TRIAGE_DISCLOSURE_MARKER, FOLLOWUP_DISCLOSURE_MARKER)
+    last_bot = max((index for index, comment in enumerate(comments) if any(marker in comment.get("body", "") for marker in markers)), default=None)
+    if last_bot is None:
+        return False
+    return any((comment.get("author") or {}).get("login") == reporter for comment in comments[last_bot + 1 :])
+
+
+def wake_waiting_issue(issue):
+    """Swap waiting_for_user for BOT_REVIEW once the reporter has replied, returning True if it did.
+
+    The follow-up review queued by BOT_REVIEW re-applies waiting_for_user if the reply still
+    doesn't provide what was asked for, so the next reply wakes it again. Issues already
+    carrying BOT_REVIEW (queued anyway) or BOT_FAILED (deliberately parked) are left alone.
+    """
+    issue_number = issue["number"]
+    label_names = {label["name"] for label in issue.get("labels", [])}
+    if label_names & {"BOT_REVIEW", "BOT_FAILED"}:
+        return False
+    reporter = (issue.get("author") or {}).get("login")
+    if not reporter or not reporter_replied_since_bot(issue_number, reporter):
+        return False
+    print(f'[waiting] issue #{issue_number}: "{issue["title"]}" - reporter replied, queueing follow-up - {issue_url(issue_number)}', flush=True)
+    subprocess.run(
+        ["gh", "issue", "edit", str(issue_number), "--repo", REPO, "--remove-label", WAITING_FOR_USER_LABEL, "--add-label", "BOT_REVIEW"],
+        check=True,
+    )
+    return True
+
+
+# "Me too" comments: someone other than the reporter posting what they believe is the same
+# problem. They are trusted by default, but one that is clearly a different problem would
+# muddy the original's analysis, so each is checked by /issue-me-too. If it is clearly
+# unrelated, the check asks its author to file their own issue and records the post as
+# unrelated, so later reviews leave it out. A related post gets no reply.
+ME_TOO_DISCLOSURE_MARKER = "automated me-too check"
+# The maintainers' own comments are never "me too" reports.
+MAINTAINER_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
+# A comment shorter than this, once quoted lines are dropped, with no attachment, is a +1 or
+# an "any update?" - not worth a Claude run to classify.
+ME_TOO_MIN_CHARS = 150
+ATTACHMENT_HINTS = ("github.com/user-attachments/", "/files/", ".log", ".yaml", ".zip", ".tgz")
+# Comment URLs already checked, capped so the state file cannot grow without bound. Only a
+# re-check of a comment that fell off the end could result, and the watermark below makes
+# even that unlikely.
+ME_TOO_CHECKED_CAP = 500
+# The issue-listing watermark is set back by this much, so a clock skew between this machine
+# and GitHub cannot skip a comment. ME_TOO_CHECKED dedupes the overlap.
+ME_TOO_WATERMARK_MARGIN_SECONDS = 600
+
+
+def is_bot_comment(comment):
+    """Return True if a comment was posted by one of the bot's own flows, judged by its disclosure line."""
+    body = comment.get("body", "")
+    return any(marker in body for marker in (TRIAGE_DISCLOSURE_MARKER, FOLLOWUP_DISCLOSURE_MARKER, ME_TOO_DISCLOSURE_MARKER))
+
+
+def looks_like_a_report(body):
+    """Return True if a comment carries enough to be a report of its own: an attachment, or real text beyond quotes."""
+    text = "\n".join(line for line in body.splitlines() if not line.lstrip().startswith(">"))
+    return any(hint in text for hint in ATTACHMENT_HINTS) or len(text.strip()) >= ME_TOO_MIN_CHARS
+
+
+def fetch_recently_updated_triaged_issues(since):
+    """Return open BOT_TRIAGED issues updated at or after `since` (an ISO-8601 UTC string)."""
+    result = subprocess.run(
+        ["gh", "issue", "list", "--repo", REPO, "--state", "open", "--label", "BOT_TRIAGED", "--search", "sort:updated-desc", "--json", "number,title,author,updatedAt", "--limit", "100"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    # ISO-8601 UTC timestamps in the same format compare correctly as strings.
+    return [issue for issue in json.loads(result.stdout) if issue.get("updatedAt", "") >= since]
+
+
+def find_me_too_comments(issue_number, reporter, since, checked):
+    """Return the URLs of comments on an issue that need a me-too check.
+
+    That is a comment created at or after `since`, not already checked, from someone other
+    than the reporter or a maintainer, not posted by the bot, and substantial enough to be a
+    report of its own.
+    """
+    result = subprocess.run(
+        ["gh", "issue", "view", str(issue_number), "--repo", REPO, "--json", "comments"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    candidates = []
+    for comment in json.loads(result.stdout).get("comments", []):
+        login = (comment.get("author") or {}).get("login")
+        if comment.get("createdAt", "") < since or comment.get("url") in checked:
+            continue
+        if login == reporter or comment.get("authorAssociation") in MAINTAINER_ASSOCIATIONS or is_bot_comment(comment):
+            continue
+        if looks_like_a_report(comment.get("body", "")):
+            candidates.append(comment["url"])
+    return candidates
+
+
+def me_too_check(issue_number, comment_url):
+    """Run the /issue-me-too skill for one comment, under the read-only triage permission set."""
+    cmd = (
+        [
+            "claude",
+            "-p",
+            f"/issue-me-too {issue_number} comment={comment_url} scratch={SCRATCH_DIR}",
+        ]
+        + [
+            "--permission-mode",
+            "dontAsk",
+            "--allowedTools",
+            ALLOWED_TOOLS,
+            "--disallowedTools",
+            DISALLOWED_TOOLS,
+            "--verbose",
+            "--add-dir",
+            str(SCRATCH_DIR),
+            "--max-turns",
+            "30",
+        ]
+        + claude_model_args(review_only=True)
+        + claude_budget_args("3.00", review_only=True)
+        + claude_mcp_args()
+    )
+    log_path = LOG_DIR / f"issue-{issue_number}-me-too.log"
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"[me-too] issue #{issue_number}: checking {comment_url}, logging to {log_path}", flush=True)
+    with log_path.open("a") as log_handle:
+        log_handle.write(f"\n==== issue #{issue_number} me-too check of {comment_url} started {time.strftime('%Y-%m-%d %H:%M:%S')} ====\n")
+        log_handle.flush()
+        result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT, env=claude_env(review_only=True))
+        log_handle.write(f"==== issue #{issue_number} me-too check exited {result.returncode} ====\n")
+    if result.returncode != 0:
+        raise subprocess.CalledProcessError(result.returncode, cmd)
+
+
+def process_me_too_comments(state):
+    """Check every new, substantial non-reporter comment on a bot-triaged issue.
+
+    The first run only sets the watermark, so switching this on never sweeps the backlog.
+    Each comment is recorded as checked before its run starts, so a failing check costs one
+    run, not one per poll. The watermark only moves once a whole pass has completed.
+    """
+    poll_started = time.time()
+    if "me_too_since" not in state:
+        state["me_too_since"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(poll_started))
+        state["me_too_checked"] = []
+        save_state(state)
+        return
+    since = state["me_too_since"]
+    checked = state.setdefault("me_too_checked", [])
+    for issue in fetch_recently_updated_triaged_issues(since):
+        reporter = (issue.get("author") or {}).get("login")
+        for comment_url in find_me_too_comments(issue["number"], reporter, since, checked):
+            checked.append(comment_url)
+            del checked[:-ME_TOO_CHECKED_CAP]
+            save_state(state)
+            sync_repo()
+            reset_scratch()
+            try:
+                me_too_check(issue["number"], comment_url)
+            except subprocess.CalledProcessError as exc:
+                print(f"[me-too] issue #{issue['number']}: check of {comment_url} failed, not retrying: {exc}", flush=True)
+    state["me_too_since"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(poll_started - ME_TOO_WATERMARK_MARGIN_SECONDS))
+    save_state(state)
+
+
 def fetch_bot_review_prs():
     """Return open PRs currently labelled BOT_REVIEW, each with its title."""
     result = subprocess.run(
@@ -754,10 +1788,22 @@ def fetch_bot_review_prs():
     return json.loads(result.stdout)
 
 
+def pr_head_is_fork(pr):
+    """True when the PR's head branch lives in someone else's fork of the repo.
+
+    The bot's credential can write to REPO and nowhere else, so a fork-head PR branch is
+    not writable however the command is spelled. Left undetected that is a dead end a run has
+    to discover for itself mid-flight, which on 2026-09-06 it did by retrying against
+    `origin` - i.e. this repo's main.
+    """
+    owner = (pr.get("headRepositoryOwner") or {}).get("login")
+    return bool(owner) and owner != REPO.split("/")[0]
+
+
 def fetch_bot_cleanup_prs():
-    """Return open PRs currently labelled BOT_CLEANUP, each with its title."""
+    """Return open PRs currently labelled BOT_CLEANUP, each with its title and labels."""
     result = subprocess.run(
-        ["gh", "pr", "list", "--repo", REPO, "--state", "open", "--label", "BOT_CLEANUP", "--json", "number,title", "--limit", "100"],
+        ["gh", "pr", "list", "--repo", REPO, "--state", "open", "--label", "BOT_CLEANUP", "--json", "number,title,headRepositoryOwner,labels", "--limit", "100"],
         capture_output=True,
         text=True,
         check=True,
@@ -770,7 +1816,7 @@ def remove_review_label(issue_number):
     subprocess.run(["gh", "issue", "edit", str(issue_number), "--repo", REPO, "--remove-label", "BOT_REVIEW"], check=True)
 
 
-def mark_review_failed(issue_number):
+def mark_review_failed(issue_number, exc=None):
     """Post a note and swap BOT_REVIEW for BOT_FAILED, so a failing triage isn't
     retried (and re-billed) every poll cycle. Remove BOT_FAILED and re-add BOT_REVIEW
     to retry once the underlying issue is fixed.
@@ -784,7 +1830,7 @@ def mark_review_failed(issue_number):
             "--repo",
             REPO,
             "--body",
-            "Automated triage failed to complete for this issue - see the triage bot's logs for details. " "Not retrying automatically; remove `BOT_FAILED` and re-add `BOT_REVIEW` to try again.",
+            f"Automated triage failed to complete for this issue.{failure_detail(exc=exc)} " "Not retrying automatically; remove `BOT_FAILED` and re-add `BOT_REVIEW` to try again.",
         ],
         check=True,
     )
@@ -799,13 +1845,15 @@ def remove_pr_review_label(pr_number):
     subprocess.run(["gh", "pr", "edit", str(pr_number), "--repo", REPO, "--remove-label", "BOT_REVIEW"], check=True)
 
 
-def mark_pr_review_failed(pr_number, reason=""):
+def mark_pr_review_failed(pr_number, reason="", exc=None):
     """Post a note and swap BOT_REVIEW for BOT_FAILED on a PR, so a failing review isn't
     retried every poll cycle. Remove BOT_FAILED and re-add BOT_REVIEW to retry. `reason`
-    names the specific failure when there is one - "see the logs" is poor advice for the
-    run that exits 0 having posted nothing, because its log reads like a finished review.
+    names the specific failure when there is one, and `exc` is the exception behind it, if
+    any: the comment says why, where in the daemon it arose and which log to open. "See the
+    logs" alone is poor advice for the run that exits 0 having posted nothing, because its
+    log reads like a finished review.
     """
-    detail = f" {reason}" if reason else ""
+    detail = failure_detail(reason, exc)
     subprocess.run(
         [
             "gh",
@@ -815,7 +1863,7 @@ def mark_pr_review_failed(pr_number, reason=""):
             "--repo",
             REPO,
             "--body",
-            f"Automated review failed to complete for this PR - see the triage bot's logs for details.{detail} " "Not retrying automatically; remove `BOT_FAILED` and re-add `BOT_REVIEW` to try again.",
+            f"Automated review failed to complete for this PR.{detail} " "Not retrying automatically; remove `BOT_FAILED` and re-add `BOT_REVIEW` to try again.",
         ],
         check=True,
     )
@@ -830,9 +1878,12 @@ def remove_pr_cleanup_label(pr_number):
     subprocess.run(["gh", "pr", "edit", str(pr_number), "--repo", REPO, "--remove-label", "BOT_CLEANUP"], check=True)
 
 
-def mark_pr_cleanup_failed(pr_number):
-    """Post a note and swap BOT_CLEANUP for BOT_FAILED on a PR, so a failing cleanup
-    isn't retried every poll cycle. Remove BOT_FAILED and re-add BOT_CLEANUP to retry.
+def mark_pr_cleanup_unsupported(pr_number):
+    """Explain that a fork-head PR cannot be cleaned up, and clear the trigger label.
+
+    Uses the same BOT_FAILED swap as a real failure so the PR stops being picked up every
+    poll, but says what is actually wrong - the maintainer's options are to push the branch
+    into this repo or to apply the review by hand.
     """
     subprocess.run(
         [
@@ -843,7 +1894,34 @@ def mark_pr_cleanup_failed(pr_number):
             "--repo",
             REPO,
             "--body",
-            "Automated cleanup failed to complete for this PR - see the triage bot's logs for details. " "Not retrying automatically; remove `BOT_FAILED` and re-add `BOT_CLEANUP` to try again.",
+            "Automated cleanup skipped: this PR's head branch lives in a fork, and the bot's credential can only write to "
+            f"`{REPO}`, so it cannot push the fixes back to this PR. Re-open the change from a branch in `{REPO}` to use the "
+            "cleanup flow, or apply the review feedback manually.",
+        ],
+        check=True,
+    )
+    subprocess.run(
+        ["gh", "pr", "edit", str(pr_number), "--repo", REPO, "--remove-label", "BOT_CLEANUP", "--add-label", "BOT_FAILED"],
+        check=True,
+    )
+
+
+def mark_pr_cleanup_failed(pr_number, reason="", exc=None):
+    """Post a note and swap BOT_CLEANUP for BOT_FAILED on a PR, so a failing cleanup
+    isn't retried every poll cycle. Remove BOT_FAILED and re-add BOT_CLEANUP to retry.
+    `reason` and `exc` name the failure when there is one, as for mark_pr_review_failed().
+    """
+    detail = failure_detail(reason, exc)
+    subprocess.run(
+        [
+            "gh",
+            "pr",
+            "comment",
+            str(pr_number),
+            "--repo",
+            REPO,
+            "--body",
+            f"Automated cleanup failed to complete for this PR.{detail} " "Not retrying automatically; remove `BOT_FAILED` and re-add `BOT_CLEANUP` to try again.",
         ],
         check=True,
     )
@@ -886,22 +1964,30 @@ def process_bot_review_issue(issue):
         action(issue_number)
     except subprocess.CalledProcessError as exc:
         print(f"[review] issue #{issue_number}: {action_name} failed: {exc}", flush=True)
-        mark_review_failed(issue_number)
+        mark_review_failed(issue_number, exc=exc)
         return
     remove_review_label(issue_number)
 
 
 def review_pr(pr_number):
-    """Run /code-review against a PR at the "high" effort level, posting findings as
-    inline PR comments. Read-only otherwise: no code changes, no push, no PR actions.
+    """Run the /pr-review skill against a PR: it reviews the PR's head in this session and
+    posts the findings as one review. Read-only otherwise: no code changes, no push, no PR
+    actions.
+
+    Not the built-in /code-review: it reviews in a forked subagent, which sees neither a
+    SKILL.md we own nor the appended system prompt below, so it posted with whatever gh api
+    spelling it chose - PR #5304's run passed `-f body="$(cat ...)"`, #5574's an inline body
+    holding backticks, and every call was denied. /pr-review does the whole review in the
+    main session, where both do reach it.
     """
     cmd = (
         [
             "claude",
             "-p",
-            f"/code-review {pr_number} high --comment",
-            "--append-system-prompt",
-            GH_API_ENDPOINT_FIRST_PROMPT,
+            f"/pr-review {pr_number} scratch={SCRATCH_DIR}",
+        ]
+        + append_system_prompt(GH_API_ENDPOINT_FIRST_PROMPT, JOURNAL_CAPTURE_PROMPT)
+        + [
             "--permission-mode",
             "dontAsk",
             "--allowedTools",
@@ -916,6 +2002,7 @@ def review_pr(pr_number):
         ]
         + claude_model_args(review_only=True)
         + claude_budget_args("20.00", review_only=True)
+        + claude_mcp_args()
     )
     log_path = LOG_DIR / f"pr-{pr_number}-review.log"
     LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -926,7 +2013,7 @@ def review_pr(pr_number):
         result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT, env=claude_env(review_only=True))
         log_handle.write(f"==== PR #{pr_number} review exited {result.returncode} ====\n")
     if result.returncode != 0:
-        raise subprocess.CalledProcessError(result.returncode, cmd)
+        raise FlowFailed(result.returncode, cmd, log_path)
     print(f"[review-pr] PR #{pr_number}: exited {result.returncode}", flush=True)
 
 
@@ -945,7 +2032,7 @@ def pr_review_activity_count(pr_number):
 
 
 def process_bot_review_pr(pr):
-    """Run the BOT_REVIEW flow for one PR: /code-review posts findings as comments,
+    """Run the BOT_REVIEW flow for one PR: /pr-review posts findings as a review,
     nothing here ever touches the PR's code. On success, remove BOT_REVIEW - the
     posted review is the artifact, there's no separate "done" state to track. A
     failed invocation swaps to BOT_FAILED instead, with an explanatory comment, as
@@ -962,21 +2049,21 @@ def process_bot_review_pr(pr):
         before = pr_review_activity_count(pr_number)
     except subprocess.CalledProcessError as exc:
         print(f"[review-pr] PR #{pr_number}: failed to sample activity count before review: {exc}", flush=True)
-        mark_pr_review_failed(pr_number, "Unable to sample PR review activity before running the review, so the result could not be verified.")
+        mark_pr_review_failed(pr_number, "Unable to sample PR review activity before running the review, so the result could not be verified.", exc)
         return
 
     try:
         review_pr(pr_number)
     except subprocess.CalledProcessError as exc:
         print(f"[review-pr] PR #{pr_number}: review failed: {exc}", flush=True)
-        mark_pr_review_failed(pr_number)
+        mark_pr_review_failed(pr_number, exc=exc)
         return
 
     try:
         after = pr_review_activity_count(pr_number)
     except subprocess.CalledProcessError as exc:
         print(f"[review-pr] PR #{pr_number}: failed to sample activity count after review: {exc}", flush=True)
-        mark_pr_review_failed(pr_number, "The review run finished, but the activity count check failed, so it could not be verified that anything was posted.")
+        mark_pr_review_failed(pr_number, "The review run finished, but the activity count check failed, so it could not be verified that anything was posted.", exc)
         return
 
     if after <= before:
@@ -989,14 +2076,20 @@ def process_bot_review_pr(pr):
 def cleanup_pr(pr_number):
     """Run the /pr-cleanup skill against a PR: address review feedback and CI
     failures, then commit and push - under the write-capable cleanup permission set.
+
+    Deliberately not review_only: this is the flow that edits a maintainer's branch and
+    pushes it, so it runs on the full Claude model rather than the review model. The worst
+    outputs of 2026-09 came from here - overriding a contributor's deliberate spelling on
+    circular evidence, and improvising a push to main after a fork branch refused one.
     """
     cmd = (
         [
             "claude",
             "-p",
             f"/pr-cleanup {pr_number} scratch={SCRATCH_DIR}",
-            "--append-system-prompt",
-            GH_API_ENDPOINT_FIRST_PROMPT,
+        ]
+        + append_system_prompt(GH_API_ENDPOINT_FIRST_PROMPT, JOURNAL_CAPTURE_PROMPT)
+        + [
             "--permission-mode",
             "dontAsk",
             "--allowedTools",
@@ -1009,8 +2102,9 @@ def cleanup_pr(pr_number):
             "--max-turns",
             "150",
         ]
-        + claude_model_args(review_only=True)
-        + claude_budget_args("25.00", review_only=True)
+        + claude_model_args()
+        + claude_budget_args("25.00")
+        + claude_mcp_args()
     )
     log_path = LOG_DIR / f"pr-{pr_number}-cleanup.log"
     LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -1018,27 +2112,107 @@ def cleanup_pr(pr_number):
     with log_path.open("a") as log_handle:
         log_handle.write(f"\n==== PR #{pr_number} cleanup started {time.strftime('%Y-%m-%d %H:%M:%S')} ====\n")
         log_handle.flush()
-        result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT, env=claude_env(review_only=True))
+        result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT, env=claude_env())
         log_handle.write(f"==== PR #{pr_number} cleanup exited {result.returncode} ====\n")
     if result.returncode != 0:
-        raise subprocess.CalledProcessError(result.returncode, cmd)
+        raise FlowFailed(result.returncode, cmd, log_path)
     print(f"[cleanup-pr] PR #{pr_number}: exited {result.returncode}", flush=True)
+
+
+def unfinished_cleanup_reason():
+    """Return why a cleanup run that exited 0 did not actually finish, or "" if it did.
+
+    Every path through /pr-cleanup ends with the clone clean and level with its upstream:
+    fixes committed and pushed, or nothing to push. Exit status cannot tell those apart from a
+    run that stopped early - PR #5216's cleanup exited 0 on 2026-09-26 with two files edited and
+    a merge of origin/main unpushed, and BOT_CLEANUP was cleared as though it had finished. The
+    clone's state is the evidence, the same way process_bot_review_pr() counts comments.
+    """
+    status = subprocess.run(["git", "-C", str(CLONE_DIR), "status", "--porcelain", "--untracked-files=no"], capture_output=True, text=True, check=False)
+    changed = [line for line in status.stdout.splitlines() if line.strip()]
+    if changed:
+        return f"The run exited cleanly but left {len(changed)} file(s) with uncommitted changes, so its fixes were never pushed. They are stashed in the bot's clone before the next flow runs."
+    ahead = subprocess.run(["git", "-C", str(CLONE_DIR), "rev-list", "--count", "@{upstream}..HEAD"], capture_output=True, text=True, check=False)
+    if ahead.returncode != 0:
+        return "The run exited cleanly, but its branch has no upstream to compare against, so there is no evidence that anything was pushed."
+    count = int(ahead.stdout.strip() or 0)
+    if count:
+        return f"The run exited cleanly but left {count} local commit(s) that were never pushed."
+    return ""
+
+
+def process_new_issue(issue, state):
+    """Triage one new issue. Returns False when the caller should stop for this poll cycle.
+
+    Previously the triage call sat bare in the main loop, so a failure propagated out of the
+    whole `try` and took the rest of the cycle with it: the same issue was retried on every
+    poll forever, and the PR, review, cleanup and journal flows behind it never ran at all.
+    #5004 did exactly that on 2026-09-08 - ten consecutive 60-turn runs, watermark stuck.
+
+    Failures are counted instead. Below the limit we stop the issue loop and try again next
+    cycle, because retrying genuinely works (#4899 and #5003 both passed on their third go)
+    and because the watermark is a high-water mark - skipping ahead to a later issue would
+    strand this one permanently. Once the attempts are spent the issue is marked and the
+    watermark moves past it. Either way the rest of the poll cycle now runs.
+    """
+    number = issue["number"]
+    print(f'[triage] issue #{number}: "{issue["title"]}" - {issue_url(number)}', flush=True)
+    sync_repo()
+    reset_scratch()
+    attempts = state.setdefault("triage_attempts", {})
+    try:
+        triage(number)
+    except subprocess.CalledProcessError as exc:
+        count = attempts.get(str(number), 0) + 1
+        attempts[str(number)] = count
+        if count < TRIAGE_MAX_ATTEMPTS:
+            print(f"[triage] issue #{number}: failed ({exc}) - attempt {count} of {TRIAGE_MAX_ATTEMPTS}, retrying next cycle", flush=True)
+            save_state(state)
+            return False
+        print(f"[triage] issue #{number}: failed {count} times - marking it and moving on", flush=True)
+        try:
+            mark_triage_failed(number, count, exc)
+        except subprocess.CalledProcessError as mark_exc:
+            # Advancing matters more than the label. Letting this escape would abort the rest
+            # of the poll cycle and leave the watermark behind - the precise failure this
+            # function exists to prevent, at the one point we have already decided to move on.
+            print(f"[triage] issue #{number}: could not label the failed triage ({mark_exc}) - moving on anyway", flush=True)
+    attempts.pop(str(number), None)
+    state["last_processed"] = number
+    save_state(state)
+    return True
 
 
 def process_bot_cleanup_pr(pr):
     """Run the BOT_CLEANUP flow for one PR: address review feedback and CI failures,
     then remove the trigger label. A failed run swaps to BOT_FAILED instead, with an
-    explanatory comment.
+    explanatory comment - and so does one that exits 0 having left its work uncommitted
+    or unpushed (see unfinished_cleanup_reason()).
+
+    A PR still carrying BOT_REVIEW is left alone, label and all: the cleanup acts on the
+    review's findings, so the review goes first and a later poll picks this PR up again.
     """
     pr_number = pr["number"]
     print(f'[cleanup-pr] PR #{pr_number}: "{pr["title"]}" - {pr_url(pr_number)}', flush=True)
+    if "BOT_REVIEW" in {label["name"] for label in pr.get("labels", [])}:
+        print(f"[cleanup-pr] PR #{pr_number}: BOT_REVIEW still pending - waiting for the review before cleaning up", flush=True)
+        return
+    if pr_head_is_fork(pr):
+        print(f"[cleanup-pr] PR #{pr_number}: head branch is in a fork - not writable with this credential, skipping", flush=True)
+        mark_pr_cleanup_unsupported(pr_number)
+        return
     sync_repo()
     reset_scratch()
     try:
         cleanup_pr(pr_number)
     except subprocess.CalledProcessError as exc:
         print(f"[cleanup-pr] PR #{pr_number}: cleanup failed: {exc}", flush=True)
-        mark_pr_cleanup_failed(pr_number)
+        mark_pr_cleanup_failed(pr_number, exc=exc)
+        return
+    reason = unfinished_cleanup_reason()
+    if reason:
+        print(f"[cleanup-pr] PR #{pr_number}: exited cleanly but did not finish - {reason}", flush=True)
+        mark_pr_cleanup_failed(pr_number, reason)
         return
     remove_pr_cleanup_label(pr_number)
 
@@ -1079,24 +2253,39 @@ def main():
     elif OLLAMA_REVIEW_MODEL:
         print(f"[triage] using Ollama model {OLLAMA_REVIEW_MODEL!r} via {OLLAMA_BASE_URL} for review flows only (PR creation still uses Claude)", flush=True)
 
+    write_mcp_config()
     state = load_state()
     while True:
         try:
             for issue in fetch_new_issues(state["last_processed"]):
-                print(f'[triage] issue #{issue["number"]}: "{issue["title"]}" - {issue_url(issue["number"])}', flush=True)
-                sync_repo()
-                reset_scratch()
-                triage(issue["number"])
-                state["last_processed"] = issue["number"]
-                save_state(state)
+                if not process_new_issue(issue, state):
+                    # Retry pending on this issue. Stop the issue loop to keep the watermark
+                    # ordering intact, but fall through to the flows below rather than
+                    # abandoning the whole cycle.
+                    break
             for issue in fetch_bot_pr_issues():
                 process_bot_pr_issue(issue)
+            # Before the BOT_REVIEW poll, so a woken issue is reviewed in this same cycle.
+            for issue in fetch_waiting_for_user_issues():
+                wake_waiting_issue(issue)
             for issue in fetch_bot_review_issues():
                 process_bot_review_issue(issue)
+            process_me_too_comments(state)
+            # Reviews before cleanups, so a PR carrying both is reviewed and cleaned up in
+            # the same cycle; process_bot_cleanup_pr() holds any PR whose review is pending.
             for pr in fetch_bot_review_prs():
                 process_bot_review_pr(pr)
             for pr in fetch_bot_cleanup_prs():
                 process_bot_cleanup_pr(pr)
+            today = time.strftime("%Y-%m-%d")
+            if should_flush_journal(state, today):
+                # Stamp the date before running, not after: a flush that fails would
+                # otherwise be retried on every poll for the rest of the day. The queue
+                # survives a failure, so the findings just wait for tomorrow.
+                state["last_journal_flush"] = today
+                save_state(state)
+                sync_repo()
+                flush_journal(today)
         except subprocess.CalledProcessError as exc:
             print(f"[triage] error: {exc}", flush=True)
         time.sleep(POLL_SECONDS)

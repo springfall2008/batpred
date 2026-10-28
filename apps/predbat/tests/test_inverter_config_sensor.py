@@ -12,7 +12,7 @@ from const import MINUTE_WATT
 from tests.test_infra import reset_inverter, TestInverter
 
 
-def make_stub_inverter(inverter_id, inverter_limit_watts, support_feedin_first=True):
+def make_stub_inverter(inverter_id, inverter_limit_watts, support_feedin_first=True, support_discharge_freeze=True):
     """Build an inverter stub carrying just the values fetch_inverter_data() aggregates"""
     inverter = TestInverter()
     inverter.id = inverter_id
@@ -20,7 +20,7 @@ def make_stub_inverter(inverter_id, inverter_limit_watts, support_feedin_first=T
     inverter.charge_window = []
     inverter.export_window = []
     inverter.export_limits = []
-    inverter.inv_support_discharge_freeze = True
+    inverter.inv_support_discharge_freeze = support_discharge_freeze
     inverter.inv_support_feedin_first = support_feedin_first
     inverter.inv_support_charge_freeze = True
     inverter.inv_has_reserve_soc = True
@@ -167,7 +167,7 @@ def run_inverter_config_checks(my_predbat):
     my_predbat.battery_discharge_power_curve_auto = False
     my_predbat.ha_interface.dummy_items.pop(entity_id, None)
 
-    my_predbat.fetch_inverter_data(create=False)
+    my_predbat.fetch_inverter_data()
 
     item = my_predbat.ha_interface.dummy_items.get(entity_id)
     if item is None:
@@ -187,7 +187,7 @@ def run_inverter_config_checks(my_predbat):
     my_predbat.inverters = [make_stub_inverter(0, 3000), make_stub_inverter(1, 3000, support_feedin_first=False)]
     my_predbat.ha_interface.dummy_items.pop(entity_id, None)
 
-    my_predbat.fetch_inverter_data(create=False)
+    my_predbat.fetch_inverter_data()
 
     if my_predbat.inverter_support_feedin_first is not False:
         print("ERROR: inverter_support_feedin_first is {} expected False when one inverter does not support it".format(my_predbat.inverter_support_feedin_first))
@@ -196,5 +196,20 @@ def run_inverter_config_checks(my_predbat):
     if item is None or item.get("inverter_support_feedin_first", None) is not False:
         print("ERROR: {} inverter_support_feedin_first is {} expected False".format(entity_id, item.get("inverter_support_feedin_first", None) if item else None))
         failed = True
+
+    # Freeze Export is fleet-wide for the same reason (#5082): an inverter that keeps charging from
+    # solar through a freeze breaks the plan's hold whichever slot it is in. The unsupported one goes
+    # second again, as asking only the first inverter left the freeze on.
+    print("Test: one inverter without Freeze Export turns it off for the whole fleet")
+    for second_supports, expect in ((True, True), (False, False)):
+        my_predbat.inverters = [make_stub_inverter(0, 3000), make_stub_inverter(1, 3000, support_discharge_freeze=second_supports)]
+        my_predbat.set_export_freeze = True
+        my_predbat.set_export_freeze_only = True
+
+        my_predbat.fetch_inverter_data()
+
+        if my_predbat.set_export_freeze is not expect or my_predbat.set_export_freeze_only is not expect:
+            print("ERROR: second inverter Freeze Export support {} - set_export_freeze is {} and set_export_freeze_only is {}, expected {}".format(second_supports, my_predbat.set_export_freeze, my_predbat.set_export_freeze_only, expect))
+            failed = True
 
     return failed

@@ -40,6 +40,14 @@ PENDING = "pending"  # diverged once, with no timing metadata to trust it - see 
 # The rolling window the customer-facing entity reports over.
 DEFAULT_WINDOW_S = 86400
 
+# Minimum wall-clock time a divergence must persist before it can be reported as EXTERNAL, on the
+# fail-open path where neither side exposes generation metadata. Without this the rule is purely
+# "it repeated in a later cycle", and cycles are advanced by every entry point that observes - so
+# the tolerance for a vendor serving a stale cached read would be set by how often the plan run
+# and the inverter poll happen to fire. Changing a poll interval would silently retune how readily
+# Predbat accuses a customer's inverter of external interference.
+MIN_DIVERGENCE_S = 240
+
 # How far into the future an event's timestamp may sit and still be judged. Clocks jitter
 # between the write and the publish, so a few seconds forward is ordinary; anything beyond
 # this is a clock that has not synchronised or an attribute that has been corrupted.
@@ -352,8 +360,11 @@ class ControlLedger:
             "confirmed_generation": generation,
             "wrote_cycle": self.cycle,
             "confirmed_by": confirmed_by,
-            # The cycle a divergence was first seen, for the persistence rule in observe().
+            # The cycle and wall-clock time a divergence was first seen, for the persistence rule
+            # in observe(). Both are needed: cycles prove a distinct read, seconds prove the vendor
+            # cache had a fair chance to resolve regardless of how often we poll.
             "diverged_cycle": None,
+            "diverged_at": None,
         }
 
     def note_write_attempt(self, entity_id):
@@ -386,6 +397,7 @@ class ControlLedger:
             # Agreement resets the persistence rule below: a divergence that came back on its own
             # was a cached read, not somebody holding the control at a different value.
             record["diverged_cycle"] = None
+            record["diverged_at"] = None
             return OWNED
 
         # The read must be newer than the confirmation, by cycle and - where the entity
@@ -418,7 +430,20 @@ class ControlLedger:
         # not. Two DISTINCT cycles, because a second pass inside one cycle can be the same read.
         if generation is None or record["confirmed_generation"] is None:
             if record["diverged_cycle"] is None or record["diverged_cycle"] == self.cycle:
+                if record["diverged_cycle"] is None:
+                    record["diverged_at"] = now
                 record["diverged_cycle"] = self.cycle
+                return PENDING
+            # Repetition in a later cycle is necessary but not sufficient: cycle rate is a
+            # function of how often Predbat's entry points run, so without a wall-clock floor a
+            # faster poll would convict a cached read sooner. See MIN_DIVERGENCE_S.
+            #
+            # Measured from the CONFIRMING WRITE, not from the first divergent read. The question
+            # is how long the vendor has had to stop serving a cached copy of the pre-write value,
+            # and that clock starts when we wrote. Measuring from the first divergence would add
+            # one poll interval on top, so the threshold would still drift with cadence - and at
+            # the old 120s cadence it would report at 360s where the previous code reported at 240s.
+            if (now - record["confirmed_at"]) < MIN_DIVERGENCE_S:
                 return PENDING
 
         event = {

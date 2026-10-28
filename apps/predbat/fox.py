@@ -17,6 +17,7 @@ Feedin), real-time monitoring, and device settings via the Fox ESS Cloud API.
 import asyncio
 from datetime import datetime, timedelta, timezone
 import os
+import yaml
 import time
 import hashlib
 from predbat_metrics import record_api_call
@@ -25,9 +26,10 @@ import json
 import argparse
 import random
 from component_base import ComponentBase
+from coordinator import inverter_record
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
-from utils import dp2
+from utils import dp2, load_apps_yaml
 
 # Define TIME_FORMAT_HA locally to avoid dependency issues
 TIME_FORMAT_HA = "%Y-%m-%dT%H:%M:%S%z"
@@ -40,6 +42,19 @@ FOX_DOMAIN = "https://www.foxesscloud.com"
 FOX_LANG = "en"
 TIMEOUT = 60
 FOX_RETRIES = 10
+# How long after our own scheduler write a disagreeing read is treated as stale rather than as
+# the truth. The Fox scheduler read is eventually consistent: confirmed live on an EVO 10-5-H
+# (2026-09-10 19:42) that a Feedin write returned success, a read 3s later still returned the
+# pre-write schedule, and a read 18s later returned Feedin.
+#
+# This matters because set_scheduler skips a write whose schedule matches the cache. A stale read
+# regressed the cache to the pre-write schedule, so the next write back to that schedule looked
+# redundant and was skipped - leaving the inverter in the mode we had meant to leave. For a freeze
+# export that means stuck in Feed-in First, not charging, for the rest of the day.
+#
+# Beyond this window a read wins, so a schedule changed in the Fox app is still picked up.
+SCHEDULER_READ_STALE_SECONDS = 60
+
 FOX_SETTINGS = ["ExportLimit", "MaxSoc", "GridCode", "WorkMode", "MinSoc", "MinSocOnGrid"]
 OPTIONS_WORK_MODE = ["SelfUse", "ForceCharge", "ForceDischarge", "Feedin"]
 
@@ -218,12 +233,23 @@ def pad_schedule(schedule, target_count, reserve, fdPwr_max):
     return schedule
 
 
-def validate_schedule(new_schedule, reserve, fdPwr_max, target_count=0):
+def validate_schedule(new_schedule, reserve, fdPwr_max, target_count=0, baseline_work_mode="SelfUse"):
+    """
+    Fill a schedule out to cover the whole day around Predbat's charge/export windows
+
+    baseline_work_mode is the mode the filled-in periods run in - Self Use normally, or Feedin for
+    a freeze export (see apply_battery_schedule). The scheduler is always left enabled and always
+    covers 00:00-23:59, so these filler slots are what the inverter actually runs whenever no
+    Predbat window is active, and the device's own work-mode setting never gets a look in.
+
+    The padding slots stay Self Use: they are disabled placeholders that only exist to match the
+    device's slot count, so their mode is inert.
+    """
     # Sort schedule by start time, closest to midnight first
     new_schedule = sort_schedule_by_start_time(new_schedule)
     if not new_schedule:
         # No schedule entries so disable
-        result = [{"enable": 1, "startHour": 0, "startMinute": 0, "endHour": 23, "endMinute": 59, "workMode": "SelfUse", "fdSoc": reserve, "maxSoc": 100, "fdPwr": fdPwr_max, "minSocOnGrid": reserve}]
+        result = [{"enable": 1, "startHour": 0, "startMinute": 0, "endHour": 23, "endMinute": 59, "workMode": baseline_work_mode, "fdSoc": reserve, "maxSoc": 100, "fdPwr": fdPwr_max, "minSocOnGrid": reserve}]
         return pad_schedule(result, target_count, reserve, fdPwr_max)
 
     # Process all schedule entries
@@ -241,7 +267,7 @@ def validate_schedule(new_schedule, reserve, fdPwr_max, target_count=0):
     first_entry = new_schedule[0]
     if first_entry["startHour"] != 0 or first_entry["startMinute"] != 0:
         demand_end_hour, demand_end_minute = end_minute_exclusive_to_inclusive(first_entry["startHour"], first_entry["startMinute"])
-        result_schedule.append({"enable": 1, "startHour": 0, "startMinute": 0, "endHour": demand_end_hour, "endMinute": demand_end_minute, "workMode": "SelfUse", "fdSoc": reserve, "maxSoc": 100, "fdPwr": fdPwr_max, "minSocOnGrid": reserve})
+        result_schedule.append({"enable": 1, "startHour": 0, "startMinute": 0, "endHour": demand_end_hour, "endMinute": demand_end_minute, "workMode": baseline_work_mode, "fdSoc": reserve, "maxSoc": 100, "fdPwr": fdPwr_max, "minSocOnGrid": reserve})
 
     # Add schedule entries and fill gaps between them
     for i, entry in enumerate(new_schedule):
@@ -272,7 +298,18 @@ def validate_schedule(new_schedule, reserve, fdPwr_max, target_count=0):
                 # Fill the gap with SelfUse
                 gap_end_hour, gap_end_minute = end_minute_exclusive_to_inclusive(next_start_hour, next_start_minute)
                 result_schedule.append(
-                    {"enable": 1, "startHour": gap_start_hour, "startMinute": gap_start_minute, "endHour": gap_end_hour, "endMinute": gap_end_minute, "workMode": "SelfUse", "fdSoc": reserve, "maxSoc": 100, "fdPwr": fdPwr_max, "minSocOnGrid": reserve}
+                    {
+                        "enable": 1,
+                        "startHour": gap_start_hour,
+                        "startMinute": gap_start_minute,
+                        "endHour": gap_end_hour,
+                        "endMinute": gap_end_minute,
+                        "workMode": baseline_work_mode,
+                        "fdSoc": reserve,
+                        "maxSoc": 100,
+                        "fdPwr": fdPwr_max,
+                        "minSocOnGrid": reserve,
+                    }
                 )
 
     # Add demand mode after last entry if needed
@@ -285,11 +322,25 @@ def validate_schedule(new_schedule, reserve, fdPwr_max, target_count=0):
             demand_start_minute = 0
         else:
             demand_start_minute += 1
-        result_schedule.append({"enable": 1, "startHour": demand_start_hour, "startMinute": demand_start_minute, "endHour": 23, "endMinute": 59, "workMode": "SelfUse", "fdSoc": reserve, "maxSoc": 100, "fdPwr": fdPwr_max, "minSocOnGrid": reserve})
+        result_schedule.append({"enable": 1, "startHour": demand_start_hour, "startMinute": demand_start_minute, "endHour": 23, "endMinute": 59, "workMode": baseline_work_mode, "fdSoc": reserve, "maxSoc": 100, "fdPwr": fdPwr_max, "minSocOnGrid": reserve})
 
     # Pad to target_count with disabled SelfUse entries if the device originally had more slots
     return pad_schedule(result_schedule, target_count, reserve, fdPwr_max)
 
+
+# The behaviour a driven Fox Cloud inverter has, as the discovery record's capabilities - the seven
+# coordinator.CAPABILITY_KEYS, with the values INVERTER_DEF["FoxCloud"] (config.py) holds. A literal,
+# never read back from the row: the record has to rebuild the row on its own, and reading the row here
+# would make that test prove nothing.
+FOX_CAPABILITIES = {
+    "support_charge_freeze": True,
+    "support_discharge_freeze": True,
+    "support_feedin_first": True,
+    "can_span_midnight": False,
+    "charge_discharge_with_rate": False,
+    "charge_control_immediate": False,
+    "target_soc_used_for_discharge": True,
+}
 
 # Group fields that the v3 scheduler API nests inside 'extraParam'
 V3_EXTRA_PARAM_KEYS = ["minSocOnGrid", "fdSoc", "fdPwr", "maxSoc", "importLimit", "exportLimit", "pvLimit", "reactivePower"]
@@ -363,6 +414,10 @@ class FoxAPI(ComponentBase, OAuthMixin):
         self.device_production_year = {}
         self.device_battery_charging_time = {}
         self.device_scheduler = {}
+        # Our own last scheduler write per device, and when it happened, so an eventually
+        # consistent read can be told apart from a real change - see SCHEDULER_READ_STALE_SECONDS
+        self.scheduler_written_groups = {}
+        self.scheduler_write_time = {}
         self.local_schedule = {}
         self.fdpwr_max = {}
         self.fdsoc_min = {}
@@ -557,6 +612,18 @@ class FoxAPI(ComponentBase, OAuthMixin):
         # Publish to HA whenever we have refreshed data (or on first start to populate entities)
         if first or settings_refresh or production_refresh or realtime_refresh:
             await self.publish_data()
+
+        # Unconditional, once per cycle and outside any one-shot gate, so a transient failure is
+        # retried rather than lost - see ComponentBase.refresh_discovery(), which owns the
+        # compare/guard loop, and never raises. Placed after the device poll and publish_data()
+        # above so it describes what this cycle actually read.
+        #
+        # Deliberately BEFORE automatic_config() below, as GivTCP's run() does: automatic_config()
+        # raises when no device qualifies as a battery inverter (a battery with no scheduler, say),
+        # and that exception leaves run() every retry. Called after it, the report would never be
+        # filed on exactly the installs whose debug dump most needs to say why. automatic_config()
+        # reads nothing this call writes, so it still runs, and still raises, exactly as before.
+        self.refresh_discovery()
 
         # Automatic configuration on first run
         if first and self.automatic:
@@ -923,6 +990,45 @@ class FoxAPI(ComponentBase, OAuthMixin):
             capacity += 500.0
         return capacity
 
+    @staticmethod
+    def battery_capacity_wh(detail):
+        """
+        Return the device's battery capacity in Wh from its device/detail batteryList.
+
+        Normally the sum of every entry's capacity. Some devices (GH#4919, an AIO ESS with one
+        10.24 kWh pack) report the same pack as several bmu entries that all carry the same
+        batterySN and each claim the whole pack, so the plain sum is a multiple of the truth.
+        When a batterySN repeats among the entries carrying a capacity, Fox's own
+        batteryDesignCapacity (kWh) is used if it is a positive number, otherwise each serial
+        is counted once. Lists without a repeated serial are summed exactly as before.
+        """
+        battery_list = detail.get("batteryList", []) or []
+        total = 0
+        deduplicated = 0
+        seen_serials = set()
+        repeated = False
+        for battery in battery_list:
+            capacity = battery.get("capacity", 0)
+            total += capacity
+            serial = battery.get("batterySN")
+            if serial and "capacity" in battery:
+                if serial in seen_serials:
+                    repeated = True
+                    continue
+                seen_serials.add(serial)
+            deduplicated += capacity
+        if not repeated:
+            return total
+        design_capacity = detail.get("batteryDesignCapacity")
+        if not isinstance(design_capacity, bool):
+            try:
+                design_capacity = float(design_capacity)
+            except (TypeError, ValueError):
+                design_capacity = 0
+            if design_capacity > 0:
+                return design_capacity * 1000.0
+        return deduplicated
+
     async def get_device_settings(self, deviceSN, checkBattery=True):
         """
         Get device settings
@@ -1271,6 +1377,39 @@ class FoxAPI(ComponentBase, OAuthMixin):
             return True
         return False
 
+    def note_scheduler_write(self, deviceSN, groups):
+        """
+        Remember a scheduler write so an eventually consistent read can be recognised as stale
+
+        See SCHEDULER_READ_STALE_SECONDS for why, and apply_scheduler_read for the other half.
+        """
+        self.scheduler_written_groups[deviceSN] = [dict(group) for group in groups]
+        self.scheduler_write_time[deviceSN] = time.time()
+        if deviceSN not in self.device_scheduler:
+            self.device_scheduler[deviceSN] = {}
+        self.device_scheduler[deviceSN]["enable"] = True
+        self.device_scheduler[deviceSN]["groups"] = groups
+
+    def apply_scheduler_read(self, deviceSN, result):
+        """
+        Cache a scheduler read, keeping our own recent write when the read still lags behind it
+
+        The read is left untouched for the caller - only what gets cached is corrected, since the
+        cache is what set_scheduler compares against to decide whether a write is needed.
+        """
+        groups = result.get("groups", [])
+        written = self.scheduler_written_groups.get(deviceSN)
+        write_age = time.time() - self.scheduler_write_time.get(deviceSN, 0)
+        if written is not None and write_age < SCHEDULER_READ_STALE_SECONDS and not schedules_are_equal(datetime.now(), groups, written):
+            self.log("Fox: Scheduler read for {} disagrees with our write {:.0f}s ago - treating the read as stale and keeping the written schedule".format(deviceSN, write_age))
+            groups = written
+        else:
+            # Either the read has caught up or it is a settled change, so stop second-guessing it
+            self.scheduler_written_groups.pop(deviceSN, None)
+            self.scheduler_write_time.pop(deviceSN, None)
+        self.device_scheduler[deviceSN] = dict(result, groups=groups)
+        return groups
+
     async def set_scheduler(self, deviceSN, groups):
         """
         Set scheduler groups, also disables scheduler if no groups provided
@@ -1296,10 +1435,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
                 else:
                     result = await self.request_get(SET_SCHEDULER, datain={"deviceSN": deviceSN, "groups": groups}, post=True)
                 if result is not None:
-                    if deviceSN not in self.device_scheduler:
-                        self.device_scheduler[deviceSN] = {}
-                    self.device_scheduler[deviceSN]["enable"] = True
-                    self.device_scheduler[deviceSN]["groups"] = groups
+                    self.note_scheduler_write(deviceSN, groups)
                     return True
         return False
 
@@ -1499,8 +1635,8 @@ class FoxAPI(ComponentBase, OAuthMixin):
             # Min SOC On grid can change as Predbat writes reserve so this must be the real min
             self.fdsoc_min[deviceSN] = result.get("properties", {}).get("fdsoc", {}).get("range", {}).get("min", 10)
             self.device_scheduler_count[deviceSN] = len(result.get("groups", []))
-            self.device_scheduler[deviceSN] = result
-            self.update_settings_from_schedule(deviceSN, result.get("groups", []), result.get("properties", {}))
+            groups = self.apply_scheduler_read(deviceSN, result)
+            self.update_settings_from_schedule(deviceSN, groups, result.get("properties", {}))
             return result
         return None
 
@@ -1776,10 +1912,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
             hasScheduler = detail.get("function", {}).get("scheduler", False)
             deviceType = detail.get("deviceType", "Unknown")
             stationName = detail.get("stationName", "Unknown")
-            batteryList = detail.get("batteryList", [])
-            battery_capacity = 0
-            for battery in batteryList:
-                battery_capacity += battery.get("capacity", 0)
+            battery_capacity = self.battery_capacity_wh(detail)
 
             self.dashboard_item(
                 entity_name_sensor + "_" + sn.lower() + "_info",
@@ -2108,6 +2241,12 @@ class FoxAPI(ComponentBase, OAuthMixin):
             except ValueError:
                 value = self.fdpwr_max.get(serial, 8000)
             self.local_schedule[serial][direction]["power"] = value
+            # A rate change is the only thing a freeze export writes, and press_and_poll_button
+            # only fires from adjust_charge_window when the times or the enable flag change - so
+            # nothing used to carry a freeze (or the restore to full rate afterwards) through to
+            # the inverter. set_scheduler compares against the live schedule before writing, so a
+            # re-apply that changes nothing costs no API call.
+            await self.apply_battery_schedule(serial)
         elif "_start_time" in entity_id:
             if value not in OPTIONS_TIME_FULL:
                 value = "00:00:00"
@@ -2128,12 +2267,50 @@ class FoxAPI(ComponentBase, OAuthMixin):
 
         await self.publish_schedule_settings_ha(serial)
 
+    def freeze_export_requested(self, serial):
+        """
+        Work out whether Predbat is asking for a freeze export, from the rates it has written
+
+        Predbat expresses Freeze Export as "demand mode, but with charging disabled". FoxCloud
+        declares has_timed_pause False and charge_discharge_with_rate False, so the only lever
+        execute.py has left for it is adjust_charge_rate(0) - which lands on the per-window
+        battery_schedule_charge_power. With no charge window running, that zero used to mean
+        nothing at all: the schedule came out identical to plain demand and the surplus PV a
+        freeze exists to export charged the battery instead (#5022, reported in #5015).
+
+        A zero charge rate always means "do not charge the battery" - the same call backs
+        set_freeze_export_during_demand and the cross-charging guards - so it is honoured here.
+        It is only read as a freeze while the export rate is non-zero, which makes the signal
+        "charging disabled, discharging still allowed" rather than just "zero". That also keeps a
+        system whose rates were never derived (both entities still at their published 0) out of a
+        permanent freeze: all-zero is an absence of a plan, not a plan, and demand is the right
+        thing to fall back to.
+
+        This is the same inference sunsynk.py and deye.py make from the same entities, for the
+        same reason - see their derive_control_state.
+        """
+        schedule = self.local_schedule.get(serial, {})
+        fdPwr_max = self.fdpwr_max.get(serial, 8000)
+        try:
+            charge_power = int(schedule.get("charge", {}).get("power", fdPwr_max))
+            discharge_power = int(schedule.get("discharge", {}).get("power", fdPwr_max))
+        except (TypeError, ValueError):
+            return False
+        return charge_power == 0 and discharge_power > 0
+
     async def apply_battery_schedule(self, serial):
         new_schedule = []
         fdPwr_max = self.fdpwr_max.get(serial, 8000)
         fdsoc_min = self.fdsoc_min.get(serial, 10)
         reserve = self.local_schedule.get(serial, {}).get("reserve", fdsoc_min)
         reserve = max(reserve, fdsoc_min)
+
+        # Feed-in First is what holds the battery during a freeze export: it sends the surplus PV
+        # to the grid rather than into the battery, while still letting the battery serve the
+        # house down to the reserve. It is not an exact SoC hold - PV above the export limit is
+        # still clipped into the battery on this hardware, which is why support_feedin_first
+        # exists in config.py for prediction.py to model.
+        baseline_work_mode = "Feedin" if self.freeze_export_requested(serial) else "SelfUse"
 
         for direction in ["charge", "discharge"]:
             enable = self.local_schedule[serial].get(direction, {}).get("enable", 0)
@@ -2147,6 +2324,8 @@ class FoxAPI(ComponentBase, OAuthMixin):
                 end_hour, end_minute = self.time_string_to_hour_minute(end_time, 0, 0)
 
                 if direction == "charge":
+                    # Fox Cloud treats fdSoc as the force charge target even on the Scheduler v1 call,
+                    # charging on past maxSoc towards it, so it must carry the target too (#3398)
                     new_schedule.append(
                         {
                             "enable": 1,
@@ -2155,7 +2334,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
                             "endHour": end_hour,
                             "endMinute": end_minute,
                             "workMode": "ForceCharge",
-                            "fdSoc": 100,
+                            "fdSoc": max(soc, reserve),
                             "maxSoc": max(soc, reserve),
                             "fdPwr": power,
                             "minSocOnGrid": max(soc, reserve),
@@ -2163,10 +2342,21 @@ class FoxAPI(ComponentBase, OAuthMixin):
                     )
                 elif direction == "discharge":
                     new_schedule.append(
-                        {"enable": 1, "startHour": start_hour, "startMinute": start_minute, "endHour": end_hour, "endMinute": end_minute, "workMode": "ForceDischarge", "fdSoc": max(soc, reserve), "maxSoc": reserve, "fdPwr": power, "minSocOnGrid": reserve}
+                        {
+                            "enable": 1,
+                            "startHour": start_hour,
+                            "startMinute": start_minute,
+                            "endHour": end_hour,
+                            "endMinute": end_minute,
+                            "workMode": "ForceDischarge",
+                            "fdSoc": max(soc, reserve),
+                            "maxSoc": reserve,
+                            "fdPwr": power,
+                            "minSocOnGrid": reserve,
+                        }
                     )
-        new_schedule = validate_schedule(new_schedule, reserve, fdPwr_max, self.device_scheduler_count.get(serial, 0))
-        self.log("Fox: New schedule for {}: {}".format(serial, new_schedule))
+        new_schedule = validate_schedule(new_schedule, reserve, fdPwr_max, self.device_scheduler_count.get(serial, 0), baseline_work_mode=baseline_work_mode)
+        self.log("Fox: New schedule for {} (baseline {}): {}".format(serial, baseline_work_mode, new_schedule))
         await self.set_scheduler(serial, new_schedule)
         await self.publish_data()
 
@@ -2218,7 +2408,13 @@ class FoxAPI(ComponentBase, OAuthMixin):
 
         self.set_arg("inverter_type", ["FoxCloud" for _ in range(num_inverters)])
         self.set_arg("num_inverters", num_inverters)
-        self.set_arg("inverter_mode", [f"select.{self.prefix}_fox_{device}_setting_workmode" for device in batteries])
+        # inverter_mode is deliberately not wired: the work mode is set per-slot inside the
+        # scheduler apply_battery_schedule writes, and that scheduler always covers the whole day,
+        # so the device-level work-mode setting never takes effect while Predbat is running.
+        # Pointing inverter_mode at it just gave the setting two writers, with adjust_inverter_mode
+        # pinning it to SelfUse every cycle (#5022). The select entity is still published, so it
+        # stays visible and manually settable. The modbus path is unaffected - it drives the work
+        # mode through the service templates in templates/fox.yaml, which never set inverter_mode.
         self.set_arg("load_today", [f"sensor.{self.prefix}_fox_{device}_loads" for device in batteries])
         self.set_arg("import_today", [f"sensor.{self.prefix}_fox_{device}_gridconsumption" for device in batteries])
         self.set_arg("export_today", [f"sensor.{self.prefix}_fox_{device}_feedin" for device in batteries])
@@ -2259,6 +2455,250 @@ class FoxAPI(ComponentBase, OAuthMixin):
 
         if len(batteries):
             self.set_arg("battery_temperature_history", f"sensor.{self.prefix}_fox_{batteries[0]}_battemperature")
+
+    @staticmethod
+    def _device_setting(settings, name):
+        """
+        The device's setting entry called name, or None. Matched case-insensitively, as
+        automatic_config() matches ExportLimit when it sets hasExportLimit.
+        """
+        for key, entry in settings.items():
+            if str(key).lower() == name.lower():
+                return entry if isinstance(entry, dict) else {}
+        return None
+
+    @staticmethod
+    def _setting_number(entry):
+        """A setting entry's value when it is a number of watts Fox reports (not negative, not a bool), else None."""
+        value = (entry or {}).get("value")
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
+            return value
+        return None
+
+    def _fox_entity(self, serial, entity_domain, suffix, access="r", **extra):
+        """
+        One discovery descriptor for an entity Fox publishes for this device, its id formed exactly as
+        automatic_config() forms its per-device list element (f"<domain>.{self.prefix}_fox_{sn.lower()}_<suffix>").
+        extra holds descriptor fields (domain, format, unit, invert).
+        """
+        return dict({"entity_id": f"{entity_domain}.{self.prefix}_fox_{serial.lower()}_{suffix}", "access": access}, **extra)
+
+    def _discovery_pv_entities(self, serial, has_pv, third_party):
+        """
+        pv_today and pv_power for one device, as automatic_config() binds them for it: the device's own
+        PV sensors when it has PV, otherwise a metered third-party generator's, otherwise 0 - the [0]
+        stand-in automatic_config() sets when nothing on the site has PV.
+
+        fox_automatic_ignore_pv is the user's opt-out, not a fact about the device, so it does not
+        remove them (spec D11); the coordinator applies it.
+        """
+        if has_pv:
+            return {"pv_today": self._fox_entity(serial, "sensor", "pvenergytotal_today"), "pv_power": self._fox_entity(serial, "sensor", "pvpower")}
+        if third_party:
+            return {"pv_today": self._fox_entity(serial, "sensor", "feedin2"), "pv_power": self._fox_entity(serial, "sensor", "meterpower2")}
+        return {"pv_today": {"value": 0, "access": "r"}, "pv_power": {"value": 0, "access": "r"}}
+
+    def _discovery_entities(self, serial, has_pv, third_party, has_export_limit, first):
+        """
+        The discovery record's entities for one inverter Fox drives: one descriptor per setting
+        automatic_config() binds for it, each entity id formed as automatic_config() forms it (see
+        _fox_entity()), so the agreement tests that run the real automatic_config() pin the two together.
+
+        access is "rw" for the settings Predbat writes (the schedule, reserve and the write
+        button) and "r" for what it only reads. grid_power_invert becomes invert on grid_power.
+        export_limit is automatic_config()'s 99999 ("no cap") stand-in when the device has no
+        ExportLimit setting. PV is _discovery_pv_entities().
+
+        battery_temperature_history is a single site-wide entity automatic_config() binds to the
+        first driven device's sensor, so only that device's record (first) carries it (spec D15).
+        """
+        time_select = {"domain": "select", "format": "HH:MM:SS"}
+        entities = {
+            "load_today": self._fox_entity(serial, "sensor", "loads"),
+            "import_today": self._fox_entity(serial, "sensor", "gridconsumption"),
+            "export_today": self._fox_entity(serial, "sensor", "feedin"),
+            "battery_rate_max": self._fox_entity(serial, "sensor", "battery_rate_max"),
+            "battery_power": self._fox_entity(serial, "sensor", "invbatpower"),
+            "grid_power": self._fox_entity(serial, "sensor", "meterpower", invert=True),
+            "load_power": self._fox_entity(serial, "sensor", "loadspower"),
+            "soc_percent": self._fox_entity(serial, "sensor", "soc", unit="%"),
+            "soc_max": self._fox_entity(serial, "sensor", "battery_capacity"),
+            "reserve": self._fox_entity(serial, "number", "battery_schedule_reserve", "rw"),
+            "battery_min_soc": self._fox_entity(serial, "sensor", "battery_reserve_min"),
+            "charge_start_time": self._fox_entity(serial, "select", "battery_schedule_charge_start_time", "rw", **time_select),
+            "charge_end_time": self._fox_entity(serial, "select", "battery_schedule_charge_end_time", "rw", **time_select),
+            "charge_limit": self._fox_entity(serial, "number", "battery_schedule_charge_soc", "rw"),
+            "scheduled_charge_enable": self._fox_entity(serial, "switch", "battery_schedule_charge_enable", "rw"),
+            "charge_rate": self._fox_entity(serial, "number", "battery_schedule_charge_power", "rw", unit="W"),
+            "scheduled_discharge_enable": self._fox_entity(serial, "switch", "battery_schedule_discharge_enable", "rw"),
+            "discharge_target_soc": self._fox_entity(serial, "number", "battery_schedule_discharge_soc", "rw"),
+            "discharge_start_time": self._fox_entity(serial, "select", "battery_schedule_discharge_start_time", "rw", **time_select),
+            "discharge_end_time": self._fox_entity(serial, "select", "battery_schedule_discharge_end_time", "rw", **time_select),
+            "discharge_rate": self._fox_entity(serial, "number", "battery_schedule_discharge_power", "rw", unit="W"),
+            "battery_temperature": self._fox_entity(serial, "sensor", "battemperature"),
+            "inverter_limit": self._fox_entity(serial, "sensor", "inverter_capacity"),
+            "battery_scaling": self._fox_entity(serial, "sensor", "battery_soh"),
+            "schedule_write_button": self._fox_entity(serial, "switch", "battery_schedule_charge_write", "rw"),
+            "export_limit": self._fox_entity(serial, "number", "setting_exportlimit") if has_export_limit else {"value": 99999, "access": "r"},
+        }
+        entities.update(self._discovery_pv_entities(serial, has_pv, third_party))
+        if first:
+            entities["battery_temperature_history"] = self._fox_entity(serial, "sensor", "battemperature")
+        return entities
+
+    def build_discovery(self):
+        """
+        Describe the discovered Fox devices for the discovery catalogue.
+
+        Reads only what automatic_config() already gathers - self.device_list, self.device_detail
+        and self.device_settings - so this adds no API calls and cannot change what Fox does.
+        Reporting is independent of self.automatic: the catalogue records what hardware is there,
+        not whether this component wired apps.yaml to it, which is what the report's own
+        "automatic" flag is for.
+
+        functions says what a device physically has ("solar", "battery"); inverter_type says
+        whether Predbat would drive it. inverter_type is "FoxCloud" - the INVERTER_DEF key
+        automatic_config() itself writes - on exactly the devices automatic_config() counts as
+        inverters: hasBattery AND function.scheduler AND a positive capacity. Any other device,
+        a PV-only one or a battery automatic_config() refuses (no scheduler, say), carries no
+        inverter_type but still shows its battery in functions, which is precisely what a dump
+        from an install whose auto-config fails needs to show. That predicate is duplicated here
+        rather than shared, because sharing it means changing automatic_config(), a control path;
+        automatic_config() is the source of truth, and a test runs it to pin this copy to it.
+
+        Only a driven device carries capabilities (FOX_CAPABILITIES, the FoxCloud row's behaviour)
+        and its full entities (what automatic_config() binds for it - see _discovery_entities()).
+        automatic_config() builds its per-device lists over the driven devices in device_list
+        order, so the Nth driven record here is index N of those lists. A PV-only device (hasPV,
+        no battery - the devices automatic_config() takes as PV sources) carries just its
+        pv_power and pv_today (spec D12), so its generation is not lost when the coordinator
+        configures from records. Any other device - a battery automatic_config() refuses, or one
+        whose detail has not been read yet - claims no entities.
+
+        A third-party generator this inverter meters is topology, not something the inverter can
+        do, so it is a flag.
+
+        ratings are figures the device reports, keyed by Predbat setting name. inverter_limit goes
+        through capacity_watts(), never capacity * 1000: Fox reports a half-kW model's capacity
+        truncated (a KH10.5 says 10), and capacity_watts() is what restores the 500 W. For a
+        battery device that is also the value of the _inverter_capacity sensor publish_data()
+        publishes; for a PV-only device publish_data() sets that sensor to 0, while the catalogue
+        still reports the device's own rating. export_limit and import_limit are the ExportLimit
+        and ImportLimit settings' configured values in W, when the device has the setting and it
+        holds a number.
+
+        stationName, stationID and moduleSN are deliberately not reported. stationName is
+        user-authored free text that can hold a street address (get_device_list()'s own sample
+        holds one), and the info container's guards - a length cap and no "@" - would let an
+        address straight into a debug dump users post publicly. Neither identifier describes the
+        hardware; a station ID, if one is ever wanted, belongs in account_ids, which is
+        pseudonymised.
+
+        No battery capacity is reported. A real batteryList mixes control units that carry no
+        capacity (bcu, ivu) with bmu entries carrying one in Wh, and the per-entry figures cannot
+        be trusted on their own (GH#4919): an AIO ESS reports its one pack as four bmu entries,
+        each claiming the whole pack and all carrying the inverter's own serial, so their sum is
+        4x the truth. battery_capacity_wh() corrects for that signature when publishing soc_max.
+        Two ratings are reported instead, named for what the API returned rather than as the
+        spec's "modules", since the vendor figures are known to be wrong:
+        battery_capacity_entries, how many entries carry a capacity, and
+        battery_capacity_serials, how many distinct batterySN those entries carry. A healthy
+        four-module stack reports four and four; four entries against one serial is the GH#4919
+        signature. Neither len(batteryList) nor the entry count alone can tell them apart - each
+        reads the same for the bug as for that healthy stack. Deliberately not gated on hasBattery:
+        a battery list on a device that says it has no battery is itself worth seeing.
+
+        Returns None when nothing has been discovered yet, which refresh_discovery() treats as
+        "nothing to report, ask again next cycle".
+        """
+        if not self.device_list:
+            return None
+
+        inverters = []
+        driven_count = 0
+        for device in self.device_list:
+            serial = device.get("deviceSN")
+            if not serial:
+                continue
+            detail = self.device_detail.get(serial, {}) or {}
+            has_battery = bool(detail.get("hasBattery", False))
+            has_pv = bool(detail.get("hasPV", False))
+            has_scheduler = bool((detail.get("function") or {}).get("scheduler", False))
+            third_party = bool(detail.get("thirdPartyGen", False))
+
+            functions = []
+            if has_pv:
+                functions.append("solar")
+            if has_battery:
+                functions.append("battery")
+
+            flags = []
+            if third_party:
+                flags.append("third_party_gen")
+
+            info = {}
+            device_type = detail.get("deviceType")
+            if device_type:
+                info["model"] = str(device_type)
+            product_type = detail.get("productType")
+            if product_type:
+                info["product_type"] = str(product_type)
+            # Fox reports a firmware version per board; info takes only strings, so they are
+            # flattened into one, board names in sorted order - as GE Cloud's
+            # _device_info_and_ratings() does with its firmware_version dict
+            boards = [(board, detail.get(board + "Version")) for board in ("manager", "master", "slave")]
+            firmware = " ".join("{} {}".format(board, version.strip()) for board, version in boards if isinstance(version, str) and version.strip())
+            if firmware:
+                info["firmware"] = firmware
+
+            # capacity_watts() multiplies the raw field, so only a positive number reaches it -
+            # the same test drives_it applies below. Anything else drops the rating, not the report.
+            capacity = detail.get("capacity", 0)
+            capacity_is_rating = isinstance(capacity, (int, float)) and capacity > 0
+            ratings = {}
+            if capacity_is_rating:
+                ratings["inverter_limit"] = self.capacity_watts(detail)
+            settings = self.device_settings.get(serial, {}) or {}
+            export_setting = self._device_setting(settings, "ExportLimit")
+            for rating, entry in (("export_limit", export_setting), ("import_limit", self._device_setting(settings, "ImportLimit"))):
+                value = self._setting_number(entry)
+                if value is not None:
+                    ratings[rating] = value
+            battery_list = detail.get("batteryList") or []
+            summed = [entry for entry in battery_list if isinstance(entry, dict) and "capacity" in entry] if isinstance(battery_list, list) else []
+            if summed:
+                ratings["battery_capacity_entries"] = len(summed)
+                ratings["battery_capacity_serials"] = len({entry.get("batterySN") for entry in summed if entry.get("batterySN")})
+
+            # automatic_config() is the source of truth for which devices are inverters Predbat
+            # drives: it configures one only when hasBattery, function.scheduler and capacity > 0
+            # all hold. Duplicated here, not shared, so this observer does not touch that control
+            # path; test_fox_build_discovery_sets_inverter_type_only_where_automatic_config_would
+            # runs the real automatic_config() to keep the two in step.
+            drives_it = has_battery and has_scheduler and capacity_is_rating
+            entities = None
+            if drives_it:
+                entities = self._discovery_entities(serial, has_pv, third_party, export_setting is not None, driven_count == 0)
+                driven_count += 1
+            elif has_pv and not has_battery:
+                entities = self._discovery_pv_entities(serial, has_pv, third_party)
+
+            inverters.append(
+                inverter_record(
+                    "fox:{}".format(serial),
+                    inverter_type="FoxCloud" if drives_it else None,
+                    composition="direct",
+                    functions=functions,
+                    capabilities=FOX_CAPABILITIES if drives_it else None,
+                    flags=flags,
+                    hardware_ids={"serial": serial},
+                    info=info,
+                    ratings=ratings,
+                    entities=entities,
+                )
+            )
+
+        return {"automatic": self.automatic, "inverters": inverters}
 
 
 async def test_write_schedule(sn, api_key, token_hash, token_expires, supabase_url, supabase_key, user_id):  # pragma: no cover
@@ -2363,20 +2803,317 @@ async def test_fox_api(sn, api_key, token_hash, token_expires, supabase_url, sup
     print("Run completed successfully")
 
 
+# Fox credentials as they appear in apps.yaml, mapped to the command line fields they stand in
+# for, so --config can supply them instead. Written out by hand rather than read from
+# COMPONENT_LIST: components.py pulls predbat in behind it, and fox.py is imported by components
+# itself. test_fox_cli_credential_keys_match_component keeps this in step with what the component
+# actually declares.
+FOX_CLI_CREDENTIAL_KEYS = {
+    "api_key": "fox_key",
+    "token_hash": "fox_token_hash",
+    "token_expires": "fox_token_expires_at",
+    "serial": "fox_inverter_sn",
+}
+
+# The OAuth refresh settings, which are not Fox component args: oauth_mixin reads
+# SUPABASE_URL/SUPABASE_KEY from the environment and user_id from base.args. Without them an
+# OAuth run cannot refresh its token and every request comes back 401, so --config reads them
+# too rather than making the caller export environment variables alongside the file.
+FOX_CLI_OAUTH_KEYS = {
+    "user_id": "user_id",
+    "supabase_url": "supabase_url",
+    "supabase_key": "supabase_key",
+}
+
+
+def merge_fox_credentials(cli, config, report=False):
+    """
+    Fill in any Fox credential not given on the command line from an apps.yaml-format config
+
+    An explicit command line value always wins, so a one-off run against a different key or
+    inverter does not mean editing apps.yaml.
+
+    A config carrying both an API key and an OAuth token hash is ambiguous, so fox_auth_method
+    decides - the same field the component itself uses to pick between them. With neither
+    declared, whatever is present is used, preferring the key (the component's own default).
+
+    With report=True, returns (merged, used) where used lists the config keys actually taken, so
+    the caller can show them - a key the CLI does not look for otherwise fails silently, with a
+    401 several lines later as its only symptom.
+    """
+    merged = dict(cli)
+    used = []
+
+    auth_method = config.get("fox_auth_method")
+    skip = set()
+    if auth_method == "oauth":
+        skip.add("api_key")
+    elif auth_method == "api_key":
+        skip.add("token_hash")
+        skip.add("token_expires")
+    elif config.get("fox_key") and config.get("fox_token_hash"):
+        skip.add("token_hash")
+        skip.add("token_expires")
+
+    for mapping in (FOX_CLI_CREDENTIAL_KEYS, FOX_CLI_OAUTH_KEYS):
+        for cli_name, config_key in mapping.items():
+            if merged.get(cli_name) or cli_name in skip:
+                continue
+            value = config.get(config_key)
+            # fox_inverter_sn is "string|string_list" in APPS_SCHEMA, but the CLI drives one device
+            if isinstance(value, list):
+                value = value[0] if value else None
+            if value:
+                merged[cli_name] = value
+                used.append(config_key)
+
+    if report:
+        return merged, used
+    return merged
+
+
+async def _await_schedule(fox_api, serial, expected, timeout=90, interval=5):  # pragma: no cover
+    """
+    Read the scheduler back until it agrees with expected, or the timeout runs out
+
+    The Fox scheduler read is eventually consistent - see SCHEDULER_READ_STALE_SECONDS. Reading
+    once, straight after a write, reported a Feedin write as rejected when it had in fact landed:
+    the read 3s after the write still returned the old schedule, and 18s after it returned Feedin.
+
+    Returns (groups, matched, seconds_waited). Argument order into schedules_are_equal matters: it
+    only walks schedule2's keys, so the read-back - which carries the extra
+    exportLimit/importLimit/pvLimit/reactivePower fields a read adds - must be schedule1, the same
+    way set_scheduler calls it.
+    """
+    started = time.time()
+    groups = []
+    while True:
+        read_back = await fox_api.get_scheduler(serial, checkBattery=False) or {}
+        groups = read_back.get("groups", [])
+        waited = int(time.time() - started)
+        if schedules_are_equal(datetime.now(), groups, expected):
+            return groups, True, waited
+        if waited >= timeout:
+            return groups, False, waited
+        print(f"  ...read has not caught up after {waited}s, retrying in {interval}s")
+        await asyncio.sleep(interval)
+
+
+async def test_feedin_schedule(sn, api_key, token_hash, token_expires, supabase_url, supabase_key, user_id, hold_seconds=180):  # pragma: no cover
+    """
+    Live-test the Feed-in First (freeze export) schedule against a real inverter
+
+    Reads the current schedule, writes the schedule a freeze export produces, reads it back to
+    confirm the inverter really accepted the Feedin work mode, holds it long enough to watch what
+    the battery does, then puts the original schedule back.
+
+    The read-back is the point: OPTIONS_WORK_MODE listing "Feedin" only says the enum knows the
+    value, not that the scheduler endpoint accepts it in a written slot (#5022). The hold is the
+    other half - Feed-in First is not an exact SoC hold on this hardware, PV above the export
+    limit still charges the battery, so what to look for is invBatPower near zero while the
+    feed-in power tracks PV minus load, not a dead flat battery.
+
+    The original schedule is restored in a finally block, so a failure part way through - or
+    Ctrl-C during the hold - still puts the inverter back as it was.
+    """
+    if supabase_url:
+        os.environ["SUPABASE_URL"] = supabase_url
+    if supabase_key:
+        os.environ["SUPABASE_KEY"] = supabase_key
+
+    mock_base = MockBase()
+    if user_id:
+        mock_base.args["user_id"] = user_id
+
+    arg_dict = {"key": api_key or "", "automatic": False}
+    if token_hash or supabase_url:
+        arg_dict["auth_method"] = "oauth"
+        arg_dict["token_hash"] = token_hash
+        arg_dict["token_expires_at"] = token_expires
+    fox_api = FoxAPI(mock_base, **arg_dict)
+
+    devices = await fox_api.get_device_list()
+    if not devices:
+        print("No devices found")
+        return
+    serial = sn if sn else devices[0].get("deviceSN")
+    print(f"Using device SN: {serial}")
+
+    await fox_api.get_device_detail(serial)
+
+    # Reading the scheduler is also what populates fdpwr_max/fdsoc_min/device_scheduler_count,
+    # so the schedule below is built from the device's real limits rather than guesses
+    original = await fox_api.get_scheduler(serial, checkBattery=False) or {}
+    original_groups = original.get("groups", [])
+    print(f"Original schedule ({len(original_groups)} groups):\n{json.dumps(original_groups, indent=2)}")
+    if not original_groups:
+        print("WARNING: no original schedule read back - restore will disable the scheduler instead")
+
+    fdPwr_max = fox_api.fdpwr_max.get(serial, 8000)
+    reserve = fox_api.fdsoc_min.get(serial, 10)
+    slot_count = fox_api.device_scheduler_count.get(serial, 0)
+    print(f"Device limits: fdPwr_max={fdPwr_max} fdsoc_min={reserve} slots={slot_count}")
+
+    # Drive the real inference rather than hand-building a Feedin payload: this is exactly the
+    # state Predbat leaves behind for a freeze export - charge rate held at 0 by execute.py while
+    # the export rate is reset to maximum - so a failure here is a failure of the shipped path.
+    fox_api.local_schedule[serial] = {
+        "reserve": reserve,
+        "charge": {"enable": 0, "start_time": "00:00:00", "end_time": "00:00:00", "soc": 100, "power": 0},
+        "discharge": {"enable": 0, "start_time": "00:00:00", "end_time": "00:00:00", "soc": reserve, "power": fdPwr_max},
+    }
+    freeze = fox_api.freeze_export_requested(serial)
+    print(f"freeze_export_requested -> {freeze}")
+    if not freeze:
+        print("ERROR: the freeze export signature was not recognised - aborting without writing anything")
+        return
+
+    schedule = validate_schedule([], reserve, fdPwr_max, slot_count, baseline_work_mode="Feedin")
+    print(f"Writing Feed-in First schedule:\n{json.dumps(schedule, indent=2)}")
+
+    try:
+        write_ok = await fox_api.set_scheduler(serial, schedule)
+        print(f"Write result: {write_ok}")
+
+        read_back_groups, match, waited = await _await_schedule(fox_api, serial, schedule)
+        print(f"Read back schedule after {waited}s:\n{json.dumps(read_back_groups, indent=2)}")
+        print(f"Schedule match: {match}")
+        if not match:
+            print("WARNING: written schedule does not match read-back schedule")
+            print_schedule_diff("written", schedule, "read-back", read_back_groups)
+
+        # The mode surviving the round trip is the claim being tested - an inverter that quietly
+        # substituted SelfUse would look like a working write everywhere else
+        modes = [group.get("workMode") for group in read_back_groups if group.get("enable", 1)]
+        if "Feedin" in modes:
+            print(f"PASS: the inverter accepted Feedin - enabled slot modes are {modes}")
+        else:
+            print(f"FAIL: Feedin did not survive the write - enabled slot modes are {modes}")
+
+        if hold_seconds > 0:
+            print(f"\nHolding Feed-in First for {hold_seconds}s - watch invBatPower (want it near zero) against pvPower and feedinPower")
+            print("Press Ctrl-C to restore the original schedule early\n")
+            deadline = time.time() + hold_seconds
+            while time.time() < deadline:
+                await fox_api.get_real_time_data(serial)
+                values = fox_api.device_values.get(serial, {})
+
+                def reading(name):
+                    """Look a real-time variable up regardless of the casing the API returned."""
+                    for key, item in values.items():
+                        if key.lower() == name.lower():
+                            return "{}{}".format(item.get("value"), item.get("unit", ""))
+                    return "?"
+
+                print(
+                    "  {}  SoC={}  battery={}  pv={}  feed-in={}  meter={}".format(
+                        datetime.now().strftime("%H:%M:%S"),
+                        reading("SoC"),
+                        reading("invBatPower"),
+                        reading("pvPower"),
+                        reading("feedinPower"),
+                        reading("meterPower"),
+                    )
+                )
+                await asyncio.sleep(min(30, max(1, deadline - time.time())))
+    except KeyboardInterrupt:
+        print("\nInterrupted - restoring the original schedule")
+    finally:
+        print("\nRestoring original schedule...")
+        # set_scheduler skips a write whose schedule matches its cache, and the cache can hold
+        # anything by now - including a stale read of the pre-write schedule, which is exactly
+        # what silently skipped the restore and left an inverter in Feedin. A restore must always
+        # write, so drop what the cache believes first.
+        fox_api.device_scheduler.pop(serial, None)
+        fox_api.scheduler_written_groups.pop(serial, None)
+        fox_api.scheduler_write_time.pop(serial, None)
+        restore_ok = await fox_api.set_scheduler(serial, original_groups)
+        restored_groups, back, waited = await _await_schedule(fox_api, serial, original_groups)
+        print(f"Restore write result: {restore_ok}, schedule back to original after {waited}s: {back}")
+        if not back:
+            print("WARNING: the original schedule was NOT restored - check the inverter")
+            print_schedule_diff("original", original_groups, "now", restored_groups)
+
+    print("Done")
+
+
+async def restore_selfuse_schedule(sn, api_key, token_hash, token_expires, supabase_url, supabase_key, user_id):  # pragma: no cover
+    """
+    Write a plain all-day Self Use schedule, to get an inverter out of a mode left behind by a test
+
+    Recovery for the case the live test used to leave behind: a Feed-in First write that landed
+    while a stale read convinced the restore it had nothing to do. Predbat rewrites the schedule
+    on its next cycle anyway, so this is only needed when Predbat is not running against the
+    inverter, or to put it back straight away.
+    """
+    if supabase_url:
+        os.environ["SUPABASE_URL"] = supabase_url
+    if supabase_key:
+        os.environ["SUPABASE_KEY"] = supabase_key
+
+    mock_base = MockBase()
+    if user_id:
+        mock_base.args["user_id"] = user_id
+
+    arg_dict = {"key": api_key or "", "automatic": False}
+    if token_hash or supabase_url:
+        arg_dict["auth_method"] = "oauth"
+        arg_dict["token_hash"] = token_hash
+        arg_dict["token_expires_at"] = token_expires
+    fox_api = FoxAPI(mock_base, **arg_dict)
+
+    devices = await fox_api.get_device_list()
+    if not devices:
+        print("No devices found")
+        return
+    serial = sn if sn else devices[0].get("deviceSN")
+    print(f"Using device SN: {serial}")
+
+    await fox_api.get_device_detail(serial)
+    current = await fox_api.get_scheduler(serial, checkBattery=False) or {}
+    modes = [group.get("workMode") for group in current.get("groups", []) if group.get("enable", 1)]
+    print(f"Current enabled slot modes: {modes}")
+
+    fdPwr_max = fox_api.fdpwr_max.get(serial, 8000)
+    reserve = fox_api.fdsoc_min.get(serial, 10)
+    schedule = validate_schedule([], reserve, fdPwr_max, fox_api.device_scheduler_count.get(serial, 0))
+    print(f"Writing Self Use schedule:\n{json.dumps(schedule, indent=2)}")
+
+    # A restore must always write, whatever the cache believes
+    fox_api.device_scheduler.pop(serial, None)
+    fox_api.scheduler_written_groups.pop(serial, None)
+    fox_api.scheduler_write_time.pop(serial, None)
+    write_ok = await fox_api.set_scheduler(serial, schedule)
+    groups, match, waited = await _await_schedule(fox_api, serial, schedule)
+    modes = [group.get("workMode") for group in groups if group.get("enable", 1)]
+    print(f"Write result: {write_ok}, confirmed after {waited}s: {match}, enabled slot modes now {modes}")
+    if not match:
+        print_schedule_diff("written", schedule, "read-back", groups)
+    print("Done")
+
+
 def main():  # pragma: no cover
     """
     Main function for command line execution
     """
     parser = argparse.ArgumentParser(description="Test Fox API")
     parser.add_argument("--serial", action="store", default=None, help="Fox API serial number")
-    auth_group = parser.add_mutually_exclusive_group(required=True)
+    auth_group = parser.add_mutually_exclusive_group()
     auth_group.add_argument("--api-key", help="Fox API key")
     auth_group.add_argument("--token-hash", action="store", help="Fox API OAuth token hash")
+    parser.add_argument(
+        "--config",
+        action="store",
+        help="Load credentials from an apps.yaml-format file instead of passing them here, resolving !secret as Predbat does. Reads fox_key, fox_auth_method, fox_token_hash, fox_token_expires_at, fox_inverter_sn, and for an OAuth refresh supabase_url, supabase_key and user_id. Anything also given on the command line wins",
+    )
     parser.add_argument("--token-expires", action="store", help="Fox API OAuth token expiry timestamp")
     parser.add_argument("--supabase-url", action="store", help="Supabase URL for OAuth token refresh")
     parser.add_argument("--supabase-key", action="store", help="Supabase anon key for OAuth token refresh")
     parser.add_argument("--user-id", action="store", help="Supabase user ID for OAuth token refresh")
     parser.add_argument("--write-schedule", action="store_true", help="Write a test schedule and read it back instead of running a full test")
+    parser.add_argument("--feedin-schedule", action="store_true", help="Live-test freeze export: write the Feed-in First schedule, read it back, hold it, then restore the original")
+    parser.add_argument("--restore-selfuse", action="store_true", help="Write a plain all-day Self Use schedule, to recover an inverter left in another work mode by a test")
+    parser.add_argument("--hold-seconds", action="store", type=int, default=180, help="How long --feedin-schedule holds Feed-in First while reporting live power, before restoring (default 180, 0 to skip)")
 
     args = parser.parse_args()
     serial = args.serial
@@ -2387,9 +3124,36 @@ def main():  # pragma: no cover
     supabase_key = args.supabase_key
     user_id = args.user_id
 
+    if args.config:
+        try:
+            config, _ = load_apps_yaml(args.config)
+        except (yaml.YAMLError, KeyError, OSError) as exc:
+            parser.error(f"could not read Fox credentials from {args.config}: {exc}")
+        cli_values = {"api_key": api_key, "token_hash": token_hash, "token_expires": token_expires, "serial": serial, "user_id": user_id, "supabase_url": supabase_url, "supabase_key": supabase_key}
+        credentials, used = merge_fox_credentials(cli_values, config, report=True)
+        api_key = credentials["api_key"]
+        token_hash = credentials["token_hash"]
+        token_expires = credentials["token_expires"]
+        serial = credentials["serial"]
+        user_id = credentials["user_id"]
+        supabase_url = credentials["supabase_url"]
+        supabase_key = credentials["supabase_key"]
+        # Name what was taken: a key the CLI does not look for leaves its credential unset, and
+        # the only other symptom is a 401 much further down
+        print("Read from {}: {}".format(args.config, ", ".join(used) if used else "nothing - no keys the CLI looks for"))
+        if token_hash and not (supabase_url and supabase_key):
+            print("Warning: an OAuth token cannot be refreshed without supabase_url and supabase_key - expect 401s once it expires")
+
+    if not api_key and not token_hash:
+        parser.error("no Fox credentials: pass --api-key or --token-hash, or --config pointing at an apps.yaml holding fox_key or fox_token_hash")
+
     # Run the test
     if args.write_schedule:
         asyncio.run(test_write_schedule(serial, api_key, token_hash, token_expires, supabase_url, supabase_key, user_id))
+    elif args.restore_selfuse:
+        asyncio.run(restore_selfuse_schedule(serial, api_key, token_hash, token_expires, supabase_url, supabase_key, user_id))
+    elif args.feedin_schedule:
+        asyncio.run(test_feedin_schedule(serial, api_key, token_hash, token_expires, supabase_url, supabase_key, user_id, hold_seconds=args.hold_seconds))
     else:
         asyncio.run(test_fox_api(serial, api_key, token_hash, token_expires, supabase_url, supabase_key, user_id))
 

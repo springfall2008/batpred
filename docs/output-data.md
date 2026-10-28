@@ -20,7 +20,7 @@ Each Predbat configuration item is named *input_number.predbat_xxx*, *switch.pre
 Each time Predbat runs it auto-generates a dashboard with the filename **predbat_dashboard.yaml** that can be used as a starter for your own Predbat dashboard.
 Depending on how you installed Predbat this predbat_dashboard.yaml file will be held in one of three different directories in Home Assistant:
 
-- if you have used the [Predbat app installation method](install.md#predbat-app-install), it will be in the directory `/addon_configs/6adb4f0d_predbat/`,
+- if you have used the [Predbat app installation method](install.md#predbat-app-install), it will be in the directory `/app_configs/6adb4f0d_predbat/`,
 
 or,
 
@@ -269,6 +269,8 @@ If you toggle this switch in Home Assistant it will force Predbat to perform an 
 
 - **predbat.status** - Gives the current status & errors and logs any changes that Predbat makes to your inverter.
 The different Predbat status values and their meanings are detailed in [what does Predbat do](what-does-predbat-do.md#predbat-status).
+When a warning is reported during a plan update, the update ends by adding the state it carried out after the warning in square brackets, e.g. `Warn: ... [Exporting]`, so the status still starts with `Warn:` or `Error:`.
+An update that stopped before carrying anything out shows the warning or error on its own.
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/e24914b8-93d9-4217-812a-ac25a569a52c)
 
@@ -278,6 +280,10 @@ predbat.status additionally has the following attributes that are automatically 
 - **Debug** - A set of arrays containing Predbat's planned charging and discharging time windows and battery limits (in kWh)
 - **Version** - version of Predbat that's running
 - **Error** - binary value true or false depending upon whether Predbat is in an error status or nor
+- **Run state** (`run_state`) - the status the last plan update carried out, such as `Exporting` or `Demand, Hold for car`, without any warning or error text.
+It stays the same while a warning is shown, and when an update stops before carrying anything out, as the inverter is still following the last one.
+It is empty after a restart until the first update completes.
+Use it in an automation that follows Predbat's status, e.g. `state_attr('predbat.status', 'run_state')`, rather than parsing the status text.
 
 ## Sensor data
 
@@ -294,7 +300,7 @@ Predbat outputs the values it read from your inverters as totals, this gives the
 Predbat outputs the following sensors to predict what your battery is expected to do *over the forecast_hours duration of the plan* with no changes made by Predbat.
 This is considered to be the 'baseline' plan:
 
-NB: All of Predbat's forecasts are from midnight today to the forecast_hours duration (set in apps.yaml) into the future and shouldn't be confused with 'today' figures.
+NB: All of Predbat's forecasts are from midnight today to the forecast_hours duration (set in `apps.yaml`) into the future and shouldn't be confused with 'today' figures.
 
 e.g. predbat.pv_energy is the actual PV energy from midnight today, and for the predicted forecast_hours (typically 48) ahead
 so will be much larger than sensor.solcast_pv_forecast_today which is today's Solcast PV forecast.
@@ -390,11 +396,12 @@ Predbat outputs the following best results under the PV 10% scenario for the for
 The following sensors are used in the in-day adjustment chart - see [creating the Predbat charts](creating-charts.md) and [in-day load adjustment](customisation.md#battery-margins-and-metrics-options):
 
 - predbat.load_energy_actual - Total kWh of house load to end of plan, energy up to 'now' taken from today's actual energy, energy after 'now' from Predbat's prediction.
-Attributes of this actual/predicted energy in 5-minute slots from midnight today to the end of the plan for charting
-- predbat.load_energy_adjusted - Total kWh of predicted house load to end of the plan, adjusted based on variance of today's actual load
+`results` attributes of this actual/predicted energy in 5-minute slots from midnight today to the end of the plan for charting
+- predbat.load_energy_adjusted - Total kWh of predicted house load to end of today, adjusted based on variance of today's actual load
 to the predicted load (based on historical data), dampened according to input_number.predbat_metric_inday_adjust_damping.
-Attributes contain the 5-minute slot forecasts to the end of the plan for charting
-- predbat.load_energy_predicted - Total predicted kWh of house load to end of plan, attributes of predicted load in 5-minute slots from midnight today to the end of the plan for charting
+`results` attribute contain the 5-minute slot forecasts to the end of the plan for charting, `today` attribute contains the total predicted today (same as the entity state), `today_so_far` the cumulative actual load energy consumed so far today, and `today_remaining` the remaining load energy predicted for today.
+- predbat.load_energy_predicted - Total predicted kWh of house load to end of today, `results` attribute of predicted load in 5-minute slots from midnight today to the end of the plan for charting and `today`, `today_so_far` and `today_remaining` that are similar to predbat.load_energy_adjusted.<BR>
+**NB:** If you are using the [LoadML](load-ml.md) engine for your load prediction instead of days_previous, then be aware that the entity value and attributes of predbat.load_energy_predicted are not populated correctly. Use predbat.load_energy_adjusted instead until this is fixed.
 - predbat.load_inday_adjustment - the % in-day adjustment factor used to adjust Predbat's predicted load by the actual load today.
 After midnight when insufficient data is available, this blends yesterday's final adjustment factor with today's developing factor:
     - **0-3 hours**: Uses 100% of yesterday's adjustment factor
@@ -407,14 +414,16 @@ After midnight when insufficient data is available, this blends yesterday's fina
 ## 'Today' energy data
 
 The following sensor's output by Predbat give the 'today' energy readings.
-They mirror input sensors fed into Predbat in apps.yaml and are used in the data prediction chart - see [creating the Predbat charts](creating-charts.md):
+They mirror input sensors fed into Predbat in `apps.yaml` and are used in the data prediction chart - see [creating the Predbat charts](creating-charts.md):
 
-- predbat.export_energy_h0 - Mirrors the export_today sensor configured in apps.yaml and gives today's total kWh of export energy
-- predbat.import_energy_h0 - Mirrors the import_today sensor configured in apps.yaml and gives today's total kWh of import energy
-- predbat.load_energy_h0 - Mirrors the load_today sensor configured in apps.yaml and gives today's total kWh of house load energy.
-Note that if you have configured [load scaling](customisation.md#scaling-and-weight-options) then load_energy_h0 will have been scaled by the scaling factor.
-- predbat.pv_energy_h0 - Mirrors the pv_today sensor configured in apps.yaml and gives today's total kWh of generated PV energy
-- predbat.soc_kw_h0 - Mirrors the soc_kwh sensor configured in apps.yaml and gives today's total kWh of battery state of charge (SoC).
+- predbat.export_energy_h0 - Mirrors the export_today sensor configured in `apps.yaml` and gives today's total kWh of export energy
+- predbat.import_energy_h0 - Mirrors the import_today sensor configured in `apps.yaml` and gives today's total kWh of import energy
+- predbat.load_energy_h0 - Mirrors the load_today sensor configured in `apps.yaml` and gives today's total kWh of house load energy, as measured:
+it is not scaled by [load scaling](customisation.md#scaling-and-weight-options) and car charging and iBoost energy are not subtracted.
+The `source` attribute says where the figure came from: `load_today`, `ge_cloud`, or `load_forecast` when no load_today sensor is configured (in which case it is a forecast, not a measurement).
+Predbat uses this sensor's history to fill gaps in load_today, for example after you change to a different load sensor - see [load filtering](apps-yaml.md#load-filtering).
+- predbat.pv_energy_h0 - Mirrors the pv_today sensor configured in `apps.yaml` and gives today's total kWh of generated PV energy
+- predbat.soc_kw_h0 - Mirrors the soc_kwh sensor configured in `apps.yaml` and gives today's total kWh of battery state of charge (SoC).
 Note that if you have configured [battery scaling](apps-yaml.md#battery-size-scaling) then soc_kw_h0 will have been scaled by the configured scaling factor
 
 ## Battery status
@@ -475,7 +484,7 @@ These values are read from `apps.yaml` or from the inverters themselves, so unli
 The sensor state is the total AC inverter limit in kW, with the rest of the detail held in the attributes:
 
 | Attribute | Meaning |
-|-----------|---------|
+| ----------- | --------- |
 | inverter_limit | Total AC throughput limit in kW - see [inverter_limit](apps-yaml.md#inverter_limit) |
 | export_limit | Total AC export limit in kW - see [export_limit](apps-yaml.md#export_limit). Note this is your inverter's power cap and is a different thing to the predbat.export_limit plan sensor |
 | pv_ac_limit | Modelled AC output limit of an AC-coupled PV system in kW - see [pv_ac_limit](apps-yaml.md#pv_ac_limit) |
@@ -530,6 +539,10 @@ content: >-
 You'll need to change the hard-coded timestamp "2024-12-12..." to the date/time you first started counting Predbat inverter writes from to get the number of days and average writes per day correct.
 
 *TIP:* If your inverter is ever replaced and you want to reset the inverter register writes back to zero, simply update the entity state of predbat.inverter_register_writes using Settings / Developer Tools / States and search for the entity.
+
+## Battery data
+
+- sensor.predbat_soc_max_calculated[_N] - Created if [automatic battery size scaling is enabled in apps.yaml](apps-yaml.md#battery-size-scaling), contains a 7 day rolling history of daily estimates of usable battery capacity, calculated from historical charging data compared to nominal capacity.
 
 ## Car data
 
@@ -616,7 +629,7 @@ They are used in the daily cost-saving and total cost-savings charts - see [crea
 
 - predbat.cost_yesterday - A sensor that gives the total energy costs in pence for yesterday (00:00-23:59 on the previous day)
 - predbat.savings_total_actual - A running total in pence of the above cost_yesterday sensor, with attribute of the total in pounds
-- predbat.savings_total_predbat - A running total in pence of the below savings_yesterday_predbat sensor, with attribute of the total in pounds
+- predbat.savings_total_predbat - A running total in pence of the *real* (unadjusted) saving each day, deliberately not the same figure as the below savings_yesterday_predbat sensor's own state - see the note below
 - predbat.savings_total_pvbat - A running total of the below savings_yesterday_pvbat sensor, with attribute of the total in pounds
 - predbat.savings_total_soc - The simulated final SoC in kWh at the end of the most recent 'without Predbat' day simulation. This is used as the starting SoC for the next day's simulation,
   so that the simulated 'without Predbat' universe is self-consistent across days. It will differ from the actual midnight SoC tracked in the 'History' view.
@@ -625,8 +638,10 @@ and only charging at the lowest import rate in the 24 hour period
 - predbat.savings_yesterday_pvbat - A sensor which tells you how much money you saved from using Predbat
 vs not having a PV and battery system at all and all house load being met from grid import
 
+Note: predbat.savings_yesterday_predbat's own displayed state is the *adjusted* saving (it factors in the change in battery value across the day, via the `saving_adjusted` attribute), while predbat.savings_total_predbat accumulates the *real*, unadjusted `saving_real` attribute from that same sensor. This is deliberate - the running total is meant to track real money saved, not a figure that includes the battery-value adjustment - but it means the two numbers are not simply "yesterday's bar vs the running total plus that bar", and the daily figure can legitimately be negative on a day the total still rises. Both `saving_real` and `saving_adjusted` are published as attributes on predbat.savings_yesterday_predbat if you want to chart either one explicitly.
+
 Note: The savings using Predbat are calculated by default compared to having one fixed nightly charge slot set to charge at the lowest import rate with a target of 100%
-You can change the number of simulated charge slots in apps.yaml by setting **calculate_savings_max_charge_slots** to the number of slots to allow.
+You can change the number of simulated charge slots in `apps.yaml` by setting **calculate_savings_max_charge_slots** to the number of slots to allow.
 If set to 0 then Demand (ECO) mode will be used as the baseline or if non-zero then the maximum number of slots can be set (e.g. 2).
 
 Note: The 'without Predbat' simulation is a self-consistent parallel universe — each day's starting SoC is the ending SoC of the previous day's simulation, not the actual midnight SoC.
@@ -650,9 +665,9 @@ levels and at different times in the upcoming forecast window. The results are p
     - `grid_export_now` - Current grid export rate (p/kWh)
     - `baseline_metric` - Internal baseline cost used to compute deltas (standing charge excluded)
     - `rate_now_low_consumption` - Marginal cost now for the 'low' (1 kWh) load level
-    - `rate_now_med_consumption` - Marginal cost now for the 'med' (2 kWh) load level
+    - `rate_now_med_consumption` - Marginal cost now for the 'medium' (2 kWh) load level
     - `rate_now_high_consumption` - Marginal cost now for the 'high' (4 kWh) load level
-    - `rate_now_ev_consumption` - Marginal cost now for the 'ev' (8 kWh) load level
+    - `rate_now_ev_consumption` - Marginal cost now for the 'EV' (8 kWh) load level
 
 ### Cheap/moderate binary sensors
 
@@ -678,14 +693,16 @@ These binary sensors are useful in Home Assistant automations, e.g. to start an 
 ## Solar forecast data
 
 The following sensors give the forecast Solar data from Solcast.
-Predbat populates these sensors irrespective of whether you are using the [Predbat direct Solcast or Solcast integration method](install.md#solcast-install) to get your Solar forecast,
+Predbat populates these sensors irrespective of whether you are using the [Predbat direct Solcast or Solcast integration method](install.md#solar-forecast-install) to get your Solar forecast,
 but if you are using the Solcast integration then the Predbat sensors mirror the similarly named Solcast integration sensors so could be disabled if you so wish.
 
 - sensor.predbat_pv_today - Tracks the PV forecast in kWh for today, attributes give the total today, remaining amount today and the half-hourly data
 - sensor.predbat_pv_tomorrow - Tracks the PV forecast in kWh for tomorrow, attributes give the total today, remaining amount today and the half-hourly data
 - sensor.predbat_pv_d2 - Similar to the above, but tracking the PV forecast for the day after tomorrow
 - sensor.predbat_pv_d3 - PV forecast for two days after tomorrow
-- sensor.predbat_pv_forecast_h0 - Tracks the PV 'power now' forecast in Watts, attributes give the 10% and 90% power now forecast
+- sensor.predbat_pv_forecast_h0 - Tracks the PV 'power now' forecast in kW (calibrated while PV calibration is on), attributes give the 10% and 90% power now forecast
+- sensor.predbat_pv_forecast_h0_uncalibrated - The PV 'power now' forecast in kW exactly as your solar provider gave it, before PV calibration and `pv_scaling`.
+PV calibration measures your actual generation against its history, so [keep it in your recorder](faq.md#predbat-is-causing-exceed-maximum-size-warning-messages-in-the-home-assistant-core-log).
 
 The solar sensor attributes include:
 
@@ -695,6 +712,8 @@ The solar sensor attributes include:
 - totalCL - total calibrated PV forecast for the day, this is the PV forecast adjusted by Predbat based on historical forecast vs generation data. The calibration should take account of shading or panel performance issues
 - remaining/remaining10/remaining90/remainingCL - forecast solar generation for the remainder of the day
 - detailedForecast - a half hourly breakdown of solar forecast for the day, with similar PV estimate, 10% estimate, 90% estimate and calibrated estimate values
+
+- binary_sensor.predbat_dawn - Set to 'on' when the current time is past dawn (forecast solar power at or above [low_power_pv_threshold_w](customisation.md#inverter-control-options)), 'off' before dawn or when no PV forecast is available. This reflects the same dawn boundary Predbat uses to split a low-power charge window at sunrise, not whether solar is producing enough to be useful right now.
 
 ## Dummy inverter sensors
 
@@ -712,6 +731,20 @@ These sensors can be ignored and excluded from the recorder history if you wish.
 
 - sensor.predbat_alertfeed_status - Gives you data on the currently active weather alert (if configured) and in the attributes a list of all active alerts with their details
 
+## Control failure data
+
+Predbat checks that the battery actually does what it was commanded during each Charging, Exporting (force export), Freeze charging and Freeze exporting slot.
+Five minutes after an inverter enters one of these modes, Predbat compares the measured battery power against the rate it asked that inverter for, allowing for the battery's charge curve, temperature and solar.
+If the battery stays well short of it (below 25% of that rate) or, in a freeze mode, flows the wrong way by more than 200W, for three readings in a row, the slot is counted as a control failure.
+Each failed slot logs one warning and is counted once, however long it lasts.
+Nothing is checked in read-only mode, while an inverter is calibrating, after the slot has ended, or when the inverter's battery power sensor cannot be read.
+
+- **predbat.control_failures** - the number of failed slots in the last 24 hours. The `events` attribute lists recent failures (inverter, mode, slot times, requested and measured power, and how many minutes the battery was not following the command) and `by_mode` breaks the count down by mode.
+- **predbat.control_failures_total** - the lifetime count of failed slots, suitable for Home Assistant long-term statistics.
+
+Common causes are an inverter app or schedule overriding Predbat's mode, a battery management system limiting the charge or discharge rate, a command that never reached the inverter, or a cloud integration that reports battery power several minutes late.
+The same data is shown in the Control Failures section of the [Metrics view](web-interface.md#metrics-view).
+
 ## Predbat Logfile
 
 Predbat writes detailed logging, status and progress activity information to a logfile as it runs and so this file should be checked if **predbat.status** reports an error,
@@ -723,11 +756,11 @@ If you are using the Predbat app then the logfile can easily be viewed via the '
 
 To directly view the physical logfile, it can be found in one of three different directories in Home Assistant with slightly different filenames depending on how you installed Predbat:
 
-- if you have used the [Predbat app installation method](install.md#predbat-app-install), the logfile will be `/addon_configs/6adb4f0d_predbat/predbat.log`,
+- if you have used the [Predbat app installation method](install.md#predbat-app-install), the logfile will be `/app_configs/6adb4f0d_predbat/predbat.log`,
 
-- if the [HACS, Appdaemon app then Predbat installation method](install.md#predbat-installation-into-appdaemon), it's `/homeassistant/appdaemon/appdaemon.log`, or
+- if the original (but now deprecated) [HACS, Appdaemon app then Predbat installation method](install.md#predbat-installation-into-appdaemon), it's `/homeassistant/appdaemon/appdaemon.log`, or
 
-- if the combined AppDaemon/Predbat app installation method was used, it's `/addon_configs/46f69597_appdaemon-predbat/predbat.log`.
+- if the (also deprecated) combined AppDaemon/Predbat app installation method was used, it's `/app_configs/46f69597_appdaemon-predbat/predbat.log`.
 
 You will need to use a file editor within Home Assistant (e.g. either the File editor or Studio Code Server apps)
 to view Predbat's logfile if you are not using the Predbat app.
@@ -846,17 +879,17 @@ actions:
             value_template: "{{ restart_app == 'GivTCP' }}"
         sequence:
           - alias: Restart GivTCP app
-            action: hassio.addon_restart
+            action: hassio.app_restart
             data:
-              addon: 533ea71a_givtcp
+              app: 533ea71a_givtcp
       - conditions:
           - condition: template
             value_template: "{{ restart_app == 'Mosquitto' }}"
         sequence:
           - alias: Restart Mosquitto app
-            action: hassio.addon_restart
+            action: hassio.app_restart
             data:
-              addon: core_mosquitto
+              app: core_mosquitto
 trace:
   stored_traces: 20
 mode: single
@@ -897,6 +930,15 @@ triggers:
   - trigger: template
     alias: Predbat status contains 'Error' for 10 minutes
     value_template: "{{ 'Error' in states('predbat.status') }}"
+    for:
+      minutes: 10
+    variables:
+      alert_text: >-
+        Predbat status is {{ states('predbat.status') }}, error={{
+        state_attr('predbat.status', 'error') }}
+  - trigger: template
+    alias: Predbat status contains 'unable to read REST data' for 10 minutes
+    value_template: "{{ 'unable to read REST data' in states('predbat.status') }}"
     for:
       minutes: 10
     variables:
@@ -1011,9 +1053,9 @@ actions:
       - condition: template
         value_template: "{{ restart_predbat == 'Y' }}"
     then:
-      - action: hassio.addon_restart
+      - action: hassio.app_restart
         data:
-          addon: 6adb4f0d_predbat
+          app: 6adb4f0d_predbat
         alias: Restart Predbat app
 mode: single
 ```

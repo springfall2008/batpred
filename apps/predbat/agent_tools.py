@@ -1128,7 +1128,7 @@ class PredbatTools:
                     continue
                 if callable(value):
                     continue
-                if key == "args":
+                if key in ("args", "args_from_apps_yaml"):
                     value = mask_secret_args(value)
 
                 fits, safe, size = measure_state_value(value, max_bytes)
@@ -1254,7 +1254,6 @@ class PredbatTools:
             debug_enable, _ = self.base.get_ha_config("debug_enable", None)
             read_only, _ = self.base.get_ha_config("set_read_only", None)
             predbat_mode, _ = self.base.get_ha_config("mode", None)
-            num_cars, _ = self.base.get_ha_config("num_cars", None)
             status_entity = self.prefix + ".status"
             last_updated = self.base.get_state_wrapper(status_entity, attribute="last_updated", default=None)
             soc_percent = calc_percent_limit(self.base.soc_kw, self.base.soc_max)
@@ -1270,7 +1269,7 @@ class PredbatTools:
                 "soc_percent": soc_percent,
                 "reserve": self.base.reserve,
                 "mode": predbat_mode,
-                "num_cars": num_cars,
+                "num_cars": self.base.num_cars,
                 "carbon_enable": self.base.carbon_enable,
                 "iboost_enable": self.base.iboost_enable,
                 "forecast_minutes": self.base.forecast_minutes,

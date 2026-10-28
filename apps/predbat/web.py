@@ -30,6 +30,7 @@ import shutil
 import html as html_module
 import urllib.parse
 import traceback
+import bisect
 import threading
 import io
 from io import StringIO
@@ -49,7 +50,10 @@ from web_helper import (
     get_apps_css,
     get_html_config_css,
     get_apps_js,
+    get_apps_filter_js,
+    get_filter_css,
     get_components_css,
+    get_discovery_css,
     get_entity_modal_css,
     get_component_edit_modal_css,
     get_entity_modal_js,
@@ -64,23 +68,48 @@ from web_helper import (
     get_browse_css,
     get_entity_detailed_row_js,
     get_internals_css,
+    get_kraken_key_page_html,
     get_internals_js,
     get_dashboard_css,
     get_dashboard_collapsible_js,
 )
 
-from utils import calc_percent_limit, str2time, dp0, dp2, dp4, format_time_ago, get_override_time_from_string, history_attribute, prune_today, mask_secret_args, read_predbat_log, classify_log_line, log_line_included
-from utils import is_data_numerical, ROOT_YAML_KEY, YAML_DUMP_WIDTH, update_nested_yaml_value  # noqa: F401 - re-exported: moved to utils.py, agent_tools.py/chat_tools.py must not import from web.py
-from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA
+from utils import (
+    strptime_aware,
+    calc_percent_limit,
+    str2time,
+    dp0,
+    dp2,
+    dp4,
+    format_time_ago,
+    get_override_time_from_string,
+    history_attribute,
+    prune_today,
+    mask_secret_args,
+    mask_secret_yaml_text,
+    read_predbat_log,
+    classify_log_line,
+    log_line_included,
+    predbat_log_file_prev,
+    is_secret_key,
+)
+from utils import is_data_numerical, ROOT_YAML_KEY, SECRET_MASK, YAML_DUMP_WIDTH, parse_yaml_path, resolve_nested_yaml_value, update_nested_yaml_value  # noqa: F401 - re-exported: moved to utils.py, agent_tools.py/chat_tools.py must not import from web.py
+from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA, MANUAL_RATE_MAX_MINUTES, MANUAL_TIME_MAX_MINUTES
 from predbat import THIS_VERSION_DISPLAY
 from component_base import ComponentBase
 from config import APPS_SCHEMA
+from compare import check_compare_list
 import debug_history
 from web_annual import AnnualPage
 from web_chat import WebChat
 from web_metrics_dashboard import get_metrics_dashboard_css, get_metrics_dashboard_body
 from predbat_metrics import metrics_handler, metrics_json_handler, metrics, PROMETHEUS_AVAILABLE
 from marginal import MARGINAL_EXTRA_KWH_LEVEL_NAMES, MARGINAL_EXTRA_KWH_LEVELS, MARGINAL_TIME_OFFSETS
+
+# How many of the newest debug-history snapshots the dashboard's one-click archive bundles.
+# debug_history_count reaches 500 since #5070 and the archive is built in memory, so this is the
+# point where a single download stops being practical - not a limit on what is retained on disk.
+DEBUG_HISTORY_DOWNLOAD_MAX = 16
 
 
 def state_as_of_slots(records, slots):
@@ -126,6 +155,7 @@ def build_entity_history_table_data(entity_selections, entity_data_fetch):
     """
     entity_records = []
     all_timestamps_30min = set()
+    following_timestamps_30min = set()
 
     for selection in entity_selections:
         entity_id = selection["entity_id"]
@@ -158,12 +188,25 @@ def build_entity_history_table_data(entity_selections, entity_data_fetch):
                     # A record makes the window it landed in a row, so activity is always on screen
                     minutes = last_updated_stamp.hour * 60 + last_updated_stamp.minute
                     rounded_minutes_30 = (minutes // 30) * 30
-                    all_timestamps_30min.add(last_updated_stamp.replace(minute=rounded_minutes_30 % 60, hour=rounded_minutes_30 // 60, second=0, microsecond=0))
+                    window_start = last_updated_stamp.replace(minute=rounded_minutes_30 % 60, hour=rounded_minutes_30 // 60, second=0, microsecond=0)
+                    all_timestamps_30min.add(window_start)
+
+                    # A row reports the state at its own start, so a change part way through a window
+                    # first shows in the NEXT row. An entity that only records on a change leaves that
+                    # window empty, and without a row there the change was hidden as "unchanged" until
+                    # the next record - which was then flagged as the change, hours late.
+                    following_timestamps_30min.add(window_start + timedelta(minutes=30))
 
         # str2time is only reliable for ordering once parsed - the raw strings mix UTC history with
         # the local-time "now" record get_history_with_now() appends
         records.sort(key=lambda record: record[0])
         entity_records.append(records)
+
+    # Never add a row beyond the newest record, that would be a row in the future
+    newest_record = max((records[-1][0] for records in entity_records if records), default=None)
+    for following in following_timestamps_30min:
+        if following <= newest_record:
+            all_timestamps_30min.add(following)
 
     # Sort timestamps in reverse chronological order
     sorted_timestamps_30min = sorted(all_timestamps_30min, reverse=True)
@@ -248,6 +291,57 @@ def resolve_group_unit_and_name(entity_id, dashboard_values, live_unit=None, liv
         unit = live_unit or ""
         friendly_name = live_friendly_name or ""
     return unit or "(no unit)", friendly_name or entity_id
+
+
+def subtract_series(base, subtract, max_gap_seconds=300):
+    """Subtract one time series from another, matching on nearest time rather than on exact timestamp.
+
+    The two series come from different entities, which Home Assistant records independently - their
+    samples land a moment apart and prune_today() keys each result on its own source timestamp, so a
+    dict lookup by key misses essentially every time and silently subtracts nothing, leaving two
+    identical lines on the chart.
+
+    Nearest rather than most-recent-at-or-before: both are published in the same cycle, so the skew
+    between them is jitter rather than a real time difference, and it falls either way. Taking only
+    the earlier sample would pair a load reading with a car value from the previous cycle whenever the
+    jitter went the wrong way - visible the moment the car stops, where a stale reading would wipe out
+    the whole house figure for one point.
+
+    Clamped at zero: the two sensors run on their own cadences, so one can momentarily exceed the
+    other, and that has to read as nothing left rather than as negative power.
+
+    Matching is bounded by max_gap_seconds, one publish cycle. Beyond that the nearest sample is not
+    evidence of anything - a car sensor that stopped reporting hours ago would otherwise keep being
+    subtracted from every later point, wiping out the house figure for as long as it stayed away.
+
+    Args:
+    - base: {timestamp: value} to subtract from
+    - subtract: {timestamp: value} to subtract, may be empty
+    - max_gap_seconds: how far a sample may be from a base point and still count
+
+    Returns:
+    - dict: same keys as base, or empty when there is nothing to subtract
+    """
+    if not base or not subtract:
+        return {}
+    points = sorted((str2time(stamp), value) for stamp, value in subtract.items())
+    times = [point[0] for point in points]
+    result = {}
+    for stamp, value in base.items():
+        when = str2time(stamp)
+        index = bisect.bisect_left(times, when)
+        candidates = []
+        if index < len(points):
+            candidates.append(points[index])
+        if index > 0:
+            candidates.append(points[index - 1])
+        other = 0
+        if candidates:
+            nearest = min(candidates, key=lambda point: abs((point[0] - when).total_seconds()))
+            if abs((nearest[0] - when).total_seconds()) <= max_gap_seconds:
+                other = nearest[1]
+        result[stamp] = dp4(max(value - other, 0))
+    return result
 
 
 class WebInterface(ComponentBase):
@@ -437,6 +531,7 @@ class WebInterface(ComponentBase):
         app.router.add_get("/log", self.html_log)
         app.router.add_get("/apps", self.html_apps)
         app.router.add_post("/apps", self.html_apps_post)
+        app.router.add_get("/apps_value", self.html_apps_value)
         app.router.add_get("/charts", self.html_charts)
         app.router.add_get("/config", self.html_config)
         app.router.add_get("/entity", self.html_entity)
@@ -446,6 +541,7 @@ class WebInterface(ComponentBase):
         app.router.add_post("/dash", self.html_dash_post)
         app.router.add_get("/dash_content", self.html_dash_content)
         app.router.add_get("/components", self.html_components)
+        app.router.add_get("/discovery", self.html_discovery)
         app.router.add_get("/component_entities", self.html_component_entities)
         app.router.add_post("/component_restart", self.html_component_restart)
         app.router.add_get("/component_config", self.html_component_config)
@@ -457,7 +553,7 @@ class WebInterface(ComponentBase):
         app.router.add_get("/debug_plan", self.html_debug_plan)
         app.router.add_get("/debug_history_list", self.html_debug_history_list)
         app.router.add_get("/debug_history_download", self.html_debug_history_download)
-        app.router.add_get("/debug_history_download_all", self.html_debug_history_download_all)
+        app.router.add_get("/debug_history_download_recent", self.html_debug_history_download_recent)
         app.router.add_get("/compare", self.html_compare)
         app.router.add_post("/compare", self.html_compare_post)
         self._register_annual_routes(app)
@@ -483,6 +579,8 @@ class WebInterface(ComponentBase):
         app.router.add_get("/internals", self.html_internals)
         app.router.add_get("/api/internals", self.html_api_internals)
         app.router.add_get("/api/internals/download", self.html_api_internals_download)
+        app.router.add_get("/kraken_key", self.html_kraken_key)
+        app.router.add_post("/api/kraken_key", self.html_api_kraken_key)
         app.router.add_get("/api/status", self.html_api_get_status)
         app.router.add_get("/metrics", metrics_handler)
         app.router.add_get("/metrics/json", metrics_json_handler)
@@ -982,11 +1080,11 @@ class WebInterface(ComponentBase):
         text += '<div style="flex: 1;">\n'
         text += "<h2>Debug</h2>\n"
         text += "<table>\n"
-        text += "<tr><td>Download</td><td><a href='javascript:void(0)' onclick='downloadLiveApps()'>apps.yaml (live)</a> | <a href='./debug_apps'>apps.yaml (file)</a></td></tr>\n"
+        text += "<tr><td>Download</td><td><a href='javascript:void(0)' onclick='downloadLiveApps()'>apps.yaml (live)</a> | <a href='javascript:void(0)' onclick='downloadFileApps()'>apps.yaml (file)</a></td></tr>\n"
         text += "<tr><td>Create</td><td><a href='./debug_yaml'>predbat_debug.yaml</a></td></tr>\n"
         text += "<tr><td>Download</td><td><a href='./debug_log'>predbat.log</a></td></tr>\n"
         text += "<tr><td>Download</td><td><a href='./debug_plan'>predbat_plan.html</a></td></tr>\n"
-        text += "<tr><td>History</td><td><a href='./debug_history_download_all'>Download all (.tgz)</a></td></tr>\n"
+        text += "<tr><td>History</td><td><a href='./debug_history_download_recent'>Download recent</a></td></tr>\n"
         text += "<tr><td>Restart</td><td><button onclick='restartPredbat()' style='background-color: #ff4444; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold;'>Restart Predbat</button></td></tr>\n"
         # The HA Companion app's embedded webview does not act on Content-Disposition: attachment,
         # so it renders these downloads inline instead of saving them - a client limitation with no
@@ -2486,21 +2584,25 @@ chart.render();
         baseline_timestamp = baseline_json.get("timestamp", None) if baseline_json else None
 
         # Get current manual overrides
-        manual_charge_times = self.base.manual_times("manual_charge")
-        manual_export_times = self.base.manual_times("manual_export")
-        manual_freeze_charge_times = self.base.manual_times("manual_freeze_charge")
-        manual_freeze_export_times = self.base.manual_times("manual_freeze_export")
-        manual_demand_times = self.base.manual_times("manual_demand")
-        manual_import_rates = self.base.manual_rates("manual_import_rates")
-        manual_export_rates = self.base.manual_rates("manual_export_rates")
-        manual_load_adjust = self.base.manual_rates("manual_load_adjust")
-        manual_soc_keep = self.base.manual_rates("manual_soc")
+        # Read-only: these run on the web server's own thread, so writing the decoded
+        # selection back could persist times captured mid-recompute (#4900)
+        manual_charge_times = self.base.manual_times("manual_charge", update=False)
+        manual_export_times = self.base.manual_times("manual_export", update=False)
+        manual_freeze_charge_times = self.base.manual_times("manual_freeze_charge", update=False)
+        manual_freeze_export_times = self.base.manual_times("manual_freeze_export", update=False)
+        manual_demand_times = self.base.manual_times("manual_demand", update=False)
+        manual_import_rates = self.base.manual_rates("manual_import_rates", update=False)
+        manual_export_rates = self.base.manual_rates("manual_export_rates", update=False)
+        manual_load_adjust = self.base.manual_rates("manual_load_adjust", update=False)
+        manual_soc_keep = self.base.manual_rates("manual_soc", update=False)
+        manual_soc_max_keep = self.base.manual_rates("manual_soc_max", update=False)
 
         # Convert manual rates dicts to list format for JavaScript
         manual_import_rates_list = [{"minutes": k, "rate": v} for k, v in manual_import_rates.items()]
         manual_export_rates_list = [{"minutes": k, "rate": v} for k, v in manual_export_rates.items()]
         manual_load_adjust_list = [{"minutes": k, "adjustment": v} for k, v in manual_load_adjust.items()]
         manual_soc_list = [{"minutes": k, "target": v} for k, v in manual_soc_keep.items()]
+        manual_soc_max_list = [{"minutes": k, "target": v} for k, v in manual_soc_max_keep.items()]
 
         # Build overrides object
         overrides = {
@@ -2513,6 +2615,7 @@ chart.render();
             "manual_export_rates": manual_export_rates_list,
             "manual_load_adjust": manual_load_adjust_list,
             "manual_soc": manual_soc_list,
+            "manual_soc_max": manual_soc_max_list,
         }
 
         # Calculate hash of overrides for change detection
@@ -2559,7 +2662,7 @@ chart.render();
         text += get_plan_css()
 
         # Add warning/error divs
-        text += '<div id="staleWarning" style="display:none; padding:10px; background:#fff3cd; color:#856404; border:1px solid #ffc107; margin-bottom:10px;">&#9888;&#65039; Plan data is stale (last updated >15 minutes ago)</div>'
+        text += '<div id="staleWarning" style="display:none; padding:10px; background:#fff3cd; color:#856404; border:1px solid #ffc107; margin-bottom:10px;">&#9888;&#65039; Plan data is stale</div>'
         text += '<div id="planError" style="display:none; padding:10px; background:#fee; color:#c00; border:1px solid #c00; margin-bottom:10px;"></div>'
 
         # Add view switcher buttons
@@ -2580,21 +2683,25 @@ chart.render();
         baseline_json = self.get_state_wrapper(entity_id=self.prefix + ".savings_yesterday_predbat", attribute="json", default=None)
 
         # Fetch override data
-        manual_charge_times = self.base.manual_times("manual_charge")
-        manual_export_times = self.base.manual_times("manual_export")
-        manual_freeze_charge_times = self.base.manual_times("manual_freeze_charge")
-        manual_freeze_export_times = self.base.manual_times("manual_freeze_export")
-        manual_demand_times = self.base.manual_times("manual_demand")
-        manual_import_rates = self.base.manual_rates("manual_import_rates")
-        manual_export_rates = self.base.manual_rates("manual_export_rates")
-        manual_load_adjust = self.base.manual_rates("manual_load_adjust")
-        manual_soc_keep = self.base.manual_rates("manual_soc")
+        # Read-only: these run on the web server's own thread, so writing the decoded
+        # selection back could persist times captured mid-recompute (#4900)
+        manual_charge_times = self.base.manual_times("manual_charge", update=False)
+        manual_export_times = self.base.manual_times("manual_export", update=False)
+        manual_freeze_charge_times = self.base.manual_times("manual_freeze_charge", update=False)
+        manual_freeze_export_times = self.base.manual_times("manual_freeze_export", update=False)
+        manual_demand_times = self.base.manual_times("manual_demand", update=False)
+        manual_import_rates = self.base.manual_rates("manual_import_rates", update=False)
+        manual_export_rates = self.base.manual_rates("manual_export_rates", update=False)
+        manual_load_adjust = self.base.manual_rates("manual_load_adjust", update=False)
+        manual_soc_keep = self.base.manual_rates("manual_soc", update=False)
+        manual_soc_max_keep = self.base.manual_rates("manual_soc_max", update=False)
 
         # Convert manual rates dicts to list format for JavaScript
         manual_import_rates_list = [{"minutes": k, "rate": v} for k, v in manual_import_rates.items()]
         manual_export_rates_list = [{"minutes": k, "rate": v} for k, v in manual_export_rates.items()]
         manual_load_adjust_list = [{"minutes": k, "adjustment": v} for k, v in manual_load_adjust.items()]
         manual_soc_list = [{"minutes": k, "target": v} for k, v in manual_soc_keep.items()]
+        manual_soc_max_list = [{"minutes": k, "target": v} for k, v in manual_soc_max_keep.items()]
 
         # Build overrides object
         overrides = {
@@ -2607,6 +2714,7 @@ chart.render();
             "manual_export_rates": manual_export_rates_list,
             "manual_load_adjust": manual_load_adjust_list,
             "manual_soc": manual_soc_list,
+            "manual_soc_max": manual_soc_max_list,
         }
 
         # Calculate hash of overrides for change detection
@@ -2792,6 +2900,10 @@ chart.render();
             text += "<table>"
             for idx, item in enumerate(value):
                 nested_path = f"{list_path}[{idx}]"
+                # An apps.yaml key can hold any character, including the quotes the attributes
+                # below are delimited with - escape once here so a key such as "it's" cannot
+                # truncate data-nested-path/data-path and hand the browser a wrong path
+                nested_path_attr = html_module.escape(nested_path, quote=True)
 
                 # Check if this list item is editable
                 can_edit = self.is_editable_value(item)
@@ -2805,9 +2917,9 @@ chart.render();
                     if can_edit:
                         if isinstance(item, bool):
                             toggle_class = "toggle-button active" if item else "toggle-button"
-                            actions_cell = f'<button class="{toggle_class}" onclick="toggleNestedValue({nested_row_id})" data-value="{str(item).lower()}" data-path="{nested_path}"></button>'
+                            actions_cell = f'<button class="{toggle_class}" onclick="toggleNestedValue({nested_row_id})" data-value="{str(item).lower()}" data-path="{nested_path_attr}"></button>'
                         else:
-                            actions_cell = f'<button class="edit-button" onclick="editNestedValue({nested_row_id})" data-path="{nested_path}">Edit</button>'
+                            actions_cell = f'<button class="edit-button" onclick="editNestedValue({nested_row_id})" data-path="{nested_path_attr}">Edit</button>'
 
                         # Store the nested value info for later processing
                         if not hasattr(self, "_nested_values"):
@@ -2820,7 +2932,7 @@ chart.render();
                 raw_value = self.resolve_value_raw(arg, item)
 
                 if nested_row_id is not None:
-                    text += f"<tr id='nested_row_{nested_row_id}' data-nested-path='{nested_path}' data-nested-original='{html_module.escape(str(raw_value))}'><td>- </td><td id='nested_value_{nested_row_id}'>{self.render_type(arg, item, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
+                    text += f"<tr id='nested_row_{nested_row_id}' data-nested-path='{nested_path_attr}' data-nested-original='{html_module.escape(str(raw_value))}'><td>- </td><td id='nested_value_{nested_row_id}'>{self.render_type(arg, item, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
                 else:
                     text += "<tr><td>- {}</td></tr>\n".format(self.render_type(arg, item, nested_path, row_counter))
             text += self.render_add_row("addListItem", [list_path, arg], "Add item", row_counter)
@@ -2830,6 +2942,7 @@ chart.render();
             text += "<table>"
             for key in value:
                 nested_path = f"{dict_path}.{key}"
+                nested_path_attr = html_module.escape(nested_path, quote=True)
                 nested_value = value[key]
 
                 # Check if this nested value is editable
@@ -2844,9 +2957,9 @@ chart.render();
                     if can_edit:
                         if isinstance(nested_value, bool):
                             toggle_class = "toggle-button active" if nested_value else "toggle-button"
-                            actions_cell = f'<button class="{toggle_class}" onclick="toggleNestedValue({nested_row_id})" data-value="{str(nested_value).lower()}" data-path="{nested_path}"></button>'
+                            actions_cell = f'<button class="{toggle_class}" onclick="toggleNestedValue({nested_row_id})" data-value="{str(nested_value).lower()}" data-path="{nested_path_attr}"></button>'
                         else:
-                            actions_cell = f'<button class="edit-button" onclick="editNestedValue({nested_row_id})" data-path="{nested_path}">Edit</button>'
+                            actions_cell = f'<button class="edit-button" onclick="editNestedValue({nested_row_id})" data-path="{nested_path_attr}">Edit</button>'
 
                         # Store the nested value info for later processing
                         if not hasattr(self, "_nested_values"):
@@ -2857,9 +2970,10 @@ chart.render();
                     actions_cell += self.render_delete_button(nested_row_id)
 
                 raw_value = self.resolve_value_raw(key, nested_value)
+                secret_attr = self.secret_row_attr(key, nested_value, "'")
 
                 if nested_row_id is not None:
-                    text += f"<tr id='nested_row_{nested_row_id}' data-nested-path='{nested_path}' data-nested-original='{html_module.escape(str(raw_value))}'><td><b>{key}: </b></td><td id='nested_value_{nested_row_id}'>{self.render_type(key, nested_value, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
+                    text += f"<tr id='nested_row_{nested_row_id}' data-nested-path='{nested_path_attr}' data-nested-original='{html_module.escape(str(raw_value))}'{secret_attr}><td><b>{key}: </b></td><td id='nested_value_{nested_row_id}'>{self.render_type(key, nested_value, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
                 else:
                     text += "<tr><td><b>{}: </b></td><td colspan='2'>{}</td></tr>\n".format(key, self.render_type(key, nested_value, nested_path, row_counter))
             text += self.render_add_row("addDictKey", [dict_path], "Add setting", row_counter)
@@ -2942,22 +3056,42 @@ chart.render();
         filename = debug_history.snapshot_filename(resolved_id)
         return await self.html_file(filename, data)
 
-    async def html_debug_history_download_all(self, request):
+    async def html_debug_history_download_recent(self, request):
         """
-        Download every retained debug-history snapshot as a single gzip tarball, so a
-        bug report can be gathered with one link instead of chasing a user through the
-        per-snapshot picker for the right moment, for #4417.
+        Download the most recent DEBUG_HISTORY_DOWNLOAD_MAX retained debug-history snapshots as a
+        single gzip tarball, so a bug report can be gathered with one link instead of chasing a
+        user through the per-snapshot picker for the right moment, for #4417.
+
+        Capped rather than "all": debug_history_count reaches 500 since #5070, and the archive is
+        built by loading every snapshot into memory at once, so an unbounded bundle of whole debug
+        dumps is neither downloadable nor attachable to an issue. Older snapshots are still
+        available individually from the plan's History view, or straight off disk in debug/.
         """
         storage = self._storage()
-        named_snapshots = await debug_history.load_all_snapshots(storage)
+        named_snapshots = await debug_history.load_all_snapshots(storage, DEBUG_HISTORY_DOWNLOAD_MAX)
         if not named_snapshots:
             return web.Response(content_type="text/html", text="No debug-history snapshots found", status=404)
 
         archive_bytes = debug_history.build_archive(named_snapshots)
+        # The trailing .dmp is load-bearing, not decoration. Browsers that unarchive downloads
+        # whose extension they recognise - on by default in more than one - turn a .tgz into a
+        # bare .tar on the way down, and that is fatal here twice over: .tar is not a file type
+        # GitHub accepts as an attachment, and a real 15-snapshot history is ~32MB expanded
+        # against a 25MB attachment limit, where the archive itself is under 5MB. Compression is
+        # doing essential work, so the download has to reach the user still compressed.
+        #
+        # There is no server-side way to decline the unarchiving - it keys on the extension, not
+        # on the content type or Content-Disposition, both of which are set correctly below and
+        # were not enough on their own. So the file is named with an extension those browsers
+        # leave alone and GitHub still accepts. The body is an ordinary gzip tarball and
+        # "tar xzf" reads it whatever it is called, so nothing needs renaming to open it.
         return web.Response(
-            content_type="application/gzip",
+            content_type="application/octet-stream",
             body=archive_bytes,
-            headers={"Content-Disposition": "attachment; filename=predbat_debug_history.tgz"},
+            headers={
+                "Content-Disposition": 'attachment; filename="predbat_debug_history.tgz.dmp"',
+                "X-Content-Type-Options": "nosniff",
+            },
         )
 
     async def html_file_load(self, filename, also_file=None, as_file=None):
@@ -2965,7 +3099,7 @@ chart.render();
         Load a file and serve it up
         """
         data = None
-        if os.path.exists(filename):
+        if filename and os.path.exists(filename):
             with open(filename, "r") as f:
                 data = f.read()
         if also_file and os.path.exists(also_file):
@@ -2978,10 +3112,38 @@ chart.render();
         return await self.html_file(as_file or filename, data)
 
     async def html_debug_log(self, request):
-        return await self.html_file_load("predbat.1.log", also_file="predbat.log", as_file="predbat.log")
+        # The previous log is whichever name is present - two-digit, or the single-digit one an
+        # older Predbat wrote (#5076). Hard-coding predbat.1.log here served nothing once
+        # rotation moved to the padded form.
+        return await self.html_file_load(predbat_log_file_prev(), also_file="predbat.log", as_file="predbat.log")
 
     async def html_debug_apps(self, request):
-        return await self.html_file_load("apps.yaml", as_file="apps.yaml.txt")
+        """
+        Return the apps.yaml file as written, with credential values redacted by default.
+
+        Masks unless ?masked=0 is passed, matching /debug_apps_live: this link sits next to that
+        one and is the file a user grabs to attach to a bug report, so a bare request - or any
+        of the plain './debug_apps' links elsewhere in the UI - must not hand over credentials.
+        Redaction is applied to the file text rather than the parsed args, so the download still
+        reads like the user's own apps.yaml, comments and '!secret' references included.
+        """
+        masked = request.query.get("masked", "1") != "0"
+        if not masked:
+            return await self.html_file_load("apps.yaml", as_file="apps.yaml.txt")
+
+        data = None
+        if os.path.exists("apps.yaml"):
+            with open("apps.yaml", "r") as f:
+                data = f.read()
+        if data:
+            try:
+                data = mask_secret_yaml_text(data)
+            except Exception as e:
+                # Fail closed - serving the raw file because the parse failed is the leak this
+                # route exists to avoid. The unmasked download is still one click away.
+                self.log("Warn: Unable to redact apps.yaml for download: {}".format(e))
+                data = "# Predbat could not parse apps.yaml to redact it, so it has not been served.\n" "# Fix the YAML error, or use the unmasked download if you intend to share credentials.\n" "# Error: {}\n".format(e)
+        return await self.html_file("apps_masked.yaml.txt", data)
 
     async def html_debug_apps_live(self, request):
         """
@@ -3107,6 +3269,13 @@ chart.render();
         soc_kw_h0[now_str] = self.base.soc_kw
         soc_kw = self.get_entity_results(self.prefix + ".soc_kw")
         soc_kw_best = self.get_entity_results(self.prefix + ".soc_kw_best")
+        # What earlier plans predicted for now, shifted forward by the horizon they were made at, so
+        # each lands on the moment it was forecasting and can be read straight against Actual.
+        # Pruned to today like the chart's other series - unpruned, the 7-day history this is read from
+        # stretched the Battery chart back across the whole week.
+        soc_best_history = self.get_history_with_now_attrs(self.prefix + ".soc_kw_best", 7)
+        soc_kw_best_h1 = prune_today(history_attribute(soc_best_history, attributes=True, state_key="soc_h1"), self.now_utc, self.midnight_utc, prune=True, offset_minutes=60)
+        soc_kw_best_h8 = prune_today(history_attribute(soc_best_history, attributes=True, state_key="soc_h8"), self.now_utc, self.midnight_utc, prune=True, offset_minutes=60 * 8)
         soc_kw_best10 = self.get_entity_results(self.prefix + ".soc_kw_best10")
         soc_kw_base10 = self.get_entity_results(self.prefix + ".soc_kw_base10")
         charge_limit_kw = self.get_entity_results(self.prefix + ".charge_limit_kw")
@@ -3140,6 +3309,8 @@ chart.render();
                 {"name": "Best", "data": soc_kw_best, "opacity": "1.0", "stroke_width": "4", "stroke_curve": "smooth", "color": "#eb2323"},
                 {"name": "Best10", "data": soc_kw_best10, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "color": "#cd23eb"},
                 {"name": "Actual", "data": soc_kw_h0, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "color": "#3291a8"},
+                {"name": "Predicted (+1h)", "data": soc_kw_best_h1, "opacity": "0.7", "stroke_width": "2", "stroke_curve": "smooth", "color": "#f5a442"},
+                {"name": "Predicted (+8h)", "data": soc_kw_best_h8, "opacity": "0.7", "stroke_width": "2", "stroke_curve": "smooth", "color": "#9b59b6"},
                 {"name": "Charge Limit Base", "data": charge_limit_kw, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline", "color": "#15eb8b"},
                 {
                     "name": "Charge Limit Best",
@@ -3214,7 +3385,9 @@ chart.render();
         elif chart == "PV" or chart == "PV7":
             pv_power_hist = history_attribute(self.get_history_wrapper(self.prefix + ".pv_power", 7, required=False))
             pv_power = prune_today(pv_power_hist, self.now_utc, self.midnight_utc, prune=chart == "PV")
-            pv_forecast_hist = history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", 7, required=False))
+            # The uncalibrated forecast: h0's state is the calibrated one while calibration is on, which would
+            # draw the same line as Forecast History CL below
+            pv_forecast_hist = history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0_uncalibrated", 7, required=False))
             pv_forecast_histCL = history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", 7, required=False), attributes=True, state_key="nowCL")
 
             pv_forecast = prune_today(pv_forecast_hist, self.now_utc, self.midnight_utc, prune=chart == "PV", intermediate=True)
@@ -3279,6 +3452,18 @@ chart.render();
             load_power_hist = history_attribute(self.get_history_wrapper(self.prefix + ".load_power", 7, required=False))
             load_power = prune_today(load_power_hist, self.now_utc, self.midnight_utc, prune=True, prune_past_days=7)
 
+            # Car charging, and the house with it taken back out. load_power is whatever the inverter
+            # reports as house load, and on a charger inside the CT clamp that includes the car - while
+            # the ML forecast it is plotted against has the car subtracted out (car_charging_hold in
+            # load_ml_component). Comparing the two directly makes every charging session look like a
+            # forecast miss the model was never trying to make. Both series are shown rather than only
+            # the corrected one: the car draw is real and worth seeing, it just is not what the model
+            # is predicting. Absent when no charger is configured, in which case neither series is
+            # drawn and the chart is exactly as it was.
+            car_charging_power_hist = history_attribute(self.get_history_wrapper(self.prefix + ".car_charging_power", 7, required=False))
+            car_charging_power = prune_today(car_charging_power_hist, self.now_utc, self.midnight_utc, prune=True, prune_past_days=7)
+            load_power_no_car = subtract_series(load_power, car_charging_power)
+
             # Get ML predicted load energy (cumulative) and convert to power (kW)
             load_ml_forecast_energy = self.get_entity_results("sensor." + self.prefix + "_load_ml_forecast")
             load_ml_forecast_power = {}
@@ -3291,8 +3476,6 @@ chart.render();
 
             # Sort timestamps and calculate deltas to get energy per interval
             if load_ml_forecast_energy:
-                from datetime import datetime
-
                 sorted_timestamps = sorted(load_ml_forecast_energy.keys())
                 prev_energy = 0
                 prev_timestamp = None
@@ -3303,8 +3486,8 @@ chart.render();
                     # Calculate actual interval in hours between this and previous timestamp
                     if prev_timestamp:
                         # Parse timestamps and calculate difference in hours
-                        curr_dt = datetime.strptime(timestamp, TIME_FORMAT)
-                        prev_dt = datetime.strptime(prev_timestamp, TIME_FORMAT)
+                        curr_dt = strptime_aware(timestamp, TIME_FORMAT)
+                        prev_dt = strptime_aware(prev_timestamp, TIME_FORMAT)
                         interval_hours = (curr_dt - prev_dt).total_seconds() / 3600.0
                         load_ml_forecast_power[timestamp] = dp4(energy_delta / interval_hours)
 
@@ -3320,6 +3503,8 @@ chart.render();
 
             series_data = [
                 {"name": "Load Power (Actual)", "data": load_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#3291a8", "unit": "kW"},
+                {"name": "Load Power (Actual, less car)", "data": load_power_no_car, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#2ca02c", "unit": "kW"},
+                {"name": "Car Charging Power", "data": car_charging_power, "opacity": "0.6", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#e377c2", "unit": "kW"},
                 {"name": "Load Power (ML Predicted Future)", "data": load_ml_forecast_power, "opacity": "0.5", "stroke_width": "3", "chart_type": "area", "stroke_curve": "smooth", "color": "#eb2323", "unit": "kW"},
                 {"name": "Load Power ML History", "data": power_today, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "kW", "color": "#eb2323"},
                 {"name": "Load Power ML History +1h", "data": power_today_h1, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "kW", "color": "#716d63"},
@@ -3588,6 +3773,47 @@ chart.render();
             return len(value) > 0 and any(self.is_editable_value(item) for item in value)
         return False
 
+    def secret_row_attr(self, key, value, quote):
+        """
+        Return the data-secret attribute for a row whose value html_apps() served masked, else "".
+
+        The page holds SECRET_MASK for a credential rather than the credential itself, so the
+        browser's Edit has to fetch the real value (/apps_value) before it can offer it - this flag
+        is how it knows to. mask_secret_args() replaces a secret key's whole value, list or dict
+        included, so a credential container (e.g. redact_strings) is also one masked row and is
+        flagged too; /apps_value refuses to hand a container back, so its Edit ends in that
+        refusal rather than letting the editor overwrite the whole list with a single string.
+        """
+        if value == SECRET_MASK and is_secret_key(key):
+            return " data-secret={}1{}".format(quote, quote)
+        return ""
+
+    async def html_apps_value(self, request):
+        """
+        Return the real value of one apps.yaml setting, for the /apps editor's Edit on a credential.
+
+        html_apps() serves credentials masked, so without this Edit could only offer "xxx" - the
+        user could neither see nor amend the key, and saving it back unchanged is refused. Only
+        the one path asked for is returned, and only when it is a single value, so the page itself
+        still never carries credentials and a whole container cannot be pulled in the clear. The
+        unmasked /debug_apps download already exposes the same values behind the same access.
+
+        The value is returned as stored, not passed through resolve_value_raw(): a credential is
+        literal text, and one holding a brace ("abc{def", "{0}") makes str.format() in
+        resolve_arg() raise ValueError/IndexError, which would surface as a 500 here.
+        """
+        path = request.query.get("path", "")
+        if not path:
+            return web.json_response({"success": False, "message": "No path given"})
+        try:
+            value = resolve_nested_yaml_value(self.args, path)
+        except (KeyError, TypeError, ValueError, IndexError) as e:
+            # IndexError: a negative index into an empty list gets past the lookup's range check
+            return web.json_response({"success": False, "message": f"Path {path} not found: {str(e)}"})
+        if not self.is_editable_value(value) or isinstance(value, list):
+            return web.json_response({"success": False, "message": f"{path} is not a single value that can be edited here - edit apps.yaml directly"})
+        return web.json_response({"success": True, "value": str(value)})
+
     def resolve_value_raw(self, arg, value):
         if isinstance(value, str) and "{" in value:
             text = self.base.resolve_arg(arg, value, indirect=False, quiet=True)
@@ -3621,12 +3847,16 @@ chart.render();
             self.log(f"Error serializing all_states for web interface: {e}")
             all_states_json = "{}"
 
-        # Add CSS styles for edit functionality
+        # Add CSS styles for edit functionality and for the filter box
         text += get_apps_css()
+        text += get_filter_css()
         text += "<body>\n"
 
         # JavaScript for edit functionality
         text += get_apps_js(all_states_json)
+
+        # JavaScript for the filter box
+        text += get_apps_filter_js()
 
         # Add message container
         text += '<div id="messageContainer" class="message-container"></div>\n'
@@ -3642,6 +3872,15 @@ chart.render();
 </div>
 """
 
+        # Filter box, matching the one on the Config page (issue #5210)
+        text += """
+<div class="filter-container">
+    <label for="appsFilter"><strong>Filter settings:</strong></label>
+    <input type="text" id="appsFilter" class="filter-input" placeholder="Type to filter settings..." oninput="filterApps()" />
+    <button type="button" style="margin-left: 10px; padding: 8px 12px;" onclick="document.getElementById('appsFilter').value=''; filterApps();">Clear</button>
+</div>
+"""
+
         warning = ""
         if self.base.arg_errors:
             warning = "&#9888;"
@@ -3651,7 +3890,16 @@ chart.render();
         text += "<table>\n"
         text += "<tr><th>Name</th><th>Value</th><th>Actions</th></tr>\n"
 
-        args = self.args
+        # Mask once, here, through the same recursive traversal every other surface uses
+        # (mask_secret_args - see utils.py). A top-level `is_secret_key(arg)` test on the loop
+        # below only covers credentials whose own apps.yaml key names them: a nested one such as
+        # chat.providers.openrouter.api_key or forecast_solar[0].api_key sits under a top-level
+        # key that matches nothing, and render_type() recurses into it - so the value, and the
+        # data-nested-original attribute built from it, both reached the browser in the clear
+        # (#5053 review). Masking the structure instead of the row keeps this route honest as
+        # new nested credentials appear, and deep-copies, so self.args (the live object shared
+        # with self.base.args) is untouched.
+        args = mask_secret_args(self.args)
         row_id = 0
         # Initialise nested values tracking and row counter
         self._nested_values = {}
@@ -3660,9 +3908,10 @@ chart.render();
         for arg in args:
             value = args[arg]
             raw_value = self.resolve_value_raw(arg, value)
-            if isinstance(arg, str) and (("_key" in arg) or ("_password" in arg) or ("_secret" in arg) or ("_pem" in arg)):
-                value = '<span title = "{}"> (hidden)</span>'.format(value)
             arg_errors = self.base.arg_errors.get(arg, "")
+            # The filter box and the editor both read the row back through data-arg-name, so an
+            # apps.yaml key holding a quote must not be able to truncate the attribute
+            arg_attr = html_module.escape(str(arg), quote=True)
 
             # Determine if this value can be edited
             # Lists should not be editable at the top level - only their individual items
@@ -3670,7 +3919,7 @@ chart.render();
 
             if arg_errors:
                 text += '<tr id="row_{}" data-arg-name="{}" data-original-value="{}"><td bgcolor=#FF7777><span title="{}">&#9888;{}</span></td><td>{}</td><td></td></tr>\n'.format(
-                    row_id, arg, html_module.escape(str(raw_value)), arg_errors, arg, self.render_type(arg, value, "", row_counter)
+                    row_id, arg_attr, html_module.escape(str(raw_value)), arg_errors, arg, self.render_type(arg, value, "", row_counter)
                 )
             else:
                 actions_cell = ""
@@ -3683,8 +3932,8 @@ chart.render();
                         # For numerical values, show edit button
                         actions_cell = f'<button class="edit-button" onclick="editValue({row_id})">Edit</button>'
 
-                text += '<tr id="row_{}" data-arg-name="{}" data-original-value="{}"><td>{}</td><td id="value_{}">{}</td><td>{}</td></tr>\n'.format(
-                    row_id, arg, html_module.escape(str(raw_value)), arg, row_id, self.render_type(arg, value, "", row_counter), actions_cell
+                text += '<tr id="row_{}" data-arg-name="{}" data-original-value="{}"{}><td>{}</td><td id="value_{}">{}</td><td>{}</td></tr>\n'.format(
+                    row_id, arg_attr, html_module.escape(str(raw_value)), self.secret_row_attr(arg, value, '"'), arg, row_id, self.render_type(arg, value, "", row_counter), actions_cell
                 )
             row_id += 1
 
@@ -3693,7 +3942,7 @@ chart.render();
             value = args[arg]
             raw_value = self.resolve_value_raw(arg, value)
             text += '<tr id="row_{}" data-arg-name="{}" data-original-value="{}"><td>{}</td><td><span style="background-color:#FFAAAA">{}</span></td><td></td></tr>\n'.format(
-                row_id, arg, html_module.escape(str(raw_value)), arg, self.render_type(arg, value, "", row_counter)
+                row_id, html_module.escape(str(arg), quote=True), html_module.escape(str(raw_value)), arg, self.render_type(arg, value, "", row_counter)
             )
             row_id += 1
 
@@ -3837,23 +4086,13 @@ chart.render();
     def _validate_compare_list(self, compare_list):
         """
         Check every compare_list profile still has the unique id and non-empty name that
-        compare.py indexes results by, raising ValueError if a batch has left one without
+        compare.py indexes results by, raising ValueError if a batch has left one without.
+        Uses compare.py's own rules, so the editor refuses exactly what a comparison would skip,
+        and names every problem at once so they can all be fixed in one go.
         """
-        if not compare_list:
-            return
-
-        seen_ids = set()
-        for entry in compare_list:
-            if not isinstance(entry, dict):
-                raise ValueError("Each compare_list entry must be a dictionary with an id and a name")
-            entry_id = entry.get("id")
-            if not entry_id:
-                raise ValueError("Each compare_list entry requires a non-empty 'id'")
-            if entry_id in seen_ids:
-                raise ValueError(f"Duplicate compare_list id '{entry_id}'")
-            seen_ids.add(entry_id)
-            if not entry.get("name"):
-                raise ValueError(f"compare_list entry '{entry_id}' requires a non-empty 'name'")
+        _, problems = check_compare_list(compare_list)
+        if problems:
+            raise ValueError("; ".join(problems))
 
     async def html_apps_post(self, request):
         """
@@ -3949,6 +4188,17 @@ chart.render();
                 except ValueError:
                     return web.json_response({"success": False, "message": f"Invalid value format for {path_or_arg}: {new_value}"})
 
+                # The /apps page serves credentials masked as SECRET_MASK (see html_apps), so the
+                # browser's data-original-value for a secret row is the mask, not the credential.
+                # Saving such a row unchanged would write "xxx" over a live key and destroy it -
+                # the same read-modify-write trap find_redacted_secret_overwrite() already refuses
+                # on the model's write path (chat_tools.py). Refuse it here too rather than trusting
+                # the page not to offer the edit, so the guard holds for any future surface (#5053
+                # review). A deliberate change to a real new value is unaffected.
+                secret_path = any(is_secret_key(segment) for segment in parse_yaml_path(path_or_arg) if not segment.startswith("["))
+                if converted_value == SECRET_MASK and secret_path:
+                    return web.json_response({"success": False, "message": f"Refusing to overwrite the credential {path_or_arg} with the redaction placeholder '{SECRET_MASK}' - edit it in apps.yaml or secrets.yaml directly"})
+
                 # Update the value in the YAML data
                 if is_nested:
                     # Handle nested paths like "battery_charge_low.normal"
@@ -3994,6 +4244,12 @@ chart.render();
                 # self.base.args) never reflects a partially applied batch
                 self.args.clear()
                 self.args.update(live_args)
+                # A credential value or the redact_strings/redact_strings_labelled denylists
+                # themselves can change in this batch, so log()'s cached redaction pattern
+                # (log_secrets.py, held on self.base - the PredBat instance, not this web component)
+                # must be rebuilt on next use, or a newly added/changed secret keeps leaking into
+                # the log under the stale pattern until the restart below completes (GH#4770 review).
+                self.base._invalidate_log_secret_pattern()
 
                 change_count = len(updated_args)
                 self.log(f"Batch updated {change_count} arguments in apps.yaml: {', '.join(updated_args)}")
@@ -4191,7 +4447,9 @@ chart.render();
         else:
             cost_yesterday_no_car = cost_yesterday_hist
 
-        compare_list = self.get_arg("compare_list", [])
+        # Same entries, with the same string ids, as the comparison itself ran on (#5472)
+        configured_compare_list = self.get_arg("compare_list", [])
+        compare_list, compare_problems = check_compare_list(configured_compare_list)
         compare_hist = {}
         for item in compare_list:
             id = item.get("id", None)
@@ -4203,8 +4461,6 @@ chart.render();
                     compare_hist[id]["cost"] = history_attribute(entity_hist, daily=True, pounds=True)
                     compare_hist[id]["metric"] = history_attribute(entity_hist, state_key="metric", attributes=True, daily=True, pounds=True)
                     compare_hist[id]["cost_1am"] = self.history_daily_at_hour(entity_hist)
-
-        compare_list = self.get_arg("compare_list", [])
 
         for compare in compare_list:
             name = compare.get("name", "")
@@ -4265,6 +4521,10 @@ chart.render();
 
         text += "</table>\n"
 
+        # The comparison only logs skipped entries when it runs, so say why a configured tariff is missing here
+        for problem in compare_problems:
+            text += "<p><b>Skipped:</b> {} - fix it in apps.yaml</p>\n".format(html_module.escape(problem))
+
         # Charts
         text += '<div id="chart"></div>'
         series_data = []
@@ -4280,9 +4540,9 @@ chart.render();
 
         if compare_hist:
             text += self.render_chart(series_data, self.currency_symbols[0], "Tariff Comparison - True cost", now_str, daily_chart=False)
-        elif not compare_list:
+        elif not configured_compare_list:
             text += '<br><h2>No tariffs configured yet - see <a href="https://springfall2008.github.io/batpred/compare/" target="_blank" rel="noopener noreferrer">Comparing Energy Tariffs</a> for how to add some to apps.yaml</h2><br>'
-        else:
+        elif compare_list:
             text += "<br><h2>Loading chart (please wait)...</h2><br>"
 
         # 7-day rolling average chart
@@ -4299,7 +4559,7 @@ chart.render();
         if series_7d:
             text += self.render_chart(series_7d, self.currency_symbols[0], "Tariff Comparison - 7 day rolling average", now_str, tagname="chart7d", daily_chart=False)
         elif not compare_list:
-            pass  # Already explained by the "No tariffs configured" message above
+            pass  # Already explained above, by "No tariffs configured" or the skipped entries
         else:
             text += "<br><h2>7 day rolling average chart loading (please wait)...</h2><br>"
 
@@ -4610,8 +4870,9 @@ chart.render();
             override_time = get_override_time_from_string(now_utc, time_str, self.plan_interval_minutes)
 
             minutes_from_now = (override_time - now_utc).total_seconds() / 60
-            if minutes_from_now >= 48 * 60:
-                return web.json_response({"success": False, "message": "Override time must be within 48 hours from now."}, status=400)
+            if minutes_from_now >= MANUAL_RATE_MAX_MINUTES:
+                max_hours = MANUAL_RATE_MAX_MINUTES // 60
+                return web.json_response({"success": False, "message": f"Override time must be within {max_hours} hours from now."}, status=400)
 
             # Calculate minutes from midnight for looking up existing rates
             minutes_from_midnight = int((override_time - self.midnight_utc).total_seconds() / 60)
@@ -4620,7 +4881,7 @@ chart.render();
 
             # For clear operations, we need to use the actual stored rate value, not the passed rate
             if action == "Clear Import":
-                manual_import_rates = self.base.manual_rates("manual_import_rates")
+                manual_import_rates = self.base.manual_rates("manual_import_rates", update=False)
                 actual_rate = manual_import_rates.get(minutes_from_midnight, rate)
                 clear_option = "[{}={}]".format(override_time.strftime("%a %H:%M"), actual_rate)
                 await self.base.async_manual_select("manual_import_rates", clear_option)
@@ -4629,7 +4890,7 @@ chart.render();
                 await self.set_state_external(item.get("entity", None), rate)
                 await self.base.async_manual_select("manual_import_rates", selection_option)
             elif action == "Clear Export":
-                manual_export_rates = self.base.manual_rates("manual_export_rates")
+                manual_export_rates = self.base.manual_rates("manual_export_rates", update=False)
                 actual_rate = manual_export_rates.get(minutes_from_midnight, rate)
                 clear_option = "[{}={}]".format(override_time.strftime("%a %H:%M"), actual_rate)
                 await self.base.async_manual_select("manual_export_rates", clear_option)
@@ -4642,7 +4903,7 @@ chart.render();
                 await self.set_state_external(item.get("entity", None), rate)
                 await self.base.async_manual_select("manual_load_adjust", selection_option)
             elif action == "Clear Load":
-                manual_load_adjust = self.base.manual_rates("manual_load_adjust")
+                manual_load_adjust = self.base.manual_rates("manual_load_adjust", update=False)
                 actual_rate = manual_load_adjust.get(minutes_from_midnight, rate)
                 clear_option = "[{}={}]".format(override_time.strftime("%a %H:%M"), actual_rate)
                 await self.base.async_manual_select("manual_load_adjust", clear_option)
@@ -4651,10 +4912,19 @@ chart.render();
                 await self.set_state_external(item.get("entity", None), rate)
                 await self.base.async_manual_select("manual_soc", selection_option)
             elif action == "Clear SOC":
-                manual_soc = self.base.manual_rates("manual_soc")
+                manual_soc = self.base.manual_rates("manual_soc", update=False)
                 actual_rate = manual_soc.get(minutes_from_midnight, rate)
                 clear_option = "[{}={}]".format(override_time.strftime("%a %H:%M"), actual_rate)
                 await self.base.async_manual_select("manual_soc", clear_option)
+            elif action == "Set SOC Max":
+                item = self.base.config_index.get("manual_soc_max_value", {})
+                await self.set_state_external(item.get("entity", None), rate)
+                await self.base.async_manual_select("manual_soc_max", selection_option)
+            elif action == "Clear SOC Max":
+                manual_soc_max = self.base.manual_rates("manual_soc_max", update=False)
+                actual_rate = manual_soc_max.get(minutes_from_midnight, rate)
+                clear_option = "[{}={}]".format(override_time.strftime("%a %H:%M"), actual_rate)
+                await self.base.async_manual_select("manual_soc_max", clear_option)
             else:
                 self.log("ERROR: Unknown action for rate override")
                 return web.json_response({"success": False, "message": "Unknown action"}, status=400)
@@ -4694,8 +4964,9 @@ chart.render();
                 return web.json_response({"success": False, "message": "Invalid time format"}, status=400)
 
             minutes_from_now = (override_time - now_utc).total_seconds() / 60
-            if minutes_from_now >= 48 * 60:
-                return web.json_response({"success": False, "message": "Override time must be within 48 hours from now."}, status=400)
+            if minutes_from_now >= MANUAL_TIME_MAX_MINUTES:
+                max_hours = MANUAL_TIME_MAX_MINUTES // 60
+                return web.json_response({"success": False, "message": f"Override time must be within {max_hours} hours from now."}, status=400)
 
             selection_option = "{}".format(override_time.strftime("%a %H:%M"))
             clear_option = "[{}]".format(override_time.strftime("%a %H:%M"))
@@ -4789,6 +5060,160 @@ chart.render();
             self.log(f"Error in html_component_entities: {e}")
             return web.json_response({"error": str(e)}, status=500)
 
+    def _coordinator(self):
+        """Return the discovery coordinator, or None when there is no component registry."""
+        components = getattr(self.base, "components", None)
+        return getattr(components, "coordinator", None) if components else None
+
+    def _discovery_value_html(self, value):
+        """Render one catalogue value - a scalar, a list or a nested container - as HTML.
+
+        Deliberately generic: it renders whatever shape it is handed rather than knowing the
+        catalogue's fields. The catalogue is designed to grow, and a renderer written against a
+        fixed field list would silently omit anything added later - which is precisely the kind of
+        gap an observe-only release exists to catch. Every value is escaped: info strings come from
+        third-party vendor APIs, not from Predbat.
+        """
+        if isinstance(value, dict):
+            return self._discovery_fields_html(value)
+        if isinstance(value, list):
+            if not value:
+                return "<span class='discovery-token'>none</span>"
+            if all(not isinstance(item, (dict, list)) for item in value):
+                return " ".join("<span class='discovery-token'>{}</span>".format(html_module.escape(str(item))) for item in value)
+            return "".join("<div class='discovery-nested'>{}</div>".format(self._discovery_value_html(item)) for item in value)
+        return "<span class='discovery-token'>{}</span>".format(html_module.escape(str(value)))
+
+    def _discovery_fields_html(self, mapping, skip=()):
+        """Render a mapping as labelled rows, recursing into whatever it nests."""
+        text = ""
+        for key in mapping:
+            if key in skip:
+                continue
+            value = mapping[key]
+            label = html_module.escape(str(key))
+            nested = isinstance(value, dict) and value
+            nested = nested or (isinstance(value, list) and value and any(isinstance(item, (dict, list)) for item in value))
+            if nested:
+                text += "<div class='discovery-field'><span class='discovery-key'>{}</span>:</div>\n".format(label)
+                text += "<div class='discovery-nested'>{}</div>\n".format(self._discovery_value_html(value))
+            else:
+                text += "<div class='discovery-field'><span class='discovery-key'>{}</span>: {}</div>\n".format(label, self._discovery_value_html(value))
+        return text
+
+    def _discovery_record_html(self, record):
+        """Render one catalogue record as a card, titled by its device_id and reporting source."""
+        text = "<div class='discovery-card'>\n"
+        text += "<div class='discovery-card-title'>{}".format(html_module.escape(str(record.get("device_id", "(no device_id)"))))
+        source = record.get("source")
+        if source:
+            text += "<span class='discovery-source'>{}</span>".format(html_module.escape(str(source)))
+        text += "</div>\n"
+        # entities is much the largest container on a real inverter - collapsed so one record does
+        # not push every other section off the screen.
+        entities = record.get("entities")
+        text += self._discovery_fields_html(record, skip=("device_id", "source", "entities"))
+        if entities:
+            text += "<details><summary>{} entities</summary><div class='discovery-nested'>{}</div></details>\n".format(len(entities), self._discovery_fields_html(entities))
+        text += "</div>\n"
+        return text
+
+    def _discovery_document_html(self, catalogue):
+        """Render the whole catalogue as the YAML a bug report would carry, for copying out."""
+        try:
+            stream = StringIO()
+            YAML().dump(json.loads(json.dumps(catalogue, default=str)), stream)
+            body = stream.getvalue()
+        except Exception as e:
+            self.log("Warn: Web: could not render the discovery document as YAML: {}".format(e))
+            body = json.dumps(catalogue, indent=2, default=str)
+        return "<details><summary>Full document</summary><pre class='discovery-raw'>{}</pre></details>\n".format(html_module.escape(body))
+
+    async def html_discovery(self, request):
+        """
+        Return the discovery catalogue as an HTML page
+
+        Redacted by default - what a debug dump would carry - with ?raw=1 for the unredacted view.
+        Reads the coordinator directly rather than parsing sensor.predbat_discovery's attributes
+        back out: that entity deliberately carries only a summary, and the coordinator is the
+        better coupling anyway (see Coordinator.publish()).
+        """
+        raw = str(request.query.get("raw", "")).lower() in ("1", "true", "yes", "on")
+        self.default_page = "./discovery"
+        text = self.get_header("Predbat Discovery", refresh=60)
+        text += "<body>\n"
+        text += get_discovery_css()
+        text += "<h2>Discovery Catalogue</h2>\n"
+
+        coordinator = self._coordinator()
+        catalogue = None
+        if coordinator is not None:
+            try:
+                catalogue = coordinator.catalogue_raw() if raw else coordinator.catalogue()
+            except Exception as e:
+                self.log("Warn: Web: failed to read the discovery catalogue: {}".format(e))
+
+        if catalogue is None:
+            text += "<div class='discovery-empty'>The discovery catalogue is not available - no component coordinator is running yet.</div>\n"
+            text += "</body></html>\n"
+            return web.Response(content_type="text/html", text=text)
+
+        # Any list at the top level is a section of records, so a section added to the catalogue
+        # later appears here without this page being taught about it.
+        meta_keys = ("schema_version", "generated", "components", "observations")
+        sections = [key for key, value in catalogue.items() if key not in meta_keys and isinstance(value, list)]
+
+        text += "<div class='discovery-bar'>\n"
+        text += "<div class='discovery-counts'>\n"
+        text += "<span class='discovery-count'>schema {}</span>\n".format(html_module.escape(str(catalogue.get("schema_version", "?"))))
+        text += "<span class='discovery-count'>generated {}</span>\n".format(html_module.escape(str(catalogue.get("generated", "?"))))
+        for section in sections:
+            text += "<span class='discovery-count'>{} {}</span>\n".format(len(catalogue[section]), html_module.escape(section))
+        text += "</div>\n"
+        if raw:
+            text += "<a class='discovery-toggle' href='./discovery'>Show redacted</a>\n"
+        else:
+            text += "<a class='discovery-toggle' href='./discovery?raw=1'>Show raw values</a>\n"
+        text += "</div>\n"
+
+        if raw:
+            text += "<div class='discovery-warning'><strong>Raw view.</strong> Serial numbers, MPANs and account identifiers are shown unredacted - this view is <strong>not safe to share</strong>. Use the redacted view for anything you post in a bug report.</div>\n"
+
+        conflicts = catalogue.get("observations", {}).get("conflicts", [])
+        if conflicts:
+            text += "<div class='discovery-conflicts'>\n"
+            text += "<strong>{} conflict(s)</strong> - two components describing the same hardware, or competing for the same slot.\n".format(len(conflicts))
+            for conflict in conflicts:
+                text += "<div class='discovery-nested'>{}</div>\n".format(self._discovery_fields_html(conflict))
+            text += "</div>\n"
+        else:
+            text += "<div class='discovery-clear'>No conflicts - no two components are describing the same hardware.</div>\n"
+
+        components = catalogue.get("components", {})
+        if components:
+            text += "<h3>Components</h3>\n"
+            text += "<div class='discovery-grid'>\n"
+            for name in sorted(components):
+                text += "<div class='discovery-card'>\n"
+                text += "<div class='discovery-card-title'>{}</div>\n".format(html_module.escape(str(name)))
+                text += self._discovery_fields_html(components[name] if isinstance(components[name], dict) else {"status": components[name]})
+                text += "</div>\n"
+            text += "</div>\n"
+
+        for section in sections:
+            records = catalogue[section]
+            if not records:
+                continue
+            text += "<h3>{} <span class='discovery-count'>{}</span></h3>\n".format(html_module.escape(section.title()), len(records))
+            text += "<div class='discovery-grid'>\n"
+            for record in records:
+                text += self._discovery_record_html(record if isinstance(record, dict) else {"device_id": record})
+            text += "</div>\n"
+
+        text += self._discovery_document_html(catalogue)
+        text += "</body></html>\n"
+        return web.Response(content_type="text/html", text=text)
+
     async def html_components(self, request):
         """
         Return the Components view as an HTML page showing status of all components
@@ -4815,7 +5240,7 @@ chart.render();
             is_alive = self.base.components.is_alive(component_name)
             is_active = component_name in active_components
 
-            if is_active and not is_alive:
+            if (is_active and not is_alive) or self.base.components.load_error(component_name):
                 error_components.append(component_name)
             elif is_active and is_alive:
                 active_healthy_components.append(component_name)
@@ -4848,18 +5273,26 @@ chart.render();
             is_alive = self.base.components.is_alive(component_name)
             can_restart = self.base.components.can_restart(component_name)
             is_active = component_name in active_components
+            # Configured but failed to import or construct: inactive, yet shown as an error
+            load_error = self.base.components.load_error(component_name)
 
             # Get last updated time
             last_updated_time = self.base.components.last_updated_time(component_name)
             time_ago_text = format_time_ago(last_updated_time)
 
             # Create component card
-            card_class = "active" if is_active else "inactive"
-            if is_active and not is_alive:
-                card_class += " error"
+            if load_error:
+                # Not "inactive" as well: that rule would paint over the error border
+                card_class = "error"
+            elif is_active and not is_alive:
+                card_class = "active error"
+            elif is_active:
+                card_class = "active"
+            else:
+                card_class = "inactive"
 
             # Add data-disabled attribute for filtering
-            disabled_attr = 'data-disabled="true"' if not is_active else 'data-disabled="false"'
+            disabled_attr = 'data-disabled="true"' if not (is_active or load_error) else 'data-disabled="false"'
 
             text += f'<div class="component-card {card_class}" {disabled_attr}>\n'
             text += f'<div class="component-header">\n'
@@ -4868,13 +5301,13 @@ chart.render();
             # Status indicator
             if is_active and is_alive:
                 text += '<span class="status-indicator status-healthy">●</span><span class="status-text">Active</span>\n'
-            elif is_active and not is_alive:
+            elif (is_active and not is_alive) or load_error:
                 text += '<span class="status-indicator status-error">●</span><span class="status-text">Error</span>\n'
             else:
                 text += '<span class="status-indicator status-inactive">●</span><span class="status-text">Disabled</span>\n'
 
-            # Add restart button for active components
-            if is_active and can_restart:
+            # Add restart button for active and failed components
+            if (is_active or load_error) and can_restart:
                 text += f'<button class="restart-button" onclick="restartComponent(\'{component_name}\')" title="Restart this component">Restart</button>\n'
 
             # Add edit button for all components
@@ -4887,6 +5320,10 @@ chart.render();
 
             # Add last updated time
             text += f'<p><strong>Last Updated:</strong> <span class="last-updated-time">{time_ago_text}</span></p>\n'
+
+            # Say why a component could not be initialised
+            if load_error:
+                text += f'<p><strong>Error:</strong> <span class="error-count-high">{html_module.escape(load_error)}</span></p>\n'
 
             # Add error count
             error_count = self.base.components.get_error_count(component_name)
@@ -5608,6 +6045,61 @@ document.addEventListener('DOMContentLoaded', function() {
         text += get_metrics_dashboard_body(data_json)
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
+
+    async def html_kraken_key(self, request):
+        """
+        Return the Kraken API key generator page (Advanced -> Kraken API Key)
+
+        No auto-refresh: a refresh would wipe a token the user has just pasted.
+        """
+        self.default_page = "./kraken_key"
+        text = self.get_header("Predbat Kraken API Key", refresh=0)
+        text += "<body>\n"
+        text += get_kraken_key_page_html()
+        text += "</body></html>\n"
+        return web.Response(content_type="text/html", text=text, headers={"Cache-Control": "no-store"})
+
+    async def html_api_kraken_key(self, request):
+        """
+        Check an account's Kraken API key, or generate a new one, using a token pasted from the user's browser.
+
+        Body: {"provider": "eon"|"edf", "token": "...", "action": "check"|"generate"}. The token and the key are
+        passed straight through and never logged or kept; responses are marked no-store.
+        """
+        # Imported here so the Kraken code is only loaded when someone uses this page
+        import kraken_key
+        from kraken import KRAKEN_BASE_URLS
+
+        headers = {"Cache-Control": "no-store"}
+        try:
+            data = await request.json()
+        except (ValueError, UnicodeDecodeError):
+            return web.json_response({"status": "error", "error": "Invalid request"}, status=400, headers=headers)
+        if not isinstance(data, dict):
+            return web.json_response({"status": "error", "error": "Invalid request"}, status=400, headers=headers)
+
+        provider = data.get("provider")
+        base_url = KRAKEN_BASE_URLS.get(provider) if isinstance(provider, str) else None
+        if not base_url:
+            return web.json_response({"status": "error", "error": "Choose E.ON Next or EDF"}, status=400, headers=headers)
+        token = kraken_key.normalise_kraken_token(data.get("token"))
+        if not token:
+            return web.json_response({"status": "error", "error": "Paste the token from your browser first"}, status=400, headers=headers)
+
+        action = data.get("action")
+        if action == "check":
+            result = await kraken_key.check_kraken_key(base_url, token)
+        elif action == "generate":
+            result = await kraken_key.generate_kraken_key(base_url, token)
+        else:
+            return web.json_response({"status": "error", "error": "Unknown action"}, status=400, headers=headers)
+
+        # Outcome only - never the token or the key
+        if result.get("status") == "generated":
+            self.log("Web: Kraken API key generated for {} (sign-in check {})".format(provider, "passed" if result.get("verified") else "failed"))
+        elif result.get("status") == "error":
+            self.log("Warn: Web: Kraken API key {} for {} failed: {}".format(action, provider, result.get("error")))
+        return web.json_response(result, headers=headers)
 
     async def html_internals(self, request):
         """

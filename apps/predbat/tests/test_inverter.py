@@ -12,13 +12,15 @@ import json
 import copy
 import yaml
 import os
+import pytz
 from datetime import datetime, timedelta
-from utils import calc_percent_limit
+from utils import calc_percent_limit, is_entity_id
 from tests.test_infra import TestHAInterface
 from predbat import PredBat
-from const import MINUTE_WATT, INVERTER_MAX_RETRY_REST
-from inverter import Inverter, DISCHARGE_TARGET_UNSUPPORTED_MODELS
+from inverter import Inverter, within_fuzzy
+from givtcp_rest import GivTCPRest
 from config import INVERTER_DEF
+from const import INVERTER_MAX_RETRY, MINUTE_WATT, TIME_FORMAT_SECONDS
 
 
 def test_foxess_support_discharge_freeze_matches_foxcloud():
@@ -40,6 +42,264 @@ def test_foxess_support_discharge_freeze_matches_foxcloud():
     return failed
 
 
+def test_has_solis_energy_control_is_opt_in():
+    """
+    has_solis_energy_control says Predbat drives the Solis Energy Storage Control Switch. Both
+    Modbus Solis types need it - FB00 firmware moved the timed charge enable into the slot
+    registers, but the switch's grid charging bit still decides whether a charge slot can charge
+    from the grid at all, and a SolisCloud session can leave it cleared.
+    """
+    failed = False
+    expect_solis = {"GS", "GS_fb00"}
+
+    for inverter_type, definition in INVERTER_DEF.items():
+        declared = definition.get("has_solis_energy_control", False)
+        if declared != (inverter_type in expect_solis):
+            print("ERROR: {} has_solis_energy_control should be {}, got {}".format(inverter_type, inverter_type in expect_solis, declared))
+            failed = True
+
+    # FB00 freezes a charge by switching grid charging off inside the charge slot, and an export by
+    # switching to Feed-in priority
+    for key in ("support_charge_freeze", "support_discharge_freeze"):
+        if INVERTER_DEF["GS_fb00"][key] is not True:
+            print("ERROR: GS_fb00 {} should be True, got {}".format(key, INVERTER_DEF["GS_fb00"][key]))
+            failed = True
+    return failed
+
+
+def test_solis_energy_control(test_name, my_predbat, ha, inverter_type, switch_state, action, expect_state, configured=True):
+    """
+    The Solis Energy Storage Control Switch ends up where the inverter type needs it after action(inv).
+
+    GS has no target SoC, so adjust_battery_target reaches the switch through mimic_target_soc and
+    uses its Timed Charge/Discharge bit as the charge enable (35). GS_fb00 has a target SoC and slot
+    enables, so adjust_charge_immediate - which execute calls every cycle - keeps the switch on
+    Backup/Reserve (49): Self-Use with the Battery Reserve bit, so the reserve Predbat writes (the
+    Reserved SOC) is a real discharge floor, and grid charging allowed. A freeze or hold turns grid
+    charging off, Backup/Reserve - No Grid Charging (17), so the inverter cannot import to reach a reserve
+    raised to SoC + 1. Each type has exactly one writer, so the two never fight.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    entity_id = "select.solis_energy_storage_control_switch"
+    # Restored whole: constructing a GS Inverter repoints charge_limit and friends at Predbat-made sensors
+    saved_args = copy.deepcopy(my_predbat.args)
+    services = []
+    orig_call = my_predbat.call_service_wrapper
+    try:
+        my_predbat.args["inverter_type"] = [inverter_type]
+        if configured:
+            my_predbat.args["energy_control_switch"] = entity_id
+        else:
+            my_predbat.args.pop("energy_control_switch", None)
+        ha.dummy_items[entity_id] = switch_state
+        ha.dummy_items["number.charge_limit"] = 100
+
+        inv = Inverter(my_predbat, 0, quiet=True)
+        inv.sleep = dummy_sleep
+        inv.soc_percent = 50
+        my_predbat.call_service_wrapper = lambda service, **kwargs: services.append((service, kwargs.get("entity_id"))) or orig_call(service, **kwargs)
+        action(inv)
+    finally:
+        my_predbat.call_service_wrapper = orig_call
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+
+    state = ha.get_state(entity_id)
+    if state != expect_state:
+        print("ERROR: {}: energy control switch should be {} got {}".format(test_name, expect_state, state))
+        failed = True
+
+    switch_writes = [service for service, target in services if target == entity_id]
+    if state == switch_state and switch_writes:
+        print("ERROR: {}: switch already at {} but was written {}".format(test_name, state, switch_writes))
+        failed = True
+    return failed
+
+
+def test_custom_type_respects_configured_time_entity(my_predbat):
+    """
+    Regression test for issue #4738: for an inverter type whose charge_time_format is not
+    HH:MM:SS, a real time entity the user set in apps.yaml for charge/discharge start/end time must
+    be used, not silently replaced by a self-created dummy sensor.
+
+    "Set in apps.yaml" is judged from args_from_apps_yaml, the snapshot taken before Predbat's own
+    defaulting, so a dummy Predbat wrote into args on an earlier refresh never reads back as user
+    configuration. Since #5126 inverters persist and refresh_config() runs every plan cycle, so the
+    refresh path is tested on one object as well as fresh construction.
+    """
+    failed = False
+    print("Test: test_custom_type_respects_configured_time_entity")
+
+    # Restored in place: other objects hold a reference to this dict, so rebinding the attribute
+    # would leave them with the mutated one
+    saved_args = copy.deepcopy(my_predbat.args)
+    had_raw = hasattr(my_predbat, "args_from_apps_yaml")
+    saved_raw = copy.deepcopy(getattr(my_predbat, "args_from_apps_yaml", None))
+    # Each construction also writes its dummy entities into the shared HA mock
+    saved_items = dict(getattr(my_predbat.ha_interface, "dummy_items", {}))
+    test_types = ["TEST_TIME_ENTITY", "TEST_TIME_ENTITY_2"]
+    saved_defs = {name: copy.deepcopy(INVERTER_DEF.get(name)) for name in test_types}
+    time_args = ["charge_start_time", "charge_end_time", "discharge_start_time", "discharge_end_time"]
+
+    def configure(apps_yaml):
+        """Stand in for loading apps.yaml: args and its pre-defaulting snapshot both get the values."""
+        for arg in time_args:
+            my_predbat.args.pop(arg, None)
+        my_predbat.args.update(copy.deepcopy(apps_yaml))
+        my_predbat.args_from_apps_yaml = copy.deepcopy(apps_yaml)
+
+    def dummy(arg, inverter_type="TEST_TIME_ENTITY", inverter_id=0):
+        """The entity id create_entity() gives this inverter's dummy."""
+        return "sensor.{}_{}_{}_{}".format(my_predbat.prefix, inverter_type, inverter_id, arg)
+
+    def check(case, arg, expected, inverter_id=0):
+        """Report a mismatch in the live args slot."""
+        got = my_predbat.args[arg][inverter_id]
+        if got != expected:
+            print("ERROR: test_custom_type_respects_configured_time_entity: {}: {}[{}] should be {}, got {}".format(case, arg, inverter_id, expected, got))
+            return True
+        return False
+
+    try:
+        my_predbat.args["inverter_type"] = ["TEST_TIME_ENTITY"]
+        my_predbat.args["inverter"] = {"charge_time_format": "S", "has_time_window": True, "has_charge_enable_time": True, "has_discharge_enable_time": True}
+        my_predbat.args["givtcp_rest"] = None
+
+        # Case 1: real entities set in apps.yaml are kept, on construction and on every refresh
+        configure({arg: ["time.real_" + arg] for arg in time_args})
+        inv = Inverter(my_predbat, 0, quiet=True)
+        inv.refresh_config()
+        for arg in time_args:
+            failed |= check("apps.yaml list value", arg, "time.real_" + arg)
+
+        # Case 2: a single (non-list) value in apps.yaml is kept too - create_missing_arg() turns a
+        # single value into a list of defaults, so it has to be put back
+        configure({"discharge_start_time": "time.real_single"})
+        Inverter(my_predbat, 0, quiet=True)
+        failed |= check("apps.yaml single value", "discharge_start_time", "time.real_single")
+
+        # Case 3: nothing set - the dummy is created
+        configure({})
+        inv = Inverter(my_predbat, 0, quiet=True)
+        failed |= check("unset", "discharge_start_time", dummy("discharge_start_time"))
+
+        # Case 4: persisted object - refresh keeps its own dummy (it is not in apps.yaml, so it never
+        # reads back as configuration) and re-creates the state if HA has lost it
+        my_predbat.ha_interface.dummy_items.pop(dummy("discharge_start_time"), None)
+        inv.refresh_config()
+        failed |= check("refresh after HA lost the dummy", "discharge_start_time", dummy("discharge_start_time"))
+        if my_predbat.get_state_wrapper(dummy("discharge_start_time")) is None:
+            print("ERROR: test_custom_type_respects_configured_time_entity: refresh should re-create the dummy state HA lost")
+            failed = True
+
+        # Case 5: the inverter type changes on the persisted object, as it does in production (execute.py
+        # refreshes rather than rebuilds) - the old type's dummy is replaced by the new type's
+        my_predbat.args["inverter_type"] = ["TEST_TIME_ENTITY_2"]
+        inv.refresh_config()
+        failed |= check("type change on refresh", "discharge_start_time", dummy("discharge_start_time", "TEST_TIME_ENTITY_2"))
+        my_predbat.args["inverter_type"] = ["TEST_TIME_ENTITY"]
+
+        # Case 6: a bare placeholder set in apps.yaml (the shipped Sofar templates do this) is not an
+        # entity - the dummy replaces it. And it stays a dummy on refresh: apps.yaml did set the key,
+        # but not to an entity, so the dummy now in the live slot must not be trusted as configured
+        configure({"discharge_start_time": ["00:00:00"]})
+        inv = Inverter(my_predbat, 0, quiet=True)
+        failed |= check("bare placeholder", "discharge_start_time", dummy("discharge_start_time"))
+        my_predbat.ha_interface.dummy_items.pop(dummy("discharge_start_time"), None)
+        inv.refresh_config()
+        if my_predbat.get_state_wrapper(dummy("discharge_start_time")) is None:
+            print("ERROR: test_custom_type_respects_configured_time_entity: bare placeholder: the dummy was read back as configured on refresh and its lost state not re-created")
+            failed = True
+
+        # Case 7: an entity in args that apps.yaml never set is not user configuration
+        configure({})
+        my_predbat.args["discharge_start_time"] = ["time.not_from_apps_yaml"]
+        Inverter(my_predbat, 0, quiet=True)
+        failed |= check("entity not from apps.yaml", "discharge_start_time", dummy("discharge_start_time"))
+
+        # Case 8: apps.yaml names inverter 0 only. Inverter 1 gets its own dummy, and it is still
+        # treated as a dummy on refresh - its live slot then holds an entity id, but apps.yaml set
+        # nothing for it, so a lost state must be re-created rather than the slot trusted as configured
+        my_predbat.args["inverter_type"] = ["TEST_TIME_ENTITY", "TEST_TIME_ENTITY"]
+        configure({"discharge_start_time": ["time.real_inverter0"]})
+        Inverter(my_predbat, 0, quiet=True)
+        inv1 = Inverter(my_predbat, 1, quiet=True)
+        my_predbat.ha_interface.dummy_items.pop(dummy("discharge_start_time", inverter_id=1), None)
+        inv1.refresh_config()
+        failed |= check("multi-inverter, inverter 0", "discharge_start_time", "time.real_inverter0", 0)
+        failed |= check("multi-inverter, inverter 1", "discharge_start_time", dummy("discharge_start_time", inverter_id=1), 1)
+        if my_predbat.get_state_wrapper(dummy("discharge_start_time", inverter_id=1)) is None:
+            print("ERROR: test_custom_type_respects_configured_time_entity: multi-inverter: inverter 1's dummy was read back as configured and its lost state not re-created")
+            failed = True
+
+        # Case 8b: a single value in apps.yaml is inverter 0's - inverter 1 gets its own dummy and
+        # keeps treating it as one on refresh
+        configure({"discharge_start_time": "time.real_single"})
+        Inverter(my_predbat, 0, quiet=True)
+        inv1 = Inverter(my_predbat, 1, quiet=True)
+        my_predbat.ha_interface.dummy_items.pop(dummy("discharge_start_time", inverter_id=1), None)
+        inv1.refresh_config()
+        failed |= check("single value, inverter 0", "discharge_start_time", "time.real_single", 0)
+        failed |= check("single value, inverter 1", "discharge_start_time", dummy("discharge_start_time", inverter_id=1), 1)
+        if my_predbat.get_state_wrapper(dummy("discharge_start_time", inverter_id=1)) is None:
+            print("ERROR: test_custom_type_respects_configured_time_entity: single value: inverter 1's dummy was read back as configured and its lost state not re-created")
+            failed = True
+        my_predbat.args["inverter_type"] = ["TEST_TIME_ENTITY"]
+
+        # Case 9: a malformed value (a nested list) must not crash the refresh; the dummy is used
+        configure({"discharge_start_time": [["time.nested"]]})
+        Inverter(my_predbat, 0, quiet=True)
+        failed |= check("malformed value", "discharge_start_time", dummy("discharge_start_time"))
+
+        # Case 10: a re: pattern that matched nothing. auto_config() deletes a single unmatched key and
+        # leaves None in an unmatched list slot, so the first cycle writes the dummy there - and from
+        # then on the pattern must not make that dummy read back as the user's entity
+        for shape, apps_yaml_value, live_value in (("single", "re:(time\\.nothing_.*)", None), ("list", ["re:(time\\.nothing_.*)"], [None])):
+            configure({})
+            my_predbat.args_from_apps_yaml = {"discharge_start_time": apps_yaml_value}
+            if live_value is not None:
+                my_predbat.args["discharge_start_time"] = live_value
+            inv = Inverter(my_predbat, 0, quiet=True)
+            failed |= check("unmatched re: ({})".format(shape), "discharge_start_time", dummy("discharge_start_time"))
+            my_predbat.ha_interface.dummy_items.pop(dummy("discharge_start_time"), None)
+            inv.refresh_config()
+            if my_predbat.get_state_wrapper(dummy("discharge_start_time")) is None:
+                print("ERROR: test_custom_type_respects_configured_time_entity: unmatched re: ({}): the dummy was read back as configured and its lost state not re-created".format(shape))
+                failed = True
+            my_predbat.args["inverter_type"] = ["TEST_TIME_ENTITY_2"]
+            inv.refresh_config()
+            failed |= check("unmatched re: ({}), type change".format(shape), "discharge_start_time", dummy("discharge_start_time", "TEST_TIME_ENTITY_2"))
+            my_predbat.args["inverter_type"] = ["TEST_TIME_ENTITY"]
+
+        # Case 11: a re: pattern that did match is the user's entity, and stays so across refreshes
+        configure({})
+        my_predbat.args_from_apps_yaml = {"discharge_start_time": ["re:(time\\.matched_.*)"]}
+        my_predbat.args["discharge_start_time"] = ["time.matched_x"]
+        inv = Inverter(my_predbat, 0, quiet=True)
+        inv.refresh_config()
+        failed |= check("matched re:", "discharge_start_time", "time.matched_x")
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        if had_raw:
+            my_predbat.args_from_apps_yaml = saved_raw
+        elif hasattr(my_predbat, "args_from_apps_yaml"):
+            del my_predbat.args_from_apps_yaml
+        items = getattr(my_predbat.ha_interface, "dummy_items", None)
+        if items is not None:
+            items.clear()
+            items.update(saved_items)
+        for name, saved_def in saved_defs.items():
+            if saved_def is None:
+                INVERTER_DEF.pop(name, None)
+            else:
+                INVERTER_DEF[name] = saved_def
+
+    return failed
+
+
 def test_support_feedin_first_is_opt_in():
     """
     support_feedin_first says the inverter's Freeze Export really is a "Feed-in First" mode (load,
@@ -47,11 +307,12 @@ def test_support_feedin_first_is_opt_in():
     clipped. Only types whose component actually selects such a mode may opt in - the Fox hardware,
     plus the four clouds that switch work mode for the freeze: SolisCloud ("Feed-in priority",
     solis.py), SolaxCloud ("feedin", solax.py), SunsynkCloud and DeyeCloud (Selling First,
-    sunsynk.py/deye.py). Every other type must default off, because modelling recapture on an
+    sunsynk.py/deye.py) - and Solis FB00 over Modbus, which selects Feed-in priority on its Energy
+    Storage Control Switch (inverter.py adjust_export_immediate). Every other type must default off, because modelling recapture on an
     inverter that merely disables charging invents energy that never reaches the battery.
     """
     failed = False
-    expect_feedin_first = {"FoxESS", "FoxCloud", "SolisCloud", "SolaxCloud", "SunsynkCloud", "DeyeCloud"}
+    expect_feedin_first = {"FoxESS", "FoxCloud", "SolisCloud", "GS_fb00", "SolaxCloud", "SunsynkCloud", "DeyeCloud"}
 
     for inverter_type in expect_feedin_first:
         if INVERTER_DEF[inverter_type].get("support_feedin_first", False) is not True:
@@ -72,6 +333,19 @@ def test_support_feedin_first_is_opt_in():
         print("ERROR: every inverter type declares support_feedin_first - the .get() default in inverter.py is no longer covered")
         failed = True
     return failed
+
+
+def _rest_client(inv, dummy_rest=None):
+    """A REST client bound to this inverter, as GivTCPComponent builds one for itself.
+
+    Inverter no longer owns a GivTCPRest - the component does, and publishes what it reads as
+    entities - so the tests that exercise the client's own methods construct one instead of
+    reaching through the inverter for it. inv.rest_data, which these tests set directly, is still
+    the snapshot the client reads. dummy_rest is optional: the read-only helpers need no transport.
+    """
+    if dummy_rest is None:
+        return GivTCPRest(inv.base, inv)
+    return GivTCPRest(inv.base, inv, rest_postCommand=dummy_rest.dummy_rest_postCommand, rest_getData=dummy_rest.dummy_rest_getData)
 
 
 def dummy_sleep(seconds):
@@ -129,6 +403,12 @@ def test_disable_charge_window(test_name, ha, inv, dummy_rest, prev_charge_start
     inv.rest_data = None
     inv.inv_time_button_press = has_inverter_time_button_press
     inv.inv_has_charge_enable_time = has_charge_enable_time
+    # Each case here is an independent scenario, not a successive cycle of one - see the same reset
+    # in test_adjust_charge_window(). disable_charge_window() shares the charge_window commit scope,
+    # so without this the second scenario to request an identical disable is correctly suppressed as
+    # a repeat and never presses.
+    inv.last_committed.pop("charge_window", None)
+    inv.commit_pending.pop("charge_window", None)
     ha.dummy_items["select.charge_start_time"] = prev_charge_start_time
     ha.dummy_items["select.charge_end_time"] = prev_charge_end_time
     ha.dummy_items["switch.scheduled_charge_enable"] = "on" if prev_enable_charge else "off"
@@ -149,35 +429,9 @@ def test_disable_charge_window(test_name, ha, inv, dummy_rest, prev_charge_start
         print("ERROR: Inverter time button press should be {} got {}".format("on" if expect_inverter_time_button_press else "off", ha.get_state("switch.inverter_button")))
         failed = True
 
-    # REST Mode
-    inv.rest_api = "dummy"
-    inv.rest_data = {}
-    inv.rest_data["Timeslots"] = {}
-    inv.rest_data["Timeslots"]["Charge_start_time_slot_1"] = prev_charge_start_time
-    inv.rest_data["Timeslots"]["Charge_end_time_slot_1"] = prev_charge_end_time
-    inv.rest_data["Control"] = {}
-    inv.rest_data["Control"]["Enable_Charge_Schedule"] = "enable" if prev_enable_charge else "disabled"
-    dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
-    dummy_rest.rest_data["Timeslots"]["Charge_start_time_slot_1"] = "00:00:00"
-    dummy_rest.rest_data["Timeslots"]["Charge_end_time_slot_1"] = "00:00:00"
-    dummy_rest.rest_data["Control"]["Enable_Charge_Schedule"] = "disabled"
-
-    print("REST Mode")
-    inv.disable_charge_window()
-    print("After disable charge window")
-    rest_command = dummy_rest.get_commands()
-    charge_start_time = "00:00:00"
-    charge_end_time = "00:00:00"
-    if (prev_charge_start_time != charge_start_time or prev_charge_end_time != charge_end_time) and not has_charge_enable_time:
-        expect_data = [["dummy/setChargeSlot1", {"start": charge_start_time[0:5], "finish": charge_end_time[0:5]}]]
-    else:
-        expect_data = []
-    if prev_enable_charge and has_charge_enable_time:
-        expect_data.append(["dummy/enableChargeSchedule", {"state": "disable"}])
-
-    if json.dumps(expect_data) != json.dumps(rest_command):
-        print("ERROR: Rest command should be {} got {}".format(expect_data, rest_command))
-        failed = True
+    # disable_charge_window now always writes via entity (write_and_poll_switch/write_and_poll_option),
+    # regardless of whether REST is configured - there's no REST-specific branch left to exercise
+    # separately here (unlike pause_mode/inverter_mode/discharge_target, which remain REST-only).
     return failed
 
 
@@ -207,6 +461,12 @@ def test_adjust_charge_window(
 
     inv.rest_data = None
     inv.inv_time_button_press = has_inverter_time_button_press
+    # Each case here is an independent scenario, not a successive cycle of one, so clear the
+    # commit-once memory the way the inverter's other state is reset - otherwise two cases with
+    # identical before/after state (5 and 6 below) look like a repeat cycle and the second is
+    # correctly suppressed (#4712).
+    inv.last_committed.pop("charge_window", None)
+    inv.commit_pending.pop("charge_window", None)
     ha.dummy_items["select.charge_start_time"] = prev_charge_start_time[:5] if short else prev_charge_start_time
     ha.dummy_items["select.charge_end_time"] = prev_charge_end_time[:5] if short else prev_charge_end_time
     ha.dummy_items["switch.scheduled_charge_enable"] = "on" if prev_enable_charge else "off"
@@ -246,31 +506,9 @@ def test_adjust_charge_window(
             print("ERROR: charge_end_time_minutes should be {} got {}".format(expect_charge_end_time_minutes, inv.charge_end_time_minutes))
             failed = True
 
-    # REST Mode
-    inv.rest_api = "dummy"
-    inv.rest_data = {}
-    inv.rest_data["Timeslots"] = {}
-    inv.rest_data["Timeslots"]["Charge_start_time_slot_1"] = prev_charge_start_time
-    inv.rest_data["Timeslots"]["Charge_end_time_slot_1"] = prev_charge_end_time
-    inv.rest_data["Control"] = {}
-    inv.rest_data["Control"]["Enable_Charge_Schedule"] = "enable" if prev_enable_charge else "disable"
-    dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
-    dummy_rest.rest_data["Timeslots"]["Charge_start_time_slot_1"] = charge_start_time
-    dummy_rest.rest_data["Timeslots"]["Charge_end_time_slot_1"] = charge_end_time
-    dummy_rest.rest_data["Control"]["Enable_Charge_Schedule"] = "enable"
-
-    inv.adjust_charge_window(charge_start_time_tm, charge_end_time_tm, minutes_now)
-    rest_command = dummy_rest.get_commands()
-    if prev_charge_start_time != charge_start_time or prev_charge_end_time != charge_end_time:
-        expect_data = [["dummy/setChargeSlot1", {"start": charge_start_time[0:5], "finish": charge_end_time[0:5]}]]
-    else:
-        expect_data = []
-    if prev_enable_charge is not True:
-        expect_data.append(["dummy/enableChargeSchedule", {"state": "enable"}])
-
-    if json.dumps(expect_data) != json.dumps(rest_command):
-        print("ERROR: Rest command should be {} got {}".format(expect_data, rest_command))
-        failed = True
+    # adjust_charge_window now always writes via entity (write_and_poll_option/write_and_poll_switch),
+    # regardless of whether REST is configured - there's no REST-specific branch left to exercise
+    # separately here (unlike pause_mode/inverter_mode/discharge_target, which remain REST-only).
     return failed
 
 
@@ -301,23 +539,9 @@ def test_adjust_reserve(test_name, ha, inv, dummy_rest, prev_reserve, reserve, e
         print("ERROR: Reserve should be {} got {}".format(expect_reserve, ha.get_state("number.reserve")))
         failed = True
 
-    # REST Mode
-    inv.rest_api = "dummy"
-    inv.rest_data = {}
-    inv.rest_data["Control"] = {}
-    inv.rest_data["Control"]["Battery_Power_Reserve"] = prev_reserve
-    dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
-    dummy_rest.rest_data["Control"]["Battery_Power_Reserve"] = expect_reserve
-
-    inv.adjust_reserve(reserve)
-    rest_command = dummy_rest.get_commands()
-    if prev_reserve != expect_reserve:
-        expect_data = [["dummy/setBatteryReserve", {"reservePercent": expect_reserve}]]
-    else:
-        expect_data = []
-    if json.dumps(expect_data) != json.dumps(rest_command):
-        print("ERROR: Rest command should be {} got {}".format(expect_data, rest_command))
-        failed = True
+    # adjust_reserve now always writes via entity (write_and_poll_value), regardless of whether
+    # REST is configured - there's no REST-specific branch left to exercise separately here
+    # (unlike pause_mode/inverter_mode/discharge_target, which remain REST-only).
 
     return failed
 
@@ -343,6 +567,296 @@ def test_adjust_reserve_device_bounds(test_name, ha, inv, prev_reserve, reserve,
     if ha.get_state("number.reserve") != expect_reserve:
         print("ERROR: Reserve should be {} got {}".format(expect_reserve, ha.get_state("number.reserve")))
         failed = True
+
+    return failed
+
+
+def test_battery_rate_max_source(test_name, my_predbat, ha, inverter_type, charge_rate_arg, charge_rate_max, battery_rate_max_arg, expect_rate_raw):
+    """
+    Test
+       Inverter.__init__ picks the battery rate maximum from the right source for GE-family
+       inverters.
+
+    The charge_rate entity's max attribute stays authoritative when there is one. Percentage-rated
+    models (the 3-phase units) have no absolute charge power register at all, so GECloud leaves
+    charge_rate unset - there the correctly-fetched battery_rate_max must be used rather than the
+    2600W fallback, which otherwise caps planning and every rate written back (GH#4908).
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    saved = {arg: my_predbat.args.get(arg, None) for arg in ("inverter_type", "charge_rate", "battery_rate_max")}
+    try:
+        my_predbat.args["inverter_type"] = [inverter_type]
+        my_predbat.args["charge_rate"] = charge_rate_arg
+        my_predbat.args["battery_rate_max"] = battery_rate_max_arg
+        if charge_rate_arg:
+            ha.dummy_items["number.charge_rate"] = {"state": 1100, "max": charge_rate_max}
+        if battery_rate_max_arg:
+            ha.dummy_items["sensor.battery_rate_max"] = 9984
+
+        inv = Inverter(my_predbat, 0)
+        if inv.battery_rate_max_raw != expect_rate_raw:
+            print("ERROR: battery_rate_max_raw should be {} got {}".format(expect_rate_raw, inv.battery_rate_max_raw))
+            failed = True
+        # The planned charge/discharge/export rates are all clamped against the raw value, so a
+        # wrong source shows up as a capped plan rather than just a cosmetic attribute
+        if round(inv.battery_rate_max_charge * MINUTE_WATT) != expect_rate_raw:
+            print("ERROR: battery_rate_max_charge should be {}W got {}W".format(expect_rate_raw, round(inv.battery_rate_max_charge * MINUTE_WATT)))
+            failed = True
+    finally:
+        for arg, value in saved.items():
+            if value is None:
+                my_predbat.args.pop(arg, None)
+            else:
+                my_predbat.args[arg] = value
+        ha.dummy_items["number.charge_rate"] = 1100
+        ha.dummy_items.pop("sensor.battery_rate_max", None)
+
+    return failed
+
+
+def test_solis_cloud_rate_limits(test_name, my_predbat, ha, user_limits, expect_charge, expect_discharge, expect_export):
+    """
+    Test
+       Inverter.__init__ plans each direction at its own limit with the SolisCloud automatic bindings.
+
+    GH#4940: Solis automatic config binds battery_rate_max to the larger of the inverter's max charge
+    and discharge power and inverter_limit_charge/_discharge to each one, so the reporter's battery
+    (2647W charge, 5559W discharge) is no longer planned discharging at its charge limit. user_limits
+    are apps.yaml values, which automatic config leaves in place of the bindings.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    entities = {"sensor.solis_battery_rate_max": 5559, "number.solis_max_charge_power": 2647, "number.solis_max_discharge_power": 5559}
+    bindings = {"battery_rate_max": "sensor.solis_battery_rate_max", "inverter_limit_charge": "number.solis_max_charge_power", "inverter_limit_discharge": "number.solis_max_discharge_power"}
+    saved_args = ("inverter_type", "charge_rate", "battery_rate_max", "inverter_limit_charge", "inverter_limit_discharge", "inverter_limit_export", "inverter_limit_override")
+    saved = {arg: my_predbat.args.get(arg, None) for arg in saved_args}
+    try:
+        for arg in saved_args:
+            my_predbat.args.pop(arg, None)
+        my_predbat.args["inverter_type"] = ["SolisCloud"]
+        my_predbat.args.update(bindings)
+        my_predbat.args.update(user_limits)
+        ha.dummy_items.update(entities)
+
+        inv = Inverter(my_predbat, 0)
+        for label, value, expect in (("charge", inv.battery_rate_max_charge, expect_charge), ("discharge", inv.battery_rate_max_discharge, expect_discharge), ("export", inv.battery_rate_max_export, expect_export)):
+            if round(value * MINUTE_WATT) != expect:
+                print("ERROR: battery_rate_max_{} should be {}W got {}W".format(label, expect, round(value * MINUTE_WATT)))
+                failed = True
+    finally:
+        for arg, value in saved.items():
+            if value is None:
+                my_predbat.args.pop(arg, None)
+            else:
+                my_predbat.args[arg] = value
+        for entity_id in entities:
+            ha.dummy_items.pop(entity_id, None)
+
+    return failed
+
+
+def test_reserve_model_device_bounds(test_name, my_predbat, ha, set_reserve_min, device_min, device_max, expect_reserve_percent, set_reserve_enable=True):
+    """
+    Test
+       Inverter.__init__ models the reserve floor the component publishes for the register, not just
+       set_reserve_min.
+
+    adjust_reserve() already clamps the write to these bounds (GH#4826), so a plan built to a lower
+    floor expects to use capacity the battery never releases (GH#4953).
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    saved_reserve_min = my_predbat.get_arg("set_reserve_min")
+    saved_reserve_enable = my_predbat.set_reserve_enable
+    saved_reserve_item = ha.dummy_items["number.reserve"]
+    try:
+        my_predbat.expose_config("set_reserve_min", set_reserve_min)
+        my_predbat.set_reserve_enable = set_reserve_enable
+        ha.dummy_items["number.reserve"] = {"state": 4.0, "min": device_min, "max": device_max}
+
+        inv = Inverter(my_predbat, 0)
+        if inv.reserve_percent != expect_reserve_percent:
+            print("ERROR: reserve_percent should be {} got {}".format(expect_reserve_percent, inv.reserve_percent))
+            failed = True
+        # reserve is what the plan actually treats as the bottom of the battery
+        expect_reserve_kwh = round(inv.soc_max * expect_reserve_percent / 100.0, 3)
+        if inv.reserve != expect_reserve_kwh:
+            print("ERROR: reserve should be {}kWh got {}kWh".format(expect_reserve_kwh, inv.reserve))
+            failed = True
+    finally:
+        my_predbat.expose_config("set_reserve_min", saved_reserve_min)
+        my_predbat.set_reserve_enable = saved_reserve_enable
+        ha.dummy_items["number.reserve"] = saved_reserve_item
+
+    return failed
+
+
+def test_reserve_literal_value(test_name, my_predbat, ha, inverter_type, reserve_arg, expect_reserve_percent, expect_reserve_percent_current, set_reserve_enable=True):
+    """
+    Test
+       Inverter.__init__ accepts a hard-wired reserve percentage, not only an entity id.
+
+    templates/huawei.yaml and templates/sofar.yaml both ship a literal reserve, since those
+    inverters expose no reserve register to bind to. Reading the register bounds off that literal as
+    though it were an entity raised TypeError inside __init__ and failed inverter creation outright,
+    so no plan could be computed at all (GH#5003).
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    # Inverter.__init__ replaces args with dummy entities for whatever the type has no register for,
+    # so the whole dict is snapshotted rather than the reserve entries alone - the shared fixture is
+    # reused by every later test in this module
+    saved_args = copy.deepcopy(my_predbat.args)
+    saved_reserve_enable = my_predbat.set_reserve_enable
+    saved_reserve_item = ha.dummy_items["number.reserve"]
+    try:
+        my_predbat.args["inverter_type"] = [inverter_type]
+        my_predbat.args["reserve"] = reserve_arg
+        my_predbat.set_reserve_enable = set_reserve_enable
+        # Pin the entity too, so the entity case is not left reading whatever an earlier test wrote
+        ha.dummy_items["number.reserve"] = {"state": 4.0, "min": None, "max": None}
+
+        inv = Inverter(my_predbat, 0)
+        if inv.reserve_percent != expect_reserve_percent:
+            print("ERROR: reserve_percent should be {} got {}".format(expect_reserve_percent, inv.reserve_percent))
+            failed = True
+        # The configured literal is what the inverter is taken to currently be set to
+        if inv.reserve_percent_current != expect_reserve_percent_current:
+            print("ERROR: reserve_percent_current should be {} got {}".format(expect_reserve_percent_current, inv.reserve_percent_current))
+            failed = True
+        # reserve is what the plan treats as the bottom of the battery
+        expect_reserve_kwh = round(inv.soc_max * expect_reserve_percent / 100.0, 3)
+        if inv.reserve != expect_reserve_kwh:
+            print("ERROR: reserve should be {}kWh got {}kWh".format(expect_reserve_kwh, inv.reserve))
+            failed = True
+        # A literal carries no min/max attributes, so there are no device bounds to honour. Types
+        # with no reserve register have had the arg replaced by a dummy entity during __init__, so
+        # only assert this where the literal survived.
+        if not is_entity_id(my_predbat.args["reserve"][0]) and inv.reserve_device_bounds() != (None, None):
+            print("ERROR: reserve_device_bounds should be (None, None) for a literal, got {}".format(inv.reserve_device_bounds()))
+            failed = True
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        my_predbat.set_reserve_enable = saved_reserve_enable
+        ha.dummy_items["number.reserve"] = saved_reserve_item
+
+    return failed
+
+
+def test_write_and_poll_non_entity(test_name, my_predbat, inv):
+    """
+    Test
+       write_and_poll_switch/value/option refuse a control that is not an entity id, with a warning.
+
+    apps.yaml settings may hold a fixed value rather than an entity id - the huawei and sofar
+    templates ship one for reserve - and every write path split it as though it were an entity id,
+    raising out of the middle of plan execution. A fixed value means Predbat cannot set that
+    control, which is a warning about a control it does not own, not a crash (GH#5003).
+    """
+    failed = False
+    print("**** Running Test: {} ****".format(test_name))
+
+    log_messages = []
+    orig_log = my_predbat.log
+    orig_status = my_predbat.current_status
+    orig_had_errors = my_predbat.had_errors
+    writes = (
+        ("write_and_poll_switch", lambda entity_id: inv.write_and_poll_switch("reserve", entity_id, True)),
+        ("write_and_poll_value", lambda entity_id: inv.write_and_poll_value("reserve", entity_id, 12)),
+        ("write_and_poll_option", lambda entity_id: inv.write_and_poll_option("reserve", entity_id, "Eco")),
+    )
+    try:
+        my_predbat.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
+        # A literal percentage, a float, a bool, and the missing/empty cases that already warned
+        for entity_id in (12, 12.5, True, None, ""):
+            for caller, write in writes:
+                del log_messages[:]
+                try:
+                    result = write(entity_id)
+                except Exception as error:
+                    print("ERROR: {} raised {} for non-entity {}".format(caller, error, repr(entity_id)))
+                    failed = True
+                    continue
+                if result is not False:
+                    print("ERROR: {} should refuse non-entity {}, returned {}".format(caller, repr(entity_id), result))
+                    failed = True
+                if not any(("Warn" in message) and (caller in message) for message in log_messages):
+                    print("ERROR: {} did not warn for non-entity {}, logged {}".format(caller, repr(entity_id), log_messages))
+                    failed = True
+    finally:
+        my_predbat.log = orig_log
+        my_predbat.current_status = orig_status
+        my_predbat.had_errors = orig_had_errors
+
+    return failed
+
+
+def test_state_wrapper_non_entity(test_name, my_predbat):
+    """
+    Test
+       get_state_wrapper/set_state_wrapper warn on a fixed value instead of indexing into it.
+
+    This is the read half of the same problem: reserve_device_bounds() fetches reserve with
+    indirect=False and looks up its min/max attributes, so a template's hard-wired percentage
+    reached "$" in 12 and raised TypeError out of Inverter.__init__, leaving Predbat unable to
+    create the inverter or compute any plan at all (GH#5003).
+    """
+    failed = False
+    print("**** Running Test: {} ****".format(test_name))
+
+    log_messages = []
+    orig_log = my_predbat.log
+    try:
+        my_predbat.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
+        for entity_id in (12, 12.5, True):
+            del log_messages[:]
+            try:
+                state = my_predbat.get_state_wrapper(entity_id, default=99)
+            except Exception as error:
+                print("ERROR: get_state_wrapper raised {} for non-entity {}".format(error, repr(entity_id)))
+                failed = True
+                continue
+            if state != 99:
+                print("ERROR: get_state_wrapper should return the default for non-entity {}, got {}".format(repr(entity_id), state))
+                failed = True
+            if not any(("Warn" in message) and ("get_state_wrapper" in message) for message in log_messages):
+                print("ERROR: get_state_wrapper did not warn for non-entity {}, logged {}".format(repr(entity_id), log_messages))
+                failed = True
+
+            del log_messages[:]
+            try:
+                written = my_predbat.set_state_wrapper(entity_id, 12)
+            except Exception as error:
+                print("ERROR: set_state_wrapper raised {} for non-entity {}".format(error, repr(entity_id)))
+                failed = True
+                continue
+            if written is not False:
+                print("ERROR: set_state_wrapper should refuse non-entity {}, returned {}".format(repr(entity_id), written))
+                failed = True
+            if not any(("Warn" in message) and ("set_state_wrapper" in message) for message in log_messages):
+                print("ERROR: set_state_wrapper did not warn for non-entity {}, logged {}".format(repr(entity_id), log_messages))
+                failed = True
+
+        # An entity id is still read as one, and no entity id at all is still the "every state" call
+        del log_messages[:]
+        my_predbat.set_state_wrapper("number.non_entity_probe", 7)
+        if my_predbat.get_state_wrapper("number.non_entity_probe", default=99) != 7:
+            print("ERROR: an entity id should still be read and written, got {}".format(my_predbat.get_state_wrapper("number.non_entity_probe", default=99)))
+            failed = True
+        if my_predbat.get_state_wrapper() is None:
+            print("ERROR: get_state_wrapper() with no entity should still return every state")
+            failed = True
+        if any("Warn" in message for message in log_messages):
+            print("ERROR: unexpected warning for a real entity id, logged {}".format(log_messages))
+            failed = True
+    finally:
+        my_predbat.log = orig_log
 
     return failed
 
@@ -434,18 +948,20 @@ def test_adjust_force_export(test_name, ha, inv, dummy_rest, prev_start, prev_en
     dummy1 = copy.deepcopy(inv.rest_data)
 
     dummy1["raw"]["invertor"]["discharge_target_soc_1"] = inv.reserve_precent if new_force_export else prev_discharge_target
-    if new_discharge_target != prev_discharge_target:
-        dummy_rest.queue_rest_data(dummy1)
+
+    # Discharge start/end time, the inverter mode and the discharge target are all written via
+    # entities now, not REST, so this phase issues no REST commands at all. Reset the two entities
+    # first so it asserts its own writes rather than inheriting what the non-REST phase left.
+    ha.set_state("select.inverter_mode", prev_mode)
+    ha.set_state("number.discharge_target_soc", prev_discharge_target)
 
     dummy1["Timeslots"]["Discharge_start_time_slot_1"] = new_start
     dummy1["Timeslots"]["Discharge_end_time_slot_1"] = new_end
-    if prev_start != expect_start or prev_end != expect_end:
-        dummy_rest.queue_rest_data(dummy1)
 
     dummy1["Control"]["Mode"] = new_mode
     dummy1["Control"]["Enable_Discharge_Schedule"] = export_schedule_discharge
-    if prev_mode != new_mode:
-        dummy_rest.queue_rest_data(dummy1)
+    # No queue_rest_data for the mode change: it is an entity write now, so nothing consumes a
+    # queued REST read-back and an entry left here would leak into the next test's runAll
 
     dummy_rest.rest_data = copy.deepcopy(dummy1)
 
@@ -458,18 +974,16 @@ def test_adjust_force_export(test_name, ha, inv, dummy_rest, prev_start, prev_en
     inv.adjust_force_export(new_force_export, new_start_timestamp, new_end_timestamp)
 
     rest_command = dummy_rest.get_commands()
-    expect_data = []
-    if new_discharge_target != prev_discharge_target:
-        expect_data.append(["dummy/setDischargeTarget", {"dischargeToPercent": int(new_discharge_target), "slot": 1}])
+    if json.dumps([]) != json.dumps(rest_command):
+        print("ERROR: Rest command should be [] got {}".format(rest_command))
+        failed = True
 
-    if prev_start != expect_start or prev_end != expect_end:
-        expect_data.append(["dummy/setDischargeSlot1", {"start": expect_start[0:5], "finish": expect_end[0:5]}])
-
-    if prev_mode != new_mode:
-        expect_data.append(["dummy/setBatteryMode", {"mode": new_mode}])
-
-    if json.dumps(expect_data) != json.dumps(rest_command):
-        print("ERROR: Rest command should be {} got {}".format(expect_data, rest_command))
+    # The mode and discharge target writes now land on entities even for a REST inverter
+    if ha.get_state("select.inverter_mode") != new_mode:
+        print("ERROR: REST inverter mode should be written via the entity as {} got {}".format(new_mode, ha.get_state("select.inverter_mode")))
+        failed = True
+    if ha.get_state("number.discharge_target_soc") != new_discharge_target:
+        print("ERROR: REST discharge target should be written via the entity as {} got {}".format(new_discharge_target, ha.get_state("number.discharge_target_soc")))
         failed = True
 
     return failed
@@ -504,38 +1018,433 @@ def test_adjust_charge_rate(test_name, ha, inv, dummy_rest, prev_rate, rate, exp
         print("ERROR: Inverter rate percent should be {} got {} - rate {} max_rate_raw {}".format(expect_percent, ha.get_state(entity_percent), rate, inv.battery_rate_max_raw))
         failed = True
 
-    # REST Mode
-    rest_entity = "Battery_Discharge_Rate" if discharge else "Battery_Charge_Rate"
-    inv.rest_api = "dummy"
-    inv.rest_data = {}
-    inv.rest_data["Control"] = {}
-    inv.rest_data["Control"][rest_entity] = prev_rate
-    dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
-    dummy_rest.rest_data["Control"][rest_entity] = expect_rate
+    # adjust_charge_rate/adjust_discharge_rate now always write via entity (write_and_poll_value),
+    # regardless of whether REST is configured - there's no REST-specific branch left to exercise
+    # separately here (unlike pause_mode/inverter_mode/discharge_target, which remain REST-only).
 
-    rest_command = dummy_rest.get_commands()
-    if rest_command:
-        print("ERROR Previous was command was not cleared, started with:".format(rest_command))
-        failed = True
+    return failed
 
-    if discharge:
-        inv.adjust_discharge_rate(rate)
-    else:
-        inv.adjust_charge_rate(rate)
 
-    rest_command = dummy_rest.get_commands()
-    if prev_rate != expect_rate:
-        print("Prev_rate {} expect_rate {}".format(prev_rate, expect_rate))
+def test_rate_write_quantised(test_name, ha, inv, prev_rate, rate, expect_writes, expect_rate, discharge=False, rate_max=None):
+    """
+    A rate the inverter stores coarsely must verify from its quantised read-back, not be re-written (#5324).
+
+    The inverter is modelled as GivEnergy holds the rate - a whole percent of nominal battery capacity,
+    rounded down. rate_max is the rate ceiling, defaulting to the request as an inverter_limit_charge override caps it.
+    """
+    failed = False
+    print("Test: {} prev_rate {} rate {} expect_writes {} expect_rate {}".format(test_name, prev_rate, rate, expect_writes, expect_rate))
+    inv.rest_data = None
+    inv.rest_api = None
+    entity = "number.discharge_rate" if discharge else "number.charge_rate"
+    max_attr = "battery_rate_max_discharge" if discharge else "battery_rate_max_charge"
+    percent_arg = "discharge_rate_percent" if discharge else "charge_rate_percent"
+    saved = (inv.inv_rate_step_percent_of_capacity, inv.nominal_capacity, getattr(inv, max_attr))
+    # GivTCP configures the rate in watts only - with a percent entity too, the current rate is read from that instead
+    saved_percent = inv.base.args.pop(percent_arg, None)
+    capacity_wh = 13410
+    writes = []
+    call_service = ha.call_service
+
+    def quantising_call_service(service, **kwargs):
+        """Store a rate write as the inverter would hold it."""
+        if service == "number/set_value" and kwargs.get("entity_id") == entity:
+            writes.append(kwargs.get("value"))
+            kwargs["value"] = int(int(float(kwargs["value"]) * 100 / capacity_wh) * capacity_wh / 100)
+        return call_service(service, **kwargs)
+
+    try:
+        inv.inv_rate_step_percent_of_capacity = 1
+        inv.nominal_capacity = capacity_wh / 1000
+        setattr(inv, max_attr, (rate if rate_max is None else rate_max) / MINUTE_WATT)
+        ha.call_service = quantising_call_service
+        ha.dummy_items[entity] = prev_rate
         if discharge:
-            expect_data = [["dummy/setDischargeRate", {"dischargeRate": expect_rate}]]
+            inv.adjust_discharge_rate(rate)
         else:
-            expect_data = [["dummy/setChargeRate", {"chargeRate": expect_rate}]]
-    else:
-        expect_data = []
-    if json.dumps(expect_data) != json.dumps(rest_command):
-        print("ERROR: Rest command should be {} got {}".format(expect_data, rest_command))
-        failed = True
+            inv.adjust_charge_rate(rate)
+    finally:
+        ha.call_service = call_service
+        if saved_percent is not None:
+            inv.base.args[percent_arg] = saved_percent
+        inv.inv_rate_step_percent_of_capacity, inv.nominal_capacity, _ = saved
+        setattr(inv, max_attr, saved[2])
 
+    if len(writes) != expect_writes:
+        print("ERROR: {} expected {} write(s) got {}: {}".format(test_name, expect_writes, len(writes), writes))
+        failed = True
+    if float(ha.get_state(entity)) != expect_rate:
+        print("ERROR: {} expected rate {} got {}".format(test_name, expect_rate, ha.get_state(entity)))
+        failed = True
+    return failed
+
+
+def test_create_missing_arg_does_not_fill_sibling_entries(test_name, my_predbat):
+    """
+    create_missing_arg() pads every OTHER inverter's slot with None, not the default (#5359 follow-up).
+
+    When the key is entirely missing from args, create_missing_arg() used to fill all four slots
+    with the same default value, and only the caller's own index was then overwritten with its
+    dummy entity. On a mixed fleet where inverter 0 triggers this (e.g. inv_output_charge_control
+    != "power") before inverter 1 is even constructed, inverter 1's slot ended up holding a bare
+    number rather than None - which the per-entry "is this inverter's entry set" check added for
+    #5359 then misreads as a configured entity, since a truthy value is indistinguishable from one.
+
+    The padding applies to every arg create_missing_arg() builds, not just the rates, so every arg
+    that constructing inverter 0 turned into a list is checked.
+    """
+    failed = False
+    print(f"**** Running Test: {test_name} ****")
+
+    saved_args = copy.deepcopy(my_predbat.args)
+    try:
+        my_predbat.args["num_inverters"] = 2
+        # GS (Solis) drives charge rate via current rather than power and has no target SoC, so
+        # constructing inverter 0 takes several create_missing_arg() branches, charge_rate among them
+        my_predbat.args["inverter_type"] = ["GS", "GS"]
+        my_predbat.args.pop("charge_rate", None)
+        my_predbat.args.pop("charge_rate_percent", None)
+        before = {key: value for key, value in my_predbat.args.items() if isinstance(value, list)}
+
+        inv0 = Inverter(my_predbat, 0, quiet=True)
+        if inv0.inv_output_charge_control == "power":
+            print("ERROR: {} test assumes a non-power charge control to exercise create_missing_arg('charge_rate', ...)".format(test_name))
+            return 1
+
+        created = sorted(key for key, value in my_predbat.args.items() if isinstance(value, list) and key not in before)
+        if "charge_rate" not in created:
+            print("ERROR: {} expected charge_rate to be created as a per-inverter list, created {}".format(test_name, created))
+            failed = True
+        for key in created:
+            siblings = my_predbat.args[key][1:]
+            if any(slot is not None for slot in siblings):
+                print("ERROR: {} expected {}'s sibling slots to stay None until those inverters are constructed, got {}".format(test_name, key, siblings))
+                failed = True
+
+        # The consequence: a percent-only inverter 1 beside it must see its own charge_rate entry as unbound,
+        # not take inverter 0's leftover default number for a watts entity and write to it
+        my_predbat.args["inverter_type"] = ["GS", "GEC"]
+        my_predbat.args["charge_rate_percent"] = [None, "number.rate_percent"]
+        inv1 = Inverter(my_predbat, 1, quiet=True)
+        if inv1.rate_controls("charge_rate") != (False, True):
+            print("ERROR: {} expected inverter 1 to use only its percent control, got {}".format(test_name, inv1.rate_controls("charge_rate")))
+            failed = True
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+
+    return 1 if failed else 0
+
+
+def test_create_missing_arg_keeps_inverter_0_single_value(test_name, my_predbat):
+    """
+    A single (non-list) apps.yaml value is inverter 0's, and must survive another inverter creating its dummy.
+
+    On a mixed fleet where inverter 0 has the control and inverter 1 does not, inverter 1's
+    create_missing_arg() turned the single value into a fresh list and threw it away, so inverter 0
+    lost its own entity: it read the literal default (100%) instead of its real target SoC, and every
+    write to it failed with "not an entity id" (or, padded with None, "No entity_id").
+    """
+    failed = False
+    print(f"**** Running Test: {test_name} ****")
+
+    saved_args = copy.deepcopy(my_predbat.args)
+    saved_apps_yaml = getattr(my_predbat, "args_from_apps_yaml", None)
+    dummy_items = my_predbat.ha_interface.dummy_items
+    saved_entity = dummy_items.get("number.inv0_charge_limit")
+    try:
+        my_predbat.args["num_inverters"] = 2
+        # GE has a target SoC control, GS does not, so only inverter 1 builds a charge_limit dummy
+        my_predbat.args["inverter_type"] = ["GE", "GS"]
+        my_predbat.args["charge_limit"] = "number.inv0_charge_limit"
+        my_predbat.args_from_apps_yaml = copy.deepcopy(my_predbat.args)
+        dummy_items["number.inv0_charge_limit"] = 55
+
+        inv0 = Inverter(my_predbat, 0, quiet=True)
+        Inverter(my_predbat, 1, quiet=True)
+
+        expected = ["number.inv0_charge_limit", "sensor.{}_GS_1_charge_limit".format(my_predbat.prefix), None, None]
+        if my_predbat.args["charge_limit"] != expected:
+            print("ERROR: {} expected charge_limit {} got {}".format(test_name, expected, my_predbat.args["charge_limit"]))
+            failed = True
+        current = my_predbat.get_arg("charge_limit", index=0, default=100.0)
+        if current != 55:
+            print("ERROR: {} expected inverter 0 to read its own charge limit 55 got {}".format(test_name, current))
+            failed = True
+        if inv0.user_configured_entity("charge_limit") != "number.inv0_charge_limit":
+            print("ERROR: {} expected inverter 0's apps.yaml entity to still count as configured, got {}".format(test_name, inv0.user_configured_entity("charge_limit")))
+            failed = True
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        my_predbat.args_from_apps_yaml = saved_apps_yaml
+        if saved_entity is None:
+            dummy_items.pop("number.inv0_charge_limit", None)
+        else:
+            dummy_items["number.inv0_charge_limit"] = saved_entity
+
+    return 1 if failed else 0
+
+
+def test_custom_inverter_def_drops_rate_step(test_name, my_predbat, ha):
+    """
+    A custom inverter type is built from a copy of the GE row, but must not inherit GivEnergy's rate step (#5324).
+
+    Building an Inverter writes args (soc_max_nominal, battery_scaling_last_known) and publishes entities on
+    the shared fixture, so both are restored whole afterwards rather than just the args this test sets (#5079).
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+    saved_args = copy.deepcopy(my_predbat.args)
+    saved_items = copy.deepcopy(ha.dummy_items)
+    try:
+        my_predbat.args["inverter_type"] = ["CUSTOM5324"]
+        my_predbat.args["inverter"] = {"name": "Custom", "has_rest_api": False}
+        inv = Inverter(my_predbat, 0, quiet=True)
+        if inv.inv_rate_step_percent_of_capacity != 0:
+            print("ERROR: {} custom inverter inherited rate step {}".format(test_name, inv.inv_rate_step_percent_of_capacity))
+            failed = True
+        if INVERTER_DEF["GE"].get("rate_step_percent_of_capacity") != 1:
+            print("ERROR: {} GE row lost its rate step".format(test_name))
+            failed = True
+    finally:
+        INVERTER_DEF.pop("CUSTOM5324", None)
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        ha.dummy_items.clear()
+        ha.dummy_items.update(saved_items)
+    return failed
+
+
+def test_rate_control_is_per_inverter(test_name, my_predbat, ha):
+    """
+    An inverter reads and writes its rate through the control its own entry is bound to, whichever settings exist
+    for the fleet: a GE Cloud fleet mixing a unit with a power register and a 3-phase one with only the percentage
+    binds each setting for one inverter and leaves it empty for the other (#5359). It also means the 3-phase unit's
+    percentage entity is bound, so its grid_charge_only mark is seen in a mixed fleet (#5082).
+
+    Building an Inverter writes args and publishes entities on the shared fixture, so both are restored whole (#5079).
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+    saved_args = copy.deepcopy(my_predbat.args)
+    saved_items = copy.deepcopy(ha.dummy_items)
+    try:
+        my_predbat.args["inverter_type"] = ["GEC"]
+        # this inverter's entry in each setting, the rate it should read, the entities a new rate is written to
+        for watts_entity, percent_entity, expect_read, expect_writes in (
+            ("number.rate_watts", None, 1500, ["number.rate_watts"]),
+            (None, "number.rate_percent", 1300, ["number.rate_percent"]),
+            ("number.rate_watts", "number.rate_percent", 1300, ["number.rate_watts", "number.rate_percent"]),
+        ):
+            for rate_arg, read_rate, adjust_rate in (("charge_rate", "get_current_charge_rate", "adjust_charge_rate"), ("discharge_rate", "get_current_discharge_rate", "adjust_discharge_rate")):
+                for name in ("charge_rate", "charge_rate_percent", "discharge_rate", "discharge_rate_percent"):
+                    my_predbat.args.pop(name, None)
+                # Both settings exist for the fleet; only this inverter's entries differ
+                my_predbat.args[rate_arg] = [watts_entity]
+                my_predbat.args[rate_arg + "_percent"] = [percent_entity]
+                ha.dummy_items["number.rate_watts"] = 1500
+                ha.dummy_items["number.rate_percent"] = {"state": 50, "unit_of_measurement": "%", "grid_charge_only": True}
+                inv = Inverter(my_predbat, 0, quiet=True)
+                inv.battery_rate_max_raw = 2600
+                inv.battery_rate_max_charge = inv.battery_rate_max_discharge = 2600 / MINUTE_WATT
+                got = getattr(inv, read_rate)()
+                if got != expect_read:
+                    print("ERROR: {} {} watts {} percent {} expected to read {} got {}".format(test_name, rate_arg, watts_entity, percent_entity, expect_read, got))
+                    failed = True
+                written = []
+                call_service = ha.call_service
+
+                def recording_call_service(service, **kwargs):
+                    """Record which entity a rate write went to."""
+                    if service == "number/set_value":
+                        written.append(kwargs.get("entity_id"))
+                    return call_service(service, **kwargs)
+
+                ha.call_service = recording_call_service
+                try:
+                    getattr(inv, adjust_rate)(0)
+                finally:
+                    ha.call_service = call_service
+                if sorted(set(written)) != sorted(expect_writes):
+                    print("ERROR: {} {} watts {} percent {} expected writes to {} got {}".format(test_name, rate_arg, watts_entity, percent_entity, expect_writes, written))
+                    failed = True
+                # The mark on the percentage charge rate is seen whenever this inverter is bound to it
+                if rate_arg == "charge_rate" and inv.inv_support_discharge_freeze is not (percent_entity is None):
+                    print("ERROR: {} watts {} percent {} Freeze Export support is {}".format(test_name, watts_entity, percent_entity, inv.inv_support_discharge_freeze))
+                    failed = True
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        ha.dummy_items.clear()
+        ha.dummy_items.update(saved_items)
+    return failed
+
+
+def test_grid_charge_only_disables_discharge_freeze(test_name, my_predbat, ha):
+    """
+    A charge rate entity marked grid_charge_only turns Freeze Export support off for that inverter: the GivEnergy
+    3-phase units have no pause register and their charge rate only limits grid charging, so a zero rate leaves
+    solar filling the battery (#5082). The hub marks its charge_rate entity, GE Cloud its percentage one.
+
+    Building an Inverter writes args and publishes entities on the shared fixture, so both are restored whole (#5079).
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+    saved_args = copy.deepcopy(my_predbat.args)
+    saved_items = copy.deepcopy(ha.dummy_items)
+    try:
+        # inverter type, the arg the rate entity is bound to, the entity, expected Freeze Export support
+        for inverter_type, rate_arg, entity, expect in (
+            ("GWMQTT", "charge_rate", {"state": 1100, "grid_charge_only": True}, False),
+            ("GWMQTT", "charge_rate", {"state": 1100, "grid_charge_only": "true"}, False),
+            ("GWMQTT", "charge_rate", {"state": 1100, "grid_charge_only": False}, True),
+            ("GWMQTT", "charge_rate", {"state": 1100, "step_percent_of_capacity": 1}, True),
+            ("GWMQTT", "charge_rate", 1100, True),
+            ("GEC", "charge_rate_percent", {"state": 100, "grid_charge_only": True}, False),
+            ("GEC", "charge_rate_percent", {"state": 100, "unit_of_measurement": "%"}, True),
+            ("GEC", "charge_rate", {"state": 1100, "max": 6000}, True),
+        ):
+            my_predbat.args.pop("charge_rate", None)
+            my_predbat.args.pop("charge_rate_percent", None)
+            my_predbat.args[rate_arg] = "number.rate_under_test"
+            my_predbat.args["inverter_type"] = [inverter_type]
+            ha.dummy_items["number.rate_under_test"] = entity
+            inv = Inverter(my_predbat, 0, quiet=True)
+            if inv.inv_support_discharge_freeze is not expect:
+                print("ERROR: {} type {} {} {} expected Freeze Export support {} got {}".format(test_name, inverter_type, rate_arg, entity, expect, inv.inv_support_discharge_freeze))
+                failed = True
+        for inverter_type in ("GWMQTT", "GEC"):
+            if INVERTER_DEF[inverter_type]["support_discharge_freeze"] is not True:
+                print("ERROR: {} the {} row must keep Freeze Export, only a marked inverter loses it".format(test_name, inverter_type))
+                failed = True
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        ha.dummy_items.clear()
+        ha.dummy_items.update(saved_items)
+    return failed
+
+
+def test_hub_midnight_capability_from_entity(test_name, my_predbat, ha):
+    """Read a device's can_span_midnight restriction per inverter and refresh, preserving other profiles."""
+    failed = False
+    print("Test: {}".format(test_name))
+    saved_args = copy.deepcopy(my_predbat.args)
+    saved_items = copy.deepcopy(ha.dummy_items)
+    orig_log = my_predbat.log
+    try:
+        my_predbat.args["charge_start_time"] = ["select.ems_start", "select.other_start"]
+        my_predbat.args["inverter_type"] = ["GWMQTT", "GWMQTT"]
+        ha.dummy_items["select.ems_start"] = {"state": "00:00:00", "can_span_midnight": False}
+        ha.dummy_items["select.other_start"] = {"state": "00:00:00"}
+        first = Inverter(my_predbat, 0, quiet=True)
+        second = Inverter(my_predbat, 1, quiet=True)
+        if first.inv_can_span_midnight or not second.inv_can_span_midnight or not INVERTER_DEF["GWMQTT"]["can_span_midnight"]:
+            print("ERROR: {} the EMS capability must not affect another inverter or the GWMQTT profile".format(test_name))
+            failed = True
+        for value, expect in [(None, True), (False, False), (True, True), ("false", True), (0, True)]:
+            ha.dummy_items["select.ems_start"] = {"state": "00:00:00", "can_span_midnight": value}
+            first.refresh_config(quiet=True)
+            if first.inv_can_span_midnight is not expect:
+                print("ERROR: {} capability {} expected {} got {}".format(test_name, value, expect, first.inv_can_span_midnight))
+                failed = True
+        my_predbat.args["inverter_type"] = ["GEE", "GWMQTT"]
+        ha.dummy_items["select.ems_start"] = {"state": "00:00:00", "can_span_midnight": True}
+        first.refresh_config(quiet=True)
+        if first.inv_can_span_midnight:
+            print("ERROR: {} an entity must not loosen the direct EMS profile".format(test_name))
+            failed = True
+        # Any inverter type can be restricted, not only a Hub device
+        my_predbat.args["inverter_type"] = ["GE", "GWMQTT"]
+        for value, expect in [(None, True), (False, False), (True, True)]:
+            ha.dummy_items["select.ems_start"] = {"state": "00:00:00", "can_span_midnight": value}
+            first.refresh_config(quiet=True)
+            if first.inv_can_span_midnight is not expect:
+                print("ERROR: {} GE capability {} expected {} got {}".format(test_name, value, expect, first.inv_can_span_midnight))
+                failed = True
+        if not INVERTER_DEF["GE"]["can_span_midnight"]:
+            print("ERROR: {} an entity must not change the shared GE profile".format(test_name))
+            failed = True
+        # A fixed time (as the Sofar templates use) has no attributes, and must not warn every refresh
+        my_predbat.args["charge_start_time"] = ["00:00:00", "select.other_start"]
+        log_messages = []
+        my_predbat.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
+        first.refresh_config(quiet=True)
+        my_predbat.log = orig_log
+        if not first.inv_can_span_midnight or any("fixed value" in message for message in log_messages):
+            print("ERROR: {} a fixed charge start time should be skipped quietly, logged {}".format(test_name, log_messages))
+            failed = True
+    finally:
+        my_predbat.log = orig_log
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        ha.dummy_items.clear()
+        ha.dummy_items.update(saved_items)
+    return failed
+
+
+def test_rate_step_from_charge_rate_entity(test_name, my_predbat, ha):
+    """
+    The charge_rate entity's step_percent_of_capacity attribute sets the rate step per inverter, for a type that
+    covers more than one brand - the hub is GWMQTT whatever it drives and marks only its GivEnergy inverters (#5324).
+
+    Building an Inverter writes args and publishes entities on the shared fixture, so both are restored whole (#5079).
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+    saved_args = copy.deepcopy(my_predbat.args)
+    saved_items = copy.deepcopy(ha.dummy_items)
+    try:
+        my_predbat.args["charge_rate"] = "number.charge_rate"
+        # inverter type, charge_rate entity, expected step - an attribute that is absent, blank or not a percentage leaves the row's value
+        for inverter_type, entity, expect in (
+            ("GWMQTT", {"state": 1100, "step_percent_of_capacity": 1}, 1),
+            ("GWMQTT", {"state": 1100, "max": 6000}, 0),
+            ("GWMQTT", 1100, 0),
+            ("GWMQTT", {"state": 1100, "step_percent_of_capacity": 150}, 0),
+            ("GWMQTT", {"state": 1100, "step_percent_of_capacity": "bad"}, 0),
+            ("GE", {"state": 1100, "max": 6000}, 1),
+        ):
+            my_predbat.args["inverter_type"] = [inverter_type]
+            ha.dummy_items["number.charge_rate"] = entity
+            inv = Inverter(my_predbat, 0, quiet=True)
+            if inv.inv_rate_step_percent_of_capacity != expect:
+                print("ERROR: {} type {} charge_rate {} expected rate step {} got {}".format(test_name, inverter_type, entity, expect, inv.inv_rate_step_percent_of_capacity))
+                failed = True
+        if "rate_step_percent_of_capacity" in INVERTER_DEF["GWMQTT"]:
+            print("ERROR: {} the GWMQTT row must not carry a rate step, it covers every brand the hub drives".format(test_name))
+            failed = True
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        ha.dummy_items.clear()
+        ha.dummy_items.update(saved_items)
+    return failed
+
+
+def test_rate_tolerances(test_name, inv):
+    """
+    A rate read-back gets 5% of the rate ceiling either side, widened below to one step only where the inverter declares one (#5324).
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+    saved = (inv.inv_rate_step_percent_of_capacity, inv.nominal_capacity)
+    try:
+        for step_percent, capacity, rate_max_watts, expect in ((0, 13.41, 1300, (65, None)), (1, 13.41, 1300, (65, 135.1)), (1, 13.41, 4000, (200, 200)), (1, 0, 1300, (65, None))):
+            inv.inv_rate_step_percent_of_capacity = step_percent
+            inv.nominal_capacity = capacity
+            got = inv.rate_tolerances(rate_max_watts / MINUTE_WATT)
+            if abs(got[0] - expect[0]) > 0.01 or (got[1] is None) != (expect[1] is None) or (got[1] is not None and abs(got[1] - expect[1]) > 0.01):
+                print("ERROR: {} step {}% capacity {}kWh rate {}W expected tolerances {} got {}".format(test_name, step_percent, capacity, rate_max_watts, expect, got))
+                failed = True
+        # value, target, fuzzy, fuzzy_below, expect - fuzzy_below only ever widens a read SHORT of target
+        for value, target, fuzzy, fuzzy_below, expect in ((1206, 1300, 65, 135.1, True), (1206, 1300, 65, None, False), (134, 0, 130, 135.1, False), (1365, 1300, 65, 135.1, True), (1366, 1300, 65, 135.1, False)):
+            if within_fuzzy(value, target, fuzzy, fuzzy_below) != expect:
+                print("ERROR: {} within_fuzzy({}, {}, {}, {}) expected {}".format(test_name, value, target, fuzzy, fuzzy_below, expect))
+                failed = True
+    finally:
+        inv.inv_rate_step_percent_of_capacity, inv.nominal_capacity = saved
     return failed
 
 
@@ -597,27 +1506,28 @@ def test_adjust_inverter_mode(test_name, ha, inv, dummy_rest, prev_mode, mode, e
     # Non-REST Mode
     inv.rest_data = None
     ha.dummy_items["select.inverter_mode"] = prev_mode
-    inv.adjust_inverter_mode(True if mode == "Timed Export" else False, False)
+    inv.adjust_inverter_mode(True if mode == "Timed Export" else False)
     if ha.get_state("select.inverter_mode") != expect_mode:
         print("ERROR: Inverter mode should be {} got {}".format(expect_mode, ha.get_state("select.inverter_mode")))
         failed = True
 
-    # REST Mode
+    # REST Mode - the mode is written via the entity now (published by GivTCPComponent), so a REST
+    # inverter issues no setBatteryMode command and lands on the same entity as the path above
     inv.rest_api = "dummy"
     inv.rest_data = {}
     inv.rest_data["Control"] = {}
     inv.rest_data["Control"]["Mode"] = prev_mode
     dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
     dummy_rest.rest_data["Control"]["Mode"] = expect_mode
+    ha.dummy_items["select.inverter_mode"] = prev_mode
 
-    inv.adjust_inverter_mode(True if mode == "Timed Export" else False, False)
+    inv.adjust_inverter_mode(True if mode == "Timed Export" else False)
     rest_command = dummy_rest.get_commands()
-    if prev_mode != expect_mode:
-        expect_data = [["dummy/setBatteryMode", {"mode": expect_mode}]]
-    else:
-        expect_data = []
-    if json.dumps(expect_data) != json.dumps(rest_command):
-        print("ERROR: Rest command should be {} got {}".format(expect_data, rest_command))
+    if json.dumps([]) != json.dumps(rest_command):
+        print("ERROR: Rest command should be [] got {}".format(rest_command))
+        failed = True
+    if ha.get_state("select.inverter_mode") != expect_mode:
+        print("ERROR: REST inverter mode should be written via the entity as {} got {}".format(expect_mode, ha.get_state("select.inverter_mode")))
         failed = True
 
     return failed
@@ -651,7 +1561,7 @@ def test_adjust_ge_eco_toggle(test_name, ha, inv, prev_eco_state, force_export, 
     inv.base.args["inverter_mode"] = "switch.enable_eco_mode"
     ha.dummy_items["switch.enable_eco_mode"] = prev_eco_state
 
-    inv.adjust_inverter_mode(force_export, False)
+    inv.adjust_inverter_mode(force_export)
 
     actual_state = ha.get_state("switch.enable_eco_mode")
     if actual_state != expect_eco_state:
@@ -697,7 +1607,7 @@ def test_adjust_ge_eco_toggle_missing_entity(test_name, inv, force_export, inver
     inv.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
 
     try:
-        inv.adjust_inverter_mode(force_export, False)
+        inv.adjust_inverter_mode(force_export)
     except Exception as exc:
         print("ERROR: adjust_inverter_mode should not raise when inverter_mode entity is missing, got {}".format(exc))
         failed = True
@@ -714,6 +1624,59 @@ def test_adjust_ge_eco_toggle_missing_entity(test_name, inv, force_export, inver
     if warning_found != expect_warning:
         print("ERROR: expected warning {} got {}".format(expect_warning, warning_found))
         failed = True
+
+    return failed
+
+
+def test_fox_no_predbat_inverter_mode_control(test_name, my_predbat):
+    """
+    Test neither Fox type routes its work mode through Predbat's inverter_mode control
+
+    Fox's work mode is set per-slot inside the scheduler fox.py writes (Cloud, see
+    apply_battery_schedule - including the Feed-in First slot for a freeze export) or by the
+    charge/discharge/freeze service templates in templates/fox.yaml (modbus). Neither path wants
+    Predbat writing the mode as well, so Fox takes the same route as every other non-GE inverter:
+    a dummy inverter_mode entity that nothing reads and no service call behind it.
+
+    FoxCloud used to be the sole inverter type declaring the has_fox_inverter_mode flag, which
+    bought it a special case in adjust_inverter_mode pinning the work mode to SelfUse every cycle -
+    fighting the scheduler and stopping Feed-in First ever being selected (#5022). The flag has
+    been removed along with that branch; this test is what keeps a mode write from coming back.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    saved_type = my_predbat.args.get("inverter_type")
+    saved_has_mode = "inverter_mode" in my_predbat.args
+    saved_mode = my_predbat.args.get("inverter_mode")
+    try:
+        my_predbat.args["inverter_type"] = ["FoxCloud"]
+        my_predbat.args.pop("inverter_mode", None)
+
+        inv = Inverter(my_predbat, 0, quiet=True)
+
+        services = []
+        orig_call = my_predbat.call_service_wrapper
+        my_predbat.call_service_wrapper = lambda service, **kwargs: services.append(service) or orig_call(service, **kwargs)
+        try:
+            inv.adjust_inverter_mode(False)
+            inv.adjust_inverter_mode(True)
+        finally:
+            my_predbat.call_service_wrapper = orig_call
+
+        # The mode must never leave Predbat - a real write would fight the scheduler
+        if services:
+            print("ERROR: FoxCloud adjust_inverter_mode should reach no inverter, got service calls {}".format(services))
+            failed = True
+    finally:
+        if saved_type is None:
+            my_predbat.args.pop("inverter_type", None)
+        else:
+            my_predbat.args["inverter_type"] = saved_type
+        if saved_has_mode:
+            my_predbat.args["inverter_mode"] = saved_mode
+        else:
+            my_predbat.args.pop("inverter_mode", None)
 
     return failed
 
@@ -745,28 +1708,9 @@ def test_adjust_battery_target(test_name, ha, inv, dummy_rest, prev_soc, soc, is
         print("ERROR: Button state should be {} got {}".format(expected_button_state, button_state))
         failed = True
 
-    # REST Mode
-    inv.rest_api = "dummy"
-    inv.rest_data = {}
-    inv.rest_data["Control"] = {}
-    inv.rest_data["Control"]["Target_SOC"] = prev_soc
-    dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
-    dummy_rest.rest_data["Control"]["Target_SOC"] = expect_soc
-    # enableChargeTarget always enables (True), so set Enable_Charge_Target to "enable" so it passes on first try
-    dummy_rest.rest_data["Control"]["Enable_Charge_Target"] = "enable"
-
-    inv.adjust_battery_target(soc, isCharging=isCharging, isExporting=isExporting)
-    rest_command = dummy_rest.get_commands()
-    if expect_soc != prev_soc:
-        expect_data = [
-            ["dummy/enableChargeTarget", {"state": "enable"}],
-            ["dummy/setChargeTarget", {"chargeToPercent": expect_soc}],
-        ]
-    else:
-        expect_data = []
-    if json.dumps(expect_data) != json.dumps(rest_command):
-        print("ERROR: Rest command should be {} got {}".format(expect_data, rest_command))
-        failed = True
+    # adjust_battery_target now always writes charge_limit via entity (write_and_poll_value),
+    # regardless of whether REST is configured - there's no REST-specific branch left to exercise
+    # separately here (unlike pause_mode/inverter_mode/discharge_target, which remain REST-only).
 
     return failed
 
@@ -830,7 +1774,7 @@ def test_rest_enable_charge_target(test_name, ha, inv, dummy_rest, enable, expec
     else:
         dummy_rest.rest_data = {"Control": {"Enable_Charge_Target": "enable" if enable else "disable"}}
 
-    inv.rest_enableChargeTarget(enable)
+    _rest_client(inv, dummy_rest).enable_charge_target(enable)
 
     rest_commands = dummy_rest.get_commands()
     if json.dumps(expect_commands) != json.dumps(rest_commands):
@@ -873,140 +1817,20 @@ def test_inverter_self_test(test_name, my_predbat):
     dummy_rest.rest_data["Power"]["Power"]["PV_Power"] = 200
     dummy_rest.rest_data["Power"]["Power"]["Load_Power"] = 300
 
-    inv = Inverter(my_predbat, 0, rest_postCommand=dummy_rest.dummy_rest_postCommand, rest_getData=dummy_rest.dummy_rest_getData)
+    inv = Inverter(my_predbat, 0)
     inv.sleep = dummy_sleep
     inv.self_test(my_predbat.minutes_now)
     rest = dummy_rest.get_commands()
-    repeats = INVERTER_MAX_RETRY_REST  # configurable number of repeats
+
+    # Battery target/rate/reserve/charge & discharge window/schedule-enable, and now the inverter
+    # mode too, all write via entities regardless of REST config, so the self test issues no direct
+    # REST commands at all. The remaining direct-REST users (battery/capacity discovery, the #4517
+    # discharge-target model check) are reads or are not exercised here - see the "REST exceptions"
+    # note in inverter.py's Inverter.__init__.
     expected = []
-
-    # Define the command patterns (each repeated INVERTER_MAX_RETRY_REST times due to the retry loop).
-    # Enable_Charge_Target is not set in the mock rest_data so enableChargeTarget exhausts all retries,
-    # same as setChargeTarget exhausts retries because Target_SOC stays at 99.
-    commands = [
-        ["dummy/enableChargeTarget", {"state": "enable"}],
-        ["dummy/setChargeTarget", {"chargeToPercent": 100}],
-        ["dummy/setChargeRate", {"chargeRate": 215}],
-        ["dummy/setChargeRate", {"chargeRate": 0}],
-        ["dummy/setDischargeRate", {"dischargeRate": 220}],
-        ["dummy/setDischargeRate", {"dischargeRate": 0}],
-        ["dummy/setBatteryReserve", {"reservePercent": 100}],
-        ["dummy/setBatteryReserve", {"reservePercent": 6}],
-        ["dummy/enableChargeSchedule", {"state": "disable"}],
-        ["dummy/setChargeSlot1", {"start": "23:01", "finish": "05:01"}],
-        ["dummy/setChargeSlot1", {"start": "23:00", "finish": "05:00"}],
-        ["dummy/setDischargeSlot1", {"start": "23:00", "finish": "23:01"}],
-        ["dummy/setBatteryMode", {"mode": "Timed Export"}],
-    ]
-
-    # Generate expected list with repeats
-    for command in commands:
-        for _ in range(repeats):
-            expected.append(command)
     if json.dumps(expected) != json.dumps(rest):
         print("ERROR: Self test should be {} got {}".format(expected, rest))
         failed = True
-    return failed
-
-
-def test_inverter_rest_template(
-    test_name,
-    my_predbat,
-    filename,
-    assert_soc_max=9.52,
-    assert_soc=0,
-    assert_voltage=52,
-    assert_inverter_limit=3600,
-    assert_battery_rate_max=2600,
-    assert_serial_number="Unknown",
-    assert_pv_power=0,
-    assert_load_power=0,
-    assert_charge_start_time_minutes=0,
-    assert_charge_end_time_minutes=0,
-    assert_charge_enable=False,
-    assert_discharge_start_time_minutes=0,
-    assert_discharge_end_time_minutes=0,
-    assert_discharge_enable=False,
-    assert_pause_start_time_minutes=0,
-    assert_pause_end_time_minutes=0,
-    assert_nominal_capacity=9.52,
-    assert_battery_temperature=0,
-):
-    failed = False
-    print("**** Running Test: {} ****".format(test_name))
-    dummy_rest = DummyRestAPI()
-    my_predbat.args["givtcp_rest"] = "dummy"
-
-    # Remove inverter_limit and export_limit from config to test REST data parsing
-    if "inverter_limit" in my_predbat.args:
-        del my_predbat.args["inverter_limit"]
-    if "export_limit" in my_predbat.args:
-        del my_predbat.args["export_limit"]
-
-    dummy_rest.rest_data = {}
-    with open(filename, "r") as file:
-        dummy_rest.rest_data = json.load(file)
-
-    my_predbat.restart_active = True
-    inv = Inverter(my_predbat, 0, rest_postCommand=dummy_rest.dummy_rest_postCommand, rest_getData=dummy_rest.dummy_rest_getData, quiet=False)
-    inv.sleep = dummy_sleep
-
-    inv.update_status(my_predbat.minutes_now)
-    my_predbat.restart_active = False
-
-    if assert_soc_max != inv.soc_max:
-        print("ERROR: SOC Max should be {} got {}".format(assert_soc_max, inv.soc_max))
-        failed = True
-    if assert_soc != inv.soc_kw:
-        print("ERROR: SOC should be {} got {}".format(assert_soc, inv.soc_kw))
-        failed = True
-    if assert_voltage != inv.battery_voltage:
-        print("ERROR: Voltage should be {} got {}".format(assert_voltage, inv.battery_voltage))
-        failed = True
-    if assert_inverter_limit != inv.inverter_limit * MINUTE_WATT:
-        print("ERROR: Inverter limit should be {} got {}".format(assert_inverter_limit, inv.inverter_limit * MINUTE_WATT))
-        failed = True
-    # Verify export_limit defaults correctly from REST data when config unset (should be 99999.0 / MINUTE_WATT = 1.66665)
-    if inv.export_limit * MINUTE_WATT < 99999.0:
-        print("ERROR: Export limit should default to 99999 W (1.66665 kW/min) when unset, got {} W ({} kW/min)".format(inv.export_limit * MINUTE_WATT, inv.export_limit))
-        failed = True
-    if assert_battery_rate_max != inv.battery_rate_max_raw:
-        print("ERROR: Battery rate max should be {} got {}".format(assert_battery_rate_max, inv.battery_rate_max_raw))
-        failed = True
-    if assert_serial_number != inv.serial_number:
-        print("ERROR: Serial number should be {} got {}".format(assert_serial_number, inv.serial_number))
-        failed = True
-    if assert_pv_power != inv.pv_power:
-        print("ERROR: PV power should be {} got {}".format(assert_pv_power, inv.pv_power))
-        failed = True
-    if assert_load_power != inv.load_power:
-        print("ERROR: Load power should be {} got {}".format(assert_load_power, inv.load_power))
-        failed = True
-    if assert_charge_start_time_minutes != inv.charge_start_time_minutes:
-        print("ERROR: Charge start time should be {} got {}".format(assert_charge_start_time_minutes, inv.charge_start_time_minutes))
-        failed = True
-    if assert_charge_end_time_minutes != inv.charge_end_time_minutes:
-        print("ERROR: Discharge end time should be {} got {}".format(assert_charge_end_time_minutes, inv.charge_end_time_minutes))
-        failed = True
-    if assert_charge_enable != inv.charge_enable_time:
-        print("ERROR: Charge enable should be {} got {}".format(assert_charge_enable, inv.charge_enable_time))
-        failed = True
-    if assert_discharge_start_time_minutes != inv.discharge_start_time_minutes:
-        print("ERROR: Discharge start time should be {} got {}".format(assert_discharge_start_time_minutes, inv.discharge_start_time_minutes))
-        failed = True
-    if assert_discharge_end_time_minutes != inv.discharge_end_time_minutes:
-        print("ERROR: Discharge end time should be {} got {}".format(assert_discharge_end_time_minutes, inv.discharge_end_time_minutes))
-        failed = True
-    if assert_discharge_enable != inv.discharge_enable_time:
-        print("ERROR: Discharge enable should be {} got {}".format(assert_discharge_enable, inv.discharge_enable_time))
-        failed = True
-    if assert_nominal_capacity != inv.nominal_capacity:
-        print("ERROR: Nominal capacity should be {} got {}".format(assert_nominal_capacity, inv.nominal_capacity))
-        failed = True
-    if assert_battery_temperature != inv.battery_temperature:
-        print("ERROR: Battery temperature should be {} got {}".format(assert_battery_temperature, inv.battery_temperature))
-        failed = True
-
     return failed
 
 
@@ -1187,10 +2011,12 @@ def test_inverter_update(
     dummy_rest.rest_data["raw"] = {}
     dummy_rest.rest_data["raw"]["invertor"] = {}
     dummy_rest.rest_data["raw"]["invertor"]["discharge_target_soc_1"] = 4
-    dummy_items["sensor.soc_kw"] = -1
+    # sensor.soc_kw is deliberately left as whatever the entity-mode block above set it to:
+    # update_status() now reads SoC/power/window state from entities even when REST is configured
+    # (only battery/capacity discovery in __init__ still comes from REST), so it must match here too.
     dummy_items["sensor.battery_capacity"] = -1
 
-    inv = Inverter(my_predbat, 0, rest_postCommand=dummy_rest.dummy_rest_postCommand, rest_getData=dummy_rest.dummy_rest_getData)
+    inv = Inverter(my_predbat, 0)
     inv.sleep = dummy_sleep
 
     print("Test: Update Inverter - REST")
@@ -1355,6 +2181,71 @@ def test_call_adjust_charge_immediate(test_name, my_predbat, ha, inv, dummy_item
     return failed
 
 
+def test_charge_target_overshoot_hold(my_predbat, ha, inv, dummy_items):
+    """An overshot software charge target should hold, preserving native targets and stop fallbacks."""
+    failed = False
+    original_args = dict(my_predbat.args)
+    original_soc = inv.soc_percent
+    original_native_target = inv.inv_has_target_soc
+    original_solis_control = inv.inv_has_solis_energy_control
+    original_rate = dummy_items["number.charge_rate"]
+    cases = [
+        ("software_overshoot", False, 20, False, True, "charge_freeze"),
+        ("software_overshoot_without_freeze", False, 20, False, False, "charge_stop"),
+        ("native_overshoot", True, 20, False, True, "charge_start"),
+        ("native_overshoot_without_freeze", True, 20, False, False, "charge_start"),
+        ("software_at_target", False, 22, False, True, "charge_freeze"),
+        ("software_at_target_without_freeze", False, 22, False, False, "charge_start"),
+        ("software_below_target", False, 25, False, True, "charge_start"),
+        ("explicit_freeze", False, 20, True, True, "charge_freeze"),
+        ("explicit_freeze_without_service", False, 20, True, False, "charge_stop"),
+        ("charge_ended", False, 0, False, True, "charge_stop"),
+    ]
+    try:
+        my_predbat.args.update({"charge_start_service": "charge_start", "charge_stop_service": "charge_stop", "discharge_stop_service": "discharge_stop", "charge_rate": "number.charge_rate", "device_id": "DID0"})
+        my_predbat.args.pop("charge_rate_percent", None)
+        dummy_items["number.charge_rate"] = 1101
+        inv.soc_percent = 22
+        inv.inv_has_solis_energy_control = False
+        ha.service_store_enable = True
+        for name, native_target, target, freeze, has_freeze, expected_service in cases:
+            print("**** Running Test: charge_target_{} ****".format(name))
+            inv.inv_has_target_soc = native_target
+            my_predbat.args["charge_freeze_service"] = "charge_freeze" if has_freeze else None
+            my_predbat.last_service_hash.pop("charge", None)
+            my_predbat.last_service_hash.pop("discharge", None)
+            ha.service_store = []
+            inv.adjust_charge_immediate(target, freeze=freeze)
+            expected = []
+            if target > 0:
+                expected.append(["discharge_stop", {"device_id": "DID0"}])
+            data = {"device_id": "DID0"}
+            if expected_service != "charge_stop":
+                data.update({"target_soc": target, "power": 1101})
+            expected.append([expected_service, data])
+            result = ha.get_service_store()
+            if result != expected:
+                print("ERROR: charge target {} expected {} got {}".format(name, expected, result))
+                failed = True
+            # Repeating the same hold must not issue another mode or power command.
+            ha.service_store = []
+            inv.adjust_charge_immediate(target, freeze=freeze)
+            result = ha.get_service_store()
+            if result:
+                print("ERROR: charge target {} repeated commands {}".format(name, result))
+                failed = True
+    finally:
+        my_predbat.args = original_args
+        inv.soc_percent = original_soc
+        inv.inv_has_target_soc = original_native_target
+        inv.inv_has_solis_energy_control = original_solis_control
+        dummy_items["number.charge_rate"] = original_rate
+        ha.service_store_enable = False
+        my_predbat.last_service_hash.pop("charge", None)
+        my_predbat.last_service_hash.pop("discharge", None)
+    return failed
+
+
 def test_call_adjust_export_immediate(test_name, my_predbat, ha, inv, dummy_items, soc, repeat=False, freeze=False, clear=False, charge_stop=False, discharge_start_time="00:00:00", discharge_end_time="23:55:00", no_freeze=False):
     """
     Tests;
@@ -1425,11 +2316,90 @@ def test_call_adjust_export_immediate(test_name, my_predbat, ha, inv, dummy_item
     return failed
 
 
-def test_call_service_template(test_name, my_predbat, inv, service_name="test", domain="charge", data={}, extra_data={}, clear=True, repeat=False, service_template=None, expected_result=None, twice=True):
+def test_press_and_poll_button_side_scoping(my_predbat, inv):
+    """
+    Tests;
+        def press_and_poll_button(self, side="both")
+
+    Covers GitHub issue #2328: with separate charge_update_button/discharge_update_button
+    entities configured (rather than a single combined button), pressing one side must not also
+    press the other - the reporter's log showed both buttons pressed together even when only one
+    side had anything to update, and on hardware that counts button presses towards flash/EEPROM
+    wear this doubles the unnecessary writes. Bypasses the real button-press-and-poll mechanism
+    (its retry/timestamp-polling behaviour is a separate concern from the side-scoping this test
+    checks) by recording which entity_id(s) press_and_poll_button() actually tries to press.
+    """
+    failed = False
+    print("**** Running Test: press_and_poll_button_side_scoping ****")
+
+    pressed = []
+
+    def fake_press(entity_id):
+        pressed.append(entity_id)
+        return True
+
+    # my_predbat/inv are shared across the whole test run - save everything this test touches so
+    # it can be restored exactly, rather than leaking a changed/missing arg or method into later
+    # tests (e.g. test_force_export_unchanged_times_HM_format relies on schedule_write_button
+    # already being set from run_inverter_tests' own setup).
+    unset = object()
+    real_press_single_button_and_poll = inv._press_single_button_and_poll
+    saved_args = {key: my_predbat.args.get(key, unset) for key in ("charge_update_button", "discharge_update_button", "charge_discharge_update_button", "schedule_write_button")}
+
+    try:
+        inv._press_single_button_and_poll = fake_press
+
+        my_predbat.args["charge_update_button"] = "button.charge_update"
+        my_predbat.args["discharge_update_button"] = "button.discharge_update"
+        for key in ("charge_discharge_update_button", "schedule_write_button"):
+            if key in my_predbat.args:
+                del my_predbat.args[key]
+
+        cases = [
+            ("charge", ["button.charge_update"]),
+            ("discharge", ["button.discharge_update"]),
+            ("both", ["button.charge_update", "button.discharge_update"]),
+        ]
+        for side, expected in cases:
+            pressed.clear()
+            inv.press_and_poll_button(side=side)
+            if sorted(pressed) != sorted(expected):
+                print(f"ERROR: press_and_poll_button(side='{side}') pressed {pressed}, expected {expected}")
+                failed = True
+            else:
+                print(f"  PASS: side='{side}' pressed only {pressed}")
+
+        # Default (no side given) must still press both, for any caller that hasn't been updated
+        pressed.clear()
+        inv.press_and_poll_button()
+        if sorted(pressed) != sorted(["button.charge_update", "button.discharge_update"]):
+            print(f"ERROR: press_and_poll_button() with no side should press both, got {pressed}")
+            failed = True
+        else:
+            print("  PASS: default side='both' pressed both")
+    finally:
+        inv._press_single_button_and_poll = real_press_single_button_and_poll
+        for key, value in saved_args.items():
+            if value is unset:
+                my_predbat.args.pop(key, None)
+            else:
+                my_predbat.args[key] = value
+
+    if not failed:
+        print("PASS: All press_and_poll_button side scoping tests passed")
+
+    return failed
+
+
+def test_call_service_template(test_name, my_predbat, inv, service_name="test", domain="charge", data=None, extra_data=None, clear=True, repeat=False, service_template=None, expected_result=None, twice=True):
     """
     tests
         def call_service_template(self, service, data, domain="charge", extra_data={})
     """
+    if extra_data is None:
+        extra_data = {}
+    if data is None:
+        data = {}
     failed = False
 
     print("**** Running Test: {} ****".format(test_name))
@@ -1469,6 +2439,71 @@ def test_call_service_template(test_name, my_predbat, inv, service_name="test", 
     return failed
 
 
+def test_call_service_template_retry(test_name, my_predbat, inv):
+    """A service call the HA layer rejects must be retried next cycle, not deduplicated away (#4876).
+
+    call_service_template() used to record the dedup hash before making the calls, and discard each
+    call's result. A service that silently failed was therefore treated as done, and every later
+    cycle with the same target logged "Skipped service ... as it was previously called" - so Predbat
+    believed it had set a control it had not. In #4876 that left a Deye sitting in its idle program
+    while predbat.status read Charging, until the identical call was re-sent by hand.
+
+    Note this is about the service call being *accepted*, not about the inverter's state: reading a
+    value back cannot settle it when the integration caches writes asynchronously.
+    """
+    failed = False
+    print("**** Running Test: {} ****".format(test_name))
+
+    ha = my_predbat.ha_interface
+    ha.service_store_enable = True
+    service_call = "retry_test_service"
+    my_predbat.args["retry_test"] = service_call
+    data = {"test": "data"}
+
+    try:
+        print("Test: a rejected call is retried on the next cycle")
+        my_predbat.last_service_hash = {}
+        ha.service_store_fail = {service_call}
+        inv.call_service_template("retry_test", data, domain="charge")
+        if not ha.get_service_store():
+            print("ERROR: the first call was never dispatched")
+            failed = True
+        if "charge" in my_predbat.last_service_hash:
+            print("ERROR: a rejected call was recorded as done - the next cycle will skip it")
+            failed = True
+        inv.call_service_template("retry_test", data, domain="charge")
+        if not ha.get_service_store():
+            print("ERROR: the call was not retried after being rejected - this is the #4876 hang")
+            failed = True
+
+        print("Test: once accepted, an identical call is deduplicated as before")
+        ha.service_store_fail = set()
+        my_predbat.last_service_hash = {}
+        inv.call_service_template("retry_test", data, domain="charge")
+        if not ha.get_service_store():
+            print("ERROR: the accepted call was never dispatched")
+            failed = True
+        inv.call_service_template("retry_test", data, domain="charge")
+        if ha.get_service_store():
+            print("ERROR: an accepted call was repeated - the dedup is meant to survive this fix")
+            failed = True
+
+        print("Test: a later rejection drops the earlier record rather than leaving it stale")
+        ha.service_store_fail = {service_call}
+        inv.call_service_template("retry_test", {"test": "other"}, domain="charge")
+        if "charge" in my_predbat.last_service_hash:
+            print("ERROR: the hash from the previous accepted call survived a rejection")
+            failed = True
+    finally:
+        ha.service_store_fail = set()
+        # Drain anything this test dispatched, or the next test in the module sees it as its own.
+        ha.get_service_store()
+        ha.service_store_enable = False
+        my_predbat.last_service_hash = {}
+
+    return failed
+
+
 def test_charge_window_none_illegal_time(test_name, my_predbat, dummy_items):
     """
     Test charge window handling when time is illegal (e.g., 'unknown')
@@ -1504,6 +2539,47 @@ def test_charge_window_none_illegal_time(test_name, my_predbat, dummy_items):
     if inv.track_charge_end != "00:00:00":
         print(f"ERROR: {test_name} - track_charge_end should be '00:00:00', got {inv.track_charge_end}")
         failed = True
+
+    return failed
+
+
+def test_battery_power_validity(test_name, my_predbat, dummy_items):
+    """
+    update_status() records whether battery_power was actually read: a number (or numeric string)
+    is valid, an unavailable sensor or an unconfigured one is not - and both still read as 0W, as
+    before, so nothing else that uses battery_power changes.
+    """
+    failed = False
+    print(f"**** Running Test: {test_name} ****")
+
+    saved_state = dummy_items.get("sensor.battery_power")
+    saved_arg = my_predbat.args.get("battery_power")
+    try:
+        inv = Inverter(my_predbat, 0)
+        inv.sleep = dummy_sleep
+        if inv.battery_power_valid is not False or inv.requested_charge_w is not None or inv.requested_discharge_w is not None:
+            print(f"ERROR: {test_name} - a new inverter should start with no valid power and no requested rates")
+            failed = True
+
+        for state, expect_power, expect_valid in ((1500.0, 1500.0, True), ("-750", -750.0, True), ("unavailable", 0.0, False), ("unknown", 0.0, False), (None, 0.0, False)):
+            dummy_items["sensor.battery_power"] = state
+            inv.update_status(my_predbat.minutes_now, quiet=True)
+            if inv.battery_power != expect_power or inv.battery_power_valid is not expect_valid:
+                print(f"ERROR: {test_name} - state {state!r}: battery_power {inv.battery_power} valid {inv.battery_power_valid}, expected {expect_power} {expect_valid}")
+                failed = True
+
+        dummy_items["sensor.battery_power"] = 1500.0
+        my_predbat.args.pop("battery_power", None)
+        inv.update_status(my_predbat.minutes_now, quiet=True)
+        if inv.battery_power != 0.0 or inv.battery_power_valid is not False:
+            print(f"ERROR: {test_name} - unconfigured battery_power: {inv.battery_power} valid {inv.battery_power_valid}, expected 0.0 False")
+            failed = True
+    finally:
+        dummy_items["sensor.battery_power"] = saved_state
+        if saved_arg is None:
+            my_predbat.args.pop("battery_power", None)
+        else:
+            my_predbat.args["battery_power"] = saved_arg
 
     return failed
 
@@ -1651,6 +2727,26 @@ def test_charge_window_rest_configured_but_no_data_yet(test_name, my_predbat, du
     return failed
 
 
+def _activate_inverter_component(my_predbat, name):
+    """Mark one inverter component active, as starting it for real would.
+
+    inverter_source_active() asks the component registry, not apps.yaml, so a test that only
+    sets the config key is describing a half-configured system: live, ge_cloud_direct being
+    true is exactly what causes the gecloud component to be created. Returns a restore().
+    """
+    from components import Components
+
+    original = my_predbat.components
+    my_predbat.components = Components(my_predbat)
+    my_predbat.components.components[name] = object()
+
+    def restore():
+        """Put back whatever registry the harness had."""
+        my_predbat.components = original
+
+    return restore
+
+
 def test_charge_window_ge_cloud_configured_but_no_data_yet(test_name, my_predbat, dummy_items):
     """
     Test charge window handling when ge_cloud_direct is configured but the cloud hasn't returned
@@ -1675,10 +2771,12 @@ def test_charge_window_ge_cloud_configured_but_no_data_yet(test_name, my_predbat
     original_charge_end_time = my_predbat.args.pop("charge_end_time", None)
     original_ge_cloud_direct = my_predbat.args.get("ge_cloud_direct", None)
     my_predbat.args["ge_cloud_direct"] = True
+    restore_components = _activate_inverter_component(my_predbat, "gecloud")
     dummy_items["switch.scheduled_charge_enable"] = "on"
 
     def restore():
         """Restore the config this test mutated so later tests are unaffected."""
+        restore_components()
         if original_charge_start_time is not None:
             my_predbat.args["charge_start_time"] = original_charge_start_time
         if original_charge_end_time is not None:
@@ -1707,10 +2805,12 @@ def test_charge_window_ge_cloud_configured_but_no_data_yet(test_name, my_predbat
         failed = True
 
     # The retry warning is the message a user now actually sees for this failure, so it must name
-    # GE Cloud rather than blaming apps.yaml - that misdirection is what made three separate live
-    # incidents look identical.
-    if "GE Cloud" not in my_predbat.current_status:
-        print(f"ERROR: {test_name} - status should name GE Cloud as the source that returned no data, got: {my_predbat.current_status}")
+    # the source rather than blaming apps.yaml - that misdirection is what made three separate live
+    # incidents look identical. It names this inverter's own type ("GivEnergy"), not a fleet-wide
+    # label: more than one inverter component can be active, and naming whichever was checked first
+    # sends the user to look at credentials for hardware they may not own.
+    if "GivEnergy" not in my_predbat.current_status:
+        print(f"ERROR: {test_name} - status should name the inverter type as the source that returned no data, got: {my_predbat.current_status}")
         failed = True
 
     restore()
@@ -1748,10 +2848,12 @@ def test_export_window_ge_cloud_configured_but_no_data_yet(test_name, my_predbat
     original_discharge_end_time = my_predbat.args.pop("discharge_end_time", None)
     original_ge_cloud_direct = my_predbat.args.get("ge_cloud_direct", None)
     my_predbat.args["ge_cloud_direct"] = True
+    restore_components = _activate_inverter_component(my_predbat, "gecloud")
     dummy_items["switch.scheduled_charge_enable"] = "on"
 
     def restore():
         """Restore the config this test mutated so later tests are unaffected."""
+        restore_components()
         if original_charge_start_time is not None:
             my_predbat.args["charge_start_time"] = original_charge_start_time
         if original_charge_end_time is not None:
@@ -1784,13 +2886,180 @@ def test_export_window_ge_cloud_configured_but_no_data_yet(test_name, my_predbat
         print(f"ERROR: {test_name} - discharge_end_time_minutes should be {my_predbat.forecast_minutes}, got {inv.discharge_end_time_minutes}")
         failed = True
 
-    # The retry warning is what a user actually sees for this failure, so it must name GE Cloud
-    # rather than sending them to apps.yaml - the same misdirection the charge window fixed.
-    if "GE Cloud" not in my_predbat.current_status:
-        print(f"ERROR: {test_name} - status should name GE Cloud as the source that returned no data, got: {my_predbat.current_status}")
+    # The retry warning is what a user actually sees for this failure, so it must name the
+    # inverter type rather than sending them to apps.yaml - the same misdirection the charge
+    # window fixed, and the same reason it is the type and not a fleet-wide label.
+    if "GivEnergy" not in my_predbat.current_status:
+        print(f"ERROR: {test_name} - status should name the inverter type as the source that returned no data, got: {my_predbat.current_status}")
         failed = True
 
     restore()
+    return failed
+
+
+def test_short_per_inverter_list_gets_its_dummy_entity(test_name, my_predbat):
+    """
+    A per-inverter args list that stops short of this inverter is treated as missing for it.
+
+    create_missing_arg() only replaced an arg that was absent or not a list, and every caller
+    assigns into [self.id] immediately afterwards - so a list naming fewer inverters than
+    num_inverters raised IndexError instead of getting its dummy entity. That is the normal shape
+    of a mixed fleet now that a component configures the inverters it discovered and leaves the
+    rest of the list alone (#5029): a GivTCP fleet of one alongside a hand-configured Solis at
+    index 1 crashed Inverter construction at inverter.py's scheduled_charge_enable dummy, since
+    GS reports no charge enable register of its own.
+    """
+    failed = False
+    print(f"**** Running Test: {test_name} ****")
+
+    # Constructing a non-GE inverter creates dummy entities for every register it lacks, and each
+    # one writes into args - so the whole dict is snapshotted and put back rather than a named few.
+    # This module shares one fixture across every test in it, and the keys this would otherwise
+    # leave behind change what the later window tests read.
+    saved_args = copy.deepcopy(my_predbat.args)
+    try:
+        my_predbat.args["num_inverters"] = 2
+        my_predbat.args["inverter_type"] = ["GE", "GS"]
+        # One entry, as a component that discovered a single inverter leaves it
+        my_predbat.args["scheduled_charge_enable"] = ["switch.predbat_givtcp_0_scheduled_charge_enable"]
+        # Named for both inverters so this test is about the short list above and not about
+        # whatever an earlier test in this module left in the shared fixture's reserve
+        my_predbat.args["reserve"] = ["number.reserve", "number.reserve"]
+
+        try:
+            Inverter(my_predbat, 1, quiet=True)
+        except IndexError as e:
+            print("ERROR: Inverter 1 raised IndexError on a list that stops short of it: {}".format(e))
+            return 1
+
+        enable = my_predbat.args["scheduled_charge_enable"]
+        if len(enable) < 2:
+            print("ERROR: expected scheduled_charge_enable to be extended to cover inverter 1, got {}".format(enable))
+            failed = True
+        elif enable[0] != "switch.predbat_givtcp_0_scheduled_charge_enable":
+            print("ERROR: inverter 0's own entry was disturbed, got {}".format(enable[0]))
+            failed = True
+        elif enable[1] != "sensor.predbat_GS_1_scheduled_charge_enable":
+            print("ERROR: expected inverter 1 to get its dummy entity, got {}".format(enable[1]))
+            failed = True
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+
+    return 1 if failed else 0
+
+
+def test_window_warning_names_components_when_type_unset(test_name, my_predbat, dummy_items):
+    """
+    Issue #4990: a Solis Cloud comms failure must not be reported as a GivEnergy credential problem.
+
+    inverter_type defaults to GE when apps.yaml does not set it, and on a Solis install it is
+    automatic_config() that sets it - which only runs once discovery has succeeded. So a SolisCloud
+    outage at startup leaves the type at the GE default, and the window-read warnings then tell a
+    Solis owner to "check the GivEnergy credentials", naming hardware they do not own and a
+    credential they cannot have got wrong.
+
+    With the type merely assumed the message must instead say so and list the inverter components
+    that ARE configured, with whether each is in error. An explicitly configured GE keeps the
+    original credentials wording: there the type is the user's own statement about their hardware.
+    """
+    from components import Components
+    from tests.test_infra import FakeComponentTask, FakeInverterComponent
+
+    failed = False
+    print(f"**** Running Test: {test_name} ****")
+
+    saved_args = {key: my_predbat.args.pop(key, None) for key in ("inverter_type", "charge_start_time", "charge_end_time", "discharge_start_time", "discharge_end_time")}
+    original_components = my_predbat.components
+    original_charge_enable = dummy_items.get("switch.scheduled_charge_enable", None)
+    dummy_items["switch.scheduled_charge_enable"] = "on"
+
+    def restore():
+        """Restore the config and registry this test mutated so later tests are unaffected."""
+        my_predbat.components = original_components
+        if original_charge_enable is None:
+            dummy_items.pop("switch.scheduled_charge_enable", None)
+        else:
+            dummy_items["switch.scheduled_charge_enable"] = original_charge_enable
+        for key, value in saved_args.items():
+            if value is None:
+                my_predbat.args.pop(key, None)
+            else:
+                my_predbat.args[key] = value
+
+    update_errors = []
+
+    def run_update(component_name, component):
+        """Register one inverter component, run a full update with no window data, return the statuses.
+
+        Returns both warnings update_status() records per cycle, in order: the charge window
+        first, then the export window. Each record_status overwrites current_status, so reading
+        current_status after the run would see only the export half.
+        """
+        statuses = []
+        original_record_status = my_predbat.record_status
+
+        def recording_record_status(message, **kwargs):
+            statuses.append(message)
+            return original_record_status(message, **kwargs)
+
+        my_predbat.record_status = recording_record_status
+        try:
+            my_predbat.components = Components(my_predbat)
+            my_predbat.components.components[component_name] = component
+            my_predbat.components.component_tasks[component_name] = FakeComponentTask()
+            inv = Inverter(my_predbat, 0)
+            inv.sleep = dummy_sleep
+            inv.inv_has_charge_enable_time = True
+            inv.rest_api = None
+            inv.rest_data = None
+            my_predbat.current_status = ""
+            try:
+                inv.update_status(my_predbat.minutes_now)
+            except ValueError as e:
+                # Caught here so one regression cannot abort the whole registry run - the same
+                # handling the neighbouring window tests give this call.
+                print(f"ERROR: {test_name} - update_status should not raise while a configured source just hasn't returned data, got ValueError({e})")
+                update_errors.append(str(e))
+        finally:
+            my_predbat.record_status = original_record_status
+        return statuses
+
+    try:
+        # Case 1: inverter_type absent, Solis component registered and erroring - the reported case.
+        statuses = run_update("solis", FakeInverterComponent(errors=3, api_started=False, updated_recently=False))
+        charge_status, export_status = (statuses + ["", ""])[:2]
+        for status in (charge_status, export_status):
+            if "GivEnergy credentials" in status:
+                print(f"ERROR: {test_name} - an assumed inverter type must not send a Solis owner to check GivEnergy credentials, got: {status}")
+                failed = True
+            if "no inverter_type is set" not in status:
+                print(f"ERROR: {test_name} - status should say inverter_type was never set, got: {status}")
+                failed = True
+            if "Solis Cloud API" not in status:
+                print(f"ERROR: {test_name} - status should list the configured inverter component, got: {status}")
+                failed = True
+            if "in error, 3 errors so far" not in status:
+                print(f"ERROR: {test_name} - status should say whether the listed component is in error, got: {status}")
+                failed = True
+
+        # Case 2: inverter_type explicitly configured - the credentials wording is still right.
+        my_predbat.args["inverter_type"] = ["GE"]
+        statuses = run_update("gecloud", FakeInverterComponent(api_started=True, updated_recently=True))
+        charge_status, export_status = (statuses + ["", ""])[:2]
+        for status in (charge_status, export_status):
+            if "check the GivEnergy credentials" not in status:
+                print(f"ERROR: {test_name} - a configured GE type should still name its credentials, got: {status}")
+                failed = True
+            if "no inverter_type is set" in status:
+                print(f"ERROR: {test_name} - inverter_type was set, so the status must not claim otherwise, got: {status}")
+                failed = True
+
+        if update_errors:
+            failed = True
+    finally:
+        restore()
+
     return failed
 
 
@@ -2061,10 +3330,12 @@ def test_discharge_target_tracks_reserve(test_name, ha, inv, dummy_rest):
             print("ERROR: {}: export target above reserve should be lowered to 20, got {}".format(test_name, ha.get_state("number.discharge_target_soc")))
             failed = True
 
-        # Case 3: same correction on the REST v3 path
+        # Case 3: the same correction for an inverter that has REST configured. The target is
+        # written through the entity now (published by GivTCPComponent) rather than the direct REST
+        # client, so having rest_api set must no longer divert this to a REST command
+        setup_entity_case(current_target=4, reserve_percent=20)
         inv.rest_api = "dummy"
         inv.rest_v3 = True
-        inv.reserve_percent = 20
         inv.rest_data = {
             "Control": {"Enable_Discharge_Schedule": "on", "Mode": "Timed Export"},
             "Timeslots": {"Discharge_start_time_slot_1": start_time, "Discharge_end_time_slot_1": end_time},
@@ -2072,13 +3343,13 @@ def test_discharge_target_tracks_reserve(test_name, ha, inv, dummy_rest):
         }
         dummy_rest.clear_queue()
         dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
-        polled = copy.deepcopy(inv.rest_data)
-        polled["raw"]["invertor"]["discharge_target_soc_1"] = 20
-        dummy_rest.queue_rest_data(polled)
 
         inv.adjust_force_export(True, ts, te)
-        if inv.rest_data["raw"]["invertor"]["discharge_target_soc_1"] != 20:
-            print("ERROR: {}: REST export target below reserve should be raised to 20, got {}".format(test_name, inv.rest_data["raw"]["invertor"]["discharge_target_soc_1"]))
+        if float(ha.get_state("number.discharge_target_soc")) != 20:
+            print("ERROR: {}: REST export target below reserve should be raised to 20 via the entity, got {}".format(test_name, ha.get_state("number.discharge_target_soc")))
+            failed = True
+        if dummy_rest.get_commands():
+            print("ERROR: {}: REST inverter should issue no discharge-target REST command, got {}".format(test_name, dummy_rest.get_commands()))
             failed = True
     finally:
         inv.reserve_percent = saved_reserve_percent
@@ -2147,7 +3418,7 @@ def test_discharge_target_read_back(test_name, ha, inv, dummy_rest):
         dummy_rest.get_commands()
         del errors[:]
 
-        if not inv.rest_setDischargeTarget(20):
+        if not _rest_client(inv, dummy_rest).set_discharge_target(20):
             print("ERROR: {}: string read back of the export target should count as success".format(test_name))
             failed = True
         if target_errors():
@@ -2258,7 +3529,7 @@ def test_discharge_target_settle_delay(test_name, ha, inv, dummy_rest):
         dummy_rest.queue_rest_data(settled)
         dummy_rest.get_commands()
 
-        if not inv.rest_setDischargeTarget(20):
+        if not _rest_client(inv, dummy_rest).set_discharge_target(20):
             print("ERROR: {}: write should be recognised as successful once the stale cache catches up".format(test_name))
             failed = True
 
@@ -2317,7 +3588,7 @@ def test_discharge_target_control_signal(test_name, ha, inv, dummy_rest):
         dummy_rest.queue_rest_data(settled_control)
         dummy_rest.get_commands()
 
-        if not inv.rest_setDischargeTarget(20):
+        if not _rest_client(inv, dummy_rest).set_discharge_target(20):
             print("ERROR: {}: write should be recognised as successful from Control.Discharge_Target_SOC_1 alone".format(test_name))
             failed = True
 
@@ -2325,70 +3596,6 @@ def test_discharge_target_control_signal(test_name, ha, inv, dummy_rest):
         if len(commands) != 1:
             print("ERROR: {}: Control signalling success on the first readback should need only 1 POST, got {}".format(test_name, len(commands)))
             failed = True
-    finally:
-        inv.rest_data = saved_rest_data
-        inv.rest_api = saved_rest_api
-        inv.rest_v3 = saved_rest_v3
-
-    return failed
-
-
-def test_discharge_target_skipped_for_ac_coupled(test_name, ha, inv, dummy_rest):
-    """
-    Regression test for issue #4517: some GivTCP inverter models (see
-    DISCHARGE_TARGET_UNSUPPORTED_MODELS) don't have a working Discharge_Target_SOC_1 register -
-    GivTCP reports a write as successful, but it never persists between cycles, so the caller sees a
-    permanent mismatch and rewrites indefinitely. "Ac" (AC Coupled) was confirmed first; "Hybrid_gen1"
-    was added after a reporter confirmed live, post-fix, that two of his Gen1 inverters still repeated
-    the write every cycle while a third, genuinely AC Coupled, correctly stopped. Skip outright rather
-    than attempting a write already known to be doomed.
-    """
-    failed = False
-    print("Test: {}".format(test_name))
-
-    saved_rest_data = inv.rest_data
-    saved_rest_api = inv.rest_api
-    saved_rest_v3 = inv.rest_v3
-
-    try:
-        inv.rest_api = "dummy"
-        inv.rest_v3 = True
-        inv.reserve_percent = 20
-
-        start_time = "03:33:00"
-        end_time = "04:44:00"
-        ts = datetime.strptime(start_time, "%H:%M:%S")
-        te = datetime.strptime(end_time, "%H:%M:%S")
-
-        inv.rest_data = {
-            "Control": {"Mode": "Timed Export", "Enable_Discharge_Schedule": "on"},
-            "Timeslots": {"Discharge_start_time_slot_1": start_time, "Discharge_end_time_slot_1": end_time},
-            "raw": {"invertor": {"discharge_target_soc_1": "4", "model": "Ac"}},
-        }
-
-        # Every model confirmed (or inferred - see the constant's own comment) unsupported must
-        # attempt no discharge-target REST commands at all.
-        for model in DISCHARGE_TARGET_UNSUPPORTED_MODELS:
-            inv.rest_data["raw"]["invertor"]["model"] = model
-            dummy_rest.clear_queue()
-            dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
-            inv.adjust_force_export(True, ts, te)
-            commands = dummy_rest.get_commands()
-            if commands:
-                print("ERROR: {}: model={!r} should attempt no discharge-target REST commands, got {}".format(test_name, model, commands))
-                failed = True
-
-        # A model not on the unsupported list (including a later Hybrid generation, or no model
-        # reported at all) must still attempt the write as before.
-        for model in ["Hybrid", "Hybrid_gen3", ""]:
-            inv.rest_data["raw"]["invertor"]["model"] = model
-            dummy_rest.clear_queue()
-            dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
-            inv.adjust_force_export(True, ts, te)
-            commands = dummy_rest.get_commands()
-            if not any(c[0] == "dummy/setDischargeTarget" for c in commands):
-                print("ERROR: {}: model={!r} should still attempt setDischargeTarget, got {}".format(test_name, model, commands))
-                failed = True
     finally:
         inv.rest_data = saved_rest_data
         inv.rest_api = saved_rest_api
@@ -2418,21 +3625,21 @@ def test_discharge_target_read_prefers_control(test_name, ha, inv):
         # Control has the real, current value - stale raw must not override it (the core of #4517:
         # the old caller ignored Control entirely and would have seen "0", not "20", here).
         inv.rest_data = {"Control": {"Discharge_Target_SOC_1": "20"}, "raw": {"invertor": {"discharge_target_soc_1": "0"}}}
-        result = inv.rest_readDischargeTarget()
+        result = _rest_client(inv).read_discharge_target()
         if result != 20:
             print("ERROR: {}: expected Control's value 20, got {}".format(test_name, result))
             failed = True
 
         # Control missing the key entirely - falls back to raw.
         inv.rest_data = {"Control": {}, "raw": {"invertor": {"discharge_target_soc_1": "15"}}}
-        result = inv.rest_readDischargeTarget()
+        result = _rest_client(inv).read_discharge_target()
         if result != 15:
             print("ERROR: {}: expected raw fallback value 15, got {}".format(test_name, result))
             failed = True
 
         # Neither present - no crash, just None (matches "No current discharge target to read" path).
         inv.rest_data = {"Control": {}, "raw": {"invertor": {}}}
-        result = inv.rest_readDischargeTarget()
+        result = _rest_client(inv).read_discharge_target()
         if result is not None:
             print("ERROR: {}: expected None when neither field is present, got {}".format(test_name, result))
             failed = True
@@ -2510,6 +3717,513 @@ def test_force_export_unchanged_times_HM_format(test_name, ha, inv):
     return failed
 
 
+def test_button_press_counts_as_register_write(test_name, ha, inv):
+    """
+    Regression test for issue #4712: a commit button press is a real (on Solis, non-volatile) write
+    and must be counted, so repeated presses are visible to users rather than silently hidden from
+    the register-write counter.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    unset = object()
+    saved_button = inv.base.args.get("schedule_write_button", unset)
+    saved_item = ha.dummy_items.get("switch.inverter_button", unset)
+    try:
+        inv.base.args["schedule_write_button"] = "switch.inverter_button"
+        ha.dummy_items["switch.inverter_button"] = "off"
+
+        before_writes = inv.count_register_writes
+        if not inv.press_and_poll_button(side="charge"):
+            print(f"ERROR: {test_name}: button press should have succeeded")
+            failed = True
+
+        if inv.count_register_writes != before_writes + 1:
+            print(f"ERROR: {test_name}: a button press must count as one register write, was {before_writes} now {inv.count_register_writes}")
+            failed = True
+    finally:
+        if saved_button is unset:
+            inv.base.args.pop("schedule_write_button", None)
+        else:
+            inv.base.args["schedule_write_button"] = saved_button
+        if saved_item is unset:
+            ha.dummy_items.pop("switch.inverter_button", None)
+        else:
+            ha.dummy_items["switch.inverter_button"] = saved_item
+        inv.count_register_writes = before_writes
+
+    return failed
+
+
+def test_button_press_and_poll_counts_as_register_write(test_name, ha, inv):
+    """
+    Regression test for issue #4712, second success path: unlike schedule_write_button (a toggle
+    switch, covered above), charge_discharge_update_button goes through
+    _press_single_button_and_poll - a button entity whose success is read back by polling its
+    last_updated timestamp. That path increments count_register_writes separately, so it needs its
+    own coverage rather than relying on the toggle-button test to exercise it.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    unset = object()
+    saved_button = inv.base.args.get("charge_discharge_update_button", unset)
+    saved_schedule_button = inv.base.args.get("schedule_write_button", unset)
+    saved_item = ha.dummy_items.get("button.charge_discharge_update", unset)
+    saved_sleep = inv.sleep
+    try:
+        inv.base.args["charge_discharge_update_button"] = "button.charge_discharge_update"
+        inv.base.args.pop("schedule_write_button", None)
+        inv.sleep = lambda seconds: None
+
+        local_tz = pytz.timezone(inv.base.get_arg("timezone", "Europe/London"))
+        ha.dummy_items["button.charge_discharge_update"] = datetime.now(local_tz).strftime(TIME_FORMAT_SECONDS)
+
+        before_writes = inv.count_register_writes
+        if not inv.press_and_poll_button(side="charge"):
+            print(f"ERROR: {test_name}: button press should have succeeded")
+            failed = True
+
+        if inv.count_register_writes != before_writes + 1:
+            print(f"ERROR: {test_name}: a button press must count as one register write, was {before_writes} now {inv.count_register_writes}")
+            failed = True
+    finally:
+        inv.sleep = saved_sleep
+        if saved_button is unset:
+            inv.base.args.pop("charge_discharge_update_button", None)
+        else:
+            inv.base.args["charge_discharge_update_button"] = saved_button
+        if saved_schedule_button is unset:
+            inv.base.args.pop("schedule_write_button", None)
+        else:
+            inv.base.args["schedule_write_button"] = saved_schedule_button
+        if saved_item is unset:
+            ha.dummy_items.pop("button.charge_discharge_update", None)
+        else:
+            ha.dummy_items["button.charge_discharge_update"] = saved_item
+        inv.count_register_writes = before_writes
+
+    return failed
+
+
+def test_button_press_and_poll_clock_skew(test_name, ha, inv):
+    """
+    Regression test for issue #5694: _press_single_button_and_poll compared the press time with
+    timedelta.seconds, which is never negative, so a last_updated a few seconds ahead of Predbat's
+    clock read as ~86395s stale (pressed 10 times, then reported failed) and one a whole number of
+    days plus a few seconds old read as fresh.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    entity_id = "button.charge_discharge_update"
+    unset = object()
+    saved_item = ha.dummy_items.get(entity_id, unset)
+    saved_sleep = inv.sleep
+    saved_call_service = inv.base.call_service_wrapper
+    had_record_status = "record_status" in inv.base.__dict__
+    saved_record_status = inv.base.record_status
+    presses = []
+    before_writes = inv.count_register_writes
+    try:
+        inv.sleep = lambda seconds: None
+        inv.base.record_status = lambda *args, **kwargs: None
+
+        def counting_call_service(service, **kwargs):
+            """Count button presses, then pass through to the mock HA."""
+            if service == "button/press":
+                presses.append(kwargs.get("entity_id"))
+            return saved_call_service(service, **kwargs)
+
+        inv.base.call_service_wrapper = counting_call_service
+        local_tz = pytz.timezone(inv.base.get_arg("timezone", "Europe/London"))
+
+        for label, offset, expect_ok in [
+            ("5s ahead of the clock", timedelta(seconds=5), True),
+            ("3 days and 5s old", -timedelta(days=3, seconds=5), False),
+        ]:
+            presses.clear()
+            inv.count_register_writes = before_writes
+            ha.dummy_items[entity_id] = (datetime.now(local_tz) + offset).strftime(TIME_FORMAT_SECONDS)
+            result = inv._press_single_button_and_poll(entity_id)
+            if result != expect_ok:
+                print(f"ERROR: {test_name}: press with last_updated {label} should return {expect_ok}, got {result}")
+                failed = True
+            expected_presses = 1 if expect_ok else INVERTER_MAX_RETRY
+            if len(presses) != expected_presses:
+                print(f"ERROR: {test_name}: press with last_updated {label} should press {expected_presses} time(s), pressed {len(presses)}")
+                failed = True
+            expected_writes = before_writes + (1 if expect_ok else 0)
+            if inv.count_register_writes != expected_writes:
+                print(f"ERROR: {test_name}: press with last_updated {label} should leave count_register_writes {expected_writes}, got {inv.count_register_writes}")
+                failed = True
+    finally:
+        inv.sleep = saved_sleep
+        inv.base.call_service_wrapper = saved_call_service
+        if had_record_status:
+            inv.base.record_status = saved_record_status
+        else:
+            del inv.base.record_status
+        if saved_item is unset:
+            ha.dummy_items.pop(entity_id, None)
+        else:
+            ha.dummy_items[entity_id] = saved_item
+        inv.count_register_writes = before_writes
+
+    return failed
+
+
+def test_force_export_stable_window_presses_button_once(test_name, ha, inv):
+    """
+    Regression test for issue #4709: a stable export window must commit to the inverter once, not on
+    every Predbat cycle.
+
+    H M format rewrites the time registers unconditionally as a write-reliability workaround (#1529),
+    so changed_start_end is True on every cycle of an unchanged window. Gating the button press on it
+    (as #4000 did) pressed the button every 5 minutes for the whole window. On Solis each press zeroes
+    the timed charge/discharge current registers, stopping export until something restores them, and it
+    also triggers the 30 second GivTCP settle sleep in adjust_inverter_mode.
+
+    The writes themselves must be preserved - this asserts only that the *commit* stops repeating.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    inv.rest_data = None
+    inv.inv_charge_time_format = "H M"
+    inv.inv_time_button_press = True
+
+    export_time = "07:58:00"
+    export_end = "09:02:00"
+
+    ha.dummy_items["select.discharge_start_time"] = export_time
+    ha.dummy_items["select.discharge_end_time"] = export_end
+    ha.dummy_items["time.discharge_start_hour"] = export_time
+    ha.dummy_items["time.discharge_end_hour"] = export_end
+    ha.dummy_items["switch.scheduled_discharge_enable"] = "on"
+    ha.dummy_items["number.discharge_target_soc"] = inv.reserve_percent
+    ha.dummy_items["select.inverter_mode"] = "Timed Export"
+
+    inv.base.args["discharge_start_time"] = "select.discharge_start_time"
+    inv.base.args["discharge_end_time"] = "select.discharge_end_time"
+    inv.base.args["discharge_start_hour"] = "time.discharge_start_hour"
+    inv.base.args["discharge_end_hour"] = "time.discharge_end_hour"
+    inv.base.args["scheduled_discharge_enable"] = "switch.scheduled_discharge_enable"
+
+    ts = datetime.strptime(export_time, "%H:%M:%S")
+    te = datetime.strptime(export_end, "%H:%M:%S")
+
+    # Nothing committed yet, as after a Predbat restart - this cycle must commit the schedule (#4000)
+    inv.last_committed.pop("export_window", None)
+    ha.dummy_items["switch.inverter_button"] = "off"
+    inv.adjust_force_export(True, ts, te)
+
+    if ha.dummy_items.get("switch.inverter_button") != "on":
+        print(f"ERROR: {test_name}: first cycle should commit the schedule (button pressed), got {ha.dummy_items.get('switch.inverter_button')}")
+        failed = True
+
+    # Subsequent cycles of the same, unchanged window must not press the button again (#4709)
+    for cycle in range(2, 4):
+        ha.dummy_items["switch.inverter_button"] = "off"
+        before_writes = inv.count_register_writes
+        inv.adjust_force_export(True, ts, te)
+
+        if ha.dummy_items.get("switch.inverter_button") != "off":
+            print(f"ERROR: {test_name}: cycle {cycle} of an unchanged window should not press the button again")
+            failed = True
+
+        # The time registers are still rewritten - only the commit is suppressed
+        if inv.count_register_writes < before_writes + 2:
+            print(f"ERROR: {test_name}: cycle {cycle} should still rewrite the time registers, writes went {before_writes} -> {inv.count_register_writes}")
+            failed = True
+
+    # A genuine change to the window must commit again
+    ha.dummy_items["switch.inverter_button"] = "off"
+    inv.adjust_force_export(True, ts, datetime.strptime("09:32:00", "%H:%M:%S"))
+
+    if ha.dummy_items.get("switch.inverter_button") != "on":
+        print(f"ERROR: {test_name}: a changed window must be committed, got {ha.dummy_items.get('switch.inverter_button')}")
+        failed = True
+
+    # A failed button press must not be recorded as committed - it has to be retried next cycle, rather
+    # than the schedule being treated as applied until it happens to change again on its own.
+    saved_press = inv.press_and_poll_button
+    try:
+        inv.last_committed.pop("export_window", None)
+        inv.press_and_poll_button = lambda side="both", scope=None, commit_key=None, moved=False: False
+        inv.adjust_force_export(True, ts, te)
+
+        attempts = []
+        inv.press_and_poll_button = lambda side="both", scope=None, commit_key=None, moved=False, _a=attempts: (_a.append(side), True)[1]
+        inv.adjust_force_export(True, ts, te)
+
+        if not attempts:
+            print(f"ERROR: {test_name}: a failed commit must be retried on the next cycle, not recorded as done")
+            failed = True
+    finally:
+        inv.press_and_poll_button = saved_press
+
+    # The same retry rule applies when the combined schedule_write_button service itself is rejected.
+    saved_call_service_wrapper = inv.base.call_service_wrapper
+    try:
+        inv.last_committed.pop("export_window", None)
+        ha.dummy_items["switch.inverter_button"] = "off"
+
+        def fail_schedule_write_button(service, **kwargs):
+            if (service == "switch/turn_on") and (kwargs.get("entity_id") == "switch.inverter_button"):
+                return None
+            return saved_call_service_wrapper(service, **kwargs)
+
+        inv.base.call_service_wrapper = fail_schedule_write_button
+        inv.adjust_force_export(True, ts, te)
+        if "export_window" in inv.last_committed:
+            print(f"ERROR: {test_name}: a rejected schedule_write_button call must not be recorded as committed")
+            failed = True
+    finally:
+        inv.base.call_service_wrapper = saved_call_service_wrapper
+
+    ha.dummy_items["switch.inverter_button"] = "off"
+    inv.adjust_force_export(True, ts, te)
+    if ha.dummy_items.get("switch.inverter_button") != "on":
+        print(f"ERROR: {test_name}: the same stable window should retry after a rejected schedule_write_button call")
+        failed = True
+
+    # A failed schedule-register write followed by a successful button press must also retry next cycle,
+    # rather than caching the tuple and skipping the button while part of the slot is still unapplied.
+    saved_write_and_poll_option = inv.write_and_poll_option
+    changed_end = datetime.strptime("09:32:00", "%H:%M:%S")
+    try:
+        inv.last_committed.pop("export_window", None)
+        ha.dummy_items["switch.inverter_button"] = "off"
+
+        def fail_discharge_end_hour(name, entity_id, new_value, ignore_fail=False):
+            if name == "discharge_end_hour":
+                return False
+            return saved_write_and_poll_option(name, entity_id, new_value, ignore_fail=ignore_fail)
+
+        inv.write_and_poll_option = fail_discharge_end_hour
+        inv.adjust_force_export(True, ts, changed_end)
+        if "export_window" in inv.last_committed:
+            print(f"ERROR: {test_name}: a failed schedule-register write must not be recorded as committed")
+            failed = True
+    finally:
+        inv.write_and_poll_option = saved_write_and_poll_option
+
+    ha.dummy_items["switch.inverter_button"] = "off"
+    inv.adjust_force_export(True, ts, changed_end)
+    if ha.dummy_items.get("switch.inverter_button") != "on":
+        print(f"ERROR: {test_name}: the same stable window should retry after a failed schedule-register write")
+        failed = True
+
+    inv.last_committed.pop("export_window", None)
+    return failed
+
+
+def test_force_export_enable_only_flip_skips_settle_sleep(test_name, ha, inv):
+    """
+    Regression test: turning scheduled export on/off with the window's start/end times unchanged
+    must not trigger the 30 second GivTCP settle sleep in adjust_inverter_mode.
+
+    That sleep exists specifically for "start/end of discharge window was just adjusted" (its own log
+    message) - a HH:MM:SS-format inverter (e.g. Fox, GE) whose scheduled_discharge_enable flips while
+    new_start/new_end already match what's on the inverter has not written any time register at all,
+    so there is nothing for GivTCP to settle. schedule_changed alone is too broad a gate for this - it
+    is also True on a bare enable flip - so adjust_force_export must gate the sleep on times_changed
+    (start/end actually differing) instead, while still pressing the update button and recording the
+    commit via the broader schedule_changed (the enable state genuinely did change and does need
+    committing).
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    unset = object()
+    saved_args = {key: inv.base.args.get(key, unset) for key in ("discharge_start_time", "discharge_end_time", "discharge_start_hour", "discharge_end_hour", "scheduled_discharge_enable")}
+    saved_items = {key: ha.dummy_items.get(key, unset) for key in ("select.discharge_start_time", "select.discharge_end_time", "switch.scheduled_discharge_enable", "number.discharge_target_soc", "select.inverter_mode", "switch.inverter_button")}
+    saved_rest_data = inv.rest_data
+    saved_inv_charge_time_format = inv.inv_charge_time_format
+    saved_inv_time_button_press = inv.inv_time_button_press
+    saved_last_committed = dict(inv.last_committed)
+    saved_commit_pending = dict(inv.commit_pending)
+    saved_sleep = inv.sleep
+
+    inv.rest_data = None
+    inv.inv_charge_time_format = "HH:MM:SS"
+    inv.inv_time_button_press = True
+    inv.last_committed.pop("export_window", None)
+
+    export_time = "18:00:00"
+    export_end = "19:00:00"
+
+    # Window already on the inverter matches what we're about to request - only the enable flag differs.
+    ha.dummy_items["select.discharge_start_time"] = export_time
+    ha.dummy_items["select.discharge_end_time"] = export_end
+    ha.dummy_items["switch.scheduled_discharge_enable"] = "off"
+    ha.dummy_items["number.discharge_target_soc"] = inv.reserve_percent
+    ha.dummy_items["select.inverter_mode"] = "Timed Export"
+    ha.dummy_items["switch.inverter_button"] = "off"
+
+    inv.base.args["discharge_start_time"] = "select.discharge_start_time"
+    inv.base.args["discharge_end_time"] = "select.discharge_end_time"
+    inv.base.args.pop("discharge_start_hour", None)
+    inv.base.args.pop("discharge_end_hour", None)
+    inv.base.args["scheduled_discharge_enable"] = "switch.scheduled_discharge_enable"
+
+    ts = datetime.strptime(export_time, "%H:%M:%S")
+    te = datetime.strptime(export_end, "%H:%M:%S")
+
+    sleep_calls = []
+    inv.sleep = lambda seconds, _c=sleep_calls: _c.append(seconds)
+
+    try:
+        inv.adjust_force_export(True, ts, te)
+
+        if ha.dummy_items.get("switch.inverter_button") != "on":
+            print(f"ERROR: {test_name}: enable flip must still commit (button pressed), got {ha.dummy_items.get('switch.inverter_button')}")
+            failed = True
+
+        # Other writes (the enable switch itself, the target SoC) legitimately sleep briefly to poll for
+        # confirmation - inv_write_and_poll_sleep, not the 30s GivTCP settle sleep. Only that specific
+        # 30-second value is what this test cares about.
+        if 30 in sleep_calls:
+            print(f"ERROR: {test_name}: enable-only flip with unchanged times should not trigger the 30s GivTCP settle sleep, got sleep({sleep_calls})")
+            failed = True
+
+        # Sanity check the sleep gate still fires when the times genuinely do change alongside the flip
+        ha.dummy_items["switch.scheduled_discharge_enable"] = "off"
+        ha.dummy_items["switch.inverter_button"] = "off"
+        sleep_calls.clear()
+        inv.adjust_force_export(True, ts, datetime.strptime("20:00:00", "%H:%M:%S"))
+
+        if 30 not in sleep_calls:
+            print(f"ERROR: {test_name}: a genuine window time change must still trigger the 30s settle sleep, got sleep({sleep_calls})")
+            failed = True
+    finally:
+        inv.sleep = saved_sleep
+        inv.rest_data = saved_rest_data
+        inv.inv_charge_time_format = saved_inv_charge_time_format
+        inv.inv_time_button_press = saved_inv_time_button_press
+        inv.last_committed = saved_last_committed
+        inv.commit_pending = saved_commit_pending
+        for key, value in saved_args.items():
+            if value is unset:
+                inv.base.args.pop(key, None)
+            else:
+                inv.base.args[key] = value
+        for key, value in saved_items.items():
+            if value is unset:
+                ha.dummy_items.pop(key, None)
+            else:
+                ha.dummy_items[key] = value
+
+    return failed
+
+
+def test_force_export_off_does_not_press_every_cycle(test_name, ha, my_predbat):
+    """
+    Regression test for issue #2328: with no export scheduled the update button must not be pressed on
+    every cycle.
+
+    execute.py calls adjust_force_export(False) with no times whenever nothing is being exported. On an
+    inverter with has_discharge_enable_time set (GS_fb00, and the FoxCloud/TESLA/Enphase/Deye/Sunsynk/
+    AlphaESS cloud types) the midnight override is skipped, so new_start/new_end stay None while the
+    inverter still reports a real time - and None never compares equal, so every cycle looked like a
+    change and pressed the button. That is most of the day, not just export windows.
+
+    FoxCloud stands in for the cloud types here. They reach the bug by the same route as GS_fb00 but
+    settle somewhere different: being HH:MM:SS format they never take the H M unconditional register
+    rewrite, so the commit-once safety net gated on that format is skipped too and an idle cloud
+    inverter should press zero times - not the one GS_fb00 spends on its first post-restart commit.
+    Pinning that separately keeps the cloud behaviour from resting on GS_fb00 happening to share
+    has_discharge_enable_time.
+
+    Plain GS takes the midnight-override path and is not affected by this None-comparison route, so it
+    is checked here too to pin the difference down. That same internally generated midnight window still
+    has to count as a managed schedule: if the inverter drifts away from 00:00-00:00 while export is
+    already off, Predbat must press the commit button once to re-apply the disable window.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    # my_predbat/ha are shared across the whole test run - save everything this test touches so it
+    # can be restored exactly, rather than leaking a changed/missing arg or dummy entity value into
+    # later tests and making results order-dependent.
+    unset = object()
+    saved_args = {key: my_predbat.args.get(key, unset) for key in ("inverter_type", "discharge_start_time", "discharge_end_time", "scheduled_discharge_enable")}
+    saved_items = {
+        key: ha.dummy_items.get(key, unset)
+        for key in ("select.discharge_start_time", "select.discharge_end_time", "switch.scheduled_discharge_enable", "select.inverter_mode", "number.discharge_target_soc", "select.idle_start_time", "select.idle_end_time")
+    }
+
+    # Times for the positive control below - any window will do, it just has to differ from idle.
+    export_start = datetime.strptime("18:00:00", "%H:%M:%S")
+    export_end = datetime.strptime("19:00:00", "%H:%M:%S")
+
+    try:
+        for inverter_type, expected_presses in (("GS_fb00", 1), ("GS", 1), ("FoxCloud", 0)):
+            my_predbat.args["inverter_type"] = [inverter_type]
+            inv = Inverter(my_predbat, 0, quiet=True)
+            inv.rest_data = None
+            # Only the press count matters here. TestHAInterface applies a service call synchronously,
+            # so the write-and-poll read-back already sees the new value and the sleep between them is
+            # pure wall clock - several seconds per register write, across three inverter types.
+            inv.sleep = lambda seconds: None
+
+            ha.dummy_items["select.discharge_start_time"] = "00:00:00"
+            ha.dummy_items["select.discharge_end_time"] = "00:00:00"
+            ha.dummy_items["switch.scheduled_discharge_enable"] = "off"
+            ha.dummy_items["select.inverter_mode"] = "Eco"
+            my_predbat.args["discharge_start_time"] = "select.discharge_start_time"
+            my_predbat.args["discharge_end_time"] = "select.discharge_end_time"
+            my_predbat.args["scheduled_discharge_enable"] = "switch.scheduled_discharge_enable"
+
+            presses = []
+            # Must report success, as a real press does - a falsy return means "not committed, retry"
+            inv.press_and_poll_button = lambda side="both", scope=None, commit_key=None, moved=False, _p=presses: (_p.append(side), True)[1]
+
+            # Several cycles with nothing to export - the first may commit, the rest must be silent
+            for _ in range(4):
+                inv.adjust_force_export(False)
+
+            if len(presses) > expected_presses:
+                print(f"ERROR: {test_name}: {inverter_type} pressed the button {len(presses)} times over 4 idle cycles, expected at most {expected_presses}")
+                failed = True
+
+            # Positive control: the suppression has to be specific to idle cycles. An inverter that had
+            # stopped committing altogether would satisfy the check above just as well, so entering an
+            # export window straight afterwards must still commit, exactly once.
+            idle_presses = len(presses)
+            inv.adjust_force_export(True, export_start, export_end)
+            if len(presses) != idle_presses + 1:
+                print(f"ERROR: {test_name}: {inverter_type} should press once on entering an export window, pressed {len(presses) - idle_presses} times")
+                failed = True
+
+            if inverter_type == "GS":
+                # Once the idle disable window has been committed, drifting away from midnight while
+                # export is still off must trigger one more commit to restore it.
+                inv.last_committed["export_window"] = ("00:00:00", "00:00:00", False)
+                ha.dummy_items["select.discharge_start_time"] = "03:33:00"
+                ha.dummy_items["select.discharge_end_time"] = "04:44:00"
+                ha.dummy_items["switch.scheduled_discharge_enable"] = "off"
+                drift_presses = len(presses)
+                inv.adjust_force_export(False)
+                if len(presses) != drift_presses + 1:
+                    print(f"ERROR: {test_name}: {inverter_type} should re-commit a drifted midnight disable window once")
+                    failed = True
+    finally:
+        for key, value in saved_args.items():
+            if value is unset:
+                my_predbat.args.pop(key, None)
+            else:
+                my_predbat.args[key] = value
+        for key, value in saved_items.items():
+            if value is unset:
+                ha.dummy_items.pop(key, None)
+            else:
+                ha.dummy_items[key] = value
+
+    return failed
+
+
 def test_time_entity_hour_write(test_name, ha, inv, dummy_rest, direction, new_start, new_end):
     """
     Test that when *_start_hour / *_end_hour args resolve to time.* entities the full
@@ -2523,6 +4237,10 @@ def test_time_entity_hour_write(test_name, ha, inv, dummy_rest, direction, new_s
 
     inv.rest_data = None
     inv.inv_charge_time_format = "H M"
+    # These assert a press, so start from nothing committed rather than whatever window an earlier
+    # test on this shared inverter left recorded - that would make the result depend on test order.
+    inv.last_committed.clear()
+    inv.commit_pending.clear()
 
     new_start_ts = datetime.strptime(new_start, "%H:%M:%S")
     new_end_ts = datetime.strptime(new_end, "%H:%M:%S")
@@ -2609,6 +4327,10 @@ def test_input_datetime_charge_window(test_name, ha, inv, dummy_rest, direction,
 
     inv.rest_data = None
     inv.inv_charge_time_format = "H M"
+    # These assert a press, so start from nothing committed rather than whatever window an earlier
+    # test on this shared inverter left recorded - that would make the result depend on test order.
+    inv.last_committed.clear()
+    inv.commit_pending.clear()
 
     new_start_ts = datetime.strptime(new_start, "%H:%M:%S")
     new_end_ts = datetime.strptime(new_end, "%H:%M:%S")
@@ -2792,7 +4514,7 @@ def test_rest_battery_capacity_fallback(test_name, my_predbat):
     dummy_rest.rest_data = rest_v3_data
 
     my_predbat.restart_active = True
-    inv = Inverter(my_predbat, 0, rest_postCommand=dummy_rest.dummy_rest_postCommand, rest_getData=dummy_rest.dummy_rest_getData, quiet=False)
+    inv = Inverter(my_predbat, 0, quiet=False)
     inv.sleep = dummy_sleep
     inv.update_status(my_predbat.minutes_now)
     my_predbat.restart_active = False
@@ -2866,6 +4588,976 @@ def test_inverter_time_handling(my_predbat, dummy_items):
     return failed
 
 
+def test_inverter_clock_skew_bands(my_predbat):
+    """Verify the three clock-skew bands in Inverter.check_clock_skew (#4989).
+
+    Compensation via the inverter_clock_skew_* settings is manual only, so a steady skew below the
+    30 minute restart threshold used to shift every slot Predbat writes with nothing above info level
+    in the log. A skew of 5-29 minutes must now produce a Warn: naming those settings, rate-limited to
+    one per hour per inverter rather than one per 5-minute cycle, without triggering an auto-restart.
+    Below 5 minutes must stay silent, and the >=30 minute band must keep its warning, error status and
+    restart - with a reason string that matches the threshold it actually uses, not the old ">=10".
+    """
+    failed = False
+    print("**** Running Test: inverter_clock_skew_bands ****")
+
+    orig_log = my_predbat.log
+    saved_skew_times = my_predbat.clock_skew_warn_time
+    saved_status = my_predbat.current_status
+    saved_had_errors = my_predbat.had_errors
+    saved_restart_active = my_predbat.restart_active
+    log_messages = []
+    restart_reasons = []
+
+    def moderate_warnings():
+        """Warnings from the moderate band, identified by the apps.yaml setting they point the user at."""
+        return [msg for msg in log_messages if msg.startswith("Warn:") and "inverter_clock_skew_start" in msg]
+
+    try:
+        inv = Inverter(my_predbat, 0)
+        inv.auto_restart = lambda reason: restart_reasons.append(reason)
+        my_predbat.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
+        inv.log = my_predbat.log
+        my_predbat.clock_skew_warn_time = {}
+        now = my_predbat.now_utc
+
+        # A 25 minute skew (as reported in #4927) warns once, without restarting
+        inv.check_clock_skew(-25.22, now)
+        warnings = moderate_warnings()
+        if len(warnings) != 1:
+            print("ERROR: a 25 minute skew should log exactly one warning, got {}".format(warnings))
+            failed = True
+        elif "-25.22" not in warnings[0]:
+            print("ERROR: the moderate skew warning should name the measured skew, got {}".format(warnings[0]))
+            failed = True
+        if restart_reasons:
+            print("ERROR: a 25 minute skew must not trigger an auto-restart, got {}".format(restart_reasons))
+            failed = True
+        if my_predbat.restart_active:
+            print("ERROR: a 25 minute skew should clear restart_active")
+            failed = True
+
+        # The same skew on the next few cycles is rate limited, it must not warn every 5 minutes
+        log_messages.clear()
+        inv.check_clock_skew(-25.22, now + timedelta(minutes=5))
+        inv.check_clock_skew(-25.30, now + timedelta(minutes=10))
+        if moderate_warnings():
+            print("ERROR: the moderate skew warning should be rate limited, got {}".format(moderate_warnings()))
+            failed = True
+
+        # ...but it repeats once the rate limit period has passed, so it isn't lost after a restart of the log
+        log_messages.clear()
+        inv.check_clock_skew(-25.22, now + timedelta(minutes=61))
+        if len(moderate_warnings()) != 1:
+            print("ERROR: the moderate skew warning should repeat after an hour, got {}".format(moderate_warnings()))
+            failed = True
+
+        # A skew inside the tolerance band is silent, and clears the rate limit so a recurrence is reported promptly
+        log_messages.clear()
+        inv.check_clock_skew(2.5, now + timedelta(minutes=62))
+        if moderate_warnings():
+            print("ERROR: a 2.5 minute skew should not warn, got {}".format(moderate_warnings()))
+            failed = True
+        if 0 in my_predbat.clock_skew_warn_time:
+            print("ERROR: a skew back inside tolerance should clear the rate limit, got {}".format(my_predbat.clock_skew_warn_time))
+            failed = True
+        inv.check_clock_skew(-25.22, now + timedelta(minutes=63))
+        if len(moderate_warnings()) != 1:
+            print("ERROR: a recurrence after a quiet period should warn immediately, got {}".format(moderate_warnings()))
+            failed = True
+
+        # The large band still warns, records an error status and restarts, quoting the threshold it uses
+        log_messages.clear()
+        restart_reasons.clear()
+        my_predbat.current_status = ""
+        inv.check_clock_skew(-45.0, now + timedelta(minutes=64))
+        if "skew" not in (my_predbat.current_status or "").lower():
+            print("ERROR: a 45 minute skew should be recorded in the status, got {}".format(my_predbat.current_status))
+            failed = True
+        if not any(msg.startswith("Warn:") and "45.0 minutes skewed" in msg for msg in log_messages):
+            print("ERROR: a 45 minute skew should log a warning naming the skew, got {}".format(log_messages))
+            failed = True
+        if len(restart_reasons) != 1:
+            print("ERROR: a 45 minute skew should trigger exactly one auto-restart, got {}".format(restart_reasons))
+            failed = True
+        elif "30" not in restart_reasons[0]:
+            print("ERROR: the auto-restart reason should quote the 30 minute threshold it uses, got {}".format(restart_reasons[0]))
+            failed = True
+    finally:
+        my_predbat.log = orig_log
+        my_predbat.clock_skew_warn_time = saved_skew_times
+        my_predbat.current_status = saved_status
+        my_predbat.had_errors = saved_had_errors
+        my_predbat.restart_active = saved_restart_active
+
+    if not failed:
+        print("**** Test inverter_clock_skew_bands PASSED ****")
+    return failed
+
+
+def test_inverter_time_space_no_tz_gh2444(my_predbat, dummy_items):
+    """Verify a space-separated inverter time with no offset parses and drives skew detection (#2444).
+
+    A Growatt read through the Solax Modbus integration (inverter_type SA) publishes its rtc sensor
+    as "2025-06-10 15:44:42" - a space separator with no timezone offset. That matched none of the
+    formats Inverter.__init__ tried (T-with-offset, space-with-offset, and the per-type
+    clock_time_format, "%Y-%m-%dT%H:%M:%S" for SA and "%H:%M:%S" for the GE type this fixture
+    normally uses), so inverter_time stayed None: clock-skew detection never ran for that inverter
+    and every 5-minute cycle logged a Warn and asked for an auto-restart. Checked for both the
+    fixture's own type and SA, the type in the report.
+    """
+    failed = False
+    print("**** Running Test: inverter_time_space_no_tz_gh2444 ****")
+
+    saved_time = dummy_items.get("sensor.inverter_time")
+    # Constructing an inverter of another type against this fixture rewrites base.args in place -
+    # create_missing_arg() swaps any entity list the type does not support for a dummy entity, and
+    # that swap outlives the test and silently redirects later inverters' writes. Snapshot the whole
+    # of args (lists copied, they are mutated in place too) and put it back afterwards.
+    saved_args = {key: (list(value) if isinstance(value, list) else value) for key, value in my_predbat.args.items()}
+    saved_sleep = Inverter.sleep
+    Inverter.sleep = lambda self, seconds: None
+    # now_utc is already in the configured timezone, so its wall clock is what a correctly parsed
+    # reading must read back as - comparing wall clocks keeps this independent of the host's own tz.
+    time_str = my_predbat.now_utc.strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        for inverter_type in ["GE", "SA"]:
+            dummy_items["sensor.inverter_time"] = time_str
+            my_predbat.ha_interface.dummy_items = dummy_items
+            my_predbat.args["inverter_type"] = [inverter_type]
+            my_predbat.current_status = ""
+            my_predbat.restart_active = False
+            try:
+                inv = Inverter(my_predbat, 0)
+            except Exception as error:
+                # An unreadable time asks for an auto-restart, which the fixture's configured
+                # auto_restart raises on - report that rather than aborting the whole module.
+                print("ERROR: inverter type {} raised on time string {}: {}".format(inverter_type, time_str, error))
+                failed = True
+                continue
+            if inv.inverter_time is None:
+                print("ERROR: inverter type {} should parse time string {}, got None".format(inverter_type, time_str))
+                failed = True
+            elif inv.inverter_time.tzinfo is None:
+                print("ERROR: inverter type {} parsed {} as naive, skew detection needs it localized".format(inverter_type, time_str))
+                failed = True
+            elif inv.inverter_time.strftime("%Y-%m-%d %H:%M:%S") != time_str:
+                print("ERROR: inverter type {} parsed {} as {}".format(inverter_type, time_str, inv.inverter_time))
+                failed = True
+            if my_predbat.restart_active:
+                print("ERROR: inverter type {} with a readable time must not trigger an auto-restart".format(inverter_type))
+                failed = True
+            if "skew" in (my_predbat.current_status or "").lower():
+                print("ERROR: inverter type {} with a current time must not report clock skew, status={}".format(inverter_type, my_predbat.current_status))
+                failed = True
+    finally:
+        Inverter.sleep = saved_sleep
+        dummy_items["sensor.inverter_time"] = saved_time
+        my_predbat.ha_interface.dummy_items = dummy_items
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        my_predbat.current_status = ""
+        my_predbat.restart_active = False
+
+    if not failed:
+        print("**** Test inverter_time_space_no_tz_gh2444 PASSED ****")
+    return failed
+
+
+def test_charge_window_stuck_enable_presses_button_once(test_name, ha, inv, my_predbat):
+    """
+    Regression test for issue #4712: a stable charge window must commit once, not on every cycle.
+
+    adjust_charge_window() presses the commit button when the times moved *or* when
+    scheduled_charge_enable read back "off". On hardware that accepts the enable write but never
+    reports it back, that third term stays true forever, so the button was pressed every 5 minutes
+    for the whole window - the same failure #4711 fixed on the export side only. On Solis each press
+    is a non-volatile write (#2328) and zeroes the timed current registers (#4415/#4709).
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    # run_inverter_tests() shares one PredBat/HA fixture across its scenarios, so anything mutated
+    # here has to be put back or a later scenario runs against altered config (batpred#5079, and
+    # the same review point raised on batpred#4711).
+    unset = object()
+    arg_keys = ("charge_start_time", "charge_end_time", "scheduled_charge_enable", "charge_start_hour", "charge_start_minute", "charge_end_hour", "charge_end_minute")
+    item_keys = ("select.charge_start_time", "select.charge_end_time", "switch.scheduled_charge_enable", "switch.inverter_button", "time.charge_start_hour", "time.charge_end_hour")
+    saved_args = {key: inv.base.args.get(key, unset) for key in arg_keys}
+    saved_items = {key: ha.dummy_items.get(key, unset) for key in item_keys}
+    saved_fields = (inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, dict(inv.last_committed), dict(inv.commit_pending))
+
+    try:
+        failed = _charge_window_stuck_enable_body(test_name, ha, inv, my_predbat)
+    finally:
+        for key, value in saved_args.items():
+            if value is unset:
+                inv.base.args.pop(key, None)
+            else:
+                inv.base.args[key] = value
+        for key, value in saved_items.items():
+            if value is unset:
+                ha.dummy_items.pop(key, None)
+            else:
+                ha.dummy_items[key] = value
+        (inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, inv.last_committed, inv.commit_pending) = saved_fields
+
+    return failed
+
+
+def _charge_window_stuck_enable_body(test_name, ha, inv, my_predbat):
+    """
+    Body of test_charge_window_stuck_enable_presses_button_once, run inside its state guard.
+    """
+    failed = False
+
+    inv.rest_data = None
+    inv.inv_charge_time_format = "H M"
+    inv.inv_time_button_press = True
+    inv.last_committed.pop("charge_window", None)
+    inv.commit_pending.pop("charge_window", None)
+
+    charge_start = my_predbat.midnight_utc + timedelta(minutes=23 * 60 + 30)
+    charge_end = my_predbat.midnight_utc + timedelta(minutes=(5 * 60 + 30) + 24 * 60)
+
+    ha.dummy_items["select.charge_start_time"] = charge_start.strftime("%H:%M:%S")
+    ha.dummy_items["select.charge_end_time"] = charge_end.strftime("%H:%M:%S")
+    # The inverter never reports the enable switch back as on - the condition that pinned the press.
+    ha.dummy_items["switch.scheduled_charge_enable"] = "off"
+
+    inv.base.args["charge_start_time"] = "select.charge_start_time"
+    inv.base.args["charge_end_time"] = "select.charge_end_time"
+    inv.base.args["scheduled_charge_enable"] = "switch.scheduled_charge_enable"
+    # H M format also writes the hour/minute registers; map them as time entities (FB00 firmware)
+    # so those writes succeed - an unmapped one fails and would keep the commit permanently pending.
+    ha.dummy_items["time.charge_start_hour"] = charge_start.strftime("%H:%M:%S")
+    ha.dummy_items["time.charge_end_hour"] = charge_end.strftime("%H:%M:%S")
+    inv.base.args["charge_start_hour"] = "time.charge_start_hour"
+    inv.base.args["charge_end_hour"] = "time.charge_end_hour"
+    inv.base.args["charge_start_minute"] = "time.charge_start_hour"
+    inv.base.args["charge_end_minute"] = "time.charge_end_hour"
+
+    # Nothing committed yet, as after a Predbat restart - this cycle must commit the schedule.
+    ha.dummy_items["switch.inverter_button"] = "off"
+    inv.adjust_charge_window(charge_start, charge_end, my_predbat.minutes_now)
+
+    if ha.dummy_items.get("switch.inverter_button") != "on":
+        print(f"ERROR: {test_name}: first cycle should commit the charge window (button pressed), got {ha.dummy_items.get('switch.inverter_button')}")
+        failed = True
+
+    # Subsequent cycles of the same window must not press again, even with the enable stuck off.
+    for cycle in range(2, 5):
+        ha.dummy_items["switch.inverter_button"] = "off"
+        ha.dummy_items["switch.scheduled_charge_enable"] = "off"
+        inv.adjust_charge_window(charge_start, charge_end, my_predbat.minutes_now)
+
+        if ha.dummy_items.get("switch.inverter_button") != "off":
+            print(f"ERROR: {test_name}: cycle {cycle} of an unchanged charge window should not press the button again")
+            failed = True
+
+    # A genuine change to the window must commit again.
+    ha.dummy_items["switch.inverter_button"] = "off"
+    inv.adjust_charge_window(charge_start, charge_end + timedelta(minutes=30), my_predbat.minutes_now)
+
+    if ha.dummy_items.get("switch.inverter_button") != "on":
+        print(f"ERROR: {test_name}: a changed charge window must be committed, got {ha.dummy_items.get('switch.inverter_button')}")
+        failed = True
+
+    # A failed button press must not be recorded as committed - it has to be retried next cycle.
+    saved_press = inv.press_and_poll_button
+    try:
+        inv.last_committed.pop("charge_window", None)
+        inv.press_and_poll_button = lambda side="both", scope=None, commit_key=None, moved=False: False
+        inv.adjust_charge_window(charge_start, charge_end, my_predbat.minutes_now)
+
+        attempts = []
+        inv.press_and_poll_button = lambda side="both", scope=None, commit_key=None, moved=False, _a=attempts: (_a.append(side), True)[1]
+        inv.adjust_charge_window(charge_start, charge_end, my_predbat.minutes_now)
+
+        if not attempts:
+            print(f"ERROR: {test_name}: a failed charge commit must be retried on the next cycle, not recorded as done")
+            failed = True
+    finally:
+        inv.press_and_poll_button = saved_press
+
+    # A failed schedule *write* must not be cached as committed either, even when the button press
+    # itself succeeds - otherwise later cycles keep rewriting the registers but never press again,
+    # leaving the window programmed and uncommitted (the batpred#4711 review point, charge side).
+    saved_write = inv.write_and_poll_option
+    try:
+        inv.last_committed.pop("charge_window", None)
+        inv.commit_pending.pop("charge_window", None)
+        ha.dummy_items["switch.scheduled_charge_enable"] = "off"
+        inv.write_and_poll_option = lambda *args, **kwargs: False
+        inv.adjust_charge_window(charge_start, charge_end, my_predbat.minutes_now)
+
+        if "charge_window" in inv.last_committed:
+            print(f"ERROR: {test_name}: a failed schedule write must not be recorded as committed")
+            failed = True
+    finally:
+        inv.write_and_poll_option = saved_write
+
+    # ...and the next cycle, with writes working again, must re-commit it.
+    ha.dummy_items["switch.inverter_button"] = "off"
+    ha.dummy_items["switch.scheduled_charge_enable"] = "off"
+    inv.adjust_charge_window(charge_start, charge_end, my_predbat.minutes_now)
+    if ha.dummy_items.get("switch.inverter_button") != "on":
+        print(f"ERROR: {test_name}: a window whose writes previously failed must be re-committed once they succeed")
+        failed = True
+
+    return failed
+
+
+def test_charge_window_unmapped_minute_entity_commits_once(test_name, ha, inv, my_predbat):
+    """
+    Regression test for #5126 review: an unmapped charge_start_minute/charge_end_minute entity
+    must not permanently poison the commit-once guard.
+
+    adjust_force_export() guards each hour/minute write with `elif start_hour_id:` - if the user's
+    config leaves that entity unmapped (falsy), the write is skipped rather than attempted.
+    adjust_charge_window() used a plain `else:` instead, so an unmapped entity's write was attempted
+    anyway, write_and_poll_option() returned False for it (check_write_entity() fails on a falsy
+    entity_id), and schedule_write_ok stayed False forever - so the charge window commit never
+    cleared and the button was pressed every single cycle, exactly the #2328/#4712 failure this PR
+    exists to fix.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    unset = object()
+    arg_keys = ("charge_start_time", "charge_end_time", "scheduled_charge_enable", "charge_start_hour", "charge_start_minute", "charge_end_hour", "charge_end_minute")
+    item_keys = ("select.charge_start_time", "select.charge_end_time", "switch.scheduled_charge_enable", "switch.inverter_button", "time.charge_start_hour", "time.charge_end_hour")
+    saved_args = {key: inv.base.args.get(key, unset) for key in arg_keys}
+    saved_items = {key: ha.dummy_items.get(key, unset) for key in item_keys}
+    saved_fields = (inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, dict(inv.last_committed), dict(inv.commit_pending))
+
+    try:
+        failed = _charge_window_unmapped_minute_body(test_name, ha, inv, my_predbat)
+    finally:
+        for key, value in saved_args.items():
+            if value is unset:
+                inv.base.args.pop(key, None)
+            else:
+                inv.base.args[key] = value
+        for key, value in saved_items.items():
+            if value is unset:
+                ha.dummy_items.pop(key, None)
+            else:
+                ha.dummy_items[key] = value
+        (inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, inv.last_committed, inv.commit_pending) = saved_fields
+
+    return failed
+
+
+def _charge_window_unmapped_minute_body(test_name, ha, inv, my_predbat):
+    """
+    Body of test_charge_window_unmapped_minute_entity_commits_once, run inside its state guard.
+    """
+    failed = False
+
+    inv.rest_data = None
+    inv.inv_charge_time_format = "H M"
+    inv.inv_time_button_press = True
+    inv.last_committed.pop("charge_window", None)
+    inv.commit_pending.pop("charge_window", None)
+
+    charge_start = my_predbat.midnight_utc + timedelta(minutes=23 * 60 + 30)
+    charge_end = my_predbat.midnight_utc + timedelta(minutes=(5 * 60 + 30) + 24 * 60)
+
+    ha.dummy_items["select.charge_start_time"] = charge_start.strftime("%H:%M:%S")
+    ha.dummy_items["select.charge_end_time"] = charge_end.strftime("%H:%M:%S")
+    # The inverter never reports the enable switch back as on - same as the stuck-enable scenario,
+    # so schedule_changed is driven by that third term rather than by the (unchanged) window times.
+    ha.dummy_items["switch.scheduled_charge_enable"] = "off"
+
+    inv.base.args["charge_start_time"] = "select.charge_start_time"
+    inv.base.args["charge_end_time"] = "select.charge_end_time"
+    inv.base.args["scheduled_charge_enable"] = "switch.scheduled_charge_enable"
+    ha.dummy_items["time.charge_start_hour"] = charge_start.strftime("%H:%M:%S")
+    ha.dummy_items["time.charge_end_hour"] = charge_end.strftime("%H:%M:%S")
+    inv.base.args["charge_start_hour"] = "time.charge_start_hour"
+    inv.base.args["charge_end_hour"] = "time.charge_end_hour"
+    # The minute entities are left unmapped entirely - the reported config shape.
+    inv.base.args.pop("charge_start_minute", None)
+    inv.base.args.pop("charge_end_minute", None)
+
+    ha.dummy_items["switch.inverter_button"] = "off"
+    inv.adjust_charge_window(charge_start, charge_end, my_predbat.minutes_now)
+
+    if ha.dummy_items.get("switch.inverter_button") != "on":
+        print(f"ERROR: {test_name}: first cycle should commit the charge window (button pressed), got {ha.dummy_items.get('switch.inverter_button')}")
+        failed = True
+
+    # With the fix, an unmapped minute entity must not poison schedule_write_ok - later cycles of
+    # the same unchanged window, with the enable switch still stuck off, must not press again.
+    # Before the fix this pressed every single cycle regardless (the reported #2328/#4712 signature).
+    for cycle in range(2, 5):
+        ha.dummy_items["switch.inverter_button"] = "off"
+        ha.dummy_items["switch.scheduled_charge_enable"] = "off"
+        inv.adjust_charge_window(charge_start, charge_end, my_predbat.minutes_now)
+
+        if ha.dummy_items.get("switch.inverter_button") != "off":
+            print(f"ERROR: {test_name}: cycle {cycle} pressed the button again with unmapped minute entities - schedule_write_ok was poisoned by the unattempted write")
+            failed = True
+
+    return failed
+
+
+def test_commit_scopes_are_independent(test_name, inv):
+    """
+    The commit-once memory is keyed by scope, not by which button commits it.
+
+    Several scopes share the charge-side button - the charge window, the target SoC, and the window
+    disable. Keying the memory by button (the obvious reading of press_and_poll_button()'s `side`)
+    would let a target SoC commit overwrite the charge window's record, so the next window commit
+    would either be suppressed as a repeat or, worse, a pending window retry would be marked done by
+    an unrelated SoC press. Pins that the scopes do not interfere, and that pending is per scope.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    saved_last_committed = dict(inv.last_committed)
+    saved_commit_pending = dict(inv.commit_pending)
+
+    try:
+        inv.last_committed.clear()
+        inv.commit_pending.clear()
+
+        window = ("01:00:00", "02:00:00", True)
+        inv.record_commit("charge_window", window, True)
+
+        # A different scope sharing the same button must not read as already committed...
+        if not inv.commit_needed("target_soc", 90):
+            print(f"ERROR: {test_name}: target_soc read as committed off the back of a charge_window commit")
+            failed = True
+
+        # ...and committing it must not disturb the charge window's record.
+        inv.record_commit("target_soc", 90, True)
+        if inv.commit_needed("charge_window", window):
+            print(f"ERROR: {test_name}: a target_soc commit invalidated the charge_window record")
+            failed = True
+
+        # A failed commit leaves only its own scope pending.
+        inv.record_commit("target_soc", 80, False)
+        if not inv.commit_needed("target_soc", 80):
+            print(f"ERROR: {test_name}: a failed target_soc commit did not leave that scope pending")
+            failed = True
+        if inv.commit_needed("charge_window", window):
+            print(f"ERROR: {test_name}: a failed target_soc commit left charge_window pending too")
+            failed = True
+
+        # Pending wins over a matching key, so a retry is never suppressed...
+        inv.record_commit("charge_window", window, False)
+        if not inv.commit_needed("charge_window", window):
+            print(f"ERROR: {test_name}: a pending charge_window commit was suppressed by its own matching key")
+            failed = True
+
+        # ...and a later success clears it.
+        inv.record_commit("charge_window", window, True)
+        if inv.commit_needed("charge_window", window):
+            print(f"ERROR: {test_name}: a successful retry did not clear the pending flag")
+            failed = True
+    finally:
+        inv.last_committed = saved_last_committed
+        inv.commit_pending = saved_commit_pending
+
+    return failed
+
+
+def test_in_calibration_clears_when_battery_leaves_calibration(test_name, my_predbat, ha):
+    """
+    Regression test: in_calibration must clear when battery_calibration reports off again.
+
+    refresh_config() only ever sets in_calibration True - there is no matching "set it False" read,
+    because most inverter types never configure battery_calibration at all (absent means never
+    calibrating). Before Inverter objects persisted, that was fine: in_calibration was reseeded
+    False by __init__ every single cycle. With persistence (#4712) a stuck True would never clear
+    on its own once the real device left calibration - _init_attribute_defaults() must be the one place
+    that still clears it, run once at construction, not on every refresh.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    unset = object()
+    saved_calibration = my_predbat.args.get("battery_calibration", unset)
+    saved_inverters = my_predbat.inverters
+
+    try:
+        my_predbat.args["battery_calibration"] = "on"
+        my_predbat.inverters = []
+        if not my_predbat.fetch_inverter_data():
+            print(f"ERROR: {test_name}: fetch_inverter_data() failed")
+            return True
+
+        if not my_predbat.inverters[0].in_calibration:
+            print(f"ERROR: {test_name}: in_calibration should be True while battery_calibration is on")
+            failed = True
+
+        my_predbat.args["battery_calibration"] = "off"
+        if not my_predbat.fetch_inverter_data():
+            print(f"ERROR: {test_name}: fetch_inverter_data() failed after calibration cleared")
+            return True
+
+        if my_predbat.inverters[0].in_calibration:
+            print(f"ERROR: {test_name}: in_calibration is still True after battery_calibration went off - it is stuck on a persisted object")
+            failed = True
+    finally:
+        if saved_calibration is unset:
+            my_predbat.args.pop("battery_calibration", None)
+        else:
+            my_predbat.args["battery_calibration"] = saved_calibration
+        my_predbat.inverters = saved_inverters
+
+    return failed
+
+
+def test_refresh_failure_keeps_other_inverters(test_name, my_predbat, ha):
+    """
+    A transient refresh_config() failure on one inverter must not discard the others' state.
+
+    refresh_config() has ways to raise on a live system that have nothing to do with configuration
+    being wrong - an entity that reads back None reaching int(), say. Clearing self.inverters there
+    threw away every inverter's commit-once state, so the next successful cycle re-committed and
+    re-pressed the button on all of them - on Solis a non-volatile write per press, which is the
+    thing this PR exists to stop (#5126 review). The construction path still clears, because a
+    half-built list is not safe to reuse.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    saved_inverters = my_predbat.inverters
+
+    try:
+        my_predbat.inverters = []
+        if not my_predbat.fetch_inverter_data():
+            print(f"ERROR: {test_name}: initial fetch_inverter_data() failed")
+            return True
+
+        first = my_predbat.inverters[0]
+        first.last_committed["charge_window"] = ("marker", "marker", True)
+        before = list(my_predbat.inverters)
+
+        saved_refresh = first.refresh_config
+        try:
+            first.refresh_config = lambda quiet=False: (_ for _ in ()).throw(TypeError("simulated transient read failure"))
+            if my_predbat.fetch_inverter_data():
+                print(f"ERROR: {test_name}: a refresh_config() failure should make fetch_inverter_data() return False")
+                failed = True
+        finally:
+            first.refresh_config = saved_refresh
+
+        if my_predbat.inverters != before:
+            print(f"ERROR: {test_name}: a refresh failure discarded the inverter objects instead of leaving them intact")
+            failed = True
+        elif first.last_committed.get("charge_window") != ("marker", "marker", True):
+            print(f"ERROR: {test_name}: a refresh failure discarded the commit-once state")
+            failed = True
+
+        # The next good cycle must reuse the same objects rather than rebuilding.
+        if not my_predbat.fetch_inverter_data():
+            print(f"ERROR: {test_name}: fetch_inverter_data() failed after the simulated failure cleared")
+            failed = True
+        elif my_predbat.inverters[0] is not first:
+            print(f"ERROR: {test_name}: the inverter was rebuilt after a transient refresh failure")
+            failed = True
+    finally:
+        my_predbat.inverters = saved_inverters
+
+    return failed
+
+
+def _snapshot_fixture(my_predbat):
+    """
+    Copy the whole of args and the HA dummy entities, for _restore_fixture().
+
+    Switching the shared fixture to another inverter type runs refresh_config(), whose dummy-entity
+    block rewrites args entries (scheduled_charge_enable, charge_limit, the window times and more)
+    with Predbat's own sensor ids. Restoring only the keys a test set itself leaves those behind
+    for every later test in the module.
+    """
+    return copy.deepcopy(my_predbat.args), dict(my_predbat.ha_interface.dummy_items)
+
+
+def _restore_fixture(my_predbat, snapshot):
+    """Put back what _snapshot_fixture() copied, in place so existing references stay valid"""
+    args, dummy_items = snapshot
+    my_predbat.args.clear()
+    my_predbat.args.update(args)
+    my_predbat.ha_interface.dummy_items.clear()
+    my_predbat.ha_interface.dummy_items.update(dummy_items)
+
+
+def test_inverters_persist_across_cycles(test_name, my_predbat, ha):
+    """
+    Regression test for issue #4712: the Inverter objects must persist across cycles.
+
+    fetch_inverter_data() used to default to create=True and rebuild them every cycle - more than
+    once when the plan was recomputed before execute_plan() - so any state they accumulated was
+    wiped before it could be used. That is why #4711's commit-once guard held in the unit tests,
+    which reuse one long-lived Inverter, but not in production: a reporter's log on v9.0.3 shows
+    377 presses over one night with every register logging "No write needed".
+
+    Also asserts refresh_config() still re-reads runtime-changeable config, so persisting the object
+    does not freeze a setting the user can change while Predbat runs.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    saved_inverters = my_predbat.inverters
+    snapshot = _snapshot_fixture(my_predbat)
+
+    try:
+        my_predbat.inverters = []
+        if not my_predbat.fetch_inverter_data():
+            print(f"ERROR: {test_name}: first fetch_inverter_data() failed")
+            return True
+        first = my_predbat.inverters[0]
+
+        # A marker that only survives if the object itself does.
+        first.last_committed["charge_window"] = ("marker", "marker", True)
+
+        for cycle in range(2, 5):
+            if not my_predbat.fetch_inverter_data():
+                print(f"ERROR: {test_name}: fetch_inverter_data() failed on cycle {cycle}")
+                return True
+            if my_predbat.inverters[0] is not first:
+                print(f"ERROR: {test_name}: cycle {cycle} rebuilt the Inverter instead of reusing it")
+                failed = True
+                break
+            if first.last_committed.get("charge_window") != ("marker", "marker", True):
+                print(f"ERROR: {test_name}: cycle {cycle} lost the committed-schedule state")
+                failed = True
+                break
+
+        # A component whose startup is deferred can set inverter_type after the objects exist.
+        # refresh_config() re-reads the type and re-derives every inv_* capability flag from it, so
+        # this is absorbed without a rebuild - and must be, since rebuilding would discard the
+        # commit-once state and force the redundant commit this guard exists to prevent (#5126
+        # review). Asserts the flags actually followed the type, not merely that the object survived.
+        my_predbat.args["inverter_type"] = ["GS"]
+        if not my_predbat.fetch_inverter_data():
+            print(f"ERROR: {test_name}: fetch_inverter_data() failed after a type change")
+            return True
+        if my_predbat.inverters[0] is not first:
+            print(f"ERROR: {test_name}: a changed inverter_type rebuilt the Inverter, discarding its commit state")
+            failed = True
+        if my_predbat.inverters[0].inverter_type != "GS":
+            print(f"ERROR: {test_name}: Inverter has type {my_predbat.inverters[0].inverter_type} after the change, expected GS")
+            failed = True
+        if my_predbat.inverters[0].inv_charge_time_format != INVERTER_DEF["GS"]["charge_time_format"]:
+            print(f"ERROR: {test_name}: capability flags did not follow the type change - inv_charge_time_format is {my_predbat.inverters[0].inv_charge_time_format}")
+            failed = True
+        if first.last_committed.get("charge_window") != ("marker", "marker", True):
+            print(f"ERROR: {test_name}: a type change lost the committed-schedule state")
+            failed = True
+
+        # Runtime config must still be re-read on a persisted object.
+        my_predbat.args["battery_min_soc"] = 15
+        if not my_predbat.fetch_inverter_data():
+            print(f"ERROR: {test_name}: fetch_inverter_data() failed after a config change")
+            return True
+        if my_predbat.inverters[0].reserve_percent_current < 15:
+            print(f"ERROR: {test_name}: refresh_config() did not pick up a changed battery_min_soc, got {my_predbat.inverters[0].reserve_percent_current}")
+            failed = True
+    finally:
+        _restore_fixture(my_predbat, snapshot)
+        my_predbat.inverters = saved_inverters
+
+    return failed
+
+
+def test_set_current_from_power_before_battery_voltage_known(test_name, my_predbat):
+    """
+    Regression test: set_current_from_power() must not crash before update_status() has ever run.
+
+    battery_voltage is seeded to None (not a guessed 52.0) since #4712's __init__ split, precisely
+    so a caller that reaches the charge/discharge current path before the inverter's own state was
+    fetched - test_force_export_off_does_not_press_every_cycle does exactly this by construction -
+    gets an explicit skip rather than a silent divide against a made-up value.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    snapshot = _snapshot_fixture(my_predbat)
+
+    try:
+        my_predbat.args["inverter_type"] = ["GS"]
+        inv = Inverter(my_predbat, 0, quiet=True)
+
+        if inv.battery_voltage is not None:
+            print(f"ERROR: {test_name}: battery_voltage should be None before update_status() has run, got {inv.battery_voltage}")
+            failed = True
+
+        try:
+            inv.set_current_from_power("charge", 1000)
+        except TypeError as e:
+            print(f"ERROR: {test_name}: set_current_from_power() raised {e} instead of skipping cleanly")
+            failed = True
+
+        # A 0 reading is no more usable than a missing one
+        inv.battery_voltage = 0
+        try:
+            inv.set_current_from_power("charge", 1000)
+        except ZeroDivisionError as e:
+            print(f"ERROR: {test_name}: set_current_from_power() raised {e} for a 0 battery_voltage instead of skipping cleanly")
+            failed = True
+    finally:
+        _restore_fixture(my_predbat, snapshot)
+
+    return failed
+
+
+def _save_inverter_fields(inv):
+    """Copy the Inverter fields the commit-guard tests below change, for _restore_inverter_fields()"""
+    return (inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, inv.reserve_percent, dict(inv.last_committed), dict(inv.commit_pending))
+
+
+def _restore_inverter_fields(inv, saved):
+    """Put back what _save_inverter_fields() copied"""
+    (inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, inv.reserve_percent, inv.last_committed, inv.commit_pending) = saved
+
+
+def _setup_hm_charge_window(ha, inv, start, end):
+    """
+    Wire the shared inverter as an H M, button-press inverter whose charge window registers read start/end.
+
+    The hour and minute registers are time entities (FB00 firmware), so each takes the whole time
+    string and every write to them can be checked.
+    """
+    inv.rest_data = None
+    inv.inv_charge_time_format = "H M"
+    inv.inv_time_button_press = True
+    inv.last_committed.clear()
+    inv.commit_pending.clear()
+    for side, value in (("start", start), ("end", end)):
+        ha.dummy_items["select.charge_{}_time".format(side)] = value
+        ha.dummy_items["time.charge_{}_hour".format(side)] = value
+        inv.base.args["charge_{}_time".format(side)] = "select.charge_{}_time".format(side)
+        inv.base.args["charge_{}_hour".format(side)] = "time.charge_{}_hour".format(side)
+        inv.base.args["charge_{}_minute".format(side)] = "time.charge_{}_hour".format(side)
+    ha.dummy_items["switch.scheduled_charge_enable"] = "on"
+    inv.base.args["scheduled_charge_enable"] = "switch.scheduled_charge_enable"
+
+
+def _charge_window_cycle(ha, inv, my_predbat, charge_start, charge_end):
+    """Run one adjust_charge_window() cycle and report whether it pressed the commit button"""
+    ha.dummy_items["switch.inverter_button"] = "off"
+    inv.adjust_charge_window(charge_start, charge_end, my_predbat.minutes_now)
+    return ha.dummy_items.get("switch.inverter_button") == "on"
+
+
+def test_charge_window_external_reset_recommits(test_name, ha, inv, my_predbat):
+    """
+    A charge window put back by something outside Predbat is committed again, once.
+
+    The guard keys on Predbat's intent, which does not change when the vendor app or a firmware
+    reset moves the registers - so on its own it rewrote the registers and never pressed, leaving
+    the inverter holding the reset window until the plan changed (#5126 review, finding 1). The
+    window contains noon, the fixture's clock, so the disable path does not press on its behalf.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+    snapshot = _snapshot_fixture(my_predbat)
+    saved = _save_inverter_fields(inv)
+    try:
+        charge_start = my_predbat.midnight_utc + timedelta(hours=11)
+        charge_end = my_predbat.midnight_utc + timedelta(hours=13)
+        _setup_hm_charge_window(ha, inv, "11:00:00", "13:00:00")
+
+        presses = [_charge_window_cycle(ha, inv, my_predbat, charge_start, charge_end) for _ in range(2)]
+
+        # The inverter's schedule is reset behind Predbat's back
+        ha.dummy_items["select.charge_start_time"] = "00:00:00"
+        ha.dummy_items["time.charge_start_hour"] = "00:00:00"
+        presses += [_charge_window_cycle(ha, inv, my_predbat, charge_start, charge_end) for _ in range(2)]
+
+        if presses != [True, False, True, False]:
+            print("ERROR: {}: presses per cycle {}, expected a commit, silence, a re-commit after the reset, silence".format(test_name, presses))
+            failed = True
+        if ha.dummy_items.get("time.charge_start_hour") != "11:00:00":
+            print("ERROR: {}: the reset start register was not rewritten, reads {}".format(test_name, ha.dummy_items.get("time.charge_start_hour")))
+            failed = True
+    finally:
+        _restore_inverter_fields(inv, saved)
+        _restore_fixture(my_predbat, snapshot)
+    return failed
+
+
+def test_charge_window_literal_minute_entity_commits_once(test_name, ha, inv, my_predbat):
+    """
+    A literal where an entity id is expected is reported, but does not press on every cycle.
+
+    apps.yaml can hold a fixed value where an entity is expected (GH#5003). The H M writes skipped
+    only a falsy id, so a literal went to write_and_poll_option(), failed check_write_entity() on
+    every cycle, kept the commit pending and pressed the button every 5 minutes (#5126 review,
+    finding 3). The warning check_write_entity() gives is still wanted, since only the user can fix it.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+    snapshot = _snapshot_fixture(my_predbat)
+    saved = _save_inverter_fields(inv)
+    saved_log = inv.base.log
+    logged = []
+    try:
+        charge_start = my_predbat.midnight_utc + timedelta(hours=11)
+        charge_end = my_predbat.midnight_utc + timedelta(hours=13)
+        _setup_hm_charge_window(ha, inv, "11:00:00", "13:00:00")
+        inv.base.args["charge_start_minute"] = 0
+        inv.base.args["charge_end_minute"] = "30"
+        inv.base.log = lambda message, *args, **kwargs: (logged.append(str(message)), saved_log(message, *args, **kwargs))[1]
+
+        presses = [_charge_window_cycle(ha, inv, my_predbat, charge_start, charge_end) for _ in range(4)]
+
+        if presses != [True, False, False, False]:
+            print("ERROR: {}: presses per cycle {}, expected one commit then silence".format(test_name, presses))
+            failed = True
+        for name in ("charge_start_minute", "charge_end_minute"):
+            if not any("write_hm_time_part" in line and name in line for line in logged):
+                print("ERROR: {}: the literal {} was not reported".format(test_name, name))
+                failed = True
+    finally:
+        inv.base.log = saved_log
+        _restore_inverter_fields(inv, saved)
+        _restore_fixture(my_predbat, snapshot)
+    return failed
+
+
+def test_target_soc_external_reset_recommits(test_name, ha, inv, my_predbat):
+    """
+    A target SoC put back by something outside Predbat is committed again, but a limit the inverter
+    never reads back is not pressed on every cycle.
+
+    Two sides of the same guard. The press sits inside "current != target", which is pinned true on
+    hardware that never reads the limit back, so the key must suppress it there (#2328). But the key
+    alone also suppressed the press after an external reset to 100% that Predbat then corrected,
+    leaving the inverter on its old target (#5126 review, finding 1).
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+    snapshot = _snapshot_fixture(my_predbat)
+    saved = _save_inverter_fields(inv)
+    saved_write = inv.write_and_poll_value
+    try:
+        inv.inv_time_button_press = True
+        inv.reserve_percent = 4
+        inv.last_committed.clear()
+        inv.commit_pending.clear()
+        ha.dummy_items["number.charge_limit"] = 100
+        inv.base.args["charge_limit"] = "number.charge_limit"
+
+        def cycle():
+            """One adjust_battery_target() cycle; True when it pressed"""
+            ha.dummy_items["switch.inverter_button"] = "off"
+            inv.adjust_battery_target(80)
+            return ha.dummy_items.get("switch.inverter_button") == "on"
+
+        presses = [cycle(), cycle()]
+        # Reset to 100% behind Predbat's back
+        ha.dummy_items["number.charge_limit"] = 100
+        presses.append(cycle())
+        if presses != [True, False, True]:
+            print("ERROR: {}: presses per cycle {}, expected a commit, silence, a re-commit after the reset".format(test_name, presses))
+            failed = True
+
+        # Now hardware that accepts the write but never reads it back
+        ha.dummy_items["number.charge_limit"] = 100
+        inv.write_and_poll_value = lambda *args, **kwargs: False
+        stuck = [cycle() for _ in range(3)]
+        if any(stuck):
+            print("ERROR: {}: a limit that never reads back pressed on cycles {}, expected no presses".format(test_name, stuck))
+            failed = True
+    finally:
+        inv.write_and_poll_value = saved_write
+        _restore_inverter_fields(inv, saved)
+        _restore_fixture(my_predbat, snapshot)
+    return failed
+
+
+def test_quick_update_skips_refresh(test_name, my_predbat):
+    """
+    The quick update reads live status only; a plan cycle also refreshes config.
+
+    refresh_config() reaches check_clock_skew() -> auto_restart() and logs the inverter summary.
+    Running it from the INVERTER_QUICK_UPDATE_SECONDS path put both into the dashboard loop, several
+    times per plan cycle (#5126 review, finding 2).
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+    snapshot = _snapshot_fixture(my_predbat)
+    saved_inverters = my_predbat.inverters
+    try:
+        my_predbat.inverters = []
+        if not my_predbat.fetch_inverter_data():
+            print("ERROR: {}: first fetch_inverter_data() failed".format(test_name))
+            return True
+        inverter = my_predbat.inverters[0]
+        calls = []
+        real_refresh = inverter.refresh_config
+        real_update = inverter.update_status
+        inverter.refresh_config = lambda quiet=False: (calls.append("refresh"), real_refresh(quiet=quiet))[1]
+        inverter.update_status = lambda minutes_now, quiet=False: (calls.append("update quiet={}".format(quiet)), real_update(minutes_now, quiet=quiet))[1]
+
+        if not my_predbat.fetch_inverter_data(quick=True):
+            print("ERROR: {}: quick fetch_inverter_data() failed".format(test_name))
+            return True
+        if calls != ["update quiet=True"]:
+            print("ERROR: {}: quick update made calls {}, expected only a quiet update_status".format(test_name, calls))
+            failed = True
+
+        calls.clear()
+        if not my_predbat.fetch_inverter_data():
+            print("ERROR: {}: plan-cycle fetch_inverter_data() failed".format(test_name))
+            return True
+        if calls != ["refresh", "update quiet=False"]:
+            print("ERROR: {}: plan cycle made calls {}, expected refresh_config then a verbose update_status".format(test_name, calls))
+            failed = True
+    finally:
+        my_predbat.inverters = saved_inverters
+        _restore_fixture(my_predbat, snapshot)
+    return failed
+
+
+def test_export_commit_guard_latches_across_fetches(test_name, my_predbat):
+    """
+    Through the production entry point, an idle H M inverter commits its export schedule once.
+
+    GS rewrites its H M time registers every cycle, so adjust_force_export() relies on the recorded
+    commit to stay quiet. While fetch_inverter_data() rebuilt the Inverter every cycle that record
+    was always empty and the button was pressed every cycle - hidden from the other tests here,
+    which all reuse one hand-built Inverter (#4712).
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+    snapshot = _snapshot_fixture(my_predbat)
+    saved_inverters = my_predbat.inverters
+    presses = []
+    real_press = Inverter.press_and_poll_button
+    real_sleep = Inverter.sleep
+    # On the class, so a rebuilt object would be counted too
+    Inverter.press_and_poll_button = lambda self, side="both", scope=None, commit_key=None, moved=False: (presses.append(side), True)[1]
+    Inverter.sleep = lambda self, seconds: None
+    try:
+        my_predbat.args["inverter_type"] = ["GS"]
+        my_predbat.inverters = []
+        per_cycle = []
+        for cycle in range(1, 6):
+            if not my_predbat.fetch_inverter_data():
+                print("ERROR: {}: fetch_inverter_data() failed on cycle {}".format(test_name, cycle))
+                return True
+            before = len(presses)
+            my_predbat.inverters[0].adjust_force_export(False)
+            per_cycle.append(len(presses) - before)
+        if per_cycle != [1, 0, 0, 0, 0]:
+            print("ERROR: {}: presses per cycle {}, expected one commit then none".format(test_name, per_cycle))
+            failed = True
+    finally:
+        Inverter.press_and_poll_button = real_press
+        Inverter.sleep = real_sleep
+        my_predbat.inverters = saved_inverters
+        _restore_fixture(my_predbat, snapshot)
+    return failed
+
+
 def run_inverter_tests(my_predbat_dummy):
     """
     Test the inverter functions
@@ -2887,6 +5579,8 @@ def run_inverter_tests(my_predbat_dummy):
     print("**** Running Inverter tests ****")
     failed |= test_foxess_support_discharge_freeze_matches_foxcloud()
     failed |= test_support_feedin_first_is_opt_in()
+    failed |= test_has_solis_energy_control_is_opt_in()
+    failed |= test_custom_type_respects_configured_time_entity(my_predbat)
     ha = my_predbat.ha_interface
 
     time_now = my_predbat.now_utc.strftime("%Y-%m-%dT%H:%M:%S%z")
@@ -2932,6 +5626,8 @@ def run_inverter_tests(my_predbat_dummy):
         my_predbat.args[arg_name] = entity_id
 
     failed |= test_inverter_time_handling(my_predbat, dummy_items)
+    failed |= test_inverter_clock_skew_bands(my_predbat)
+    failed |= test_inverter_time_space_no_tz_gh2444(my_predbat, dummy_items)
 
     failed |= test_inverter_update(
         "update1",
@@ -3069,46 +5765,6 @@ def run_inverter_tests(my_predbat_dummy):
     if failed:
         return failed
 
-    failed |= test_inverter_rest_template(
-        "rest1",
-        my_predbat,
-        filename="cases/rest_v2.json",
-        assert_soc_max=9.523,
-        assert_soc=3.333,
-        assert_pv_power=10,
-        assert_load_power=624,
-        assert_charge_start_time_minutes=1410,
-        assert_charge_end_time_minutes=1770,
-        assert_discharge_start_time_minutes=1380,
-        assert_discharge_end_time_minutes=1441,
-        assert_discharge_enable=False,
-        assert_charge_enable=True,
-        assert_nominal_capacity=9.5232,
-        assert_battery_temperature=15.3,
-    )
-    if failed:
-        return failed
-    failed |= test_inverter_rest_template(
-        "rest2",
-        my_predbat,
-        filename="cases/rest_v3.json",
-        assert_voltage=53.65,
-        assert_battery_rate_max=3600,
-        assert_serial_number="EA2303G082",
-        assert_soc=7.62,
-        assert_pv_power=247.0,
-        assert_load_power=197.0,
-        assert_charge_start_time_minutes=1440,
-        assert_charge_end_time_minutes=1440,
-        assert_discharge_start_time_minutes=1445,
-        assert_discharge_end_time_minutes=1531,
-        assert_discharge_enable=True,
-        assert_nominal_capacity=9.52,
-        assert_battery_temperature=25.0,
-    )
-    if failed:
-        return failed
-
     failed |= test_battery_scaling_invalid_value_clamped("battery_scaling_invalid_value_clamped", my_predbat)
 
     failed |= test_inverter_type_default_warning("inverter_type_default_warning", my_predbat)
@@ -3121,7 +5777,7 @@ def run_inverter_tests(my_predbat_dummy):
 
     my_predbat.args["givtcp_rest"] = None
     dummy_rest = DummyRestAPI()
-    inv = Inverter(my_predbat, 0, rest_postCommand=dummy_rest.dummy_rest_postCommand, rest_getData=dummy_rest.dummy_rest_getData)
+    inv = Inverter(my_predbat, 0)
     inv.sleep = dummy_sleep
     inv.update_status(my_predbat.minutes_now)
     my_predbat.inv = inv
@@ -3156,6 +5812,34 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_adjust_battery_target("adjust_target100", ha, inv, dummy_rest, 99, 100, True, False, 100, has_inv_time_button_press=True, expect_button_press=True)
     failed |= test_adjust_battery_target("adjust_target100r", ha, inv, dummy_rest, 100, 100, True, False, 100, has_inv_time_button_press=True, expect_button_press=False)  # No change, no button press
     failed |= test_adjust_battery_target("adjust_target0x", ha, inv, dummy_rest, 50, 0, False, True, 50, has_inv_time_button_press=False, expect_button_press=False)  # No button press feature
+    if failed:
+        return failed
+
+    # Solis Energy Storage Control Switch - FB00 left on "No Grid Charging" by a SolisCloud session froze the battery through a charge slot
+    charge = lambda inv: inv.adjust_charge_immediate(100)
+    idle = lambda inv: inv.adjust_charge_immediate(0)
+    freeze = lambda inv: inv.adjust_charge_immediate(50, freeze=True)
+    target = lambda inv: inv.adjust_battery_target(100, isCharging=True, isExporting=False)
+    export = lambda inv: inv.adjust_export_immediate(10)
+    export_freeze = lambda inv: inv.adjust_export_immediate(50, freeze=True)
+    export_idle = lambda inv: inv.adjust_export_immediate(100)
+    failed |= test_solis_energy_control("solis_fb00_charge_allows_grid", my_predbat, ha, "GS_fb00", "Self-Use - No Grid Charging", charge, "Backup/Reserve")
+    failed |= test_solis_energy_control("solis_fb00_charge_from_self_use", my_predbat, ha, "GS_fb00", "Self-Use", charge, "Backup/Reserve")
+    failed |= test_solis_energy_control("solis_fb00_idle_allows_grid", my_predbat, ha, "GS_fb00", "Self-Use - No Grid Charging", idle, "Backup/Reserve")
+    failed |= test_solis_energy_control("solis_fb00_already_backup_reserve", my_predbat, ha, "GS_fb00", "Backup/Reserve", charge, "Backup/Reserve")
+    failed |= test_solis_energy_control("solis_fb00_unavailable", my_predbat, ha, "GS_fb00", "unavailable", charge, "Backup/Reserve")
+    failed |= test_solis_energy_control("solis_fb00_not_configured", my_predbat, ha, "GS_fb00", "Self-Use - No Grid Charging", charge, "Self-Use - No Grid Charging", configured=False)
+    failed |= test_solis_energy_control("solis_fb00_freeze_blocks_grid", my_predbat, ha, "GS_fb00", "Backup/Reserve", freeze, "Backup/Reserve - No Grid Charging")
+    failed |= test_solis_energy_control("solis_fb00_freeze_already_blocked", my_predbat, ha, "GS_fb00", "Backup/Reserve - No Grid Charging", freeze, "Backup/Reserve - No Grid Charging")
+    failed |= test_solis_energy_control("solis_fb00_freeze_export_feed_in", my_predbat, ha, "GS_fb00", "Backup/Reserve", export_freeze, "Feed-in priority - No Grid Charging")
+    failed |= test_solis_energy_control("solis_fb00_export_restores_backup_reserve", my_predbat, ha, "GS_fb00", "Feed-in priority - No Grid Charging", export, "Backup/Reserve")
+    failed |= test_solis_energy_control("solis_fb00_export_idle_leaves_switch", my_predbat, ha, "GS_fb00", "Backup/Reserve - No Grid Charging", export_idle, "Backup/Reserve - No Grid Charging")
+    failed |= test_solis_energy_control("solis_fb00_battery_target_leaves_switch", my_predbat, ha, "GS_fb00", "Self-Use - No Grid Charging", target, "Self-Use - No Grid Charging")
+    failed |= test_solis_energy_control("solis_gs_charge_timed", my_predbat, ha, "GS", "Self-Use - No Timed Charge/Discharge", target, "Self-Use")
+    failed |= test_solis_energy_control("solis_gs_already_timed", my_predbat, ha, "GS", "Self-Use", target, "Self-Use")
+    failed |= test_solis_energy_control("solis_gs_unavailable", my_predbat, ha, "GS", "unavailable", target, "Self-Use")
+    failed |= test_solis_energy_control("solis_gs_charge_immediate_leaves_switch", my_predbat, ha, "GS", "Self-Use - No Timed Charge/Discharge", charge, "Self-Use - No Timed Charge/Discharge")
+    failed |= test_solis_energy_control("solis_gs_export_immediate_leaves_switch", my_predbat, ha, "GS", "Self-Use - No Timed Charge/Discharge", export_freeze, "Self-Use - No Timed Charge/Discharge")
     if failed:
         return failed
 
@@ -3230,6 +5914,7 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_adjust_ge_eco_toggle_missing_entity("eco_toggle_missing_entity_unset_export", inv, True, "unset", True)
     failed |= test_adjust_ge_eco_toggle_missing_entity("eco_toggle_missing_entity_none_enable", inv, False, None, False)
     failed |= test_adjust_ge_eco_toggle_missing_entity("eco_toggle_missing_entity_none_export", inv, True, None, False)
+    failed |= test_fox_no_predbat_inverter_mode_control("fox_no_predbat_inverter_mode_control", my_predbat)
     if failed:
         return failed
 
@@ -3248,6 +5933,25 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_adjust_charge_rate("adjust_discharge_rate1", ha, inv, dummy_rest, 0, 250.1, 250, discharge=True)
     failed |= test_adjust_charge_rate("adjust_discharge_rate2", ha, inv, dummy_rest, 250, 0, 0, discharge=True)
     failed |= test_adjust_charge_rate("adjust_discharge_rate3", ha, inv, dummy_rest, 200, 210, 200, discharge=True)
+    if failed:
+        return failed
+
+    # #5324: GivEnergy stores the rate as a whole percent of capacity, so 1300W reads back 1206W
+    failed |= test_rate_tolerances("rate_tolerances", inv)
+    failed |= test_custom_inverter_def_drops_rate_step("custom_inverter_def_drops_rate_step", my_predbat, ha)
+    failed |= test_hub_midnight_capability_from_entity("hub_midnight_capability_from_entity", my_predbat, ha)
+    failed |= test_rate_step_from_charge_rate_entity("rate_step_from_charge_rate_entity", my_predbat, ha)
+    failed |= test_grid_charge_only_disables_discharge_freeze("grid_charge_only_disables_discharge_freeze", my_predbat, ha)
+    failed |= test_rate_control_is_per_inverter("rate_control_is_per_inverter", my_predbat, ha)
+    failed |= test_rate_write_quantised("rate_write_quantised_charge", ha, inv, 2600, 1300, 1, 1206)
+    failed |= test_rate_write_quantised("rate_write_quantised_charge_settled", ha, inv, 1206, 1300, 0, 1206)
+    failed |= test_rate_write_quantised("rate_write_quantised_charge_next_step", ha, inv, 1206, 1350, 1, 1341)
+    failed |= test_rate_write_quantised("rate_write_quantised_discharge", ha, inv, 2600, 1300, 1, 1206, discharge=True)
+    failed |= test_rate_write_quantised("rate_write_quantised_discharge_settled", ha, inv, 1206, 1300, 0, 1206, discharge=True)
+    # Rounding is always down, so a rate held above the request is never quantisation - still written
+    failed |= test_rate_write_quantised("rate_write_quantised_hold_from_one_step", ha, inv, 134, 0, 1, 0, rate_max=2600)
+    failed |= test_rate_write_quantised("rate_write_quantised_step_down", ha, inv, 1341, 1210, 1, 1206)
+    failed |= test_rate_write_quantised("rate_write_quantised_discharge_hold_from_one_step", ha, inv, 134, 0, 1, 0, discharge=True, rate_max=2600)
     if failed:
         return failed
 
@@ -3272,16 +5976,78 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_adjust_reserve_device_bounds("adjust_reserve_device_min2", ha, inv, 3, 4, device_min=5, device_max=100, expect_reserve=5)
     failed |= test_adjust_reserve_device_bounds("adjust_reserve_device_max1", ha, inv, 10, 80, device_min=4, device_max=50, expect_reserve=50)
     failed |= test_adjust_reserve_device_bounds("adjust_reserve_device_no_bounds", ha, inv, 4, 10, device_min=None, device_max=None, expect_reserve=10)
+    # A fractional floor must not round down to a value under it, or the write is clamped and
+    # confirmed to something else and never converges
+    failed |= test_adjust_reserve_device_bounds("adjust_reserve_device_min_fractional", ha, inv, 4, 4, device_min=4.2, device_max=100, expect_reserve=5)
     if failed:
         return failed
 
-    failed |= test_adjust_charge_window("adjust_charge_window1", ha, inv, dummy_rest, "00:00:00", "00:00:00", True, "00:00:00", "00:00:00", my_predbat.minutes_now, has_inverter_time_button_press=True, expect_inverter_time_button_press=False)
+    # GH#4908: percentage-rated GivEnergy models publish no absolute charge power register, so the
+    # rate must come from battery_rate_max rather than the 2600W fallback - without regressing the
+    # models that do have one, where the register's own maximum stays authoritative
+    failed |= test_battery_rate_max_source("battery_rate_max_charge_rate_entity", my_predbat, ha, "GEC", "number.charge_rate", charge_rate_max=3000, battery_rate_max_arg="sensor.battery_rate_max", expect_rate_raw=3000)
+    failed |= test_battery_rate_max_source("battery_rate_max_percent_only", my_predbat, ha, "GEC", None, charge_rate_max=None, battery_rate_max_arg="sensor.battery_rate_max", expect_rate_raw=9984)
+    failed |= test_battery_rate_max_source("battery_rate_max_percent_only_ge", my_predbat, ha, "GE", None, charge_rate_max=None, battery_rate_max_arg="sensor.battery_rate_max", expect_rate_raw=9984)
+    failed |= test_battery_rate_max_source("battery_rate_max_no_source", my_predbat, ha, "GEC", None, charge_rate_max=None, battery_rate_max_arg=None, expect_rate_raw=2600)
+    if failed:
+        return failed
+
+    # GH#4940: with the SolisCloud automatic bindings each direction is planned at its own limit, and
+    # an apps.yaml limit (the reporter's own 2500/5000) still caps it
+    failed |= test_solis_cloud_rate_limits("solis_cloud_rate_limits_auto", my_predbat, ha, {}, expect_charge=2647, expect_discharge=5559, expect_export=5559)
+    failed |= test_solis_cloud_rate_limits("solis_cloud_rate_limits_user", my_predbat, ha, {"inverter_limit_charge": 2500, "inverter_limit_discharge": 5000}, expect_charge=2500, expect_discharge=5000, expect_export=5000)
+    if failed:
+        return failed
+
+    # GH#4953: the plan must be built to the same floor the write is clamped to, or it counts on
+    # capacity the inverter will never release
+    failed |= test_reserve_model_device_bounds("reserve_model_device_min", my_predbat, ha, set_reserve_min=4, device_min=5, device_max=100, expect_reserve_percent=5)
+    # A fractional bound rounds towards the value the register accepts, not to nearest: 4.2 must
+    # become 5, since modelling or writing 4 is under the device's floor
+    failed |= test_reserve_model_device_bounds("reserve_model_device_min_fractional", my_predbat, ha, set_reserve_min=4, device_min=4.2, device_max=100, expect_reserve_percent=5)
+    failed |= test_reserve_model_device_bounds("reserve_model_device_max_fractional", my_predbat, ha, set_reserve_min=100, device_min=5, device_max=99.7, expect_reserve_percent=99)
+    failed |= test_reserve_model_device_bounds("reserve_model_device_min_below_config", my_predbat, ha, set_reserve_min=10, device_min=5, device_max=100, expect_reserve_percent=10)
+    failed |= test_reserve_model_device_bounds("reserve_model_device_max", my_predbat, ha, set_reserve_min=60, device_min=5, device_max=50, expect_reserve_percent=50)
+    failed |= test_reserve_model_device_bounds("reserve_model_no_bounds", my_predbat, ha, set_reserve_min=4, device_min=None, device_max=None, expect_reserve_percent=4)
+    # The floor is the device's, not a policy, so it applies with set_reserve_enable off too
+    failed |= test_reserve_model_device_bounds("reserve_model_device_min_no_set_reserve", my_predbat, ha, set_reserve_min=4, device_min=5, device_max=100, expect_reserve_percent=5, set_reserve_enable=False)
+    if failed:
+        return failed
+
+    # GH#5003: a hard-wired reserve percentage - what templates/huawei.yaml and templates/sofar.yaml
+    # ship, since those inverters have no reserve register - must not be read as an entity id, which
+    # raised inside __init__ and failed inverter creation outright
+    failed |= test_reserve_literal_value("reserve_literal_huawei", my_predbat, ha, "HU", [12], expect_reserve_percent=4, expect_reserve_percent_current=12)
+    failed |= test_reserve_literal_value("reserve_literal_below_battery_min", my_predbat, ha, "HU", [1], expect_reserve_percent=4, expect_reserve_percent_current=4)
+    # On a type that does have a reserve register the literal is kept as the current setting rather
+    # than being replaced by a dummy entity, so it is what gets modelled when set_reserve_enable is off
+    failed |= test_reserve_literal_value("reserve_literal_ge", my_predbat, ha, "GE", [12], expect_reserve_percent=12, expect_reserve_percent_current=12, set_reserve_enable=False)
+    # An entity id is still resolved as one, rather than everything being treated as a literal
+    failed |= test_reserve_literal_value("reserve_entity_still_read", my_predbat, ha, "GE", ["number.reserve"], expect_reserve_percent=4, expect_reserve_percent_current=4, set_reserve_enable=False)
+    if failed:
+        return failed
+
+    # GH#5003: the same fixed value must be a warning rather than a crash wherever it reaches a read
+    # or a write, not only on the reserve path that reported it
+    failed |= test_state_wrapper_non_entity("state_wrapper_non_entity", my_predbat)
+    failed |= test_write_and_poll_non_entity("write_and_poll_non_entity", my_predbat, inv)
+    if failed:
+        return failed
+
+    # First scenario of the run, so nothing has been committed yet and the window is committed once -
+    # the same post-restart commit the export side has had since #4000. It used to be suppressed here
+    # only because new == old and the enable happened to read back "on", which is exactly the
+    # observed-state reasoning that never settles on hardware that does not read writes back (#2328).
+    failed |= test_adjust_charge_window("adjust_charge_window1", ha, inv, dummy_rest, "00:00:00", "00:00:00", True, "00:00:00", "00:00:00", my_predbat.minutes_now, has_inverter_time_button_press=True, expect_inverter_time_button_press=True)
     failed |= test_adjust_charge_window("adjust_charge_window2", ha, inv, dummy_rest, "00:00:00", "00:00:00", False, "00:00:00", "23:00:00", my_predbat.minutes_now, has_inverter_time_button_press=True, expect_inverter_time_button_press=True)
     failed |= test_adjust_charge_window("adjust_charge_window3", ha, inv, dummy_rest, "00:00:00", "00:00:00", True, "00:00:00", "23:00:00", my_predbat.minutes_now, has_inverter_time_button_press=True, expect_inverter_time_button_press=True)
     failed |= test_adjust_charge_window("adjust_charge_window4", ha, inv, dummy_rest, "00:00:00", "00:00:00", False, "01:12:00", "23:12:00", my_predbat.minutes_now, has_inverter_time_button_press=True, expect_inverter_time_button_press=True)
     failed |= test_adjust_charge_window("adjust_charge_window5", ha, inv, dummy_rest, "00:00:00", "00:00:00", True, "01:12:00", "23:12:00", my_predbat.minutes_now, has_inverter_time_button_press=True, expect_inverter_time_button_press=True)
     failed |= test_adjust_charge_window("adjust_charge_window6", ha, inv, dummy_rest, "00:00:00", "00:00:00", True, "01:12:00", "23:12:00", my_predbat.minutes_now, short=True, has_inverter_time_button_press=True, expect_inverter_time_button_press=True)
-    failed |= test_adjust_charge_window("adjust_charge_window7", ha, inv, dummy_rest, "00:11:00", "00:12:00", True, "00:11:00", "00:12:00", my_predbat.minutes_now, short=True, has_inverter_time_button_press=True, expect_inverter_time_button_press=False)
+    # Each scenario clears the commit memory (see the helper), so this is a first commit of that
+    # window and presses once; the guard's suppression of a genuine repeat cycle is covered by
+    # charge_window_stuck_enable_button_once and charge_window_unmapped_minute_entity_commits_once.
+    failed |= test_adjust_charge_window("adjust_charge_window7", ha, inv, dummy_rest, "00:11:00", "00:12:00", True, "00:11:00", "00:12:00", my_predbat.minutes_now, short=True, has_inverter_time_button_press=True, expect_inverter_time_button_press=True)
     failed |= test_adjust_charge_window("adjust_charge_window7", ha, inv, dummy_rest, "00:11:00", "00:12:00", False, "00:11:00", "00:12:00", my_predbat.minutes_now, short=True, has_inverter_time_button_press=True, expect_inverter_time_button_press=True)
 
     # Test midnight-spanning windows - verify charge_start_time_minutes and charge_end_time_minutes are calculated correctly
@@ -3376,6 +6142,7 @@ def run_inverter_tests(my_predbat_dummy):
     if failed:
         return failed
 
+    failed |= test_call_service_template_retry("test_service_retry", my_predbat, inv)
     failed |= test_call_service_template("test_service_simple1", my_predbat, inv, service_name="test_service", domain="charge", data={"test": "data"}, extra_data={"extra": "data"})
     failed |= test_call_service_template("test_service_simple2", my_predbat, inv, service_name="test_service", domain="charge", data={"test": "data"}, extra_data={"extra": "data"}, clear=False, repeat=True)
     failed |= test_call_service_template("test_service_simple3", my_predbat, inv, service_name="test_service", domain="discharge", data={"test": "data"}, extra_data={"extra": "data"}, clear=False)
@@ -3464,7 +6231,7 @@ charge_start_service:
     """
     decoded_yaml = yaml.safe_load(dummy_yaml)
 
-    for repeat in range(2):
+    for _repeat in range(2):
         failed |= test_call_service_template(
             "test_service_complex5",
             my_predbat,
@@ -3522,6 +6289,14 @@ charge_start_service:
     if failed:
         return failed
 
+    failed |= test_press_and_poll_button_side_scoping(my_predbat, inv)
+    if failed:
+        return failed
+
+    failed |= test_charge_target_overshoot_hold(my_predbat, ha, inv, dummy_items)
+    if failed:
+        return failed
+
     failed |= test_auto_restart(
         "auto_restart0",
         my_predbat,
@@ -3541,8 +6316,8 @@ charge_start_service:
         ha,
         inv,
         dummy_items,
-        service={"command": "service", "service": "restart_service", "addon": "adds"},
-        expected=[["restart_service", {"addon": "adds"}]],
+        service={"command": "service", "service": "restart_service", "app": "adds"},
+        expected=[["restart_service", {"app": "adds"}]],
         expect_notify=True,
     )
     if failed:
@@ -3649,17 +6424,28 @@ charge_start_service:
     if failed:
         return failed
 
+    failed |= test_battery_power_validity("battery_power_validity", my_predbat, dummy_items)
+    if failed:
+        return failed
+
     failed |= test_charge_window_no_source_configured("charge_window_no_source_configured", my_predbat, dummy_items)
     if failed:
         return failed
 
-    failed |= test_charge_window_rest_configured_but_no_data_yet("charge_window_rest_configured_but_no_data_yet", my_predbat, dummy_items)
-    if failed:
-        return failed
+    # test_charge_window_rest_configured_but_no_data_yet was removed: charge_start_time is no
+    # longer read from REST at all by Inverter.update_status(), so the "REST configured but data
+    # not returned yet" transient case it covered can no longer happen here - GivTCPComponent now
+    # owns that retry/backoff (see component_base.py's start()), and Components.start(phase=1)
+    # blocks predbat startup until the component's automatic_config() has already populated
+    # charge_start_time in self.base.args, before any Inverter is constructed.
 
     failed |= test_charge_window_ge_cloud_configured_but_no_data_yet("charge_window_ge_cloud_configured_but_no_data_yet", my_predbat, dummy_items)
     failed |= test_export_window_ge_cloud_configured_but_no_data_yet("export_window_ge_cloud_configured_but_no_data_yet", my_predbat, dummy_items)
     failed |= test_export_window_no_source_configured_raises("export_window_no_source_configured_raises", my_predbat, dummy_items)
+    failed |= test_window_warning_names_components_when_type_unset("window_warning_names_components_when_type_unset", my_predbat, dummy_items)
+    failed |= test_short_per_inverter_list_gets_its_dummy_entity("short_per_inverter_list_gets_its_dummy_entity", my_predbat)
+    failed |= test_create_missing_arg_does_not_fill_sibling_entries("create_missing_arg_does_not_fill_sibling_entries", my_predbat)
+    failed |= test_create_missing_arg_keeps_inverter_0_single_value("create_missing_arg_keeps_inverter_0_single_value", my_predbat)
     if failed:
         return failed
 
@@ -3703,6 +6489,34 @@ charge_start_service:
     if failed:
         return failed
 
+    # Regression test for issue #4709: a stable export window must be committed once, not every cycle
+    failed |= test_force_export_stable_window_presses_button_once("force_export_stable_window_button_once", ha, inv)
+    failed |= test_charge_window_stuck_enable_presses_button_once("charge_window_stuck_enable_button_once", ha, inv, my_predbat)
+    failed |= test_charge_window_unmapped_minute_entity_commits_once("charge_window_unmapped_minute_entity_commits_once", ha, inv, my_predbat)
+    failed |= test_commit_scopes_are_independent("commit_scopes_are_independent", inv)
+    failed |= test_inverters_persist_across_cycles("inverters_persist_across_cycles", my_predbat, ha)
+    failed |= test_refresh_failure_keeps_other_inverters("refresh_failure_keeps_other_inverters", my_predbat, ha)
+    failed |= test_in_calibration_clears_when_battery_leaves_calibration("in_calibration_clears", my_predbat, ha)
+    failed |= test_set_current_from_power_before_battery_voltage_known("set_current_from_power_before_voltage_known", my_predbat)
+    failed |= test_charge_window_external_reset_recommits("charge_window_external_reset_recommits", ha, inv, my_predbat)
+    failed |= test_charge_window_literal_minute_entity_commits_once("charge_window_literal_minute_entity_commits_once", ha, inv, my_predbat)
+    failed |= test_target_soc_external_reset_recommits("target_soc_external_reset_recommits", ha, inv, my_predbat)
+    failed |= test_quick_update_skips_refresh("quick_update_skips_refresh", my_predbat)
+    failed |= test_export_commit_guard_latches_across_fetches("export_commit_guard_latches_across_fetches", my_predbat)
+    failed |= test_button_press_counts_as_register_write("button_press_counts_as_register_write", ha, inv)
+    failed |= test_button_press_and_poll_counts_as_register_write("button_press_and_poll_counts_as_register_write", ha, inv)
+    failed |= test_button_press_and_poll_clock_skew("button_press_and_poll_clock_skew", ha, inv)
+    if failed:
+        return failed
+
+    # Regression test: an enable-only flip (times unchanged) must not trigger the GivTCP settle sleep
+    failed |= test_force_export_enable_only_flip_skips_settle_sleep("force_export_enable_only_flip_skips_settle_sleep", ha, inv)
+
+    # Regression test for issue #2328: idle (non-export) cycles must not press the button every time
+    failed |= test_force_export_off_does_not_press_every_cycle("force_export_off_no_repeat_press", ha, my_predbat)
+    if failed:
+        return failed
+
     # Regression test: export target SoC must track the minimum reserve SoC in both directions
     failed |= test_discharge_target_tracks_reserve("discharge_target_tracks_reserve", ha, inv, dummy_rest)
     if failed:
@@ -3727,7 +6541,6 @@ charge_start_service:
 
     # Regression test for issue #4517 (follow-up): AC Coupled inverters don't have a working
     # discharge target register, skip the write entirely rather than retrying it forever
-    failed |= test_discharge_target_skipped_for_ac_coupled("discharge_target_skipped_for_ac_coupled", ha, inv, dummy_rest)
     if failed:
         return failed
 

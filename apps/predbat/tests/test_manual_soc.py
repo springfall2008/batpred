@@ -163,6 +163,5 @@ def run_test_manual_soc(my_predbat):
     my_predbat.now_utc = datetime.now(my_predbat.local_tz)
     my_predbat.midnight_utc = my_predbat.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
     my_predbat.minutes_now = int((my_predbat.now_utc - my_predbat.midnight_utc).total_seconds() / 60)
-    my_predbat.midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
 
     return failed

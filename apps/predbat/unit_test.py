@@ -13,6 +13,8 @@ import time
 import sys
 import glob
 import argparse
+import random
+from datetime import timedelta
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -20,7 +22,7 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 from predbat import PredBat
-from tests.test_infra import TestHAInterface, set_plot_enabled
+from tests.test_infra import FIXTURE_MINUTES_NOW, TestHAInterface, set_plot_enabled
 from tests.test_compute_metric import run_compute_metric_tests
 from tests.test_pv90 import run_pv90_tests
 from tests.test_performance_tweaks import run_performance_tweaks_tests
@@ -36,20 +38,27 @@ from tests.test_kernel_static_cache import run_kernel_static_cache_tests
 from tests.test_execute import run_execute_tests
 from tests.test_execute_multi_inverter_status import test_multi_inverter_status
 from tests.test_load_car_energy import test_load_car_energy_warns_when_configured_entity_has_no_data
-from tests.test_predheat import test_predheat
+from tests.test_predheat import test_predheat, test_predheat_smart_thermostat
 from tests.test_debug_enable_auto_scope import test_debug_enable_auto_scope
 from tests.test_charge_hold import run_charge_hold_tests
 from tests.test_octopus_slots import run_load_octopus_slots_tests, run_octopus_slot_max_default_tests
 from tests.test_multi_car_iog import run_multi_car_iog_tests
+from tests.test_car_manual_soc import run_car_manual_soc_tests
+from tests.test_car_max_rate import run_car_max_rate_tests
 from tests.test_fetch_config_options import test_fetch_config_options
 from tests.test_multi_inverter import run_inverter_multi_tests
 from tests.test_heterogeneous_fleet import test_heterogeneous_fleet
 from tests.test_window2minutes import test_window2minutes
+from tests.test_car_plan_windows import test_car_plan_windows
 from tests.test_hass_watcher import test_hass_watcher
+from tests.test_hass_timer import test_hass_timer
 from tests.test_new_install_detection import test_new_install_detection
+from tests.test_config_json_format import test_config_json_format
 from tests.test_history_attribute import test_history_attribute
+from tests.test_previous_value_provider import test_previous_value_provider
 from tests.test_inverter import run_inverter_tests
 from tests.test_basic_rates import test_basic_rates
+from tests.test_clock import run_clock_tests
 from tests.test_rate_export_max_forward_calc import test_rate_export_max_forward_calc
 from tests.test_rate_min_forward_calc import test_rate_min_forward_calc
 from tests.test_find_charge_curve import run_find_charge_curve_tests
@@ -60,14 +69,28 @@ from tests.test_optimise_swap_charge import run_optimise_swap_charge_tests
 from tests.test_optimise_swap_export import run_optimise_swap_export_tests
 from tests.test_nordpool import run_nordpool_test
 from tests.test_futurerate_auto import test_futurerate_auto
+from tests.test_futurerate_agilepredict import test_futurerate_agilepredict
 from tests.test_car_charging_smart import run_car_charging_smart_tests
+from tests.test_battery_accuracy import run_battery_accuracy_tests
 from tests.test_plugin_startup import test_plugin_startup_order
 from tests.test_active_flag import test_active_flag
-from tests.test_component_health_status import test_component_health_status
+from tests.test_time_loop_guard import test_time_loop_guard
+from tests.test_component_health_status import (
+    test_component_health_status,
+    test_record_status_state_clamped,
+    test_record_status_under_warning,
+    test_record_status_concurrent,
+    test_record_status_reset_locked,
+    test_record_status_after_comparison,
+    test_record_status_run_state,
+)
 from tests.test_optimise_levels import run_optimise_levels_tests
 from tests.test_trim_export import run_trim_export_tests
 from tests.test_plan_tiebreak import run_plan_tiebreak_tests
 from tests.test_plan_preclip import run_plan_preclip_tests
+from tests.test_plan_version_replace import run_plan_version_replace_tests
+from tests.test_pv_calibration_clipping import run_pv_calibration_clipping_tests
+from tests.test_pv_calibration_day_scaling import run_pv_calibration_day_scaling_tests
 from tests.test_export_commitment import run_export_commitment_tests
 from tests.test_optimise_export_copy import run_optimise_export_copy_tests
 from tests.test_energydataservice import run_energydataservice_tests
@@ -80,6 +103,7 @@ from tests.test_saving_session import (
     test_saving_session,
     test_saving_session_null_octopoints,
     test_octopus_free_session_null_code,
+    test_kraken_flextras_free_electricity,
     test_saving_session_notify_config,
     test_saving_session_default_rate,
     test_saving_session_axle_conflict,
@@ -94,6 +118,7 @@ from tests.test_saving_session import (
     test_saving_session_zero_octopoints_joined_is_free_slot,
 )
 from tests.test_secrets import run_secrets_tests
+from tests.test_env_config import run_env_config_tests
 from tests.test_ge_cloud import test_ge_cloud
 from tests.test_teslemetry import test_teslemetry
 from tests.test_compare import test_compare
@@ -108,8 +133,8 @@ from tests.test_hainterface_lifecycle import run_hainterface_lifecycle_tests
 from tests.test_hainterface_websocket import run_hainterface_websocket_tests
 from tests.test_history_chunking import run_history_chunking_tests
 from tests.test_web_if import run_test_web_if
-from tests.test_web_apps_edit import run_web_apps_edit_tests
-from tests.test_web_chart_currency import test_rates_chart_series_names_use_currency_symbol
+from tests.test_web_apps_edit import run_web_apps_edit_tests, run_web_apps_filter_tests
+from tests.test_web_chart_currency import test_rates_chart_series_names_use_currency_symbol, test_pv_chart_forecast_history_is_uncalibrated
 from tests.test_web_debug_history_routes import test_web_debug_history_routes
 from tests.test_agent_tools import run_agent_tools_tests
 from tests.test_chat_store import run_chat_store_tests
@@ -118,9 +143,12 @@ from tests.test_chat import run_chat_tests
 from tests.test_web_chat import run_web_chat_tests
 from tests.test_web_mcp import run_web_mcp_tests
 from tests.test_debug_history_client_js import test_debug_history_client_js
+from tests.test_plan_staleness_js import test_plan_staleness_js
+from tests.test_plan_totals_js import test_plan_totals_js
 from tests.test_metrics_dashboard_soc_refresh import test_soc_chart_center_text_reads_live_data
 from tests.test_web_functions import run_web_functions_tests, run_web_logo_image_tests, run_web_dark_mode_preference_tests
 from tests.test_web_power_flow import run_web_power_flow_tests
+from tests.test_web_discovery import run_web_discovery_tests
 from tests.test_web_history_table import run_web_history_table_tests
 from tests.test_web_charts import run_web_charts_tests
 from tests.test_web_chart_grouping import run_web_chart_grouping_tests
@@ -144,9 +172,12 @@ from tests.test_web_annual import (
 from tests.test_window import run_window_sort_tests, run_intersect_window_tests, run_clone_windows_tests, run_window_cache_tests
 from tests.test_hit_charge_cache import run_hit_charge_cache_tests
 from tests.test_window_selection import run_window_selection_tests
+from tests.test_export_encoding import run_export_encoding_tests
+from tests.test_export_more_solar_warning import run_export_more_solar_warning_tests
 from tests.test_find_charge_rate import test_find_charge_rate, test_find_charge_rate_pv_overlap, test_find_charge_rate_string_temperature, test_find_charge_rate_string_charge_curve
 from tests.test_manual_api import run_test_manual_api
 from tests.test_manual_soc import run_test_manual_soc
+from tests.test_manual_soc_max import run_test_manual_soc_max
 from tests.test_manual_times import run_test_manual_times
 from tests.test_manual_select import run_test_manual_select
 from tests.test_minute_array import test_minute_array
@@ -165,6 +196,7 @@ from tests.test_holiday_mode import test_holiday_mode
 from tests.test_inday_adjustment_carry import test_inday_adjustment_carry
 from tests.test_filtered_load_minute import test_filtered_load_minute
 from tests.test_fill_load_from_power import run_all_tests as test_fill_load_from_power
+from tests.test_fill_load_from_history import run_all_tests as test_fill_load_from_history
 from tests.test_fetch_pv_forecast import run_all_tests as test_fetch_pv_forecast
 from tests.test_octopus_free import test_octopus_free
 from tests.test_prune_today import test_prune_today
@@ -176,9 +208,11 @@ from tests.test_octopus_refresh_token import test_octopus_refresh_token_wrapper
 from tests.test_octopus_misc import test_octopus_misc_wrapper
 from tests.test_octopus_read_response import test_octopus_read_response_wrapper
 from tests.test_octopus_read_response_retry import test_octopus_read_response_retry_wrapper
+from tests.test_octopus_saving_event_type import test_octopus_saving_event_type
 from tests.test_octopus_waf_block import test_octopus_waf_block_wrapper
 from tests.test_octopus_catalogue_cache import test_octopus_catalogue_cache_wrapper
 from tests.test_octopus_rate_limit import test_octopus_rate_limit_wrapper
+from tests.test_octopus_backoff import test_octopus_backoff_wrapper
 from tests.test_octopus_logging import test_octopus_logging_wrapper
 from tests.test_octopus_fetch_previous_dispatch import test_octopus_fetch_previous_dispatch_wrapper
 from tests.test_octopus_intelligent_devices import test_octopus_intelligent_devices_wrapper
@@ -190,15 +224,19 @@ from tests.test_fetch_octopus_rates import test_fetch_octopus_rates
 from tests.test_fetch_tariffs import test_fetch_tariffs
 from tests.test_fetch_url_cached import test_fetch_url_cached
 from tests.test_load_free_slot import test_load_free_slot
-from tests.test_add_now_to_octopus_slot import test_add_now_to_octopus_slot
+from tests.test_car_charging_now import test_car_charging_now
 from tests.test_octopus_slots_change import test_octopus_slots_change
 from tests.test_dynamic_load import test_dynamic_load_car_slot_cancellation, test_dynamic_load_high_load_baseline
+from tests.test_dynamic_load_car import test_dynamic_load_car_not_charging
+from tests.test_octopus_dispatch_hold import test_octopus_dispatch_hold
+from tests.test_dispatch_billing_window import test_dispatch_billing_window
 from tests.test_fox_api import run_fox_api_tests
 from tests.test_deye_const import run_deye_const_tests
 from tests.test_deye_config import run_deye_config_tests
 from tests.test_deye_api import run_deye_api_tests
 from tests.test_deye_oauth import run_deye_oauth_tests
 from tests.test_deye_control import run_deye_control_tests
+from tests.test_tou_schedule import run_tou_schedule_tests
 from tests.test_deye_publish import run_deye_publish_tests
 from tests.test_deye_storage import run_deye_storage_tests
 from tests.test_sunsynk_const import run_sunsynk_const_tests
@@ -206,10 +244,18 @@ from tests.test_sunsynk_auth import run_sunsynk_auth_tests
 from tests.test_sunsynk_api import run_sunsynk_api_tests
 from tests.test_sunsynk_control import run_sunsynk_control_tests
 from tests.test_control_ledger import run_control_ledger_tests
+from tests.test_control_monitor import run_control_monitor_tests
 from tests.test_sunsynk_publish import run_sunsynk_publish_tests
 from tests.test_sunsynk_storage import run_sunsynk_storage_tests
 from tests.test_sunsynk_config import run_sunsynk_config_tests
+from tests.test_sunsynk_parallel import run_sunsynk_parallel_tests
 from tests.test_alphaess_const import run_alphaess_const_tests
+from tests.test_hanchu_const import run_hanchu_const_tests
+from tests.test_hanchu_config import run_hanchu_config_tests
+from tests.test_hanchu_api import run_hanchu_api_tests
+from tests.test_hanchu_control import run_hanchu_control_tests
+from tests.test_hanchu_publish import run_hanchu_publish_tests
+from tests.test_hanchu_cli import run_hanchu_cli_tests
 from tests.test_alphaess_api import run_alphaess_api_tests
 from tests.test_alphaess_config import run_alphaess_config_tests
 from tests.test_alphaess_publish import run_alphaess_publish_tests
@@ -224,9 +270,17 @@ from tests.test_annual_load import test_annual_load, test_annual_load_octopus
 from tests.test_annual_weather import test_annual_weather, test_annual_weather_orientation_cache, test_annual_weather_window
 from tests.test_annual_tariff import test_annual_tariff
 from tests.test_rate_add_io_slots import run_rate_add_io_slots_tests
+from tests.test_iog_car_need_gate import run_iog_car_need_gate_tests
 from tests.test_iog_charge_skew import run_iog_charge_skew_tests
+from tests.test_iog_bird_in_hand import run_iog_bird_in_hand_tests
+from tests.test_iog_early_slot_flat_battery import run_iog_early_slot_flat_battery_tests
+from tests.test_multi_car_load import run_multi_car_load_tests
+from tests.test_dispatch_timeline import run_dispatch_timeline_tests
+from tests.test_log_rotation import run_log_rotation_tests
 from tests.test_battery_curve_keys import run_battery_curve_keys_tests
 from tests.test_balance_inverters import run_balance_inverters_tests
+from tests.test_balance_pure import run_balance_pure_tests
+from tests.test_utils_allocate import run_allocate_export_tests
 from tests.test_octopus_download_rates import test_octopus_download_rates_wrapper
 from tests.test_integer_config import (
     test_integer_config_entities,
@@ -236,15 +290,22 @@ from tests.test_integer_config import (
     test_get_ha_config_normalises_int_default_for_fractional_step,
     test_metric_battery_cycle_fractional_value_not_truncated,
     test_metric_battery_value_scaling_step_resolves_export_margin,
+    test_float_declared_keys_never_read_with_int_default,
+    test_component_arg_specs_resolve_float_declared_keys_as_float,
 )
 from tests.test_predbat_metrics_data_age import test_data_age_metrics_round_trip
 from tests.test_metrics_dashboard_control_conflicts import test_control_conflicts_metrics_round_trip, test_control_conflicts_dashboard_renders_section
+from tests.test_metrics_dashboard_control_failures import test_control_failures_metrics_round_trip, test_control_failures_dashboard_renders_section
 from tests.test_validate_config import test_validate_config, test_validate_config_retry, test_validate_config_secrets
 from tests.test_get_arg_missing_index import test_get_arg_missing_index_uses_default_quietly
+from tests.test_get_arg_combine_units import test_get_arg_combine_units
 from tests.test_plan_json_rate_adjust import run_test_plan_json_rate_adjust
 from tests.test_plan_why_reason import run_test_plan_why_reason
+from tests.test_plan_scenario_summary import run_test_plan_scenario_summary
 from tests.test_rate_replicate_missing_slots import test_rate_replicate
 from tests.test_find_charge_window import test_find_charge_window
+from tests.test_fetch_pv_mid_cycle import test_fetch_pv_mid_cycle
+from tests.test_set_rate_thresholds import run_set_rate_thresholds_tests
 from tests.test_random_scenarios import generate_scenarios, save_scenarios, run_scenarios_from_file, compare_results, profile_scenario, run_random_scenario_tests
 from tests.test_carbon import test_carbon
 from tests.test_storage import test_storage
@@ -252,9 +313,21 @@ from tests.test_plan_persistence import test_plan_persistence
 from tests.test_github import test_github
 from tests.test_download import test_download
 from tests.test_ohme import test_ohme
+from tests.test_givtcp_component import test_givtcp_component
+from tests.test_debug_yaml_scope import run_debug_yaml_scope_tests
+from tests.test_log_replay_inputs import run_log_replay_inputs_tests
+from tests.test_memory_release import run_memory_release_tests
+from tests.test_inverter_write_poll import run_inverter_write_poll_tests
+from tests.test_givtcp_rest import run_givtcp_rest_tests
 from tests.test_myenergi import test_myenergi
+from tests.test_wallbox import test_wallbox
+from tests.test_hypervolt import test_hypervolt
+from tests.test_car_charger_control import run_car_charger_control_tests
 from tests.test_component_base import test_component_base_all
 from tests.test_components import test_components_all
+from tests.test_coordinator import test_coordinator_all
+from tests.test_discovery_contract import run_discovery_contract_tests
+from tests.test_discovery_catalogue import test_discovery_catalogue_all
 from tests.test_mock_base import test_mock_base_all
 from tests.test_solis import run_solis_tests
 from tests.test_load_ml import test_load_ml
@@ -268,16 +341,21 @@ from tests.test_band_rate_text import test_band_rate_text
 from tests.test_rate_text_scan import test_rate_text_scan
 from tests.test_kraken import run_kraken_tests
 from tests.test_kraken_auth_mixin import run_kraken_auth_mixin_tests
+from tests.test_kraken_key import run_kraken_key_tests
 from tests.test_clip_export_slots import run_clip_export_slots_tests
 from tests.test_manual_overrides import run_manual_overrides_tests
 from tests.test_charge_freeze_only import run_charge_freeze_only_tests
 from tests.test_prune_dead_slots import run_prune_dead_slots_tests
+from tests.test_export_floor import run_export_floor_tests
+from tests.test_plan_pv10_hedge import run_plan_pv10_hedge_tests
+from tests.test_plan_freeze_export_fallback import run_plan_freeze_export_fallback_tests
 from tests.test_clip_charge_slots import run_clip_charge_slots_tests
 from tests.test_discard_unused_charge_slots import run_discard_unused_charge_slots_tests
 from tests.test_discard_unused_export_slots import run_discard_unused_export_slots_tests
 from tests.test_marginal_costs import test_marginal_costs
 from tests.test_savings_stability import test_savings_stability
 from tests.test_calculate_yesterday import test_calculate_yesterday
+from tests.test_cloud_modulation import run_cloud_modulation_tests
 from tests.test_load_today_comparison import test_load_today_comparison
 from tests.test_annual_config import test_annual_config
 from tests.test_annual_bootstrap import test_annual_bootstrap
@@ -304,7 +382,7 @@ from tests.test_annual_export_sweep import (
     test_annual_export_sweep_tariff_threading,
 )
 from tests.test_debug_history import test_debug_history
-from tests.test_debug_history_capture import test_debug_history_capture, test_debug_history_capture_slot_alignment
+from tests.test_debug_history_capture import test_debug_history_capture, test_debug_history_capture_slot_alignment, test_debug_history_count_range
 
 # Mock the components and plugin system
 
@@ -380,6 +458,17 @@ def create_predbat():
     my_predbat.states = {}
     my_predbat.reset()
     my_predbat.update_time()
+    # update_time() takes the clock from the host, so the same module used to behave differently
+    # standalone and in the suite - a suite run sat at reset_inverter's noon residue while a
+    # standalone run inherited the wall clock, and a time-of-day-dependent test could pass one way
+    # and fail the other (#5026). Pin the fixture clock here instead, now_utc from midnight_utc so
+    # the two stay consistent, the same way the scenario loader pins a scenario's own clock
+    # (test_random_scenarios.py apply_random_scenario). Only minutes_now and now_utc are pinned
+    # here - update_time() has already taken midnight_utc and now_utc_real from the host clock
+    # and they are left alone. Modules that want more still pin and hand their clock back
+    # themselves, but no module inherits the wall clock into those two fields any more.
+    my_predbat.minutes_now = FIXTURE_MINUTES_NOW
+    my_predbat.now_utc = my_predbat.midnight_utc + timedelta(minutes=FIXTURE_MINUTES_NOW)
     my_predbat.ha_interface = TestHAInterface()
     my_predbat.ha_interface.base = my_predbat
     my_predbat.ha_interface.history_enable = False
@@ -397,6 +486,9 @@ def main():
     # Format: (name, function, description, slow)
     TEST_REGISTRY = [
         ("secrets", run_secrets_tests, "Secrets loading tests", False),
+        ("env_config", run_env_config_tests, "Per-instance PREDBAT_APPS_FILE / PREDBAT_SECRETS_FILE config tests", False),
+        ("export_encoding", run_export_encoding_tests, "Packed export limit encoding accessor tests", False),
+        ("export_more_solar_warning", run_export_more_solar_warning_tests, "export_more_solar / set_export_freeze dependency warning tests", False),
         ("perf", run_perf_test, "Performance tests", False),
         ("model", run_model_tests, "Model tests", False),
         ("plot", run_plot_tests, "Failure plot display is opt-in (--plot) tests", False),
@@ -411,15 +503,20 @@ def main():
         ("multi_inverter_status", test_multi_inverter_status, "Multi-inverter headline status resolution tests (#4446)", False),
         ("load_car_energy", test_load_car_energy_warns_when_configured_entity_has_no_data, "car_charging_energy configured-but-empty warning tests (#4458 follow-up)", False),
         ("predheat", test_predheat, "Predheat scheduler and predheat_enable gate tests (#4670)", False),
+        ("predheat_smart_thermostat", test_predheat_smart_thermostat, "Predheat smart thermostat pre-heat window tests", False),
         ("debug_enable_auto_scope", test_debug_enable_auto_scope, "debug_enable auto-disable-after-N-hours tests (#4438 review)", False),
         ("charge_hold", run_charge_hold_tests, "Charge freeze hold modelling tests", False),
         ("basic_rates", test_basic_rates, "Basic rates tests", False),
+        ("clock", run_clock_tests, "update_time clock tests", False),
         ("rate_min_forward_calc", test_rate_min_forward_calc, "Rate min forward calc tests", False),
         ("rate_export_max_forward_calc", test_rate_export_max_forward_calc, "Rate export max forward calc tests", False),
         ("window_sort", run_window_sort_tests, "Window sort tests", False),
         ("window2minutes", test_window2minutes, "Window to minutes tests", False),
+        ("car_plan_windows", test_car_plan_windows, "parse_car_plan_windows year anchoring: New Year either side, long windows, leap day", False),
         ("hass_watcher", test_hass_watcher, "Standalone-mode file watcher tests (#4397/#4396)", False),
+        ("hass_timer", test_hass_timer, "Standalone-mode scheduler keeps its pace across clock changes (#5770)", False),
         ("new_install_detection", test_new_install_detection, "New-install misdetection tests (Bug B, #4397/#4396, #3259, #3306)", False),
+        ("config_json_format", test_config_json_format, "predbat_config.json written one setting per line and loads back", False),
         ("compute_metric", run_compute_metric_tests, "Compute metric tests", False),
         ("pv90", run_pv90_tests, "pv90 upside scenario tests", False),
         ("performance_tweaks", run_performance_tweaks_tests, "performance_tweaks toggle tests", False),
@@ -433,6 +530,7 @@ def main():
         ("get_now_cumulative", test_get_now_from_cumulative, "Get now from cumulative tests", False),
         ("prune_today", test_prune_today, "Prune today tests", False),
         ("history_attribute", test_history_attribute, "History attribute tests", False),
+        ("previous_value_provider", test_previous_value_provider, "Previous value provider hook tests", False),
         ("minute_data_state", test_minute_data_state, "Minute data state tests", False),
         ("minute_data_copy", run_minute_data_copy_tests, "Minute data history copying tests", False),
         ("format_time_ago", test_format_time_ago, "Format time ago tests", False),
@@ -444,6 +542,7 @@ def main():
         ("inday_adjustment_carry", test_inday_adjustment_carry, "In-day adjustment midnight carry-over tests", False),
         ("filtered_load_minute", test_filtered_load_minute, "Filtered load minute / window tests", False),
         ("fill_load_from_power", test_fill_load_from_power, "Fill load from power sensor tests", False),
+        ("fill_load_from_history", test_fill_load_from_history, "Fill load_today gaps from load_energy_h0 history tests", False),
         ("fetch_pv_forecast", test_fetch_pv_forecast, "Fetch PV forecast with relative_time offset tests", False),
         # Octopus Energy URL/API tests
         ("octopus_url", test_octopus_url, "Octopus URL/API comprehensive tests (downloads, day/night rates, saving sessions, intelligent dispatch, tariffs, EDF)", False),
@@ -452,10 +551,12 @@ def main():
         ("octopus_refresh_token", test_octopus_refresh_token_wrapper, "Octopus refresh token tests", False),
         ("octopus_misc", test_octopus_misc_wrapper, "Octopus misc API tests (set intelligent schedule, join saving sessions)", False),
         ("octopus_read_response", test_octopus_read_response_wrapper, "Octopus read response tests", False),
-        ("octopus_read_response_retry", test_octopus_read_response_retry_wrapper, "Octopus read response retry with exponential backoff tests", False),
+        ("octopus_read_response_retry", test_octopus_read_response_retry_wrapper, "Octopus read response (read once) tests", False),
+        ("octopus_saving_event_type", test_octopus_saving_event_type, "Octopus savingSessions eventType classification tests (issue #4851)", False),
         ("octopus_waf_block", test_octopus_waf_block_wrapper, "Octopus CloudFront/WAF 403 handling tests", False),
         ("octopus_catalogue_cache", test_octopus_catalogue_cache_wrapper, "Octopus EV catalogue caching tests", False),
         ("octopus_rate_limit", test_octopus_rate_limit_wrapper, "Octopus API rate limit tests", False),
+        ("octopus_backoff", test_octopus_backoff_wrapper, "Octopus rate limit backoff tests", False),
         ("octopus_logging", test_octopus_logging_wrapper, "Octopus GraphQL logging redaction tests", False),
         ("octopus_fetch_previous_dispatch", test_octopus_fetch_previous_dispatch_wrapper, "Octopus fetch previous dispatch tests", False),
         ("octopus_intelligent_devices", test_octopus_intelligent_devices_wrapper, "Octopus intelligent devices tests (flexPlannedDispatches, energyAddedKwh)", False),
@@ -469,21 +570,34 @@ def main():
         ("fetch_url_cached", test_fetch_url_cached, "Fetch URL cached tests", False),
         ("fetch_config_options", test_fetch_config_options, "Fetch config options tests", False),
         ("load_free_slot", test_load_free_slot, "Load free slot tests", False),
-        ("add_now_to_octopus_slot", test_add_now_to_octopus_slot, "Add now to Octopus slot tests", False),
         ("octopus_slots_change", test_octopus_slots_change, "Octopus slots change-detection signature tests (in-progress re-clock vs genuine change)", False),
         ("plugin_startup", test_plugin_startup_order, "Plugin startup order tests", False),
         ("active_flag", test_active_flag, "Active flag cleared on exception tests", False),
+        ("time_loop_guard", test_time_loop_guard, "Run-loop guard reports a missing HA interface and sets fatal_error (#5135)", False),
         ("component_health_status", test_component_health_status, "Component errors fail the recorded run status tests", False),
+        ("record_status_state_clamped", test_record_status_state_clamped, "Status sensor state is clamped at the 255 characters Home Assistant accepts", False),
+        ("record_status_under_warning", test_record_status_under_warning, "A run's state is recorded after the warning it raised, in brackets", False),
+        ("record_status_concurrent", test_record_status_concurrent, "Concurrent record_status calls keep every error_count increment", False),
+        ("record_status_reset_locked", test_record_status_reset_locked, "The start-of-run status reset waits for the status lock", False),
+        ("record_status_after_comparison", test_record_status_after_comparison, "A tariff comparison warning keeps the run's state after it", False),
+        ("record_status_run_state", test_record_status_run_state, "The status sensor's run_state attribute holds the run's plain state", False),
         ("dynamic_load_car", test_dynamic_load_car_slot_cancellation, "Dynamic load car slot cancellation tests", False),
         ("dynamic_load_high", test_dynamic_load_high_load_baseline, "Dynamic load high-load baseline tests", False),
+        ("dynamic_load_car_not_charging", test_dynamic_load_car_not_charging, "Dynamic load car not charging tests", False),
+        ("octopus_dispatch_hold", test_octopus_dispatch_hold, "Octopus dispatch hold tests", False),
+        ("dispatch_billing_window", test_dispatch_billing_window, "Dispatch billing window tests (E.ON)", False),
+        ("car_charging_now", test_car_charging_now, "car_charging_now holds the battery and feeds the model but never adds a car slot", False),
         ("units", run_test_units, "Unit tests", False),
         ("manual_api", run_test_manual_api, "Manual API tests", False),
         ("manual_soc", run_test_manual_soc, "Manual SOC target tests", False),
+        ("manual_soc_max", run_test_manual_soc_max, "Manual SOC maximum (ceiling) target tests (issue #1578)", False),
         ("manual_times", run_test_manual_times, "Manual times tests", False),
         ("manual_select", run_test_manual_select, "Manual select tests", False),
         ("web_if", run_test_web_if, "Web interface tests", False),
         ("web_apps_edit", run_web_apps_edit_tests, "Apps.yaml editor add/delete tests (issue #4714)", False),
+        ("web_apps_filter", run_web_apps_filter_tests, "Apps.yaml page filter box tests (issue #5210)", False),
         ("web_chart_currency", test_rates_chart_series_names_use_currency_symbol, "Rates chart series names follow currency_symbols tests", False),
+        ("web_chart_pv_forecast", test_pv_chart_forecast_history_is_uncalibrated, "PV chart plots the uncalibrated forecast history tests", False),
         ("web_debug_history_routes", test_web_debug_history_routes, "Debug-history web routes tests (#4438 review items 4, 6, 21)", False),
         ("agent_tools", run_agent_tools_tests, "Shared agent tool layer and schema projection tests", False),
         ("chat_store", run_chat_store_tests, "Chat conversation store tests (expiry, deletion, LRU, trimming)", False),
@@ -492,9 +606,12 @@ def main():
         ("web_chat", run_web_chat_tests, "Chat tab route, SSE framing and markdown escaping tests", False),
         ("web_mcp", run_web_mcp_tests, "MCP get_log and apps.yaml redaction tests (issue #4768)", False),
         ("debug_history_client_js", test_debug_history_client_js, "Debug-history client-side JS structure tests (#4438 review item 22)", False),
+        ("plan_staleness_js", test_plan_staleness_js, "Plan page stale-data warning JS: per-view data and refresh interval", False),
+        ("plan_totals_js", test_plan_totals_js, "Plan card summary row total cost 2dp formatting JS (#5785)", False),
         ("metrics_dashboard_soc_refresh", test_soc_chart_center_text_reads_live_data, "Metrics dashboard SoC chart live-refresh tests", False),
         ("web_functions", run_web_functions_tests, "Web function unit tests", False),
         ("web_power_flow", run_web_power_flow_tests, "Power flow diagram car charging tests", False),
+        ("web_discovery", run_web_discovery_tests, "Discovery catalogue web page tests", False),
         ("web_logo_image", run_web_logo_image_tests, "Local logo image route tests (issue #4562)", False),
         ("web_dark_mode_preference", run_web_dark_mode_preference_tests, "Dark mode follows OS prefers-color-scheme when unset (issue #4800)", False),
         ("web_annual", test_web_annual, "Annual web tab prefill tests", False),
@@ -517,13 +634,24 @@ def main():
         ("web_entity_unit_resolution", run_web_entity_unit_resolution_tests, "Web /entity chart unit/name resolution tests", False),
         ("nordpool", run_nordpool_test, "Nordpool tests", False),
         ("futurerate_auto", test_futurerate_auto, "FutureRate auto Agile detection tests", False),
+        ("futurerate_agilepredict", test_futurerate_agilepredict, "FutureRate AgilePredict forecast tests", False),
         ("octopus_slots", run_load_octopus_slots_tests, "Load Octopus slots tests", False),
         ("octopus_slot_max_default", run_octopus_slot_max_default_tests, "Octopus slot max auto-detection from IOG-SMB tariff code", False),
         ("multi_car_iog", run_multi_car_iog_tests, "Multi-car IOG tests", False),
+        ("car_manual_soc", run_car_manual_soc_tests, "Manual car SoC: automatic enable, reset on unplug, energy-sensor tracking", False),
+        ("car_max_rate", run_car_max_rate_tests, "car_charging_max_rate caps each car's charge rate, per car, held through sensor drop-outs, and against the Octopus raise", False),
         ("rate_add_io_slots", run_rate_add_io_slots_tests, "Rate add IO slots tests", False),
+        ("iog_car_need_gate", run_iog_car_need_gate_tests, "IOG car-need gate: no cheap rate for dispatch minutes no car needs", False),
         ("iog_charge_skew", run_iog_charge_skew_tests, "IOG earlier-charge skew characterisation tests", False),
+        ("iog_bird_in_hand", run_iog_bird_in_hand_tests, "IOG bird-in-hand credit for a confirmed dispatch run", False),
+        ("iog_early_slot_flat_battery", run_iog_early_slot_flat_battery_tests, "IOG bonus dispatch before the night window with a flat battery", False),
+        ("multi_car_load", run_multi_car_load_tests, "Cars charging at once each add their own energy to the load", False),
+        ("dispatch_timeline", run_dispatch_timeline_tests, "Dispatch timeline diagnostic tests (#4516 Stage 1)", False),
+        ("log_rotation", run_log_rotation_tests, "Configurable log rotation and two-digit naming (#5076)", False),
         ("rate_replicate", test_rate_replicate, "Rate replicate comprehensive tests (missing slots, IO, offsets, gas)", False),
         ("find_charge_window", test_find_charge_window, "Find charge window gap handling tests", False),
+        ("fetch_pv_mid_cycle", test_fetch_pv_mid_cycle, "PV forecasts not empty part way through fetch_sensor_data (#4317)", False),
+        ("set_rate_thresholds", run_set_rate_thresholds_tests, "Rate threshold saving-session exclusion tests (GH#5050)", False),
         ("find_charge_rate", test_find_charge_rate, "Find charge rate tests", False),
         ("find_charge_rate_pv", test_find_charge_rate_pv_overlap, "Find charge rate with PV overlap", False),
         ("find_charge_rate_string_temp", test_find_charge_rate_string_temperature, "Find charge rate string temperature", False),
@@ -534,6 +662,7 @@ def main():
         ("saving_session", test_saving_session, "Saving session tests", False),
         ("saving_session_null", test_saving_session_null_octopoints, "Saving session null octopoints test (issue #3079)", False),
         ("octopus_free_session_null_code", test_octopus_free_session_null_code, "Octopus free-session code: null acceptance test (issue #4835)", False),
+        ("kraken_flextras_free_electricity", test_kraken_flextras_free_electricity, "EDF Flextras booked hours priced at 0p via octopus_free_electricity", False),
         ("saving_session_notify", test_saving_session_notify_config, "Saving session notification config tests", False),
         ("saving_session_default_rate", test_saving_session_default_rate, "Saving session default rate injection test", False),
         ("saving_session_axle_conflict", test_saving_session_axle_conflict, "Saving session Axle conflict avoidance test (issue #4120)", False),
@@ -548,6 +677,7 @@ def main():
         ("saving_session_zero_octopoints_free_slot", test_saving_session_zero_octopoints_joined_is_free_slot, "Joined zero octopoints session becomes a free import slot test (issue #4851)", False),
         ("alert_feed", test_alert_feed, "Alert feed tests", False),
         ("fox_api", run_fox_api_tests, "Fox API tests", False),
+        ("tou_schedule", run_tou_schedule_tests, "Shared TOU slot programme tests", False),
         ("deye_const", run_deye_const_tests, "DEYE constants tests", False),
         ("deye_config", run_deye_config_tests, "DEYE config/INVERTER_DEF tests", False),
         ("deye_api", run_deye_api_tests, "DEYE API tests", False),
@@ -560,15 +690,23 @@ def main():
         ("sunsynk_api", run_sunsynk_api_tests, "Sunsynk API tests", False),
         ("sunsynk_control", run_sunsynk_control_tests, "Sunsynk control-logic tests", False),
         ("control_ledger", run_control_ledger_tests, "Control ownership ledger tests", False),
+        ("control_monitor", run_control_monitor_tests, "Control failure monitor tests", False),
         ("sunsynk_publish", run_sunsynk_publish_tests, "Sunsynk publish tests", False),
         ("sunsynk_storage", run_sunsynk_storage_tests, "Sunsynk storage tests", False),
         ("sunsynk_config", run_sunsynk_config_tests, "Sunsynk config/INVERTER_DEF tests", False),
+        ("sunsynk_parallel", run_sunsynk_parallel_tests, "Sunsynk parallel master/slave group tests", False),
         ("alphaess_const", run_alphaess_const_tests, "AlphaESS constants tests", False),
         ("alphaess_api", run_alphaess_api_tests, "AlphaESS API tests", False),
         ("alphaess_config", run_alphaess_config_tests, "AlphaESS config/INVERTER_DEF tests", False),
         ("alphaess_publish", run_alphaess_publish_tests, "AlphaESS publish/config tests", False),
         ("alphaess_control", run_alphaess_control_tests, "AlphaESS control-logic tests", False),
         ("alphaess_storage", run_alphaess_storage_tests, "AlphaESS storage tests", False),
+        ("hanchu_const", run_hanchu_const_tests, "Hanchu constants tests", False),
+        ("hanchu_config", run_hanchu_config_tests, "Hanchu config/INVERTER_DEF tests", False),
+        ("hanchu_api", run_hanchu_api_tests, "Hanchu API/auth tests", False),
+        ("hanchu_control", run_hanchu_control_tests, "Hanchu control-logic tests", False),
+        ("hanchu_publish", run_hanchu_publish_tests, "Hanchu publish/config tests", False),
+        ("hanchu_cli", run_hanchu_cli_tests, "Hanchu command-line harness helper tests", False),
         ("enphase_api", run_enphase_api_tests, "Enphase API tests", False),
         ("solcast", run_solcast_tests, "Solcast API tests", False),
         ("open_meteo", run_open_meteo_tests, "Open-Meteo solar forecast provider tests", False),
@@ -584,6 +722,7 @@ def main():
         ("sigenergy", run_sigenergy_tests, "Sigenergy Cloud API tests", False),
         ("iboost_smart", run_iboost_smart_tests, "iBoost smart tests", False),
         ("car_charging_smart", run_car_charging_smart_tests, "Car charging smart tests", False),
+        ("battery_accuracy", run_battery_accuracy_tests, "Battery prediction accuracy recording tests", False),
         ("intersect_window", run_intersect_window_tests, "Intersect window tests", False),
         ("clone_windows", run_clone_windows_tests, "Clone windows tests", False),
         ("window_cache", run_window_cache_tests_isolated, "Window bounds cache tests", False),
@@ -596,12 +735,15 @@ def main():
         ("battery_curve_keys", run_battery_curve_keys_tests, "Battery curve keys tests", False),
         ("balance_inverters", run_balance_inverters_tests, "Balance inverters tests", False),
         ("heterogeneous_fleet", test_heterogeneous_fleet, "Heterogeneous multi-inverter fleet tests (#4856)", False),
+        ("balance_pure", run_balance_pure_tests, "Pure balance_inverters function tests", False),
+        ("allocate_export", run_allocate_export_tests, "Export rate allocator tests", False),
         # GE Cloud unit tests
         ("ge_cloud", test_ge_cloud, "GE Cloud comprehensive tests (API, devices, EVC, inverter ops, events, publishing, config, downloads, cache)", False),
         ("teslemetry", test_teslemetry, "Teslemetry Tesla Powerwall component tests (data path, control, tariff)", False),
         ("integer_config", test_integer_config_entities, "Integer config entities tests", False),
         ("validate_config", test_validate_config, "APPS_SCHEMA validator tests (string types, sensor boolean states)", False),
         ("get_arg_missing_index", test_get_arg_missing_index_uses_default_quietly, "get_arg missing (out-of-range index) vs malformed numeric coercion tests", False),
+        ("get_arg_combine_units", test_get_arg_combine_units, "get_arg combine=True converts each entry to required_unit", False),
         ("validate_config_retry", test_validate_config_retry, "Config validation retry-after-failure tests (#4379)", False),
         ("validate_config_secrets", test_validate_config_secrets, "check_apps_yaml_secrets() unmasked-credential detection tests (#4787)", False),
         ("expose_config_integer", test_expose_config_preserves_integer, "Expose config preserves integer tests", False),
@@ -610,11 +752,16 @@ def main():
         ("get_ha_config_fractional_default", test_get_ha_config_normalises_int_default_for_fractional_step, "get_ha_config normalises int default to float for fractional-step items (#4296)", False),
         ("metric_battery_cycle_fractional", test_metric_battery_cycle_fractional_value_not_truncated, "metric_battery_cycle fractional value not truncated by get_arg (#4296)", False),
         ("metric_battery_value_scaling_step", test_metric_battery_value_scaling_step_resolves_export_margin, "metric_battery_value_scaling step resolves the export margin (#4840)", False),
+        ("float_keys_float_defaults", test_float_declared_keys_never_read_with_int_default, "No float-declared APPS_SCHEMA key is read with an int default (#4925)", False),
+        ("component_arg_float_specs", test_component_arg_specs_resolve_float_declared_keys_as_float, "COMPONENT_LIST arg specs resolve float-declared keys as float (#4925)", False),
         ("data_age_metrics", test_data_age_metrics_round_trip, "Metrics dashboard data_age_days/data_age_required_days tests", False),
         ("control_conflicts_metrics", test_control_conflicts_metrics_round_trip, "Metrics dashboard control_conflicts round-trip tests", False),
         ("control_conflicts_dashboard", test_control_conflicts_dashboard_renders_section, "Metrics dashboard control_conflicts section render tests", False),
+        ("control_failures_metrics", test_control_failures_metrics_round_trip, "Metrics dashboard control_failures round-trip tests", False),
+        ("control_failures_dashboard", test_control_failures_dashboard_renders_section, "Metrics dashboard control_failures section render tests", False),
         ("plan_json_rate_adjust", run_test_plan_json_rate_adjust, "Plan JSON rate adjust type field tests", False),
         ("plan_why_reason", run_test_plan_why_reason, "Plan JSON per-slot 'why' reason text tests", False),
+        ("plan_scenario_summary", run_test_plan_scenario_summary, "Plan scenario_summary_state export-limit tuple regression test", False),
         # Download tests
         ("download", test_download, "Predbat download/update comprehensive tests (GitHub API, SHA1, install check, file ops)", False),
         # Axle Energy VPP unit tests
@@ -643,11 +790,23 @@ def main():
         ("github", test_github, "GitHub mixin tests (cache hit/miss/stale, HTTP errors, release parsing, auto-update)", False),
         # Ohme EV charger API unit tests
         ("ohme", test_ohme, "Ohme EV charger comprehensive tests (helper functions, client methods, API operations, event handlers)", False),
+        ("givtcp_component", test_givtcp_component, "GivTCP component tests (entity publishing, automatic_config, event handlers)", False),
+        ("debug_yaml_scope", run_debug_yaml_scope_tests, "create_debug_yaml() reachability/scope tests", False),
+        ("log_replay_inputs", run_log_replay_inputs_tests, "Replay-input log lines (forecasts, rates, plan state, cars, inverter)", False),
+        ("memory_release", run_memory_release_tests, "glibc malloc_trim()/arena cap helper tests", False),
+        ("inverter_write_poll", run_inverter_write_poll_tests, "Inverter write-and-poll timing tests", False),
+        ("givtcp_rest", run_givtcp_rest_tests, "GivTCP REST client write/retry/transport tests", False),
+        ("car_charger_control", run_car_charger_control_tests, "Shared Predbat-led EV charger control tests", False),
         # myenergi Zappi and Eddi unit tests
         ("myenergi", test_myenergi, "myenergi Zappi and Eddi comprehensive tests (normalisation, transports, publishing, auto-config, controls)", False),
+        ("wallbox", test_wallbox, "Wallbox EV charger tests (transport, normalisation, publishing, auto-config, controls, plan-led charging)", False),
+        ("hypervolt", test_hypervolt, "Hypervolt EV charger tests (auth, sockets, state, publishing, auto-config, controls, plan-led charging)", False),
         # ComponentBase lifecycle tests
         ("component_base", test_component_base_all, "ComponentBase tests (all)", False),
         ("components", test_components_all, "Components registry tests (all)", False),
+        ("coordinator", test_coordinator_all, "Discovery catalogue coordinator tests", False),
+        ("discovery_contract", run_discovery_contract_tests, "Discovery reporter contract checks", False),
+        ("discovery_catalogue", test_discovery_catalogue_all, "End-to-end discovery catalogue assembly and the observe-only invariant", False),
         # Shared MockBase tests
         ("mock_base", test_mock_base_all, "Shared CLI-harness MockBase tests", False),
         # Solis Cloud API unit tests
@@ -662,16 +821,21 @@ def main():
         # Kraken Energy (EDF/E.ON) tests
         ("kraken", run_kraken_tests, "Kraken API tests (init, GraphQL, tariff discovery, rate fetching, run lifecycle)", False),
         ("kraken_auth", run_kraken_auth_mixin_tests, "Kraken auth mixin tests (API key, email, refresh, 401 handling)", False),
+        ("kraken_key", run_kraken_key_tests, "Kraken API key generator page tests (token check, key generation, Advanced menu)", False),
         ("clip_export_slots", run_clip_export_slots_tests, "Clip export slots tests", False),
         ("manual_overrides", run_manual_overrides_tests, "Manual window override tests", False),
         ("charge_freeze_only", run_charge_freeze_only_tests, "set_charge_freeze_only (no grid charging) tests", False),
         ("prune_dead_slots", run_prune_dead_slots_tests, "Prune dead plan slots tests", False),
+        ("export_floor", run_export_floor_tests, "Realistic pv10 export floor, pinning and staircase merge tests", False),
+        ("plan_pv10_hedge", run_plan_pv10_hedge_tests, "End to end: a bad PV10 forecast makes the overnight charge bigger", False),
+        ("plan_freeze_export_fallback", run_plan_freeze_export_fallback_tests, "End to end: without Freeze Export a target export stands in for it", False),
         ("clip_charge_slots", run_clip_charge_slots_tests, "Clip charge slots tests", False),
         ("discard_unused_charge_slots", run_discard_unused_charge_slots_tests, "Discard unused charge slots tests", False),
         ("discard_unused_export_slots", run_discard_unused_export_slots_tests, "Discard unused export slots tests", False),
         ("marginal_costs", test_marginal_costs, "Marginal energy cost matrix tests", False),
         ("savings_stability", test_savings_stability, "Savings yesterday rate_low stability tests", False),
         ("calculate_yesterday", test_calculate_yesterday, "Calculate yesterday savings and IOG car-slot subtraction tests", False),
+        ("cloud_modulation", run_cloud_modulation_tests, "Cloud/load divergence modulation tests", False),
         ("load_today_comparison", test_load_today_comparison, "load_today_comparison None-guard regression test", False),
         ("compare", test_compare, "Compare tariff engine tests (hardware overrides, bleed isolation)", False),
         ("gateway", run_gateway_tests, "GatewayMQTT component tests (protobuf, plan serialization, commands, telemetry)", False),
@@ -679,6 +843,9 @@ def main():
         ("trim_export", run_trim_export_tests, "Export trim ordering (buffer from cheapest slot) tests", False),
         ("plan_tiebreak", run_plan_tiebreak_tests, "Plan fragmentation near-tie tie-break tests", False),
         ("plan_preclip", run_plan_preclip_tests, "Plan selection scores the pre-clip plan", True),
+        ("plan_version_replace", run_plan_version_replace_tests, "A plan made by another Predbat version is always replaced", False),
+        ("pv_calibration_clipping", run_pv_calibration_clipping_tests, "PV calibration does not learn inverter clipping as forecast error", False),
+        ("pv_calibration_day_scaling", run_pv_calibration_day_scaling_tests, "PV calibration per-day scaling keeps dull days at raw x adjustment", False),
         ("export_commitment", run_export_commitment_tests, "Forced-export commitment / anti-flapping tests", False),
         ("optimise_solar", run_optimise_solar_tests, "Optimise export more solar tests", False),
         ("optimise_windows_kernel", run_optimise_all_windows_kernel_tests, "Optimise all windows tests with the C++ kernel", False),
@@ -726,6 +893,7 @@ def main():
         ("debug_history", test_debug_history, "Rolling debug-history snapshot buffer tests", False),
         ("debug_history_capture", test_debug_history_capture, "Debug history capture throttle/force-capture tests", False),
         ("debug_history_capture_alignment", test_debug_history_capture_slot_alignment, "Debug history capture timestamp is floored to the plan slot grid", False),
+        ("debug_history_count_range", test_debug_history_count_range, "Debug history snapshot count range reaches a fortnight and still clamps (#5070)", False),
     ]
 
     # Parse command line arguments
@@ -737,7 +905,12 @@ def main():
     parser.add_argument("--test", "-t", action="append", help="Run specific test(s) by name (can be used multiple times, use --list to see available tests)")
     parser.add_argument("--keyword", "-k", action="store", help="Run tests matching keyword pattern (e.g., -k carbon_ runs all carbon tests)")
     parser.add_argument("--list", "-l", action="store_true", help="List all available tests")
-    parser.add_argument("--quick", "-q", action="store_true", help="Skip slow tests (optimise_levels, optimise_windows, debug_cases)")
+    # Named from the registry rather than hard-coded: the previous literal list had drifted to
+    # name three tests that are not marked slow at all, while the four that are went unmentioned.
+    slow_test_names = ", ".join(name for name, _func, _desc, slow in TEST_REGISTRY if slow) or "none currently marked slow"
+    parser.add_argument("--quick", "-q", action="store_true", help=f"Skip slow tests ({slow_test_names})")
+    parser.add_argument("--shuffle", action="store_true", help="Run the selected tests in a random order, to look for shared-fixture state leaks between tests (see #5079)")
+    parser.add_argument("--shuffle-seed", type=int, default=None, metavar="N", help="Seed for --shuffle (default: a random seed, printed at the start of the run)")
     parser.add_argument("--plot", action="store_true", help="Display failure plots on screen (blocks until closed); the PNG is written either way")
     parser.add_argument("--random-generate", action="store_true", help="Generate random benchmark scenarios and write to a YAML file")
     parser.add_argument("--random-count", type=int, default=100, metavar="N", help="Number of random scenarios to generate (default: 100)")
@@ -783,6 +956,8 @@ def main():
         sys.exit(0)
 
     print("**** Starting Predbat tests ****")
+    # Used by the debug-file, random-scenario and profiling paths below. The registry test
+    # loop does not share this one - it builds a fresh instance per test (see GH#5079).
     my_predbat = create_predbat()
     print("**** Testing Predbat ****")
     failed = False
@@ -845,6 +1020,11 @@ def main():
         # Run all tests from the registry
         tests_to_run = TEST_REGISTRY
 
+    if args.shuffle:
+        shuffle_seed = args.shuffle_seed if args.shuffle_seed is not None else random.randrange(2**32)
+        random.Random(shuffle_seed).shuffle(tests_to_run)
+        print(f"**** Shuffled test order with seed {shuffle_seed} ****")
+
     print(f"**** Running {len(tests_to_run)} test(s) ****")
     # Single loop to run all collected tests
     total_time = 0
@@ -855,26 +1035,37 @@ def main():
             skipped_count += 1
             continue
 
-        # Show descriptive message for keyword/specific tests, simple for full suite
-        print(f"**** Running: {name} - {desc} ****")
+        # Show descriptive message for keyword/specific tests, simple for full suite.
+        # The wall-clock stamps bracket each test so a run that stalls can be read straight
+        # from the log: the elapsed figure below only appears once a test returns, so a test
+        # still running (or one that hung) is identified by its unmatched start stamp.
+        print(f"**** Running: {name} - {desc} (start {time.strftime('%H:%M:%S')}) ****")
+
+        # Each test gets a PredBat of its own, so state an earlier test left behind cannot
+        # reach it. Sharing one instance across the whole run made a test that mutated it
+        # without restoring break whichever unrelated test happened to follow, depending on
+        # the order they ran in (GH#5079). create_predbat() costs about 22ms, which is lost
+        # in the noise of the suite as a whole.
+        my_predbat = create_predbat()
 
         start_time = time.time()
         test_failed = func(my_predbat)
         elapsed = time.time() - start_time
         total_time += elapsed
+        end_stamp = time.strftime("%H:%M:%S")
 
         if test_failed:
             if args.keyword or args.test:
-                print(f"**** ERROR: Test {name} FAILED in {elapsed:.2f}s ****")
+                print(f"**** ERROR: Test {name} FAILED in {elapsed:.2f}s (end {end_stamp}) ****")
             else:
-                print(f"**** {name}: FAILED in {elapsed:.2f}s ****")
+                print(f"**** {name}: FAILED in {elapsed:.2f}s (end {end_stamp}) ****")
             failed = True
             break
         else:
             if args.keyword or args.test:
-                print(f"**** Test {name} PASSED in {elapsed:.2f}s ****")
+                print(f"**** Test {name} PASSED in {elapsed:.2f}s (end {end_stamp}) ****")
             else:
-                print(f"**** {name}: PASSED in {elapsed:.2f}s ****")
+                print(f"**** {name}: PASSED in {elapsed:.2f}s (end {end_stamp}) ****")
 
     # Report results
     if failed:

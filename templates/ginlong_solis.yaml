@@ -20,11 +20,9 @@ pred_bat:
   # however if you have two inverters only set one of them as they will both read the same.
   #
 
-  # comment out for firmware version fb00 or later:
+  # For Solis inverters with firmware before FB00 (fewer than 6 charge/discharge time slots)
+  # For FB00 firmware or later use ginlong_solis_fb00.yaml instead
   inverter_type: "GS"
-
-  # un-comment for firmware version fb00 or later:
-  #inverter_type: "GS_fb00"
 
   solax_modbus_new: True   # Set to True if you have integration version 2024.03.2 or beyond
 
@@ -81,26 +79,9 @@ pred_bat:
   battery_min_soc:
     - sensor.solis_battery_minimum_soc
 
-  # With the Solax integration we need to press a button to send the time to
-  # comment out for firmware version fb00 or later:
+  # With the Solax integration we need to press a button to send the time to the inverter
   charge_discharge_update_button:
     - button.solis_update_charge_discharge_times
-
-  # un-comment for firmware version fb00 or later:
-  #charge_update_button:
-  #  - button.solis_inverter_update_charge_times
-  #discharge_update_button:
-  #  - button.solis_inverter_update_discharge_times
-
-  # un-comment for firmware version fb00 or later:
-  #scheduled_charge_enable:
-  #   - switch.inverter_timed_charge_slot_1_enable
-  #scheduled_discharge_enable:
-  #   - switch.inverter_timed_discharge_slot_1_enable
-
-  # un-comment for firmware version fb00 or later:
-  # charge_limit:
-  #     - number.solis_inverter_timed_charge_soc
 
   timed_charge_current:
     - number.solis_timed_charge_current
@@ -234,6 +215,28 @@ pred_bat:
   #   - 'latched'
   #   - 'locked'
   #   - 'plugged in'
+
+  # car_charging_plugged can be set to a sensor that says only whether the car is plugged in - staying on after
+  # its charge has finished - matched against car_charging_planned_response. Predbat resets the manual car SoC
+  # (input_number.predbat_car_charging_manual_soc_kwh) to 0 when it reads unplugged, and with car_charging_energy
+  # set it tracks the SoC of a car that has no car_charging_soc sensor. One entry per car - e.g. for a myenergi Zappi:
+  #car_charging_plugged:
+  #  - 're:(sensor.myenergi_zappi_[0-9a-z]+_plug_status)'
+
+  # car_charging_now can be set to a sensor that shows the car is charging right now, so that
+  # Predbat holds the house battery for the car while it charges. It never adds a charging slot.
+  # Use an on/off sensor (matched against car_charging_now_response), or a charging power sensor
+  # in W or kW where 200W or more counts as charging - e.g. for a Wallbox charger:
+  #car_charging_now:
+  #  - sensor.wallbox_portal_charging_power
+
+  # Positive responses for car_charging_now, for an on/off or status sensor. Its state must match one
+  # of these (ignoring case) for Predbat to see the car charging - e.g. 'charging' for a myenergi Zappi plug_status sensor.
+  # car_charging_now_response:
+  #   - 'yes'
+  #   - 'on'
+  #   - 'true'
+  #   - 'charging'
 
   # To make planned car charging more accurate, either using car_charging_planned or Octopus Intelligent
   # specify your battery size in kwh, charge limit % and current car battery soc % sensors/values

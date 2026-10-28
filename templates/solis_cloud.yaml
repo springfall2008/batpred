@@ -36,12 +36,13 @@ pred_bat:
   solis_control_enable: true
 
   # Optional: your battery's nominal pack voltage (e.g. cell count x nominal cell voltage per
-  # cell, NOT the live/resting battery voltage which varies with charge state). Needed for an
-  # accurate, stable battery_capacity sensor on batteries with a voltage other than the ~48V
-  # default. The max charge/discharge power sensors already use the live measured voltage
-  # automatically and don't need this set. Leave commented out and battery_capacity is still
-  # published, but estimated from the live voltage and flagged unreliable (reliable: false
-  # attribute, plus a log warning) since that value drifts with charge state - see soc_max below.
+  # cell, NOT the live/resting battery voltage which varies with charge state). The inverter
+  # holds its limits in amps, so this is the voltage used to convert them to watts for the
+  # battery_capacity, max charge/discharge power and slot power sensors, and hence for
+  # battery_rate_max. Leave it commented out and Predbat infers it instead: on an LV pack from
+  # the BMS charge voltage the inverter reports (48V or 51.2V), on an HV pack from the live
+  # reading. Either way battery_capacity is flagged unreliable (reliable: false attribute, plus a
+  # log warning) since an inferred value is only close to nominal. See soc_max below.
   # solis_nominal_voltage: 512
 
   #
@@ -64,8 +65,6 @@ pred_bat:
   # it is not auto-bound to soc_max - set the value manually here)
   soc_max: 7.5
 
-  # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
-  #balance_inverters_seconds: 60
   #
 
   # Some inverters don't turn off when the rate is set to 0, still charge or discharge at around 200w
@@ -164,17 +163,29 @@ pred_bat:
     - 'plugged in'
     - 'waiting'
 
-  # In some cases car planning is difficult (e.g. Ohme with Intelligent doesn't report slots)
-  # The car charging now can be set to a sensor to indicate the car is charging and to plan
-  # for it to charge during this 30 minute slot
-  #car_charging_now:
-  #  - off
+  # car_charging_plugged can be set to a sensor that says only whether the car is plugged in - staying on after
+  # its charge has finished - matched against car_charging_planned_response. Predbat resets the manual car SoC
+  # (input_number.predbat_car_charging_manual_soc_kwh) to 0 when it reads unplugged, and with car_charging_energy
+  # set it tracks the SoC of a car that has no car_charging_soc sensor. One entry per car - e.g. for a myenergi Zappi:
+  #car_charging_plugged:
+  #  - 're:(sensor.myenergi_zappi_[0-9a-z]+_plug_status)'
 
-  # Positive responses for car_charging_now
+  # car_charging_now can be set to a sensor that shows the car is charging right now, so that
+  # Predbat holds the house battery for the car while it charges. It never adds a charging slot.
+  # Use an on/off sensor (matched against car_charging_now_response), or a charging power sensor
+  # in W or kW where 200W or more counts as charging - e.g. for a Wallbox charger:
+  #car_charging_now:
+  #  - sensor.wallbox_portal_charging_power
+
+  # Positive responses for car_charging_now, for an on/off or status sensor. Its state must match one
+  # of these (ignoring case) for Predbat to see the car charging - e.g. 'charging' for a myenergi Zappi
+  # plug_status sensor. If it never matches while the car charges, Predbat cancels the car's Octopus Intelligent
+  # dispatches (switch.predbat_octopus_intelligent_dynamic, On by default) and the house battery can lose their cheap rate.
   car_charging_now_response:
     - 'yes'
     - 'on'
     - 'true'
+    - 'charging'
 
   # To make planned car charging more accurate, either using car_charging_planned or the Octopus Energy plugin,
   # specify your battery size in kwh, charge limit % and current car battery soc % sensors/values.
@@ -420,4 +431,3 @@ pred_bat:
   #  - '{octopus_saving_session}'
   #  - '+[car_charging_planned]'
   #  - '+[car_charging_soc]'
-  #  - '{car_charging_now}'

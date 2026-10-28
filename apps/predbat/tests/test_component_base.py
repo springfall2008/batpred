@@ -14,10 +14,11 @@ Tests for ComponentBase start method and backoff behavior
 
 import asyncio
 from types import SimpleNamespace
-from datetime import timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 from component_base import ComponentBase
+from coordinator import inverter_record
 
 
 # Save original sleep before any patching
@@ -342,9 +343,13 @@ def test_component_base_first_cleared_when_run_presets_api_started(my_predbat):
 
             task = asyncio.create_task(component.start())
 
-            # Wait long enough (sped up 100x by fast_sleep → ~2s real) for the component
-            # loop to advance past simulated seconds=60 so a steady-state run can occur.
-            await asyncio.sleep(200)
+            # Wait for the component loop to advance past simulated seconds=60 so a steady-state
+            # run can occur - polled, so it ends as soon as one has (about 0.65s real via
+            # fast_sleep) instead of always sitting out the full 200 simulated seconds.
+            for _ in range(200):
+                if any(flag is False for flag in component.first_flags):
+                    break
+                await asyncio.sleep(1)
 
             assert component.api_started, "Component should be started"
 
@@ -406,6 +411,58 @@ def test_component_base_set_arg_auto(my_predbat):
     return False
 
 
+def test_component_base_set_arg_auto_keeps_user_setting(my_predbat):
+    """
+    Test ComponentBase.set_arg_auto(overwrite=False): leaves a key the user set in apps.yaml alone.
+
+    Repointing an entity key at a freshly published sensor throws away that sensor's recorder
+    history. For the keys Predbat reads history from - the daily energy totals its load model is
+    built out of - that means planning against no history at all until days accumulate, so those
+    callers opt out of overwriting. The default stays overwrite=True, which is what keeps every
+    existing caller's behaviour unchanged.
+    """
+    print("\n*** Test: ComponentBase.set_arg_auto(overwrite=False) keeps the user's apps.yaml setting ***")
+
+    base = MockBase()
+    base.args_from_apps_yaml = {"load_today": ["sensor.my_own_load_today"]}
+    base.apps_yaml_override_warned = set()
+    set_calls = {}
+    base.set_arg = lambda arg, value: set_calls.__setitem__(arg, value)
+
+    component = TestComponent(base)
+
+    # The user configured this key, so overwrite=False must not touch it at all
+    component.set_arg_auto("load_today", ["sensor.predbat_givtcp_0_load_today"], overwrite=False)
+    assert "load_today" not in set_calls, f"User's apps.yaml setting should not be overwritten, got {set_calls.get('load_today')}"
+    assert any("load_today" in msg and "keeping your apps.yaml setting" in msg for msg in base.log_messages), "Should say the user's setting was kept"
+
+    # Said once when it happens, not on every automatic_config pass for the life of the process
+    component.set_arg_auto("load_today", ["sensor.predbat_givtcp_0_load_today"], overwrite=False)
+    kept_count = sum(1 for msg in base.log_messages if "load_today" in msg and "keeping your apps.yaml setting" in msg)
+    assert kept_count == 1, f"Kept message should not repeat, got {kept_count}"
+
+    # A key the user never configured is still auto-discovered - overwrite=False protects the
+    # user's own value, it does not stop auto-discovery filling in a key that has none
+    component.set_arg_auto("pv_today", ["sensor.predbat_givtcp_0_pv_today"], overwrite=False)
+    assert set_calls.get("pv_today") == ["sensor.predbat_givtcp_0_pv_today"], "An unconfigured key should still be auto-configured"
+
+    # The default is unchanged: auto-discovery still wins when overwrite is not passed
+    component.set_arg_auto("load_today", ["sensor.predbat_givtcp_0_load_today"])
+    assert set_calls.get("load_today") == ["sensor.predbat_givtcp_0_load_today"], "Default overwrite=True should still apply the auto-discovered value"
+
+    # Keeping the user's value must not depend on the warned-set bookkeeping being present -
+    # a component built outside PredBat.initialize() has neither snapshot attribute
+    bare_base = MockBase()
+    bare_base.args_from_apps_yaml = {"load_today": ["sensor.my_own_load_today"]}
+    bare_set_calls = {}
+    bare_base.set_arg = lambda arg, value: bare_set_calls.__setitem__(arg, value)
+    bare_component = TestComponent(bare_base)
+    bare_component.set_arg_auto("load_today", ["sensor.predbat_givtcp_0_load_today"], overwrite=False)
+    assert "load_today" not in bare_set_calls, "User's setting should be kept even without an apps_yaml_override_warned set"
+
+    print("PASS: set_arg_auto(overwrite=False) keeps an explicit apps.yaml setting and still fills in unset keys")
+
+
 def test_component_base_set_state_external(my_predbat):
     """
     Test ComponentBase.set_state_external() forwards to the HA interface with the attributes intact.
@@ -418,8 +475,10 @@ def test_component_base_set_state_external(my_predbat):
 
     calls = []
 
-    async def capture(entity_id, state, attributes={}):
+    async def capture(entity_id, state, attributes=None):
         """Record a forwarded external state write."""
+        if attributes is None:
+            attributes = {}
         calls.append((entity_id, state, attributes))
         return "written"
 
@@ -438,6 +497,350 @@ def test_component_base_set_state_external(my_predbat):
     return False
 
 
+def test_component_base_midnight_utc_ignores_rewound_base(my_predbat):
+    """
+    Test ComponentBase.midnight_utc ignores a base.midnight_utc rewound by calculate_yesterday (GH#4804).
+
+    calculate_yesterday() (output.py) rewinds the shared base.midnight_utc by a day for the duration
+    of the savings calculation and restores it ~350 lines later. Components run on their own OS
+    threads (hass.py's create_task uses threading.Thread) on schedules of their own, so a component
+    reading the passthrough mid-rewind used to see yesterday's midnight - which bucketed a whole PV
+    forecast one day late, emptying "today" (the reported incident), and can shift any other
+    component's day arithmetic the same way.
+
+    The property therefore derives today's midnight from base.now_utc, the field calculate_yesterday
+    never fakes. On a healthy base the two are identical: predbat.py's update_time() sets
+    midnight_utc = now_utc.replace(hour=0, ...), so this changes nothing outside the rewind window.
+    """
+    print("\n*** Test: ComponentBase.midnight_utc ignores a rewound base.midnight_utc ***")
+
+    base = MockBase()
+    base.now_utc = datetime(2025, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+    base.midnight_utc = base.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+    component = TestComponent(base)
+
+    assert component.midnight_utc == datetime(2025, 6, 15, 0, 0, 0, tzinfo=timezone.utc), f"Healthy base should give today's midnight, got {component.midnight_utc}"
+
+    # A concurrent calculate_yesterday() is mid-flight: the shared field points at yesterday.
+    base.midnight_utc = base.midnight_utc - timedelta(days=1)
+    assert component.midnight_utc == datetime(2025, 6, 15, 0, 0, 0, tzinfo=timezone.utc), f"Rewound base.midnight_utc leaked into the component: {component.midnight_utc}"
+
+    print("PASS: midnight_utc derives from now_utc and ignores the rewound shared value")
+    return False
+
+
+def test_component_base_minutes_now_follows_update_time(my_predbat):
+    """
+    Test ComponentBase.minutes_now matches update_time()'s own value and ignores the faked one (GH#4804).
+
+    calculate_yesterday() (output.py) fakes base.minutes_now to 0 alongside its midnight_utc rewind.
+    0 is the nastier of the two, since it reads as a legitimate "just after midnight" rather than an
+    obviously wrong date - it would tell octopus.py to keep every expired dispatch slot, and the
+    AlphaESS/Deye/Sunsynk adapters that pick the live TOU slot by time of day to believe it is
+    midnight while writing to a real inverter.
+
+    The derived value has to agree with update_time()'s (predbat.py), including its PREDICT_STEP
+    flooring - so the first half of this test compares the two on the real base rather than
+    restating the formula, and would catch the two drifting apart later.
+    """
+    print("\n*** Test: ComponentBase.minutes_now follows update_time and ignores the faked value ***")
+
+    # The fixture pins its own clock (unit_test.py's create_predbat) and the whole suite shares this
+    # instance, so every field update_time() writes has to go back - not just the ones read here, or
+    # a later test inherits this one's wall-clock state.
+    saved = {name: getattr(my_predbat, name) for name in ("now_utc", "now_utc_real", "midnight_utc", "minutes_now", "minutes_to_midnight", "difference_minutes", "local_tz")}
+    try:
+        my_predbat.update_time(print=False)
+        component = TestComponent(my_predbat)
+        assert component.minutes_now == my_predbat.minutes_now, f"Derived {component.minutes_now} but update_time() computed {my_predbat.minutes_now}"
+        assert component.minutes_now % 5 == 0, f"Should stay on a PREDICT_STEP boundary, got {component.minutes_now}"
+    finally:
+        for name, value in saved.items():
+            setattr(my_predbat, name, value)
+
+    base = MockBase()
+    base.now_utc = datetime(2025, 6, 15, 14, 37, 0, tzinfo=timezone.utc)
+    base.midnight_utc = base.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+    base.minutes_now = 14 * 60 + 35
+    component = TestComponent(base)
+
+    assert component.minutes_now == 14 * 60 + 35, f"Expected 14:35 floored to a PREDICT_STEP boundary, got {component.minutes_now}"
+
+    # A concurrent calculate_yesterday() is mid-flight: the shared fields say midnight yesterday.
+    base.minutes_now = 0
+    base.midnight_utc = base.midnight_utc - timedelta(days=1)
+    assert component.minutes_now == 14 * 60 + 35, f"Faked base.minutes_now leaked into the component: {component.minutes_now}"
+
+    print("PASS: minutes_now follows update_time's computation and ignores the faked value")
+    return False
+
+
+def test_component_base_minutes_now_snapshots_the_clock(my_predbat):
+    """
+    Test minutes_now survives update_time() landing mid-read.
+
+    The value needs now_utc and the midnight derived from it, and self.midnight_utc goes back to
+    base.now_utc for its own read - so a naive implementation reads the field twice. update_time()
+    runs on the main thread while components run on theirs, so those two reads can straddle it: at
+    a day boundary that subtracts the new day's midnight from the old day's timestamp and collapses
+    23:59 to 0, which reads as midnight rather than as an error.
+
+    A base whose now_utc advances a day between reads reproduces that deterministically, without
+    needing two threads to interleave.
+    """
+    print("\n*** Test: ComponentBase.minutes_now snapshots now_utc ***")
+
+    class RollingClockBase(MockBase):
+        """A base whose clock rolls into the next day between one read of now_utc and the next."""
+
+        def __init__(self):
+            """Start the day before, with a read counter."""
+            super().__init__()
+            self.reads = 0
+
+        @property
+        def now_utc(self):
+            """Return 23:59 on the first read and the next day's noon on every read after it."""
+            self.reads += 1
+            if self.reads == 1:
+                return datetime(2025, 6, 15, 23, 59, 0, tzinfo=timezone.utc)
+            return datetime(2025, 6, 16, 12, 0, 0, tzinfo=timezone.utc)
+
+    base = RollingClockBase()
+    component = TestComponent(base)
+
+    minutes_now = component.minutes_now
+    assert base.reads == 1, f"now_utc should be read once per call, was read {base.reads} times"
+    assert minutes_now == 23 * 60 + 55, f"Expected the first read's 23:59 floored to 23:55, got {minutes_now}"
+
+    print("PASS: minutes_now reads the clock once and stays on that reading")
+    return False
+
+
+# ============================================================================
+# refresh_discovery() / discovery_entities() - the shared discovery reporting loop
+#
+# Every reporter (GivTCP, GE Cloud, Octopus, Ohme, Solcast) drives its report through these two
+# methods rather than hand-rolling the loop, so the rules they used to each restate in prose are
+# pinned once, here. See ComponentBase.refresh_discovery()'s own docstring for why each holds.
+# ============================================================================
+
+
+class _DiscoveryCoordinator:
+    """Stand-in for coordinator.Coordinator: records what each component filed."""
+
+    def __init__(self):
+        """Start with nothing filed."""
+        self.filed = []
+
+    def report(self, component_name, report):
+        """Record one component's report, as the real coordinator would."""
+        self.filed.append((component_name, report))
+
+
+class _DiscoveryComponent(ComponentBase):
+    """A component that reports whatever is put in self.next_report."""
+
+    def initialize(self, **kwargs):
+        """Start with an empty report and no recorded build calls."""
+        self.next_report = {"inverters": []}
+        self.build_calls = 0
+        self.build_raises = False
+
+    async def run(self, seconds, first):
+        """Never driven directly by these tests."""
+        return True
+
+    def build_discovery(self):
+        """Return the report this test staged, or blow up if it asked for a failure."""
+        self.build_calls += 1
+        if self.build_raises:
+            raise RuntimeError("boom")
+        return self.next_report
+
+
+def _discovery_component():
+    """One component wired to a recording coordinator, returned with it."""
+    base = MockBase()
+    coordinator = _DiscoveryCoordinator()
+    base.components = SimpleNamespace(coordinator=coordinator)
+    component = _DiscoveryComponent(base)
+    component.component_name = "test_component"
+    return component, coordinator
+
+
+def test_component_base_refresh_discovery_files_and_stops_churning(my_predbat):
+    """A changed report is filed; an unchanged one is not re-filed."""
+    component, coordinator = _discovery_component()
+    component.next_report = {"inverters": [{"device_id": "test:1"}]}
+
+    component.refresh_discovery()
+    assert len(coordinator.filed) == 1, f"The first report should be filed, got {len(coordinator.filed)}"
+    assert coordinator.filed[0][0] == "test_component", "The report should be filed under the component's registry name"
+
+    component.refresh_discovery()
+    assert len(coordinator.filed) == 1, "An unchanged report must not be re-filed - that would churn the catalogue every cycle"
+
+    component.next_report = {"inverters": [{"device_id": "test:1", "serials": ["SERIAL-1"]}]}
+    component.refresh_discovery()
+    assert len(coordinator.filed) == 2, "A report that has moved on should replace the last one"
+    print("PASS: refresh_discovery files a changed report and stops churning on an unchanged one")
+    return False
+
+
+def test_component_base_refresh_discovery_skips_none_and_missing_build(my_predbat):
+    """A None report files nothing, and a component with no build_discovery() is a no-op."""
+    component, coordinator = _discovery_component()
+    component.next_report = None
+
+    component.refresh_discovery()
+    assert coordinator.filed == [], "A None report means 'nothing to describe yet' and must file nothing"
+    assert component._discovery_report is None, "A None report must not advance the marker"
+
+    component.next_report = {"inverters": [{"device_id": "test:1"}]}
+    component.refresh_discovery()
+    assert len(coordinator.filed) == 1, "Once there is something to describe it should file"
+
+    plain = TestComponent(MockBase())
+    plain.refresh_discovery()  # no build_discovery() at all - must not raise
+    print("PASS: refresh_discovery skips a None report and a component that does not report at all")
+    return False
+
+
+def test_component_base_refresh_discovery_failure_is_contained_and_retried(my_predbat):
+    """A build failure is logged, never raised, and the marker is left for the next cycle to retry."""
+    component, coordinator = _discovery_component()
+    component.next_report = {"inverters": [{"device_id": "test:1"}]}
+    component.build_raises = True
+
+    component.refresh_discovery()  # must not raise - an observer may not degrade what it observes
+
+    assert coordinator.filed == [], "Nothing should be filed when the build failed"
+    assert component._discovery_report is None, "A failed report must not advance the marker"
+    assert not component.base.had_errors, "A discovery failure must never set had_errors - that would suppress record_status()"
+    assert any("failed to report discovery" in message for message in component.base.log_messages), "The failure should be logged"
+
+    component.build_raises = False
+    component.refresh_discovery()
+    assert len(coordinator.filed) == 1, "The next cycle should retry and succeed, not stay lost for the life of the process"
+    print("PASS: a build_discovery failure is contained, logged and retried rather than lost")
+    return False
+
+
+def test_component_base_refresh_discovery_marker_waits_for_the_report_to_land(my_predbat):
+    """The marker advances only after the report is filed, not merely after it is built.
+
+    If it advanced first, a coordinator that threw would leave the component believing it had
+    reported - and since the rebuilt report would then match the marker every cycle, that report
+    would be lost for the life of the process. The order in refresh_discovery() is what prevents
+    it, so pin it here rather than leave it to reading.
+    """
+    component, coordinator = _discovery_component()
+    component.next_report = {"inverters": [{"device_id": "test:1"}]}
+
+    def _explode(report):
+        raise RuntimeError("coordinator is down")
+
+    component.report_discovery = _explode
+    component.refresh_discovery()  # must not raise
+
+    assert component._discovery_report is None, "The marker must not advance when filing the report failed"
+
+    component.report_discovery = lambda report: coordinator.report(component.component_name, report)
+    component.refresh_discovery()
+    assert len(coordinator.filed) == 1, "The next cycle should retry the report the coordinator rejected"
+    print("PASS: the marker waits for the report to actually land, so a rejected report is retried")
+    return False
+
+
+def test_component_base_refresh_discovery_survives_a_component_built_without_init(my_predbat):
+    """A component built with Cls.__new__(Cls) must not raise out of refresh_discovery().
+
+    The test harnesses across this repo construct components that way to exercise one method in
+    isolation (solcast's own tests use SolarAPI.__new__(SolarAPI)), so component_name and the
+    report marker are declared on the class rather than only assigned in __init__. Without that,
+    the failure path itself raised AttributeError - which escapes run() and is exactly the
+    degradation the guard exists to prevent.
+    """
+    component = _DiscoveryComponent.__new__(_DiscoveryComponent)
+    base = MockBase()
+    component.base = base
+    component.log = base.log
+    component.build_raises = True
+    component.build_calls = 0
+
+    component.refresh_discovery()  # must not raise, despite __init__ never having run
+
+    assert component._discovery_report is None, "The class-level marker default should read as None"
+    assert any("failed to report discovery" in message for message in base.log_messages), "The failure should still be logged, under the class name"
+    print("PASS: refresh_discovery does not raise on a component built without __init__")
+    return False
+
+
+def test_component_base_refresh_discovery_refiles_when_live_state_behind_inverter_record_grows(my_predbat):
+    """A report built with inverter_record() from live component state is re-filed when that state grows.
+
+    refresh_discovery() stores the report it filed and compares each rebuild against it with ==.
+    A reporter passing its own long-lived list (serials=self.serials) is the natural way to write
+    one, so the builder must not let that list into the stored report: if it did, appending to it
+    would change the stored report too, the rebuild would compare equal, and the grown fleet
+    would never reach the catalogue - the report frozen at its first state.
+    """
+    component, coordinator = _discovery_component()
+    component.fronted = ["battery001"]
+    component.build_discovery = lambda: {"inverters": [inverter_record("test:gateway", composition="gateway", serials=component.fronted)]}
+
+    component.refresh_discovery()
+    assert len(coordinator.filed) == 1, f"The first report should be filed, got {len(coordinator.filed)}"
+
+    component.fronted.append("battery002")
+    component.refresh_discovery()
+    assert len(coordinator.filed) == 2, "A grown fleet must be re-filed - the stored report must not have grown along with the live list"
+    assert coordinator.filed[1][1]["inverters"][0]["serials"] == ["battery001", "battery002"], coordinator.filed[1][1]
+    print("PASS: refresh_discovery re-files a report once the live state behind inverter_record() grows")
+    return False
+
+
+def test_component_base_discovery_entities_keeps_only_what_exists(my_predbat):
+    """Only entities Home Assistant has actually seen survive - a spec is not evidence of publication."""
+    component, _coordinator = _discovery_component()
+    published = {"sensor.predbat_test_published": "5.0"}
+    component.base.get_state_wrapper = lambda entity_id=None, default=None, attribute=None, refresh=False, required_unit=None, raw=False: published.get(entity_id)
+
+    entities = component.discovery_entities(
+        {
+            "charge_rate": {"entity_id": "sensor.predbat_test_published", "domain": "sensor", "access": "rw"},
+            "discharge_rate": {"entity_id": "sensor.predbat_test_never_published", "domain": "sensor", "access": "rw"},
+        }
+    )
+
+    assert set(entities) == {"charge_rate"}, f"Only the published entity should survive, got {list(entities)}"
+    assert entities["charge_rate"]["domain"] == "sensor", "The descriptor should be carried through intact"
+    print("PASS: discovery_entities keeps only the entities that exist in the state store")
+    return False
+
+
+def test_component_base_request_replan(my_predbat):
+    """
+    ComponentBase.request_replan() is how a component asks for the plan to be recomputed on the next
+    15 second tick, rather than a component reaching into base.update_pending itself. It sets only
+    update_pending - not plan_valid - so the recompute still weighs the current plan against the new one.
+    """
+    print("\n*** Test: ComponentBase.request_replan sets update_pending and logs why ***")
+    base = MockBase()
+    base.update_pending = False
+    base.plan_valid = True
+    component = TestComponent(base)
+
+    component.request_replan("dispatches changed")
+
+    assert base.update_pending is True, "request_replan should set update_pending"
+    assert base.plan_valid is True, "request_replan must not invalidate the current plan"
+    assert any("TestComponent" in msg and "dispatches changed" in msg for msg in base.log_messages), "request_replan should log the component and reason, got {}".format(base.log_messages)
+    print("PASS: request_replan sets update_pending, leaves plan_valid and logs the reason")
+    return False
+
+
 def test_component_base_all(my_predbat):
     """Run all component_base tests"""
     tests = [
@@ -450,7 +853,19 @@ def test_component_base_all(my_predbat):
         ("run_timeout", test_component_base_run_timeout, "Hung run() triggers timeout, stack trace, and error count"),
         ("first_cleared_preset", test_component_base_first_cleared_when_run_presets_api_started, "first flag clears even when run() pre-sets api_started"),
         ("set_arg_auto", test_component_base_set_arg_auto, "set_arg_auto warns once on an apps.yaml override, silent otherwise"),
+        ("set_arg_auto_keep", test_component_base_set_arg_auto_keeps_user_setting, "set_arg_auto(overwrite=False) keeps an explicit apps.yaml setting"),
         ("set_state_external", test_component_base_set_state_external, "set_state_external forwards to the HA interface"),
+        ("midnight_utc_rewound", test_component_base_midnight_utc_ignores_rewound_base, "midnight_utc ignores a rewound base.midnight_utc"),
+        ("minutes_now_derived", test_component_base_minutes_now_follows_update_time, "minutes_now follows update_time and ignores the faked value"),
+        ("minutes_now_snapshot", test_component_base_minutes_now_snapshots_the_clock, "minutes_now snapshots now_utc rather than reading it twice"),
+        ("discovery_refresh_churn", test_component_base_refresh_discovery_files_and_stops_churning, "refresh_discovery files a changed report, not an unchanged one"),
+        ("discovery_refresh_none", test_component_base_refresh_discovery_skips_none_and_missing_build, "refresh_discovery skips a None report and a non-reporting component"),
+        ("discovery_refresh_failure", test_component_base_refresh_discovery_failure_is_contained_and_retried, "a build_discovery failure is contained and retried"),
+        ("discovery_refresh_marker_order", test_component_base_refresh_discovery_marker_waits_for_the_report_to_land, "the marker advances only after the report is filed"),
+        ("discovery_refresh_no_init", test_component_base_refresh_discovery_survives_a_component_built_without_init, "refresh_discovery does not raise on a component built without __init__"),
+        ("discovery_refresh_live_state", test_component_base_refresh_discovery_refiles_when_live_state_behind_inverter_record_grows, "a report built from live state is re-filed when that state grows"),
+        ("discovery_entities_filter", test_component_base_discovery_entities_keeps_only_what_exists, "discovery_entities keeps only entities that exist"),
+        ("request_replan", test_component_base_request_replan, "request_replan sets update_pending without invalidating the plan"),
     ]
 
     failed = []
