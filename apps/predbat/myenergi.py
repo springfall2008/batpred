@@ -738,6 +738,7 @@ myenergi_attribute_table = {
     "status": {"friendly_name": "myenergi Status", "icon": "mdi:information-outline"},
     "mode": {"friendly_name": "myenergi Mode", "icon": "mdi:ev-station"},
     "plug_status": {"friendly_name": "myenergi Plug Status", "icon": "mdi:ev-plug-type2"},
+    "plugged": {"friendly_name": "myenergi Car Plugged In", "icon": "mdi:ev-plug-type2"},
     "power": {"friendly_name": "myenergi Power", "icon": "mdi:lightning-bolt", "unit_of_measurement": "W", "device_class": "power", "state_class": "measurement"},
     "session_energy": {"friendly_name": "myenergi Session Energy", "icon": "mdi:lightning-bolt", "unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total_increasing"},
     "charging": {"friendly_name": "myenergi Charging", "icon": "mdi:battery-charging"},
@@ -828,8 +829,10 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         car_charging_planned, which is indexed per car, so entry N is the Nth Zappi;
         without it Predbat falls back to the car_charging_threshold heuristic, because
         the regex the apps.yaml templates ship targets the third-party ha-myenergi
-        integration's entity names rather than the ones this component publishes. Eddi
-        diverted energy feeds iboost_energy_today.
+        integration's entity names rather than the ones this component publishes. The
+        _plugged binary sensors go to car_charging_plugged, in the same order, for the
+        manual car SoC's reset on unplug (see plugged_state()). Eddi diverted energy
+        feeds iboost_energy_today.
 
         These sensors are session-scoped and reset to zero when a session ends. That is
         handled: get_from_incrementing() clamps negative deltas to zero for the
@@ -857,6 +860,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         zappi_energy_entities = []
         zappi_power_entities = []
         zappi_plug_entities = []
+        zappi_plugged_entities = []
         eddi_entity = None
         for device in sorted(self.devices.values(), key=lambda item: item.serial):
             prefix = self.entity_prefix(device)
@@ -864,6 +868,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
                 zappi_energy_entities.append("sensor.{}_session_energy".format(prefix))
                 zappi_power_entities.append("sensor.{}_power".format(prefix))
                 zappi_plug_entities.append("sensor.{}_plug_status".format(prefix))
+                zappi_plugged_entities.append("binary_sensor.{}_plugged".format(prefix))
             elif device.kind == DEVICE_KIND_EDDI and self.automatic_eddi and eddi_entity is None:
                 eddi_entity = "sensor.{}_session_energy".format(prefix)
 
@@ -872,6 +877,9 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
             self.set_arg_auto("car_charging_energy", zappi_energy_entities)
             self.log("Info: myenergi: setting car_charging_planned to {}".format(zappi_plug_entities))
             self.set_arg_auto("car_charging_planned", zappi_plug_entities)
+            # The cable alone, for the manual car SoC's reset on unplug - unavailable when the plug state is not known
+            self.log("Info: myenergi: setting car_charging_plugged to {}".format(zappi_plugged_entities))
+            self.set_arg_auto("car_charging_plugged", zappi_plugged_entities)
             self.log("Info: myenergi: setting car_charging_power to {}".format(zappi_power_entities))
             self.set_arg_auto("car_charging_power", zappi_power_entities)
             self.log("Info: myenergi: setting car_charging_now to {}".format(zappi_power_entities))
@@ -916,6 +924,17 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         """The Zappis to drive, in car order - see controlled_zappis()."""
         return [(device.device_id, device) for device in self.controlled_zappis()]
 
+    def plugged_state(self, device):
+        """
+        binary_sensor.<prefix>_plugged for a Zappi: on with a car plugged in, whether or not it is charging, off with none,
+        and unavailable when the plug state is not known (not reported, or a fault) - which is no reading, not an unplug.
+        """
+        if device.plug_status == ZAPPI_PLUG_STATES["A"]:
+            return "off"
+        if device.plug_status and device.plug_status != ZAPPI_PLUG_STATES["F"]:
+            return "on"
+        return "unavailable"
+
     def charger_control_car_plugged(self, device):
         """Is a car plugged in to this Zappi - an unknown or faulted plug state reads as plugged in."""
         return device.plug_status != ZAPPI_PLUG_STATES["A"]
@@ -957,8 +976,9 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
     async def load_control_modes(self):
         """Restore the saved Zappi modes from storage - called once control has been decided.
 
-        With control off nothing is held, so modes left over from an earlier session are
-        dropped: restored months later they would no longer be where the user left the Zappi.
+        With control off and nothing held, modes left over from an earlier session are dropped:
+        restored months later they would no longer be where the user left the Zappi. While a Zappi
+        is still held they are kept, as releasing it needs them (#5788).
         """
         if self.storage is None:
             return
@@ -970,7 +990,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         modes = saved.get("modes") if isinstance(saved, dict) else None
         if not isinstance(modes, dict) or not modes:
             return
-        if self.charger_control_active:
+        if self.charger_control_active or self.charger_control_state:
             self.control_saved_modes = {str(device_id): mode for device_id, mode in modes.items()}
         else:
             await self.save_control_modes()
@@ -1072,7 +1092,10 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
                 if self.automatic and not self._auto_configured:
                     self.automatic_config()
                     self._auto_configured = True
-                if self.charger_control_active:
+                # Whether or not control is on: with myenergi_zappi_control since turned off, a Zappi an
+                # earlier session stopped is still released (#5788). Not with myenergi_enable_controls off,
+                # which means Predbat must not write to the Zappi at all
+                if self.enable_controls:
                     try:
                         await self.charger_control_tick(self.now_utc_exact)
                     except MyEnergiError as exc:
@@ -1201,6 +1224,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
             if device.kind == DEVICE_KIND_ZAPPI:
                 self.dashboard_item("sensor.{}_mode".format(prefix), state=device.mode, attributes=myenergi_attribute_table["mode"], app="myenergi")
                 self.dashboard_item("sensor.{}_plug_status".format(prefix), state=device.plug_status, attributes=myenergi_attribute_table["plug_status"], app="myenergi")
+                self.dashboard_item("binary_sensor.{}_plugged".format(prefix), state=self.plugged_state(device), attributes=myenergi_attribute_table["plugged"], app="myenergi")
                 self.dashboard_item("binary_sensor.{}_charging".format(prefix), state="on" if device.status == STATUS_CHARGING else "off", attributes=myenergi_attribute_table["charging"], app="myenergi")
                 self.dashboard_item("number.{}_boost_energy".format(prefix), state=self.boost_amount_for(device), attributes=myenergi_attribute_table["boost_energy"], app="myenergi")
             else:

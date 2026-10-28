@@ -561,6 +561,30 @@ def run_test_plan_why_reason(my_predbat):
     my_predbat.charge_window_best = window
     my_predbat.charge_limit_best = [8.0]
 
+    # --- Test 4c: Chrg rate capped at the inverter limit (GH#5394) - a battery that can take more
+    # than the inverter can pass is charged at inverter_limit x inverter_loss by the prediction, plus
+    # any DC-coupled PV on a hybrid, so the reason must not show the battery's own max rate ---
+    print("Test Chrg reason shows the inverter-limited rate_kw, not battery_rate_max_charge")
+    saved = (my_predbat.inverter_hybrid, my_predbat.inverter_limit, my_predbat.inverter_loss, my_predbat.battery_rate_max_charge)
+    try:
+        my_predbat.inverter_limit = 1.0 / 60.0
+        my_predbat.inverter_loss = 0.96
+        my_predbat.battery_rate_max_charge = 2.0 / 60.0
+        my_predbat.predict_soc_best = _flat_soc(my_predbat, 2.0)
+        pv_half_kw = {minute: 0.5 / 60.0 * 5 for minute in pv_step}
+        for hybrid, pv, expected_rate_kw in [(True, pv_step, "0.96"), (True, pv_half_kw, "1.46"), (False, pv_half_kw, "0.96")]:
+            my_predbat.inverter_hybrid = hybrid
+            _, raw_plan = my_predbat.publish_html_plan(pv, pv, load_step, load_step, my_predbat.end_record, publish=False)
+            row = _get_row(raw_plan, minutes_now)
+            if row is None or _codes(row) != ["charge_low_rate"]:
+                print("ERROR: Chrg inverter-limited reasons unexpected (hybrid {}): {}".format(hybrid, row and _codes(row)))
+                failed = True
+            elif row["reasons"][0]["params"].get("rate_kw") != expected_rate_kw:
+                print("ERROR: Chrg rate_kw not capped at the inverter limit (hybrid {}, pv {} kW): expected {}, got {}".format(hybrid, pv[0] * 12, expected_rate_kw, row["reasons"][0]["params"].get("rate_kw")))
+                failed = True
+    finally:
+        my_predbat.inverter_hybrid, my_predbat.inverter_limit, my_predbat.inverter_loss, my_predbat.battery_rate_max_charge = saved
+
     # --- Test 5: Exp ---
     print("Test Exp reason")
     my_predbat.charge_window_best = []

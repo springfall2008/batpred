@@ -53,7 +53,7 @@ write_git_version_marker()
 import predbat
 from utils import load_apps_yaml, predbat_log_count, predbat_log_name, rotate_predbat_logs
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from multiprocessing import set_start_method
 import concurrent.futures
 import threading
@@ -63,14 +63,15 @@ import traceback
 def check_modified(py_files, start_time):
     """
     Check if .py file was changed since we started
+
+    start_time is a time.time() timestamp, compared with each file's mtime as it is: a naive local time would
+    repeat an hour when the clocks go back, and a file written before a restart in that hour would look newer (#5770)
     """
 
     # Check the last modified timestamp of each .py file
     for file_path in py_files:
         if os.path.exists(file_path):
-            last_modified = os.path.getmtime(file_path)
-            last_modified_timestamp = datetime.fromtimestamp(last_modified)
-            if last_modified_timestamp > start_time:
+            if os.path.getmtime(file_path) > start_time:
                 print("File {} was modified".format(file_path))
                 return True
         else:
@@ -79,12 +80,15 @@ def check_modified(py_files, start_time):
     return False
 
 
-def resolve_apps_yaml_path():
+def resolve_apps_yaml_path(apps_file=None):
     """
     Resolve the one real apps.yaml path this instance is actually configured to use, using the
     same PREDBAT_APPS_FILE resolution applied when the config itself is loaded.
+
+    Pass the instance's own apps_file (Hass.apps_file) so the answer is per instance; with no
+    argument it falls back to the process environment.
     """
-    return os.path.abspath(os.getenv("PREDBAT_APPS_FILE", "apps.yaml"))
+    return os.path.abspath(apps_file or os.getenv("PREDBAT_APPS_FILE", "apps.yaml"))
 
 
 def collect_watch_files(roots, apps_file_path):
@@ -126,7 +130,7 @@ def collect_watch_files(roots, apps_file_path):
 
 async def main():
     print("**** Starting Standalone Predbat ****")
-    start_time = datetime.now()
+    start_time = time.time()
 
     try:
         p_han = predbat.PredBat()
@@ -158,7 +162,7 @@ async def main():
     # Find all .py files in the directory hierarchy, plus the one real apps.yaml this
     # instance is actually configured to use (not any file that merely happens to share
     # that name elsewhere in the tree - see #4397/#4396)
-    py_files = collect_watch_files(roots, resolve_apps_yaml_path())
+    py_files = collect_watch_files(roots, resolve_apps_yaml_path(p_han.apps_file))
 
     print("Watching {} for changes".format(py_files))
 
@@ -265,10 +269,16 @@ class Hass(LogRedaction):
             t.join(5 * 60)
         self.logfile.close()
 
-    def __init__(self):
+    def __init__(self, apps_file=None, secrets_file=None):
         """
         Start Predbat
+
+        apps_file / secrets_file override $PREDBAT_APPS_FILE / $PREDBAT_SECRETS_FILE for this
+        instance only. The environment is read once, here, and the values kept on the instance,
+        so several engines in one process can each load their own configuration.
         """
+        self.apps_file = apps_file if apps_file is not None else os.getenv("PREDBAT_APPS_FILE", "apps.yaml")
+        self.secrets_file = secrets_file if secrets_file is not None else os.getenv("PREDBAT_SECRETS_FILE")
         self.args = {}
         self.run_list = []
         self.threads = []
@@ -279,7 +289,7 @@ class Hass(LogRedaction):
 
         # Load apps.yaml (resolving !secret) through the shared loader
         try:
-            self.args, self.secrets = load_apps_yaml(log=self.log)
+            self.args, self.secrets = load_apps_yaml(apps_file=self.apps_file, log=self.log, secrets_file=self.secrets_file)
         except yaml.YAMLError as exc:
             print(exc)
             sys.exit(1)
@@ -295,12 +305,17 @@ class Hass(LogRedaction):
         self.run_list.append({"callback": callback, "next_time": next_time, "run_every": run_every, "kwargs": kwargs})
         return True
 
-    async def timer_tick(self):
+    async def timer_tick(self, now=None):
         """
         Timer tick function, executes tasks at the correct time
+
+        Due times are kept in UTC: the local wall clock repeats an hour when the clocks go back, and a due time
+        compared with it would then stall every task for up to an hour (#5770). A naive due time, as some callers
+        pass, is read as the host's local time once and kept in UTC from then on; now likewise.
         """
-        now = datetime.now()
+        now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
         for item in self.run_list:
+            item["next_time"] = item["next_time"].astimezone(timezone.utc)
             if now > item["next_time"]:
                 try:
                     item["callback"](None)

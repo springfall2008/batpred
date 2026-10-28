@@ -4950,6 +4950,185 @@ class TestCheckInverterResets:
         assert gw.log.call_count == 2
 
 
+class TestCheckCommandedSerials:
+    """Tests for GatewayMQTT._check_commanded_serials() - declaring the inverters PredBat drives."""
+
+    def _make_gateway(self, read_only=False, alive=True, auto_configured=True, online=True, mode="Control charge & discharge"):
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+        import time as time_mod
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.log = MagicMock()
+        gw.base = MagicMock()
+        gw.base.inverters = []
+        self._set_mode(gw, mode)
+        gw.base.set_read_only = False
+        gw._inverter_slot_serials = ["CH2330G098"]
+        gw._commanded_serials_sent = None
+        gw._commanded_serials_sent_time = 0
+        gw._mqtt_connected = alive
+        gw._gateway_online = online
+        gw._last_telemetry_time = time_mod.time()
+        gw._auto_configured = auto_configured
+        gw._read_only = read_only
+        gw._published = []
+        gw.get_arg = lambda key, default=None: gw._read_only if key == "set_read_only" else default
+
+        async def fake_publish_command(command, **kwargs):
+            gw._published.append((command, kwargs))
+
+        gw.publish_command = fake_publish_command
+        return gw
+
+    def _set_mode(self, gw, mode):
+        gw.base.predbat_mode = mode
+
+    def _inverter(self, slot, inverter_type="GWMQTT"):
+        from unittest.mock import MagicMock
+
+        inverter = MagicMock()
+        inverter.id = slot
+        inverter.inverter_type = inverter_type
+        return inverter
+
+    def _run(self, coro):
+        import asyncio
+
+        return asyncio.run(coro)
+
+    def test_declares_every_driven_inverter_once(self):
+        gw = self._make_gateway()
+        gw._inverter_slot_serials = ["CH2330G098", "FD2321G797"]
+        gw.base.inverters = [self._inverter(1), self._inverter(0), self._inverter(2, inverter_type="GE")]
+        self._run(gw._check_commanded_serials())
+        self._run(gw._check_commanded_serials())
+        assert gw._published == [("set_commanded_serials", {"serials": ["CH2330G098", "FD2321G797"]})]
+
+    def test_resent_when_the_set_changes(self):
+        gw = self._make_gateway()
+        gw.base.inverters = [self._inverter(0)]
+        self._run(gw._check_commanded_serials())
+        gw._inverter_slot_serials = ["CH2330G098", "FD2321G797"]  # the hub found a second inverter
+        gw.base.inverters = [self._inverter(0), self._inverter(1)]
+        self._run(gw._check_commanded_serials())
+        assert [k["serials"] for _, k in gw._published] == [["CH2330G098"], ["CH2330G098", "FD2321G797"]]
+
+    def test_resent_periodically_and_after_the_hub_returns(self):
+        gw = self._make_gateway()
+        gw.base.inverters = [self._inverter(0)]
+        self._run(gw._check_commanded_serials())
+        gw._commanded_serials_sent_time -= 31 * 60
+        self._run(gw._check_commanded_serials())
+        assert len(gw._published) == 2
+        gw._gateway_online = False
+        self._run(gw._check_commanded_serials())
+        gw._gateway_online = True
+        self._run(gw._check_commanded_serials())
+        assert len(gw._published) == 3
+
+    def test_nothing_sent_in_read_only_offline_or_before_auto_config(self):
+        for kwargs in ({"read_only": True}, {"online": False}, {"alive": False}, {"auto_configured": False}):
+            gw = self._make_gateway(**kwargs)
+            gw.base.inverters = [self._inverter(0)]
+            self._run(gw._check_commanded_serials())
+            assert gw._published == [], kwargs
+
+    def test_nothing_sent_when_no_inverter_is_driven(self):
+        gw = self._make_gateway()
+        gw.base.inverters = [self._inverter(0, inverter_type="GE")]
+        self._run(gw._check_commanded_serials())
+        assert gw._published == []
+
+    def test_monitor_mode_sends_nothing(self):
+        """In Monitor mode PredBat controls nothing: no declaration at all, never an empty one."""
+        gw = self._make_gateway(mode="Monitor")
+        gw.base.inverters = [self._inverter(0)]
+        self._run(gw._check_commanded_serials())
+        assert gw._published == []
+
+    def test_soc_only_mode_still_controls(self):
+        gw = self._make_gateway(mode="Control SOC only")
+        gw.base.inverters = [self._inverter(0)]
+        self._run(gw._check_commanded_serials())
+        assert gw._published == [("set_commanded_serials", {"serials": ["CH2330G098"]})]
+
+    def test_switching_to_monitor_stops_and_back_resends(self):
+        gw = self._make_gateway()
+        gw.base.inverters = [self._inverter(0)]
+        self._run(gw._check_commanded_serials())
+        self._set_mode(gw, "Monitor")
+        self._run(gw._check_commanded_serials())
+        self._set_mode(gw, "Control charge")
+        self._run(gw._check_commanded_serials())
+        assert [k["serials"] for _, k in gw._published] == [["CH2330G098"], ["CH2330G098"]]
+
+    def test_startup_state_sends_nothing(self):
+        """PredBat starts in Monitor mode; mid-load (read-only lifted, control flags part set) must not send."""
+        gw = self._make_gateway(mode="Monitor")
+        gw.base.inverters = [self._inverter(0)]
+        gw.base.set_soc_enable = True  # fetch.py sets this before the mode block
+        self._run(gw._check_commanded_serials())
+        assert gw._published == []
+
+    def test_nothing_sent_during_a_read_only_hold(self):
+        """A VPP event holds PredBat read-only without changing the set_read_only setting."""
+        gw = self._make_gateway()
+        gw.base.inverters = [self._inverter(0)]
+        gw.base.set_read_only = True
+        self._run(gw._check_commanded_serials())
+        assert gw._published == []
+
+    def test_nothing_sent_for_an_unknown_mode(self):
+        for mode in (None, "", "Something else"):
+            gw = self._make_gateway(mode=mode)
+            gw.base.inverters = [self._inverter(0)]
+            self._run(gw._check_commanded_serials())
+            assert gw._published == [], mode
+
+    def test_hub_restart_between_cycles_is_told_again(self):
+        """A hub that goes offline and returns between two run() cycles is re-sent the declaration."""
+        from unittest.mock import MagicMock
+
+        gw = self._make_gateway()
+        gw.base.inverters = [self._inverter(0)]
+        gw._rate_caps_sent = {}
+        gw.prefix = "predbat"
+        gw.topic_status = "predbat/devices/pbgw_test/status"
+        gw.topic_online = "predbat/devices/pbgw_test/online"
+        gw.dashboard_item = MagicMock()
+        gw._error_count = 0
+        self._run(gw._check_commanded_serials())
+        assert len(gw._published) == 1
+
+        for payload in (b"0", b"1"):
+            message = MagicMock()
+            message.topic = gw.topic_online
+            message.payload = payload
+            self._run(gw._handle_message(message))
+
+        self._run(gw._check_commanded_serials())
+        assert len(gw._published) == 2
+        assert gw._error_count == 0
+
+    def test_nothing_sent_while_the_inverter_list_is_being_rebuilt(self):
+        """The hub found a new inverter (two slots) but PredBat has rebuilt only one: declaring now would drop a unit."""
+        gw = self._make_gateway()
+        gw._inverter_slot_serials = ["CH2330G098", "FD2321G797"]
+        gw.base.inverters = [self._inverter(0)]
+        self._run(gw._check_commanded_serials())
+        assert gw._published == []
+
+    def test_command_carries_the_serials_list(self):
+        from gateway import GatewayMQTT
+        import json
+
+        cmd = json.loads(GatewayMQTT.build_command("set_commanded_serials", serials=["CH2330G098"]))
+        assert cmd["command"] == "set_commanded_serials"
+        assert cmd["serials"] == ["CH2330G098"]
+        assert cmd["command_id"].startswith("PBAT")
+
+
 class TestCheckRateCaps:
     """Tests for GatewayMQTT._check_rate_caps() - the per-inverter set_rate_cap command (predbat-gateway#424)."""
 
@@ -5590,6 +5769,7 @@ class TestEvTelemetry:
         base = "predbat_gateway_ev_3xb749"
         assert gw._dashboard_calls[f"binary_sensor.{base}_online"][0] is True
         assert gw._dashboard_calls[f"binary_sensor.{base}_connected"][0] is True  # status="Charging" → car connected
+        assert gw._dashboard_calls[f"binary_sensor.{base}_plugged"][0] is True
         assert gw._dashboard_calls[f"binary_sensor.{base}_session_active"][0] is True
         assert gw._dashboard_calls[f"sensor.{base}_status"][0] == "Charging"
         assert gw._dashboard_calls[f"sensor.{base}_power"][0] == 7200
@@ -5602,6 +5782,28 @@ class TestEvTelemetry:
         assert gw._dashboard_calls[f"sensor.{base}_eco_mode"][0] == "Boost"
         # Derived charge-rate capability in kW: 32 A × 240 V / 1000
         assert approx_equal(gw._dashboard_calls[f"sensor.{base}_charge_rate"][0], 7.68)
+
+    def test_ev_soc_holds_the_last_reported_value(self):
+        """Once the charger has reported the car's SoC, sensor.<pfx>_soc keeps the last report rather than the session estimate.
+
+        A charger reports the SoC only during a session, and the estimate restarts at 0% each session - so a user who wired
+        car_charging_soc to it by hand would see the car planned from empty between sessions.
+        """
+        gw = self._make_gateway(battery_size=100)
+        base = "predbat_gateway_ev_3xb749"
+        # Nothing reported yet - the estimate from 12.4 kWh of a 100 kWh battery
+        gw._inject_ev_entities(self._status_with_ev(soc_percent=0))
+        assert approx_equal(gw._dashboard_calls[f"sensor.{base}_soc"][0], 12.4)
+        gw._inject_ev_entities(self._status_with_ev(soc_percent=62))
+        assert gw._dashboard_calls[f"sensor.{base}_soc"][0] == 62
+        # Session over, or the charger offline - the last report is kept
+        gw._inject_ev_entities(self._status_with_ev(soc_percent=0, session_energy_wh=0))
+        assert gw._dashboard_calls[f"sensor.{base}_soc"][0] == 62
+        gw._inject_ev_entities(self._status_with_ev(soc_percent=0, connected=False))
+        assert gw._dashboard_calls[f"sensor.{base}_soc"][0] == 62
+        # Another charger's report is its own
+        gw._inject_ev_entities(self._status_with_ev(soc_percent=0, charge_point_id="OTHER1"))
+        assert approx_equal(gw._dashboard_calls["sensor.predbat_gateway_ev_other1_soc"][0], 12.4)
 
     def test_ev_charging_follows_the_charger_status(self):
         """binary_sensor.<pfx>_charging - what car_charging_now is wired to - is the car actually drawing power.
@@ -5668,11 +5870,14 @@ class TestEvTelemetry:
         base = "predbat_gateway_ev_3xb749"
         assert gw._dashboard_calls[f"binary_sensor.{base}_online"][0] is False
         assert gw._dashboard_calls[f"binary_sensor.{base}_connected"][0] is False
+        # Whether a car is plugged in is not known while the charger is offline - not an unplug
+        assert gw._dashboard_calls[f"binary_sensor.{base}_plugged"][0] == "unavailable"
         # Stale live-session values must be suppressed, not republished
         assert gw._dashboard_calls[f"binary_sensor.{base}_session_active"][0] is False
         assert gw._dashboard_calls[f"binary_sensor.{base}_charging"][0] is False
         assert gw._dashboard_calls[f"sensor.{base}_power"][0] == 0
-        assert gw._dashboard_calls[f"sensor.{base}_session_energy"][0] == 0
+        # Unavailable rather than 0, so the energy history sees a gap and not a new session that counts the energy again
+        assert gw._dashboard_calls[f"sensor.{base}_session_energy"][0] == "unavailable"
 
     def test_suffix_slugifies_unsafe_charge_point_ids(self):
         """Charge point ids are vendor strings; entity ids must stay legal.
@@ -5789,14 +5994,35 @@ class TestEvAutoConfig:
         gw.get_arg = fake_get_arg
         return gw
 
-    def _status_with_ev(self, charge_point_id="CP1", max_current_a=32, voltage_v=240):
+    def _status_with_ev(self, charge_point_id="CP1", max_current_a=32, voltage_v=240, soc_percent=55):
         status = pb.GatewayStatus()
         ev = status.ev_chargers.add()
         ev.connected = True
         ev.charge_point_id = charge_point_id
         ev.max_current_a = max_current_a
         ev.voltage_v = voltage_v
+        ev.soc_percent = soc_percent
         return status
+
+    def test_no_soc_sensor_when_charger_reports_none(self):
+        """A charger that reports no SoC leaves car_charging_soc unset, so the car is tracked as a manual SoC car.
+
+        sensor.<pfx>_soc is then only an estimate from the session energy, which starts from 0% every session.
+        """
+        gw = self._make_gateway(ev_enable=True, num_cars=0)
+        gw._register_ev_car(self._status_with_ev(soc_percent=0))
+
+        assert "car_charging_soc" not in gw._args
+        # What the manual SoC is tracked from: the session energy, and the plugged-in sensor for the reset on unplug
+        assert gw._args["car_charging_energy"] == "sensor.predbat_gateway_ev_cp1_session_energy"
+        assert gw._args["car_charging_plugged"] == ["binary_sensor.predbat_gateway_ev_cp1_plugged"]
+
+    def test_no_soc_sensor_when_charger_reports_soc(self):
+        """Nor when the charger reports the car's SoC: it only knows it during a session, so the car is tracked manually too."""
+        gw = self._make_gateway(ev_enable=True, num_cars=0)
+        gw._register_ev_car(self._status_with_ev(soc_percent=40))
+
+        assert "car_charging_soc" not in gw._args
 
     def test_registers_connected_charger_not_a_stale_slot(self):
         """A disconnected charger in slot 0 must not be registered over a connected one.
@@ -5816,6 +6042,8 @@ class TestEvAutoConfig:
         gw._register_ev_car(status)
 
         assert gw._args["car_charging_planned"] == ["binary_sensor.predbat_gateway_ev_cp0001_connected"]
+        # gateway_evc_control drives the registered charger, not the lower id min() would pick
+        assert gw._ev_control_cp_id == "CP0001"
 
     def test_registers_offline_charger_when_none_connected(self):
         """A charger that is merely offline right now still registers, so it reappears."""
@@ -5837,8 +6065,9 @@ class TestEvAutoConfig:
 
         assert gw._args["num_cars"] == 1
         assert gw._args["car_charging_planned"] == ["binary_sensor.predbat_gateway_ev_cp1_connected"]
+        assert gw._args["car_charging_plugged"] == ["binary_sensor.predbat_gateway_ev_cp1_plugged"]
         assert gw._args["car_charging_now"] == ["binary_sensor.predbat_gateway_ev_cp1_charging"]
-        assert gw._args["car_charging_soc"] == ["sensor.predbat_gateway_ev_cp1_soc"]
+        assert "car_charging_soc" not in gw._args
         # car_charging_rate is a UI config item — set via expose_config, not set_arg
         assert "car_charging_rate" not in gw._args
         gw.base.expose_config.assert_called_once_with("car_charging_rate", 7.68)  # 32A * 240V / 1000
@@ -5989,6 +6218,15 @@ class TestEvNeedsReconfigure:
         gw = self._make_gateway()
         assert gw._needs_reconfigure(self._status()) is False
 
+    def test_charger_reporting_soc_does_not_reconfigure(self):
+        """A known charger starting or stopping to report the car's SoC does not re-run auto-config - the SoC is never wired."""
+        gw = self._make_gateway()
+        gw._configured_ev_chargers = frozenset({"CP30000003"})
+        status = self._status(charge_point_id="CP30000003")
+        assert gw._needs_reconfigure(status) is False
+        status.ev_chargers[0].soc_percent = 62
+        assert gw._needs_reconfigure(status) is False
+
 
 class TestEvControl:
     """Tests for GatewayMQTT EVC minute-level control — _refresh_ev_windows, _should_ev_charge_now, _apply_ev_charging_state."""
@@ -6003,11 +6241,59 @@ class TestEvControl:
         gw.gateway_evc_control = evc_control
         gw.gateway_evc_automatic = evc_automatic
         gw._configured_ev_chargers = frozenset(configured_chargers or ["CP10000001"])
+        gw._ev_control_cp_id = (configured_chargers or ["CP10000001"])[0]
         gw._ev_max_current = ev_max_current if ev_max_current is not None else {"CP10000001": 32}
         gw._ev_windows = []
-        gw._ev_charging_active = False
+        gw._ev_desired = None
+        gw._ev_attempts = {"start": 0, "stop": 0}
+        gw._ev_last_attempt = 0.0
         gw.local_tz = pytz.timezone("Europe/London")
+        gw.topic_command = "predbat/devices/test/command"
+        gw._command_id = 1000
+        gw.gateway_display_only = False
+        gw._mqtt_client = MagicMock()
+        gw._mqtt_connected = True
+        gw._last_status = None
+        gw._last_telemetry_time = 0
+        gw._last_ev_status = None
+        gw._last_ev_status_time = 0
+        gw._ev_unknown_warned = False
+        gw.base = MagicMock()
+        gw.base.set_read_only = False
+        gw.published = []
+
+        async def fake_publish_raw(topic, payload, **kwargs):
+            assert topic == gw.topic_command
+            gw.published.append(json.loads(payload.decode()))
+
+        gw._publish_raw = fake_publish_raw
         return gw
+
+    @staticmethod
+    def _set_charger(gw, session_active=False, status="Preparing", connected=True, cp_id="CP10000001"):
+        """Give the gateway fresh telemetry for one charger in the given state."""
+        import time
+
+        gw._last_ev_status = pb.GatewayStatus(ev_chargers=[pb.EvCharger(charge_point_id=cp_id, connected=connected, session_active=session_active, status=status)])
+        gw._last_ev_status_time = time.time()
+
+    @staticmethod
+    def _in_window(gw):
+        """Put now inside a planned charge window."""
+        import datetime as dt_mod
+
+        now = dt_mod.datetime.now(gw.local_tz)
+        gw._ev_windows = [(now - dt_mod.timedelta(minutes=5), now + dt_mod.timedelta(hours=1))]
+
+    @staticmethod
+    def _apply(gw):
+        """Run one reconcile cycle."""
+        asyncio.run(gw._apply_ev_charging_state())
+
+    @staticmethod
+    def _actions(gw):
+        """The actions published so far."""
+        return [p["action"] for p in gw.published]
 
     def _planned(self, windows):
         """Return a list of planned-attribute window dicts like output.py produces."""
@@ -6119,95 +6405,349 @@ class TestEvControl:
         assert start_dt.year == 2026 and end_dt.year == 2026
         assert charging is True
 
-    def test_apply_sends_start_on_transition(self):
-        """_apply_ev_charging_state sends SetChargingProfile then RemoteStartTransaction when entering a window."""
-        import asyncio
-        import datetime as dt_mod
-        import json
-
+    def test_apply_sends_start_when_car_plugged_in_window(self):
+        """Inside a window with a car plugged in and no session: SetChargingProfile then RemoteStartTransaction to /command."""
         gw = self._make_gateway()
-        published = []
+        self._in_window(gw)
+        self._set_charger(gw, session_active=False, status="Preparing")
 
-        async def fake_publish_raw(topic, payload, **kwargs):
-            published.append(json.loads(payload.decode()))
+        self._apply(gw)
 
-        gw._publish_raw = fake_publish_raw
-        gw.topic_ev_command = "predbat/devices/test/ev/command"
-
-        now = dt_mod.datetime.now(gw.local_tz)
-        gw._ev_windows = [(now - dt_mod.timedelta(minutes=5), now + dt_mod.timedelta(hours=1))]
-        gw._ev_charging_active = False
-
-        asyncio.run(gw._apply_ev_charging_state())
-
+        published = gw.published
         assert len(published) == 2
-        assert published[0] == {"action": "SetChargingProfile", "current_a": 32}
-        assert published[1] == {"action": "RemoteStartTransaction", "id_tag": "predbat"}
-        assert gw._ev_charging_active is True
+        cp_id = gw._ev_control_cp_id
+        assert published[0]["command_id"] != published[1]["command_id"]
+        assert all(p["command_id"].startswith("PBAT") for p in published)
+        for p in published:
+            p.pop("command_id")
+        assert published[0] == {"command": "ev", "charge_point_id": cp_id, "action": "SetChargingProfile", "current_a": 32}
+        assert published[1] == {"command": "ev", "charge_point_id": cp_id, "action": "RemoteStartTransaction", "id_tag": "predbat"}
 
-    def test_apply_sends_stop_on_transition(self):
-        """_apply_ev_charging_state sends RemoteStopTransaction when leaving a window."""
-        import asyncio
-        import json
+    def test_apply_sends_stop_outside_window(self):
+        """Outside every window with a session active: RemoteStopTransaction to /command."""
+        gw = self._make_gateway()
+        self._set_charger(gw, session_active=True, status="Charging")
+
+        self._apply(gw)
+
+        assert len(gw.published) == 1
+        assert gw.published[0].pop("command_id").startswith("PBAT")
+        assert gw.published[0] == {"command": "ev", "charge_point_id": gw._ev_control_cp_id, "action": "RemoteStopTransaction"}
+
+    def test_apply_no_command_when_state_matches(self):
+        """Desired state already matches the charger: nothing is sent, cycle after cycle."""
+        gw = self._make_gateway()
+        self._set_charger(gw, session_active=False, status="Available")
+        for _ in range(3):
+            self._apply(gw)
+        self._in_window(gw)
+        self._set_charger(gw, session_active=True, status="Charging")
+        for _ in range(3):
+            self._apply(gw)
+        # A full car (SuspendedEV) in a window still has its session - no restart
+        self._set_charger(gw, session_active=True, status="SuspendedEV")
+        self._apply(gw)
+        assert gw.published == []
+
+    def test_apply_drives_registered_charger_not_lowest_id(self):
+        """With two chargers, the reconcile drives the one registered as car 1, even when another has a lower id."""
+        import time
+
+        gw = self._make_gateway(configured_chargers=["CP_B", "CP_A"], ev_max_current={"CP_B": 16})
+        assert gw._ev_control_cp_id == "CP_B"
+        self._in_window(gw)
+        gw._last_ev_status = pb.GatewayStatus(
+            ev_chargers=[
+                pb.EvCharger(charge_point_id="CP_B", connected=True, session_active=False, status="Preparing"),
+                pb.EvCharger(charge_point_id="CP_A", connected=True, session_active=False, status="Preparing"),
+            ]
+        )
+        gw._last_ev_status_time = time.time()
+
+        self._apply(gw)
+
+        assert [p["charge_point_id"] for p in gw.published] == ["CP_B", "CP_B"]
+        assert gw.published[0]["current_a"] == 16
+
+    def test_apply_nothing_without_registered_charger(self):
+        """No charger registered as the car (gateway_evc_automatic off, or none reported): nothing is sent."""
+        gw = self._make_gateway()
+        gw._ev_control_cp_id = None
+        self._in_window(gw)
+        self._set_charger(gw, session_active=False, status="Preparing")
+
+        self._apply(gw)
+
+        assert gw.published == []
+        gw.log.assert_not_called()
+
+    def test_apply_no_start_when_charger_unusable(self):
+        """Inside a window a Faulted or Unavailable charger is not sent a start."""
+        gw = self._make_gateway()
+        self._in_window(gw)
+        for status in ("Faulted", "Unavailable"):
+            self._set_charger(gw, session_active=False, status=status)
+            self._apply(gw)
+        assert gw.published == []
+
+    def test_second_window_starts_although_hub_reads_available(self):
+        """Stopped at the end of window 1, the car stays plugged in but the hub reads "Available": window 2 still starts."""
+        gw = self._make_gateway()
+        self._in_window(gw)
+        self._set_charger(gw, session_active=True, status="Charging")
+        self._apply(gw)
+        gw._ev_windows = []  # window 1 ends
+        self._apply(gw)
+        assert self._actions(gw) == ["RemoteStopTransaction"]
+        # The hub sets "Available" on StopTransaction and the charger sends no new StatusNotification
+        self._set_charger(gw, session_active=False, status="Available")
+        self._apply(gw)
+        self._in_window(gw)  # window 2 begins
+        self._apply(gw)
+        assert self._actions(gw) == ["RemoteStopTransaction", "SetChargingProfile", "RemoteStartTransaction"]
+
+    def test_apply_no_command_without_fresh_telemetry(self):
+        """No telemetry, stale telemetry or an offline charger: the state is unknown, so nothing is sent."""
+        gw = self._make_gateway()
+        self._apply(gw)
+        # Startup, before the hub has ever reported a charger: silent
+        assert not [c for c in gw.log.call_args_list if "cannot see charger" in str(c)]
+        self._set_charger(gw, session_active=True, status="Charging")
+        gw._last_ev_status_time -= 600
+        self._apply(gw)
+        self._set_charger(gw, session_active=True, status="Charging", connected=False)
+        self._apply(gw)
+        assert gw.published == []
+        # Warned once for this window state, not every minute
+        warnings = [c for c in gw.log.call_args_list if "cannot see charger" in str(c)]
+        assert len(warnings) == 1
+        self._in_window(gw)  # window state changes: warned again
+        self._apply(gw)
+        warnings = [c for c in gw.log.call_args_list if "cannot see charger" in str(c)]
+        assert len(warnings) == 2
+
+    def test_ev_freshness_from_status_without_inverters(self):
+        """A /status carrying EV chargers but no inverters still refreshes what EVC control sees."""
+        gw = self._make_gateway()
+        gw._debug = False
+        gw.gateway_inverter_serial = None
+        gw._discovery = {}
+        status = pb.GatewayStatus(ev_chargers=[pb.EvCharger(charge_point_id="CP10000001", connected=True, session_active=True, status="Charging")])
+        gw._process_telemetry(status.SerializeToString())
+        assert gw._last_telemetry_time == 0  # no inverters: not counted as the hub being alive
+        self._apply(gw)
+        assert self._actions(gw) == ["RemoteStopTransaction"]
+
+    def test_restart_mid_window_then_window_ends_sends_stop(self):
+        """A restart forgets everything; when the window it started in ends, the active session is still stopped."""
+        gw = self._make_gateway()  # fresh process: no memory of the start
+        self._in_window(gw)
+        self._set_charger(gw, session_active=True, status="Charging")
+        self._apply(gw)
+        assert gw.published == []
+        gw._ev_windows = []  # window ends
+        self._apply(gw)
+        assert self._actions(gw) == ["RemoteStopTransaction"]
+
+    def test_refused_stop_is_capped_and_recorded(self):
+        """A charger that keeps its session after three stops gets no more, and the failure reaches the status."""
+        from unittest.mock import patch
+        import gateway as gateway_mod
 
         gw = self._make_gateway()
-        published = []
+        clock = [1_000_000.0]
+        with patch.object(gateway_mod.time, "time", side_effect=lambda: clock[0]):
+            for _ in range(20):
+                self._set_charger(gw, session_active=True, status="Charging")
+                self._apply(gw)
+                clock[0] += 60
+        assert self._actions(gw) == ["RemoteStopTransaction"] * 3
+        gw.base.record_status.assert_called_once()
+        assert "stop" in gw.base.record_status.call_args.args[0]
+        assert gw.base.record_status.call_args.kwargs["had_errors"] is True
 
-        async def fake_publish_raw(topic, payload, **kwargs):
-            published.append(json.loads(payload.decode()))
+    def test_startup_charging_outside_window_sends_stop(self):
+        """The first reconcile after startup stops a charger already charging outside any window."""
+        gw = self._make_gateway()
+        self._set_charger(gw, session_active=True, status="Charging")
+        self._apply(gw)
+        assert self._actions(gw) == ["RemoteStopTransaction"]
 
-        gw._publish_raw = fake_publish_raw
-        gw.topic_ev_command = "predbat/devices/test/ev/command"
-        gw._ev_windows = []  # no active window
-        gw._ev_charging_active = True  # was charging
+    def test_mqtt_down_is_not_an_attempt_and_retries_after_reconnect(self):
+        """A command that cannot be published is not recorded; it goes out once MQTT is back."""
+        gw = self._make_gateway()
+        self._set_charger(gw, session_active=True, status="Charging")
+        gw._mqtt_connected = False
+        self._apply(gw)
+        self._apply(gw)
+        assert gw.published == []
+        assert gw._ev_attempts == {"start": 0, "stop": 0}
+        assert gw._ev_last_attempt == 0.0
 
-        asyncio.run(gw._apply_ev_charging_state())
+        gw._mqtt_connected = True
+        self._apply(gw)
+        assert self._actions(gw) == ["RemoteStopTransaction"]
+        assert gw._ev_attempts["stop"] == 1
 
-        assert len(published) == 1
-        assert published[0] == {"action": "RemoteStopTransaction"}
-        assert gw._ev_charging_active is False
+    def test_publish_failure_is_not_an_attempt(self):
+        """A start whose publish raises is not counted or backed off: the next minute sends it."""
+        gw = self._make_gateway()
+        self._in_window(gw)
+        self._set_charger(gw, session_active=False, status="Preparing")
+        working_publish = gw._publish_raw
 
-    def test_apply_no_command_when_state_unchanged(self):
-        """_apply_ev_charging_state sends nothing when desired state matches last state."""
-        import asyncio
+        async def failing_publish(topic, payload, **kwargs):
+            raise RuntimeError("broker gone")
+
+        gw._publish_raw = failing_publish
+        self._apply(gw)
+        assert gw._ev_attempts["start"] == 0
+        assert gw._ev_last_attempt == 0.0
+
+        gw._publish_raw = working_publish
+        self._apply(gw)
+        assert self._actions(gw) == ["SetChargingProfile", "RemoteStartTransaction"]
+        assert gw._ev_attempts["start"] == 1
+
+    def test_refused_start_retries_are_spaced_and_capped(self):
+        """A charger that never starts gets at most three starts, two minutes apart, then one warning."""
+        from unittest.mock import patch
+        import gateway as gateway_mod
 
         gw = self._make_gateway()
-        published = []
+        self._in_window(gw)
+        clock = [1_000_000.0]
+        with patch.object(gateway_mod.time, "time", side_effect=lambda: clock[0]):
+            for _ in range(20):  # 20 minutes of the charger staying in Preparing
+                self._set_charger(gw, session_active=False, status="Preparing")
+                self._apply(gw)
+                clock[0] += 60
+        assert self._actions(gw).count("RemoteStartTransaction") == 3
+        warnings = [c for c in gw.log.call_args_list if "giving up" in str(c)]
+        assert len(warnings) == 1
+        # No car plugged in for a window is normal: logged, but never an error status
+        gw.base.record_status.assert_not_called()
 
-        async def fake_publish_raw(topic, payload, **kwargs):
-            published.append((topic, payload))
-
-        gw._publish_raw = fake_publish_raw
-        gw.topic_ev_command = "predbat/devices/test/ev/command"
+        # The window ends and the next one starts: the attempts are reset
         gw._ev_windows = []
-        gw._ev_charging_active = False  # already stopped
-
-        asyncio.run(gw._apply_ev_charging_state())
-
-        assert published == []
+        with patch.object(gateway_mod.time, "time", side_effect=lambda: clock[0]):
+            self._set_charger(gw, session_active=False, status="Preparing")
+            self._apply(gw)
+            self._in_window(gw)
+            self._apply(gw)
+        assert self._actions(gw).count("RemoteStartTransaction") == 4
 
     def test_max_current_fallback_32a(self):
         """Falls back to 32 A in SetChargingProfile when max_current_a not in cache for the charge point."""
-        import asyncio
-        import datetime as dt_mod
-        import json
-
         gw = self._make_gateway(ev_max_current={})
-        published = []
+        self._in_window(gw)
+        self._set_charger(gw, session_active=False, status="Preparing")
+        self._apply(gw)
+        assert gw.published[0]["current_a"] == 32
 
-        async def fake_publish_raw(topic, payload, **kwargs):
-            published.append(json.loads(payload.decode()))
+    def test_read_only_blocks_start_stop_and_direct_publish(self):
+        """The live override and startup config fallback both block every EV command."""
+        for live, configured in ((True, False), (None, True)):
+            for inside in (False, True):
+                gw = self._make_gateway()
+                gw.base.set_read_only = live
+                gw.get_arg = lambda key, default=None, **kwargs: configured if key == "set_read_only" else default
+                self._set_charger(gw, session_active=not inside)
+                if inside:
+                    self._in_window(gw)
+                self._apply(gw)
+                assert not asyncio.run(gw._send_ev_command(gw._ev_control_cp_id, {"action": "RemoteStartTransaction"}))
+                assert gw.published == []
+                assert gw._ev_attempts == {"start": 0, "stop": 0}
 
-        gw._publish_raw = fake_publish_raw
-        gw.topic_ev_command = "predbat/devices/test/ev/command"
+    def test_read_only_between_profile_and_start_blocks_start(self):
+        """A read-only override arriving during the profile publish prevents the subsequent start."""
+        gw = self._make_gateway()
+        self._in_window(gw)
+        self._set_charger(gw)
+        publish = gw._publish_raw
 
-        now = dt_mod.datetime.now(gw.local_tz)
-        gw._ev_windows = [(now - dt_mod.timedelta(minutes=5), now + dt_mod.timedelta(hours=1))]
-        gw._ev_charging_active = False
+        async def publish_then_read_only(topic, payload, **kwargs):
+            """Simulate the live override changing while a publish is awaited."""
+            await publish(topic, payload, **kwargs)
+            gw.base.set_read_only = True
 
+        gw._publish_raw = publish_then_read_only
+        self._apply(gw)
+        assert self._actions(gw) == ["SetChargingProfile"]
+        assert gw._ev_attempts["start"] == 0
+
+    def test_read_only_release_resets_spent_attempts(self):
+        """Releasing read only resumes reconciliation even after an earlier retry budget was exhausted."""
+        gw = self._make_gateway()
+        self._set_charger(gw, session_active=True, status="Charging")
+        gw._ev_desired = False
+        gw._ev_attempts["stop"] = 4
+        gw.base.set_read_only = True
+        self._apply(gw)
+        gw.base.set_read_only = False
+        self._apply(gw)
+        assert self._actions(gw) == ["RemoteStopTransaction"]
+
+
+def test_ev_two_windows_through_planner(my_predbat):
+    """Real telemetry entities, config lookup, planning and output retain window two after a truthful stop."""
+    import datetime as dt
+    from unittest.mock import patch
+
+    gw = TestEvControl()._make_gateway()
+    gw.base = my_predbat
+    gw.local_tz = pytz.UTC
+    gw.dashboard_item = lambda entity_id, state=None, attributes=None, **kwargs: my_predbat.ha_interface.set_state(entity_id, state, attributes)
+    status = pb.GatewayStatus(ev_chargers=[pb.EvCharger(charge_point_id=gw._ev_control_cp_id, connected=True, status="Preparing", max_current_a=32, voltage_v=230)])
+    gw._register_ev_car(status)
+    my_predbat.num_cars = 1
+    my_predbat.set_read_only = False
+    my_predbat.octopus_intelligent_charging = False
+    my_predbat.car_charging_soc = [0]
+    my_predbat.car_charging_loss = 1.0
+    my_predbat.args.update(car_charging_battery_size=[60], car_charging_limit=[100], car_charging_plan_time="04:00:00", car_charging_plan_smart=False)
+    my_predbat.low_rates_tariff = [{"start": 60, "end": 90, "average": 5}, {"start": 120, "end": 150, "average": 5}]
+    midnight = dt.datetime(2026, 1, 15, tzinfo=pytz.UTC)
+    clock = [midnight]
+
+    class FixedDateTime(dt.datetime):
+        """Give the real gateway window parser and reconciler the simulated plan-cycle clock."""
+
+        @classmethod
+        def now(cls, tz=None):
+            """Return the current simulated time in the requested timezone."""
+            return clock[0].astimezone(tz) if tz else clock[0].replace(tzinfo=None)
+
+    def cycle(minute, charger_status, session_active):
+        """Inject a firmware report and execute a full car planning/publication/reconciliation cycle."""
+        clock[0] = midnight + dt.timedelta(minutes=minute)
+        my_predbat.now_utc = clock[0]
+        my_predbat.midnight_utc = midnight
+        my_predbat.minutes_now = minute
+        ev = status.ev_chargers[0]
+        ev.status = charger_status
+        ev.session_active = session_active
+        gw._last_ev_status = status
+        gw._last_ev_status_time = clock[0].timestamp()
+        gw._inject_ev_entities(status)
+        my_predbat.get_car_charging_planned()
+        my_predbat.fetch_sensor_data_car_planning()
+        my_predbat.publish_car_plan()
+        gw._refresh_ev_windows()
         asyncio.run(gw._apply_ev_charging_state())
 
-        assert published[0]["current_a"] == 32
+    with patch("gateway.datetime.datetime", FixedDateTime), patch("gateway.time.time", side_effect=lambda: clock[0].timestamp()):
+        cycle(60, "Preparing", False)
+        cycle(90, "Charging", True)
+        cycle(95, "Finishing", False)  # firmware #501 preserves the plugged-in car after StopTransaction
+        assert my_predbat.car_charging_planned == [True]
+        assert my_predbat.car_plugged_in_now(0, "car_charging_plugged") is True
+        assert len(gw._ev_windows) == 1
+        cycle(120, "Finishing", False)
+        assert TestEvControl._actions(gw) == ["SetChargingProfile", "RemoteStartTransaction", "RemoteStopTransaction", "SetChargingProfile", "RemoteStartTransaction"]
+        cycle(155, "Available", False)  # an actual unplug removes the plan, without phantom car demand
+        assert not my_predbat.car_charging_planned[0] and not gw._ev_windows
 
 
 class TestRateAnchors(unittest.TestCase):
@@ -7554,18 +8094,168 @@ class TestIntegratePower:
         assert self._today(gw, "import_today") == 0.5
 
 
+class TestGatewayOnlineTopic:
+    """The hub's retained online topic, as the firmware publishes it: 'online', and 'offline' as its LWT (predbat-gateway#510)."""
+
+    def _make_gateway(self):
+        """Build a minimal GatewayMQTT stub that _handle_message() can route an online message through."""
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+        import time as time_mod
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.log = MagicMock()
+        gw.base = MagicMock()
+        gw.base.inverters = []
+        gw.prefix = "predbat"
+        gw.topic_status = "predbat/devices/pbgw_test/status"
+        gw.topic_online = "predbat/devices/pbgw_test/online"
+        gw.dashboard_item = MagicMock()
+        gw.gateway_display_only = False
+        gw._error_count = 0
+        gw._rate_caps_sent = {}
+        gw._mqtt_connected = True
+        gw._gateway_online = False
+        gw._last_telemetry_time = time_mod.time()
+        return gw
+
+    def _online(self, gw, payload):
+        """Deliver one message on the online topic."""
+        from unittest.mock import MagicMock
+
+        message = MagicMock()
+        message.topic = gw.topic_online
+        message.payload = payload
+        asyncio.run(gw._handle_message(message))
+
+    def test_firmware_payloads_set_the_flag(self):
+        """The firmware publishes 'online' on connect and 'offline' as its LWT, not '1' / '0'."""
+        gw = self._make_gateway()
+        self._online(gw, b"online")
+        assert gw._gateway_online is True
+        self._online(gw, b"offline")
+        assert gw._gateway_online is False
+        assert gw._error_count == 0
+
+    def test_numeric_payloads_still_accepted(self):
+        """'1' / '0', the payloads this code used to expect, are still accepted."""
+        gw = self._make_gateway()
+        self._online(gw, b"1")
+        assert gw._gateway_online is True
+        self._online(gw, b"0")
+        assert gw._gateway_online is False
+
+    def test_transition_is_logged_and_published(self):
+        """Going online logs the change and publishes the online sensor."""
+        gw = self._make_gateway()
+        self._online(gw, b"online")
+        gw.log.assert_any_call("Info: GatewayMQTT: Gateway is online")
+        entity, state = gw.dashboard_item.call_args[0][:2]
+        assert entity == "binary_sensor.predbat_gateway_online"
+        assert state is True
+
+    def test_stale_telemetry_is_not_alive_while_online(self):
+        """A hub that says it is online but has sent no telemetry for over two minutes is a frozen feed."""
+        import time as time_mod
+
+        gw = self._make_gateway()
+        self._online(gw, b"online")
+        assert gw.is_alive() is True
+        gw._last_telemetry_time = time_mod.time() - 300
+        assert gw.is_alive() is False
+
+    def _make_control_gateway(self):
+        """A control-mode gateway built through initialize(), with housekeeping's outbound calls stubbed."""
+        from gateway import GatewayMQTT
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.base = MagicMock()
+        gw.prefix = "predbat"
+        gw.args = {}
+        gw.log = MagicMock()
+        gw.initialize(gateway_device_id="pbgw_test", mqtt_host="mqtt.test")
+        gw._mqtt_connected = True
+        gw._mqtt_client = SimpleNamespace(publish=AsyncMock())
+        gw.api_started = True
+        gw.api_stop = False
+        for name in ("_check_read_only_state", "_check_inverter_resets", "_check_rate_caps", "_publish_predbat_data", "_check_token_refresh", "_republish_plan_if_stale"):
+            setattr(gw, name, AsyncMock())
+        return gw
+
+    def test_silent_hub_goes_unhealthy_even_when_offline(self):
+        """Housekeeping is not a success: a hub that has sent nothing for two hours is unhealthy, whatever its LWT says."""
+        import datetime
+        import time as time_mod
+        from components import Components
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        gw = self._make_control_gateway()
+        comps = Components.__new__(Components)
+        comps.components = {"gateway": gw}
+        comps.component_tasks = {"gateway": SimpleNamespace(is_alive=lambda: True)}
+        comps.component_errors = {}
+
+        gw._gateway_online = False
+        gw._last_telemetry_time = time_mod.time() - 7200
+        gw.last_success_timestamp = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=2)
+        with patch("gateway.HAS_AIOMQTT", True):
+            assert asyncio.run(gw.run(60, False))
+
+        # Connected to the broker with the hub offline is a known state for the component itself...
+        assert gw.is_alive() is True
+        # ...but nothing has been read for two hours, so the site must not report healthy
+        assert comps.is_alive("gateway") is False
+
+        # Telemetry arriving is what makes it healthy again
+        gw.update_success_timestamp()
+        assert comps.is_alive("gateway") is True
+
+    def test_rate_caps_sent_once_online(self):
+        """set_rate_cap is held while the hub is offline, so it must go out once the firmware says 'online'."""
+        helper = TestCheckRateCaps()
+        gw = helper._make_gateway()
+        gw._gateway_online = False
+        gw._inverter_slot_serials = ["CH2330G098"]
+        gw.base.inverters = [helper._inverter(0, 3000, 3600)]
+        gw.prefix = "predbat"
+        gw.topic_status = "predbat/devices/pbgw_test/status"
+        gw.topic_online = "predbat/devices/pbgw_test/online"
+        gw.dashboard_item = lambda *args, **kwargs: None
+        gw._error_count = 0
+
+        asyncio.run(gw._check_rate_caps())
+        assert gw._published == []
+
+        self._online(gw, b"online")
+        asyncio.run(gw._check_rate_caps())
+        assert [command for command, _ in gw._published] == ["set_rate_cap"]
+
+
 def run_gateway_tests(my_predbat=None):
     """Run all GatewayMQTT tests. Returns True on failure, False on success."""
     from tests.test_gateway_token_refresh import TestIsAuthFailure, TestApplyRefreshResponse, TestMaybeRefreshOnAuthError
     from tests.test_gateway_window_commit import TestHubWindowCommit
-    from tests.test_gateway_display import TestGatewayDisplayOnly
     from tests.test_gateway_commit import TestGatewayStaging, TestGatewayCommit
+    from tests.test_gateway_display import TestGatewayDisplayOnly, TestIndependentVisibility
+    from tests.test_live_display import run_live_display_tests
+
+    try:
+        run_live_display_tests()
+    except Exception:
+        import traceback
+
+        traceback.print_exc()
+        return True
 
     test_classes = [
         TestGatewayStaging,
         TestGatewayCommit,
         TestHubWindowCommit,
         TestGatewayDisplayOnly,
+        TestIndependentVisibility,
         TestProtobufDecode,
         TestPlanSerialization,
         TestCommandFormat,
@@ -7592,7 +8282,9 @@ def run_gateway_tests(my_predbat=None):
         TestPublishPredbatData,
         TestIanaToPosixTz,
         TestCheckInverterResets,
+        TestCheckCommandedSerials,
         TestCheckRateCaps,
+        TestGatewayOnlineTopic,
         TestCheckReadOnlyState,
         TestRunStartupWait,
         TestSetChargeSlotPayload,
@@ -7628,4 +8320,6 @@ def run_gateway_tests(my_predbat=None):
             traceback.print_exc()
             return True
         print("  OK: test_ev_soc_battery_size_through_get_arg")
+        test_ev_two_windows_through_planner(my_predbat)
+        print("  OK: test_ev_two_windows_through_planner")
     return False

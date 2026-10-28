@@ -1262,6 +1262,24 @@ _DETAIL_STRING_INVERTER = {
     "dataTimestamp": "1790579858000",
 }
 
+# A grid-tied string inverter (S6-GR1P: GR = grid-tied, no battery port) beside an S5-EH1P hybrid on one
+# account. The summary fields are as its inverterDetail logged them on a live system; the battery
+# readings are as its published sensors read. batteryType alternates between '0' and '0.0' from one
+# poll to the next, and it was still enrolled as a battery inverter when it reported '0'.
+_DETAIL_GRID_TIED_STRING_INVERTER = {
+    "machine": "S6-GR1P6K",
+    "productModel": "0206",
+    "model": "0206",
+    "power": 6.0,
+    "powerStr": "kW",
+    "batteryModel": None,
+    "batteryType": "0.0",
+    "parallelBattery": 0,
+    "batteryHealthSoh": 0.0,
+    "batteryCapacitySoc": 0.0,
+    "batteryVoltage": 0.0,
+}
+
 
 async def _run_automatic_config(details):
     """Run automatic_config() over `details` ({sn: detail}) and return the recorded set_arg_auto args."""
@@ -1573,7 +1591,7 @@ def test_solis_catalogue_export_limit_is_the_configured_register():
     """export_limit is register 499 in watts, converted as publish_entities() presents it; 0 or unread gives no rating.
 
     publish_entities() shows an unset or 0 register as 99999 W ("no limit") - a placeholder, not a
-    configured figure, so no rating is reported for it. A value under 200 is in 100 W units there.
+    configured figure, so no rating is reported for it. Every other value is in 100 W units (GH#5385).
     """
     api = _solis_fleet()
 
@@ -1586,8 +1604,8 @@ def test_solis_catalogue_export_limit_is_the_configured_register():
     assert "export_limit" not in ratings(), "0 means no limit"
     api.cached_values["BAT001"][SOLIS_CID_MAX_EXPORT_POWER] = "37"
     assert ratings()["export_limit"] == 3700.0, ratings()
-    api.cached_values["BAT001"][SOLIS_CID_MAX_EXPORT_POWER] = "3680"
-    assert ratings()["export_limit"] == 3680.0, ratings()
+    api.cached_values["BAT001"][SOLIS_CID_MAX_EXPORT_POWER] = "480"
+    assert ratings()["export_limit"] == 48000.0, ratings()
     return False
 
 
@@ -1876,6 +1894,9 @@ def test_reports_no_battery_for_a_silent_string_inverter():
         ("batteryType null, all zero", dict(zeros, batteryType=None), True),
         ("batteryType code '0', all zero", dict(zeros, batteryType="0"), True),
         ("batteryType code 0 as a number, all zero", dict(zeros, batteryType=0), True),
+        ("batteryType code '0.0', all zero", dict(zeros, batteryType="0.0"), True),
+        ("batteryType code 0.0 as a number, all zero", dict(zeros, batteryType=0.0), True),
+        ("batteryType code '0.0' but a live battery", dict(zeros, batteryType="0.0", batteryVoltage=49.3, batteryCapacitySoc=66.0), False),
         ("empty batteryList, all zero", dict(zeros, batteryList=[]), True),
         ("all zero as strings", {"batteryVoltage": "0", "batteryCapacitySoc": "0.0", "batteryNum": "0", "batteryJump": {"batteryCount": "0"}}, True),
         # A transient all-zero reading on a battery inverter that names no type - the pack counts must corroborate it
@@ -1910,6 +1931,59 @@ def test_reports_no_battery_for_a_silent_string_inverter():
     assert MockSolisAPI._reports_no_battery(_DETAIL_REAL_BATTERY_ZERO_SOH) is False
     assert MockSolisAPI._reports_no_battery(_DETAIL_NO_BATTERY) is True
     print("PASSED: a silent string inverter is PV-only, nothing else is")
+    return False
+
+
+def test_reports_no_battery_for_a_grid_tied_model():
+    """A machine Solis names grid-tied (S6-GR1P...) is PV-only when its battery readings are zero, whatever its pack fields say.
+
+    The model has no battery port, so a batteryList entry or a missing pack count cannot mean a battery
+    there. The readings must still be present and zero, and a named pack still decides on its own, so
+    a misreported model never drops a battery that is actually reading.
+    """
+    print("\n=== Test: _reports_no_battery on a grid-tied model ===")
+    gr = dict(_DETAIL_GRID_TIED_STRING_INVERTER)
+    cases = [
+        ("grid-tied model as captured", dict(gr), True),
+        ("grid-tied model, batteryType '0'", dict(gr, batteryType="0"), True),
+        ("grid-tied model, batteryType absent", {k: v for k, v in gr.items() if k != "batteryType"}, True),
+        ("grid-tied model, batteryList entry that names no pack", dict(gr, batteryType="0", batteryList=[{"batteryType": 0}]), True),
+        ("three-phase grid-tied model", dict(gr, machine="S5-GR3P10K"), True),
+        ("grid-tied model in lower case", dict(gr, machine="s6-gr1p6k"), True),
+        ("grid-tied model but a live voltage", dict(gr, batteryVoltage=51.2), False),
+        ("grid-tied model but a live SOC", dict(gr, batteryCapacitySoc=40.0), False),
+        ("grid-tied model, voltage absent", dict(gr, batteryVoltage=None), False),
+        ("grid-tied model, SOC absent", dict(gr, batteryCapacitySoc=None), False),
+        ("grid-tied model naming a pack", dict(gr, batteryType="PYLON_LV"), False),
+        # The same zeros on a hybrid are a transient placeholder (issue #4494) without the pack counts
+        ("hybrid model, same zeros", dict(gr, machine="S5-EH1P6K-L"), False),
+        ("AC-coupled storage model, same zeros", dict(gr, machine="S6-EA1P5K-L"), False),
+        ("RHI hybrid, same zeros", dict(gr, machine="RHI-6K-48ES-5G"), False),
+        ("machine absent, same zeros", {k: v for k, v in gr.items() if k != "machine"}, False),
+        ("GR only later in the name", dict(gr, machine="S6-EH1P-GR1P"), False),
+    ]
+    for label, detail, expected in cases:
+        got = MockSolisAPI._reports_no_battery(detail)
+        assert got is expected, "{}: expected _reports_no_battery {} for {}, got {}".format(label, expected, detail, got)
+    print("PASSED: a grid-tied model reading zero is PV-only, a hybrid is not")
+    return False
+
+
+async def test_automatic_config_treats_grid_tied_model_as_pv_only():
+    """A grid-tied string inverter beside a hybrid is left out of the battery args but kept in the PV totals."""
+    print("\n=== Test: automatic_config treats a grid-tied model as PV-only ===")
+    with_batt = "6031050241180AA"
+    string_inv = "1802060232170BB"
+    for battery_type in ("0", "0.0"):
+        recorded, api = await _run_automatic_config({with_batt: _DETAIL_WITH_BATTERY, string_inv: dict(_DETAIL_GRID_TIED_STRING_INVERTER, batteryType=battery_type)})
+        assert recorded.get("num_inverters") == 1, "batteryType {!r}: expected only the hybrid to be enrolled, got num_inverters={}".format(battery_type, recorded.get("num_inverters"))
+        for arg in ("soc_percent", "discharge_start_time", "charge_start_time", "reserve"):
+            entities = recorded.get(arg) or []
+            assert len(entities) == 1 and string_inv.lower() not in " ".join(entities), "batteryType {!r}: {} must stay on the hybrid alone, got {}".format(battery_type, arg, entities)
+        expect_pv_today = [f"sensor.predbat_solis_{with_batt.lower()}_pv_energy_total", f"sensor.predbat_solis_{string_inv.lower()}_pv_energy_total"]
+        assert recorded.get("pv_today") == expect_pv_today, "batteryType {!r}: expected pv_today to cover both inverters, got {}".format(battery_type, recorded.get("pv_today"))
+        assert api.is_battery_inverter(string_inv) is False and api.is_battery_inverter(with_batt) is True
+    print("PASSED: the grid-tied model is PV-only and stays in the PV totals")
     return False
 
 
@@ -2249,6 +2323,8 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_automatic_config_keeps_no_battery_inverter_in_pv_totals())
         failed |= test_reports_no_battery_for_a_silent_string_inverter()
         failed |= asyncio.run(test_automatic_config_treats_silent_string_inverter_as_pv_only())
+        failed |= test_reports_no_battery_for_a_grid_tied_model()
+        failed |= asyncio.run(test_automatic_config_treats_grid_tied_model_as_pv_only())
         failed |= asyncio.run(test_automatic_config_pv_totals_unchanged_when_all_have_batteries())
         failed |= test_solis_catalogue_describes_battery_and_pv_only()
         failed |= test_solis_catalogue_battery_ratings_carry_only_stated_facts()
@@ -2296,6 +2372,7 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_compute_solis_mode_value_hold_and_reserve())
         failed |= asyncio.run(test_storage_mode_always_sets_battery_reserve())
         failed |= asyncio.run(test_number_event_soc_limit_shows_at_once())
+        failed |= asyncio.run(test_reads_recover_after_soc_limit_shown_before_first_poll())
         failed |= asyncio.run(test_warns_when_reserve_is_the_over_discharge_soc())
         failed |= asyncio.run(test_write_time_windows_v1_slot_detection())
         failed |= asyncio.run(test_write_time_windows_v1_discharge_slot_detection())
@@ -4120,6 +4197,53 @@ async def test_number_event_soc_limit_shows_at_once():
     assert writes == ["55"], writes
 
     print("PASSED: SOC limit change shown at once, written from the queue")
+    return False
+
+
+async def test_reads_recover_after_soc_limit_shown_before_first_poll():
+    """A SOC limit shown before the first successful poll must not break every later read.
+
+    When the datalogger refuses the startup poll (B0600), Predbat still writes reserve_soc, and
+    show_soc_limit_now() creates cached_values[sn] with no cached_infos[sn]. The read paths only
+    created both caches when cached_values had no entry, so every later poll and single-CID read
+    raised KeyError(sn) and the inverter stayed unread until the pod restarted.
+    """
+    print("\n=== Test: reads recover after a SOC limit was shown before the first poll ===")
+    api = MockSolisAPI()
+    inverter_sn = "123456"
+    api.inverter_sn = [inverter_sn]
+
+    await api.number_event(f"number.predbat_solis_{inverter_sn}_reserve_soc", 12)
+    assert inverter_sn in api.cached_values and inverter_sn not in api.cached_infos, (api.cached_values, api.cached_infos)
+
+    async def read_batch(sn, cids):
+        """Return one CID as SolisCloud's batch read would"""
+        return {SOLIS_CID_STORAGE_MODE: "35"}, {SOLIS_CID_STORAGE_MODE: {"cid": str(SOLIS_CID_STORAGE_MODE), "msg": "35"}}
+
+    api.read_batch = read_batch
+    assert await api.poll_inverter_data(inverter_sn, [SOLIS_CID_STORAGE_MODE]) is True, "poll should succeed"
+    assert api.cached_values[inverter_sn][SOLIS_CID_STORAGE_MODE] == "35", api.cached_values
+    assert api.cached_values[inverter_sn][SOLIS_CID_BATTERY_RESERVE_SOC] == "12", "the shown SOC limit should survive the poll"
+    assert api.cached_infos[inverter_sn][SOLIS_CID_STORAGE_MODE]["msg"] == "35", api.cached_infos
+
+    # The single-CID read path had the same guard
+    del api.cached_infos[inverter_sn]
+
+    async def execute_request(endpoint, payload):
+        """Return a single CID read"""
+        return {"msg": "20"}
+
+    async def no_retry(operation, *args, **kwargs):
+        """Run the operation once"""
+        return await operation()
+
+    api._execute_request = execute_request
+    api._with_retry = no_retry
+    value, _ = await api.read_cid(inverter_sn, SOLIS_CID_BATTERY_RESERVE_SOC)
+    assert value == "20", value
+    assert api.cached_infos[inverter_sn][SOLIS_CID_BATTERY_RESERVE_SOC]["msg"] == "20", api.cached_infos
+
+    print("PASSED: reads recover after a SOC limit was shown before the first poll")
     return False
 
 
@@ -7522,8 +7646,9 @@ async def test_rate_setpoints_do_not_drift_with_battery_voltage():
 async def test_publish_entities_export_power_unit_conversion():
     """Test publish_entities converts max export power CID value to watts correctly.
 
-    The Solis API returns CID 499 (max export power) in either 100W units (when value < 200)
-    or watts (when value >= 200).  A value of 0 is treated as 'no limit' and mapped to 99999.
+    The Solis API returns CID 499 (max export power) in 100W units at every value - the same units
+    number_event_handler() writes - so a read of 480 is 48000W (GH#5385).  A value of 0 is treated
+    as 'no limit' and mapped to 99999.
     """
     print("\n=== Test: publish_entities export power unit conversion ===")
 
@@ -7532,7 +7657,7 @@ async def test_publish_entities_export_power_unit_conversion():
     def _make_api(export_power_cid_value):
         """Helper: create a minimal MockSolisAPI with a single inverter."""
         api = MockSolisAPI()
-        sn = "EXPORT_TEST"
+        sn = "SN0EXPORT1"  # No underscore, so number_event_handler() can parse it back out of the entity id
         api.inverter_sn = [sn]
         api.inverter_details[sn] = {"inverterName": "Test"}
         api.cached_values[sn] = {
@@ -7544,14 +7669,14 @@ async def test_publish_entities_export_power_unit_conversion():
         api.max_discharge_current[sn] = 50
         return api, sn
 
-    # Case 1: value >= 200 — already in watts, no conversion applied
-    api, sn = _make_api("5000")
+    # Case 1: GH#5385 - a register reading of 480 is 48000W, not 480W
+    api, sn = _make_api("480")
     await api.publish_entities()
     entity_id = f"number.predbat_solis_{sn.lower()}_max_export_power"
     item = api.dashboard_items[entity_id]
-    assert item["state"] == 5000.0, f"Expected 5000W unchanged, got {item['state']}"
+    assert item["state"] == 48000.0, f"Expected 480 * 100 = 48000W, got {item['state']}"
 
-    # Case 2: value < 200 — treated as 100W units, multiplied by 100
+    # Case 2: small value — 100W units, multiplied by 100
     api, sn = _make_api("50")
     await api.publish_entities()
     item = api.dashboard_items[entity_id]
@@ -7577,17 +7702,31 @@ async def test_publish_entities_export_power_unit_conversion():
     item = api.dashboard_items[entity_id]
     assert item["state"] == 99999, f"Expected 99999 for invalid value, got {item['state']}"
 
-    # Case 6: boundary — value exactly 200 is NOT multiplied (only < 200 triggers conversion)
-    api, sn = _make_api("200")
-    await api.publish_entities()
-    item = api.dashboard_items[entity_id]
-    assert item["state"] == 200.0, f"Expected 200W unchanged at boundary, got {item['state']}"
-
-    # Case 7: value is 199 — last value that triggers 100W-unit conversion
+    # Case 6: no threshold — 199 and 200 either side of the old < 200 cut-off both convert
     api, sn = _make_api("199")
     await api.publish_entities()
     item = api.dashboard_items[entity_id]
     assert item["state"] == 19900.0, f"Expected 199 * 100 = 19900W, got {item['state']}"
+    api, sn = _make_api("200")
+    await api.publish_entities()
+    item = api.dashboard_items[entity_id]
+    assert item["state"] == 20000.0, f"Expected 200 * 100 = 20000W, got {item['state']}"
+
+    # Case 7: round trip — a watt value written through number_event_handler() reads back unchanged
+    api, sn = _make_api("0")
+    written = {}
+
+    async def mock_read_and_write_cid(inverter_sn, cid, value, field_description=None):
+        """Record the written register value in the cache as the inverter would hold it."""
+        written["value"] = value
+        api.cached_values[inverter_sn][cid] = value
+        return True
+
+    api.read_and_write_cid = mock_read_and_write_cid
+    await api.number_event_handler(entity_id, 30000)
+    assert written["value"] == "300", f"Expected 30000W written as '300', got {written}"
+    item = api.dashboard_items[entity_id]
+    assert item["state"] == 30000.0, f"Expected 30000W to read back as 30000W, got {item['state']}"
 
     # Verify unit of measurement on the published entity
     assert item["attributes"]["unit_of_measurement"] == "W", "unit_of_measurement should be W"

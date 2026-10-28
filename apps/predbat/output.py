@@ -1175,7 +1175,8 @@ class Output:
         Work out the actual planned charge rate (kW) for a charge_window_best slot. Unlike export,
         which stores a fixed reduced rate in the fractional part of export_limits_best, low power
         charging (set_charge_low_power) throttles the rate dynamically minute-by-minute, so it has
-        to be recomputed the same way the prediction engine works it out (find_charge_rate()).
+        to be recomputed the same way the prediction engine works it out (find_charge_rate()), and
+        then capped at the inverter limit as the prediction does (GH#5394).
 
         Returns (rate_kw, low_power): the rate achieved after the charge curve, and whether low power
         charging asked for less than the maximum charge rate. The curve tapering a full rate charge
@@ -1222,7 +1223,14 @@ class Output:
             low_power_pv_threshold_w=self.low_power_pv_threshold_w,
             solar_full_rate=self.set_charge_low_power_solar_full_rate,
         )
-        # Compared in whole watts, find_charge_rate() steps the rate down in watts and converts back
+        # The prediction then clamps the grid side of the charge at the inverter limit (less inverter
+        # losses); a hybrid can add DC-coupled PV on top of that, an AC-coupled inverter cannot.
+        charge_rate_limit = self.inverter_limit * self.inverter_loss
+        if self.inverter_hybrid:
+            charge_rate_limit += pv_forecast_minute_step.get(minute_relative_start, 0.0) / PREDICT_STEP
+        charge_rate_now_curve = min(charge_rate_now_curve, charge_rate_limit)
+        # Compared in whole watts, find_charge_rate() steps the rate down in watts and converts back.
+        # Low power is what was asked for, so the inverter cap above does not count as low power
         low_power = dp0(charge_rate_now * MINUTE_WATT) < dp0(battery_rate_max_charge * MINUTE_WATT)
         return dp2(charge_rate_now_curve * MINUTE_WATT / 1000.0), low_power
 

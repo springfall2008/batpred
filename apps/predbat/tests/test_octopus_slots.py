@@ -327,6 +327,18 @@ def run_short_dispatch_slot_tests(my_predbat, midnight_utc, time_format):
 
 def run_load_octopus_slots_tests(my_predbat):
     """
+    Run the load octopus slots cases, putting octopus_slots back afterwards: the cases set it to a single
+    car's flat slot list, and the daily cap now reads every car's entry in it (#5215).
+    """
+    saved_octopus_slots = my_predbat.octopus_slots
+    try:
+        return run_load_octopus_slots_cases(my_predbat)
+    finally:
+        my_predbat.octopus_slots = saved_octopus_slots
+
+
+def run_load_octopus_slots_cases(my_predbat):
+    """
     Test for load octopus slots
 
 
