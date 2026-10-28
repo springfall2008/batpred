@@ -134,7 +134,8 @@ class CarChargerControl:
                 Left as None neither survives a restart.
             control: The component's control setting from apps.yaml. None (unset) lets control
                 run wherever the component's automatic setup maps chargers to cars; False turns
-                it off; True also drives a charger whose Octopus arrangement cannot be told.
+                it off; True also drives a charger whose Octopus arrangement cannot be told, and a charger Octopus
+                drives when octopus_intelligent_planned_slot filters that car's dispatches.
             switch_prefix: The component's entity name, e.g. "gecloud", for its guest charging
                 switch. Left as None the component has no guest switch.
             control_setting: The apps.yaml name of the control setting, e.g. "ge_cloud_evc_control",
@@ -206,7 +207,8 @@ class CarChargerControl:
 
         True: Octopus switches the charger itself, so Predbat must leave it alone or the two
         would fight - whatever octopus_intelligent_charging says, as that switch only changes
-        Predbat's own planning and Octopus goes on driving the charger regardless. False: there
+        Predbat's own planning and Octopus goes on driving the charger regardless. The one
+        exception is control: true with a planned sensor, see charger_control_drive_one(). False: there
         is no Octopus Intelligent car here, or Octopus drives the car rather than the charger -
         see charger_control_octopus_drives_car() for what Predbat does then. None: the car is on
         Octopus Intelligent but which device Octopus drives cannot be told, or not yet.
