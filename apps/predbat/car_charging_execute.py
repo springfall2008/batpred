@@ -62,6 +62,46 @@ def native_plan_hook_allowed(base):
     return not _requested(base)
 
 
+def native_charger_control_conflict(base):
+    """Reject separately polling native writers, including retained component configuration.
+
+    These controls do not depend on the plan-executed hook. Even a temporarily
+    disabled control switch can be re-enabled independently, so apply requires
+    their configured control options to be off. Never change or release either
+    controller here: the commissioned external executor remains the sole owner.
+    """
+    components = getattr(base, "components", None)
+    for name, setting, runtime_setting in (
+        ("hypervolt", "hypervolt_control", "hypervolt_control"),
+        ("gateway", "gateway_evc_control", "gateway_evc_control"),
+        ("myenergi", "myenergi_zappi_control", "zappi_control"),
+        ("gecloud", "ge_cloud_evc_control", "evc_control"),
+        ("ohme", "ohme_control", "ohme_control"),
+        ("wallbox", "wallbox_control", "wallbox_control"),
+    ):
+        if base.get_arg(setting, False):
+            return True
+        component = components.get_component(name) if components else None
+        if component is not None:
+            if name in ("wallbox", "hypervolt") and (
+                getattr(component, "control_active", False)
+                or getattr(component, "paused_by_predbat", None)
+                or getattr(component, "schedule_pending", None)
+                or getattr(component, "released_by_predbat", None)
+                or getattr(component, "control_state_dirty", False)
+                or (getattr(component, "storage", None) is not None and not getattr(component, "control_state_loaded", False))
+            ):
+                return True
+            if getattr(component, runtime_setting, False) or getattr(component, "charger_control_active", False) or getattr(component, "charger_control_state", None):
+                return True
+            # The shared control's None means automatic ownership, not disabled.
+            # A pending release can also start a previously stopped charger, so
+            # retained control above must be settled before an external lease.
+            if hasattr(component, "charger_control_config") and component.charger_control_config is not False:
+                return True
+    return False
+
+
 def execution_fingerprint(base):
     """Bind staging to actual configuration, not to the pending object's own copy."""
     names = (
@@ -115,6 +155,7 @@ def execution_fingerprint(base):
         # _evidence/validate_template independently reject changed capabilities.
         payload["set_charge_freeze"] = False
     payload["settings"] = read_car_charging_config(base)
+    payload["native_charger_control_conflict"] = native_charger_control_conflict(base)
     from car_charging_config import measurement_policy
 
     payload["measurements"] = measurement_policy(base)
@@ -208,6 +249,7 @@ def _evidence(base, allow_read_only_transition=False):
     _require(settings.get("ev_executor_lease_verified") is True, "ev_executor_lease_required")
     _require(not getattr(base, "octopus_intelligent_charging", False), "external_ev_scheduler_unsupported")
     _require(not base.get_arg("octopus_intelligent_slot", None, indirect=False), "external_ev_scheduler_unsupported")
+    _require(not native_charger_control_conflict(base), "native_charger_control_unsupported")
     hooks = getattr(getattr(base, "plugin_system", None), "hooks", {})
     _require(not hooks.get("on_plan_executed"), "external_plan_consumer_unsupported")
     if not metered_session:

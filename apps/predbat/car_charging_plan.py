@@ -473,6 +473,11 @@ def _options(base):
 def _collect_blockers(base, options):
     """Collect every independent reason the shadow planner cannot run, never first-reason stop."""
     blockers = []
+    if options and options["mode"] == "apply":
+        from car_charging_execute import native_charger_control_conflict
+
+        if native_charger_control_conflict(base):
+            blockers.append("native_charger_control_unsupported")
     if base.num_cars != 1 or base.num_inverters != 1:
         blockers.append("multi_topology")
     if base.iboost_enable:

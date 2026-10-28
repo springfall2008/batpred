@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 from datetime import timedelta
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from car_charging_execute import execute_car_charging_plan, publish_car_charging_slot, refresh_car_charging_lease
@@ -287,6 +288,158 @@ def test_receipt_and_plan_renewal_exact_boundaries():
         print("PASS:", "plan_renewal_600s")
 
 
+def test_native_charger_control_ownership():
+    """Independent native control loops must never share an external executor's apply lease."""
+    from car_charging_execute import execution_fingerprint
+
+    controls = (
+        ("hypervolt", "hypervolt_control", "hypervolt_control"),
+        ("gateway", "gateway_evc_control", "gateway_evc_control"),
+        ("myenergi", "myenergi_zappi_control", "zappi_control"),
+        ("gecloud", "ge_cloud_evc_control", "evc_control"),
+        ("ohme", "ohme_control", "ohme_control"),
+        ("wallbox", "wallbox_control", "wallbox_control"),
+    )
+    for component, setting, runtime_setting in controls:
+        for runtime_only in (False, True):
+            base = _fresh_base()
+            with patch("car_charging_plan._observation_clock", side_effect=lambda: base.now_utc), patch("car_charging_execute._clock", side_effect=lambda: base.now_utc):
+                _, actuator = _stage_local_candidate(base)
+                original = execution_fingerprint(base)
+                if runtime_only:
+                    native = SimpleNamespace(**{runtime_setting: True})
+                    base.components = SimpleNamespace(get_component=lambda name: native if name == component else None)
+                else:
+                    base.args[setting] = True
+                assert execution_fingerprint(base) != original, (component, runtime_only)
+                assert execute_car_charging_plan(base) == ("EV blocked", "native_charger_control_unsupported")
+                assert not actuator["args"]
+                assert base.car_charging_execution is None
+                report = evaluate_car_charging(base, publish=False)
+                assert report["status"] == "unsupported" and "native_charger_control_unsupported" in report["execution_blockers"], report
+                assert base.car_charging_pending is None
+
+            # A later independent controller activation invalidates an accepted
+            # lease without any extra inverter write or external switch command.
+            base = _fresh_base()
+            with patch("car_charging_plan._observation_clock", side_effect=lambda: base.now_utc), patch("car_charging_execute._clock", side_effect=lambda: base.now_utc):
+                _, actuator = _stage_local_candidate(base)
+                assert execute_car_charging_plan(base)[0] != "EV blocked"
+                assert base.car_charging_execution is not None
+                writes = len(actuator["args"])
+                if runtime_only:
+                    native = SimpleNamespace(**{runtime_setting: True})
+                    base.components = SimpleNamespace(get_component=lambda name: native if name == component else None)
+                else:
+                    base.args[setting] = True
+                assert publish_car_charging_slot(base) is True
+                assert base.car_charging_execution is None
+                assert base.dashboard_values["binary_sensor." + base.prefix + "_car_charging_slot"]["state"] == "off"
+                assert base.car_charging_report["execution_reason"] == "native_charger_control_unsupported"
+                assert len(actuator["args"]) == writes
+            print("PASS:", component, "runtime" if runtime_only else "configured", "single_executor_ownership")
+
+    # Disabled options alone do not prove a component has finished handing back
+    # hardware it previously held. Automatic shared control is not disabled.
+    from car_charging_execute import native_charger_control_conflict
+
+    for component, setting, runtime_setting in controls:
+        for state in ({"charger_control_config": None}, {"charger_control_active": True}, {"charger_control_state": {"charger": False}}):
+            base = _fresh_base()
+            native = SimpleNamespace(**{runtime_setting: False, **state})
+            base.components = SimpleNamespace(get_component=lambda name: native if name == component else None)
+            assert native_charger_control_conflict(base), (component, state)
+        base = _fresh_base()
+        native = SimpleNamespace(**{runtime_setting: False, "charger_control_config": False, "charger_control_active": False, "charger_control_state": {}})
+        base.components = SimpleNamespace(get_component=lambda name: native if name == component else None)
+        assert not native_charger_control_conflict(base), component
+
+    # Explicitly disabled native controls permit the existing apply path.
+    base = _fresh_base()
+    with patch("car_charging_plan._observation_clock", side_effect=lambda: base.now_utc), patch("car_charging_execute._clock", side_effect=lambda: base.now_utc):
+        _apply_inputs(base)
+        base.args.update({setting: False for _, setting, _ in controls})
+        assert evaluate_car_charging(base, publish=False)["status"] == "candidate"
+        adapter, _ = _make_adapter()
+        _make_inverter(base, adapter)
+        assert execute_car_charging_plan(base)[0] != "EV blocked"
+        assert base.car_charging_execution is not None
+    print("PASS:", "native_controls_disabled_preserves_apply")
+
+
+def test_wallbox_retained_ownership():
+    """Actual Wallbox restore/release state must settle before an external apply lease."""
+    from car_charging_execute import native_charger_control_conflict
+    from ha import run_async
+    from tests.test_wallbox import _Storage, _control_component, _status, PLAN_OUTSIDE, CONTROL_NOW
+
+    for field in ("paused", "schedule"):
+        storage = _Storage()
+        storage.data[("wallbox", "control_state")] = {"control_enabled": False, "paused": [], "schedule": [], field: ["101"]}
+        native = _control_component({0: PLAN_OUTSIDE}, {101: _status(status_id=178, power=0)}, storage=storage, wallbox_control=False)
+        assert native.control_active is False and native.wallbox_control is False
+        base = _fresh_base()
+        with patch("car_charging_plan._observation_clock", side_effect=lambda: base.now_utc), patch("car_charging_execute._clock", side_effect=lambda: base.now_utc):
+            _, actuator = _stage_local_candidate(base)
+            base.components = SimpleNamespace(get_component=lambda name: native if name == "wallbox" else None)
+            assert execute_car_charging_plan(base) == ("EV blocked", "native_charger_control_unsupported"), field
+            assert not actuator["args"] and base.car_charging_execution is None
+            assert native.transport.calls == [], "The guard must not release hardware itself"
+            # The native poll can resume a charger even with its option off.
+            # Only after that existing release path settles can apply proceed.
+            run_async(native.control_tick(CONTROL_NOW))
+            assert ("resume_schedule", 101) in native.transport.calls, (field, native.transport.calls)
+            if field == "paused":
+                assert ("resume", 101) in native.transport.calls
+            assert not native_charger_control_conflict(base), (field, native.transport.calls)
+            native.control_state_loaded = False
+            assert native_charger_control_conflict(base), "Unread persistent ownership is not settled"
+            run_async(native.load_control_state())
+            assert not native_charger_control_conflict(base)
+            native.control_state_dirty = True
+            assert native_charger_control_conflict(base), "Unsaved ownership is not settled"
+            run_async(native.save_control_state())
+            assert not native_charger_control_conflict(base)
+        print("PASS:", "wallbox_retained_" + field)
+
+
+def test_hypervolt_retained_ownership():
+    """Missing chargers and failed restores cannot hide Hypervolt's persisted releases."""
+    from car_charging_execute import native_charger_control_conflict
+    from ha import run_async
+    from tests.test_hypervolt import _Storage, _control_component, _charger, _requests, PLAN_OUTSIDE, CONTROL_NOW, V3_ID
+
+    for failed_restore in (False, True):
+        storage = _Storage()
+        storage.data[("hypervolt", "control_state")] = {"control_enabled": False, "released": [V3_ID]}
+        storage.fail_loads = int(failed_restore)
+        native = _control_component({0: PLAN_OUTSIDE}, chargers=[], storage=storage, hypervolt_control=False)
+        native.sync_held()
+        assert not native.charger_control_state, "Absent charger is not in the shared held-state map"
+        base = _fresh_base()
+        with patch("car_charging_plan._observation_clock", side_effect=lambda: base.now_utc), patch("car_charging_execute._clock", side_effect=lambda: base.now_utc):
+            _, actuator = _stage_local_candidate(base)
+            base.components = SimpleNamespace(get_component=lambda name: native if name == "hypervolt" else None)
+            assert execute_car_charging_plan(base) == ("EV blocked", "native_charger_control_unsupported"), failed_restore
+            assert not actuator["args"] and base.car_charging_execution is None
+            assert _requests(native) == [], "The ownership guard must not send releases"
+            if failed_restore:
+                assert native.control_state_loaded is False and not native.released_by_predbat
+                run_async(native.load_control_state())
+            assert native.released_by_predbat == {V3_ID} and native_charger_control_conflict(base)
+            # A later successful poll can resume the previously absent charger.
+            native.transport.chargers[V3_ID] = _charger(release_state="released", pilot_status="B")
+            native.update_car_order([V3_ID])
+            run_async(native.control_tick(CONTROL_NOW))
+            assert _requests(native) == [(V3_ID, "sync.apply", {"release": False})]
+            assert not native.released_by_predbat and not native_charger_control_conflict(base)
+            native.control_state_dirty = True
+            assert native_charger_control_conflict(base)
+            run_async(native.save_control_state())
+            assert not native_charger_control_conflict(base)
+        print("PASS:", "hypervolt_retained_release", "failed_restore" if failed_restore else "absent_charger")
+
+
 def run_car_planning_authority_matrix_tests(base):
     """Run authority sequences on fresh, deterministic in-memory HA fixtures."""
     del base  # Each row gets a genuinely independent Predbat fixture.
@@ -296,4 +449,7 @@ def run_car_planning_authority_matrix_tests(base):
     test_modes_keep_execution_authority_separate()
     test_target_complete_stop_waits_for_observed_relay_off()
     test_receipt_and_plan_renewal_exact_boundaries()
+    test_native_charger_control_ownership()
+    test_wallbox_retained_ownership()
+    test_hypervolt_retained_ownership()
     return False

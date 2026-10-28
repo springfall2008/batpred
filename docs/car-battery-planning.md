@@ -33,6 +33,20 @@ introduced. A report or a future charging window is not permission to energise.
 Only the current accepted command and a valid expiring lease can grant authority
 in apply mode. The sole external EV executor retains physical relay ownership.
 
+Apply rejects configured native `hypervolt_control`, `gateway_evc_control`,
+`myenergi_zappi_control`, `ge_cloud_evc_control`, `ohme_control` or `wallbox_control`,
+including control retained by an already initialised component. These independent
+polling loops do not rely on the plan-executed hook and cannot share ownership
+with the external executor. A temporary native control switch being off is not
+sufficient: configure those control options off before requesting apply. Enabling
+them later invalidates the candidate or lease on its next validation. Automatic
+shared control and outstanding held-charger state also block apply until ownership
+has been released and settled outside this path. Wallbox's retained pause/schedule
+releases, Hypervolt's outstanding releases (including absent chargers), and their
+unread or unsaved ownership records must likewise settle first. This gate
+does not disable, release or commission either controller, and cannot discover
+every unrelated external writer.
+
 Native forecasts supply battery capacity, reserve, energy, charge/discharge rates,
 losses, car capacity/rate/target, tariffs and household/PV demand. Existing
 `car_charging_soc`, `car_charging_plugged` and `import_limit` mappings are reused.
