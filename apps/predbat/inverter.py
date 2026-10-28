@@ -801,6 +801,11 @@ class Inverter:
             self.inverter_limit = self.base.get_arg("inverter_limit", self.inverter_limit * MINUTE_WATT, index=self.id, required_unit="W") / MINUTE_WATT
         if "export_limit" in self.base.args:
             self.export_limit = self.base.get_arg("export_limit", self.export_limit * MINUTE_WATT, index=self.id, required_unit="W") / MINUTE_WATT
+        # A site can be barred from exporting battery energy while still exporting spare solar, e.g. a Powerwall
+        # left at Tesla's Solar Only export permission (GH#5710). Only an explicit off or false bars it, so a
+        # missing or unavailable entity leaves export planning as it was.
+        battery_export = self.base.get_arg("battery_export_permitted", None, index=self.id)
+        self.inv_battery_export_permitted = str(battery_export).lower() not in ["off", "false"]
 
         # Log inverter details
         if not quiet:

@@ -20,8 +20,9 @@ TIME_FORMAT_NORD = "%d-%m-%YT%H:%M:%S%z"
 # AgilePredict (https://agilepredict.com) forecasts Octopus Agile prices per region for up to 14 days
 AGILEPREDICT_DEFAULT_URL = "https://prices.fly.dev/api/"
 AGILEPREDICT_REGIONS = "ABCDEFGHJKLMNP"
-# AgilePredict publishes new forecasts four times a day, so a 30 minute cache is plenty fresh
-AGILEPREDICT_CACHE_MINUTES = 30
+# AgilePredict publishes new forecasts four times a day (at least five hours apart), so a three hour
+# cache keeps the load on this free community service low while never being more than one update behind
+AGILEPREDICT_CACHE_MINUTES = 180
 # Always ask for the same span so that every user of a shared cache asks for the same URL
 AGILEPREDICT_DAYS = 5
 

@@ -49,11 +49,13 @@ from tests.test_charge_hold import run_charge_hold_tests
 from tests.test_octopus_slots import run_load_octopus_slots_tests, run_octopus_slot_max_default_tests
 from tests.test_multi_car_iog import run_multi_car_iog_tests
 from tests.test_car_manual_soc import run_car_manual_soc_tests
+from tests.test_car_max_rate import run_car_max_rate_tests
 from tests.test_fetch_config_options import test_fetch_config_options
 from tests.test_multi_inverter import run_inverter_multi_tests
 from tests.test_window2minutes import test_window2minutes
 from tests.test_car_plan_windows import test_car_plan_windows
 from tests.test_hass_watcher import test_hass_watcher
+from tests.test_hass_timer import test_hass_timer
 from tests.test_new_install_detection import test_new_install_detection
 from tests.test_config_json_format import test_config_json_format
 from tests.test_history_attribute import test_history_attribute
@@ -210,6 +212,7 @@ from tests.test_octopus_saving_event_type import test_octopus_saving_event_type
 from tests.test_octopus_waf_block import test_octopus_waf_block_wrapper
 from tests.test_octopus_catalogue_cache import test_octopus_catalogue_cache_wrapper
 from tests.test_octopus_rate_limit import test_octopus_rate_limit_wrapper
+from tests.test_octopus_backoff import test_octopus_backoff_wrapper
 from tests.test_octopus_logging import test_octopus_logging_wrapper
 from tests.test_octopus_fetch_previous_dispatch import test_octopus_fetch_previous_dispatch_wrapper
 from tests.test_octopus_intelligent_devices import test_octopus_intelligent_devices_wrapper
@@ -346,6 +349,7 @@ from tests.test_charge_freeze_only import run_charge_freeze_only_tests
 from tests.test_prune_dead_slots import run_prune_dead_slots_tests
 from tests.test_export_floor import run_export_floor_tests
 from tests.test_plan_pv10_hedge import run_plan_pv10_hedge_tests
+from tests.test_plan_freeze_export_fallback import run_plan_freeze_export_fallback_tests
 from tests.test_clip_charge_slots import run_clip_charge_slots_tests
 from tests.test_discard_unused_charge_slots import run_discard_unused_charge_slots_tests
 from tests.test_discard_unused_export_slots import run_discard_unused_export_slots_tests
@@ -510,6 +514,7 @@ def main():
         ("window2minutes", test_window2minutes, "Window to minutes tests", False),
         ("car_plan_windows", test_car_plan_windows, "parse_car_plan_windows year anchoring: New Year either side, long windows, leap day", False),
         ("hass_watcher", test_hass_watcher, "Standalone-mode file watcher tests (#4397/#4396)", False),
+        ("hass_timer", test_hass_timer, "Standalone-mode scheduler keeps its pace across clock changes (#5770)", False),
         ("new_install_detection", test_new_install_detection, "New-install misdetection tests (Bug B, #4397/#4396, #3259, #3306)", False),
         ("config_json_format", test_config_json_format, "predbat_config.json written one setting per line and loads back", False),
         ("compute_metric", run_compute_metric_tests, "Compute metric tests", False),
@@ -545,11 +550,12 @@ def main():
         ("octopus_refresh_token", test_octopus_refresh_token_wrapper, "Octopus refresh token tests", False),
         ("octopus_misc", test_octopus_misc_wrapper, "Octopus misc API tests (set intelligent schedule, join saving sessions)", False),
         ("octopus_read_response", test_octopus_read_response_wrapper, "Octopus read response tests", False),
-        ("octopus_read_response_retry", test_octopus_read_response_retry_wrapper, "Octopus read response retry with exponential backoff tests", False),
+        ("octopus_read_response_retry", test_octopus_read_response_retry_wrapper, "Octopus read response (read once) tests", False),
         ("octopus_saving_event_type", test_octopus_saving_event_type, "Octopus savingSessions eventType classification tests (issue #4851)", False),
         ("octopus_waf_block", test_octopus_waf_block_wrapper, "Octopus CloudFront/WAF 403 handling tests", False),
         ("octopus_catalogue_cache", test_octopus_catalogue_cache_wrapper, "Octopus EV catalogue caching tests", False),
         ("octopus_rate_limit", test_octopus_rate_limit_wrapper, "Octopus API rate limit tests", False),
+        ("octopus_backoff", test_octopus_backoff_wrapper, "Octopus rate limit backoff tests", False),
         ("octopus_logging", test_octopus_logging_wrapper, "Octopus GraphQL logging redaction tests", False),
         ("octopus_fetch_previous_dispatch", test_octopus_fetch_previous_dispatch_wrapper, "Octopus fetch previous dispatch tests", False),
         ("octopus_intelligent_devices", test_octopus_intelligent_devices_wrapper, "Octopus intelligent devices tests (flexPlannedDispatches, energyAddedKwh)", False),
@@ -631,6 +637,7 @@ def main():
         ("octopus_slot_max_default", run_octopus_slot_max_default_tests, "Octopus slot max auto-detection from IOG-SMB tariff code", False),
         ("multi_car_iog", run_multi_car_iog_tests, "Multi-car IOG tests", False),
         ("car_manual_soc", run_car_manual_soc_tests, "Manual car SoC: automatic enable, reset on unplug, energy-sensor tracking", False),
+        ("car_max_rate", run_car_max_rate_tests, "car_charging_max_rate caps each car's charge rate, per car, held through sensor drop-outs, and against the Octopus raise", False),
         ("rate_add_io_slots", run_rate_add_io_slots_tests, "Rate add IO slots tests", False),
         ("iog_car_need_gate", run_iog_car_need_gate_tests, "IOG car-need gate: no cheap rate for dispatch minutes no car needs", False),
         ("iog_charge_skew", run_iog_charge_skew_tests, "IOG earlier-charge skew characterisation tests", False),
@@ -819,6 +826,7 @@ def main():
         ("prune_dead_slots", run_prune_dead_slots_tests, "Prune dead plan slots tests", False),
         ("export_floor", run_export_floor_tests, "Realistic pv10 export floor, pinning and staircase merge tests", False),
         ("plan_pv10_hedge", run_plan_pv10_hedge_tests, "End to end: a bad PV10 forecast makes the overnight charge bigger", False),
+        ("plan_freeze_export_fallback", run_plan_freeze_export_fallback_tests, "End to end: without Freeze Export a target export stands in for it", False),
         ("clip_charge_slots", run_clip_charge_slots_tests, "Clip charge slots tests", False),
         ("discard_unused_charge_slots", run_discard_unused_charge_slots_tests, "Discard unused charge slots tests", False),
         ("discard_unused_export_slots", run_discard_unused_export_slots_tests, "Discard unused export slots tests", False),

@@ -134,6 +134,10 @@ SIGENERGY_TOKEN_EXPIRY_BUFFER = 600   # refresh token 10 min before expiry
 SIGENERGY_MIN_REQUEST_INTERVAL = 6.0  # enforce ≥10 req/min API limit
 SIGENERGY_POLL_INTERVAL = 300         # realtime data poll every 5 minutes
 SIGENERGY_MQTT_STALE_SECONDS = 300    # an MQTT period reading older than this on arrival is stale - poll REST instead
+# MQTT counts as keeping energy_flow live if a message arrived within this long. Wider than the poll
+# interval because the broker's ~5 min period cadence jitters to ~410s: a 300s window sent REST polls
+# on healthy feeds, and REST energyFlow is the weaker source (no third-party PV, for one).
+SIGENERGY_MQTT_FRESH_SECONDS = 450
 SIGENERGY_VPP_RECLAIM_INTERVAL = 60   # re-assert VPP ownership every minute (see _manage_vpp_registration)
 SIGENERGY_DEVICE_POLL_INTERVAL = 1800  # device list refresh every 30 minutes
 SIGENERGY_RATE_LIMIT_BACKOFF = [15, 30, 60, 120, 480]  # seconds to wait after code 1201
@@ -225,6 +229,11 @@ SIGENERGY_HISTORY_NODES = [
     ("TO_EVDC", "ev_charge_lifetime", "EV Charge Lifetime"),
     ("FROM_EVDC", "ev_discharge_lifetime", "EV Discharge Lifetime"),
 ]
+
+# Lifetime kWh a PV source (FROM_SOLAR or FROM_THIRD_PARTY_INV) must have produced to count as
+# fitted. Keeps a few stray Wh of native PV on an AC-coupled install (seen: 0.08kWh) from reading
+# as DC strings.
+SIGENERGY_PV_PRESENT_KWH = 1.0
 
 # Storage cache keys for poll-interval system state persisted between restarts (see
 # load_cached_data()). System/device discovery is deliberately excluded — it is always
@@ -1033,17 +1042,73 @@ class SigenergyAPI(ComponentBase):
         battery_kw = -_safe_float(data.get("batteryPower", 0))
         pv_kw = _safe_float(data.get("pvPower", 0))
         grid_kw = _safe_float(data.get("gridPower", 0))
+        load_kw = _safe_float(data.get("loadPower", 0))
+        ev_kw = _safe_float(data.get("evPower", 0))
+        # energyFlow's pvPower (and acPower) leave out a third-party PV inverter's output, although
+        # loadPower and gridPower include it: an AC-coupled site exporting 8.3kW reported pvPower 0,
+        # acPower 0, load 0.74kW, battery charging 0.2kW, while MQTT "PV power" read 9.4kW. Recover
+        # the missing PV from the energy balance, but only where the system has third-party PV, so
+        # a hybrid's PV is never inflated by measurement noise.
+        #
+        # loadPower excludes the DC EV charger, which is its own branch: a site importing 9.22kW at
+        # night with the battery idle reported load 0.42kW and evPower 8.8kW. heatPumpPower is left
+        # out because no live sample has shown whether loadPower covers it, and adding a term
+        # loadPower already holds would over-report PV, where leaving one out can only under-report.
+        if self._has_third_party_pv(system_id):
+            pv_kw = max(pv_kw, load_kw + ev_kw - battery_kw + grid_kw)
         self.energy_flow[system_id] = {
             "batterySoc": soc,
             "batteryPower": battery_kw,
             "pvPower": pv_kw,
             "gridPower": grid_kw,
-            "loadPower": _safe_float(data.get("loadPower", 0)),
-            "evPower": _safe_float(data.get("evPower", 0)),
+            "loadPower": load_kw,
+            "evPower": ev_kw,
         }
         self.log("SigenergyAPI: System {} — SOC {:.0f}% battery {:.2f}kW pv {:.2f}kW grid {:.2f}kW".format(system_id, soc, battery_kw, pv_kw, grid_kw))
         self._grid_load_unknown_warned.discard(system_id)  # measured again - warn afresh if it is lost later
         return True
+
+    def _has_third_party_pv(self, system_id):
+        """True when the system's lifetime totals show PV from a third-party (AC-coupled) inverter."""
+        return self.history_totals.get(system_id, {}).get("FROM_THIRD_PARTY_INV", 0.0) >= SIGENERGY_PV_PRESENT_KWH
+
+    def detect_ac_coupled(self, system_id):
+        """Return True (AC-coupled), False (hybrid) or None (undecided) for one system.
+
+        Read from the lifetime totals: native PV (FROM_SOLAR) means DC strings on the Sigenergy
+        inverter, so it is a hybrid even if a third-party inverter is fitted as well; only
+        third-party PV with no native PV is AC-coupled. No totals, or no PV yet, is undecided.
+        """
+        totals = self.history_totals.get(system_id)
+        if not totals:
+            return None
+        if totals.get("FROM_SOLAR", 0.0) >= SIGENERGY_PV_PRESENT_KWH:
+            return False
+        if self._has_third_party_pv(system_id):
+            return True
+        return None
+
+    async def apply_hybrid_verdict(self):
+        """Move switch.predbat_inverter_hybrid only on positive evidence of AC coupling.
+
+        inverter_hybrid is one of Predbat's OWN CONFIG_ITEMS switches rather than an apps.yaml
+        arg, so it is written with set_state_external. Predbat defaults it on, which suits the
+        DC-coupled SigenStor, and the errors are not symmetric: off on a real hybrid lets PV and
+        battery charge plan past inverter_limit, on for an AC-coupled site merely skips the
+        PV->battery conversion loss. So the switch only moves off, and only when every system
+        is AC-coupled.
+        """
+        system_ids = list(self.systems.keys())
+        if not system_ids:
+            return
+        verdicts = [self.detect_ac_coupled(sid) for sid in system_ids]
+        entity = "switch.{}_inverter_hybrid".format(self.prefix)
+        if all(verdict is True for verdict in verdicts):
+            self.log("Info: SigenergyAPI: detected AC coupling (third-party PV inverter, no native PV) for system(s) {}; setting {} off".format(", ".join(system_ids), entity))
+            await self.set_state_external(entity, False)
+            return
+        if any(verdict is None for verdict in verdicts):
+            self.log("Info: SigenergyAPI: could not determine hybrid versus AC coupling for system(s) {} yet; leaving {} at its current value".format(", ".join(system_ids), entity))
 
     async def fetch_daily_summary(self, system_id):
         """Fetch daily/lifetime generation summary for a system.
@@ -2492,6 +2557,8 @@ class SigenergyAPI(ComponentBase):
         self.set_arg("discharge_rate", ["number.{}_sigenergy_{}_export_rate".format(self.prefix, s) for s in slugs])
         self.set_arg("reserve", ["number.{}_sigenergy_{}_reserve".format(self.prefix, s) for s in slugs])
 
+        await self.apply_hybrid_verdict()
+
         self.log("SigenergyAPI: automatic_config complete")
 
     # -----------------------------------------------------------------------
@@ -3390,7 +3457,7 @@ class SigenergyAPI(ComponentBase):
                 last_update = self.last_mqtt_update.get(sid, 0)
                 mqtt_age = now_ts - last_update
                 # Arriving recently is not enough - the reading it carried must be recent too
-                mqtt_fresh = last_update > 0 and mqtt_age < SIGENERGY_POLL_INTERVAL and self.mqtt_data_lag.get(sid, 0) <= SIGENERGY_MQTT_STALE_SECONDS
+                mqtt_fresh = last_update > 0 and mqtt_age < SIGENERGY_MQTT_FRESH_SECONDS and self.mqtt_data_lag.get(sid, 0) <= SIGENERGY_MQTT_STALE_SECONDS
                 if mqtt_fresh:
                     # MQTT is genuinely keeping energy_flow live — worth persisting/re-timestamping.
                     self.log("SigenergyAPI: Skipping REST energy poll for {} (MQTT data {:.0f}s old)".format(sid, mqtt_age))
