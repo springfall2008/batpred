@@ -1066,7 +1066,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
         unavailable = self.device_settings_unavailable.setdefault(deviceSN, [])
         if key_lower not in unavailable:
             unavailable.append(key_lower)
-        self.log(f"Fox: Warn: Setting {key} is not supported by device {deviceSN}, will not read or write it again")
+        self.log(f"Info: Fox: Setting {key} is not supported by device {deviceSN}, will not read or write it again")
         if key_lower in FOX_SETTINGS_DEFAULTS:
             self.device_settings.setdefault(deviceSN, {})[key] = dict(FOX_SETTINGS_DEFAULTS[key_lower])
 
@@ -1096,7 +1096,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
         Set device setting
         """
         if self.is_setting_unavailable(deviceSN, key):
-            self.log(f"Fox: Warn: Ignoring write to unsupported setting {key} for device {deviceSN}")
+            self.log(f"Info: Fox: Ignoring write to unsupported setting {key} for device {deviceSN}")
             return True
 
         SET_DEVICE_SETTING = "/op/v0/device/setting/set"
@@ -1780,7 +1780,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
 
             retries += 1
             await asyncio.sleep(retries * random.random())
-        self.log("Fox: API Response failed after {} retries for {}".format(FOX_RETRIES, path))
+        self.log("Fox: API Response failed after {} attempts for {}".format(retries + 1, path))
         return result
 
     async def request_get_func(self, path, post=False, datain=None, _retry_after_refresh=False):
@@ -1863,9 +1863,11 @@ class FoxAPI(ComponentBase, OAuthMixin):
                     await asyncio.sleep(5 * 60)
                     return None, False
                 elif errno in FOX_SETTINGS_UNSUPPORTED_ERRNO:
-                    # Unsupported function code
+                    # Unsupported function code - expected for a setting a model lacks, where the caller
+                    # caches it via mark_setting_unavailable() and never asks again (#3880)
                     self.last_unsupported = True
-                    self.log(f"Warn: Fox: Unsupported function code {msg}:{errno} from {url}")
+                    level = "Info" if "/device/setting/" in url else "Warn"
+                    self.log(f"{level}: Fox: Unsupported function code {msg}:{errno} from {url}")
                     return None, False
                 elif errno in [40257]:
                     # Invalid parameter

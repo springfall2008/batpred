@@ -4064,6 +4064,57 @@ def test_request_get_func_real_fox_errno_unsupported_42015(my_predbat):
     assert result is None
     assert allow_retry is False
     assert fox.last_unsupported is True
+    # A setting the model lacks is expected and cached by the caller, so it is not a warning (#3880)
+    assert not any(msg.startswith("Warn:") for msg in fox.log_messages), "Unsupported function code should not log a warning: {}".format(fox.log_messages)
+
+    return False
+
+
+def test_request_get_func_real_fox_errno_unsupported_non_setting_warns(my_predbat):
+    """
+    Test real request_get_func still warns for an unsupported answer outside the setting endpoints,
+    where nothing caches it (#3880)
+    """
+    print("  - test_request_get_func_real_fox_errno_unsupported_non_setting_warns")
+
+    fox = MockFoxAPIForRequestTesting()
+
+    mock_response = create_aiohttp_mock_response(status=200, json_data={"errno": 44096, "msg": "Unsupported function"})
+    mock_session = create_aiohttp_mock_session(mock_response)
+
+    with patch("fox.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
+        result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list"))
+
+    assert result is None
+    assert allow_retry is False
+    assert any(msg.startswith("Warn: Fox: Unsupported function code") for msg in fox.log_messages), "Expected a warning for an unsupported non-setting call: {}".format(fox.log_messages)
+
+    return False
+
+
+def test_get_device_setting_unsupported_logs_no_warning(my_predbat):
+    """
+    Reading a setting the model lacks is expected: it is cached as unsupported, and nothing the user
+    sees reads as a warning (the web log classes any line containing "warn" as one) (#3880)
+    """
+    print("  - test_get_device_setting_unsupported_logs_no_warning")
+
+    fox = MockFoxAPIForRequestTesting()
+    fox.device_settings = {}
+    fox.device_settings_unavailable = {}
+
+    mock_response = create_aiohttp_mock_response(status=200, json_data={"errno": 42015, "msg": "This device does not currently support this feature"})
+    mock_session = create_aiohttp_mock_session(mock_response)
+
+    with patch("fox.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
+        result = run_async(fox.get_device_setting("SN123", "ExportLimit"))
+
+    assert result is None
+    assert fox.is_setting_unavailable("SN123", "ExportLimit"), "the setting should be cached as unsupported"
+    assert any("not supported by device" in msg for msg in fox.log_messages), "Expected the not-supported message, got {}".format(fox.log_messages)
+    assert not any("warn" in msg.lower() for msg in fox.log_messages), "An expected unsupported setting should not log a warning: {}".format(fox.log_messages)
 
     return False
 
@@ -8212,6 +8263,8 @@ def run_fox_api_tests(my_predbat):
         failed |= test_request_get_func_real_fox_errno_rate_limit(my_predbat)
         failed |= test_request_get_func_real_fox_errno_api_limit(my_predbat)
         failed |= test_request_get_func_real_fox_errno_unsupported_42015(my_predbat)
+        failed |= test_request_get_func_real_fox_errno_unsupported_non_setting_warns(my_predbat)
+        failed |= test_get_device_setting_unsupported_logs_no_warning(my_predbat)
         failed |= test_request_get_func_real_fox_errno_unsupported_44096(my_predbat)
         failed |= test_request_get_func_real_fox_errno_other_leaves_unsupported_false(my_predbat)
         failed |= test_request_get_func_real_connection_error(my_predbat)
