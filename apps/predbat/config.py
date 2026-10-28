@@ -2772,6 +2772,7 @@ APPS_SCHEMA = {
     "inverter_limit_override": {"type": "sensor_list", "sensor_type": "integer", "modify": False, "zero": False, "entries": "num_inverters"},
     "battery_rate_max": {"type": "sensor_list", "sensor_type": "float", "modify": False, "zero": False, "entries": "num_inverters"},
     "export_limit": {"type": "sensor_list", "sensor_type": "float", "entries": "num_inverters"},
+    "battery_export_permitted": {"type": "sensor_list", "sensor_type": "boolean", "entries": "num_inverters"},
     "inverter_battery_rate_min": {"type": "integer", "zero": False, "entries": "num_inverters"},
     "inverter_reserve_max": {"type": "integer", "zero": False, "entries": "num_inverters"},
     "battery_charge_power_curve": {"type": "int_float_dict", "or_auto": True},
@@ -2804,6 +2805,11 @@ APPS_SCHEMA = {
     "car_charging_soc": {"type": "sensor", "sensor_type": "float", "entries": "num_cars"},
     "car_charging_limit": {"type": "sensor", "sensor_type": "float", "entries": "num_cars"},
     "car_charging_exclusive": {"type": "boolean_list", "entries": "num_cars"},
+    # The car's own maximum charge rate in kW, per car: Fetch caps car_charging_rate at it for every
+    # charger integration (car_max_rate_cap()). A list with a number or an entity pointer per car;
+    # a blank entry, 0, or a shorter list means no cap for that car. unknown/unavailable is normal
+    # for a car sensor (the runtime holds the last cap), but an entity that does not exist is an error.
+    "car_charging_max_rate": {"type": "sensor", "sensor_type": "float", "entries": "num_cars", "optional_entries": True, "transient_ok": True, "blank_entries": True},
     "carbon_intensity": {"type": "sensor", "sensor_type": "string"},
     "carbon_postcode": {"type": "string", "empty": False},
     "carbon_automatic": {"type": "boolean"},
@@ -2914,6 +2920,7 @@ APPS_SCHEMA = {
     "teslemetry_automatic": {"type": "boolean"},
     "teslemetry_tbc_control": {"type": "boolean"},
     "teslemetry_hybrid": {"type": "boolean"},
+    "teslemetry_battery_export": {"type": "boolean"},
     "teslemetry_auth_method": {"type": "string", "empty": False},
     "teslemetry_token_expires_at": {"type": "string", "empty": False},
     "teslemetry_token_hash": {"type": "string", "empty": False},
@@ -2961,6 +2968,9 @@ APPS_SCHEMA = {
     "futurerate_adjust_import": {"type": "boolean"},
     "futurerate_adjust_export": {"type": "boolean"},
     "futurerate_adjust_auto": {"type": "boolean"},
+    "futurerate_agilepredict": {"type": "boolean"},
+    "futurerate_agilepredict_region": {"type": "string", "empty": False},
+    "futurerate_agilepredict_url": {"type": "string", "empty": False},
     "futurerate_peak_start": {"type": "string", "empty": False},
     "futurerate_peak_end": {"type": "string", "empty": False},
     "octopus_region": {"type": "string", "empty": False},

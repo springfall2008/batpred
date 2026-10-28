@@ -256,6 +256,12 @@ A value of 0.1 assumes that 1 in every 10 times we will get the Solcast 10% scen
 Predbat estimates solar generation for each half-hour slot to be a pv_metric10_weight weighting of the Solcast 10% PV forecast to the Solcast Median forecast.<BR>
 A value of 0.15 (the default) is recommended. Do not enter a value above 1.0 (e.g. 30 for "30%") - Predbat will clamp it back into range and log a warning, but the resulting plan is likely to look very wrong in the meantime.
 
+When Predbat scores a forced export in the PV10% scenario it assumes the export stops at the target it would send to your inverter - the battery
+level the central forecast reaches by the end of that export - rather than draining the battery as far as the export rate allows.
+This matches what really happens: if the battery is lower than planned when the export starts, it reaches its target sooner, and the next replan
+shortens it. It lets Predbat keep some battery back from an evening export to cover a higher-load evening, where the central forecast alone would
+have exported it all. The PV90% scenario is not limited this way, as on a sunnier day a replan would export more rather than less.
+
 **switch.predbat_calculate_pv90_plan** (_performance tweaks_) enables the PV90% upside scenario described below - it is **On by default**.
 Turn it Off (after turning on **switch.predbat_performance_tweaks** to reveal it) and the PV90% scenario is not simulated at all, saving that
 planning time, regardless of what `pv_metric90_weight` is set to.
