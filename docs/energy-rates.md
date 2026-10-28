@@ -281,7 +281,7 @@ E.g. <https://api.oegb-kraken.energy/v1/products/GO-VAR-22-10-14/>
 
 Look through that page to find the right URL for usage charges in your DNO area
 
-<https://api.oegb-kraken.energy/v1/products/GO-VAR-22-10-14//electricity-tariffs/E-1R-GO-VAR-22-10-14-A/standard-unit-rates>
+<https://api.oegb-kraken.energy/v1/products/GO-VAR-22-10-14/electricity-tariffs/E-1R-GO-VAR-22-10-14-A/standard-unit-rates>
 
 (For area A)
 
