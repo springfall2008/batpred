@@ -320,6 +320,7 @@ class GatewayMQTT(ComponentBase):
     _discovery_save_retry_at = 0
     _pv_only_serials = ()
     _pv_only_counters = ()
+    _coordinator_seen = False
     _inverter_slot_serials = ()
     _slots_without_capacity = frozenset()
     _ev_last_soc = {}  # replaced, never changed in place
@@ -459,6 +460,7 @@ class GatewayMQTT(ComponentBase):
         self._inverter_slot_serials = []  # serial bound to each PredBat inverter slot at the last auto-config
         self._pv_only_serials = ()  # inverters with no battery: counted for PV, never written to
         self._pv_only_counters = ()  # the PV-only inverters whose pv_today counter is counted too (listed ones)
+        self._coordinator_seen = False  # a Gateway or Plant EMS has been in a status (see _has_coordinator)
         self._slots_without_capacity = frozenset()  # slots bound with no battery size sensor, re-bound once the hub reports a size
         self._last_ratings = {}  # (entity suffix, rating name) -> the last real value the hub reported
         self._assumed_ratings = frozenset()  # entity suffixes of inverters whose maximum rate has never been reported
@@ -1290,9 +1292,11 @@ class GatewayMQTT(ComponentBase):
             inv: A ``predbat_InverterEntry`` from the gateway status.
         """
         suffix = _serial_suffix(inv.serial)
-        if inv.serial in self._pv_only_serials and not inv.connected and self.get_state_wrapper(f"sensor.{self.prefix}_gateway_{suffix}_pv_power") is not None:
+        if inv.serial in self._pv_only_serials and not inv.connected and self._has_telemetry(inv):
             # The hub repeats a disconnected unit's last readings. For a PV-only inverter, one
-            # that dropped out mid-afternoon would go on adding generation that is not happening.
+            # that dropped out mid-afternoon would go on adding generation that is not happening:
+            # its entities are published as last read, with its powers zeroed.
+            self._inject_inverter_entities(inv, suffix, site_energy=self._integrated_site_energy(inv))
             self._inject_unread_inverter(suffix)
             return
         if not self._has_telemetry(inv):
@@ -1843,8 +1847,7 @@ class GatewayMQTT(ComponentBase):
         One that is not already a battery inverter and has a discovery record which has never
         shown a battery: so an inverter whose readings have not arrived yet is not taken for
         one, and one that has ever reported a battery never is. The primary flag is not used:
-        current hub firmware never elects a battery-less inverter, older firmware flagged
-        every unit primary.
+        it differs between hub firmware versions.
 
         Args:
             candidates: The non-coordinator units in the status.
@@ -1862,6 +1865,23 @@ class GatewayMQTT(ComponentBase):
             pv_only.append(inv)
         return pv_only
 
+    def _has_coordinator(self, inverters):
+        """Whether the site has a Gateway or Plant EMS: in these inverters, or ever seen.
+
+        Sticky, from this run or a stored discovery record: a status that briefly leaves the
+        coordinator out (a hub rescan) must not make its battery-less AIOs PV-only inverters
+        and move control to the AIOs behind it.
+
+        Args:
+            inverters: The ``predbat_InverterEntry`` items of a status.
+
+        Returns:
+            bool: True when the site has a coordinator.
+        """
+        if any(inv.type in GATEWAY_COORDINATOR_TYPES for inv in inverters):
+            self._coordinator_seen = True
+        return self._coordinator_seen or any(record.get("type") in GATEWAY_COORDINATOR_TYPES for record in self._discovery.values())
+
     def _usable_serials(self, status):
         """What auto-config could act on in this status, as a set of keys.
 
@@ -1872,7 +1892,8 @@ class GatewayMQTT(ComponentBase):
         With ``gateway_inverter_serial`` set, the listed inverters count by their discovery
         record instead (see ``_update_discovery``): the serial for a battery inverter and
         ``<serial>:pv`` for one with no battery, so one that turns out to have a battery
-        after all is new again. With no serial list and no coordinator, a recorded inverter
+        after all is new again. With no serial list and no coordinator (see
+        ``_has_coordinator``), a recorded inverter
         with no battery counts as ``<serial>:pv`` too, so a PV-only inverter the hub only
         starts reading later (one that powers off at night) re-runs auto-config.
 
@@ -1892,7 +1913,7 @@ class GatewayMQTT(ComponentBase):
         if self.gateway_inverter_serial:
             for record in self._discovery.values():
                 usable.add(record["serial"] if record.get("battery") else record["serial"] + ":pv")
-        elif not any(inv.type in GATEWAY_COORDINATOR_TYPES for inv in status.inverters):
+        elif not self._has_coordinator(status.inverters):
             # With no serial list and no coordinator, a PV-only inverter the hub starts
             # reading after start-up (one that powers off at night) is new too
             for inv in status.inverters:
@@ -2201,17 +2222,19 @@ class GatewayMQTT(ComponentBase):
             aios = [inv for inv in candidate_aios if self._discovery.get(inv.serial.upper(), {}).get("battery")]
             pv_only = [inv for inv in candidate_aios if inv.serial.upper() in self._discovery and not self._discovery[inv.serial.upper()].get("battery")]
             gateway_coordinates = gateway_coordinates or len(aios) > 1
-        elif aios and not ems_units and not gateway_units:
+        elif aios and not self._has_coordinator(all_inverters):
             # No serial list: a battery-less inverter the hub reads alongside the battery
             # inverter(s), with no Gateway or Plant EMS on the site, is a PV-only inverter
-            # (an AC-coupled PV inverter, or a hybrid with no battery fitted). The hub never
-            # elects one primary, so it used to be dropped and its generation missed.
+            # (an AC-coupled PV inverter, or a hybrid with no battery fitted). The hub does not
+            # elect one primary, so it used to be dropped and its generation missed.
             # Behind a coordinator the battery-less units are AIOs whose readings the
             # coordinator already carries, so they stay out.
             pv_only = self._auto_pv_only(candidate_aios, aios)
-            # Only its pv_power is counted: on some sites the battery inverter's own pv_today
-            # already includes the PV inverter's generation, and adding its counter would count
-            # it twice in the day's PV and in an integrated load.
+            # Only its pv_power is counted. Each inverter's pv_power is its own panels, but on
+            # some sites the battery inverter's pv_today already includes the PV inverter's
+            # generation, and adding its counter would count it twice in the day's PV and in
+            # an integrated load. So the day's PV (and the PV calibration that reads it) is
+            # unchanged; a site where it misses the PV inverter needs gateway_inverter_serial.
             pv_only_counted = False
 
         if ems_units:

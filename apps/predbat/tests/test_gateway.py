@@ -4582,7 +4582,7 @@ class TestGatewayUnitControlBinding:
         return inv
 
     def _hybrid_and_pv_status(self, pv_connected=True, pv_w=900):
-        """A battery hybrid plus a battery-less PV inverter the hub never elects primary (current firmware)."""
+        """A battery hybrid plus a battery-less PV inverter the hub does not elect primary."""
         status = pb.GatewayStatus()
         status.device_id = "pbgw_hybrid_pv"
         status.firmware = "1.0.39"
@@ -4643,6 +4643,18 @@ class TestGatewayUnitControlBinding:
         assert gw._states["sensor.predbat_gateway_00a002_pv_power"] == 0
         assert gw._pv_only_serials == ("PD0000A002",)
 
+    def test_pv_only_inverter_disconnected_at_startup_reads_no_generation(self):
+        """Started at night with the hub repeating the PV inverter's afternoon reading: its first publish is already zero."""
+        gw = self._listed_gateway([])
+        status = self._hybrid_and_pv_status()
+        status.inverters[1].connected = False  # frozen at 900 W
+        status.inverters[1].active = False
+
+        gw._process_telemetry(status.SerializeToString())
+
+        assert gw._pv_only_serials == ("PD0000A002",)
+        assert gw._states["sensor.predbat_gateway_00a002_pv_power"] == 0
+
     def test_unlisted_pv_only_inverter_is_not_counted_in_integrated_load(self):
         """Its pv_today is not added to an integrated load: the hybrid's counter may already hold it."""
         gw = self._listed_gateway([])
@@ -4650,20 +4662,62 @@ class TestGatewayUnitControlBinding:
         assert gw._pv_only_counters == ()
 
     def test_unlisted_battery_less_aios_behind_a_gateway_stay_out(self):
-        """Real topology: a Gateway carrying the battery data with four battery-less AIOs behind it. Nothing is PV only."""
+        """A Gateway with one battery AIO and battery-less AIOs behind it: auto-config runs, and nothing is PV only."""
         status = pb.GatewayStatus()
         status.device_id = "pbgw_gateway_four"
         status.firmware = "1.1.0"
         status.schema_version = 1
         self._unit(status, "GW0000A010", inv_type=pb.INVERTER_TYPE_GIVENERGY_GATEWAY, primary=True, battery=True, pv_w=34, pv_today_wh=200)
-        for serial in ("CH0000A011", "CH0000A012", "CH0000A013", "CH0000A014"):
+        self._unit(status, "CH0000A011", primary=True, battery=True, pv_w=500)
+        for serial in ("CH0000A012", "CH0000A013", "CH0000A014"):
             self._unit(status, serial, pv_w=1)
         gw = self._listed_gateway([])
 
         gw._process_telemetry(status.SerializeToString())
 
+        assert gw._auto_configured
         assert gw._pv_only_serials == ()
-        assert all("00a011" not in e and "00a014" not in e for e in gw._args.get("pv_power", []))
+        assert not any(s in e for e in gw._args["pv_power"] for s in ("00a012", "00a013", "00a014"))
+
+    def test_coordinator_missing_from_one_status_changes_nothing(self):
+        """A status that leaves the Gateway or Plant EMS out (a hub rescan) does not re-run auto-config or move control."""
+        for coordinator in (pb.INVERTER_TYPE_GIVENERGY_EMS, pb.INVERTER_TYPE_GIVENERGY_GATEWAY):
+
+            def site(with_coordinator):
+                status = pb.GatewayStatus()
+                status.device_id = "pbgw_coord"
+                status.firmware = "1.0.39"
+                status.schema_version = 1
+                if with_coordinator:
+                    self._unit(status, "EM0000G001", inv_type=coordinator, primary=True, battery=True)
+                self._unit(status, "CH0000G002", battery=True, pv_w=500)
+                self._unit(status, "CH0000G003", battery=True, pv_w=500)
+                self._unit(status, "CH0000G004", pv_w=300)
+                return status.SerializeToString()
+
+            gw = self._listed_gateway([])
+            gw._process_telemetry(site(True))
+            assert gw._inverter_slot_serials == ["EM0000G001"], coordinator
+
+            runs = []
+            real_config = gw.automatic_config
+
+            def counted_config():
+                runs.append(1)
+                return real_config()
+
+            gw.automatic_config = counted_config
+            gw._process_telemetry(site(False))
+            gw._process_telemetry(site(True))
+            assert runs == [], coordinator
+            assert gw._inverter_slot_serials == ["EM0000G001"], coordinator
+            assert gw._pv_only_serials == (), coordinator
+
+            # After a restart the stored discovery record still marks the site as coordinated
+            fresh = self._listed_gateway([])
+            fresh._discovery = dict(gw._discovery)
+            fresh._process_telemetry(site(False))
+            assert fresh._pv_only_serials == (), coordinator
 
     def test_unlisted_ems_and_gateway_sites_are_unchanged(self):
         """Real topologies with a coordinator keep exactly the configuration they had."""
