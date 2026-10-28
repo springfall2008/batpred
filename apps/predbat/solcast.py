@@ -20,7 +20,6 @@ import hashlib
 import math
 import random
 import aiohttp
-import pytz
 from datetime import datetime, timedelta, timezone
 
 from const import TIME_FORMAT, TIME_FORMAT_SOLCAST
@@ -35,6 +34,8 @@ Solcast class deals with fetching solar predictions, processing the data and pub
 
 PV_CALIBRATION_LOWEST = 0.20
 PV_CALIBRATION_HIGHEST = 4.0
+# A history sample at this fraction of the clipping ceiling or above is treated as clipped by calibration
+PV_CALIBRATION_CLIP_MARGIN = 0.95
 # Ceiling on the Open-Meteo ensemble's P90:median ratio. Near dawn and dusk the median is a few
 # W/m2 and the ratio is unbounded; this is the same limit best_day_scaling is held to.
 OPEN_METEO_P90_RATIO_MAX = 2.0
@@ -663,7 +664,6 @@ class SolarAPI(ComponentBase):
                         period_end = forecast.get("period_end", None)
                         if period_end:
                             period_end_stamp = strptime_aware(period_end, TIME_FORMAT_SOLCAST)
-                            period_end_stamp.replace(tzinfo=pytz.utc)
                             period_period = forecast.get("period", "PT30M")
                             period_minutes = int(period_period[2:-1])
                             period_start_stamp = period_end_stamp - timedelta(minutes=period_minutes)
@@ -1169,6 +1169,53 @@ class SolarAPI(ComponentBase):
             self.log("Warn: SolarAPI: PV Calibration: could not read any forecast history from sensor.{}_pv_forecast_h0_uncalibrated or sensor.{}_pv_forecast_h0 - calibration will be disabled until history builds up".format(self.prefix, self.prefix))
         return history
 
+    def pv_clipping_ceiling_kw(self):
+        """
+        Return the power in kW above which this system's PV generation is clipped, or 0 if it is not known.
+
+        A hybrid inverter caps PV at its AC limit (inverter_limit, summed across inverters); it can pass
+        more while charging the battery from DC, but generation at the limit is where clipping starts. An
+        AC-coupled array has its own PV inverter, so the battery inverter's limit says nothing about it and
+        only a configured pv_ac_limit applies.
+
+        Only a configured limit counts. Inverter falls back to a standing default when inverter_limit is not
+        set, which is fine for the plan but would be a guess here: a larger unconfigured system would have its
+        real generation above the guess taken as clipped. So with no inverter_limit the ceiling is unknown.
+        """
+        if self.get_arg("inverter_hybrid", True):
+            limit_w = self.get_arg("inverter_limit", 0.0, combine=True, required_unit="W") or 0
+        else:
+            limit_w = self.get_arg("pv_ac_limit", 0.0) or 0
+        return max(limit_w / 1000.0, 0)
+
+    def impute_clipped_pv_history(self, pv_power_hist, pv_forecast):
+        """
+        Return a copy of pv_power_hist (kW by minutes ago) in which samples the inverter clipped take the forecast.
+
+        Clipped energy is never generated, so no sensor records it: a sample at the clipping ceiling says only
+        that the array made at least that much. Taken as exact, a sunny week on an array that out-produces its
+        inverter reads as over-forecast, and calibration scales the next sunny day down - hiding the clipping
+        the planner should be making room for in the battery. So a sample at the ceiling (within
+        PV_CALIBRATION_CLIP_MARGIN) under a forecast above it is treated as if the forecast had been right.
+        Taking the actual as the forecast, rather than the forecast as the actual, keeps the slot and day
+        ratios - which are ratios of sums - the same as they would have been without the inverter limit.
+        Samples below the ceiling, and those that beat the forecast, are left alone.
+        """
+        ceiling_kw = self.pv_clipping_ceiling_kw()
+        if ceiling_kw <= 0:
+            return pv_power_hist
+        threshold_kw = ceiling_kw * PV_CALIBRATION_CLIP_MARGIN
+        imputed = dict(pv_power_hist)
+        clipped_minutes = 0
+        for minute, actual_kw in pv_power_hist.items():
+            forecast_kw = pv_forecast.get(minute)
+            if forecast_kw is not None and actual_kw >= threshold_kw and forecast_kw > actual_kw:
+                imputed[minute] = forecast_kw
+                clipped_minutes += 1
+        if clipped_minutes:
+            self.log("SolarAPI: PV Calibration: {} minutes of history at the {}kW clipping ceiling taken as the forecast rather than as forecast error".format(clipped_minutes, dp2(ceiling_kw)))
+        return imputed
+
     def pv_calibration(self, pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data, create_pv10, divide_by, max_kwh, forecast_days, period=None, calibrate_band=False):
         """
         Perform PV calibration based on historical data and forecast data.
@@ -1208,16 +1255,20 @@ class SolarAPI(ComponentBase):
             for sub_minute in range(1, 6):
                 pv_power_hist[minute + 5 - sub_minute] = power_amount
 
+        # Find the forecast history - the uncalibrated forecast, never the calibrated h0 state (GH#5116)
+        pv_forecast, pv_forecast_hist_days = history_attribute_to_minute_data(self.now_utc_exact, prune_today(self.pv_forecast_history(days + 1), self.now_utc_exact, self.midnight_utc, prune=False, intermediate=True))
+
+        # Generation capped by the inverter is not forecast error, so calibrate against a copy of the history
+        # where clipped samples take the forecast. pv_power_hist itself stays measured, for the observed peak.
+        pv_power_hist_calibrate = self.impute_clipped_pv_history(pv_power_hist, pv_forecast)
+
         # Past days actual data
         past_day_actual = {}
-        for minute in pv_power_hist:
+        for minute in pv_power_hist_calibrate:
             minute_absolute = self.minutes_now - minute
             if minute_absolute < 0:
                 days_prev = int(abs(minute_absolute) / (24 * 60)) + 1
-                past_day_actual[days_prev] = past_day_actual.get(days_prev, 0) + pv_power_hist[minute]
-
-        # Find the forecast history - the uncalibrated forecast, never the calibrated h0 state (GH#5116)
-        pv_forecast, pv_forecast_hist_days = history_attribute_to_minute_data(self.now_utc_exact, prune_today(self.pv_forecast_history(days + 1), self.now_utc_exact, self.midnight_utc, prune=False, intermediate=True))
+                past_day_actual[days_prev] = past_day_actual.get(days_prev, 0) + pv_power_hist_calibrate[minute]
 
         hist_days = min(pv_today_hist_days, pv_forecast_hist_days, days)
         enabled_calibration = True
@@ -1272,8 +1323,9 @@ class SolarAPI(ComponentBase):
                 weight = max(1.0 - 0.1 * (days_prev - 1), 0.3)
                 slot_abs = minute_absolute % (24 * 60)
                 slot = int(slot_abs / self.plan_interval_minutes) * self.plan_interval_minutes
-                pv_power_hist_by_slot[slot] = pv_power_hist_by_slot.get(slot, 0) + pv_power_hist[minute] * weight
+                pv_power_hist_by_slot[slot] = pv_power_hist_by_slot.get(slot, 0) + pv_power_hist_calibrate[minute] * weight
                 pv_power_hist_by_slot_weight[slot] = pv_power_hist_by_slot_weight.get(slot, 0) + weight
+                # Measured, not imputed: the calibrated forecast is capped against this as evidence of what the array produces
                 max_pv_power_hist = max(max_pv_power_hist, pv_power_hist[minute])
 
         # Average the history for each slot in the day
@@ -1392,6 +1444,7 @@ class SolarAPI(ComponentBase):
         )
 
         # Work out the total forecast for each future day going forward.
+        # Sum unrounded: a dull-day minute is well under 0.01 kWh, so rounding each addition would just count minutes (GH#5690)
         days_forecast_total = {}
         days_forecast_total_scaled_slot = {}
         for minute in range(0, max(pv_forecast_minute.keys()) + 1):
@@ -1399,8 +1452,8 @@ class SolarAPI(ComponentBase):
             if day < forecast_days:
                 slot = (int(minute / self.plan_interval_minutes) * self.plan_interval_minutes) % (24 * 60)
                 pv_value = pv_forecast_minute.get(minute, 0)
-                days_forecast_total[day] = dp2(days_forecast_total.get(day, 0) + pv_value)
-                days_forecast_total_scaled_slot[day] = dp2(days_forecast_total_scaled_slot.get(day, 0) + pv_value * slot_adjustment.get(slot, 1.0))
+                days_forecast_total[day] = days_forecast_total.get(day, 0) + pv_value
+                days_forecast_total_scaled_slot[day] = days_forecast_total_scaled_slot.get(day, 0) + pv_value * slot_adjustment.get(slot, 1.0)
 
         # Decide on the per day scaling factor
         days_use_scaling = {}
@@ -1410,7 +1463,11 @@ class SolarAPI(ComponentBase):
             scaling_applied = dp4(total_day_scaled_slot / total_day if total_day > 0.01 else 1.0)
             days_use_scaling[day] = dp4(total_adjustment / scaling_applied if scaling_applied > 0.01 else 1.0)
 
-        self.log("SolarAPI: PV Calibration: Days forecast total {}, days forecast total scaled by slot adjustments {}, days use scaling {}".format(days_forecast_total, days_forecast_total_scaled_slot, days_use_scaling))
+        self.log(
+            "SolarAPI: PV Calibration: Days forecast total {}, days forecast total scaled by slot adjustments {}, days use scaling {}".format(
+                {day: dp2(total) for day, total in days_forecast_total.items()}, {day: dp2(total) for day, total in days_forecast_total_scaled_slot.items()}, days_use_scaling
+            )
+        )
 
         pv_forecast_minute_adjusted = {}
         for minute in range(0, max(pv_forecast_minute.keys()) + 1):

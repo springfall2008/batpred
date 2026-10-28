@@ -23,6 +23,7 @@ Covers:
   - a re-plan requested during the comparison survives it, and the state is restored even if the config restore raises
 """
 
+import copy
 import inspect
 import os
 import tempfile
@@ -618,7 +619,7 @@ def test_compare(my_predbat):
 
     cmp.fetch_config = lambda tariff: None
     cmp.apply_hardware_overrides = lambda tariff, pb: None
-    cmp.fetch_rates = lambda tariff, base_import, base_export, io_adjusted_base=None: "existing"
+    cmp.fetch_rates = lambda tariff, base_import, base_export, *args: "existing"
     cmp.recompute_car_charging = lambda slots: None
     cmp.run_scenario = lambda end_record: {"cost": 0, "metric": 0}
 
@@ -660,7 +661,7 @@ def test_compare(my_predbat):
 
     cmp.fetch_config = lambda tariff: None
     cmp.apply_hardware_overrides = lambda tariff, pb: None
-    cmp.fetch_rates = lambda tariff, base_import, base_export, io_adjusted_base=None: "existing"
+    cmp.fetch_rates = lambda tariff, base_import, base_export, *args: "existing"
     cmp.recompute_car_charging = lambda slots: None
     cmp.run_scenario = lambda end_record: {"cost": 0, "metric": 0}
 
@@ -1109,6 +1110,128 @@ def test_compare(my_predbat):
         failed += 1
     else:
         print("PASS T31: publish_data() publishes a saved numeric name as text")
+
+    # ------------------------------------------------------------------
+    # T32: fetch_rates() recognises the user's own tariff as existing while a
+    #      saving session or Intelligent dispatch is stamped on the live rates -
+    #      a refetched rate card never carries those, so a side the tariff
+    #      supplies is matched against the live tariff without them, while a
+    #      side left on the live rates is still matched against those (#5180)
+    # ------------------------------------------------------------------
+    cmp, pb = _make_compare()
+    pb.minutes_now = 0
+    pb.forecast_minutes = 60
+    pb.rate_export_cost_threshold = 99
+    pb.rate_export_max = 15.0
+    pb.rate_scan = lambda rates, print=True: None
+    pb.rate_scan_export = lambda rates, print=True: None
+    pb.rate_replicate = lambda rates, io_adjusted=None, is_import=True, **kwargs: (dict(rates), {})
+    pb.set_rate_thresholds = lambda: None
+    pb.rate_scan_window = lambda rates, *args: ([], 0, 0)
+    pb.find_low_rate_windows = lambda: None
+    pb.basic_rates = lambda info, *args, **kwargs: {minute: info[0]["rate"] for minute in range(60)}
+
+    # Live: 20p import / 5p export, with a dispatch at 7p and a saving session at 300p export in the second half hour
+    import_clean = {minute: 20.0 for minute in range(60)}
+    export_clean = {minute: 5.0 for minute in range(60)}
+    import_live = {minute: (7.0 if minute >= 30 else 20.0) for minute in range(60)}
+    export_live = {minute: (300.0 if minute >= 30 else 5.0) for minute in range(60)}
+    same_tariff = {"id": "mine", "name": "Mine", "rates_import": [{"rate": 20.0}], "rates_export": [{"rate": 5.0}]}
+    cases = [
+        ("the same tariff during an event", same_tariff, True),
+        ("a dearer import tariff", {"id": "dear", "name": "Dear", "rates_import": [{"rate": 25.0}], "rates_export": [{"rate": 5.0}]}, False),
+        ("a tariff reusing the live rates", {"id": "live", "name": "Live"}, True),
+        ("the same import tariff reusing the live export", {"id": "import_only", "name": "Import Only", "rates_import": [{"rate": 20.0}]}, True),
+    ]
+    t32_errors = []
+    for label, tariff, expected in cases:
+        try:
+            got = cmp.fetch_rates(tariff, dict(import_live), dict(export_live), {}, rate_import_match=dict(import_clean), rate_export_match=dict(export_clean))
+        except TypeError as exc:
+            got = "raised {!r}".format(exc)
+        if got is not expected:
+            t32_errors.append("{} should give existing {}, got {}".format(label, expected, got))
+
+    # run_all() hands run_single() the clean baselines, snapshotted before any tariff refetches them
+    cmp = Compare.__new__(Compare)
+    cmp.pb = my_predbat
+    cmp.log = lambda msg: None
+    cmp.comparisons = {}
+    cmp.live_saving_state = None
+    match_kwargs = []
+    cmp.run_single = lambda tariff, *args, **kwargs: match_kwargs.append((kwargs.get("rate_import_match"), kwargs.get("rate_export_match"))) or {"date": "2026-10-19", "soc": 1.0, "soc_start": 1.0}
+    cmp.select_best = lambda compare_list, results: None
+    cmp.save_yaml = lambda: None
+    cmp.publish_data = lambda: None
+    real_get_arg = my_predbat.get_arg
+
+    def t32_get_arg(key, default=None, *args, **kwargs):
+        """Return a one-tariff compare_list, deferring every other key to the real get_arg."""
+        if key == "compare_list":
+            return [{"id": "mine", "name": "Mine"}]
+        return real_get_arg(key, default, *args, **kwargs)
+
+    with patch.object(my_predbat, "get_arg", side_effect=t32_get_arg), patch.object(my_predbat, "rate_import_no_io", dict(import_clean)), patch.object(my_predbat, "rate_export_base", dict(export_clean)), patch.object(my_predbat, "rate_export", dict(export_live)):
+        cmp.run_all(fetch_sensor=False)
+    if match_kwargs != [(import_clean, export_clean)]:
+        t32_errors.append("run_all() should pass run_single() the live rates without events, got {}".format(match_kwargs))
+
+    # A cycle with no export rates leaves rate_export_base on the previous cycle's table - it must not be used as the match
+    match_kwargs.clear()
+    with patch.object(my_predbat, "get_arg", side_effect=t32_get_arg), patch.object(my_predbat, "rate_import_no_io", dict(import_clean)), patch.object(my_predbat, "rate_export_base", dict(export_clean)), patch.object(my_predbat, "rate_export", {}):
+        cmp.run_all(fetch_sensor=False)
+    if match_kwargs != [(import_clean, {})]:
+        t32_errors.append("run_all() should not match against a stale rate_export_base when this cycle has no export rates, got {}".format(match_kwargs))
+
+    if t32_errors:
+        for error in t32_errors:
+            print("ERROR T32: {}".format(error))
+        failed += 1
+    else:
+        print("PASS T32: the existing tariff is recognised during a saving session or dispatch, against the live rates without them")
+
+    # ------------------------------------------------------------------
+    # T33: predicted future rates (futurerate) fill only the user's own tariff. A compared tariff
+    #      whose published rates are the live tariff's gets them - so it is still recognised as
+    #      the existing tariff - and any other tariff keeps its own copied prices
+    # ------------------------------------------------------------------
+    t33_errors = []
+    cmp = Compare.__new__(Compare)
+    cmp.pb = my_predbat
+    cmp.log = lambda msg: None
+    cmp.live_saving_state = None
+    # fetch_rates() and the real rate_replicate()/rate_scan() rebuild rate tables and scan state on the shared
+    # fixture, so snapshot all of its attributes and put them back even if something in here raises
+    saved = {key: (copy.copy(value) if isinstance(value, (dict, list, set)) else value) for key, value in vars(my_predbat).items()}
+    try:
+        published = {minute: 15.0 for minute in range(-1440, 1380)}
+        future = {minute: 20.0 for minute in range(1380, 3 * 1440)}
+        other = {minute: 10.0 for minute in range(-1440, 1380)}
+        with patch.object(my_predbat, "get_arg", side_effect=lambda key, default=None, *a, **k: True if key == "futurerate_adjust_import" else (False if key == "futurerate_adjust_export" else default)):
+            my_predbat.minutes_now = 600
+            my_predbat.forecast_minutes = 2880
+            my_predbat.future_energy_rates_import = future
+            my_predbat.future_energy_rates_export = {}
+            my_predbat.metric_future_rate_offset_import = 0
+            my_predbat.metric_future_rate_offset_export = 0
+            my_predbat.io_adjusted = {}
+            live, _ = my_predbat.rate_replicate(dict(published), {}, is_import=True, use_future=True)
+            for label, rates, expected_existing, expected_2000 in [("the live tariff refetched", published, True, 20.0), ("another tariff", other, False, 10.0)]:
+                with patch.object(my_predbat, "basic_rates", side_effect=lambda *a, rates=rates, **k: dict(rates)), patch.object(my_predbat, "find_low_rate_windows", lambda: None), patch.object(my_predbat, "set_rate_thresholds", lambda: None):
+                    got = cmp.fetch_rates({"id": "t33", "rates_import": [{"rate": 0}]}, dict(live), {}, {}, rate_import_match=dict(live), rate_export_match={})
+                    if got is not expected_existing:
+                        t33_errors.append("{}: existing should be {}, got {}".format(label, expected_existing, got))
+                    if my_predbat.rate_import.get(2000) != expected_2000:
+                        t33_errors.append("{}: minute 2000 should be {}, got {}".format(label, expected_2000, my_predbat.rate_import.get(2000)))
+    finally:
+        vars(my_predbat).clear()
+        vars(my_predbat).update(saved)
+    if t33_errors:
+        for error in t33_errors:
+            print("ERROR T33: {}".format(error))
+        failed += 1
+    else:
+        print("PASS T33: future rates fill only a compared tariff that is the live one")
 
     if failed:
         print("**** compare tests FAILED: {} errors ****\n".format(failed))

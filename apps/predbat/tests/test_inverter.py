@@ -20,7 +20,7 @@ from predbat import PredBat
 from inverter import Inverter, within_fuzzy
 from givtcp_rest import GivTCPRest
 from config import INVERTER_DEF
-from const import MINUTE_WATT, TIME_FORMAT_SECONDS
+from const import INVERTER_MAX_RETRY, MINUTE_WATT, TIME_FORMAT_SECONDS
 
 
 def test_foxess_support_discharge_freeze_matches_foxcloud():
@@ -3903,6 +3903,73 @@ def test_button_press_and_poll_counts_as_register_write(test_name, ha, inv):
     return failed
 
 
+def test_button_press_and_poll_clock_skew(test_name, ha, inv):
+    """
+    Regression test for issue #5694: _press_single_button_and_poll compared the press time with
+    timedelta.seconds, which is never negative, so a last_updated a few seconds ahead of Predbat's
+    clock read as ~86395s stale (pressed 10 times, then reported failed) and one a whole number of
+    days plus a few seconds old read as fresh.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    entity_id = "button.charge_discharge_update"
+    unset = object()
+    saved_item = ha.dummy_items.get(entity_id, unset)
+    saved_sleep = inv.sleep
+    saved_call_service = inv.base.call_service_wrapper
+    had_record_status = "record_status" in inv.base.__dict__
+    saved_record_status = inv.base.record_status
+    presses = []
+    before_writes = inv.count_register_writes
+    try:
+        inv.sleep = lambda seconds: None
+        inv.base.record_status = lambda *args, **kwargs: None
+
+        def counting_call_service(service, **kwargs):
+            """Count button presses, then pass through to the mock HA."""
+            if service == "button/press":
+                presses.append(kwargs.get("entity_id"))
+            return saved_call_service(service, **kwargs)
+
+        inv.base.call_service_wrapper = counting_call_service
+        local_tz = pytz.timezone(inv.base.get_arg("timezone", "Europe/London"))
+
+        for label, offset, expect_ok in [
+            ("5s ahead of the clock", timedelta(seconds=5), True),
+            ("3 days and 5s old", -timedelta(days=3, seconds=5), False),
+        ]:
+            presses.clear()
+            inv.count_register_writes = before_writes
+            ha.dummy_items[entity_id] = (datetime.now(local_tz) + offset).strftime(TIME_FORMAT_SECONDS)
+            result = inv._press_single_button_and_poll(entity_id)
+            if result != expect_ok:
+                print(f"ERROR: {test_name}: press with last_updated {label} should return {expect_ok}, got {result}")
+                failed = True
+            expected_presses = 1 if expect_ok else INVERTER_MAX_RETRY
+            if len(presses) != expected_presses:
+                print(f"ERROR: {test_name}: press with last_updated {label} should press {expected_presses} time(s), pressed {len(presses)}")
+                failed = True
+            expected_writes = before_writes + (1 if expect_ok else 0)
+            if inv.count_register_writes != expected_writes:
+                print(f"ERROR: {test_name}: press with last_updated {label} should leave count_register_writes {expected_writes}, got {inv.count_register_writes}")
+                failed = True
+    finally:
+        inv.sleep = saved_sleep
+        inv.base.call_service_wrapper = saved_call_service
+        if had_record_status:
+            inv.base.record_status = saved_record_status
+        else:
+            del inv.base.record_status
+        if saved_item is unset:
+            ha.dummy_items.pop(entity_id, None)
+        else:
+            ha.dummy_items[entity_id] = saved_item
+        inv.count_register_writes = before_writes
+
+    return failed
+
+
 def test_force_export_stable_window_presses_button_once(test_name, ha, inv):
     """
     Regression test for issue #4709: a stable export window must commit to the inverter once, not on
@@ -6536,6 +6603,7 @@ charge_start_service:
     failed |= test_export_commit_guard_latches_across_fetches("export_commit_guard_latches_across_fetches", my_predbat)
     failed |= test_button_press_counts_as_register_write("button_press_counts_as_register_write", ha, inv)
     failed |= test_button_press_and_poll_counts_as_register_write("button_press_and_poll_counts_as_register_write", ha, inv)
+    failed |= test_button_press_and_poll_clock_skew("button_press_and_poll_clock_skew", ha, inv)
     if failed:
         return failed
 

@@ -35,6 +35,7 @@ from wallbox import (
     WallboxTransport,
     basic_auth_header,
     normalise_charger,
+    plugged_state,
 )
 
 
@@ -629,7 +630,7 @@ def test_component_publishes_one_charger():
     wallbox_entities = {name for name in entities if "_wallbox_" in name}
     assert wallbox_entities == {
         "sensor.{}_status".format(prefix), "sensor.{}_power".format(prefix), "sensor.{}_session_energy".format(prefix),
-        "binary_sensor.{}_connected".format(prefix), "binary_sensor.{}_charging".format(prefix),
+        "binary_sensor.{}_connected".format(prefix), "binary_sensor.{}_plugged".format(prefix), "binary_sensor.{}_charging".format(prefix),
         "switch.{}_charging".format(prefix), "switch.{}_locked".format(prefix), "number.{}_max_charging_current".format(prefix),
     }, wallbox_entities
     assert entities["sensor.{}_status".format(prefix)]["state"] == "Charging"
@@ -639,6 +640,7 @@ def test_component_publishes_one_charger():
     assert entities["sensor.{}_power".format(prefix)]["attributes"]["unit_of_measurement"] == "W"
     assert entities["sensor.{}_session_energy".format(prefix)]["state"] == 4.5
     assert entities["binary_sensor.{}_connected".format(prefix)]["state"] == "on"
+    assert entities["binary_sensor.{}_plugged".format(prefix)]["state"] == "on"
     assert entities["binary_sensor.{}_charging".format(prefix)]["state"] == "on"
     assert entities["switch.{}_charging".format(prefix)]["state"] == "on"
     assert entities["switch.{}_locked".format(prefix)]["state"] == "off"
@@ -656,6 +658,7 @@ def test_component_publishes_two_chargers_and_eco_smart():
     entities = component.base.entities
     assert entities["sensor.predbat_wallbox_202_status"]["state"] == "Ready"
     assert entities["binary_sensor.predbat_wallbox_202_connected"]["state"] == "off"
+    assert entities["binary_sensor.predbat_wallbox_202_plugged"]["state"] == "off"
     assert entities["switch.predbat_wallbox_202_charging"]["state"] == "off"
     select = entities["select.predbat_wallbox_101_eco_smart"]
     assert select["state"] == "full_solar" and select["attributes"]["options"] == ["off", "eco_mode", "full_solar"]
@@ -896,6 +899,18 @@ def test_charger_for_entity_requires_a_whole_id():
     print("  ✓ Entities resolve to a whole charger id")
 
 
+def test_plugged_state():
+    """binary_sensor.<prefix>_plugged is off only when the status positively says no car - Disconnected is no reading."""
+    for status_id, expected in [(193, "on"), (180, "on"), (210, "on"), (161, "off"), (162, "off"), (165, "off"), (209, "off"), (0, "unavailable"), (163, "unavailable"), (14, "unavailable"), (166, "unavailable"), (999, "unavailable")]:
+        state = plugged_state(normalise_charger(101, _status(status_id=status_id)))
+        assert state == expected, (status_id, state)
+    # A charger that reported no status at all
+    payload = _status()
+    payload.pop("status_id")
+    assert plugged_state(normalise_charger(101, payload)) == "unavailable"
+    print("  ✓ The plugged sensor reads unavailable rather than unplugged when the status says nothing about the cable")
+
+
 def test_automatic_config_two_chargers():
     """Each argument is a per-car list in charger id order, and num_cars is raised to match."""
     component = _make_component({202: _status(), 101: _status()})
@@ -903,6 +918,7 @@ def test_automatic_config_two_chargers():
     args = component.base.args
     assert args["car_charging_energy"] == ["sensor.predbat_wallbox_101_session_energy", "sensor.predbat_wallbox_202_session_energy"]
     assert args["car_charging_planned"] == ["binary_sensor.predbat_wallbox_101_connected", "binary_sensor.predbat_wallbox_202_connected"]
+    assert args["car_charging_plugged"] == ["binary_sensor.predbat_wallbox_101_plugged", "binary_sensor.predbat_wallbox_202_plugged"]
     assert args["car_charging_power"] == ["sensor.predbat_wallbox_101_power", "sensor.predbat_wallbox_202_power"]
     assert args["car_charging_now"] == ["sensor.predbat_wallbox_101_power", "sensor.predbat_wallbox_202_power"]
     assert args["num_cars"] == 2
@@ -1009,10 +1025,15 @@ def _control_component(plans, statuses=None, storage=None, **overrides):
     for car_n, windows in plans.items():
         postfix = "" if car_n == 0 else "_{}".format(car_n)
         component.base.set_state_wrapper("binary_sensor.predbat_car_charging_slot" + postfix, "off", {"planned": windows})
-    run_async(component.load_control_state())
+    run_async(component.charger_control_load_enabled())
     component.enable_control()
     _load_chargers(component)
     return component
+
+
+def _held_stops(component):
+    """The chargers Predbat holds stopped (paused) - the shared loop's record of what it owes a release."""
+    return {key for key, charge in component.charger_control_state.items() if charge is False}
 
 
 def _load_chargers(component):
@@ -1026,10 +1047,10 @@ def _load_chargers(component):
 
 def test_control_needs_automatic():
     """Control stays off, with a warning, unless automatic configuration is on."""
-    assert _control_component({}).control_active is True
+    assert _control_component({}).charger_control_active is True
     without_auto = _control_component({}, automatic=False)
-    assert without_auto.control_active is False and _logged(without_auto, "needs wallbox_automatic")
-    assert _control_component({}, wallbox_control=False).control_active is False
+    assert without_auto.charger_control_active is False and _logged(without_auto, "needs wallbox_automatic")
+    assert _control_component({}, wallbox_control=False).charger_control_active is False
     print("  ✓ Control needs wallbox_control and wallbox_automatic")
 
 
@@ -1046,7 +1067,7 @@ def test_control_pauses_outside_a_window():
     component = _control_component({0: PLAN_OUTSIDE})
     run_async(component.control_tick(CONTROL_NOW))
     assert component.transport.calls == [("pause", 101)]
-    assert component.paused_by_predbat == {"101"}
+    assert _held_stops(component) == {"101"}
     print("  ✓ A charging charger outside a window is paused")
 
 
@@ -1104,11 +1125,11 @@ def test_control_forgets_an_unplugged_charger():
     """Once the car is unplugged, Predbat no longer counts the charger as one it paused."""
     component = _control_component({0: PLAN_OUTSIDE})
     run_async(component.control_tick(CONTROL_NOW))
-    assert component.paused_by_predbat == {"101"}
+    assert _held_stops(component) == {"101"}
     component.transport.statuses[101] = _status(status_id=161, power=0)
     _load_chargers(component)
     run_async(component.control_tick(CONTROL_NOW))
-    assert component.paused_by_predbat == set() and component.transport.calls == []
+    assert _held_stops(component) == set() and component.transport.calls == []
     print("  ✓ An unplugged charger is forgotten")
 
 
@@ -1124,10 +1145,10 @@ def test_control_releases_on_read_only_and_switch_off():
             component.base.args["set_read_only"] = True
         else:
             run_async(component.switch_event_handler("switch.predbat_wallbox_control", "turn_off"))
-            assert component.control_enabled is False
+            assert component.charger_control_enabled is False
         run_async(component.control_tick(CONTROL_NOW))
         assert component.transport.calls == [("resume", 101), ("resume_schedule", 101)], (release, component.transport.calls)
-        assert component.paused_by_predbat == set()
+        assert _held_stops(component) == set()
 
         component.transport.calls = []
         run_async(component.control_tick(CONTROL_NOW))
@@ -1149,13 +1170,13 @@ def test_control_state_survives_a_restart():
     storage = _Storage()
     component = _control_component({0: PLAN_OUTSIDE}, storage=storage)
     run_async(component.control_tick(CONTROL_NOW))
-    assert storage.data[("wallbox", "control_state")] == {"control_enabled": True, "paused": ["101"], "schedule": []}
+    assert storage.data[("wallbox", "control_state")] == {"control_enabled": True, "held": {"101": False}, "paused": ["101"], "schedule": []}
 
     restarted = _control_component({0: PLAN_OUTSIDE}, {101: _status(status_id=178, power=0)}, storage=storage, wallbox_control=False)
-    assert restarted.control_active is False and restarted.paused_by_predbat == {"101"}
+    assert restarted.charger_control_active is False and _held_stops(restarted) == {"101"}
     run_async(restarted.control_tick(CONTROL_NOW))
     assert restarted.transport.calls == [("resume", 101), ("resume_schedule", 101)]
-    assert storage.data[("wallbox", "control_state")]["paused"] == []
+    assert storage.data[("wallbox", "control_state")]["held"] == {}
     print("  ✓ A restart with control off still releases the charger")
 
 
@@ -1168,7 +1189,7 @@ def test_control_switch_state_survives_a_restart():
     restarted = _make_component(wallbox_control=True)
     restarted.base.components = _Components(storage)
     run_async(restarted.run(0, True))
-    assert restarted.control_enabled is False
+    assert restarted.charger_control_enabled is False
     assert restarted.base.entities["switch.predbat_wallbox_control"]["state"] == "off"
     print("  ✓ The control switch state survives a restart")
 
@@ -1202,10 +1223,10 @@ def test_control_failure_does_not_fail_the_cycle():
     component.transport.errors[("pause", 101)] = WallboxApiError("HTTP 500")
     assert run_async(component.run(0, True)) is True
     # The pause is recorded before it is sent, in case it was applied and only the reply was lost
-    assert _logged(component, "charge control failed") and component.paused_by_predbat == {"101"}
+    assert _logged(component, "charge control failed") and _held_stops(component) == {"101"}
     assert component.transport.count("pause") == 1
     run_async(component.run(120, False))
-    assert component.transport.count("pause") == 2 and component.paused_by_predbat == {"101"}
+    assert component.transport.count("pause") == 2 and _held_stops(component) == {"101"}
     print("  ✓ A refused control is a warning and is retried")
 
 
@@ -1263,7 +1284,7 @@ def test_control_records_a_pause_whose_response_was_lost():
     component = _control_component({0: PLAN_OUTSIDE})
     component.transport.errors[("pause", 101)] = WallboxApiError("timed out")
     run_async(component.control_tick(CONTROL_NOW))
-    assert component.paused_by_predbat == {"101"} and _logged(component, "charge control failed")
+    assert _held_stops(component) == {"101"} and _logged(component, "charge control failed")
 
     component.transport.statuses[101] = _status(status_id=178, power=0)
     _load_chargers(component)
@@ -1281,7 +1302,7 @@ def test_control_keeps_its_record_through_a_transient_status():
         component.transport.statuses[101] = _status(status_id=transient, power=0)
         _load_chargers(component)
         run_async(component.control_tick(CONTROL_NOW))
-        assert component.paused_by_predbat == {"101"}, transient
+        assert _held_stops(component) == {"101"}, transient
 
         component.transport.statuses[101] = _status(status_id=178, power=0)
         _load_chargers(component)
@@ -1307,11 +1328,132 @@ def test_control_state_load_is_retried():
     storage.load = flaky_load
     component = _make_component({101: _status(status_id=178, power=0)}, wallbox_control=False)
     component.base.components = _Components(storage)
+    # The run's own read fails; the control tick in the same poll reads it again and releases at once
     run_async(component.run(0, True))
-    assert component.paused_by_predbat == set() and component.transport.count("resume") == 0
-    run_async(component.run(120, False))
     assert component.transport.count("resume") == 1, "The stored charger was released once the state could be read"
+    run_async(component.run(120, False))
+    assert component.transport.count("resume") == 1 and _held_stops(component) == set(), "Released once, not again"
     print("  ✓ A failed control state read is retried")
+
+
+DISPATCH = "binary_sensor.octopus_energy_intelligent_dispatching"
+# CONTROL_NOW (23:30 BST) is inside this dispatch
+DISPATCH_NOW = [{"start": "2026-10-05T22:00:00+0000", "end": "2026-10-05T23:00:00+0000", "charge_in_kwh": 7.0}]
+
+
+def _octopus_control_component(is_charger, plans, statuses=None, dispatches=None, follows_car=False):
+    """A control component whose car 0 is on Octopus Intelligent, with a dispatch sensor saying whether Octopus drives the charger."""
+    component = _control_component(plans, statuses)
+    component.base.args["octopus_intelligent_slot"] = [DISPATCH]
+    component.base.args["octopus_intelligent_charger_follows_car"] = follows_car
+    attributes = {"planned_dispatches": dispatches or []}
+    if is_charger is not None:
+        attributes["is_charger"] = is_charger
+    component.base.set_state_wrapper(DISPATCH, "on" if dispatches else "off", attributes)
+    return component
+
+
+def test_octopus_drives_car_leaves_wallbox_alone():
+    """Octopus drives the car: by default a charging Wallbox outside a window is left alone, with one Info line naming the switch."""
+    component = _octopus_control_component(False, {0: PLAN_OUTSIDE})
+    run_async(component.control_tick(CONTROL_NOW))
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == [], component.transport.calls
+    assert len([message for message in component.log_messages if "drives car 0 itself" in message and "charger_follows_car" in message]) == 1
+    print("  ✓ Octopus drives the car: Wallbox left alone")
+
+
+def test_octopus_drives_car_wallbox_follows_dispatches():
+    """With octopus_intelligent_charger_follows_car on, the Wallbox is paused outside a dispatch and resumed inside one."""
+    component = _octopus_control_component(False, {0: []}, follows_car=True)
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == [("pause", 101)], component.transport.calls
+    component.transport.statuses[101] = _status(status_id=178, power=0)
+    _load_chargers(component)
+    component.base.set_state_wrapper(DISPATCH, "on", {"is_charger": False, "planned_dispatches": DISPATCH_NOW})
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == [("resume", 101)], component.transport.calls
+    print("  ✓ Octopus drives the car: Wallbox follows the dispatches when asked")
+
+
+def test_wallbox_guest_charging_releases():
+    """The guest switch is published with control, and turning it on resumes a Wallbox Predbat paused and hands back its schedule."""
+    component = _control_component({0: PLAN_OUTSIDE})
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == [("pause", 101)]
+    run_async(component.publish_data())
+    assert component.base.entities["switch.predbat_wallbox_guest_charging"]["state"] == "off"
+    component.transport.statuses[101] = _status(status_id=178, power=0)
+    _load_chargers(component)
+    run_async(component.switch_event_handler("switch.predbat_wallbox_guest_charging", "turn_on"))
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == [("resume", 101), ("resume_schedule", 101)], component.transport.calls
+    assert _held_stops(component) == set()
+    print("  ✓ Guest charging releases the Wallbox")
+
+
+def test_wallbox_unplug_forgets_a_paused_charger():
+    """A charger Predbat paused that then says positively there is no car is forgotten without a command; Disconnected is not enough."""
+    component = _control_component({0: PLAN_OUTSIDE})
+    run_async(component.control_tick(CONTROL_NOW))
+    component.transport.statuses[101] = _status(status_id=0, power=0)
+    _load_chargers(component)
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == [] and _held_stops(component) == {"101"}, "Disconnected says nothing about the cable"
+    component.transport.statuses[101] = _status(status_id=161, power=0)
+    _load_chargers(component)
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == [] and _held_stops(component) == set(), component.transport.calls
+    print("  ✓ An unplugged Wallbox is forgotten")
+
+
+def test_wallbox_restart_does_not_read_as_read_only():
+    """reset() leaves the base read only attribute True until the first update_pred(): a restart must not release a paused Wallbox."""
+    component = _restarted_with_control_off(_storage_with_paused("101"), {101: _status(status_id=178, power=0)})
+    component.charger_control_active = True
+    component.base.set_read_only = True
+    component.base.set_state_wrapper("binary_sensor.predbat_car_charging_slot", "off", {"planned": PLAN_OUTSIDE})
+    run_async(component.control_tick(CONTROL_NOW))
+    assert ("resume", 101) not in component.transport.calls, component.transport.calls
+    print("  ✓ A restart does not read as read only")
+
+
+def test_wallbox_failed_resume_is_retried():
+    """A resume that fails on release leaves the charger owed and paused, so the next cycle resumes it again."""
+    component = _restarted_with_control_off(_storage_with_paused("101"), {101: _status(status_id=178, power=0)})
+    component.transport.errors[("resume", 101)] = WallboxApiError("HTTP 500")
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == [("resume", 101)] and "101" in component.paused_by_predbat
+    # The stub transport raises a configured error once
+    component.transport.calls = []
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == [("resume", 101), ("resume_schedule", 101)], component.transport.calls
+    assert component.paused_by_predbat == set() and _held_stops(component) == set()
+    print("  ✓ A failed resume is retried")
+
+
+def test_wallbox_user_pause_is_not_resumed():
+    """A charger the user paused, held outside a window with nothing sent, is not resumed when control is released."""
+    component = _control_component({0: PLAN_OUTSIDE}, {101: _status(status_id=178, power=0)})
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == [] and component.paused_by_predbat == set()
+    component.base.args["set_read_only"] = True
+    run_async(component.control_tick(CONTROL_NOW))
+    assert ("resume", 101) not in component.transport.calls, component.transport.calls
+    print("  ✓ A charger the user paused is not resumed on release")
+
+
+def test_wallbox_rate_limit_stops_the_control_loop():
+    """A rate limit on one charger stops the loop at once and reaches run(), even after another charger's ordinary error."""
+    component = _control_component({0: PLAN_OUTSIDE, 1: PLAN_OUTSIDE}, {101: _status(), 202: _status()})
+    component.transport.errors[("pause", 101)] = WallboxApiError("HTTP 500")
+    component.transport.errors[("pause", 202)] = WallboxRateLimitError("HTTP 429")
+    try:
+        run_async(component.control_tick(CONTROL_NOW))
+        raise AssertionError("Expected the rate limit to reach the caller")
+    except WallboxRateLimitError:
+        pass
+    print("  ✓ A rate limit stops the control loop")
 
 
 def test_normalise_real_locked_capture():
@@ -1384,21 +1526,21 @@ def test_release_waits_for_a_locked_charger():
     """A charger Predbat paused that is now locked cannot be resumed; the record is kept until it is unlocked."""
     component = _control_component({0: PLAN_OUTSIDE})
     run_async(component.control_tick(CONTROL_NOW))
-    assert component.paused_by_predbat == {"101"}
+    assert _held_stops(component) == {"101"}
 
     component.transport.statuses[101] = _status(status_id=178, power=0, locked=1)
     _load_chargers(component)
     component.base.args["set_read_only"] = True
     run_async(component.control_tick(CONTROL_NOW))
     run_async(component.control_tick(CONTROL_NOW))
-    assert component.transport.calls == [] and component.paused_by_predbat == {"101"}
+    assert component.transport.calls == [] and _held_stops(component) == {"101"}
     assert len([message for message in component.log_messages if "is locked" in message]) == 1
 
     component.transport.statuses[101] = _status(status_id=178, power=0)
     _load_chargers(component)
     run_async(component.control_tick(CONTROL_NOW))
     assert component.transport.calls == [("resume", 101), ("resume_schedule", 101)]
-    assert component.paused_by_predbat == set()
+    assert _held_stops(component) == set()
     print("  ✓ Release waits for a locked charger to be unlocked")
 
 
@@ -1463,7 +1605,7 @@ def test_control_is_disabled_for_an_ocpp_charger():
     run_async(component.control_tick(CONTROL_NOW))
     run_async(component.control_tick(CONTROL_NOW))
     assert component.transport.count("pause") == 2 and ("pause", 101) not in component.transport.calls, component.transport.calls
-    assert component.paused_by_predbat == {"202"}
+    assert _held_stops(component) == {"202"}
     assert len([message for message in component.log_messages if "OCPP" in message and "Garage" in message]) == 1, component.log_messages
 
     paused = _control_component({0: PLAN_INSIDE}, {101: _status(status_id=178, power=0, mode="ocpp")})
@@ -1554,26 +1696,30 @@ def test_release_keeps_a_charger_it_could_not_read():
     component = _restarted_with_control_off(storage, {202: _status(status_id=161, power=0)})
     component.update_car_order([101, 202])
     run_async(component.control_tick(CONTROL_NOW))
-    assert component.transport.calls == [] and component.paused_by_predbat == {"101"}
+    assert component.transport.calls == [] and _held_stops(component) == {"101"}
 
     component.transport.statuses[101] = _status(status_id=178, power=0)
     _load_chargers(component)
     run_async(component.control_tick(CONTROL_NOW))
     assert component.transport.calls == [("resume", 101), ("resume_schedule", 101)]
-    assert component.paused_by_predbat == set()
+    assert _held_stops(component) == set()
     print("  ✓ Release keeps a charger it could not read")
 
 
 def test_release_keeps_an_indeterminate_charger_and_forgets_a_settled_one():
-    """Updating, Error, Unknown and locked-with-car stay pending on release; charging, waiting and unplugged are forgotten."""
-    for status_id, locked in ((166, False), (14, False), (999, False), (210, 1)):
+    """Updating, Error, Unknown, Disconnected and locked-with-car stay pending on release; charging, waiting and a positive no-car are forgotten.
+
+    Disconnected (0) is kept: it is also what a charger reads while it has dropped off Wallbox's cloud, which is
+    seen mid-charge, so it says nothing about the cable and forgetting the pause then could strand the car.
+    """
+    for status_id, locked in ((166, False), (14, False), (999, False), (210, 1), (0, False)):
         component = _restarted_with_control_off(_storage_with_paused("101"), {101: _status(status_id=status_id, power=0, locked=locked)})
         run_async(component.control_tick(CONTROL_NOW))
-        assert component.transport.calls == [] and component.paused_by_predbat == {"101"}, status_id
-    for status_id in (193, 177, 180, 161, 0):
+        assert component.transport.calls == [] and _held_stops(component) == {"101"}, status_id
+    for status_id in (193, 177, 180, 161):
         component = _restarted_with_control_off(_storage_with_paused("101"), {101: _status(status_id=status_id, power=0)})
         run_async(component.control_tick(CONTROL_NOW))
-        assert component.transport.calls == [] and component.paused_by_predbat == set(), status_id
+        assert component.transport.calls == [] and _held_stops(component) == set(), status_id
     print("  ✓ Release keeps an indeterminate charger and forgets a settled one")
 
 
@@ -1591,7 +1737,7 @@ def test_one_chargers_failure_does_not_block_the_next():
     component.transport.errors[("resume", 101)] = WallboxApiError("HTTP 500")
     run_async(component.control_tick(CONTROL_NOW))
     assert ("resume", 202) in component.transport.calls and ("resume_schedule", 202) in component.transport.calls
-    assert component.paused_by_predbat == {"101"}, "The charger whose resume failed is still owed a release"
+    assert _held_stops(component) == {"101"}, "The charger whose resume failed is still owed a release"
     print("  ✓ One charger's failure does not block the next")
 
 
@@ -1616,7 +1762,8 @@ def test_pause_is_persisted_before_it_is_sent():
 
     async def recording_pause(charger_id):
         """Note what storage held at the moment the pause was sent."""
-        seen.append(list((storage.data.get(("wallbox", "control_state")) or {}).get("paused", [])))
+        held = (storage.data.get(("wallbox", "control_state")) or {}).get("held", {})
+        seen.append(sorted(key for key, charge in held.items() if charge is False))
         return await real_pause(charger_id)
 
     component.transport.pause = recording_pause
@@ -1645,7 +1792,7 @@ def test_failed_control_state_save_is_retried():
     component.transport.statuses[101] = _status(status_id=178, power=0)
     _load_chargers(component)
     run_async(component.control_tick(CONTROL_NOW))
-    assert storage.data[("wallbox", "control_state")]["paused"] == ["101"]
+    assert storage.data[("wallbox", "control_state")]["held"] == {"101": False}
     print("  ✓ A failed control state save is retried")
 
 
@@ -1675,7 +1822,8 @@ def test_schedule_restoration_is_retried_after_a_failure():
     component.transport.errors[("resume_schedule", 101)] = WallboxApiError("HTTP 500")
     run_async(component.control_tick(CONTROL_NOW))
     assert component.transport.calls == [("resume", 101), ("resume_schedule", 101)]
-    assert component.paused_by_predbat == set() and component.schedule_pending == {"101"}
+    # Still held until the hand-back goes through, with the resume recorded as done
+    assert component.schedule_pending == {"101"}
     assert storage.data[("wallbox", "control_state")]["schedule"] == ["101"], "The pending step survives a restart"
 
     component.transport.statuses[101] = _status(status_id=193)
@@ -1683,6 +1831,7 @@ def test_schedule_restoration_is_retried_after_a_failure():
     run_async(component.control_tick(CONTROL_NOW))
     assert component.transport.calls == [("resume_schedule", 101)], component.transport.calls
     assert component.schedule_pending == set() and storage.data[("wallbox", "control_state")]["schedule"] == []
+    assert _held_stops(component) == set()
     print("  ✓ Schedule restoration is retried after a failure")
 
 
@@ -1769,6 +1918,14 @@ def test_wallbox(my_predbat=None):
     test_operation_mode_is_read_and_published()
     test_control_is_disabled_for_an_ocpp_charger()
     test_control_resumes_once_ocpp_is_turned_off()
+    test_octopus_drives_car_leaves_wallbox_alone()
+    test_octopus_drives_car_wallbox_follows_dispatches()
+    test_wallbox_guest_charging_releases()
+    test_wallbox_unplug_forgets_a_paused_charger()
+    test_wallbox_restart_does_not_read_as_read_only()
+    test_wallbox_failed_resume_is_retried()
+    test_wallbox_user_pause_is_not_resumed()
+    test_wallbox_rate_limit_stops_the_control_loop()
     test_lock_warning_names_ocpp_when_it_holds_the_lock()
     test_location_and_timezone_are_read_and_published()
     test_software_versions_are_read_and_published()
@@ -1780,5 +1937,6 @@ def test_wallbox(my_predbat=None):
     test_failed_control_state_save_is_retried()
     test_control_state_with_nothing_saved_is_read_once()
     test_schedule_restoration_is_retried_after_a_failure()
+    test_plugged_state()
     print("=" * 70)
     return False

@@ -803,6 +803,11 @@ class Inverter:
             self.inverter_limit = self.base.get_arg("inverter_limit", self.inverter_limit * MINUTE_WATT, index=self.id, required_unit="W") / MINUTE_WATT
         if "export_limit" in self.base.args:
             self.export_limit = self.base.get_arg("export_limit", self.export_limit * MINUTE_WATT, index=self.id, required_unit="W") / MINUTE_WATT
+        # A site can be barred from exporting battery energy while still exporting spare solar, e.g. a Powerwall
+        # left at Tesla's Solar Only export permission (GH#5710). Only an explicit off or false bars it, so a
+        # missing or unavailable entity leaves export planning as it was.
+        battery_export = self.base.get_arg("battery_export_permitted", None, index=self.id)
+        self.inv_battery_export_permitted = str(battery_export).lower() not in ["off", "false"]
 
         # Log inverter details
         if not quiet:
@@ -1345,7 +1350,7 @@ class Inverter:
             soc_label = "soc_percent"
         else:
             soc_kwh_percent = False
-            soc_label = "soc_kwh"
+            soc_label = "soc_kw"
             soc_kwh_sensor = self.base.get_arg("soc_kw", indirect=False, index=self.id)
 
         if discharge:
@@ -1360,10 +1365,6 @@ class Inverter:
 
         final_curve = {}
         final_curve_count = {}
-        soc_kwh = []
-        charge_rate = []
-        battery_power = []
-        predbat_status = []
 
         if discharge:
             max_power = int(self.battery_rate_max_discharge * MINUTE_WATT)
@@ -1638,12 +1639,18 @@ class Inverter:
                         )
                     )
             else:
-                self.log(
-                    "Warn: Inverter {} Cannot find battery {} curve (missing history), one of the required settings for {}, {}_rate, battery_power and predbat.status do not have history, check apps.yaml".format(self.id, curve_type, soc_label, curve_type)
-                )
-                self.log("Warn: Inverter {} Sensor history data lengths: {} {}, {}_rate {}, battery_power {}, predbat_status {}".format(self.id, soc_label, len(soc_kwh), curve_type, len(charge_rate), len(battery_power), len(predbat_status)))
+                history_checks = [
+                    (soc_label, soc_kwh_sensor, soc_kwh_data),
+                    ("{}_rate".format(curve_type), charge_rate_sensor, charge_rate_data),
+                    ("battery_power", battery_power_sensor, battery_power_data),
+                    ("predbat.status", predbat_status_sensor, predbat_status_data),
+                ]
+                no_history = ["{} ({})".format(setting, entity_id) for setting, entity_id, data in history_checks if not data]
+                self.log("Warn: Inverter {} Cannot find battery {} curve (missing history), no history found for {} - check the entity name in apps.yaml and that Home Assistant is recording its history".format(self.id, curve_type, ", ".join(no_history)))
+                self.log("Warn: Inverter {} Sensor history record counts: {}".format(self.id, ", ".join("{} {}".format(setting, len(data[0]) if data else 0) for setting, entity_id, data in history_checks)))
         else:
-            self.log("Warn: Inverter {} Cannot find battery {} curve (settings missing), one of the required settings for {}, {}_rate and battery_power are missing from apps.yaml".format(self.id, curve_type, soc_label, curve_type))
+            missing_settings = [setting for setting, entity_id in [(soc_label, soc_kwh_sensor), ("{}_rate".format(curve_type), charge_rate_sensor), ("battery_power", battery_power_sensor)] if not entity_id]
+            self.log("Warn: Inverter {} Cannot find battery {} curve (settings missing), {} not set in apps.yaml".format(self.id, curve_type, ", ".join(missing_settings)))
         return {}
 
     def create_entity(self, entity_name, value, uom=None, device_class=None, icon=None):
@@ -3897,7 +3904,9 @@ class Inverter:
                 continue
 
             now_local = datetime.now(local_tz)
-            if (now_local - time_pressed).seconds < 10:
+            # total_seconds(), not .seconds: .seconds is normalised into [0, 86399], so a stamp a
+            # second ahead of our clock read as ~86399s stale and a days-old one read as fresh (batpred#5694).
+            if abs((now_local - time_pressed).total_seconds()) < 10:
                 self.base.log(f"Inverter {self.id} successfully pressed button {entity_id}")
                 # Counted for the same reason as the toggle-button path above (batpred#4712).
                 self.count_register_writes += 1

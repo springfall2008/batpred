@@ -90,6 +90,27 @@ def test_octopus_free(my_predbat):
         else:
             print("PASS: Free-session direct download uses the configured timeout")
 
+        # A ReadTimeout is not a ConnectionError, so it must be caught as a RequestException rather than abort the plan cycle (#5743)
+        import requests
+
+        _reset_free_cache(my_predbat)
+        my_predbat.components = None
+        try:
+            with patch("octopus.requests.get", side_effect=requests.exceptions.ReadTimeout("Read timed out. (read timeout=120)")):
+                body = my_predbat.download_octopus_free_func(_URL)
+                sessions = my_predbat.download_octopus_free(_URL)
+            if body is not None:
+                print("FAIL: Expected None from free-session download on ReadTimeout, got {}".format(body))
+                failed = True
+            elif sessions != []:
+                print("FAIL: Expected no free sessions on ReadTimeout, got {}".format(sessions))
+                failed = True
+            else:
+                print("PASS: Free-session ReadTimeout handled without raising")
+        except requests.exceptions.ReadTimeout:
+            print("FAIL: ReadTimeout escaped download_octopus_free (#5743)")
+            failed = True
+
         # --- Test 1: no storage (components=None) — no exception, returns sessions ---
         _reset_free_cache(my_predbat)
         my_predbat.components = None

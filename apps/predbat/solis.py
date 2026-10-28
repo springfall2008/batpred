@@ -260,6 +260,10 @@ SOLIS_SLOT_PROBE_RETRY_SECONDS = 60 * 60
 # reply carries the owner's station name and address, which must stay out of a log shared with support.
 SOLIS_DETAIL_SUMMARY_PATTERN = re.compile(r"model|version|firmware|machine|^power(Str)?$|^parallelBattery$|^batteryType(Name)?$|^batteryCount$", re.IGNORECASE)
 
+# inverterDetail `machine` of a grid-tied string inverter, which has no battery port: Solis names these
+# <series>-GR<phases>P (S6-GR1P6K, S5-GR3P10K), against EH/EA/RHI/RAI for the hybrid and storage ranges
+SOLIS_GRID_TIED_MACHINE_PATTERN = re.compile(r"^S\d+-GR\dP", re.IGNORECASE)
+
 def parse_cid_int(value, default=None):
     """Convert a CID register value to an int, returning default when it is missing or not numeric.
 
@@ -296,6 +300,27 @@ def time_in_window(current_time, start_time, end_time):
         return start_time <= current_time <= end_time
     # Overnight time range (e.g., 23:00 to 02:00)
     return current_time >= start_time or current_time <= end_time
+
+
+def export_power_cid_to_watts(value):
+    """Convert a max export power register (CID 499) read to watts, or None when no limit is configured.
+
+    The register holds 100 W units at every value - the write path in number_event_handler() divides
+    by 100 unconditionally - so a read of 480 is 48,000 W, not 480 W (GH#5385). An unread, non-numeric
+    or zero register is not a configured figure.
+
+    Args:
+        value: Raw register value, usually a string
+
+    Returns: The limit in watts as a float, or None
+    """
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    if value <= 0:
+        return None
+    return value * 100
 
 
 def cid_value_matches(read_back, value):
@@ -856,11 +881,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
             value = data["msg"]
             info = copy.deepcopy(data)
 
-            if inverter_sn not in self.cached_values:
-                self.cached_values[inverter_sn] = {}
-                self.cached_infos[inverter_sn] = {}
-            self.cached_values[inverter_sn][cid] = str(value)
-            self.cached_infos[inverter_sn][cid] = info
+            self.cached_values.setdefault(inverter_sn, {})[cid] = str(value)
+            self.cached_infos.setdefault(inverter_sn, {})[cid] = info
 
             return value, info
 
@@ -2174,13 +2196,22 @@ class SolisAPI(ComponentBase, OAuthMixin):
         dropped by one such response - on the one-shot automatic_config() pass that leaves Predbat
         planning with no battery until a restart. The pack counts are what corroborate them. Every
         field must be present, so an empty or unread detail still counts as a battery, and a named
-        pack is decided before any of this is looked at.
+        pack is decided before any of this is looked at. The code 0 is matched by value, as one
+        string inverter reports '0' and '0.0' on alternate polls.
+
+        A machine Solis names grid-tied (S6-GR1P6K) has no battery port, so once its readings are
+        present and zero the pack fields are not needed to corroborate them: one such unit was
+        enrolled with batteryType '0' and zero readings, so its pack fields did not read as empty.
+        A named pack still settles it first, and live or missing readings keep the battery, so a
+        misreported model cannot drop a battery that is actually reading.
         """
         battery_type = str(detail.get("batteryType") or "").strip()
         if battery_type.lower() == "no battery":
             return True
-        if battery_type and battery_type != "0":
+        if battery_type and not SolisAPI._reads_zero(detail, "batteryType"):
             return False
+        if SOLIS_GRID_TIED_MACHINE_PATTERN.match(str(detail.get("machine") or "")) and SolisAPI._reads_zero(detail, "batteryVoltage") and SolisAPI._reads_zero(detail, "batteryCapacitySoc"):
+            return True
         battery_list = detail.get("batteryList")
         for entry in battery_list if isinstance(battery_list, list) else []:
             if not isinstance(entry, dict):
@@ -2443,19 +2474,11 @@ class SolisAPI(ComponentBase, OAuthMixin):
         """The configured maximum export power (register 499) in watts, or None when there is no configured figure.
 
         Converted exactly as publish_entities() presents the max_export_power number that
-        automatic_config() binds export_limit to: a value under 200 is in 100 W units. publish_entities()
+        automatic_config() binds export_limit to, via export_power_cid_to_watts(). publish_entities()
         shows an unread or 0 register as 99999 W, a "no limit" placeholder rather than a configured
         figure, so neither is reported as a rating.
         """
-        try:
-            value = float(self.cached_values.get(sn, {}).get(SOLIS_CID_MAX_EXPORT_POWER))
-        except (TypeError, ValueError):
-            return None
-        if value <= 0:
-            return None
-        if value < 200:
-            value *= 100
-        return value
+        return export_power_cid_to_watts(self.cached_values.get(sn, {}).get(SOLIS_CID_MAX_EXPORT_POWER))
 
     def build_discovery(self):
         """
@@ -2597,14 +2620,10 @@ class SolisAPI(ComponentBase, OAuthMixin):
                     values[cid] = value
                     infos[cid] = copy.deepcopy(info)
 
-            # Initialise cache for this inverter if not exists
-            if inverter_sn not in self.cached_values:
-                self.cached_values[inverter_sn] = {}
-                self.cached_infos[inverter_sn] = {}
-
-            # Update cached values
-            self.cached_values[inverter_sn].update(values)
-            self.cached_infos[inverter_sn].update(infos)
+            # Update cached values, initialising each cache on its own: show_soc_limit_now() can create
+            # cached_values[inverter_sn] before the first successful poll, with no cached_infos entry
+            self.cached_values.setdefault(inverter_sn, {}).update(values)
+            self.cached_infos.setdefault(inverter_sn, {}).update(infos)
 
             return True
 
@@ -3672,17 +3691,9 @@ class SolisAPI(ComponentBase, OAuthMixin):
             )
 
             entity_id = f"number.{prefix}_solis_{inverter_sn_lower}_max_export_power"
-            max_export_power_value = values.get(SOLIS_CID_MAX_EXPORT_POWER, None)
-            try:
-                max_export_power_value = float(max_export_power_value)
-            except (ValueError, TypeError):
-                max_export_power_value = 0.0
-            if max_export_power_value == 0.0:
+            max_export_power_value = export_power_cid_to_watts(values.get(SOLIS_CID_MAX_EXPORT_POWER, None))
+            if max_export_power_value is None:
                 max_export_power_value = 99999  # Use large number to indicate no limit
-
-            # Export power seems to be in 100w units, so convert to watts if value is small
-            if max_export_power_value < 200:
-                max_export_power_value *= 100
 
             self.dashboard_item(
                 entity_id,
