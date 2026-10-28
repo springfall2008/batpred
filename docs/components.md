@@ -1129,7 +1129,7 @@ Talks directly to the Wallbox cloud, so it works with or without Home Assistant.
 
     - **Monitoring only** (the default). Predbat sees the charger and removes car charging from its house load, but something else decides when the car charges: the Wallbox app's schedule, your car, or your energy supplier.
     - **Predbat-led charging.** Add `wallbox_control: True` and Predbat pauses and resumes the charger from its own car charging plan. See [Predbat-led charging](#predbat-led-charging-wallbox) below.
-    - **Octopus Intelligent Go, or any other OCPP backend.** Leave `wallbox_control` off. The backend controls the charger, and Predbat takes the car's charging slots from the Octopus integration as usual.
+    - **Octopus Intelligent Go, or any other OCPP backend.** A charger an OCPP backend runs is left to it whatever `wallbox_control` says. If instead Octopus drives your car (a Volkswagen or BMW linked to Octopus, say), Predbat leaves the Wallbox alone by default, and in expert mode **switch.predbat_octopus_intelligent_charger_follows_car** has it let the car charge only during Octopus's dispatches. See [Octopus Intelligent and charger control](car-charging.md#octopus-intelligent-and-charger-control).
 
 If you previously pointed **car_charging_energy**, **car_charging_planned** or **car_charging_now** at the Home Assistant Wallbox integration's sensors, you can remove those lines: with `wallbox_automatic` on, Predbat uses its own Wallbox entities and logs a note when it replaces a setting of yours.
 
@@ -1182,7 +1182,8 @@ Set `wallbox_control: True` to let Predbat pause and resume each charger from it
 
 - Inside a planned car charging slot a paused charger is resumed.
 - Outside a slot a charging charger is paused.
-- When control is released, any charger Predbat paused is resumed and returned to its own Wallbox schedule.
+- When control is released, any charger Predbat paused is resumed and returned to its own Wallbox schedule. This includes after a restart, and after `wallbox_control` is turned off.
+- `switch.predbat_wallbox_guest_charging` hands the chargers back so a visitor's car can charge - see [Guest charging](car-charging.md#guest-charging).
 
 Things to know:
 

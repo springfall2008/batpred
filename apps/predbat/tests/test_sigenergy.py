@@ -28,6 +28,7 @@ from sigenergy import (
     SIGENERGY_MODE_MSC,
     SIGENERGY_MODE_NBI,
     SIGENERGY_MODE_VPP,
+    SIGENERGY_MQTT_RESUBSCRIBE_DELAY,
     SIGENERGY_MQTT_TOPIC_MODE,
     SIGENERGY_VPP_RECLAIM_INTERVAL,
     SIGENERGY_OPTIONS_TIME,
@@ -107,10 +108,12 @@ class FakeStorage:
     def __init__(self):
         """Initialise an empty in-memory store keyed by (module, filename)."""
         self.data = {}
+        self.expiry = {}
 
     async def save(self, module, filename, data, format="yaml", expiry=None):
         """Store data under (module, filename), mirroring StorageBase.save's signature and return value."""
         self.data[(module, filename)] = data
+        self.expiry[(module, filename)] = expiry
         return True
 
     async def load(self, module, filename):
@@ -1287,6 +1290,28 @@ def test_sigenergy_save_load_cache_round_trip(my_predbat):
     return failed
 
 
+def test_sigenergy_save_cache_settings_expiry(my_predbat):
+    """Test plant settings (export limit, SoC cut-offs) are cached for 28 days and poll data for one day."""
+    failed = False
+    api = MockSigenergyAPI()
+    storage = FakeStorage()
+    api._mock_storage = storage
+
+    for key in ("energy_flow", "grid_export", "device_cutoffs"):
+        run_async(api._save_cache(key, {"SIG001": {}}))
+    now = datetime.now(timezone.utc)
+
+    def days_left(key):
+        """Days until the saved entry for key expires."""
+        return (storage.expiry[("sigenergy", key)] - now).total_seconds() / 86400
+
+    assert 0.99 < days_left("energy_flow") <= 1.0, "poll data expires after a day, got {:.2f}".format(days_left("energy_flow"))
+    assert 27.99 < days_left("grid_export") <= 28.0, "export limit kept for 28 days, got {:.2f}".format(days_left("grid_export"))
+    assert 27.99 < days_left("device_cutoffs") <= 28.0, "SoC cut-offs kept for 28 days, got {:.2f}".format(days_left("device_cutoffs"))
+
+    return failed
+
+
 def test_sigenergy_load_cached_data(my_predbat):
     """Test load_cached_data restores energy_flow/daily_summary/history_totals/onboard_status."""
     failed = False
@@ -2225,12 +2250,12 @@ def test_sigenergy_mqtt_listener_loop(my_predbat):
     api = MockSigenergyAPI()
     api.access_token = "tok"
     api.token_expires_at = 9_999_999_999
-    api.systems["XRTKQ1773829273"] = {"systemName": "Test"}
+    api.systems["TESTA1700000000"] = {"systemName": "Test"}
     api.api_stop = False
 
     period_payload = _json.dumps([{
         "deviceType": "system",
-        "systemId": "XRTKQ1773829273",
+        "systemId": "TESTA1700000000",
         "value": {
             "storageSOC%": "55.0",
             "storageChargeDischargePowerW": "1000.0",
@@ -2241,7 +2266,7 @@ def test_sigenergy_mqtt_listener_loop(my_predbat):
 
     change_payload = _json.dumps([{
         "deviceType": "system",
-        "systemId": "XRTKQ1773829273",
+        "systemId": "TESTA1700000000",
         "value": {
             "backupCutOffSOC%": "20.0",
             "chargeCutOffSOC%": "95.0",
@@ -2258,8 +2283,8 @@ def test_sigenergy_mqtt_listener_loop(my_predbat):
             self.retain = False
 
     messages_to_deliver = [
-        FakeMessage("openapi/period/test_app_key/XRTKQ1773829273", period_payload),
-        FakeMessage("openapi/change/test_app_key/XRTKQ1773829273", change_payload),
+        FakeMessage("openapi/period/test_app_key/TESTA1700000000", period_payload),
+        FakeMessage("openapi/change/test_app_key/TESTA1700000000", change_payload),
     ]
 
     publishes = []
@@ -2302,18 +2327,23 @@ def test_sigenergy_mqtt_listener_loop(my_predbat):
         def messages(self):
             return FakeMQTTClient._Messages(messages_to_deliver, api)
 
+    async def fake_sleep(seconds):
+        """Record each pause in line with the publishes, so their order can be checked."""
+        publishes.append(("sleep", seconds))
+
     with patch("sigenergy.aiomqtt.Client", return_value=FakeMQTTClient()):
         with patch("sigenergy.ssl.create_default_context", return_value=MagicMock()):
-            run_async(api._mqtt_listener_loop())
+            with patch("sigenergy.asyncio.sleep", side_effect=fake_sleep):
+                _base_run_async(api._mqtt_listener_loop())
 
     # Period message: energy_flow updated
-    flow = api.energy_flow.get("XRTKQ1773829273", {})
+    flow = api.energy_flow.get("TESTA1700000000", {})
     assert abs(flow.get("batterySoc", 0) - 55.0) < 0.01, "batterySoc from MQTT period = 55%"
     # storageChargeDischargePowerW +1000W (charging), negated to -1.0 kW (Predbat convention: negative=charging)
     assert abs(flow.get("batteryPower", 0) - (-1.0)) < 0.01, "batteryPower = -1.0 kW (charging)"
 
     # Change message: controls updated
-    ctrl = api.controls.get("XRTKQ1773829273", {})
+    ctrl = api.controls.get("TESTA1700000000", {})
     assert ctrl.get("reserve") == 10, "reserve = 10 (dischargeCutOffSOC%) from MQTT change"
     assert ctrl.get("charge", {}).get("target_soc") == 95, "charge target_soc = 95"
     assert ctrl.get("export", {}).get("target_soc") is None, "export target_soc is Predbat's own, not the device's discharge cut-off"
@@ -2323,14 +2353,23 @@ def test_sigenergy_mqtt_listener_loop(my_predbat):
     assert "openapi/subscription/period" in sub_topics, "period subscription published"
     assert "openapi/subscription/change" in sub_topics, "change subscription published"
     assert "openapi/subscription/alarm" in sub_topics, "alarm subscription published"
+    # The change subscription is cancelled first, so Sigenergy treats it as new and sends the full snapshot
+    assert "openapi/unsubscription/change" in sub_topics, "change subscription cancelled before re-subscribing"
+    assert sub_topics.index("openapi/unsubscription/change") < sub_topics.index("openapi/subscription/change"), "cancel precedes subscribe: {}".format(sub_topics)
+    payloads = dict(publishes)
+    assert payloads["openapi/unsubscription/change"] == payloads["openapi/subscription/change"], "cancel carries the same token and system list"
+    # Different topics, so delivery order isn't guaranteed - the subscribe waits for the cancel to land
+    cancel_at = sub_topics.index("openapi/unsubscription/change")
+    assert publishes[cancel_at + 1] == ("sleep", SIGENERGY_MQTT_RESUBSCRIBE_DELAY), "pause after the cancel, got {}".format(publishes[cancel_at + 1])
+    assert publishes[cancel_at + 1][1] > 0, "pause must be non-zero, got {}".format(publishes[cancel_at + 1])
 
     # last_mqtt_update was set per system
-    assert api.last_mqtt_update.get("XRTKQ1773829273", 0) > 0, "last_mqtt_update was set for system"
+    assert api.last_mqtt_update.get("TESTA1700000000", 0) > 0, "last_mqtt_update was set for system"
 
     # MQTT topic subscriptions are scoped to the managed system, not a "#" wildcard
     # across every system on the app_key.
     assert len(subscribed_topics) == 3, "one topic per message type for the single managed system, got {}".format(subscribed_topics)
-    assert all("XRTKQ1773829273" in t for t in subscribed_topics), "topics scoped to the managed system_id: {}".format(subscribed_topics)
+    assert all("TESTA1700000000" in t for t in subscribed_topics), "topics scoped to the managed system_id: {}".format(subscribed_topics)
     assert not any("#" in t for t in subscribed_topics), "no wildcard system_id in subscribed topics: {}".format(subscribed_topics)
 
     return failed
@@ -2356,7 +2395,7 @@ def test_sigenergy_mqtt_listener_loop_ignores_other_systems(my_predbat):
 
     period_payload_other_system = _json.dumps([{
         "deviceType": "system",
-        "systemId": "XRTKQ1773829273",  # not in api.systems - must be ignored
+        "systemId": "TESTA1700000000",  # not in api.systems - must be ignored
         "value": {
             "storageSOC%": "80.0",
             "storageChargeDischargePowerW": "1000.0",
@@ -2373,7 +2412,7 @@ def test_sigenergy_mqtt_listener_loop_ignores_other_systems(my_predbat):
             self.retain = False
 
     messages_to_deliver = [
-        FakeMessage("openapi/period/test_app_key/XRTKQ1773829273", period_payload_other_system),
+        FakeMessage("openapi/period/test_app_key/TESTA1700000000", period_payload_other_system),
     ]
 
     class FakeMQTTClient:
@@ -2412,9 +2451,9 @@ def test_sigenergy_mqtt_listener_loop_ignores_other_systems(my_predbat):
         with patch("sigenergy.ssl.create_default_context", return_value=MagicMock()):
             run_async(api._mqtt_listener_loop())
 
-    assert "XRTKQ1773829273" not in api.energy_flow, "energy_flow not populated for out-of-scope system"
-    assert "XRTKQ1773829273" not in api.last_mqtt_update, "last_mqtt_update not set for out-of-scope system"
-    other_slug = api._system_slug("XRTKQ1773829273")
+    assert "TESTA1700000000" not in api.energy_flow, "energy_flow not populated for out-of-scope system"
+    assert "TESTA1700000000" not in api.last_mqtt_update, "last_mqtt_update not set for out-of-scope system"
+    other_slug = api._system_slug("TESTA1700000000")
     assert "sensor.predbat_sigenergy_{}_battery_soc".format(other_slug) not in api.dashboard_items, "no entities published for out-of-scope system"
 
     return failed
@@ -5037,6 +5076,7 @@ def run_sigenergy_tests(my_predbat):
         ("fetch_history_totals_keeps_missing_node", test_sigenergy_fetch_history_totals_keeps_missing_node),
         ("save_load_cache_no_storage", test_sigenergy_save_load_cache_no_storage),
         ("save_load_cache_round_trip", test_sigenergy_save_load_cache_round_trip),
+        ("save_cache_settings_expiry", test_sigenergy_save_cache_settings_expiry),
         ("load_cached_data", test_sigenergy_load_cached_data),
         ("load_cached_data_no_storage_leaves_defaults", test_sigenergy_load_cached_data_no_storage_leaves_defaults),
         ("history_totals_clamp_survives_restart", test_sigenergy_history_totals_clamp_survives_restart),
