@@ -2506,6 +2506,61 @@ def _test_component_fetch_load_data():
 
         print("    ✓ Rate history is fetched as optional data")
 
+    # Test: iBoost/diverter energy is subtracted from the training load, as the standard forecast does (GH#5825)
+    async def test_iboost_energy_subtraction(iboost_energy_subtract=True):
+        """With iboost_energy_today configured and iboost_energy_subtract on, each step's load loses that step's
+        iBoost energy (floored at zero); with the switch off the load is left alone and the sensor isn't fetched."""
+        mock_base = MockBase()
+
+        # Load: 1.0 kWh per 5-min step over 24h (backwards cumulative, minute 0 = now)
+        load_data = {}
+        cumulative = 289.0
+        for minute in range(0, 1446, 5):
+            load_data[minute] = cumulative
+            cumulative -= 1.0
+
+        # iBoost: 0.4 kWh per step, except 1.5 kWh in the step ending at minute 700 (exceeds load, must floor at 0)
+        iboost_data = {}
+        cumulative = 200.0
+        for minute in range(0, 1446, 5):
+            iboost_data[minute] = cumulative
+            cumulative -= 1.5 if minute == 700 else 0.4
+
+        def mock_get_arg(key, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
+            return {
+                "load_today": ["sensor.load_today"],
+                "load_power": None,
+                "car_charging_energy": None,
+                "car_charging_hold": False,
+                "iboost_energy_today": ["sensor.eddi_energy_today"],
+                "iboost_energy_subtract": iboost_energy_subtract,
+            }.get(key, default)
+
+        def mock_import_export(days, now_utc, key, **kwargs):
+            """Return iBoost history for the iBoost key and nothing for anything else (rates)"""
+            return dict(iboost_data) if key == "iboost_energy_today" else {}
+
+        mock_base.get_arg = mock_get_arg
+        mock_base.minute_data_load = MagicMock(return_value=(dict(load_data), 1.0))
+        mock_base.minute_data_import_export = MagicMock(side_effect=mock_import_export)
+        mock_base.fill_load_from_power = MagicMock(side_effect=lambda x, y: x)
+
+        component = LoadMLComponent(mock_base, load_ml_enable=True)
+        result_data, _, result_now, _, _, _, _ = await component._fetch_load_data()
+
+        iboost_calls = [call for call in mock_base.minute_data_import_export.call_args_list if call.args[2] == "iboost_energy_today"]
+        if iboost_energy_subtract:
+            assert len(iboost_calls) == 1, f"Expected iboost_energy_today to be fetched once, got {iboost_calls}"
+            for minute in (5, 100, 1435):
+                assert abs(result_data[minute] - 0.6) < 0.001, f"At minute {minute} expected 0.6 kWh (1.0 load - 0.4 iBoost), got {result_data[minute]}"
+            assert result_data[700] == 0, f"At minute 700 iBoost (1.5) exceeds load (1.0), expected 0 kWh, got {result_data[700]}"
+            print("    ✓ iBoost energy subtracted from ML training load")
+        else:
+            assert not iboost_calls, f"iboost_energy_today must not be fetched with iboost_energy_subtract off, got {iboost_calls}"
+            for minute in (5, 100, 700, 1435):
+                assert abs(result_data[minute] - 1.0) < 0.001, f"At minute {minute} expected 1.0 kWh with subtraction off, got {result_data[minute]}"
+            print("    ✓ iBoost energy left in ML training load with iboost_energy_subtract off")
+
     # Run all sub-tests
     print("  Running LoadMLComponent._fetch_load_data tests:")
     run_async(test_basic_fetch())
@@ -2521,6 +2576,8 @@ def _test_component_fetch_load_data():
     run_async(test_temperature_no_data())
     run_async(test_step_size_calculation())
     run_async(test_rate_history_is_optional())
+    run_async(test_iboost_energy_subtraction())
+    run_async(test_iboost_energy_subtraction(iboost_energy_subtract=False))
     print("  All _fetch_load_data tests passed!")
 
 

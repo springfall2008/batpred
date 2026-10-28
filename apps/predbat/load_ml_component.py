@@ -293,6 +293,25 @@ class LoadMLComponent(ComponentBase):
             result[minute] = total_energy
         return result
 
+    def iboost_subtraction(self, load_cumulative, iboost_cumulative, step=PREDICT_STEP):
+        """
+        Subtract iBoost/diverter energy from cumulative load, step by step, flooring each step at zero.
+
+        Both inputs and the result are {minute: cumulative_kwh} in backwards format (minute 0 = now, highest value).
+        """
+        result = {}
+        if not load_cumulative:
+            return result
+        max_minute = max(load_cumulative.keys())
+        max_minute = (max_minute // step) * step
+        total_energy = 0.0
+        for minute in range(max_minute, -step, -step):
+            load_delta = self.get_from_incrementing(load_cumulative, minute, step, backwards=True)
+            iboost_delta = self.get_from_incrementing(iboost_cumulative, minute, step, backwards=True)
+            total_energy += max(0.0, load_delta - iboost_delta)
+            result[minute] = dp4(total_energy)
+        return result
+
     async def _fetch_load_data(self):
         """
         Fetch and process load data from configured sensors.
@@ -373,7 +392,15 @@ class LoadMLComponent(ComponentBase):
                     load_minutes_new[minute] = dp4(total_load_energy + load_delta)
                     total_load_energy += load_delta
 
-            # Get current cumulative load value (excludes car) before converting to per-step
+            # Subtract iBoost/diverter energy as the standard load forecast does (get_filtered_load_window),
+            # whether or not Predbat controls the diverter. Re-read so a switch change is picked up without a restart.
+            if self.get_arg("iboost_energy_subtract", True) and self.get_arg("iboost_energy_today", default=None, indirect=False):
+                iboost_energy = self.base.minute_data_import_export(days_to_fetch, self.now_utc, "iboost_energy_today", required_unit="kWh", pad=False)
+                if iboost_energy:
+                    self.log("ML Component: Applying iBoost energy subtraction")
+                    load_minutes_new = self.iboost_subtraction(load_minutes_new, iboost_energy, step=PREDICT_STEP)
+
+            # Get current cumulative load value (excludes car and iBoost) before converting to per-step
             load_minutes_now = get_now_from_cumulative(load_minutes_new, self.minutes_now, backwards=True)
 
             # Convert cumulative load data to per-5-min energy for the predictor
