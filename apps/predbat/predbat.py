@@ -2057,7 +2057,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             return
 
         if apps_yaml_path is None:
-            apps_yaml_path = hass.resolve_apps_yaml_path(getattr(self, "apps_file", None))
+            apps_yaml_path = hass.resolve_apps_yaml_path(self.apps_file)
         if not os.path.exists(apps_yaml_path):
             return
 
