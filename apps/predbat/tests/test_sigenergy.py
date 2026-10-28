@@ -28,6 +28,7 @@ from sigenergy import (
     SIGENERGY_MODE_MSC,
     SIGENERGY_MODE_NBI,
     SIGENERGY_MODE_VPP,
+    SIGENERGY_MQTT_RESUBSCRIBE_DELAY,
     SIGENERGY_MQTT_TOPIC_MODE,
     SIGENERGY_VPP_RECLAIM_INTERVAL,
     SIGENERGY_OPTIONS_TIME,
@@ -2326,9 +2327,14 @@ def test_sigenergy_mqtt_listener_loop(my_predbat):
         def messages(self):
             return FakeMQTTClient._Messages(messages_to_deliver, api)
 
+    async def fake_sleep(seconds):
+        """Record each pause in line with the publishes, so their order can be checked."""
+        publishes.append(("sleep", seconds))
+
     with patch("sigenergy.aiomqtt.Client", return_value=FakeMQTTClient()):
         with patch("sigenergy.ssl.create_default_context", return_value=MagicMock()):
-            run_async(api._mqtt_listener_loop())
+            with patch("sigenergy.asyncio.sleep", side_effect=fake_sleep):
+                _base_run_async(api._mqtt_listener_loop())
 
     # Period message: energy_flow updated
     flow = api.energy_flow.get("XRTKQ1773829273", {})
@@ -2352,6 +2358,9 @@ def test_sigenergy_mqtt_listener_loop(my_predbat):
     assert sub_topics.index("openapi/unsubscription/change") < sub_topics.index("openapi/subscription/change"), "cancel precedes subscribe: {}".format(sub_topics)
     payloads = dict(publishes)
     assert payloads["openapi/unsubscription/change"] == payloads["openapi/subscription/change"], "cancel carries the same token and system list"
+    # Different topics, so delivery order isn't guaranteed - the subscribe waits for the cancel to land
+    cancel_at = sub_topics.index("openapi/unsubscription/change")
+    assert publishes[cancel_at + 1] == ("sleep", SIGENERGY_MQTT_RESUBSCRIBE_DELAY), "pause after the cancel, got {}".format(publishes[cancel_at + 1])
 
     # last_mqtt_update was set per system
     assert api.last_mqtt_update.get("XRTKQ1773829273", 0) > 0, "last_mqtt_update was set for system"

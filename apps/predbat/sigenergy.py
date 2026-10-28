@@ -144,6 +144,7 @@ SIGENERGY_RATE_LIMIT_BACKOFF = [15, 30, 60, 120, 480]  # seconds to wait after c
 SIGENERGY_BATTERY_NOMINAL_VOLTAGE_V = 28.8  # 8S LiFePO4 pack: 8 × 3.6V; used to convert ratedEnergy (Ah) → kWh
 SIGENERGY_RATED_ENERGY_AH_THRESHOLD = 100.0  # a ratedEnergy above this is Ah (e.g. 314), below it kWh (e.g. 9.04) - see _get_battery_capacity_kwh
 SIGENERGY_MQTT_PORT = 8883             # TLS MQTT port on the Sigenergy broker
+SIGENERGY_MQTT_RESUBSCRIBE_DELAY = 5   # seconds between cancelling and re-requesting the change push (see _mqtt_listener_loop)
 
 # MQTT topic patterns — format with app_key and system_id
 SIGENERGY_MQTT_TOPIC_CHANGE = "openapi/change/{app_key}/{system_id}"    # system data (device state)
@@ -2139,8 +2140,11 @@ class SigenergyAPI(ComponentBase):
                     sub_payload = json.dumps({"accessToken": token, "systemIdList": system_id_list})
                     # Sigenergy only sends the full openapi/change snapshot (export limit, SoC cut-offs) when it registers
                     # a new change subscription - re-subscribing after a restart gets nothing. Cancelling it first makes
-                    # every connect a new registration, so the snapshot comes straight back.
+                    # every connect a new registration, so the snapshot comes straight back. The two go on different
+                    # topics, so their order isn't guaranteed - sent back to back, the cancel can land second and leave
+                    # the system with no change subscription at all (seen on 2 of 29 live plants), hence the pause.
                     await client.publish(SIGENERGY_MQTT_TOPIC_UNSUBSCRIBE_CHANGE, payload=sub_payload, qos=1)
+                    await asyncio.sleep(SIGENERGY_MQTT_RESUBSCRIBE_DELAY)
                     for sub_topic in ("openapi/subscription/period", "openapi/subscription/change", "openapi/subscription/alarm"):
                         await client.publish(sub_topic, payload=sub_payload, qos=1)
                     self.log("SigenergyAPI: MQTT subscriptions published for {} system(s)".format(len(system_id_list)))
