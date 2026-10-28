@@ -188,16 +188,38 @@ class EntityHistory:
 
     def prune(self, cutoff_epoch):
         """
-        Drop all records older than the given cutoff epoch time
+        Drop all records older than the given cutoff epoch time.
+
+        The last record before the cutoff holds the state in force at the cutoff, so unless a record
+        lands exactly on the cutoff it is kept and re-stamped at the cutoff, as Home Assistant stamps
+        the first record of a history window. Dropping it would leave a rarely-changing sensor with
+        no history before its next change (#5456).
         """
         index = bisect.bisect_left(self.epochs, cutoff_epoch)
-        if index > 0:
-            self.epochs = self.epochs[index:]
-            self.states = self.states[index:]
-            if self.state_exceptions:
-                self.state_exceptions = {epoch: value for epoch, value in self.state_exceptions.items() if epoch >= cutoff_epoch}
-            if self.attribute_exceptions:
-                self.attribute_exceptions = {epoch: value for epoch, value in self.attribute_exceptions.items() if epoch >= cutoff_epoch}
+        if index == 0:
+            return
+        anchor_epoch = None
+        if index == len(self.epochs) or self.epochs[index] != cutoff_epoch:
+            index -= 1
+            anchor_epoch = self.epochs[index]
+        self.epochs = self.epochs[index:]
+        self.states = self.states[index:]
+        if anchor_epoch is not None:
+            self.epochs[0] = cutoff_epoch
+        if self.state_exceptions:
+            self.state_exceptions = self._prune_exceptions(self.state_exceptions, cutoff_epoch, anchor_epoch)
+        if self.attribute_exceptions:
+            self.attribute_exceptions = self._prune_exceptions(self.attribute_exceptions, cutoff_epoch, anchor_epoch)
+
+    @staticmethod
+    def _prune_exceptions(exceptions, cutoff_epoch, anchor_epoch):
+        """
+        Return the exceptions at or after the cutoff, with the kept anchor's (if any) moved to the cutoff
+        """
+        pruned = {epoch: value for epoch, value in exceptions.items() if epoch >= cutoff_epoch}
+        if anchor_epoch in exceptions:
+            pruned[cutoff_epoch] = exceptions[anchor_epoch]
+        return pruned
 
 
 class HAHistory(ComponentBase):

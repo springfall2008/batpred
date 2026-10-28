@@ -589,8 +589,8 @@ def test_hahistory_prune_history(my_predbat=None):
     entity_id = "sensor.battery"
     now = datetime(2025, 12, 25, 10, 0, 0, tzinfo=pytz.UTC)
 
-    # Create history spanning 60 days
-    history = create_mock_history(entity_id, days=60, step_minutes=60, start_time=now - timedelta(days=60))
+    # Create history spanning 60 days, offset so the cutoff falls between two records (#5456)
+    history = create_mock_history(entity_id, days=60, step_minutes=60, start_time=now - timedelta(days=60, minutes=-7))
     ha_history.history_data[entity_id] = EntityHistory.from_records(history)
     ha_history.history_entities[entity_id] = 30  # Only keep 30 days
 
@@ -603,7 +603,7 @@ def test_hahistory_prune_history(my_predbat=None):
     final_count = len(ha_history.history_data[entity_id])
     print(f"  After pruning: {final_count} entries")
 
-    # Verify entries are within 30 days
+    # Verify entries are within 30 days; the first holds the state in force at the cutoff, stamped there (#5456)
     cutoff_time = now - timedelta(days=30)
     for entry in ha_history.history_data[entity_id]:
         entry_time = str2time(entry["last_updated"])
@@ -614,6 +614,11 @@ def test_hahistory_prune_history(my_predbat=None):
 
     if failed == 0:
         print("✓ All entries within 30-day window")
+
+    first_time = str2time(ha_history.history_data[entity_id][0]["last_updated"])
+    if first_time != cutoff_time:
+        print(f"ERROR: Expected the first entry at the cutoff {cutoff_time}, got {first_time}")
+        failed += 1
 
     # Verify some entries were removed
     if final_count >= initial_count:
@@ -952,20 +957,70 @@ def test_entity_history_store(my_predbat=None):
     else:
         print("✓ Indexing and iteration materialise records correctly")
 
-    # Test 7: prune drops older records and their exceptions
-    store.prune((base_time + timedelta(minutes=12)).timestamp())
-    remaining = [entry["state"] for entry in store.to_records()]
-    if remaining != ["Charging", 30.0]:
-        print(f"ERROR: Expected ['Charging', 30.0] after prune, got {remaining}")
+    # Test 7: prune drops older records and their exceptions, but keeps the state in force at the
+    # cutoff (the 10-minute record, with its attributes) re-stamped at the cutoff (#5456)
+    cutoff_epoch = (base_time + timedelta(minutes=12)).timestamp()
+    store.prune(cutoff_epoch)
+    remaining = store.to_records()
+    if [entry["state"] for entry in remaining] != [20.25, "Charging", 30.0]:
+        print(f"ERROR: Expected [20.25, 'Charging', 30.0] after prune, got {[entry['state'] for entry in remaining]}")
         failed += 1
-    elif store.state_exceptions and min(store.state_exceptions) < (base_time + timedelta(minutes=12)).timestamp():
+    elif str2time(remaining[0]["last_updated"]).timestamp() != cutoff_epoch:
+        print(f"ERROR: Expected the kept record re-stamped at the cutoff, got {remaining[0]['last_updated']}")
+        failed += 1
+    elif remaining[0]["attributes"] != {"special": True}:
+        print(f"ERROR: Expected the kept record to keep its attributes, got {remaining[0]['attributes']}")
+        failed += 1
+    elif store.state_exceptions and min(store.state_exceptions) < cutoff_epoch:
         print(f"ERROR: Prune left stale state exceptions: {store.state_exceptions}")
         failed += 1
-    elif store.attribute_exceptions:
-        print(f"ERROR: Prune left stale attribute exceptions: {store.attribute_exceptions}")
+    elif list(store.attribute_exceptions) != [cutoff_epoch]:
+        print(f"ERROR: Expected only the kept record's attribute exception, got {store.attribute_exceptions}")
         failed += 1
     else:
-        print("✓ Prune drops old records and stale exceptions")
+        print("✓ Prune drops old records and stale exceptions, keeping the state in force at the cutoff")
+
+    # Test 7b: a record exactly on the cutoff is the state in force there, so nothing older is kept
+    store.prune((base_time + timedelta(minutes=15)).timestamp())
+    remaining = [entry["state"] for entry in store.to_records()]
+    if remaining != ["Charging", 30.0] or store.attribute_exceptions:
+        print(f"ERROR: Expected ['Charging', 30.0] and no attribute exceptions after pruning on a record, got {remaining} {store.attribute_exceptions}")
+        failed += 1
+    else:
+        print("✓ Prune on an exact record time keeps nothing older")
+
+    # Test 7d: a non-numeric state in force at the cutoff keeps its value, not the 0.0 placeholder (#5456)
+    switch_store = EntityHistory.from_records(
+        [
+            {"state": "on", "last_updated": base_time.isoformat(), "attributes": {}},
+            {"state": "off", "last_updated": (base_time + timedelta(minutes=5)).isoformat(), "attributes": {}},
+        ]
+    )
+    switch_store.prune((base_time + timedelta(minutes=10)).timestamp())
+    remaining = [entry["state"] for entry in switch_store.to_records()]
+    if remaining != ["off"]:
+        print(f"ERROR: Expected ['off'] kept at the cutoff, got {remaining}")
+        failed += 1
+    else:
+        print("✓ A non-numeric state in force at the cutoff is kept")
+
+    # Test 7c: a rarely-changing sensor whose last change (a brief 'unavailable' blip) is older than
+    # the cutoff keeps its current value, not just the blip (#5456)
+    blip_store = EntityHistory.from_records(
+        [
+            {"state": "7.0", "last_updated": base_time.isoformat(), "attributes": {}},
+            {"state": "unavailable", "last_updated": (base_time + timedelta(days=2)).isoformat(), "attributes": {}},
+            {"state": "7.0", "last_updated": (base_time + timedelta(days=2, minutes=1)).isoformat(), "attributes": {}},
+        ]
+    )
+    blip_cutoff = base_time + timedelta(days=3)
+    blip_store.prune(blip_cutoff.timestamp())
+    remaining = blip_store.to_records()
+    if [entry["state"] for entry in remaining] != [7.0] or str2time(remaining[0]["last_updated"]) != blip_cutoff:
+        print(f"ERROR: Expected [7.0] stamped at the cutoff, got {remaining}")
+        failed += 1
+    else:
+        print("✓ A sensor with no change since the cutoff keeps its current value")
 
     # Test 8: records without a valid last_updated are not stored
     bad_store = EntityHistory.from_records([{"state": "1"}, {"state": "2", "last_updated": "junk"}, {"state": "3", "last_updated": base_time.isoformat()}])
