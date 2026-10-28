@@ -3819,9 +3819,18 @@ class GatewayMQTT(ComponentBase):
 
         self._refresh_in_progress = True
         try:
+            instance_id = self.args.get("user_id", "") if isinstance(self.args, dict) else ""
+
+            refresh_provider = getattr(getattr(self, "base", None), "oauth_refresh_provider", None)
+            if refresh_provider:
+                data = await refresh_provider(instance_id, "predbat_gateway", "")
+                if data is None:
+                    self.log("Warn: GatewayMQTT: Token refresh provider returned no answer")
+                    return False
+                return self._apply_refresh_response(data)
+
             supabase_url = os.environ.get("SUPABASE_URL", "")
             supabase_key = os.environ.get("SUPABASE_KEY", "")
-            instance_id = self.args.get("user_id", "") if isinstance(self.args, dict) else ""
 
             if not supabase_url or not supabase_key or not instance_id:
                 self.log("Warn: GatewayMQTT: Token refresh skipped — missing env vars or instance_id")

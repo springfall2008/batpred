@@ -27,6 +27,7 @@ class MockOAuthComponent(OAuthMixin):
         self.log_messages = []
         self.base = MagicMock()
         self.base.args = {"user_id": "test-instance-id-1234"}
+        self.base.oauth_refresh_provider = None  # As on the real base: no host hook
 
     def log(self, message):
         self.log_messages.append(message)
@@ -589,6 +590,137 @@ def test_do_refresh_missing_instance_id():
     return failed
 
 
+def _provider_returning(reply):
+    """A fake oauth_refresh_provider that records its calls and returns reply."""
+    calls = []
+
+    async def provider(instance_id, provider_name, token_hash):
+        calls.append((instance_id, provider_name, token_hash))
+        return reply
+
+    return provider, calls
+
+
+def _no_http(*args, **kwargs):
+    raise AssertionError("aiohttp.ClientSession must not be used when oauth_refresh_provider is set")
+
+
+def test_do_refresh_provider_success():
+    """A host provider's reply is applied, with no HTTP call and no env read."""
+    failed = False
+    comp = MockOAuthComponent()
+    comp._init_oauth("oauth", "old-token", None, "fox_ess")
+    comp.token_hash = "old-hash"
+    provider, calls = _provider_returning({"success": True, "access_token": "provider-token", "expires_at": "2026-03-07T12:00:00Z", "token_hash": "new-hash"})
+    comp.base.oauth_refresh_provider = provider
+
+    with patch.dict("os.environ", {}, clear=True):
+        with patch("aiohttp.ClientSession", side_effect=_no_http):
+            result = run_async(comp._do_refresh())
+
+    if not result:
+        print("ERROR: _do_refresh should return True when the provider succeeds")
+        failed = True
+    if calls != [("test-instance-id-1234", "fox_ess", "old-hash")]:
+        print(f"ERROR: provider called with {calls}")
+        failed = True
+    if comp.access_token != "provider-token" or comp.token_hash != "new-hash" or comp.token_expires_at <= 0:
+        print(f"ERROR: provider reply not applied: {comp.access_token} {comp.token_hash} {comp.token_expires_at}")
+        failed = True
+    if comp._refresh_in_progress:
+        print("ERROR: _refresh_in_progress should be cleared after a provider refresh")
+        failed = True
+
+    if not failed:
+        print("PASS: _do_refresh applies an oauth_refresh_provider reply")
+    return failed
+
+
+def test_do_refresh_provider_needs_reauth():
+    """A provider needs_reauth reply sets oauth_failed exactly as the edge function's would."""
+    failed = False
+    comp = MockOAuthComponent()
+    comp._init_oauth("oauth", "old-token", None, "fox_ess")
+    provider, _ = _provider_returning({"success": False, "error": "needs_reauth"})
+    comp.base.oauth_refresh_provider = provider
+
+    with patch("aiohttp.ClientSession", side_effect=_no_http):
+        result = run_async(comp._do_refresh())
+
+    if result:
+        print("ERROR: _do_refresh should return False on a provider needs_reauth")
+        failed = True
+    if not comp.oauth_failed:
+        print("ERROR: oauth_failed should be True after a provider needs_reauth")
+        failed = True
+    if comp.access_token != "old-token":
+        print(f"ERROR: held token should be kept, got {comp.access_token}")
+        failed = True
+
+    if not failed:
+        print("PASS: _do_refresh provider needs_reauth sets oauth_failed")
+    return failed
+
+
+def test_do_refresh_provider_no_answer():
+    """A provider returning None is a failed refresh: no fallback to the edge function, held token kept."""
+    failed = False
+    comp = MockOAuthComponent()
+    comp._init_oauth("oauth", "old-token", None, "fox_ess")
+    provider, calls = _provider_returning(None)
+    comp.base.oauth_refresh_provider = provider
+
+    with patch.dict("os.environ", {"SUPABASE_URL": "https://test.supabase.co", "SUPABASE_KEY": "test-key"}):
+        with patch("aiohttp.ClientSession", side_effect=_no_http):
+            result = run_async(comp._do_refresh())
+
+    if result:
+        print("ERROR: _do_refresh should return False when the provider has no answer")
+        failed = True
+    if len(calls) != 1:
+        print(f"ERROR: provider should be called once, got {calls}")
+        failed = True
+    if comp.access_token != "old-token" or comp.oauth_failed:
+        print(f"ERROR: held token should be kept and oauth_failed unset: {comp.access_token} {comp.oauth_failed}")
+        failed = True
+    # The caller still carries on with the held token, as for any transient failure
+    comp.token_expires_at = 0
+    if not run_async(comp.check_and_refresh_oauth_token()):
+        print("ERROR: check_and_refresh should continue with the held token when the provider has no answer")
+        failed = True
+
+    if not failed:
+        print("PASS: _do_refresh provider None is a failed refresh")
+    return failed
+
+
+def test_do_refresh_provider_error():
+    """A provider that raises is caught like any other refresh error."""
+    failed = False
+    comp = MockOAuthComponent()
+    comp._init_oauth("oauth", "old-token", None, "fox_ess")
+
+    async def provider(instance_id, provider_name, token_hash):
+        raise RuntimeError("host refresh failed")
+
+    comp.base.oauth_refresh_provider = provider
+    result = run_async(comp._do_refresh())
+
+    if result:
+        print("ERROR: _do_refresh should return False when the provider raises")
+        failed = True
+    if comp._refresh_in_progress:
+        print("ERROR: _refresh_in_progress should be cleared after a provider error")
+        failed = True
+    if not any("host refresh failed" in m for m in comp.log_messages):
+        print(f"ERROR: provider error not logged: {comp.log_messages}")
+        failed = True
+
+    if not failed:
+        print("PASS: _do_refresh handles a provider error")
+    return failed
+
+
 def test_handle_oauth_401_api_key():
     """handle_oauth_401 returns False for api_key mode."""
     failed = False
@@ -690,6 +822,10 @@ def run_oauth_mixin_tests(my_predbat):
         ("refresh_network_error", test_do_refresh_network_error),
         ("refresh_missing_env", test_do_refresh_missing_env_vars),
         ("refresh_missing_instance", test_do_refresh_missing_instance_id),
+        ("refresh_provider_success", test_do_refresh_provider_success),
+        ("refresh_provider_needs_reauth", test_do_refresh_provider_needs_reauth),
+        ("refresh_provider_no_answer", test_do_refresh_provider_no_answer),
+        ("refresh_provider_error", test_do_refresh_provider_error),
         ("401_apikey", test_handle_oauth_401_api_key),
         ("401_forces_refresh", test_handle_oauth_401_forces_refresh),
         ("refresh_dedup", test_refresh_dedup),
