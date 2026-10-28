@@ -1972,8 +1972,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                                 if spec.get("modify", False):
                                     prefix = sensor.split(".")[0]
                                     if prefix not in ["switch", "select", "input_number", "number", "time", "input_number", "input_datetime"]:
-                                        if sensor.startswith("sensor.predbat_"):
-                                            # We can ignore predbat generated sensors as they are control placeholders
+                                        if sensor.startswith(("sensor.predbat_", "sensor.{}_".format(self.prefix))):
+                                            # We can ignore predbat generated sensors as they are control placeholders,
+                                            # named with this instance's prefix (#5242)
                                             pass
                                         else:
                                             self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} which cannot be modified".format(name, sensor))
