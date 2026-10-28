@@ -203,6 +203,20 @@ def test_marginal_costs(my_predbat):
                 print("ERROR: free session: '{}' = '{}' but expected '{}' (1.0p against a 10p base floor is cheap)".format(bs_key, bs_state, expected))
                 failed = True
 
+    # A saving session spikes rate_max, which used to stretch the moderate threshold to half the reward
+    print("*** Running test: marginal_costs moderate threshold during a saving session")
+    my_predbat.marginal_costs_matrix = {kwh: {first_time_label: 20.0} for kwh in MARGINAL_EXTRA_KWH_LEVELS}
+    my_predbat.rate_min = 10.0
+    my_predbat.rate_max = 300.0
+    my_predbat.publish_marginal_costs()
+    for state_name in MARGINAL_EXTRA_KWH_LEVEL_NAMES:
+        for kind in ("cheap", "moderate"):
+            bs_key = "binary_sensor.{}_marginal_rate_now_{}_is_{}".format(my_predbat.prefix, state_name, kind)
+            bs_state = my_predbat.dashboard_values.get(bs_key, {}).get("state")
+            if bs_state != "off":
+                print("ERROR: saving session: '{}' = '{}' but expected 'off' (20p is above the 15p moderate threshold of a 30p base peak)".format(bs_key, bs_state))
+                failed = True
+
     if not failed:
         print("*** test_marginal_costs PASSED ***")
     else:
