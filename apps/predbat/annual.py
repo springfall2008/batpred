@@ -633,26 +633,17 @@ def write_minimal_apps_yaml(work_dir, timezone):
 def create_headless_predbat(work_dir, timezone, log):
     """Construct a PredBat instance with no Home Assistant connection.
 
-    ``Hass.__init__`` is the only place that reads ``$PREDBAT_APPS_FILE``, and it does so
-    synchronously while ``PredBat()`` is constructed below, so the environment variable only
-    needs to be set for the duration of that one call. It is restored to whatever it held
-    before (unset if it was unset) in a ``finally`` block, so a later ``PredBat()`` in the
-    same process — including ``unit_test.py``'s own ``create_predbat()`` — never silently
-    picks up this work directory's apps.yaml. The predbat import is deliberately local to
-    this function so merely importing ``annual`` does not drag in the whole engine.
+    The work directory's apps.yaml is handed to ``PredBat(apps_file=...)`` directly rather
+    than through ``$PREDBAT_APPS_FILE``, so the process environment is never touched and a
+    later ``PredBat()`` in the same process (including ``unit_test.py``'s own
+    ``create_predbat()``) never picks up this work directory's apps.yaml. The predbat import
+    is deliberately local to this function so merely importing ``annual`` does not drag in
+    the whole engine.
     """
     path = write_minimal_apps_yaml(work_dir, timezone)
-    previous_apps_file = os.environ.get("PREDBAT_APPS_FILE")
-    os.environ["PREDBAT_APPS_FILE"] = path
-    try:
-        import predbat
+    import predbat
 
-        instance = predbat.PredBat()
-    finally:
-        if previous_apps_file is None:
-            os.environ.pop("PREDBAT_APPS_FILE", None)
-        else:
-            os.environ["PREDBAT_APPS_FILE"] = previous_apps_file
+    instance = predbat.PredBat(apps_file=path)
 
     instance.states = {}
     instance.log = log
