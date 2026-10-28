@@ -35,7 +35,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v9.6.0"
+THIS_VERSION = "v9.6.2"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
 from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, is_valid_predbat_branch, parse_predbat_branch_option, DEFAULT_PREDBAT_REPOSITORY
@@ -2067,7 +2067,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             return
 
         if apps_yaml_path is None:
-            apps_yaml_path = hass.resolve_apps_yaml_path()
+            apps_yaml_path = hass.resolve_apps_yaml_path(self.apps_file)
         if not os.path.exists(apps_yaml_path):
             return
 

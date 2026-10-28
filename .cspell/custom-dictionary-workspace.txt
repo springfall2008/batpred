@@ -409,6 +409,7 @@ maxrss
 maxsoc
 mbat
 mbuhansen
+mdi
 mdlrc
 measurand
 measurands
@@ -594,6 +595,7 @@ remainings
 remotecontrol
 renderable
 replayer
+repr
 resetmidnight
 resultid
 resultmid
@@ -735,6 +737,7 @@ tunables
 twinx
 typecode
 typecodes
+tzdata
 tzfile
 tzpath
 tzset
@@ -787,6 +790,7 @@ WEXITSTATUS
 WIFEXITED
 WNOHANG
 workmode
+workstream
 worktree
 writeonly
 wrongsha
