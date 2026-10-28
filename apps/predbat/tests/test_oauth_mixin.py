@@ -683,6 +683,13 @@ def test_do_refresh_provider_no_answer():
     if comp.access_token != "old-token" or comp.oauth_failed:
         print(f"ERROR: held token should be kept and oauth_failed unset: {comp.access_token} {comp.oauth_failed}")
         failed = True
+    # A fallback to the edge function would also return False (its HTTP failure is caught), so pin the path by its log
+    if not any("provider returned no answer" in m for m in comp.log_messages):
+        print(f"ERROR: expected the provider no-answer warning, got {comp.log_messages}")
+        failed = True
+    if any("Refreshing OAuth token" in m or "unexpected error" in m for m in comp.log_messages):
+        print(f"ERROR: no edge function refresh should be attempted, got {comp.log_messages}")
+        failed = True
     # The caller still carries on with the held token, as for any transient failure
     comp.token_expires_at = 0
     if not run_async(comp.check_and_refresh_oauth_token()):

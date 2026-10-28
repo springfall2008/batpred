@@ -166,6 +166,9 @@ class TestTokenRefreshProvider:
         assert ok is False
         provider.assert_awaited_once_with("test-instance-id-1234", "predbat_gateway", "")
         assert gw.mqtt_token == "old.jwt.token"
+        # A fallback would take the empty-env "skipped" branch with the same result, so pin the path by its log
+        assert any("no answer" in str(call) for call in gw.log.call_args_list)
+        assert not any("skipped" in str(call) for call in gw.log.call_args_list)
 
     def test_provider_failure_reply_keeps_token(self):
         provider = AsyncMock(return_value={"success": False, "error": "needs_reauth"})
