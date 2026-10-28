@@ -607,6 +607,7 @@ You can set `predbat_repository` (format `owner/repo`) to get **main** from your
 ```
 
 - Only **main** (and the [predbat_branch](#predbat_branch) entry) use this setting, the released versions are always read from the official repository.
+- If `switch.predbat_auto_update` is on, Predbat may re-install the latest release a few minutes after `main` is installed. Turn auto update off while testing.
 - You can also set the environment variable `PREDBAT_REPOSITORY` (same `owner/repo` format), `predbat_repository` in `apps.yaml` takes priority.
 
 ### predbat_branch
@@ -634,6 +635,7 @@ or for just one branch:
 At most 10 branches are shown, any more are ignored (with a warning in the log), and the more branches you add the fewer older releases appear in the drop-down.
 - The branch is downloaded when you select it, so if you push more changes to the branch, select the entry again to pick them up.
 - The drop-down is built when Predbat starts, so restart Predbat after changing `predbat_branch`.
+- If `switch.predbat_auto_update` is on, Predbat may re-install the latest release a few minutes after a branch is installed. Turn auto update off while testing a branch.
 - To go back to normal operation remove `predbat_branch` and `predbat_repository` from `apps.yaml`, restart Predbat and select a released version.
 
 ## Inverter information

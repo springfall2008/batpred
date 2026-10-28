@@ -391,7 +391,36 @@ def test_github(my_predbat):
         if not any(o.startswith("v2.0") for o in options):
             print("  FAILED: releases must still be listed after the branches, got {}".format(options))
             failed += 1
+
+        print("  Test 18: predbat_branch warnings are logged once per run, not every plan cycle")
+        my_predbat.predbat_branch_warned = set()
+        with patch.object(my_predbat, "log") as mock_log:
+            for _cycle in range(3):
+                _options_for(["has space", "fix/ok"])
+        warnings = [call for call in mock_log.call_args_list if "predbat_branch" in str(call)]
+        if len(warnings) != 1:
+            print("  FAILED: expected the invalid branch warning once over 3 cycles, got {}: {}".format(len(warnings), warnings))
+            failed += 1
+
+        my_predbat.predbat_branch_warned = set()
+        with patch.object(my_predbat, "log") as mock_log:
+            for _cycle in range(3):
+                _options_for(many)
+        warnings = [call for call in mock_log.call_args_list if "predbat_branch" in str(call)]
+        if len(warnings) != 5:
+            print("  FAILED: expected one over-limit warning for each of the 5 branches that are left out, got {}".format(len(warnings)))
+            failed += 1
+
+        my_predbat.predbat_branch_warned = set()
+        with patch.object(my_predbat, "log") as mock_log:
+            _options_for(["has space"])
+            _options_for(["has another space"])
+        warnings = [call for call in mock_log.call_args_list if "predbat_branch" in str(call)]
+        if len(warnings) != 2:
+            print("  FAILED: two different invalid branches should each be warned about once, got {}".format(len(warnings)))
+            failed += 1
     finally:
         my_predbat.args.pop("predbat_branch", None)
+        my_predbat.predbat_branch_warned = set()
 
     return failed

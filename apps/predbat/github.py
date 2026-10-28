@@ -50,6 +50,19 @@ class GitHub:
                     branches.append(branch)
         return branches
 
+    def warn_predbat_branch_once(self, key, message):
+        """Log a predbat_branch warning once per run.
+
+        download_predbat_releases() runs every plan cycle, so a persistent mistake in apps.yaml would otherwise
+        repeat the same warning every 5 minutes. Restarting Predbat logs it again.
+        """
+        warned = getattr(self, "predbat_branch_warned", None)
+        if warned is None:
+            warned = self.predbat_branch_warned = set()
+        if key not in warned:
+            warned.add(key)
+            self.log(message)
+
     def _load_github_url_cache_from_storage(self):
         """Load the persisted GitHub URL cache from storage on the first call."""
         components = getattr(self, "components", None)
@@ -180,9 +193,9 @@ class GitHub:
                 if branch == "main":
                     continue
                 if not is_valid_predbat_branch(branch):
-                    self.log("Warn: predbat_branch '{}' is not valid, it can only contain letters, numbers, '.', '_', '-' and '/', so it is not offered as an update option".format(branch))
+                    self.warn_predbat_branch_once(("invalid", branch), "Warn: predbat_branch '{}' is not valid, it can only contain letters, numbers, '.', '_', '-' and '/', so it is not offered as an update option".format(branch))
                 elif branch_count >= MAX_PREDBAT_BRANCH_OPTIONS:
-                    self.log("Warn: predbat_branch '{}' is not offered as an update option, at most {} branches are shown".format(branch, MAX_PREDBAT_BRANCH_OPTIONS))
+                    self.warn_predbat_branch_once(("limit", branch), "Warn: predbat_branch '{}' is not offered as an update option, at most {} branches are shown".format(branch, MAX_PREDBAT_BRANCH_OPTIONS))
                 else:
                     PREDBAT_UPDATE_OPTIONS.append(predbat_branch_option(branch))
                     branch_count += 1
