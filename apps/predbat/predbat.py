@@ -1264,6 +1264,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         instant. It sets now_utc_real, now_utc, midnight_utc and minutes_now for the run (see
         update_time). The default None plans at the wall clock as before. A naive datetime
         raises ValueError before anything else runs.
+
+        plan_at should be at or behind the wall clock. The plan is stamped at plan_at, and a
+        later wall-clock run in the same process that sees a stamp in its future reads it as a
+        day wrap (calculate_plan's "start of day" check) and forces a recompute.
         """
         if plan_at is not None and (plan_at.tzinfo is None or plan_at.utcoffset() is None):
             raise ValueError("plan_once: plan_at must be a timezone-aware datetime, got naive {}".format(plan_at))
@@ -1324,7 +1328,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             recompute = True
         else:
             plan_age = self.now_utc - self.plan_last_updated
-            plan_age_minutes = plan_age.seconds / 60.0
+            plan_age_minutes = plan_age.total_seconds() / 60.0
             self.log("Plan was last updated on {} and is now {} minutes old".format(self.plan_last_updated, dp1(plan_age_minutes)))
 
         # Calculate the new plan (or re-use existing)
@@ -1381,7 +1385,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         # If the plan was not updated, and the time has expired lets update it now
         if not recompute:
             plan_age = self.now_utc - self.plan_last_updated
-            plan_age_minutes = plan_age.seconds / 60.0
+            plan_age_minutes = plan_age.total_seconds() / 60.0
 
             if (plan_age_minutes + RUN_EVERY) > self.calculate_plan_every:
                 recompute = True

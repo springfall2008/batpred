@@ -482,6 +482,26 @@ def _scenario_plan_at_ignores_skew(my_predbat):
     return failed
 
 
+def _scenario_plan_at_ahead_of_clock(my_predbat):
+    """A plan stamped at the next boundary (plan_at ahead of the wall clock) is fresh to a wall-clock update_pred, not a day old."""
+    failed = 0
+    my_predbat.args.pop("clock_skew", None)
+    now = datetime.now(timezone.utc)
+    next_boundary = now.replace(second=0, microsecond=0, minute=now.minute - (now.minute % 5)) + timedelta(minutes=5)
+    with ExitStack() as stack:
+        _patch_pipeline(my_predbat, stack, real_time=True)
+        my_predbat.plan_once(scheduled=False, plan_at=next_boundary)
+    failed = _check(failed, my_predbat.plan_last_updated == next_boundary, "plan_at ahead: plan stamped at the next boundary")
+    with ExitStack() as stack:
+        mocks = _patch_pipeline(my_predbat, stack, real_time=True)
+        my_predbat.update_pred(scheduled=True)
+    failed = _check(failed, mocks["calculate_plan"].call_count == 1, "plan_at ahead: calculate_plan called once (negative age is not an aged plan)")
+    failed = _check(failed, mocks["calculate_plan"].call_args.kwargs.get("recompute") is False, "plan_at ahead: plan reused, not recomputed")
+    failed = _check(failed, mocks["save_plan"].call_count == 0, "plan_at ahead: save_plan not called")
+    failed = _check(failed, mocks["execute_plan"].call_count == 1, "plan_at ahead: execute_plan called once")
+    return failed
+
+
 def _scenario_plan_at_naive_rejected(my_predbat):
     """A naive plan_at raises ValueError before the run touches any state."""
     failed = 0
@@ -529,6 +549,7 @@ def test_plan_execute_split(my_predbat):
         failed += _scenario_plan_at_drives_time(my_predbat)
         failed += _scenario_plan_at_rounding(my_predbat)
         failed += _scenario_plan_at_ignores_skew(my_predbat)
+        failed += _scenario_plan_at_ahead_of_clock(my_predbat)
         failed += _scenario_plan_at_naive_rejected(my_predbat)
     finally:
         _restore_state(my_predbat, saved)
