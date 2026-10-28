@@ -56,11 +56,8 @@ class GitHub:
         download_predbat_releases() runs every plan cycle, so a persistent mistake in apps.yaml would otherwise
         repeat the same warning every 5 minutes. Restarting Predbat logs it again.
         """
-        warned = getattr(self, "predbat_branch_warned", None)
-        if warned is None:
-            warned = self.predbat_branch_warned = set()
-        if key not in warned:
-            warned.add(key)
+        if key not in self.predbat_branch_warned:
+            self.predbat_branch_warned.add(key)
             self.log(message)
 
     def _load_github_url_cache_from_storage(self):
