@@ -2361,6 +2361,7 @@ def test_sigenergy_mqtt_listener_loop(my_predbat):
     # Different topics, so delivery order isn't guaranteed - the subscribe waits for the cancel to land
     cancel_at = sub_topics.index("openapi/unsubscription/change")
     assert publishes[cancel_at + 1] == ("sleep", SIGENERGY_MQTT_RESUBSCRIBE_DELAY), "pause after the cancel, got {}".format(publishes[cancel_at + 1])
+    assert publishes[cancel_at + 1][1] > 0, "pause must be non-zero, got {}".format(publishes[cancel_at + 1])
 
     # last_mqtt_update was set per system
     assert api.last_mqtt_update.get("XRTKQ1773829273", 0) > 0, "last_mqtt_update was set for system"
