@@ -1230,8 +1230,9 @@ class Output:
             charge_rate_limit += pv_forecast_minute_step.get(minute_relative_start, 0.0) / PREDICT_STEP
         charge_rate_now_curve = min(charge_rate_now_curve, charge_rate_limit)
         # Compared in whole watts, find_charge_rate() steps the rate down in watts and converts back.
-        # Low power is what was asked for, so the inverter cap above does not count as low power
-        low_power = dp0(charge_rate_now * MINUTE_WATT) < dp0(battery_rate_max_charge * MINUTE_WATT)
+        # Low power is what was asked for, and only slows the charge when it asks for less than the
+        # inverter can pass; the inverter cap alone is the full rate, not low power
+        low_power = dp0(charge_rate_now * MINUTE_WATT) < dp0(min(battery_rate_max_charge, charge_rate_limit) * MINUTE_WATT)
         return dp2(charge_rate_now_curve * MINUTE_WATT / 1000.0), low_power
 
     def publish_html_plan(self, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record, publish=True, prediction=None, car_hold_minutes=None, status_warnings=None):
