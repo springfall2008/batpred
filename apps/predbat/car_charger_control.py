@@ -518,11 +518,11 @@ class CarChargerControl:
     def charger_control_dispatch_active(self, car_n, now):
         """Is an Octopus Intelligent dispatch running for this car right now?
 
-        Only reached for a charger Predbat drives, so here Octopus drives the car. The plan
-        carries the dispatches too, but is only republished every 5 minutes and leaves out a
-        dispatch Octopus has not given any energy yet - following the dispatch sensor as well
-        stops the charger holding the car off for the first minutes of a new dispatch. With
-        octopus_intelligent_charging off Predbat follows only its own plan.
+        Only reached for a charger Predbat drives: Octopus drives the car, or the charger and the
+        user has Predbat filter it. The plan carries the dispatches too, but is only republished
+        every 5 minutes and leaves out a dispatch Octopus has not given any energy yet - following
+        the dispatch sensor as well stops the charger holding the car off for the first minutes of
+        a new dispatch. With octopus_intelligent_charging off Predbat follows only its own plan.
 
         The planned dispatches come from octopus_intelligent_planned_slot where it is set, as they
         do for the car's plan, so a dispatch that sensor leaves out does not run the charger.
@@ -751,9 +751,11 @@ class CarChargerControl:
         # Predbat to drive it to the dispatches - or has turned Octopus Intelligent charging off in
         # Predbat, which then plans the car itself and drives the charger to that plan
         car_driven = drives is False and self.get_arg("octopus_intelligent_charging", True) and not self.get_arg("octopus_intelligent_charger_follows_car", False) and self.charger_control_octopus_drives_car(car_n)
+        # Octopus drives the charger, but control: true plus a planned sensor filtering its dispatches has Predbat stop it outside them
+        filtered = drives is True and self.charger_control_config is True and not (car_n == 0 and self.charger_control_slots_claimed()) and self.charger_control_planned_sensor(car_n, self.charger_control_dispatch_sensor(car_n)) is not None
         # An explicit control: true is the user saying their charger is not the Octopus
         # device, so it overrides "cannot tell" - but never a known charge point
-        if drives is True or car_driven or (drives is None and self.charger_control_config is not True):
+        if (drives is True and not filtered) or car_driven or (drives is None and self.charger_control_config is not True):
             if drives:
                 why = "octopus"
             elif car_driven:
