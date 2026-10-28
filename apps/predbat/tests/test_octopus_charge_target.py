@@ -116,6 +116,42 @@ def _run_detection(my_predbat):
     return failed
 
 
+def _run_target_entity_detection(my_predbat):
+    """
+    device_type on the car's charge target entity (BottlecapDave #1917) decides, ahead of the sizes; a target set as a
+    plain number has no entity to read, so the dispatch sensor alone decides. is_charger as a string is read too.
+    """
+    failed = False
+    print("Test 1b: device_type on the charge target entity, and is_charger as a string")
+    target = "number.octopus_energy_test_intelligent_charge_target"
+    saved = my_predbat.args.get("octopus_charge_limit")
+    try:
+        my_predbat.args["octopus_charge_limit"] = target
+        sizes_say_car = {"vehicle_battery_size_in_kwh": 75.0, "charge_point_power_in_kw": None}
+        my_predbat.ha_interface.set_state(IOG_SENSOR, "off", attributes=sizes_say_car)
+        for device_type, expected in (("ELECTRIC_VEHICLE_CHARGERS", True), ("ELECTRIC_VEHICLES", False)):
+            my_predbat.ha_interface.set_state(target, "80", attributes={"device_type": device_type})
+            result = my_predbat.octopus_charge_target_is_added(IOG_SENSOR, 0)
+            failed |= _check("t1b target entity says {}".format(device_type), result is expected, "expected {} got {}".format(expected, result))
+        my_predbat.ha_interface.set_state(target, "80", attributes={})
+        result = my_predbat.octopus_charge_target_is_added(IOG_SENSOR, 0)
+        failed |= _check("t1b target entity without device_type falls back to the sizes", result is False, "got {}".format(result))
+        my_predbat.args["octopus_charge_limit"] = 80
+        my_predbat.ha_interface.set_state(IOG_SENSOR, "off", attributes={"vehicle_battery_size_in_kwh": None, "charge_point_power_in_kw": 7.0})
+        result = my_predbat.octopus_charge_target_is_added(IOG_SENSOR, 0)
+        failed |= _check("t1b a plain-number target is decided by the dispatch sensor", result is True, "got {}".format(result))
+        for text, expected in (("true", True), ("False", False), ("unknown", None)):
+            my_predbat.ha_interface.set_state(IOG_SENSOR, "off", attributes={"is_charger": text})
+            result = my_predbat.octopus_charge_target_is_added(IOG_SENSOR, 0)
+            failed |= _check("t1b is_charger '{}'".format(text), result is expected, "expected {} got {}".format(expected, result))
+    finally:
+        if saved is None:
+            my_predbat.args.pop("octopus_charge_limit", None)
+        else:
+            my_predbat.args["octopus_charge_limit"] = saved
+    return failed
+
+
 def _run_limit(my_predbat):
     """
     The charge limit a charger-linked target gives, and that a car-linked one is unchanged.
@@ -203,6 +239,7 @@ def test_octopus_charge_target(my_predbat):
     saved_args = {key: copy.deepcopy(my_predbat.args[key]) for key in SAVED_ARGS if key in my_predbat.args}
     try:
         failed = _run_detection(my_predbat)
+        failed |= _run_target_entity_detection(my_predbat)
         failed |= _run_limit(my_predbat)
     finally:
         for field, value in saved_state.items():

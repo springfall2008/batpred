@@ -19,7 +19,7 @@ dictionaries for use by the prediction engine.
 """
 
 from datetime import datetime, timedelta
-from utils import minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative, MinuteArray, strptime_aware, is_entity_id
+from utils import minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative, MinuteArray, strptime_aware, is_entity_id, intelligent_device_is_charger
 from const import (
     MINUTE_WATT,
     PREDICT_STEP,
@@ -2414,7 +2414,7 @@ class Fetch:
                     base_soc = self.octopus_charge_target_base_soc(car_n, plugged, save)
                     if octopus_limit:
                         octopus_limit = dp3(float(octopus_limit) * self.car_charging_battery_size[car_n] / 100.0)
-                        if self.octopus_charge_target_is_added(entity_id):
+                        if self.octopus_charge_target_is_added(entity_id, car_n):
                             if save:
                                 self.log("Car {} Octopus is linked to the charger, so its target adds {}kWh to the {}kWh the car had when plugged in".format(car_n, octopus_limit, base_soc))
                             octopus_limit = dp3(base_soc + octopus_limit)
@@ -2480,31 +2480,20 @@ class Fetch:
         if save:
             self.car_manual_soc_mirror()
 
-    def octopus_charge_target_is_added(self, entity_id):
+    def octopus_charge_target_is_added(self, entity_id, car_n=0):
         """
         Is the Octopus Intelligent charge target for this dispatch sensor a percentage to add, rather than a SoC to reach?
 
         Octopus takes a percentage to add when the charger is linked, and a SoC to reach when the car is (#3034).
-        Predbat's own Octopus and Kraken components say which with is_charger, and the HA Octopus Energy
-        integration with device_type. Older versions of the integration say neither, but fill in only the
-        charge point's power for a charger and only the battery size for a car, so that tells them apart.
-        Returns None when nothing does, which keeps the target read as a SoC to reach, as it always was.
+        Which device is linked is decided by intelligent_device_is_charger(), from the dispatch sensor and the
+        car's octopus_charge_limit entity when that is an entity rather than a number. None when nothing says,
+        which keeps the target read as a SoC to reach, as it always was.
         """
-        is_charger = self.get_state_wrapper(entity_id=entity_id, attribute="is_charger")
-        if isinstance(is_charger, bool):
-            return is_charger
-        device_type = self.get_state_wrapper(entity_id=entity_id, attribute="device_type")
-        if device_type == "ELECTRIC_VEHICLE_CHARGERS":
-            return True
-        if device_type == "ELECTRIC_VEHICLES":
-            return False
-        size = self.get_state_wrapper(entity_id=entity_id, attribute="vehicle_battery_size_in_kwh")
-        rate = self.get_state_wrapper(entity_id=entity_id, attribute="charge_point_power_in_kw")
-        if rate is not None and size is None:
-            return True
-        if size is not None and rate is None:
-            return False
-        return None
+        target = self.get_arg("octopus_charge_limit", None, indirect=False, index=car_n)
+        target_attribute = None
+        if is_entity_id(target):
+            target_attribute = lambda name: self.get_state_wrapper(entity_id=target, attribute=name)
+        return intelligent_device_is_charger(lambda name: self.get_state_wrapper(entity_id=entity_id, attribute=name), target_attribute)
 
     def octopus_charge_target_base_soc(self, car_n, plugged, save):
         """
