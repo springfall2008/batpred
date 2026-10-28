@@ -107,10 +107,12 @@ class FakeStorage:
     def __init__(self):
         """Initialise an empty in-memory store keyed by (module, filename)."""
         self.data = {}
+        self.expiry = {}
 
     async def save(self, module, filename, data, format="yaml", expiry=None):
         """Store data under (module, filename), mirroring StorageBase.save's signature and return value."""
         self.data[(module, filename)] = data
+        self.expiry[(module, filename)] = expiry
         return True
 
     async def load(self, module, filename):
@@ -1287,6 +1289,28 @@ def test_sigenergy_save_load_cache_round_trip(my_predbat):
     return failed
 
 
+def test_sigenergy_save_cache_settings_expiry(my_predbat):
+    """Test plant settings (export limit, SoC cut-offs) are cached for 28 days and poll data for one day."""
+    failed = False
+    api = MockSigenergyAPI()
+    storage = FakeStorage()
+    api._mock_storage = storage
+
+    for key in ("energy_flow", "grid_export", "device_cutoffs"):
+        run_async(api._save_cache(key, {"SIG001": {}}))
+    now = datetime.now(timezone.utc)
+
+    def days_left(key):
+        """Days until the saved entry for key expires."""
+        return (storage.expiry[("sigenergy", key)] - now).total_seconds() / 86400
+
+    assert 0.99 < days_left("energy_flow") <= 1.0, "poll data expires after a day, got {:.2f}".format(days_left("energy_flow"))
+    assert 27.99 < days_left("grid_export") <= 28.0, "export limit kept for 28 days, got {:.2f}".format(days_left("grid_export"))
+    assert 27.99 < days_left("device_cutoffs") <= 28.0, "SoC cut-offs kept for 28 days, got {:.2f}".format(days_left("device_cutoffs"))
+
+    return failed
+
+
 def test_sigenergy_load_cached_data(my_predbat):
     """Test load_cached_data restores energy_flow/daily_summary/history_totals/onboard_status."""
     failed = False
@@ -2323,6 +2347,11 @@ def test_sigenergy_mqtt_listener_loop(my_predbat):
     assert "openapi/subscription/period" in sub_topics, "period subscription published"
     assert "openapi/subscription/change" in sub_topics, "change subscription published"
     assert "openapi/subscription/alarm" in sub_topics, "alarm subscription published"
+    # The change subscription is cancelled first, so Sigenergy treats it as new and sends the full snapshot
+    assert "openapi/unsubscription/change" in sub_topics, "change subscription cancelled before re-subscribing"
+    assert sub_topics.index("openapi/unsubscription/change") < sub_topics.index("openapi/subscription/change"), "cancel precedes subscribe: {}".format(sub_topics)
+    payloads = dict(publishes)
+    assert payloads["openapi/unsubscription/change"] == payloads["openapi/subscription/change"], "cancel carries the same token and system list"
 
     # last_mqtt_update was set per system
     assert api.last_mqtt_update.get("XRTKQ1773829273", 0) > 0, "last_mqtt_update was set for system"
@@ -5037,6 +5066,7 @@ def run_sigenergy_tests(my_predbat):
         ("fetch_history_totals_keeps_missing_node", test_sigenergy_fetch_history_totals_keeps_missing_node),
         ("save_load_cache_no_storage", test_sigenergy_save_load_cache_no_storage),
         ("save_load_cache_round_trip", test_sigenergy_save_load_cache_round_trip),
+        ("save_cache_settings_expiry", test_sigenergy_save_cache_settings_expiry),
         ("load_cached_data", test_sigenergy_load_cached_data),
         ("load_cached_data_no_storage_leaves_defaults", test_sigenergy_load_cached_data_no_storage_leaves_defaults),
         ("history_totals_clamp_survives_restart", test_sigenergy_history_totals_clamp_survives_restart),
