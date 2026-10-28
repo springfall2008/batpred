@@ -38,7 +38,7 @@ import asyncio
 THIS_VERSION = "v9.5.3"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
-from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, DEFAULT_PREDBAT_REPOSITORY
+from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, is_valid_predbat_branch, parse_predbat_branch_option, DEFAULT_PREDBAT_REPOSITORY
 from const import MINUTE_WATT
 
 # Only do the self-install/self-update logic if we are NOT compiled.
@@ -1642,7 +1642,17 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             return
 
         selected_tag = version.split(" ")[0] if version else ""
-        if selected_tag == "main":
+        branch = parse_predbat_branch_option(version)
+        download_version = version
+        if branch is not None:
+            # 'branch: <name>' installs that branch from the predbat_repository, or the default repository if that is not set.
+            # The branch name is the version used for the download, as the git ref and the staged file suffix.
+            if not is_valid_predbat_branch(branch):
+                self.log("Warn: Predbat update not performed, branch '{}' is not valid, it can only contain letters, numbers, '.', '_', '-' and '/'".format(branch))
+                return False
+            repository = self.get_predbat_repository()
+            download_version = branch
+        elif selected_tag == "main":
             repository = self.get_predbat_repository()
         else:
             repository = DEFAULT_PREDBAT_REPOSITORY
@@ -1650,7 +1660,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.log("Update Predbat to version {} from repository {}".format(version, repository))
         self.expose_config("version", True, force=True, in_progress=True)
 
-        files = predbat_update_download(version, repository=repository)
+        files = predbat_update_download(download_version, repository=repository)
         if files:
             # Notify before killing threads so the WebSocket is still healthy
             if self.get_arg("set_system_notify"):
@@ -1662,7 +1672,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
             # Perform the update
             self.log("Perform the update.....")
-            if predbat_update_move(version, files):
+            if predbat_update_move(download_version, files):
                 self.log("Update to version {} completed".format(version))
                 return True
             else:

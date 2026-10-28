@@ -10,6 +10,7 @@
 
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
+from download import MAX_PREDBAT_BRANCH_OPTIONS
 
 
 class _MockComponents:
@@ -334,5 +335,63 @@ def test_github(my_predbat):
                 failed += 1
     finally:
         shutil.rmtree(tmpdir2, ignore_errors=True)
+
+    print("  Test 13: predbat_branch adds 'branch: <name>' entries after main in the update options")
+    import github as _github
+
+    releases_data = [_make_release("v2.0", "Stable Two", prerelease=False)]
+
+    def _options_for(branch):
+        _setup(my_predbat)
+        if branch is None:
+            my_predbat.args.pop("predbat_branch", None)
+        else:
+            my_predbat.args["predbat_branch"] = branch
+        with patch.object(my_predbat, "download_predbat_releases_url", return_value=releases_data):
+            with patch.object(my_predbat, "expose_config"):
+                with patch.object(my_predbat, "download_predbat_version"):
+                    my_predbat.download_predbat_releases()
+        return list(_github.PREDBAT_UPDATE_OPTIONS)
+
+    try:
+        options = _options_for("my-feature")
+        if options[:2] != ["main", "branch: my-feature"] or not any(o.startswith("v2.0") for o in options):
+            print("  FAILED: expected main, then branch: my-feature, then the releases, got {}".format(options))
+            failed += 1
+
+        print("  Test 14: a list of branches, including names with a /, is offered in the order given without duplicates or blanks")
+        options = _options_for(["fix/one", "feat/two", "fix/one", "  ", "test/three"])
+        if options[:4] != ["main", "branch: fix/one", "branch: feat/two", "branch: test/three"] or not any(o.startswith("v2.0") for o in options):
+            print("  FAILED: expected main, three branch entries and the releases, got {}".format(options))
+            failed += 1
+
+        print("  Test 15: no branch entry when predbat_branch is not set, is main, or is not a valid branch name")
+        for branch in [None, "", "   ", [], "main", ["main"], "has space", "a//b", "/x", 5]:
+            options = _options_for(branch)
+            if any(o.startswith("branch:") for o in options):
+                print("  FAILED: predbat_branch {!r} should not add a branch entry, got {}".format(branch, options))
+                failed += 1
+            if options[0] != "main":
+                print("  FAILED: main should always be the first option, got {}".format(options))
+                failed += 1
+
+        print("  Test 16: an invalid branch in the list is skipped but the valid ones are kept")
+        options = _options_for(["fix/ok", "has space", "feat/ok"])
+        if [o for o in options if o.startswith("branch:")] != ["branch: fix/ok", "branch: feat/ok"]:
+            print("  FAILED: expected only the two valid branches, got {}".format(options))
+            failed += 1
+
+        print("  Test 17: no more than MAX_PREDBAT_BRANCH_OPTIONS branches are offered, and releases are still listed")
+        many = ["fix/b{}".format(n) for n in range(MAX_PREDBAT_BRANCH_OPTIONS + 5)]
+        options = _options_for(many)
+        offered = [o for o in options if o.startswith("branch:")]
+        if offered != ["branch: " + b for b in many[:MAX_PREDBAT_BRANCH_OPTIONS]]:
+            print("  FAILED: expected the first {} branches only, got {}".format(MAX_PREDBAT_BRANCH_OPTIONS, offered))
+            failed += 1
+        if not any(o.startswith("v2.0") for o in options):
+            print("  FAILED: releases must still be listed after the branches, got {}".format(options))
+            failed += 1
+    finally:
+        my_predbat.args.pop("predbat_branch", None)
 
     return failed
