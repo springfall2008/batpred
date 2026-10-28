@@ -689,7 +689,7 @@ The cheap/moderate thresholds are computed relative to the current day's import 
 - **Moderate threshold** = `max(rate_max × 0.5, rate_min × 1.5)`
 
 `rate_min` and `rate_max` are the base tariff's lowest and highest import rates, the same values as the sensor's `rate_min`/`rate_max` attributes.
-Octopus free and saving sessions and Intelligent dispatches are left out, so a free session does not drag the cheap threshold down to zero.
+Octopus free and saving sessions, Axle events and rate overrides are left out, so a free session does not drag the cheap threshold down to zero.
 
 These binary sensors are useful in Home Assistant automations, e.g. to start an EV charge or run a dishwasher only when energy is cheap.
 
