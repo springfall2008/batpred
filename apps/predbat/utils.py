@@ -474,12 +474,17 @@ def load_apps_yaml(apps_file=None, log=None, secrets_file=None):
         log(f"Warn: Secret '{secret_key}' not found in secrets.yaml")
         return None
 
-    yaml.add_constructor("!secret", secret_constructor, Loader=yaml.SafeLoader)
+    # A private SafeLoader per call, so !secret resolves against this call's secrets only and is
+    # not registered on the process-wide yaml.SafeLoader that every other yaml.safe_load() uses
+    class AppsYamlLoader(yaml.SafeLoader):
+        pass
+
+    AppsYamlLoader.add_constructor("!secret", secret_constructor)
 
     apps_file = apps_file or os.getenv("PREDBAT_APPS_FILE", "apps.yaml")
     log(f"Loading {apps_file}", quiet=False)
     with open(apps_file, "r") as stream:
-        config = yaml.safe_load(stream)
+        config = yaml.load(stream, Loader=AppsYamlLoader)  # nosec B506 - a SafeLoader subclass
     return config["pred_bat"], secrets
 
 
