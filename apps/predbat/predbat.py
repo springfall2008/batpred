@@ -760,15 +760,28 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.config_root_p = self.config_root
         self.log("Config root is {}".format(self.config_root))
 
-    def update_time(self, print=True):
+    def update_time(self, print=True, now=None):
         """
         Update the current time/date
+
+        now, when given, is a timezone-aware datetime used in place of the wall clock - a host
+        that plans at an instant of its own choosing (see plan_once). It is converted to the
+        configured timezone and rounded down to PREDICT_STEP exactly as the clock is. The
+        clock_skew debug setting is not applied to it: the caller has already chosen the instant.
         """
         self.local_tz = pytz.timezone(self.args.get("timezone", "Europe/London"))
         skew = self.args.get("clock_skew", 0)
-        if skew:
-            self.log("Warn: Clock skew is set to {} minutes".format(skew))
-        self.now_utc_real = datetime.now(self.local_tz)
+        if now is not None:
+            if now.tzinfo is None or now.utcoffset() is None:
+                raise ValueError("update_time: now must be a timezone-aware datetime, got naive {}".format(now))
+            if skew:
+                self.log("Warn: Clock skew of {} minutes ignored as the plan time was given by the caller".format(skew))
+            skew = 0
+            self.now_utc_real = now.astimezone(self.local_tz)
+        else:
+            if skew:
+                self.log("Warn: Clock skew is set to {} minutes".format(skew))
+            self.now_utc_real = datetime.now(self.local_tz)
         now_utc = self.now_utc_real + timedelta(minutes=skew)
         now_utc = now_utc.replace(second=0, microsecond=0, minute=(now_utc.minute - (now_utc.minute % PREDICT_STEP)))
 
@@ -1237,7 +1250,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         if status is not None and self.current_status != status_before:
             self.record_status_under_warning(status, status_extra)
 
-    def plan_once(self, scheduled=True):
+    def plan_once(self, scheduled=True, plan_at=None):
         """
         Refresh input data and recompute the plan if required, without executing it.
 
@@ -1245,11 +1258,24 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         unavailable or import rates all zero) - the error will already have been recorded.
         Otherwise returns a plan artifact summary dict with keys recomputed, plan_valid,
         plan_version and plan_last_updated. Passing scheduled=False forces a recompute.
+
+        plan_at, when given, is a timezone-aware datetime this run plans at instead of the
+        wall clock, so several processes gathering inputs for one site can agree on the
+        instant. It sets now_utc_real, now_utc, midnight_utc and minutes_now for the run (see
+        update_time). The default None plans at the wall clock as before. A naive datetime
+        raises ValueError before anything else runs.
+
+        plan_at should be at or behind the wall clock. The plan is stamped at plan_at, and a
+        later wall-clock run in the same process that sees a stamp in its future reads it as a
+        day wrap (calculate_plan's "start of day" check) and forces a recompute.
         """
+        if plan_at is not None and (plan_at.tzinfo is None or plan_at.utcoffset() is None):
+            raise ValueError("plan_once: plan_at must be a timezone-aware datetime, got naive {}".format(plan_at))
+
         recompute = False
         self.reset_run_status()
 
-        self.update_time()
+        self.update_time(now=plan_at)
         self.save_current_config()
 
         # Check our version, don't check for cloud version which can't update directly
@@ -1302,7 +1328,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             recompute = True
         else:
             plan_age = self.now_utc - self.plan_last_updated
-            plan_age_minutes = plan_age.seconds / 60.0
+            plan_age_minutes = plan_age.total_seconds() / 60.0
             self.log("Plan was last updated on {} and is now {} minutes old".format(self.plan_last_updated, dp1(plan_age_minutes)))
 
         # Calculate the new plan (or re-use existing)
@@ -1359,7 +1385,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         # If the plan was not updated, and the time has expired lets update it now
         if not recompute:
             plan_age = self.now_utc - self.plan_last_updated
-            plan_age_minutes = plan_age.seconds / 60.0
+            plan_age_minutes = plan_age.total_seconds() / 60.0
 
             if (plan_age_minutes + RUN_EVERY) > self.calculate_plan_every:
                 recompute = True

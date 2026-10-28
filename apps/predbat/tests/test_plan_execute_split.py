@@ -10,7 +10,7 @@
 """Characterisation and unit tests for the plan_once()/execute_once() split of update_pred()."""
 
 from contextlib import ExitStack
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 _STATE_ATTRS = [
@@ -35,6 +35,13 @@ _STATE_ATTRS = [
     "charge_limit_best",
     "export_window_best",
     "export_limits_best",
+    "local_tz",
+    "now_utc_real",
+    "now_utc",
+    "midnight_utc",
+    "difference_minutes",
+    "minutes_now",
+    "minutes_to_midnight",
 ]
 
 
@@ -43,6 +50,7 @@ def _save_state(my_predbat):
     saved = {name: getattr(my_predbat, name, None) for name in _STATE_ATTRS}
     saved["_template_arg"] = my_predbat.args.get("template", None)
     saved["_plan_random_delay_arg"] = my_predbat.args.get("plan_random_delay", None)
+    saved["_clock_skew_arg"] = my_predbat.args.get("clock_skew", None)
     return saved
 
 
@@ -58,6 +66,10 @@ def _restore_state(my_predbat, saved):
         my_predbat.args.pop("plan_random_delay", None)
     else:
         my_predbat.args["plan_random_delay"] = saved["_plan_random_delay_arg"]
+    if saved["_clock_skew_arg"] is None:
+        my_predbat.args.pop("clock_skew", None)
+    else:
+        my_predbat.args["clock_skew"] = saved["_clock_skew_arg"]
 
 
 def _quiet_bookkeeping(my_predbat):
@@ -79,10 +91,11 @@ def _quiet_bookkeeping(my_predbat):
     my_predbat.args["plan_random_delay"] = 0  # avoids the real random sleep in update_pred's aged-plan path
 
 
-def _patch_pipeline(my_predbat, stack, inverter_ok=True, plan_valid_after=True):
-    """Patch the fetch/plan/execute pipeline on my_predbat, returning a dict of the created mocks."""
+def _patch_pipeline(my_predbat, stack, inverter_ok=True, plan_valid_after=True, real_time=False):
+    """Patch the fetch/plan/execute pipeline on my_predbat, returning a dict of the created mocks. real_time=True leaves update_time unpatched."""
     mocks = {}
-    for name in ("update_time", "save_current_config", "download_predbat_releases", "fetch_config_options", "publish_rate_and_threshold", "save_plan"):
+    names = ("save_current_config",) if real_time else ("update_time", "save_current_config")
+    for name in names + ("download_predbat_releases", "fetch_config_options", "publish_rate_and_threshold", "save_plan"):
         mocks[name] = stack.enter_context(patch.object(my_predbat, name))
     mocks["fetch_sensor_data"] = stack.enter_context(patch.object(my_predbat, "fetch_sensor_data", return_value=False))
     mocks["dynamic_load"] = stack.enter_context(patch.object(my_predbat, "dynamic_load", return_value=False))
@@ -395,6 +408,123 @@ def _scenario_plan_version_persistence(my_predbat):
     return failed
 
 
+def _scenario_plan_at_default(my_predbat):
+    """plan_once without plan_at plans at the wall clock, exactly as before."""
+    failed = 0
+    my_predbat.plan_valid = False
+    my_predbat.plan_last_updated = None
+    with ExitStack() as stack:
+        mocks = _patch_pipeline(my_predbat, stack)
+        my_predbat.plan_once(scheduled=True)
+    failed = _check(failed, mocks["update_time"].call_args.kwargs.get("now") is None, "plan_at default: update_time given no instant")
+
+    my_predbat.args.pop("clock_skew", None)
+    my_predbat.plan_valid = False
+    my_predbat.plan_last_updated = None
+    before = datetime.now(timezone.utc)
+    with ExitStack() as stack:
+        _patch_pipeline(my_predbat, stack, real_time=True)
+        artifact = my_predbat.plan_once(scheduled=True)
+    after = datetime.now(timezone.utc)
+    failed = _check(failed, before <= my_predbat.now_utc_real <= after, "plan_at default: now_utc_real read from the wall clock")
+    failed = _check(failed, before - timedelta(minutes=5) < my_predbat.now_utc <= after, "plan_at default: now_utc is the wall clock rounded down")
+    failed = _check(failed, my_predbat.now_utc.minute % 5 == 0 and my_predbat.now_utc.second == 0, "plan_at default: now_utc on a 5 minute boundary")
+    failed = _check(failed, artifact and artifact.get("plan_last_updated") == my_predbat.now_utc, "plan_at default: plan stamped at now_utc")
+    return failed
+
+
+def _scenario_plan_at_drives_time(my_predbat):
+    """plan_at on a boundary sets now_utc, midnight_utc and minutes_now for the run, in the configured timezone."""
+    failed = 0
+    my_predbat.args.pop("clock_skew", None)
+    my_predbat.plan_valid = False
+    my_predbat.plan_last_updated = None
+    plan_at = datetime(2026, 6, 15, 11, 35, tzinfo=timezone.utc)  # 12:35 BST
+    with ExitStack() as stack:
+        _patch_pipeline(my_predbat, stack, real_time=True)
+        artifact = my_predbat.plan_once(scheduled=True, plan_at=plan_at)
+    failed = _check(failed, my_predbat.now_utc == plan_at, "plan_at: now_utc equals plan_at")
+    failed = _check(failed, my_predbat.now_utc_real == plan_at, "plan_at: now_utc_real equals plan_at")
+    failed = _check(failed, getattr(my_predbat.now_utc.tzinfo, "zone", None) == my_predbat.local_tz.zone, "plan_at: now_utc carries the configured timezone")
+    failed = _check(failed, my_predbat.now_utc.hour == 12, "plan_at: now_utc is 12:35 local (BST)")
+    failed = _check(failed, my_predbat.minutes_now == 12 * 60 + 35, "plan_at: minutes_now is 755")
+    failed = _check(failed, my_predbat.minutes_to_midnight == 24 * 60 - 755, "plan_at: minutes_to_midnight follows")
+    failed = _check(failed, my_predbat.midnight_utc == datetime(2026, 6, 14, 23, 0, tzinfo=timezone.utc), "plan_at: midnight_utc is local midnight of plan_at")
+    failed = _check(failed, artifact and artifact.get("plan_last_updated") == plan_at, "plan_at: plan stamped at plan_at")
+    return failed
+
+
+def _scenario_plan_at_rounding(my_predbat):
+    """A plan_at off the boundary is rounded down the same way the clock is; now_utc_real keeps the exact instant."""
+    failed = 0
+    my_predbat.args.pop("clock_skew", None)
+    plan_at = datetime(2026, 1, 10, 23, 59, 42, 500000, tzinfo=timezone.utc)  # GMT, so local == UTC
+    with ExitStack() as stack:
+        _patch_pipeline(my_predbat, stack, real_time=True)
+        my_predbat.plan_once(scheduled=False, plan_at=plan_at)
+    failed = _check(failed, my_predbat.now_utc == datetime(2026, 1, 10, 23, 55, tzinfo=timezone.utc), "plan_at rounding: now_utc rounded down to 23:55")
+    failed = _check(failed, my_predbat.now_utc_real == plan_at, "plan_at rounding: now_utc_real keeps the exact instant")
+    failed = _check(failed, my_predbat.minutes_now == 23 * 60 + 55, "plan_at rounding: minutes_now is 1435")
+    failed = _check(failed, my_predbat.midnight_utc == datetime(2026, 1, 10, 0, 0, tzinfo=timezone.utc), "plan_at rounding: midnight_utc is the same local day")
+    return failed
+
+
+def _scenario_plan_at_ignores_skew(my_predbat):
+    """clock_skew offsets the wall clock only; a caller-chosen plan_at is used as given."""
+    failed = 0
+    my_predbat.args["clock_skew"] = 10
+    plan_at = datetime(2026, 1, 10, 9, 0, tzinfo=timezone.utc)
+    with ExitStack() as stack:
+        _patch_pipeline(my_predbat, stack, real_time=True)
+        my_predbat.plan_once(scheduled=False, plan_at=plan_at)
+    my_predbat.args.pop("clock_skew", None)
+    failed = _check(failed, my_predbat.now_utc == plan_at, "plan_at skew: clock_skew not applied to plan_at")
+    return failed
+
+
+def _scenario_plan_at_ahead_of_clock(my_predbat):
+    """A plan stamped at the next boundary (plan_at ahead of the wall clock) is fresh to a wall-clock update_pred, not a day old."""
+    failed = 0
+    my_predbat.args.pop("clock_skew", None)
+    now = datetime.now(timezone.utc)
+    next_boundary = now.replace(second=0, microsecond=0, minute=now.minute - (now.minute % 5)) + timedelta(minutes=5)
+    with ExitStack() as stack:
+        _patch_pipeline(my_predbat, stack, real_time=True)
+        my_predbat.plan_once(scheduled=False, plan_at=next_boundary)
+    failed = _check(failed, my_predbat.plan_last_updated == next_boundary, "plan_at ahead: plan stamped at the next boundary")
+    with ExitStack() as stack:
+        mocks = _patch_pipeline(my_predbat, stack, real_time=True)
+        my_predbat.update_pred(scheduled=True)
+    failed = _check(failed, mocks["calculate_plan"].call_count == 1, "plan_at ahead: calculate_plan called once (negative age is not an aged plan)")
+    failed = _check(failed, mocks["calculate_plan"].call_args.kwargs.get("recompute") is False, "plan_at ahead: plan reused, not recomputed")
+    failed = _check(failed, mocks["save_plan"].call_count == 0, "plan_at ahead: save_plan not called")
+    failed = _check(failed, mocks["execute_plan"].call_count == 1, "plan_at ahead: execute_plan called once")
+    return failed
+
+
+def _scenario_plan_at_naive_rejected(my_predbat):
+    """A naive plan_at raises ValueError before the run touches any state."""
+    failed = 0
+    raised = False
+    with ExitStack() as stack:
+        mocks = _patch_pipeline(my_predbat, stack)
+        try:
+            my_predbat.plan_once(scheduled=True, plan_at=datetime(2026, 1, 10, 9, 0))
+        except ValueError:
+            raised = True
+    failed = _check(failed, raised, "plan_at naive: ValueError raised")
+    failed = _check(failed, mocks["update_time"].call_count == 0, "plan_at naive: update_time not called")
+    failed = _check(failed, mocks["calculate_plan"].call_count == 0, "plan_at naive: calculate_plan not called")
+
+    raised = False
+    try:
+        my_predbat.update_time(now=datetime(2026, 1, 10, 9, 0))
+    except ValueError:
+        raised = True
+    failed = _check(failed, raised, "plan_at naive: update_time(now=naive) raises ValueError")
+    return failed
+
+
 def test_plan_execute_split(my_predbat):
     """Entry point registered in unit_test.py - characterises update_pred and tests plan_once/execute_once."""
     print("**** Running plan/execute split tests ****")
@@ -415,6 +545,12 @@ def test_plan_execute_split(my_predbat):
         failed += _scenario_execute_once(my_predbat)
         failed += _scenario_plan_version_bump(my_predbat)
         failed += _scenario_plan_version_persistence(my_predbat)
+        failed += _scenario_plan_at_default(my_predbat)
+        failed += _scenario_plan_at_drives_time(my_predbat)
+        failed += _scenario_plan_at_rounding(my_predbat)
+        failed += _scenario_plan_at_ignores_skew(my_predbat)
+        failed += _scenario_plan_at_ahead_of_clock(my_predbat)
+        failed += _scenario_plan_at_naive_rejected(my_predbat)
     finally:
         _restore_state(my_predbat, saved)
     return failed
