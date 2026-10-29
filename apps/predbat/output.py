@@ -1533,6 +1533,13 @@ class Output:
                 if "target" in self.charge_window_best[charge_window_n]:
                     target = self.charge_window_best[charge_window_n]["target"]
 
+                # Classify Chrg vs HoldChrg against the real instruction (charge_limit_best), but have a Chrg row
+                # keep displaying the window's predicted SoC ("target", from plan.py) as before, rather than an
+                # instruction the window may never reach. Classifying against the prediction showed a full-rate
+                # charge that can't finish within the window as HoldChrg whenever the row's lowest SoC sat at or
+                # above that prediction (issue #4445). A HoldChrg row shows the limit it is held at, which the
+                # prediction need not match.
+                instruction_percent = calc_percent_limit(limit, self.soc_max)
                 limit_percent = calc_percent_limit(target, self.soc_max)
                 if limit > 0.0:
                     if self.is_freeze_charge(limit):
@@ -1541,10 +1548,11 @@ class Output:
                         raw_state = "FrzChrg"
                         limit_percent = soc_percent
                         reason_parts.append({"code": "freeze_charge", "params": {"rate": rate_text_import, "threshold": "{:.2f}".format(import_cost_threshold)}})
-                    elif limit_percent <= soc_percent_min_window:
+                    elif instruction_percent <= soc_percent_min_window:
                         state = "HoldChrg&rarr;"
                         state_color = "#34DBEB"
                         raw_state = "HoldChrg"
+                        limit_percent = instruction_percent
                         reason_parts.append({"code": "hold_charge_at_target", "params": {"target_percent": limit_percent}})
                     else:
                         state = "Chrg&nearr;"
@@ -1564,7 +1572,7 @@ class Output:
                     show_limit = str(limit_percent)
                     had_state = True
                     if plan_debug:
-                        show_limit += " ({})".format(str(calc_percent_limit(limit, self.soc_max)))
+                        show_limit += " ({})".format(str(instruction_percent))
                     raw_state_target = str(limit_percent)
             else:
                 if export_window_n >= 0:

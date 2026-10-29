@@ -416,6 +416,78 @@ def run_test_plan_why_reason(my_predbat):
         print("ERROR: HoldChrg rendered text unexpected: {}".format(_render(row, templates)))
         failed = True
 
+    # --- Test 2b: #4445 - a full-rate charge that can't finish within the window carries a "target"
+    # (plan.py's predicted end-of-window SoC) below the real charge_limit_best. Chrg vs HoldChrg must be
+    # decided from the real limit, while the Limit cell, reason and state_target of a Chrg row keep
+    # showing the predicted SoC, as before ---
+    print("Test Chrg vs HoldChrg is decided by the real limit, with the predicted SoC displayed (#4445)")
+    my_predbat.charge_window_best[0]["target"] = 6.0  # predicted to only reach 60% (6kWh of 10kWh soc_max) by window end
+
+    # The reported symptom: the SoC is already above the predicted 60% but below the real 80% limit, so
+    # classifying against the prediction showed HoldChrg for a window that is really charging
+    my_predbat.predict_soc_best = _flat_soc(my_predbat, 7.0)  # 70%, between the 60% target and the 80% limit
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or _codes(row) != ["charge_low_rate"]:
+        print("ERROR: #4445 SoC between target and limit should show Chrg, not HoldChrg: {}".format(row and _codes(row)))
+        failed = True
+    elif row["reasons"][0]["params"].get("target_percent") != 60:
+        print("ERROR: #4445 Chrg reason should show the predicted SoC (60): {}".format(row["reasons"][0]["params"]))
+        failed = True
+    elif row["state"] != "Chrg" or row["state_target"] != "60":
+        print("ERROR: #4445 SoC between target and limit state unexpected: {} -> {}".format(row["state"], row["state_target"]))
+        failed = True
+    elif "Charging up to 60" not in _render(row, templates):
+        print("ERROR: #4445 Chrg rendered text unexpected: {}".format(_render(row, templates)))
+        failed = True
+
+    # With plan_debug on, the Limit cell shows the predicted SoC with the real limit in brackets
+    plan_debug_saved = my_predbat.plan_debug
+    my_predbat.plan_debug = True
+    html, _ = render()
+    my_predbat.plan_debug = plan_debug_saved
+    if "60 (80)" not in html:
+        print("ERROR: #4445 plan_debug Limit cell should read '60 (80)' (predicted SoC, then limit)")
+        failed = True
+
+    # A real hold still classifies as HoldChrg (the SoC is at or above the real limit), and reports the
+    # 80% limit it is held at rather than the predicted 60%
+    my_predbat.predict_soc_best = _flat_soc(my_predbat, 9.0)  # 90%, above the 80% limit
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or _codes(row) != ["hold_charge_at_target"]:
+        print("ERROR: #4445 SoC above the real limit should still show HoldChrg: {}".format(row and _codes(row)))
+        failed = True
+    elif row["reasons"][0]["params"] != {"target_percent": 80} or row["state_target"] != "80":
+        print("ERROR: #4445 HoldChrg should report the 80% limit it holds at: {} -> {}".format(row["reasons"][0]["params"], row["state_target"]))
+        failed = True
+
+    # The prediction can also sit above the limit (PV carries the SoC past it): a row already above the
+    # real limit is held there, not charged towards the predicted SoC
+    my_predbat.charge_window_best[0]["target"] = 9.5  # predicted to reach 95% by window end
+    my_predbat.predict_soc_best = _flat_soc(my_predbat, 8.5)  # 85%, between the 80% limit and the 95% target
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or _codes(row) != ["hold_charge_at_target"]:
+        print("ERROR: #4445 SoC above the limit but below a higher prediction should show HoldChrg: {}".format(row and _codes(row)))
+        failed = True
+    elif row["reasons"][0]["params"] != {"target_percent": 80} or row["state_target"] != "80":
+        print("ERROR: #4445 HoldChrg below a higher prediction should report the 80% limit: {} -> {}".format(row["reasons"][0]["params"], row["state_target"]))
+        failed = True
+    my_predbat.charge_window_best[0]["target"] = 6.0  # back to the 60% prediction for the text summary check below
+
+    # --- Test 2c: get_charge_export_text reports the predicted SoC too, falling back to the limit ---
+    print("Test get_charge_export_text shows the predicted SoC, or the limit when there is no prediction")
+    text = my_predbat.get_charge_export_text(minutes_now, 0, -1)
+    if "charging to 60%" not in text:
+        print("ERROR: get_charge_export_text with a predicted target unexpected: {}".format(text))
+        failed = True
+    del my_predbat.charge_window_best[0]["target"]
+    text = my_predbat.get_charge_export_text(minutes_now, 0, -1)
+    if "charging to 80%" not in text:
+        print("ERROR: get_charge_export_text with no predicted target unexpected: {}".format(text))
+        failed = True
+
     # --- Test 3: FrzChrg ---
     print("Test FrzChrg reason")
     my_predbat.charge_limit_best = [my_predbat.reserve]  # target == reserve level
