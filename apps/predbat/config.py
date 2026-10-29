@@ -2963,6 +2963,7 @@ APPS_SCHEMA = {
     "battery_discharge_power_curve_default": {"type": "int_float_dict"},
     "clock_skew": {"type": "integer"},
     "predbat_repository": {"type": "string", "empty": True},
+    "predbat_branch": {"type": "string|string_list", "empty": False},
     "solcast_api_key": {"type": "string", "empty": False},
     "solcast_host": {"type": "string", "empty": False},
     "solcast_poll_hours": {"type": "float", "zero": False},

@@ -574,13 +574,28 @@ def test_alphaess_reserve_is_clamped_at_the_api_boundary():
     """The entity is published unclamped; the payload is where the API's limits apply.
 
     Asserts the EXACT clamped value against genuinely out-of-range input on both sides - a
-    The discharge API requires a minimum reserve of 10%, even for lower requests.
+    loose `0 <= x <= 100` range check passes for almost any implementation, including one
+    whose floor is wrong (for example clamping negative input to 5 instead of 10, the API's
+    floor for batUseCap - anything lower is rejected with 10001, #4748).
     """
     failed = False
     client = _client()
+    # The API rejects batUseCap below 10 with 10001 Parameter Error (#4748)
     low = client.build_discharge_payload("AL70", _schedule(reserve=-20))
     if low.get("batUseCap") != 10:
         print(f"ERROR: batUseCap {low.get('batUseCap')} should clamp -20 up to exactly 10")
+        failed = True
+    zero = client.build_discharge_payload("AL70", _schedule(reserve=0))
+    if zero.get("batUseCap") != 10:
+        print(f"ERROR: batUseCap {zero.get('batUseCap')} should clamp a 0 reserve up to exactly 10")
+        failed = True
+    hold_low = client.build_discharge_payload("AL70", _schedule(reserve=4), hold_charge={"enable": True, "soc": 10, "power": 100, "start": "00:00:00", "end": "23:45:00"})
+    if hold_low.get("batUseCap") != 10:
+        print(f"ERROR: hold batUseCap {hold_low.get('batUseCap')} should clamp a 4% reserve up to exactly 10")
+        failed = True
+    export_low = client.build_discharge_payload("AL70", _schedule(reserve=0, export={"enable": True, "soc": 4, "power": 3000, "start": "17:00:00", "end": "19:00:00"}))
+    if export_low.get("ctrDis") != 1 or export_low.get("batUseCap") != 10:
+        print(f"ERROR: export window batUseCap {export_low.get('batUseCap')} (ctrDis {export_low.get('ctrDis')}) should clamp a 4% target up to exactly 10")
         failed = True
     high = client.build_charge_payload("AL70", _schedule(charge={"enable": True, "soc": 250, "power": 3000, "start": "01:00:00", "end": "05:00:00"}))
     if high.get("batHighCap") != 100:

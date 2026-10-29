@@ -135,6 +135,10 @@ class UserInterface:
     # callable(entity, attribute) returning the value, or None to fall back to the HA read.
     previous_value_provider = None
 
+    # Optional host hook consulted by OAuth token refresh instead of the oauth-refresh edge function:
+    # async callable(instance_id, provider, token_hash) returning the edge function's JSON reply, or None for a failed refresh.
+    oauth_refresh_provider = None
+
     def call_notify(self, message):
         """
         Sync wrapper for call_notify

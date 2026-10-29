@@ -6,6 +6,8 @@ from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 from urllib.parse import parse_qs, urlsplit
 
+import pytz
+
 import sys
 import os
 
@@ -307,6 +309,20 @@ def test_build_rates_url_eon():
     assert parts.scheme == "https" and parts.netloc == urlsplit("https://api.eonnext-kraken.energy").netloc
     assert parts.path == "/v1/products/PROD-01/electricity-tariffs/E-1R-PROD-01-A/standard-unit-rates/"
     assert parse_qs(parts.query)["page_size"] == ["1500"]
+
+
+def test_build_rates_url_bounded_to_read_window():
+    """The REST rates request is bounded to the window Predbat reads back, not the whole contract (#5572)"""
+    api = make_kraken_api(provider="edf")
+    api.base.now_utc = datetime(2026, 10, 28, 14, 30, tzinfo=timezone.utc)
+    url = api.build_rates_url("FIX-01", "E-1R-FIX-01-A")
+    # forecast_hours defaults to 48 (forecast_days 2): from midnight - 3 days to midnight + 4 days, matching what _published_rates keeps
+    assert url.endswith("?period_from=2026-10-25T00:00:00Z&period_to=2026-11-01T00:00:00Z&page_size=1500"), url
+
+    # The clock runs in local time; the Z timestamps must be the same instants in UTC (BST midnight is 23:00Z)
+    api.base.now_utc = pytz.timezone("Europe/London").localize(datetime(2026, 7, 10, 14, 30))
+    url = api.build_rates_url("FIX-01", "E-1R-FIX-01-A")
+    assert url.endswith("?period_from=2026-07-06T23:00:00Z&period_to=2026-07-13T23:00:00Z&page_size=1500"), url
 
 
 def test_fetch_rates_single_page():

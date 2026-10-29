@@ -8236,7 +8236,7 @@ class TestGatewayOnlineTopic:
 
 def run_gateway_tests(my_predbat=None):
     """Run all GatewayMQTT tests. Returns True on failure, False on success."""
-    from tests.test_gateway_token_refresh import TestIsAuthFailure, TestApplyRefreshResponse, TestMaybeRefreshOnAuthError
+    from tests.test_gateway_token_refresh import TestIsAuthFailure, TestApplyRefreshResponse, TestMaybeRefreshOnAuthError, TestTokenRefreshProvider
     from tests.test_gateway_window_commit import TestHubWindowCommit
     from tests.test_gateway_commit import TestGatewayStaging, TestGatewayCommit
     from tests.test_gateway_display import TestGatewayDisplayOnly, TestIndependentVisibility
@@ -8291,6 +8291,7 @@ def run_gateway_tests(my_predbat=None):
         TestIsAuthFailure,
         TestApplyRefreshResponse,
         TestMaybeRefreshOnAuthError,
+        TestTokenRefreshProvider,
         TestRateAnchors,
         TestPublishRawLoopSafety,
     ]
