@@ -1203,6 +1203,12 @@ class Output:
             pv_window_kwh=pv_window_kwh,
             low_power_pv_threshold_w=self.low_power_pv_threshold_w,
             solar_full_rate=self.set_charge_low_power_solar_full_rate,
+            # Derived from configured hysteresis and this window's soc trajectory (predict_soc_best,
+            # the actual simulation result): treats the whole band below 100% as potentially active,
+            # not just the exact leading edge at soc==100%, since a suppressed charge leaves soc stuck
+            # somewhere inside the band rather than pinned at exactly soc_max. Gated on the feature
+            # actually being enabled, so this has no effect for the default (hysteresis=0) case.
+            full_hysteresis_active=(self.battery_soc_full_hysteresis > 0 and self.soc_max > 0 and (soc / self.soc_max * 100.0) >= (100.0 - self.battery_soc_full_hysteresis)),
         )
         # The prediction then clamps the grid side of the charge at the inverter limit (less inverter
         # losses); a hybrid can add DC-coupled PV on top of that, an AC-coupled inverter cannot.
@@ -2821,6 +2827,26 @@ class Output:
                 },
             )
 
+    def full_hysteresis_status_attributes(self):
+        """
+        Status sensor attributes carrying the battery-full hysteresis latch, per inverter.
+
+        Each inverter's own BMS clamp is independent, so the per-inverter dict (keyed by inverter id) is
+        what Inverter.update_full_hysteresis() reads back on restart; the aggregate is for dashboards.
+        dashboard_item replaces the whole attributes dict on each call, so EVERY write to the status
+        sensor must include these or the persisted state is wiped.
+        """
+        if self.inverters:
+            hysteresis_status = {str(inverter.id): getattr(inverter, "full_hysteresis_active", False) for inverter in self.inverters}
+        else:
+            # Inverters not fetched yet (e.g. an early startup error before the first fetch_inverter_data())
+            # - preserve whatever was last persisted rather than overwriting it with an empty dict.
+            hysteresis_status = self.get_state_wrapper(self.prefix + ".status", attribute="battery_full_hysteresis_active", default={})
+        return {
+            "battery_full_hysteresis_active": hysteresis_status,
+            "battery_full_hysteresis_active_any": self.battery_full_hysteresis_active,
+        }
+
     def record_status(self, message, debug="", had_errors=False, notify=False, extra=""):
         """
         Records status to HA sensor
@@ -2889,6 +2915,7 @@ class Output:
                     "error": (had_errors or self.had_errors),
                     "error_count": error_count,
                     "run_state": self.status_run_state or "",
+                    **self.full_hysteresis_status_attributes(),
                 },
             )
 
@@ -2964,6 +2991,7 @@ class Output:
                     "error": True,
                     "error_count": error_count,
                     "run_state": self.status_run_state or "",
+                    **self.full_hysteresis_status_attributes(),
                 },
             )
 
