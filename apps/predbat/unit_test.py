@@ -47,6 +47,7 @@ from tests.test_car_manual_soc import run_car_manual_soc_tests
 from tests.test_car_max_rate import run_car_max_rate_tests
 from tests.test_fetch_config_options import test_fetch_config_options
 from tests.test_multi_inverter import run_inverter_multi_tests
+from tests.test_heterogeneous_fleet import test_heterogeneous_fleet
 from tests.test_window2minutes import test_window2minutes
 from tests.test_car_plan_windows import test_car_plan_windows
 from tests.test_hass_watcher import test_hass_watcher
@@ -733,6 +734,7 @@ def main():
         ("octopus_free", test_octopus_free, "Octopus free electricity tests", False),
         ("battery_curve_keys", run_battery_curve_keys_tests, "Battery curve keys tests", False),
         ("balance_inverters", run_balance_inverters_tests, "Balance inverters tests", False),
+        ("heterogeneous_fleet", test_heterogeneous_fleet, "Heterogeneous multi-inverter fleet tests (#4856)", False),
         ("balance_pure", run_balance_pure_tests, "Pure balance_inverters function tests", False),
         ("allocate_export", run_allocate_export_tests, "Export rate allocator tests", False),
         # GE Cloud unit tests

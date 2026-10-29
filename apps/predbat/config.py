@@ -1828,6 +1828,7 @@ CONFIG_API_OVERRIDE = {
     "inverter_limit_charge": True,
     "inverter_limit_charge_dc": True,
     "inverter_limit_discharge": True,
+    "inverter_limit_export": True,
     "rates_import_override": True,
     "rates_export_override": True,
 }
