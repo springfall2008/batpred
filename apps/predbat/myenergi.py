@@ -832,7 +832,10 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         the power sensor.
 
         Never reported: the cloud alias (a user-chosen name) and the hub serial (the digest-auth
-        username). An Eddi is a diverter, not a charger, and has no catalogue section.
+        username). An install with no hub enters the Zappi's own serial as myenergi_hub_serial, so
+        there that serial is the login username too: it is then reported as an account id, which the
+        catalogue pseudonymises wherever it appears, rather than as a hardware serial. An Eddi is a
+        diverter, not a charger, and has no catalogue section.
 
         Returns None when there is no Zappi to describe.
         """
@@ -849,9 +852,12 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
                 "car_charging_energy": {"entity_id": "sensor.{}_session_energy".format(prefix), "domain": "sensor", "access": "r"},
                 "car_charging_power": {"entity_id": "sensor.{}_power".format(prefix), "domain": "sensor", "access": "r"},
             }
+            serial = str(device.serial)
+            is_login = bool(self.hub_serial) and str(self.hub_serial) == serial
             charger, car = charger_with_stub_car(
-                "myenergi:{}".format(device.serial),
-                hardware_ids={"serial": str(device.serial)},
+                "myenergi:{}".format(serial),
+                hardware_ids=None if is_login else {"serial": serial},
+                account_ids={"hub_serial": serial} if is_login else None,
                 info={"vendor": "myenergi", "model": DEVICE_KIND_ZAPPI},
                 entities=self.discovery_entities(descriptors),
             )

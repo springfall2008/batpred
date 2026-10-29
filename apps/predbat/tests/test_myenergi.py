@@ -2819,6 +2819,27 @@ def test_discovery_round_trip():
     print("  ✓ Discovery report round-trips through the Coordinator")
 
 
+def test_discovery_login_serial_pseudonymised_without_hub():
+    """With no hub, the Zappi's own serial is the digest login username, so it must not be published in the clear.
+
+    docs/apps-yaml.md tells hub-less installs to enter the Zappi serial as myenergi_hub_serial. That
+    serial is then an account identifier, not just hardware: it goes in account_ids, which the
+    Redactor pseudonymises everywhere it appears, including the device_id, cross-links and entity ids.
+    """
+    from coordinator import Coordinator
+
+    component = _discovery_component([_zappi(12345678)], hub_serial="12345678")
+    charger = component.build_discovery()["chargers"][0]
+    assert "hardware_ids" not in charger, charger
+    assert charger["account_ids"] == {"hub_serial": "12345678"}, charger
+    coordinator = Coordinator(MockBase())
+    coordinator.report("myenergi", component.build_discovery())
+    coordinator.assemble()
+    catalogue = coordinator.catalogue()
+    assert "12345678" not in str(catalogue), catalogue["chargers"]
+    assert len(catalogue["chargers"][0]["entities"]) == 4, catalogue["chargers"]
+    print("  ✓ Discovery pseudonymises a hub-less Zappi's login serial")
+
 def test_discovery_refreshed_on_non_poll_cycle():
     """A report that failed to build on a poll cycle is retried on the next run(), poll or not."""
     component = _discovery_component([_zappi(12345678)])
@@ -2971,6 +2992,7 @@ def test_myenergi(my_predbat=None):
     test_discovery_zappi_record()
     test_discovery_cloud_alias_never_reported()
     test_discovery_round_trip()
+    test_discovery_login_serial_pseudonymised_without_hub()
     test_discovery_refreshed_on_non_poll_cycle()
 
     print("=" * 70)
