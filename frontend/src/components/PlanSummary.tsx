@@ -25,12 +25,13 @@ import {
 /**
  * Props supplied to the PlanSummary component.
  *
- * The whole Plan object is passed in rather than individual values because
- * the summary uses both row-level forecast data and plan-level values such
- * as the actual battery energy and maximum capacity.
+ * The summary combines plan data with the latest battery reading.
  */
 type PlanSummaryProps = {
   plan: Plan
+  batterySoc: number | null
+  batteryStale: boolean
+  socBoundaries: { low: number; medium: number }
   showPlanLink?: boolean
 }
 
@@ -296,7 +297,7 @@ function formatReason(template: string, params: Record<string, unknown>) {
  * 3. What is the current import rate and when does it change?
  * 4. What will Predbat do next?
  */
-function PlanSummary({ plan, showPlanLink = true }: PlanSummaryProps) {
+function PlanSummary({ plan, batterySoc, batteryStale, socBoundaries, showPlanLink = true }: PlanSummaryProps) {
   const rows = plan.rows
   const reasonTemplates = plan.reason_templates
   const { minor: currencyMinor } = resolveCurrencySymbols(plan.currency_symbols)
@@ -323,16 +324,7 @@ function PlanSummary({ plan, showPlanLink = true }: PlanSummaryProps) {
   // Fall back to the first row if the plan unexpectedly begins in the future.
   const current = currentIndex >= 0 ? rows[currentIndex] : rows[0]
 
-  /**
-   * -------------------------------------------------------------
-   * BATTERY
-   * -------------------------------------------------------------
-   *
-   * plan.soc is the actual current stored energy.
-   * current.soc_percent is the modelled/planned SoC for a plan row, so it
-   * should not be used as the live battery percentage.
-   */
-  const batteryPercent = plan.soc_max === 0 ? 0 : (plan.soc / plan.soc_max) * 100
+  const batteryPercent = batterySoc
 
   // Predicted battery movement during the current plan slot.
   const socDirection =
@@ -347,7 +339,7 @@ function PlanSummary({ plan, showPlanLink = true }: PlanSummaryProps) {
 
   // Colour the battery bar according to its current SoC.
   const batteryLevelClass =
-    batteryPercent <= 20 ? 'battery-low' : batteryPercent <= 50 ? 'battery-medium' : 'battery-high'
+    batteryPercent === null ? '' : batteryPercent <= socBoundaries.low ? 'battery-low' : batteryPercent <= socBoundaries.medium ? 'battery-medium' : 'battery-high'
 
   /**
    * -------------------------------------------------------------
@@ -529,7 +521,7 @@ function PlanSummary({ plan, showPlanLink = true }: PlanSummaryProps) {
       </div>
 
       <div className="plan-summary-context">
-        <span className="plan-summary-context-now">Plan snapshot</span>
+        <span className="plan-summary-context-now">Now</span>
 
         <span className="plan-summary-context-next">Next</span>
       </div>
@@ -540,7 +532,7 @@ function PlanSummary({ plan, showPlanLink = true }: PlanSummaryProps) {
                     Live battery level plus active charge/export indicator.
                    -------------------------------------------------------- */}
         <div className="plan-summary-metric">
-          <span className="metric-label">Battery SOC at plan generation</span>
+          <span className="metric-label">{batteryStale ? 'Battery SOC (cached)' : 'Live battery SOC'}</span>
 
           <strong className={`metric-value battery-value ${getActionClass(currentActionType)}`}>
             {isCharging && <FontAwesomeIcon icon={faBolt} className="battery-charging-icon" />}
@@ -555,22 +547,20 @@ function PlanSummary({ plan, showPlanLink = true }: PlanSummaryProps) {
               </FontAwesomeLayers>
             )}
 
-            <span>{batteryPercent.toFixed(0)}%</span>
+            <span>{batteryPercent === null ? '—' : `${batteryPercent.toFixed(0)}%`}</span>
           </strong>
 
-          <div className="battery-bar">
+          {batteryPercent !== null && <div className="battery-bar">
             <div
               className={`battery-bar-fill ${batteryLevelClass} ${isCharging ? 'is-charging' : ''} ${isExporting ? 'is-exporting' : ''}`}
               style={{
                 width: `${batteryPercent}%`
               }}
             />
-          </div>
+          </div>}
 
           <span className="metric-detail">
-            {plan.soc.toFixed(1)}
-            {' / '}
-            {plan.soc_max.toFixed(1)} kWh
+            {batteryPercent === null ? 'Battery reading unavailable' : batteryStale ? 'Last known reading' : 'Current battery level'}
           </span>
         </div>
 

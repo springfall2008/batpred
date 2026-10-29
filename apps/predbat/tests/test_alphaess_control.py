@@ -574,14 +574,13 @@ def test_alphaess_reserve_is_clamped_at_the_api_boundary():
     """The entity is published unclamped; the payload is where the API's limits apply.
 
     Asserts the EXACT clamped value against genuinely out-of-range input on both sides - a
-    loose `0 <= x <= 100` range check passes for almost any implementation, including one
-    whose floor is wrong (for example clamping negative input to 5 instead of 0).
+    The discharge API requires a minimum reserve of 10%, even for lower requests.
     """
     failed = False
     client = _client()
     low = client.build_discharge_payload("AL70", _schedule(reserve=-20))
-    if low.get("batUseCap") != 0:
-        print(f"ERROR: batUseCap {low.get('batUseCap')} should clamp -20 down to exactly 0")
+    if low.get("batUseCap") != 10:
+        print(f"ERROR: batUseCap {low.get('batUseCap')} should clamp -20 up to exactly 10")
         failed = True
     high = client.build_charge_payload("AL70", _schedule(charge={"enable": True, "soc": 250, "power": 3000, "start": "01:00:00", "end": "05:00:00"}))
     if high.get("batHighCap") != 100:

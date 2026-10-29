@@ -58,6 +58,7 @@ type AppNavigationProps = {
   planStatus: 'unavailable' | 'calculating' | 'ready' | 'stale'
   batterySoc: number | null
   batteryStale?: boolean
+  socBoundaries: { low: number; medium: number }
   chatEnabled: boolean
 
   version: string
@@ -137,6 +138,7 @@ const navigationGroups: NavigationGroup[] = [
         href: './config',
         icon: faSliders
       },
+      { label: 'Theme', href: './theme', icon: faCircleHalfStroke },
       {
         label: 'Apps',
         href: './apps',
@@ -235,6 +237,7 @@ export default function AppNavigation({
   planStatus,
   batterySoc,
   batteryStale = false,
+  socBoundaries,
   chatEnabled,
   version
 }: AppNavigationProps) {
@@ -411,7 +414,7 @@ export default function AppNavigation({
 
               {batterySoc !== null && (
                 <span
-                  className="navigation-battery-status"
+                  className={`navigation-battery-status ${batterySoc <= socBoundaries.low ? 'is-low' : batterySoc <= socBoundaries.medium ? 'is-medium' : 'is-high'}`}
                   title={`${batteryStale ? 'Last known' : 'Live'} battery state of charge: ${Math.round(batterySoc)}%`}
                 >
                   <FontAwesomeIcon icon={getBatteryIcon(batterySoc)} />

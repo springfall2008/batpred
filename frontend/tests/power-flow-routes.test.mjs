@@ -76,10 +76,14 @@ function loadComponent(file, preference = 'off') {
   return module.exports
 }
 const diagramFile = new URL('../src/components/SimplePowerFlow.tsx', import.meta.url).pathname
-function renderDiagram(data, preference) {
+function renderDiagram(data, preference, socBoundaries = { low: 20, medium: 50 }) {
   const Component = loadComponent(diagramFile, preference).default
-  return renderToStaticMarkup(React.createElement(Component, { data: { ...data, soc_percent: 55 } }))
+  return renderToStaticMarkup(React.createElement(Component, { data: { ...data, soc_percent: 55 }, socBoundaries }))
 }
+test('battery icon uses configured SOC boundaries', () => {
+  assert.match(renderDiagram(data, 'off', { low: 30, medium: 70 }), /simple-node-icon soc-medium/)
+  assert.match(renderDiagram(data, 'off', { low: 60, medium: 80 }), /simple-node-icon soc-low/)
+})
 test('configured devices stay visible below 100 W and their dots stop', () => {
   const html = renderDiagram({ ...data, car: { ...data.car, power: 99 }, ashp: { power: 99 } })
   assert.match(html, /Car:  Idle/)

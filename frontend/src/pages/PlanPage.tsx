@@ -11,6 +11,9 @@ import './PlanPage.css'
 
 type PlanPageProps = {
   plan: Plan
+  batterySoc: number | null
+  batteryStale: boolean
+  socBoundaries: { low: number; medium: number }
   yesterday: Plan | null
   baseline: Plan | null
   overrides: PlanOverrides
@@ -32,6 +35,9 @@ const EMPTY_OVERRIDES: PlanOverrides = {
 
 export default function PlanPage({
   plan,
+  batterySoc,
+  batteryStale,
+  socBoundaries,
   yesterday,
   baseline,
   overrides,
@@ -53,7 +59,7 @@ export default function PlanPage({
         </div>
       </header>
 
-      <PlanSummary plan={plan} showPlanLink={false} />
+      <PlanSummary plan={plan} batterySoc={batterySoc} batteryStale={batteryStale} socBoundaries={socBoundaries} showPlanLink={false} />
 
       <div className="plan-view-tabs" aria-label="Plan view">
         {([
@@ -75,7 +81,7 @@ export default function PlanPage({
 
       {selectedPlan ? (
         <>
-          <PlanVisual plan={selectedPlan} />
+          <PlanVisual plan={selectedPlan} socBoundaries={socBoundaries} />
 
           <PlanTable
             plan={selectedPlan}

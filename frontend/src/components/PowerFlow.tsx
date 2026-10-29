@@ -6,9 +6,10 @@ import './PowerFlow.css'
 type PowerFlowProps = {
   data: PowerFlowData
   stale?: boolean
+  socBoundaries: { low: number; medium: number }
 }
 
-function PowerFlow({ data, stale = false }: PowerFlowProps) {
+function PowerFlow({ data, stale = false, socBoundaries }: PowerFlowProps) {
   return (
     <section className="power-flow-card">
       <div className="power-flow-header">
@@ -18,7 +19,7 @@ function PowerFlow({ data, stale = false }: PowerFlowProps) {
         </div>
       </div>
 
-      <SimplePowerFlow data={data} />
+      <SimplePowerFlow data={data} socBoundaries={socBoundaries} />
     </section>
   )
 }

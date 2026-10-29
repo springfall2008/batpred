@@ -25,6 +25,7 @@ import './PlanVisual.css'
 
 type PlanVisualProps = {
   plan: Plan
+  socBoundaries: { low: number; medium: number }
 }
 
 type PlanRow = Plan['rows'][number]
@@ -329,12 +330,12 @@ function getActionIcon(action?: TimelineAction) {
   }
 }
 
-function getSocColour(soc: number) {
-  if (soc <= 20) {
+function getSocColour(soc: number, boundaries: { low: number; medium: number }) {
+  if (soc <= boundaries.low) {
     return 'var(--color-battery-low)'
   }
 
-  if (soc <= 50) {
+  if (soc <= boundaries.medium) {
     return 'var(--color-battery-medium)'
   }
 
@@ -862,7 +863,7 @@ export function buildTimeTicks(startMs: number, endMs: number): TimelineTick[] {
   return ticks
 }
 
-export default function PlanVisual({ plan }: PlanVisualProps) {
+export default function PlanVisual({ plan, socBoundaries }: PlanVisualProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const { minor: currencyMinor } = resolveCurrencySymbols(plan.currency_symbols)
 
@@ -1321,9 +1322,7 @@ export default function PlanVisual({ plan }: PlanVisualProps) {
               {/*
                * SOC colour follows the vertical battery level:
                *
-               * 0–20%   = low
-               * 20–50%  = medium
-               * 50–100% = high
+               * The gradient stops follow the configured SOC boundaries.
                *
                * gradientUnits="userSpaceOnUse" is important because
                * it makes the colours correspond to the actual 0–100%
@@ -1339,13 +1338,13 @@ export default function PlanVisual({ plan }: PlanVisualProps) {
               >
                 <stop offset="0%" stopColor="var(--color-battery-low)" />
 
-                <stop offset="20%" stopColor="var(--color-battery-low)" />
+                <stop offset={`${socBoundaries.low}%`} stopColor="var(--color-battery-low)" />
 
-                <stop offset="20%" stopColor="var(--color-battery-medium)" />
+                <stop offset={`${socBoundaries.low}%`} stopColor="var(--color-battery-medium)" />
 
-                <stop offset="50%" stopColor="var(--color-battery-medium)" />
+                <stop offset={`${socBoundaries.medium}%`} stopColor="var(--color-battery-medium)" />
 
-                <stop offset="50%" stopColor="var(--color-battery-high)" />
+                <stop offset={`${socBoundaries.medium}%`} stopColor="var(--color-battery-high)" />
 
                 <stop offset="100%" stopColor="var(--color-battery-high)" />
               </linearGradient>
@@ -1451,7 +1450,7 @@ export default function PlanVisual({ plan }: PlanVisualProps) {
                   r="3"
                   className="plan-timeline-soc-point"
                   style={{
-                    stroke: getSocColour(boundary.soc)
+                    stroke: getSocColour(boundary.soc, socBoundaries)
                   }}
                 />
               )
@@ -1477,7 +1476,7 @@ export default function PlanVisual({ plan }: PlanVisualProps) {
                   y={boundary.soc > 88 ? y + 14 : y - 7}
                   textAnchor={first ? 'start' : last ? 'end' : 'middle'}
                   style={{
-                    fill: getSocColour(boundary.soc)
+                    fill: getSocColour(boundary.soc, socBoundaries)
                   }}
                   className="plan-timeline-soc-value"
                 >

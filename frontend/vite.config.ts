@@ -16,7 +16,7 @@ const schemaMarkdown = {
 }
 
 const uiDirectory = fileURLToPath(new URL('../apps/predbat/', import.meta.url))
-const uiFilename = /^predbat_ui(?:_[A-Za-z0-9_.-]+)?\.(?:html|js|css|webp|svg|png)$/
+const uiFilename = /^predbat_ui(?:_[A-Za-z0-9_.-]+)?\.(?:html|js|css|webp|svg|png|woff2)$/
 const uiFiles: Plugin = {
   name: 'flat-predbat-ui',
   enforce: 'post',

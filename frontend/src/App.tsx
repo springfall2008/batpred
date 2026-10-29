@@ -10,6 +10,8 @@ import MetricsPanel from './components/MetricsPanel'
 import PlanPage from './pages/PlanPage'
 import ChartsPage from './pages/ChartsPage'
 import { useStoredState } from './hooks/useStoredState'
+import { useThemeSettings } from './hooks/useThemeSettings'
+import ThemePage from './pages/ThemePage'
 import { resolvePlanData, type PlanDataResponse } from './utils/planData'
 
 const AppsEditorPage = lazy(() => import('./pages/AppsEditorPage'))
@@ -33,12 +35,13 @@ import type { PredbatStatus } from './types/status'
 import type { PowerFlowData } from './types/powerFlow'
 
 import './App.css'
-import { snapshotAge, snapshotState } from './utils/dataFreshness'
+import { snapshotState } from './utils/dataFreshness'
 
 type ApiSource = 'plan' | 'status' | 'powerFlow'
 
 /** Coordinates dashboard polling and refreshes the plan after a calculation completes. */
 function App() {
+  const themeSettings = useThemeSettings()
   const pathPage = window.location.pathname.replace(/\/+$/, '').split('/').pop() ?? 'dash'
   const currentPage = new URLSearchParams(window.location.search).get('page') ?? (pathPage === 'ui' || !pathPage ? 'dash' : pathPage)
 
@@ -117,6 +120,7 @@ function App() {
    */
   const [controlError, setControlError] = useState<string | null>(null)
   const [updateRequested, setUpdateRequested] = useState(false)
+  const [configUpdatePending, setConfigUpdatePending] = useState(false)
   const [chartLoading, setChartLoading] = useState(false)
 
   useEffect(() => {
@@ -476,7 +480,7 @@ function App() {
   const apiWarning =
     controlError ?? apiErrors.plan ?? apiErrors.status ?? apiErrors.powerFlow ?? null
 
-  const updating = statusData?.updating === true
+  const updating = statusData?.updating === true || configUpdatePending
   const calculating = statusData?.calculating === true && !apiErrors.status
   const active = updating || calculating
   const planTimestamp = planData?.plan?.timestamp ? Date.parse(planData.plan.timestamp) : null
@@ -484,17 +488,6 @@ function App() {
   const powerFreshness = snapshotState(powerFlowUpdatedAt, freshnessNow, 10 * 60_000, Boolean(apiErrors.powerFlow))
   const livePowerFlow = powerFreshness === 'unavailable' ? null : powerFlowData
   const navigationPlanStatus = apiErrors.status ? 'unavailable' : active ? 'calculating' : statusData?.calculating === false && planData?.plan ? planFreshness === 'current' ? 'ready' : planFreshness === 'stale' ? 'stale' : 'unavailable' : 'unavailable'
-  const freshnessNotice = (
-    <aside className="data-freshness" aria-label="Data freshness">
-      <span title={Number.isFinite(planTimestamp) && planTimestamp !== null ? new Date(planTimestamp).toLocaleString() : undefined}>
-        {planData?.plan ? `${calculating ? 'Previous plan' : planFreshness === 'stale' ? 'Cached plan' : 'Plan snapshot'} · ${planFreshness === 'unavailable' ? 'generation time unavailable' : `generated ${snapshotAge(planTimestamp, freshnessNow)}`}${calculating ? ' · recalculating' : ''}` : 'Plan unavailable'}
-      </span>
-      <span title={powerFreshness !== 'unavailable' && powerFlowUpdatedAt !== null ? new Date(powerFlowUpdatedAt).toLocaleString() : undefined}>
-        {powerFreshness === 'unavailable' ? 'Live readings unavailable · awaiting a completed power refresh' : `${powerFreshness === 'stale' ? 'Last known readings' : 'Live readings'} · snapshot ${snapshotAge(powerFlowUpdatedAt, freshnessNow)}`}
-      </span>
-      {apiErrors.status && <span>Status refresh failed · operational status may be out of date</span>}
-    </aside>
-  )
   const activityOverlay = active || chartLoading ? (
     <div className={`plan-calculating-overlay ${updating ? '' : 'is-non-blocking'}`} role="status" aria-live="polite">
       {chartLoading && !updating && (
@@ -515,7 +508,7 @@ function App() {
     </div>
   ) : null
 
-  if (currentPage === 'apps_editor' || currentPage === 'docs' || currentPage === 'log' || currentPage === 'components' || currentPage === 'discovery' || currentPage === 'cards' || currentPage === 'browse' || currentPage === 'internals' || currentPage === 'config' || currentPage === 'compare' || currentPage === 'annual' || currentPage === 'chat' || currentPage === 'apps' || currentPage === 'entity') {
+  if (currentPage === 'theme' || currentPage === 'apps_editor' || currentPage === 'docs' || currentPage === 'log' || currentPage === 'components' || currentPage === 'discovery' || currentPage === 'cards' || currentPage === 'browse' || currentPage === 'internals' || currentPage === 'config' || currentPage === 'compare' || currentPage === 'annual' || currentPage === 'chat' || currentPage === 'apps' || currentPage === 'entity') {
     return (
       <>
         <a className="skip-link" href="#main-content">Skip to main content</a>
@@ -533,14 +526,14 @@ function App() {
             planStatus={navigationPlanStatus}
             batterySoc={livePowerFlow?.soc_percent ?? null}
             batteryStale={powerFreshness === 'stale'}
+            socBoundaries={themeSettings.draft.socBoundaries}
             chatEnabled={statusData?.chat_enabled ?? false}
             version={statusData?.version ?? ''}
           />
           <div className="app-content">
             <main id="main-content" tabIndex={-1}>
-              {freshnessNotice}
               <Suspense fallback={<div role="status" aria-live="polite">Loading…</div>}>
-                {currentPage === 'apps_editor' ? <AppsEditorPage /> : currentPage === 'docs' ? <DocsPage /> : currentPage === 'components' ? <ComponentsPage /> : currentPage === 'discovery' ? <DiscoveryPage /> : currentPage === 'cards' ? <CardsPage /> : currentPage === 'browse' ? <BrowsePage /> : currentPage === 'internals' ? <InternalsPage /> : currentPage === 'config' ? <ConfigPage /> : currentPage === 'compare' ? <ComparePage /> : currentPage === 'annual' ? <AnnualPage /> : currentPage === 'chat' ? <ChatPage /> : currentPage === 'apps' ? <AppsPage /> : currentPage === 'entity' ? <EntitiesPage /> : <LogPage />}
+                {currentPage === 'theme' ? <ThemePage {...themeSettings} /> : currentPage === 'apps_editor' ? <AppsEditorPage /> : currentPage === 'docs' ? <DocsPage /> : currentPage === 'components' ? <ComponentsPage /> : currentPage === 'discovery' ? <DiscoveryPage /> : currentPage === 'cards' ? <CardsPage /> : currentPage === 'browse' ? <BrowsePage /> : currentPage === 'internals' ? <InternalsPage /> : currentPage === 'config' ? <ConfigPage onUpdatePendingChange={setConfigUpdatePending} /> : currentPage === 'compare' ? <ComparePage /> : currentPage === 'annual' ? <AnnualPage /> : currentPage === 'chat' ? <ChatPage /> : currentPage === 'apps' ? <AppsPage /> : currentPage === 'entity' ? <EntitiesPage /> : <LogPage />}
               </Suspense>
             </main>
           </div>
@@ -598,18 +591,21 @@ function App() {
           planStatus={navigationPlanStatus}
           batterySoc={livePowerFlow?.soc_percent ?? null}
           batteryStale={powerFreshness === 'stale'}
+          socBoundaries={themeSettings.draft.socBoundaries}
           chatEnabled={statusData.chat_enabled}
           version={statusData.version}
         />
 
         <div className="app-content">
           <main id="main-content" tabIndex={-1} className={currentPage === 'plan' || currentPage === 'charts' || currentPage === 'overview' ? undefined : 'dashboard-main'}>
-            {freshnessNotice}
             {currentPage === 'dash' && <h1 className="visually-hidden">Predbat Dashboard</h1>}
 
             {currentPage === 'plan' ? (
               <PlanPage
                 plan={planData.plan}
+                batterySoc={livePowerFlow?.soc_percent ?? null}
+                batteryStale={powerFreshness === 'stale'}
+                socBoundaries={themeSettings.draft.socBoundaries}
                 yesterday={planData.yesterday}
                 baseline={planData.baseline}
                 overrides={planData.overrides}
@@ -625,7 +621,7 @@ function App() {
             ) : currentPage === 'overview' ? (
               livePowerFlow ? (
                 <Suspense fallback={<div className="page-loading">Loading overview…</div>}>
-                  <OverviewPage plan={planData.plan} powerFlow={livePowerFlow} updatedAt={powerFlowUpdatedAt} />
+                  <OverviewPage plan={planData.plan} powerFlow={livePowerFlow} updatedAt={powerFlowUpdatedAt} socBoundaries={themeSettings.draft.socBoundaries} />
                 </Suspense>
               ) : (
                 <div className="page-loading">Live readings are unavailable. Waiting for Predbat to complete a power refresh.</div>
@@ -665,17 +661,17 @@ function App() {
                   onUpdate={installLatestUpdate}
                 />
 
-                <PlanSummary plan={planData.plan} />
+                <PlanSummary plan={planData.plan} batterySoc={livePowerFlow?.soc_percent ?? null} batteryStale={powerFreshness === 'stale'} socBoundaries={themeSettings.draft.socBoundaries} />
 
                 <PlanDescription description={planData.plan?.description} />
 
                 {livePowerFlow ? (
-                  <PowerFlow data={livePowerFlow} stale={powerFreshness === 'stale'} />
+                  <PowerFlow data={livePowerFlow} stale={powerFreshness === 'stale'} socBoundaries={themeSettings.draft.socBoundaries} />
                 ) : (
                   <p className="data-freshness">Live power readings are unavailable. Startup defaults are not shown.</p>
                 )}
 
-                <MetricsPanel lastStarted={statusData.last_started} now={freshnessNow} />
+                <MetricsPanel lastStarted={statusData.last_started} now={freshnessNow} socBoundaries={themeSettings.draft.socBoundaries} />
 
                 {statusData.debug_enable && (
                   <DebugPanel

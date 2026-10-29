@@ -32,14 +32,14 @@ function FlowLine({ path, power, tone, reverse = false, threshold = 10 }: { path
 }
 
 /** Keep the icon, power and state within a labelled circular node. */
-function FlowNode({ x, y, label, value, tone, icon, soc, direction }: {
-  x: number; y: number; label: string; value: string; tone: string; icon: IconDefinition | ReactNode; soc?: number; direction?: string
+function FlowNode({ x, y, label, value, tone, icon, soc, socTone, direction }: {
+  x: number; y: number; label: string; value: string; tone: string; icon: IconDefinition | ReactNode; soc?: number; socTone?: string; direction?: string
 }) {
   return <g transform={`translate(${x} ${y})`} className={`simple-node ${tone}`} role="group" aria-label={`${label}: ${direction ?? ''} ${value}${soc === undefined ? '' : `, ${soc}% full`}`}>
     <circle r="43" className="simple-node-circle" />
     {soc !== undefined && <text y="-25" className="simple-node-soc">{soc.toFixed(0)}%</text>}
     <foreignObject x="-13" y={soc === undefined ? -23 : -16} width="26" height="26" aria-hidden="true">
-      <div className="simple-node-icon">{icon && typeof icon === 'object' && 'iconName' in icon ? <FontAwesomeIcon icon={icon as IconDefinition} /> : icon as ReactNode}</div>
+      <div className={`simple-node-icon ${socTone ?? ''}`}>{icon && typeof icon === 'object' && 'iconName' in icon ? <FontAwesomeIcon icon={icon as IconDefinition} /> : icon as ReactNode}</div>
     </foreignObject>
     <text y="23" className={`simple-node-power ${value === 'Idle' ? 'is-muted' : ''}`}>
       {direction && <tspan aria-hidden="true">{direction === 'Importing' || direction === 'Charging' ? '↓ ' : '↑ '}</tspan>}{value}
@@ -49,11 +49,12 @@ function FlowNode({ x, y, label, value, tone, icon, soc, direction }: {
 }
 
 /** Screenshot-inspired live flow diagram, with optional household device subtraction. */
-function SimplePowerFlow({ data }: { data: PowerFlowData }) {
+function SimplePowerFlow({ data, socBoundaries }: { data: PowerFlowData; socBoundaries: { low: number; medium: number } }) {
   const [subtract, setSubtract] = useStoredState('predbat-power-flow-subtract-devices', 'off', ['off', 'on'])
   const flow = resolvePowerFlow(data, subtract === 'on')
   const gridTone = data.grid_importing ? 'flow-grid' : 'flow-export'
   const batteryTone = data.battery_charging ? 'flow-charge' : 'flow-battery'
+  const socTone = data.soc_percent <= socBoundaries.low ? 'soc-low' : data.soc_percent <= socBoundaries.medium ? 'soc-medium' : 'soc-high'
   const hasDevices = data.car.configured || data.ashp !== null
   return <div className="simple-power-flow">
     <svg viewBox="20 -10 560 400" className="simple-power-flow-diagram" role="group" aria-label="Live energy flow">
@@ -67,7 +68,7 @@ function SimplePowerFlow({ data }: { data: PowerFlowData }) {
       {data.car.configured && <FlowLine path="M 490 233 L 490 269" power={flow.car} tone="flow-car" threshold={100} />}
       <FlowNode x={110} y={190} label="Grid" value={formatPower(data.grid_power)} tone={gridTone} icon={<GridIcon />} direction={Math.abs(data.grid_power) >= 10 ? data.grid_importing ? 'Importing' : 'Exporting' : undefined} />
       <FlowNode x={300} y={54} label="Solar" value={formatPower(data.pv_power)} tone="flow-solar" icon={faSolarPanel} />
-      <FlowNode x={300} y={312} label="Battery" value={formatPower(data.battery_power)} tone={batteryTone} icon={getBatteryIcon(data.soc_percent)} soc={data.soc_percent} direction={Math.abs(data.battery_power) >= 10 ? data.battery_charging ? 'Charging' : data.battery_discharging ? 'Discharging' : undefined : undefined} />
+      <FlowNode x={300} y={312} label="Battery" value={formatPower(data.battery_power)} tone={batteryTone} icon={getBatteryIcon(data.soc_percent)} soc={data.soc_percent} socTone={socTone} direction={Math.abs(data.battery_power) >= 10 ? data.battery_charging ? 'Charging' : data.battery_discharging ? 'Discharging' : undefined : undefined} />
       <FlowNode x={490} y={190} label="Home" value={formatPower(flow.home)} tone="flow-home" icon={faHouse} />
       {data.ashp && <FlowNode x={490} y={54} label="ASHP" value={data.ashp.power === null ? '—' : flow.heatPump < 100 ? 'Idle' : formatPower(flow.heatPump)} tone="flow-heat-pump" icon={faFan} />}
       {data.car.configured && <FlowNode x={490} y={312} label="Car" value={flow.car < 100 ? 'Idle' : formatPower(flow.car)} tone="flow-car" icon={faCar} />}

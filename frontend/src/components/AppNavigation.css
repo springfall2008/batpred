@@ -158,8 +158,11 @@
 .navigation-battery-status > svg {
   flex: 0 0 auto;
   font-size: 0.9rem;
-  color: var(--color-flow-battery);
 }
+
+.navigation-battery-status.is-low > svg { color: var(--color-battery-low); }
+.navigation-battery-status.is-medium > svg { color: var(--color-battery-medium); }
+.navigation-battery-status.is-high > svg { color: var(--color-battery-high); }
 
 .navigation-battery-soc {
   min-width: 2.1rem;

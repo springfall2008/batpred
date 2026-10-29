@@ -4,6 +4,7 @@ import json
 import time
 from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import parse_qs, urlsplit
 
 import sys
 import os
@@ -292,13 +293,20 @@ def test_find_tariffs_discovers_export_on_same_account():
 def test_build_rates_url():
     api = make_kraken_api(provider="edf")
     url = api.build_rates_url("VAR-22-11-01", "E-1R-VAR-22-11-01-J")
-    assert url == "https://api.edfgb-kraken.energy/v1/products/VAR-22-11-01/electricity-tariffs/E-1R-VAR-22-11-01-J/standard-unit-rates/"
+    parts = urlsplit(url)
+    assert parts.scheme == "https" and parts.netloc == urlsplit("https://api.edfgb-kraken.energy").netloc
+    assert parts.path == "/v1/products/VAR-22-11-01/electricity-tariffs/E-1R-VAR-22-11-01-J/standard-unit-rates/"
+    params = parse_qs(parts.query)
+    assert params == {"period_from": [(api.midnight_utc - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%SZ")], "period_to": [(api.midnight_utc + timedelta(days=4)).strftime("%Y-%m-%dT%H:%M:%SZ")], "page_size": ["1500"]}
 
 
 def test_build_rates_url_eon():
     api = make_kraken_api(provider="eon")
     url = api.build_rates_url("PROD-01", "E-1R-PROD-01-A")
-    assert url == "https://api.eonnext-kraken.energy/v1/products/PROD-01/electricity-tariffs/E-1R-PROD-01-A/standard-unit-rates/"
+    parts = urlsplit(url)
+    assert parts.scheme == "https" and parts.netloc == urlsplit("https://api.eonnext-kraken.energy").netloc
+    assert parts.path == "/v1/products/PROD-01/electricity-tariffs/E-1R-PROD-01-A/standard-unit-rates/"
+    assert parse_qs(parts.query)["page_size"] == ["1500"]
 
 
 def test_fetch_rates_single_page():

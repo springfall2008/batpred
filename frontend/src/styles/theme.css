@@ -1,12 +1,57 @@
+@font-face {
+  font-family: 'Courier Prime';
+  src: url('/predbat_ui_courier_prime.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Courier Prime';
+  src: url('/predbat_ui_courier_prime_bold.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Press Start 2P';
+  src: url('/predbat_ui_press_start.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+:root {
+  --default-light-bg: #f3f4f6;
+  --default-dark-bg: #111827;
+  --default-light-text: #111827;
+  --default-dark-text: #f9fafb;
+  --default-light-battery-low: #ef4444;
+  --default-dark-battery-low: #f87171;
+  --default-light-battery-medium: #f59e0b;
+  --default-dark-battery-medium: #fbbf24;
+  --default-light-battery-high: #22c55e;
+  --default-dark-battery-high: #4ade80;
+  --default-light-charge: #2563eb;
+  --default-dark-charge: #60a5fa;
+  --default-light-export: #7c3aed;
+  --default-dark-export: #a78bfa;
+  --default-light-flow-solar: #f59e0b;
+  --default-dark-flow-solar: #fbbf24;
+  --default-light-flow-grid: #6b7280;
+  --default-dark-flow-grid: #9ca3af;
+  --default-light-flow-home: #16a34a;
+  --default-dark-flow-home: #4ade80;
+}
+
 /* Shared semantic tokens: components use the same meanings in both themes. */
 :root,
 :root[data-theme='light'] {
   color-scheme: light;
-  --color-bg: #f3f4f6;
+  --color-bg: var(--default-light-bg);
   --color-surface: #ffffff;
   --color-border: #e5e7eb;
   --color-border-soft: #dddddd;
-  --color-text: #111827;
+  --color-text: var(--default-light-text);
   --color-text-muted: #4b5563;
   --color-text-secondary: #4b5563;
   --color-text-subtle: #9ca3af;
@@ -25,10 +70,10 @@
   --color-export-text: #6d28d9;
 
   /* Action colours */
-  --color-charge: #2563eb;
+  --color-charge: var(--user-light-charge, var(--default-light-charge));
   --color-hold-charge: #3b82f6;
   --color-freeze-charge: #0891b2;
-  --color-export: #7c3aed;
+  --color-export: var(--user-light-export, var(--default-light-export));
   --color-hold-export: #8b5cf6;
   --color-freeze-export: #9333ea;
   --color-hold-car: #b45309;
@@ -38,28 +83,28 @@
   --color-tooltip-bg: #111827;
   --color-tooltip-text: #ffffff;
   --color-battery-track: #e5e7eb;
-  --color-battery-low: #ef4444;
-  --color-battery-medium: #f59e0b;
-  --color-battery-high: #22c55e;
+  --color-battery-low: var(--user-light-battery-low, var(--default-light-battery-low));
+  --color-battery-medium: var(--user-light-battery-medium, var(--default-light-battery-medium));
+  --color-battery-high: var(--user-light-battery-high, var(--default-light-battery-high));
   --shadow-sm: 0 1px 3px color-mix(in srgb, var(--color-text) 12%, transparent);
   --shadow-card: 0 2px 8px color-mix(in srgb, var(--color-text) 6%, transparent);
   --shadow-tooltip: 0 8px 24px color-mix(in srgb, var(--color-text) 18%, transparent);
-  --color-flow-solar: #f59e0b;
+  --color-flow-solar: var(--user-light-flow-solar, var(--default-light-flow-solar));
   --color-solar-text: #92400e;
   /* Match the battery connection to the charging label; green identifies household load. */
   --color-flow-battery: var(--color-charge);
-  --color-flow-grid: #6b7280;
+  --color-flow-grid: var(--user-light-flow-grid, var(--default-light-flow-grid));
   --color-flow-car: var(--color-charge);
-  --color-flow-home: #16a34a;
+  --color-flow-home: var(--user-light-flow-home, var(--default-light-flow-home));
 }
 
 :root[data-theme='dark'] {
   color-scheme: dark;
-  --color-bg: #111827;
+  --color-bg: var(--default-dark-bg);
   --color-surface: #1f2937;
   --color-border: #374151;
   --color-border-soft: #4b5563;
-  --color-text: #f9fafb;
+  --color-text: var(--default-dark-text);
   --color-text-muted: #b2bac6;
   --color-text-secondary: #d1d5db;
   --color-text-subtle: #6b7280;
@@ -77,10 +122,10 @@
   --color-export-text: #c4b5fd;
 
   /* Action colours */
-  --color-charge: #60a5fa;
+  --color-charge: var(--user-dark-charge, var(--default-dark-charge));
   --color-hold-charge: #93c5fd;
   --color-freeze-charge: #22d3ee;
-  --color-export: #a78bfa;
+  --color-export: var(--user-dark-export, var(--default-dark-export));
   --color-hold-export: #c4b5fd;
   --color-freeze-export: #c084fc;
   --color-hold-car: #fbbf24;
@@ -90,16 +135,60 @@
   --color-tooltip-bg: #030712;
   --color-tooltip-text: #f9fafb;
   --color-battery-track: #374151;
-  --color-battery-low: #f87171;
-  --color-battery-medium: #fbbf24;
-  --color-battery-high: #4ade80;
+  --color-battery-low: var(--user-dark-battery-low, var(--default-dark-battery-low));
+  --color-battery-medium: var(--user-dark-battery-medium, var(--default-dark-battery-medium));
+  --color-battery-high: var(--user-dark-battery-high, var(--default-dark-battery-high));
   --shadow-sm: 0 1px 3px color-mix(in srgb, black 32%, transparent);
   --shadow-card: 0 2px 8px color-mix(in srgb, black 25%, transparent);
   --shadow-tooltip: 0 8px 24px color-mix(in srgb, black 40%, transparent);
-  --color-flow-solar: #fbbf24;
+  --color-flow-solar: var(--user-dark-flow-solar, var(--default-dark-flow-solar));
   --color-solar-text: #fbbf24;
   --color-flow-battery: var(--color-charge);
-  --color-flow-grid: #9ca3af;
+  --color-flow-grid: var(--user-dark-flow-grid, var(--default-dark-flow-grid));
   --color-flow-car: var(--color-charge);
-  --color-flow-home: #4ade80;
+  --color-flow-home: var(--user-dark-flow-home, var(--default-dark-flow-home));
+}
+
+/* Built-in palettes retain semantic tokens so every dashboard surface follows them. */
+:root[data-preset='retro'] {
+  --default-light-bg: #e9f1e9; --default-light-text: #193a2a;
+  --default-dark-bg: #0f0f0f; --default-dark-text: #c6f5d7;
+  --default-light-battery-low: #b43c34; --default-dark-battery-low: #ff7c72;
+  --default-light-battery-medium: #a56808; --default-dark-battery-medium: #f5c660;
+  --default-light-battery-high: #137a4c; --default-dark-battery-high: #41ec9d;
+  --default-light-charge: #137a4c; --default-dark-charge: #41ec9d;
+  --default-light-export: #376c7e; --default-dark-export: #8edee0;
+  --default-light-flow-solar: #a56808; --default-dark-flow-solar: #f5c660;
+  --default-light-flow-grid: #526c60; --default-dark-flow-grid: #a5c8b4;
+  --default-light-flow-home: #137a4c; --default-dark-flow-home: #41ec9d;
+  font-family: 'Courier Prime', ui-monospace, monospace;
+}
+:root[data-preset='retro'] :is(h1, h2) {
+  font-family: 'Press Start 2P', ui-monospace, monospace;
+  font-size: clamp(0.8rem, 1.3vw, 1.1rem);
+  font-weight: 400;
+  line-height: 1.6;
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+}
+:root[data-preset='retro'][data-theme='light'] {
+  --color-surface: #f7fbf4; --color-border: #a9c4ae; --color-border-soft: #c9dbca;
+  --color-text-muted: #38594a; --color-text-secondary: #38594a; --color-text-subtle: #627f6e;
+  --color-current: #137a4c; --focus-ring: #137a4c; --color-field-border: #5d7e69;
+  --color-charge-text: #12633f; --color-export-text: #29566b; --color-solar-text: #805100;
+}
+:root[data-preset='retro'][data-theme='dark'] {
+  --color-surface: #1a2212; --color-border: #2b4e33; --color-border-soft: #448053;
+  --color-text-muted: #a7c8b2; --color-text-secondary: #b8ddc5; --color-text-subtle: #83a48c;
+  --color-current: #41ec9d; --focus-ring: #41ec9d; --color-field-border: #79b18c;
+  --color-charge-text: #8af8c3; --color-export-text: #a7e7e4; --color-solar-text: #f5c660;
+  --color-battery-track: #2b4e33;
+}
+:root[data-preset='retro'][data-theme='dark'] body {
+  background-image:
+    repeating-conic-gradient(rgb(255 255 255 / 3%) 0 25%, transparent 0 50%),
+    repeating-conic-gradient(rgb(142 174 148 / 3%) 0 25%, transparent 0 50%),
+    repeating-conic-gradient(rgb(255 255 255 / 2%) 0 25%, transparent 0 50%);
+  background-size: 5px 5px, 13px 13px, 23px 23px;
+  background-position: 0 0, 2px 4px, 7px 3px;
 }

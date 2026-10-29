@@ -25,7 +25,7 @@ type ConfigItem = {
 }
 
 /** Edit the live Home Assistant controls generated from Predbat configuration. */
-export default function ConfigPage() {
+export default function ConfigPage({ onUpdatePendingChange }: { onUpdatePendingChange: (pending: boolean) => void }) {
   const [items, setItems] = useState<ConfigItem[]>([])
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
@@ -85,6 +85,7 @@ export default function ConfigPage() {
   async function save(item: ConfigItem, value: string | number | boolean) {
     setSaving(item.entity)
     setError('')
+    if (item.name === 'update') onUpdatePendingChange(true)
     try {
       await postChanges([{ item, value }])
       setItems((current) => current.map((entry) => entry.entity === item.entity ? { ...entry, value } : entry))
@@ -92,6 +93,7 @@ export default function ConfigPage() {
       setError(reason instanceof Error ? reason.message : 'Unable to save configuration')
     } finally {
       setSaving('')
+      if (item.name === 'update') onUpdatePendingChange(false)
     }
   }
 

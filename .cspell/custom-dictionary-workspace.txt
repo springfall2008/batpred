@@ -811,6 +811,7 @@ WIFEXITED
 WNOHANG
 workmode
 workstream
+workstreams
 worktree
 writeonly
 wrongsha

@@ -31,7 +31,7 @@ function MetricCard({ label, value, detail, tone }: { label: string; value: stri
 }
 
 /** Display operational metrics that complement the main dashboard cards. */
-export default function MetricsPanel({ lastStarted, now }: { lastStarted: string | null; now: number }) {
+export default function MetricsPanel({ lastStarted, now, socBoundaries }: { lastStarted: string | null; now: number; socBoundaries: { low: number; medium: number } }) {
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null)
   const [error, setError] = useState(false)
 
@@ -111,7 +111,7 @@ export default function MetricsPanel({ lastStarted, now }: { lastStarted: string
         )}
       </div>
 
-      <MetricsCharts metrics={metrics} />
+      <MetricsCharts metrics={metrics} socBoundaries={socBoundaries} />
 
       <div className="metrics-section">
         <h3>Cost and savings</h3>
