@@ -126,6 +126,9 @@ import traceback
 from pathlib import Path
 
 REPO = "springfall2008/batpred"
+# Bounds the best-effort gh calls that link a bot PR to its requester, so a stalled call
+# can't hang the single-threaded poll loop.
+GH_LINK_TIMEOUT_SECONDS = 120
 BASE_DIR = Path.home() / "predbat-triage-bot"
 CLONE_DIR = BASE_DIR / "batpred"
 SCRATCH_DIR = BASE_DIR / "scratch"
@@ -697,17 +700,20 @@ def is_actionable(issue_number):
     return bool(label_names & {"bug", "enhancement"})
 
 
-def flag_pr_for_review(pr_number, cleanup=False):
+def flag_pr_for_review(pr_number, cleanup=False, opened_by_bot=False):
     """Add BOT_REVIEW to a PR, so the next poll cycle runs /pr-review against it - and
     with cleanup, BOT_CLEANUP too, so /pr-cleanup then acts on what the review found.
     Both go in one edit: a cycle that saw BOT_CLEANUP alone would run the cleanup before
     the review existed. Idempotent - adding a label the PR already carries is a no-op.
+
+    opened_by_bot adds BOT_PR_OPENED to the PR as well (not just the issue), so PRs the
+    BOT_PR flow opened can be listed by label - their author is always the bot's credential.
     """
-    labels = ["--add-label", "BOT_REVIEW"] + (["--add-label", "BOT_CLEANUP"] if cleanup else [])
+    labels = ["--add-label", "BOT_REVIEW"] + (["--add-label", "BOT_CLEANUP"] if cleanup else []) + (["--add-label", "BOT_PR_OPENED"] if opened_by_bot else [])
     subprocess.run(["gh", "pr", "edit", str(pr_number), "--repo", REPO] + labels, check=True)
 
 
-def mark_pr_opened(issue_number, cleanup=False):
+def mark_pr_opened(issue_number, cleanup=False, opened_by_bot=False):
     """Swap BOT_PR for BOT_PR_OPENED once the draft PR has been confirmed open, and
     flag the PR itself with BOT_REVIEW so a code review runs against it automatically -
     /issue-pr's own quality gate (step 4 of its SKILL.md) is pre-commit and a targeted
@@ -716,6 +722,9 @@ def mark_pr_opened(issue_number, cleanup=False):
     cleanup also queues BOT_CLEANUP. Only process_bot_pr_issue() passes it, and only for a
     PR its own create_pr() just opened: a PR found already open on entry may be someone's
     own branch, and BOT_CLEANUP is the label that commits and pushes to it.
+
+    opened_by_bot, passed under the same condition, labels the PR as the bot's and assigns
+    it to whoever added BOT_PR (assign_bot_pr_requester()).
     """
     subprocess.run(
         ["gh", "issue", "edit", str(issue_number), "--repo", REPO, "--remove-label", "BOT_PR", "--add-label", "BOT_PR_OPENED"],
@@ -723,7 +732,52 @@ def mark_pr_opened(issue_number, cleanup=False):
     )
     pr_number = find_pr_number_for_issue(issue_number)
     if pr_number is not None:
-        flag_pr_for_review(pr_number, cleanup=cleanup)
+        flag_pr_for_review(pr_number, cleanup=cleanup, opened_by_bot=opened_by_bot)
+        if opened_by_bot:
+            assign_bot_pr_requester(pr_number, issue_number)
+
+
+def find_bot_pr_requester(issue_number):
+    """Return the login of whoever last added BOT_PR to the issue, or None if it can't be found.
+
+    The PR is always authored by the bot's credential, so the issue's label event is the only
+    record of who asked for it. Read after mark_pr_opened() has swapped BOT_PR off: the
+    labeled event stays in the issue's history either way. Events come oldest first and
+    --paginate walks the pages in order, so the last line is the latest request.
+    """
+    result = subprocess.run(
+        ["gh", "api", "--paginate", f"repos/{REPO}/issues/{issue_number}/events", "--jq", '.[] | select(.event == "labeled" and .label.name == "BOT_PR" and .actor != null) | .actor.login'],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=GH_LINK_TIMEOUT_SECONDS,
+    )
+    if result.returncode != 0:
+        # Said why, so a failed lookup (auth expiry, rate limit) is not mistaken for an issue nobody asked on
+        print(f"[pr] issue #{issue_number}: BOT_PR requester lookup failed: {(result.stderr or '').strip() or 'exit ' + str(result.returncode)}", flush=True)
+        return None
+    logins = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+    return logins[-1] if logins else None
+
+
+def assign_bot_pr_requester(pr_number, issue_number):
+    """Assign a PR the BOT_PR flow just opened to whoever added BOT_PR to its issue.
+
+    The PR's author is always the bot's credential, so this is what makes it show up under
+    the requester's assigned PRs. Best effort: the PR is already open and labelled, so any
+    failure - no requester found, an unassignable login, gh erroring or hanging - is logged
+    and must not fail the flow.
+    """
+    try:
+        requester = find_bot_pr_requester(issue_number)
+        if requester is None:
+            print(f"[pr] PR #{pr_number}: no BOT_PR requester found on issue #{issue_number}, not assigning", flush=True)
+            return
+        assign = subprocess.run(["gh", "pr", "edit", str(pr_number), "--repo", REPO, "--add-assignee", requester], capture_output=True, text=True, check=False, timeout=GH_LINK_TIMEOUT_SECONDS)
+        if assign.returncode != 0:
+            print(f"[pr] PR #{pr_number}: could not assign requester {requester}: {(assign.stderr or '').strip()}", flush=True)
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"[pr] PR #{pr_number}: assigning the BOT_PR requester failed: {exc}", flush=True)
 
 
 class FlowFailed(subprocess.CalledProcessError):
@@ -1505,7 +1559,7 @@ def process_bot_pr_issue(issue):
         return
     create_pr(issue_number)
     if has_existing_pr(issue_number):
-        mark_pr_opened(issue_number, cleanup=True)
+        mark_pr_opened(issue_number, cleanup=True, opened_by_bot=True)
     else:
         mark_pr_failed(issue_number)
 

@@ -80,12 +80,15 @@ def check_modified(py_files, start_time):
     return False
 
 
-def resolve_apps_yaml_path():
+def resolve_apps_yaml_path(apps_file=None):
     """
     Resolve the one real apps.yaml path this instance is actually configured to use, using the
     same PREDBAT_APPS_FILE resolution applied when the config itself is loaded.
+
+    Pass the instance's own apps_file (Hass.apps_file) so the answer is per instance; with no
+    argument it falls back to the process environment.
     """
-    return os.path.abspath(os.getenv("PREDBAT_APPS_FILE", "apps.yaml"))
+    return os.path.abspath(apps_file or os.getenv("PREDBAT_APPS_FILE", "apps.yaml"))
 
 
 def collect_watch_files(roots, apps_file_path):
@@ -159,7 +162,7 @@ async def main():
     # Find all .py files in the directory hierarchy, plus the one real apps.yaml this
     # instance is actually configured to use (not any file that merely happens to share
     # that name elsewhere in the tree - see #4397/#4396)
-    py_files = collect_watch_files(roots, resolve_apps_yaml_path())
+    py_files = collect_watch_files(roots, resolve_apps_yaml_path(p_han.apps_file))
 
     print("Watching {} for changes".format(py_files))
 
@@ -272,10 +275,16 @@ class Hass(LogRedaction):
             t.join(5 * 60)
         self.logfile.close()
 
-    def __init__(self):
+    def __init__(self, apps_file=None, secrets_file=None):
         """
         Start Predbat
+
+        apps_file / secrets_file override $PREDBAT_APPS_FILE / $PREDBAT_SECRETS_FILE for this
+        instance only. The environment is read once, here, and the values kept on the instance,
+        so several engines in one process can each load their own configuration.
         """
+        self.apps_file = apps_file if apps_file is not None else os.getenv("PREDBAT_APPS_FILE", "apps.yaml")
+        self.secrets_file = secrets_file if secrets_file is not None else os.getenv("PREDBAT_SECRETS_FILE")
         self.args = {}
         self.run_list = []
         self.threads = []
@@ -286,7 +295,7 @@ class Hass(LogRedaction):
 
         # Load apps.yaml (resolving !secret) through the shared loader
         try:
-            self.args, self.secrets = load_apps_yaml(log=self.log)
+            self.args, self.secrets = load_apps_yaml(apps_file=self.apps_file, log=self.log, secrets_file=self.secrets_file)
         except yaml.YAMLError as exc:
             print(exc)
             sys.exit(1)

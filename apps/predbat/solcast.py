@@ -1523,6 +1523,7 @@ class SolarAPI(ComponentBase):
         )
 
         # Work out the total forecast for each future day going forward.
+        # Sum unrounded: a dull-day minute is well under 0.01 kWh, so rounding each addition would just count minutes (GH#5690)
         days_forecast_total = {}
         days_forecast_total_scaled_slot = {}
         for minute in range(0, max(pv_forecast_minute.keys()) + 1):
@@ -1530,8 +1531,8 @@ class SolarAPI(ComponentBase):
             if day < forecast_days:
                 slot = (int(minute / self.plan_interval_minutes) * self.plan_interval_minutes) % (24 * 60)
                 pv_value = pv_forecast_minute.get(minute, 0)
-                days_forecast_total[day] = dp2(days_forecast_total.get(day, 0) + pv_value)
-                days_forecast_total_scaled_slot[day] = dp2(days_forecast_total_scaled_slot.get(day, 0) + pv_value * slot_adjustment.get(slot, 1.0))
+                days_forecast_total[day] = days_forecast_total.get(day, 0) + pv_value
+                days_forecast_total_scaled_slot[day] = days_forecast_total_scaled_slot.get(day, 0) + pv_value * slot_adjustment.get(slot, 1.0)
 
         # Decide on the per day scaling factor
         days_use_scaling = {}
@@ -1541,7 +1542,11 @@ class SolarAPI(ComponentBase):
             scaling_applied = dp4(total_day_scaled_slot / total_day if total_day > 0.01 else 1.0)
             days_use_scaling[day] = dp4(total_adjustment / scaling_applied if scaling_applied > 0.01 else 1.0)
 
-        self.log("SolarAPI: PV Calibration: Days forecast total {}, days forecast total scaled by slot adjustments {}, days use scaling {}".format(days_forecast_total, days_forecast_total_scaled_slot, days_use_scaling))
+        self.log(
+            "SolarAPI: PV Calibration: Days forecast total {}, days forecast total scaled by slot adjustments {}, days use scaling {}".format(
+                {day: dp2(total) for day, total in days_forecast_total.items()}, {day: dp2(total) for day, total in days_forecast_total_scaled_slot.items()}, days_use_scaling
+            )
+        )
 
         pv_forecast_minute_adjusted = {}
         for minute in range(0, max(pv_forecast_minute.keys()) + 1):
