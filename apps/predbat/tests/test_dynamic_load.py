@@ -286,3 +286,101 @@ def _run_dynamic_load_high_load_baseline(my_predbat):
         print("*** Dynamic load high load baseline test FAILED")
 
     return failed
+
+
+LIVE_LOAD_POWER = "sensor.load_power_test_live"
+
+
+def _set_live_load(my_predbat, state):
+    """
+    Point load_power at one entity holding state (in watts), or remove load_power when state is None.
+    """
+    my_predbat.ha_interface.dummy_items.pop(LIVE_LOAD_POWER, None)
+    if state is None:
+        my_predbat.args.pop("load_power", None)
+        return
+    my_predbat.args["load_power"] = LIVE_LOAD_POWER
+    my_predbat.ha_interface.dummy_items[LIVE_LOAD_POWER] = state
+
+
+def test_dynamic_load_high_live_confirm(my_predbat):
+    """
+    Test that a high load_last_period only counts as "high" once the live load_power confirms it.
+    """
+    state_fields = (
+        "num_cars",
+        "minutes_now",
+        "battery_rate_max_discharge",
+        "car_charging_threshold",
+        "car_charging_slots",
+        "car_energy_reported_load",
+        "load_last_period",
+        "load_last_status",
+        "metric_dynamic_load_adjust",
+        "dynamic_load_baseline",
+    )
+    saved_state = {field: copy.deepcopy(getattr(my_predbat, field)) for field in state_fields}
+    saved_load_power = my_predbat.args.get("load_power", None)
+    try:
+        return _run_dynamic_load_high_live_confirm(my_predbat)
+    finally:
+        for field, value in saved_state.items():
+            setattr(my_predbat, field, value)
+        my_predbat.ha_interface.dummy_items.pop(LIVE_LOAD_POWER, None)
+        if saved_load_power is None:
+            my_predbat.args.pop("load_power", None)
+        else:
+            my_predbat.args["load_power"] = saved_load_power
+
+
+def _run_dynamic_load_high_live_confirm(my_predbat):
+    """
+    A Solis load counter moves in whole kWh, so one step inside the last five minutes reads as a load spike
+    of up to 12kW while the house is using under 1kW. Unconfirmed by the live load_power it must not raise the
+    load forecast or force a re-plan, which on 27 Oct 2026 cut a live export window short twice.
+    """
+    print("*** Running test: Dynamic load high load confirmed by live load")
+    failed = False
+
+    reset_inverter(my_predbat)
+    my_predbat.num_cars = 1
+    my_predbat.minutes_now = 18 * 60 + 45
+    my_predbat.battery_rate_max_discharge = 5.12 / 60.0  # 5.12kW, the threshold for "high"
+    my_predbat.car_charging_threshold = 6.0
+    my_predbat.car_charging_slots = [[], [], [], []]
+    my_predbat.car_energy_reported_load = False
+    my_predbat.metric_dynamic_load_adjust = True
+
+    cases = [
+        # (description, counter kW, live load_power, expected status, expect a baseline)
+        ("counter step 9.6kW, live load 692W - not confirmed", 9.6, 692, "baseline", False),
+        ("counter 9.6kW, live load 7000W - confirmed", 9.6, 7000, "high", True),
+        ("counter 9.6kW, live load 4700W - within 90% of the threshold, confirmed", 9.6, 4700, "high", True),
+        ("counter 9.6kW, live load unavailable - counter stands as before", 9.6, "unavailable", "high", True),
+        ("counter 9.6kW, load_power not configured - counter alone as before", 9.6, None, "high", True),
+        ("counter 0.7kW, live load 7000W - only a high counter is confirmed", 0.7, 7000, "low", False),
+    ]
+    for test_n, (description, counter_kw, live_state, expected_status, expect_baseline) in enumerate(cases, start=1):
+        print("Test {}: {}".format(test_n, description))
+        _set_live_load(my_predbat, live_state)
+        my_predbat.load_last_status = "baseline"
+        my_predbat.load_last_period = counter_kw
+
+        replan = my_predbat.dynamic_load()
+
+        if my_predbat.load_last_status != expected_status:
+            print("ERROR: Expected load_last_status '{}', got '{}'".format(expected_status, my_predbat.load_last_status))
+            failed = True
+        if bool(my_predbat.dynamic_load_baseline) != expect_baseline:
+            print("ERROR: Expected baseline {}, got {}".format("entries" if expect_baseline else "none", my_predbat.dynamic_load_baseline))
+            failed = True
+        if replan != (expected_status != "baseline"):
+            print("ERROR: Expected dynamic_load() to return {} for status '{}', got {}".format(expected_status != "baseline", expected_status, replan))
+            failed = True
+
+    if not failed:
+        print("*** Dynamic load high load confirmed by live load test PASSED")
+    else:
+        print("*** Dynamic load high load confirmed by live load test FAILED")
+
+    return failed

@@ -380,9 +380,19 @@ class Plan:
         Shared by dynamic_load(), which runs after the inverter fetch, and dynamic_load_car_check(), which
         runs before it and so uses the previous cycle's battery_rate_max_discharge - it barely moves
         between cycles, and the car grace period spans several of them.
+
+        A high load_last_period is re-checked against the live load_power, as a low one is for the car check.
+        load_last_period is the difference of an energy counter over PREDICT_STEP, and a counter that moves in
+        whole kWh (Solis) reads as 0 or 12kW over five minutes, so each step looks like a load spike. A live
+        reading below the threshold makes it "baseline": no evidence either way. With no live reading the
+        counter stands as before, so a load_power sensor that is down does not switch dynamic load off.
         """
         threshold_battery = self.battery_rate_max_discharge * MINUTE_WATT / 1000
         if self.load_last_period >= threshold_battery:
+            _, live_load = self.dynamic_load_car_live_load()
+            if live_load is not None and live_load < threshold_battery * 0.9:
+                self.log("Dynamic load last period {:.2f}kW is high but live load {:.2f}kW does not confirm it".format(self.load_last_period, live_load))
+                return "baseline"
             return "high"
         if (self.load_last_period < (threshold_battery * 0.9)) and (self.load_last_period < self.dynamic_load_car_low_kw()):
             return "low"
