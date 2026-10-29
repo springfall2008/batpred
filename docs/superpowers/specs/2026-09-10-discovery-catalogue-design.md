@@ -174,7 +174,7 @@ let it collide with real supply points in the `multiple_import_meters` detector.
 `car_charging_power`, `car_charging_now`.
 
 **`cars`** — a vehicle. Predbat indexes cars, not chargers, so a charger integration that
-knows nothing about the vehicle still emits a stub car record with `info.stub`. Ohme can do
+knows nothing about the vehicle still emits a stub car record with `flags: ["stub"]`. Ohme can do
 better: it holds a vehicle list today that is discarded. `make` and `model` in `info`;
 `battery_kwh` and `max_charge_kw` in `ratings`; `charged_by` cross-links to `chargers`. Its
 `entities` carry the car facts: `car_charging_soc`, `car_charging_limit`,

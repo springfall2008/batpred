@@ -27,6 +27,7 @@ from typing import Dict, List, Union
 from datetime import timedelta, timezone
 from const import TIME_FORMAT_HA, DISPATCH_SOURCE_CHARGER_SCHEDULE
 from component_base import ComponentBase
+from coordinator import car_record, charger_record
 from car_charger_control import CarChargerControl, parse_control_setting
 from predbat_metrics import record_api_call
 
@@ -898,7 +899,7 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         exactly the kind of fabricated record the catalogue design forbids - ratings is therefore
         never populated at all rather than populated with a guess.
 
-        The car record is a stub - device_id "ohme:{serial}:car", info.stub true - unless the Ohme
+        The car record is a stub - device_id "ohme:{serial}:car", flags ["stub"] - unless the Ohme
         account reports a current vehicle (self.client._cars, via _discovery_vehicle()), which this
         component discards today. When one is known, the record instead carries a genuine identity:
         device_id "ohme:{vehicle id}" with make/model in info. This is the one place a charger
@@ -936,29 +937,26 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         if device_model:
             charger_info["model"] = device_model
 
-        charger = {
-            "device_id": charger_device_id,
-            "hardware_ids": {"serial": serial},
-            "info": charger_info,
-            "serves_cars": [car_device_id],
-            "entities": self.discovery_entities(CHARGER_DISCOVERY_ENTITY_SPEC),
-        }
+        charger = charger_record(
+            charger_device_id,
+            serves_cars=[car_device_id],
+            hardware_ids={"serial": serial},
+            info=charger_info,
+            entities=self.discovery_entities(CHARGER_DISCOVERY_ENTITY_SPEC),
+        )
 
-        if vehicle_id:
-            car_info = {}
-            if make:
-                car_info["make"] = make
-            if model:
-                car_info["model"] = model
-        else:
-            car_info = {"stub": True}
-
-        car = {
-            "device_id": car_device_id,
-            "charged_by": charger_device_id,
-            "info": car_info,
-            "entities": self.discovery_entities(CAR_DISCOVERY_ENTITY_SPEC),
-        }
+        car_info = {}
+        if make:
+            car_info["make"] = make
+        if model:
+            car_info["model"] = model
+        car = car_record(
+            car_device_id,
+            charged_by=charger_device_id,
+            flags=None if vehicle_id else ["stub"],
+            info=car_info,
+            entities=self.discovery_entities(CAR_DISCOVERY_ENTITY_SPEC),
+        )
 
         return {"automatic": self.ohme_automatic, "chargers": [charger], "cars": [car]}
 

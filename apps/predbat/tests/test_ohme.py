@@ -347,6 +347,7 @@ def test_ohme(my_predbat=None):
         ("switch_approve_wrong_status", _test_ohme_switch_event_handler_approve_charge_wrong_status, "switch_event_handler approve wrong status"),
         ("discovery_split", _test_ohme_build_discovery_charger_and_car_split, "build_discovery produces cross-linked charger and car records"),
         ("discovery_stub_car", _test_ohme_build_discovery_stub_car_when_no_vehicle, "build_discovery stubs the car when no vehicle is known"),
+        ("discovery_stub_car_validation", _test_ohme_stub_car_round_trips_validation, "a stub car keeps its stub flag through the real Coordinator"),
         ("discovery_known_vehicle", _test_ohme_build_discovery_known_vehicle, "build_discovery reports a genuine car identity when a vehicle is known"),
         ("discovery_vehicle_real_parse", _test_ohme_build_discovery_vehicle_from_real_client_parse, "the non-stub car path works against the real client parsing pipeline"),
         ("discovery_entity_split", _test_ohme_build_discovery_entities_split_by_record, "charger and car entities land in the correct record"),
@@ -4452,7 +4453,7 @@ def _test_ohme_build_discovery_charger_and_car_split(my_predbat=None):
 
 
 def _test_ohme_build_discovery_stub_car_when_no_vehicle(my_predbat=None):
-    """With no vehicle known the car record is a stub - device_id "ohme:{serial}:car", info.stub true"""
+    """With no vehicle known the car record is a stub - device_id "ohme:{serial}:car", flags ["stub"]"""
     print("**** Running test_ohme_build_discovery_stub_car_when_no_vehicle ****")
 
     api = MockOhmeAPI()
@@ -4464,9 +4465,40 @@ def _test_ohme_build_discovery_stub_car_when_no_vehicle(my_predbat=None):
 
     car = report["cars"][0]
     assert car["device_id"] == "ohme:TEST-SERIAL-123:car", f"Unexpected stub device_id: {car['device_id']}"
-    assert car["info"].get("stub") is True, f"Expected info.stub True for a stub car, got {car.get('info')}"
+    assert car.get("flags") == ["stub"], f"Expected flags ['stub'] for a stub car, got {car.get('flags')}"
+    assert "info" not in car, f"Expected no info for a stub car, got {car.get('info')}"
 
-    print("PASS: with no vehicle known, build_discovery stubs the car with info.stub True")
+    print("PASS: with no vehicle known, build_discovery stubs the car with flags ['stub']")
+    return 0
+
+
+def _test_ohme_stub_car_round_trips_validation(my_predbat=None):
+    """A stub car keeps its stub flag through the real Coordinator, with nothing logged (GH#5849).
+
+    The marker used to be info.stub True; info only holds strings, so validation dropped it and logged
+    a warning on every report filed, while the build-level test above still passed.
+    """
+    print("**** Running test_ohme_stub_car_round_trips_validation ****")
+
+    from coordinator import Coordinator
+    from mock_base import MockBase as SharedMockBase
+
+    api = MockOhmeAPI()
+    api.client.serial = "TEST-SERIAL-123"
+    api.client._cars = []
+    _stage_all_discovery_entities(api)
+
+    base = SharedMockBase()
+    logs = []
+    coordinator = Coordinator(base)
+    coordinator.log = logs.append
+    coordinator.report("ohme", api.build_discovery())
+
+    car = coordinator.reports["ohme"]["cars"][0]
+    assert car.get("flags") == ["stub"], f"stub flag lost in validation: {car}"
+    assert not [line for line in logs if line.startswith("Warn")], f"validation warned about the Ohme report: {logs}"
+
+    print("PASS: a stub car keeps its stub flag through the real Coordinator")
     return 0
 
 

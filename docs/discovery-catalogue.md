@@ -73,9 +73,12 @@ is configured as a PV source. A PV-only unit that has been configured as a batte
 usually show it in its record: `battery` among its functions, but no `battery_capacity_ah` rating
 and no `soc_max` entity.
 
-No reporter (GivTCP, GE Cloud, Octopus, Ohme, Solcast, Fox, AlphaESS, Solis, Deye, Sunsynk) populates `programmes` yet - it is part of
-the schema for a future Axle/VPP-style reporter - so today it is always present as an empty list
-rather than missing from the document.
+No reporter populates `programmes` yet - it is part of the schema for a future Axle/VPP-style
+reporter - so today it is always present as an empty list rather than missing from the document.
+
+A charger integration that knows nothing about the vehicle it charges still reports a car, marked
+`flags: ["stub"]`, because Predbat indexes cars rather than chargers. A car without that flag is a
+vehicle the integration actually described (Ohme can, when the account names one).
 
 Every record carries a `source` field naming the component that reported it, a `device_id` unique
 within that component, and whichever typed containers below the component chose to populate. Two
@@ -278,3 +281,7 @@ rather than assembling the dict by hand. It takes the section's fields as keywor
 omits whatever is unset or empty, so a reporter can pass everything it gathered without writing
 its own `if info: record["info"] = info` ladder. A mistyped field name is a `TypeError` at the
 call site rather than a key silently dropped from a user's dump.
+
+For `chargers` and `cars`, use `charger_record()` and `car_record()` the same way. A charger with
+no vehicle data at all can use `charger_with_stub_car()`, which returns the charger and its stub
+car already cross-linked (`serves_cars` / `charged_by`).

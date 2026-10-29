@@ -6,7 +6,7 @@ import inspect
 from datetime import datetime
 
 from mock_base import MockBase
-from coordinator import CAPABILITY_KEYS, CONTAINER_SPEC, Coordinator, NOT_APPLICABLE_DEFAULTS, Redactor, SCHEMA_VERSION, SECTION_SPEC, VOCAB_CONTAINERS, inverter_definition, inverter_record, validate_report
+from coordinator import CAPABILITY_KEYS, CONTAINER_SPEC, Coordinator, NOT_APPLICABLE_DEFAULTS, Redactor, SCHEMA_VERSION, SECTION_SPEC, VOCAB_CONTAINERS, car_record, charger_record, charger_with_stub_car, inverter_definition, inverter_record, validate_report
 from config import INVERTER_DEF
 
 
@@ -460,6 +460,55 @@ def test_inverter_record_drops_an_empty_string():
     assert record["composition"] == "direct"
     assert record["control"] is False, "control=False is a bool, not an empty string, and must be kept: {}".format(record)
     print("PASS: inverter_record drops an empty string but keeps control=False")
+    return 0
+
+
+def test_charger_record_omits_empty_containers():
+    """A charger record leaves out unset and empty fields exactly as an inverter record does."""
+    record = charger_record("hypervolt:ABC123", serves_cars=[], hardware_ids={"serial": "ABC123"}, account_ids={}, info={}, ratings={}, entities={})
+    assert record == {"device_id": "hypervolt:ABC123", "hardware_ids": {"serial": "ABC123"}}, record
+    print("PASS: charger_record omits empty containers")
+    return 0
+
+
+def test_charger_and_car_record_parameters_match_their_sections():
+    """Each builder accepts exactly its section's structural fields plus the containers it can carry.
+
+    The parameter list is the schema, so a structural field added to SECTION_SPEC without a matching
+    parameter would have no way into a record built here.
+    """
+    import inspect
+
+    for builder, section in ((charger_record, "chargers"), (car_record, "cars")):
+        params = set(inspect.signature(builder).parameters) - {"device_id"}
+        structural = set(SECTION_SPEC[section]["structural"]) - {"device_id"}
+        assert structural <= params, "{} is missing structural fields {}".format(builder.__name__, structural - params)
+        assert params - structural <= set(CONTAINER_SPEC) | set(VOCAB_CONTAINERS), "{} has unknown parameters {}".format(builder.__name__, params - structural - set(CONTAINER_SPEC) - set(VOCAB_CONTAINERS))
+    print("PASS: charger_record and car_record parameters match their sections")
+    return 0
+
+
+def test_charger_with_stub_car_cross_links():
+    """A charger that knows nothing of its vehicle gets a stub car, linked both ways."""
+    charger, car = charger_with_stub_car("wallbox:900001", hardware_ids={"serial": "900001"}, info={"vendor": "Wallbox"}, entities={})
+    assert charger == {"device_id": "wallbox:900001", "serves_cars": ["wallbox:900001:car"], "hardware_ids": {"serial": "900001"}, "info": {"vendor": "Wallbox"}}, charger
+    assert car == {"device_id": "wallbox:900001:car", "charged_by": "wallbox:900001", "flags": ["stub"]}, car
+    print("PASS: charger_with_stub_car cross-links the charger and its stub car")
+    return 0
+
+
+def test_stub_car_survives_validation():
+    """The stub marker reaches the catalogue (GH#5849).
+
+    It used to ride in info as {"stub": True}; info only holds strings, so validation dropped it and
+    logged a warning, and a stub car was published indistinguishable from a real vehicle record.
+    """
+    _, car = charger_with_stub_car("x:1")
+    logs = []
+    cleaned = validate_report({"cars": [car]}, "x", logs.append)
+    assert cleaned["cars"][0].get("flags") == ["stub"], cleaned
+    assert not logs, logs
+    print("PASS: a stub car keeps its stub flag through validation")
     return 0
 
 
@@ -2090,6 +2139,10 @@ def test_coordinator_all(my_predbat=None):
     failures += test_inverter_record_normalises_sets_and_tuples()
     failures += test_inverter_record_sorts_a_mixed_type_set_without_raising()
     failures += test_inverter_record_drops_an_empty_string()
+    failures += test_charger_record_omits_empty_containers()
+    failures += test_charger_and_car_record_parameters_match_their_sections()
+    failures += test_charger_with_stub_car_cross_links()
+    failures += test_stub_car_survives_validation()
     failures += test_component_status_omits_components_that_cannot_report()
     failures += test_component_status_reported_at_set_only_for_ok()
     failures += test_observations_duplicate_serial()
