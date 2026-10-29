@@ -373,6 +373,26 @@ def test_validate_config(my_predbat):
         expect_clean=["charge_rate"],
     )
 
+    print("  [sensor_list modify] a placeholder named with a custom prefix is exempt too (#5242)")
+    saved_prefix = my_predbat.prefix
+    try:
+        my_predbat.prefix = "predbatsolcast"
+        _run(
+            my_predbat,
+            {"inverter_mode": ["sensor.predbatsolcast_solax_cloud_0_inverter_mode"], "num_inverters": 1},
+            extra_states={"sensor.predbatsolcast_solax_cloud_0_inverter_mode": "Eco"},
+            expect_clean=["inverter_mode"],
+        )
+        # The prefix only matches as a whole name part, and an ordinary sensor still fails
+        _run(
+            my_predbat,
+            {"charge_rate": ["sensor.predbatsolcast2_charge_rate"], "num_inverters": 1},
+            extra_states={"sensor.predbatsolcast2_charge_rate": 2.5},
+            expect_errors=["charge_rate"],
+        )
+    finally:
+        my_predbat.prefix = saved_prefix
+
     print("  [sensor_list modify] select. prefix is allowed for modification")
     _run(
         my_predbat,
