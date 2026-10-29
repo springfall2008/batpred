@@ -107,6 +107,7 @@ class MockFoxAPIWithRequests(FoxAPI):
         # Mock request responses - keyed by API path
         self.mock_responses = {}
         self.request_log = []  # Track all requests made
+        self.log_messages = []  # Track all log lines
 
         # Mock HA state values - keyed by entity_id
         self.mock_ha_states = {}
@@ -134,8 +135,8 @@ class MockFoxAPIWithRequests(FoxAPI):
         self.base = MockBase()
 
     def log(self, message):
-        """Mock log method"""
-        pass
+        """Mock log method - captures messages"""
+        self.log_messages.append(message)
 
     def dashboard_item(self, entity_id, state, attributes, app):
         """Mock dashboard_item method - tracks calls"""
@@ -1960,6 +1961,9 @@ def test_api_set_device_setting_unsupported_marks_unavailable(my_predbat):
     assert result2 is True
     assert len(fox.request_log) == 1
     assert fox.device_settings[deviceSN]["MaxSoc"]["value"] == 100
+    # An expected unsupported setting must not read as a warning in the web log (#3880)
+    assert any("Ignoring write to unsupported setting" in msg for msg in fox.log_messages), "Expected the ignored-write message, got {}".format(fox.log_messages)
+    assert not any("warn" in msg.lower() for msg in fox.log_messages), "An ignored write to an unsupported setting should not log a warning: {}".format(fox.log_messages)
 
     return False
 
@@ -4280,6 +4284,7 @@ def test_request_get_real_no_retry_on_auth_error(my_predbat):
 
     assert result is None
     assert call_count[0] == 1  # Should only make 1 call, no retry
+    assert any("failed after 1 attempts" in msg for msg in fox.log_messages), "Expected the failure log to count 1 attempt: {}".format(fox.log_messages)
 
     return False
 
@@ -4308,6 +4313,7 @@ def test_request_get_real_max_retries(my_predbat):
 
     assert result is None
     assert call_count[0] == 10  # FOX_RETRIES = 10
+    assert any("failed after 10 attempts" in msg for msg in fox.log_messages), "Expected the failure log to count 10 attempts: {}".format(fox.log_messages)
 
     return False
 

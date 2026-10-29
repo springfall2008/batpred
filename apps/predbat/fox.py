@@ -1763,10 +1763,12 @@ class FoxAPI(ComponentBase, OAuthMixin):
         Retry wrapper
         """
         retries = 0
+        attempts = 0
         self.last_unsupported = False
         self.log("Fox: API Requesting {} {} - data {}".format("POST" if post else "GET", path, datain))
 
         while retries < FOX_RETRIES:
+            attempts += 1
             result, allow_retry = await self.request_get_func(path, post=post, datain=datain)
             if result is not None:
                 return result
@@ -1780,7 +1782,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
 
             retries += 1
             await asyncio.sleep(retries * random.random())
-        self.log("Fox: API Response failed after {} attempts for {}".format(retries + 1, path))
+        self.log("Fox: API Response failed after {} attempts for {}".format(attempts, path))
         return result
 
     async def request_get_func(self, path, post=False, datain=None, _retry_after_refresh=False):
