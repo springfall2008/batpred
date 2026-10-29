@@ -405,17 +405,8 @@ the latest version will be at the top of the list. Predbat will update itself an
 
 Alternatively, if you turn On **switch.predbat_auto_update**, Predbat will automatically update itself as new releases are published on GitHub.
 
-For testing against a fork, you can override the repository used when updating to **main** by setting this under your Predbat app in `apps.yaml`:
-
-```yaml
-pred_bat:
-  # ... existing Predbat config ...
-  predbat_repository: your-github-user/batpred
-```
-
-Only the `main` update path uses this override; release tags in **select.predbat_update** are still read from the official upstream repository.
-
-You can also set environment variable `PREDBAT_REPOSITORY` (same `owner/repo` format).
+For testing against a fork or a branch, you can change where **main** is downloaded from, and add branches to the update drop-down, using the `predbat_repository` and `predbat_branch` settings in `apps.yaml`,
+see [predbat_repository](apps-yaml.md#predbat_repository) and [predbat_branch](apps-yaml.md#predbat_branch).
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/56bca491-1069-4abb-be29-a50b0a67a6b9)
 
