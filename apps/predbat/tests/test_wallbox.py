@@ -21,6 +21,7 @@ from tests.test_infra import run_async
 from mock_base import MockBase
 
 from wallbox import (
+    CHARGER_LIST_SECONDS,
     MAX_POLL_SECONDS,
     MIN_POLL_SECONDS,
     WALLBOX_API_URL,
@@ -1835,6 +1836,107 @@ def test_schedule_restoration_is_retried_after_a_failure():
     print("  ✓ Schedule restoration is retried after a failure")
 
 
+# Discovery catalogue reporter
+
+
+def _private_status():
+    """A status carrying every private field a Wallbox payload can hold, each with a value to look for."""
+    status = _status(name="Garage")
+    status["config_data"].update({"timezone": "Europe/Madrid", "country": {"iso2": "ES", "code": "ESP"}, "zipcode": "08019"})
+    status.update({"car_plate": "AB12CDE", "user_name": "Jane Bloggs", "user_id": 556677})
+    return status
+
+
+def _capture_reports(component):
+    """Capture every report this component files, in order."""
+    component.filed_reports = []
+    component.report_discovery = component.filed_reports.append
+    return component.filed_reports
+
+
+def test_discovery_record():
+    """A charger keyed by its hardware serial, its cloud id pseudonymised, with a stub car and the bound entities."""
+    component = _started_component()
+    report = component.build_discovery()
+    assert report["automatic"] is True
+    charger, car = report["chargers"][0], report["cars"][0]
+    assert charger["device_id"] == "wallbox:900001", charger
+    assert charger["hardware_ids"] == {"serial": "900001"}, charger
+    assert charger["account_ids"] == {"charger_id": "101"}, charger
+    assert charger["info"] == {"vendor": "Wallbox", "model": "PLP1-0-2-4-9-002-E", "firmware": "5.5.10"}, charger
+    assert set(charger["entities"]) == {"car_charging_planned", "car_charging_plugged", "car_charging_energy", "car_charging_power"}, charger["entities"]
+    assert charger["entities"]["car_charging_planned"]["entity_id"] == "binary_sensor.predbat_wallbox_101_connected"
+    assert car == {"device_id": "wallbox:900001:car", "charged_by": "wallbox:900001", "flags": ["stub"]}, car
+    print("  ✓ Discovery reports a Wallbox charger with a stub car")
+
+
+def test_discovery_private_fields_never_reported():
+    """The charger nickname, location, number plate and account user never reach the report."""
+    component = _started_component({101: _private_status()})
+    text = str(component.build_discovery())
+    for private in ("Garage", "Europe/Madrid", "ES", "08019", "AB12CDE", "Jane Bloggs", "556677"):
+        assert private not in text, "{} leaked into {}".format(private, text)
+    print("  ✓ Discovery never reports private Wallbox fields")
+
+
+def test_discovery_no_serial_fallback():
+    """A charger whose status has no serial is still reported, under its cloud id."""
+    status = _status()
+    del status["config_data"]["serial_number"]
+    component = _started_component({101: status})
+    charger = component.build_discovery()["chargers"][0]
+    assert charger["device_id"] == "wallbox:charger:101", charger
+    assert "hardware_ids" not in charger, charger
+    assert charger["account_ids"] == {"charger_id": "101"}, charger
+    print("  ✓ Discovery falls back to the cloud id when there is no serial")
+
+
+def test_discovery_second_charger_refiles():
+    """A charger added to the account later is reported as soon as it is listed, after the first."""
+    second = _status()
+    second["config_data"]["serial_number"] = "900002"
+    component = _make_component({101: _status()})
+    reports = _capture_reports(component)
+    assert run_async(component.run(0, True)) is True
+    component.transport.statuses[102] = second
+    assert run_async(component.run(CHARGER_LIST_SECONDS, False)) is True
+    assert len(reports) == 2, reports
+    assert [charger["device_id"] for charger in reports[-1]["chargers"]] == ["wallbox:900001", "wallbox:900002"], reports[-1]
+    print("  ✓ Discovery re-files when a second charger appears")
+
+
+def test_discovery_refreshed_between_polls():
+    """A report not yet filed is retried on the next run(), not only on the next poll."""
+    component = _make_component()
+    reports = _capture_reports(component)
+    assert run_async(component.run(0, True)) is True
+    reports.clear()
+    component._discovery_report = None
+    assert run_async(component.run(60, False)) is True
+    assert len(reports) == 1, "a cycle between polls still refreshes the report"
+    print("  ✓ Discovery is refreshed between polls")
+
+
+def test_discovery_round_trip():
+    """Through the real Coordinator and Redactor: entities and the stub flag survive, the cloud id is hidden."""
+    from coordinator import Coordinator
+
+    component = _started_component({4417302: _status()})
+    logs = []
+    coordinator = Coordinator(MockBase())
+    coordinator.log = logs.append
+    coordinator.report("wallbox", component.build_discovery())
+    cleaned = coordinator.reports["wallbox"]
+    assert len(cleaned["chargers"][0]["entities"]) == 4, cleaned
+    assert cleaned["cars"][0]["flags"] == ["stub"], cleaned
+    assert not [line for line in logs if line.startswith("Warn")], logs
+    coordinator.assemble()
+    catalogue = str(coordinator.catalogue())
+    assert "4417302" not in catalogue, "the Wallbox cloud id must be pseudonymised"
+    assert "900001" in catalogue, "the hardware serial stays readable"
+    print("  ✓ Discovery report round-trips through the Coordinator and Redactor")
+
+
 def test_wallbox(my_predbat=None):
     """Run every Wallbox test."""
     print("=" * 70)
@@ -1938,5 +2040,11 @@ def test_wallbox(my_predbat=None):
     test_control_state_with_nothing_saved_is_read_once()
     test_schedule_restoration_is_retried_after_a_failure()
     test_plugged_state()
+    test_discovery_record()
+    test_discovery_private_fields_never_reported()
+    test_discovery_no_serial_fallback()
+    test_discovery_second_charger_refiles()
+    test_discovery_refreshed_between_polls()
+    test_discovery_round_trip()
     print("=" * 70)
     return False
