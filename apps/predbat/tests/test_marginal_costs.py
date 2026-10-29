@@ -12,6 +12,7 @@
 from tests.test_infra import reset_rates, reset_inverter
 from prediction import Prediction
 from marginal import MARGINAL_EXTRA_KWH_LEVELS, MARGINAL_EXTRA_KWH_LEVEL_NAMES
+from utils import dp2
 
 
 def test_marginal_costs(my_predbat):
@@ -42,7 +43,6 @@ def test_marginal_costs(my_predbat):
     my_predbat.load_minutes_step10 = load_step
     my_predbat.pv_forecast_minute_step = pv_step
     my_predbat.pv_forecast_minute10_step = pv_step
-    my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step)
 
     # Simple flat import rate, no export
     reset_rates(my_predbat, 20.0, 5.0)
@@ -50,6 +50,9 @@ def test_marginal_costs(my_predbat):
     # Populate base rate dicts to mirror the flat import/export rates (no IOG/saving-session distortion)
     my_predbat.rate_import_base = my_predbat.rate_import.copy()
     my_predbat.rate_export_base = my_predbat.rate_export.copy()
+
+    # Built after the rates, as Prediction copies them - built before, the baseline costs nothing
+    my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step)
 
     # Empty charge/export plan (no windows)
     my_predbat.charge_limit_best = []
@@ -93,6 +96,14 @@ def test_marginal_costs(my_predbat):
     if my_predbat.marginal_costs_min > my_predbat.marginal_costs_max:
         print("ERROR: marginal_costs_min {} > marginal_costs_max {}".format(my_predbat.marginal_costs_min, my_predbat.marginal_costs_max))
         failed = True
+
+    # Empty battery on a flat 20p tariff: every extra kWh is imported, so every cell is 20p
+    for kwh_key in expected_kwh_keys:
+        for time_key in expected_time_keys:
+            val = matrix.get(kwh_key, {}).get(time_key)
+            if isinstance(val, (int, float)) and abs(val - 20.0) > 0.01:
+                print("ERROR: matrix['{}']['{}'] = {} but an empty battery on a flat 20p tariff should cost 20p".format(kwh_key, time_key, val))
+                failed = True
 
     print("matrix = {}".format(matrix))
     print("min={} max={}".format(my_predbat.marginal_costs_min, my_predbat.marginal_costs_max))
@@ -185,8 +196,68 @@ def test_marginal_costs(my_predbat):
                     print("ERROR: binary sensor '{}' missing 'cost' attribute".format(bs_key))
                     failed = True
 
+    failed |= marginal_costs_battery_value(my_predbat)
+
     if not failed:
         print("*** test_marginal_costs PASSED ***")
     else:
         print("*** test_marginal_costs FAILED ***")
+    return failed
+
+
+def marginal_costs_battery_value(my_predbat):
+    """
+    Extra load the battery covers is priced at the value the planner gives stored energy (#5107).
+
+    The battery starts half full and the base load is small, so it never empties over the plan and
+    every extra kWh in the now window comes out of energy that would otherwise still be stored at
+    end_record. Before the fix that cost next to nothing - 2.4p for the 1 kWh cell, flagged 'cheap' -
+    whereas the planner values that energy at battery_value_rate.
+    """
+    failed = False
+    print("*** Running test: marginal_costs battery value")
+
+    reset_inverter(my_predbat)
+    my_predbat.soc_kw = 50.0
+    my_predbat.forecast_minutes = 24 * 60
+
+    pv_step = {}
+    load_step = {}
+    for minute in range(0, my_predbat.forecast_minutes + my_predbat.plan_interval_minutes, 5):
+        pv_step[minute] = 0.0
+        load_step[minute] = 0.01  # ~0.12 kW, ~3 kWh over the day
+
+    my_predbat.load_minutes_step = load_step
+    my_predbat.load_minutes_step10 = load_step
+    my_predbat.pv_forecast_minute_step = pv_step
+    my_predbat.pv_forecast_minute10_step = pv_step
+
+    reset_rates(my_predbat, 20.0, 5.0)
+    my_predbat.rate_import_base = my_predbat.rate_import.copy()
+    my_predbat.rate_export_base = my_predbat.rate_export.copy()
+    my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step)
+
+    my_predbat.charge_limit_best = []
+    my_predbat.charge_window_best = []
+    my_predbat.export_window_best = []
+    my_predbat.export_limits_best = []
+    my_predbat.end_record = 24 * 60
+
+    my_predbat.calculate_marginal_costs()
+
+    value_rate = my_predbat.battery_value_rate(my_predbat.minutes_now + my_predbat.end_record)
+    expected_min = value_rate * my_predbat.metric_battery_value_scaling
+    now_label = my_predbat.marginal_time_labels[0]
+    for kwh in MARGINAL_EXTRA_KWH_LEVELS:
+        cost = my_predbat.marginal_costs_matrix[kwh][now_label]
+        # Losses mean a kWh of load takes at least a kWh out of the battery, so never less than the value
+        if cost < expected_min - 0.01:
+            print("ERROR: battery-covered marginal cost for {} kWh is {} but stored energy is worth {} per kWh".format(kwh, cost, dp2(expected_min)))
+            failed = True
+        # Never dearer than importing it - catches the value being counted twice
+        if cost > 20.0 + 0.01:
+            print("ERROR: battery-covered marginal cost for {} kWh is {}, above the 20p import rate".format(kwh, cost))
+            failed = True
+
+    my_predbat.soc_kw = 0.0
     return failed
