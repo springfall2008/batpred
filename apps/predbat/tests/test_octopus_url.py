@@ -203,6 +203,19 @@ async def test_download_octopus_url(my_predbat):
         else:
             print("PASS: Got 4 results from pagination (2 pages)")
 
+    # The new Octopus host still links further pages on the old one (GH#5786)
+    print("\n*** Test 7: A further page linked on the old Octopus host is fetched from the new one ***")
+    json_data_page1 = {"results": [{"value": 1}], "next": "https://api.octopus.energy/v1/rates/?page=2"}
+    json_data_page2 = {"results": [{"value": 2}], "next": None}
+    mock_session_page1 = create_aiohttp_mock_session(mock_response=create_aiohttp_mock_response(status=200, json_data=json_data_page1))
+    mock_session_page2 = create_aiohttp_mock_session(mock_response=create_aiohttp_mock_response(status=200, json_data=json_data_page2))
+    with patch("aiohttp.ClientSession", side_effect=[mock_session_page1, mock_session_page2]):
+        result = await api.async_download_octopus_url("https://api.oegb-kraken.energy/v1/rates/")
+    page_two_url = mock_session_page2.get.call_args[0][0] if mock_session_page2.get.call_args else None
+    if len(result) != 2 or page_two_url != "https://api.oegb-kraken.energy/v1/rates/?page=2":
+        print("ERROR: Expected page 2 from the new host, got {} ({} results)".format(page_two_url, len(result)))
+        failed = True
+
     if not failed:
         print("\n**** All async_download_octopus_url tests PASSED ****")
 
