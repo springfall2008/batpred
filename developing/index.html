@@ -1,0 +1,1567 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>Developing on Predbat - Predbat Documentation</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Developing on Predbat";
+        var mkdocs_page_input_path = "developing.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../discovery-catalogue/">Discovery Catalogue</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">Developing on Predbat</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#the-workflow-at-a-glance">The workflow at a glance</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#quick-reference">Quick reference</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#setting-up-your-development-environment">Setting up your development environment</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#creating-a-fork">Creating a fork</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#using-github-codespaces">Using GitHub Codespaces</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#what-is-github-codespaces">What is GitHub Codespaces?</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#running-github-codespaces">Running GitHub Codespaces</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#working-in-the-codespaces-terminal">Working in the Codespaces terminal</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#connecting-your-fork-to-the-main-predbat-repository">Connecting your fork to the main Predbat repository</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#developing-locally-within-home-assistant">Developing locally within Home Assistant</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#running-the-unit-tests-on-your-own-machine-not-codespaces">Running the unit tests on your own machine (not Codespaces)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#running-your-code-against-a-live-home-assistant-system-not-codespaces">Running your code against a live Home Assistant system (not Codespaces)</a>
+    </li>
+        </ul>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#working-with-branches-and-pull-requests">Working with branches and pull requests</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#ground-rules">Ground rules</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#before-you-start-check-that-nobody-else-is-on-it">Before you start: check that nobody else is on it</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#creating-a-branch">Creating a branch</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#seeing-which-branch-you-are-on-and-what-branches-there-are">Seeing which branch you are on, and what branches there are</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#working-on-more-than-one-change-at-once">Working on more than one change at once</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#committing-and-pushing">Committing and pushing</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#check-what-you-are-about-to-commit">Check what you are about to commit</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#committing">Committing</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#using-the-source-control-view-in-codespaces">Using the Source Control view in Codespaces</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#using-the-terminal">Using the terminal</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#check-which-commits-the-pull-request-will-contain">Check which commits the pull request will contain</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#raising-the-pull-request">Raising the pull request</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#keeping-your-branch-up-to-date">Keeping your branch up to date</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#what-does-merge-do">What does merge do?</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#what-does-rebase-do-and-why-is-it-not-recommended">What does rebase do, and why is it not recommended?</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#what-does-force-with-lease-do">What does --force-with-lease do?</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#if-there-are-conflicts">If there are conflicts</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#after-your-pull-request-is-merged">After your pull request is merged</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#code-layout">Code layout</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#testing">Testing</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#setting-up-the-python-environment">Setting up the Python environment</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#running-the-tests">Running the tests</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#reading-the-results">Reading the results</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#adding-a-unit-test">Adding a unit test</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#finding-test-order-dependencies">Finding test order dependencies</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#replaying-a-debug-dump">Replaying a debug dump</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#random-scenario-benchmarking">Random scenario benchmarking</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#failure-plots-profiling-and-coverage">Failure plots, profiling and coverage</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#the-scripts-and-files-in-the-coverage-directory">The scripts and files in the coverage directory</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#running-the-tests-and-checks">Running the tests and checks</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#profiling-and-benchmarking">Profiling and benchmarking</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#running-against-home-assistant">Running against Home Assistant</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#load-predictor-helper-scripts">Load predictor helper scripts</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#configuration-and-test-data">Configuration and test data</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#files-that-the-scripts-create">Files that the scripts create</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#troubleshooting-the-tests">Troubleshooting the tests</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#coding-standards">Coding standards</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#expected-standards">Expected standards</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#enforced-standards">Enforced standards</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#running-the-checks-locally">Running the checks locally</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#running-the-checks-from-within-github">Running the checks from within GitHub</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#before-you-raise-a-pull-request">Before you raise a pull request</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#the-c-prediction-kernel">The C++ prediction kernel</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#building-the-c-kernel-locally">Building the C++ kernel locally</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#testing-the-kernel">Testing the kernel</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#keeping-the-two-engines-in-sync">Keeping the two engines in sync</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#working-on-the-documentation">Working on the documentation</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#overview-of-the-predbat-documentation">Overview of the Predbat documentation</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#the-documentation-build-process">The documentation build process</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#working-locally-on-the-documentation">Working locally on the documentation</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#publishing-predbat-documentation">Publishing Predbat documentation</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#using-ai-coding-assistants">Using AI coding assistants</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../hub-live-display/">Optional measured Hub display feed</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Predbat development</li>
+      <li class="breadcrumb-item active">Developing on Predbat</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="developing-on-predbat">Developing on Predbat</h1>
+<p>This guide explains how to set up a Predbat development environment, make a change on a branch,
+test it, and get it merged into the core Predbat code.
+It also covers the C++ prediction kernel and working on the documentation.</p>
+<h2 id="the-workflow-at-a-glance">The workflow at a glance</h2>
+<p>For every change you make, the steps are:</p>
+<ol>
+<li><a href="#creating-a-fork">Fork Predbat</a> on GitHub (only needed once)</li>
+<li><a href="#using-github-codespaces">Open a Codespace</a> on your fork (once - you can reuse it for every change)</li>
+<li><a href="#connecting-your-fork-to-the-main-predbat-repository">Add the <code>upstream</code> remote</a> (once)</li>
+<li><a href="#creating-a-branch">Create a new branch</a> for the change, starting from Predbat's <code>main</code></li>
+<li>Make the change, and <a href="#adding-a-unit-test">add unit tests</a> for it</li>
+<li><a href="#running-the-tests">Run the tests</a></li>
+<li><a href="#running-the-checks-locally">Run the pre-commit checks</a></li>
+<li><a href="#committing-and-pushing">Commit and push</a> the branch to your fork</li>
+<li><a href="#raising-the-pull-request">Raise a pull request</a> into Predbat's <code>main</code> branch</li>
+</ol>
+<p>The sections below explain each step with the exact commands to use.</p>
+<h2 id="quick-reference">Quick reference</h2>
+<p>The whole cycle for one change, from reopening your environment to a pushed branch. Each step links to the full explanation below, and
+<code>my-change-name</code> is your own branch name. Run the test and pre-commit commands from the <code>coverage/</code> directory (step 5).</p>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Command or action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1. Reopen your environment</td>
+<td>Open <a href="https://github.com/codespaces">github.com/codespaces</a> and click your Codespace. It restarts if it has stopped</td>
+</tr>
+<tr>
+<td>2. See where you are</td>
+<td><code>git status -sb</code> and <code>git branch -vv</code>, or look at the branch name at the bottom-left of VS Code. See <a href="#seeing-which-branch-you-are-on-and-what-branches-there-are">seeing which branch you are on</a></td>
+</tr>
+<tr>
+<td>3. Get Predbat's latest code</td>
+<td><code>git fetch upstream</code></td>
+</tr>
+<tr>
+<td>4. Make a new branch</td>
+<td><code>git switch -c my-change-name upstream/main</code>. See <a href="#creating-a-branch">creating a branch</a></td>
+</tr>
+<tr>
+<td>5. Go to the test directory</td>
+<td><code>cd coverage</code>. The test scripts (<code>run_all</code>, <code>run_pre_commit</code>) set up the Python environment themselves, so the first run in a new Codespace takes longer while the packages install. You only need to activate it yourself (<code>source venv/bin/activate</code>) for <code>run_cov</code>, <code>run_profile</code>, or Python commands you run directly. See <a href="#setting-up-the-python-environment">setting up the Python environment</a></td>
+</tr>
+<tr>
+<td>6. Make the change, and its unit test</td>
+<td>Edit in VS Code. A new test must be imported and registered in <code>unit_test.py</code>. See <a href="#adding-a-unit-test">adding a unit test</a></td>
+</tr>
+<tr>
+<td>7. Run the tests for your change</td>
+<td><code>./run_all -k keyword &gt; /tmp/t.txt 2&gt;&amp;1</code>, then <code>tail -3 /tmp/t.txt</code> and <code>grep -n Traceback /tmp/t.txt</code>. See <a href="#running-the-tests">running the tests</a></td>
+</tr>
+<tr>
+<td>8. Run the pre-commit checks and the quick tests</td>
+<td><code>./run_pre_commit &gt; /tmp/pre.txt 2&gt;&amp;1</code>, then <code>tail -5 /tmp/pre.txt</code>. This takes a few minutes. See <a href="#running-the-checks-locally">running the checks locally</a></td>
+</tr>
+<tr>
+<td>9. Check what will be committed</td>
+<td><code>git status</code>, or the Source Control view. See <a href="#check-what-you-are-about-to-commit">check what you are about to commit</a></td>
+</tr>
+<tr>
+<td>10. Commit</td>
+<td>In the Source Control view, click <code>+</code> beside each file, type a message and click Commit. Or: <code>git add file1 file2</code>, then <code>git commit -m "message"</code></td>
+</tr>
+<tr>
+<td>11. Push the new branch (first time only)</td>
+<td>Source Control view: <code>...</code> menu, then Branch, then Publish Branch..., and choose <code>origin</code>. Or in the terminal: <code>git push -u origin my-change-name</code>. Don't use the Sync Changes button for the first push</td>
+</tr>
+<tr>
+<td>12. Open the pull request</td>
+<td>Use the link that the push prints. Check that base is <code>springfall2008/batpred</code> <code>main</code>, compare is your branch, and the Commits and Files changed tabs list only your own work. First run <code>git log --oneline upstream/main..HEAD</code>, which lists the commits the PR will contain. See <a href="#raising-the-pull-request">raising the pull request</a></td>
+</tr>
+<tr>
+<td>13. Later pushes to the same branch</td>
+<td>The Sync Changes button in the Source Control view, or <code>git push</code></td>
+</tr>
+<tr>
+<td>14. If the pull request has conflicts</td>
+<td><code>git fetch upstream</code>, then <code>git merge upstream/main</code>, fix the clashes, run the tests again, then <code>git push</code>. See <a href="#if-there-are-conflicts">if there are conflicts</a></td>
+</tr>
+<tr>
+<td>15. After the pull request is merged</td>
+<td><code>git switch main</code>, <code>git pull</code>, <code>git fetch upstream</code>, <code>git merge --ff-only upstream/main</code>, <code>git push origin main</code>, <code>git branch -d my-change-name</code> and then <code>git fetch --prune</code>. See <a href="#after-your-pull-request-is-merged">after your pull request is merged</a></td>
+</tr>
+</tbody>
+</table>
+<h2 id="setting-up-your-development-environment">Setting up your development environment</h2>
+<h3 id="creating-a-fork">Creating a fork</h3>
+<p>Using GitHub, take a fork of Predbat - effectively, this creates
+a copy of the main repository, but in your personal space.
+There, you can create branches to develop on.</p>
+<h3 id="using-github-codespaces">Using GitHub Codespaces</h3>
+<h4 id="what-is-github-codespaces">What is GitHub Codespaces?</h4>
+<p>GitHub Codespaces gives you a full-featured development environment.</p>
+<p>This includes:</p>
+<ul>
+<li>A full IDE (a code editor), Visual Studio Code, which can be:<ul>
+<li>Run in the browser, requiring no additional software to be installed</li>
+<li>Run in a virtual machine (VM) running in the cloud which can connect to a copy of VS Code installed on your own machine</li>
+</ul>
+</li>
+<li>A terminal where you can run commands against your codebase e.g. running <code>pre-commit</code> to run the automatic code quality checks, linting files, etc.</li>
+<li>Software like <code>mkdocs</code> to re-generate the documentation files (and other software we may include) pre-installed in it</li>
+</ul>
+<p>The Codespaces environment is entirely separate from your HA
+installation, so does not require any modification to your HA
+setup to work with it.</p>
+<p>Codespaces gives a really easy way to work on Predbat and is especially useful as you don't
+need to have a running Home Assistant system to make the changes you're interested in
+(e.g. for documentation, quick fixes etc.).</p>
+<p>However, you are modifying code in an environment where you can't see HA running,
+so whilst it's great for things like updating documentation, or writing automated tests, it's not
+if you need to see your changes live within HA.</p>
+<h4 id="running-github-codespaces">Running GitHub Codespaces</h4>
+<p>You may wish to first install <a href="https://code.visualstudio.com/download">VS Code</a>
+on your machine, which does offer some benefits compared to running
+Codespaces in the cloud, but this is certainly not essential, and
+you'll see the same code editor and terminal, and you'll have the
+same commands and Python packages available in the Codespaces terminal.</p>
+<p>Importantly, even if you do a local install of VS Code and use that
+to edit your code within GitHub, the terminal, the code you're editing
+any commands that you run, and any processes like <code>mkdocs</code> that you
+may browse to are all running in the Codespaces VM that runs in the GitHub cloud.
+Your local VS Code is connected to the Codespaces VM through SSH. It will appear as if
+the code, the terminal etc. are local, but they are not. Running
+a local VS Code install connected to Codespaces will not install
+Python, Python packages or anything else on your local machine.</p>
+<p>Now, from your fork or branch, click on the Code button, and select the Codespaces tab.
+You can create multiple environments, or use a single environment and swap
+between branches in it (the recommended approach).</p>
+<p><img alt="codespaces-selection" src="../images/codespaces-selection.png" /></p>
+<p>Once you start your Codespaces environment, it will take a minute to
+create a VM for you, and to install the software we've asked it to
+install in there. It will also clone your fork of the Predbat repository and branch into
+it for you, and the VM will be authenticated with GitHub
+so you can commit and push straight back to your fork on GitHub.</p>
+<p>You can choose between running the IDE in the browser or having
+your local installation of VS Code connect to the environment that GitHub
+Codespaces has created for you.</p>
+<p>The Codespaces will be already set up with Python, along with various
+Python packages (as defined in <code>requirements.txt</code>). The environment
+is configured through the config in <code>.devcontainer/devcontainer.json</code>.</p>
+<h4 id="working-in-the-codespaces-terminal">Working in the Codespaces terminal</h4>
+<p>Open a terminal in Codespaces by choosing Menu &gt; Terminal &gt; New Terminal.
+All the commands in this guide are typed into that terminal.</p>
+<ul>
+<li>Codespaces usage counts against your GitHub monthly allowance of free hours and storage.
+  Long running commands (the full test suite, the shuffle tests) use CPU time, and an idle
+  Codespace will keep running until it times out, so it's recommended to stop it when you are not using it.</li>
+<li>To stop a command that is running in the terminal, press <code>CTRL-C</code> once and wait for the prompt to come back.</li>
+<li>If you close the terminal and open a new one, the Python virtual environment is not active any more. The test scripts
+  set it up themselves each time, but see <a href="#setting-up-the-python-environment">setting up the Python environment</a> for when you need to activate it yourself.</li>
+</ul>
+<h3 id="connecting-your-fork-to-the-main-predbat-repository">Connecting your fork to the main Predbat repository</h3>
+<p>In git, a copy of the code on GitHub that you work with is called a <em>remote</em>.
+Your fork is called <code>origin</code>. You also need to know about the main Predbat repository,
+conventionally called <code>upstream</code>, so that you can start each change from the latest Predbat code.</p>
+<p>Check which remotes you have by typing this in the terminal window:</p>
+<pre><code class="language-bash">git remote -v
+</code></pre>
+<p>You should see <code>origin</code> pointing at your fork (<code>https://github.com/&lt;your-user&gt;/batpred</code>).
+If there is no <code>upstream</code>, add it once:</p>
+<pre><code class="language-bash">git remote add upstream https://github.com/springfall2008/batpred.git
+</code></pre>
+<h3 id="developing-locally-within-home-assistant">Developing locally within Home Assistant</h3>
+<p>The two sections below are for developing on your own computer instead of in Codespaces: running the unit tests, and trying your code against a live Home Assistant system.
+Neither is part of the Codespaces route.</p>
+<h4 id="running-the-unit-tests-on-your-own-machine-not-codespaces">Running the unit tests on your own machine (not Codespaces)</h4>
+<p><strong>These steps are not part of the Codespaces route.</strong> If you are using Codespaces, ignore this section and follow <a href="#testing">Testing</a> instead.
+They describe how to run the unit tests on your own computer, for example if you are developing and testing against a Home Assistant system that you run yourself:</p>
+<ol>
+<li>Install <code>git</code> and Python 3 on your machine</li>
+<li>
+<p>Clone your fork of Predbat to your machine, and go into the folder:</p>
+<p><code>bash
+git clone https://github.com/&lt;your-user&gt;/batpred.git
+cd batpred</code></p>
+<p>The clone contains the whole repository, including the <code>coverage/</code> directory with its <code>cases/</code> folder of example data and a sample <code>apps.yaml</code>,
+so there is nothing to copy or extract separately. (GitHub's website can only download the whole repository as a ZIP file, not a single folder,
+which is why cloning is the easiest way to get the <code>coverage/</code> directory.)
+3. Keep the folders where they are in the repository. The test scripts expect <code>apps/predbat</code> to sit alongside <code>coverage/</code>
+4. Follow <a href="#running-the-tests">running the tests</a>: in the <code>coverage/</code> directory, run <code>./run_all --quick</code>. This sets up the Python environment the first time</p>
+</li>
+</ol>
+<h4 id="running-your-code-against-a-live-home-assistant-system-not-codespaces">Running your code against a live Home Assistant system (not Codespaces)</h4>
+<p><strong>This is not part of the Codespaces route</strong>, as Codespaces can't see your Home Assistant system.</p>
+<p>Three scripts in the <code>coverage/</code> directory let you try a code change with a real Home Assistant system, without having to copy files around by hand.
+They are written for a Mac, with the Predbat app's configuration folder from Home Assistant mounted on the computer as a network share.</p>
+<table>
+<thead>
+<tr>
+<th>Script</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>deploy</code></td>
+<td>Copies your code into the Predbat app's folder on Home Assistant, so Home Assistant runs your version. It copies the <code>*.py</code>, <code>*.proto</code> and <code>*.so</code> files from <code>apps/predbat/</code>, and writes <code>git_version.txt</code> containing the short git hash of your checkout (with <code>-dirty</code> added if you have uncommitted changes). Predbat notices that its files have changed and restarts itself, so you don't need to restart the app</td>
+</tr>
+<tr>
+<td><code>standalone</code></td>
+<td>Runs your code on your own computer, using the app's <code>apps_direct.yaml</code> file as its configuration</td>
+</tr>
+<tr>
+<td><code>standalone_ha</code></td>
+<td>Runs your code on your own computer, using the app's own <code>apps.yaml</code> and <code>secrets.yaml</code> files</td>
+</tr>
+</tbody>
+</table>
+<p>The two standalone scripts work in the same way. Each creates a folder in <code>coverage/</code> (<code>predbat_standalone</code> or <code>predbat_standalone_ha</code>) containing links to the
+Python files in <code>apps/predbat/</code>, so the changes you save are used the next time you start it. It then copies the configuration files into that folder
+(<code>apps_direct.yaml</code> is copied as <code>apps.yaml</code>) and runs <code>python3 hass.py</code> from there, which starts Predbat.</p>
+<p>Before you start:</p>
+<ul>
+<li>The scripts expect the Predbat app's configuration folder to be available on your computer under <code>/Volumes</code>. Home Assistant 2026.2 renamed the folder
+  <code>addon_configs</code> to <code>app_configs</code>: The scripts check for <code>/Volumes/app_configs/6adb4f0d_predbat</code> first (the new pathname) and then for <code>/Volumes/addon_configs/6adb4f0d_predbat</code>. If you use another type of computer, or your folder is called something else, edit the paths in the scripts.</li>
+<li><code>standalone</code> needs an <code>apps_direct.yaml</code> file in that folder. What it needs to contain (over and above a standard <code>apps.yaml</code>) is not documented here yet.</li>
+<li>The standalone scripts don't set up the Python environment, so first run <code>source setup.csh</code> in the <code>coverage/</code> directory (see
+  <a href="#setting-up-the-python-environment">setting up the Python environment</a>).</li>
+<li>Stop the Predbat app in Home Assistant while you test with one of the standalone scripts, as two copies of Predbat controlling the same inverter will conflict.
+  The code you are testing can also send real commands to your inverter, so consider putting Predbat into read-only mode first (see the Predbat documentation).</li>
+</ul>
+<p>To run a standalone script, and then press <code>CTRL-C</code> to stop it:</p>
+<pre><code class="language-bash">cd coverage
+source setup.csh
+./standalone
+</code></pre>
+<p>Use <code>./standalone_ha</code> instead to run with the app's own <code>apps.yaml</code> and <code>secrets.yaml</code>. Both standalone scripts delete any old <code>predbat.log</code> from the <code>coverage</code> directory (the log file that the unit tests writes as it runs) before they start.
+The scripts then create and cd to a <code>predbat_standalone</code> (or <code>predbat_standalone_ha</code>) sub-directory, and run <code>python3 hass.py</code> from there. <code>hass.py</code> will open <code>predbat.log</code> in that sub-directory, so the standalone run log is <code>coverage/standalone/predbat.log</code>.</p>
+<p>To copy your code into the app instead, run <code>./deploy</code>, which doesn't need the Python environment. Predbat restarts itself when it sees the new files.</p>
+<p><code>predbat_standalone/apps.yaml</code> is a copy of your live configuration and <code>predbat_standalone_ha/secrets.yaml</code> is a copy of your secrets, which may include passwords and access tokens.
+Never commit them, delete the folders when you have finished, and check <a href="#check-what-you-are-about-to-commit">what you are about to commit</a> before every commit.</p>
+<h2 id="working-with-branches-and-pull-requests">Working with branches and pull requests</h2>
+<h3 id="ground-rules">Ground rules</h3>
+<ul>
+<li><strong>Never commit changes directly to your <code>main</code> branch.</strong> Always make a branch for a change.
+  Anything you commit to <code>main</code> and push will join any pull request that was raised from <code>main</code>.</li>
+<li><strong>One branch per change, one pull request per branch.</strong> Small, focused pull requests are easier to
+  review and merge, and independent changes can't hold each other up.</li>
+<li><strong>Start each branch from Predbat's <code>main</code></strong> (<code>upstream/main</code>), not from another branch of yours,
+  unless the new change really does depend on the earlier one.</li>
+</ul>
+<h3 id="before-you-start-check-that-nobody-else-is-on-it">Before you start: check that nobody else is on it</h3>
+<p>Two people can easily fix the same issue without knowing, and the second pull request then has to be thrown away or reworked. A couple of minutes of checking helps:</p>
+<ul>
+<li>Open the issue and read it all: the assignee, the comments, and any linked pull requests (listed on the right-hand side).</li>
+<li>Search the Pull requests tab of <code>springfall2008/batpred</code> for the issue number (include closed and merged ones, as the fix may have just landed).</li>
+<li><strong>Say that you are starting.</strong> Add a comment on the issue, such as "I'm working on this on a branch in my fork", as an assignee isn't always noticed by other contributors.</li>
+<li>Fetch Predbat's latest code regularly while you work (<code>git fetch upstream</code>) and look at what has changed in the files you are editing, so that you spot overlapping work early, before you have invested much in it.</li>
+</ul>
+<p>If it turns out that someone has already made the same change, review their pull request, and offer anything that is missing as a separate follow-up (agree it on the issue first).</p>
+<h3 id="creating-a-branch">Creating a branch</h3>
+<p>Before you start, make sure that you have no uncommitted work (<code>git status --short</code> should print nothing),
+or commit or stash it first. Then:</p>
+<pre><code class="language-bash">git fetch upstream
+git switch -c my-change-name upstream/main
+</code></pre>
+<p>This creates a new branch called <code>my-change-name</code> which contains Predbat's latest code and none of your other work.
+Choose a short descriptive branch name, using lower case letters and hyphens (for example <code>fix-rate-rounding</code>).
+Git confirms what it has done:</p>
+<pre><code class="language-text">$ git switch -c discharge-target-soc upstream/main
+branch 'discharge-target-soc' set up to track 'upstream/main'.
+Switched to a new branch 'discharge-target-soc'
+</code></pre>
+<p>The "set up to track 'upstream/main'" line means that the new branch follows Predbat's repository, not your fork.
+That is why the first push of a new branch is done with <code>git push -u origin my-change-name</code>, which points it at your fork instead
+(see <a href="#committing-and-pushing">committing and pushing</a>).</p>
+<p>Check the starting point is what you expect:</p>
+<pre><code class="language-bash">git log --oneline -3
+git status -sb
+</code></pre>
+<p>The output should look like this (the commits will be whatever Predbat's latest ones are when you run it):</p>
+<pre><code class="language-text">$ git log --oneline -3
+cca8967f7 (HEAD -&gt; discharge-target-soc, tag: v9.4.6, upstream/main) fix(plan): only split charge windows at dawn, not at the midnight light/dark reset (#5709)
+e4068d6f6 Update predbat.py
+333c358c8 refactor: drop dead timezone fallbacks after strptime_aware in octopus.py and solcast.py (#5695) (#5696)
+
+$ git status -sb
+## discharge-target-soc...upstream/main
+</code></pre>
+<p>What to look for:</p>
+<ul>
+<li>On the first line of the log, <code>HEAD -&gt; your-branch-name</code> and <code>upstream/main</code> are on the same commit, so your branch starts exactly at Predbat's latest code.
+  (The tag, here <code>v9.4.6</code>, shows the Predbat version.)</li>
+<li>The log contains none of your own earlier commits.</li>
+<li><code>git status -sb</code> shows your branch following <code>upstream/main</code>, with no changed files listed below it.</li>
+</ul>
+<p>A stricter check is to ask git for the commits that your branch has and Predbat's <code>main</code> doesn't. Straight after creating a branch there should be none, so this prints nothing:</p>
+<pre><code class="language-bash">git log --oneline upstream/main..HEAD
+</code></pre>
+<p>If the log shows commits from one of your earlier changes, or that command lists anything, you started from the wrong place - switch back and recreate the branch using the commands above.</p>
+<p><strong>A new branch starts from wherever you are, unless you say otherwise.</strong> <code>git switch -c my-change-name</code> on its own makes the branch from the branch that is currently checked out, so if you
+were on your own <code>main</code> the new branch contains all of its commits. The <code>upstream/main</code> on the end of the command is what makes it start from Predbat's code.
+The same applies in VS Code: choose <strong>Create new branch from...</strong> (from the branch name in the bottom-left status bar), and pick <code>upstream/main</code> as the starting point when it asks,
+as a plain "Create new branch" starts from the current branch.</p>
+<h3 id="seeing-which-branch-you-are-on-and-what-branches-there-are">Seeing which branch you are on, and what branches there are</h3>
+<ul>
+<li><strong>Which branch you are on:</strong> the name is shown at the bottom-left of the VS Code window (the status bar), and the terminal prompt shows it in brackets,
+  for example <code>(discharge-target-soc)</code>.</li>
+<li><strong>The list of branches, in VS Code:</strong> click the branch name at the bottom-left. A list opens at the top of the window showing your local branches,
+  and below them the branches on GitHub (such as <code>origin/main</code>, and <code>upstream/main</code> for Predbat's own). Choosing one switches to it, so commit or
+  <a href="#working-on-more-than-one-change-at-once">stash</a> your changes first.</li>
+<li>
+<p><strong>The list of branches, in the terminal:</strong></p>
+<p><code>bash
+git branch -vv
+git branch -r</code></p>
+<p><code>git branch -vv</code> lists your local branches with their latest commit and the branch each one follows. <code>git branch -r</code> lists the branches on GitHub,
+as they were the last time you ran <code>git fetch</code>. Run <code>git fetch --all</code> first to bring that list up to date, and use <code>git branch -a</code> to see both lists together.</p>
+</li>
+</ul>
+<p>Branches that begin <code>origin/</code> are on your fork, and branches that begin <code>upstream/</code> are on Predbat's main repository. A branch with no <code>origin/</code> or <code>upstream/</code> is a local one.</p>
+<h3 id="working-on-more-than-one-change-at-once">Working on more than one change at once</h3>
+<p>Each change lives on its own branch, so you can have several in flight at the same time.
+Commit your work on one branch before moving to another, then switch between them with:</p>
+<pre><code class="language-bash">git switch other-branch-name
+git branch -vv
+</code></pre>
+<p>(<code>git branch -vv</code> lists your branches and what they are tracking.)
+If the changes don't touch the same files, the pull requests can be merged in any order.</p>
+<p><strong>Uncommitted changes are not tied to a branch.</strong> When you run <code>git switch</code>, any changes you haven't committed come with you to the other branch
+(unless they clash with it). So if you edit files on one branch, switch to <code>main</code> and run the tests, you are testing <code>main</code> <em>plus your edits</em>, which is
+not what you intended. Either commit your work first (a commit with a message like "WIP" is fine - you can tidy it up before the pull request),
+or set the changes aside until later:</p>
+<pre><code class="language-bash">git stash push -u -m &quot;describe the work&quot;
+git switch other-branch-name
+# ... do something on the other branch ...
+git switch my-change-name
+git stash pop
+</code></pre>
+<p><code>git status</code> shows whether you have uncommitted changes, and <code>git stash list</code> shows anything that is set aside.</p>
+<h3 id="committing-and-pushing">Committing and pushing</h3>
+<p>Run the <a href="#testing">tests</a> and the <a href="#running-the-checks-locally">pre-commit checks</a> first.</p>
+<h4 id="check-what-you-are-about-to-commit">Check what you are about to commit</h4>
+<p>Before you commit, check that the commit will only contain the files you meant to change. In the terminal, type:</p>
+<pre><code class="language-bash">git status
+</code></pre>
+<p>The output lists your files in groups:</p>
+<ul>
+<li><strong>Changes to be committed</strong> - files that are staged, so will be in the commit</li>
+<li><strong>Changes not staged for commit</strong> - files you have modified but not staged, so they won't be in the commit</li>
+<li><strong>Untracked files</strong> - new files that git doesn't know about. They are only included in a commit if you stage them</li>
+</ul>
+<p>Compare the list with the files you expect to have changed. The Source Control view in Codespaces shows the same list
+(modified files are marked <code>M</code> and new files <code>U</code>).</p>
+<p>If there is something there that shouldn't be:</p>
+<table>
+<thead>
+<tr>
+<th>Situation</th>
+<th>What to do</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A file is staged but doesn't belong in this commit, and you want to keep the file</td>
+<td><code>git restore --staged path/to/file</code> (in the Source Control view, click the <code>-</code> beside it)</td>
+</tr>
+<tr>
+<td>A new file that you don't want, such as a results file or a copy of a config file made while testing</td>
+<td>Don't stage it and it won't be committed. To get rid of it, delete the file (<code>rm path/to/file</code>) - this can't be undone</td>
+</tr>
+<tr>
+<td>An existing file that you changed by accident</td>
+<td><code>git restore path/to/file</code> puts it back as it was at the last commit, <strong>throwing away your changes to it</strong> - this can't be undone</td>
+</tr>
+<tr>
+<td>You already committed it, but haven't pushed yet</td>
+<td><code>git reset HEAD~1</code> undoes the last commit but leaves your files as they are, so you can stage the right files and commit again</td>
+</tr>
+<tr>
+<td>You already pushed it</td>
+<td>Remove it in a new commit (<code>git rm --cached path/to/file</code> keeps the file on your machine but takes it out of the repository), then commit and push. If you aren't sure, ask in the PR</td>
+</tr>
+</tbody>
+</table>
+<p>If a file you pushed contained a password or an API key (for example a copy of <code>secrets.yaml</code>), treat that secret as exposed and change it,
+and ask a maintainer for help removing it from the history.</p>
+<p>Run <code>git status</code> again afterwards to confirm that it now shows what you expect.</p>
+<h4 id="committing">Committing</h4>
+<p>You can commit and push either with the Source Control view in Codespaces, or with commands in the terminal.
+The result is the same, so use whichever you prefer.</p>
+<h4 id="using-the-source-control-view-in-codespaces">Using the Source Control view in Codespaces</h4>
+<ol>
+<li>Open the Source Control view (in the toolbar down the left-hand side, third from the top).
+   It lists every file you have changed.</li>
+<li>Stage the files that belong in this change by clicking the <code>+</code> beside each one. Check that the list only contains files you meant to change -
+   results files, or copies of config files that you made while testing, should not be committed.</li>
+<li>Type a commit message, and click Commit. Mention any related GitHub issues in the message using <code>#1234</code>.
+   (If nothing is staged, VS Code offers to stage <em>all</em> your changes and commit them. That includes any stray files, so check the list first.)</li>
+<li>
+<p>Push the commit to your fork. For the <strong>first</strong> push of a new branch, use the Publish Branch menu: click the three dots (<code>...</code>) at the top of the Source Control view,
+   choose <strong>Branch</strong>, then <strong>Publish Branch...</strong>. VS Code asks "Pick a remote to publish the branch to". It lists <code>origin</code> (your fork, at <code>https://github.com/&lt;your-user&gt;/batpred</code>)
+   and <code>upstream</code> (Predbat's repository). Choose <strong><code>origin</code></strong>. This pushes the branch and makes it follow your fork, the same as the terminal command:</p>
+<p><code>bash
+git push -u origin my-change-name</code></p>
+<p><strong>Don't use the Sync Changes button for the first push.</strong> A branch created with <code>git switch -c my-change-name upstream/main</code> will follow Predbat's repository (<code>upstream/main</code>),
+so the button appears as Sync Changes (not Publish Branch), and clicking it tries to push to Predbat's repository. VS Code then says "You don't have permissions to push to
+springfall2008/batpred" and offers to <strong>Create Fork</strong>. If you see that message, choose Cancel (or No). Nothing has been pushed, and the branch is fine.</p>
+<p>To check where the branch went, run <code>git branch -vv</code>. It should show <code>[origin/my-change-name]</code> beside your branch, like this:</p>
+<p><code>text
+* my-change-name   8afe508e [origin/my-change-name] docs: restructure the development guide</code></p>
+<p>After the first push, Sync Changes is safe to use. The exact menu and button labels vary a little between versions of VS Code.</p>
+</li>
+</ol>
+<h4 id="using-the-terminal">Using the terminal</h4>
+<pre><code class="language-bash">git add path/to/changed_file.py path/to/new_test.py
+git commit -m &quot;A short summary of the change&quot;
+git push -u origin my-change-name
+</code></pre>
+<p>Add files by name rather than using <code>git add .</code>, so that stray files (for example, results files or
+copies of config files that you created while testing) don't end up in your commit.
+<code>git status --short</code> shows what is changed and what is staged.</p>
+<p>If you have run <code>pre-commit install</code> (see <a href="#running-the-checks-locally">running the checks locally</a>) the checks also run automatically
+whenever you commit, whichever route you use.</p>
+<p>After you push, GitHub normally offers a "Compare &amp; pull request" button on your fork's page.</p>
+<p>The first push of a new branch prints something like this:</p>
+<pre><code class="language-text">$ git push -u origin discharge-target-soc
+...
+remote: Create a pull request for 'discharge-target-soc' on GitHub by visiting:
+remote:      https://github.com/&lt;your-user&gt;/batpred/pull/new/discharge-target-soc
+...
+ * [new branch]        discharge-target-soc -&gt; discharge-target-soc
+branch 'discharge-target-soc' set up to track 'origin/discharge-target-soc'.
+</code></pre>
+<p>The link opens the pull request page for the branch. The last line shows that the branch now follows your fork instead of Predbat's repository,
+so from now on the Sync Changes button in the Source Control view works for it.</p>
+<h4 id="check-which-commits-the-pull-request-will-contain">Check which commits the pull request will contain</h4>
+<p>A pull request contains every commit on your branch that Predbat's <code>main</code> doesn't have. If the branch was started from the wrong place (for example from your own <code>main</code>,
+which has other work on it), all of that other work comes along and is reviewed as part of the pull request. Check this before you push:</p>
+<pre><code class="language-bash">git log --oneline upstream/main..HEAD
+</code></pre>
+<p>This lists exactly the commits that the pull request will contain. It should show only the commit or commits you made for this change.
+If it shows others, don't push. Create a new branch from <code>upstream/main</code> (see <a href="#creating-a-branch">creating a branch</a>), then bring your changes across, either by copying the changed files
+into the new branch or with <code>git checkout my-old-branch -- path/to/file</code>, and commit them there.</p>
+<h3 id="raising-the-pull-request">Raising the pull request</h3>
+<p>Open a pull request (PR) from your branch (on your fork) into the <code>main</code> branch of <code>springfall2008/batpred</code>.
+A pull request has two sides, and it is worth checking both before you submit it:</p>
+<ul>
+<li><strong>Base</strong> - where your change is going to: the <code>main</code> branch of the <strong><code>springfall2008/batpred</code></strong> repository</li>
+<li><strong>Compare</strong> (the head) - where your change is coming from: <strong>your branch</strong>, on your fork</li>
+</ul>
+<p>The compare side must be the branch that you made for this change, not <code>main</code>.</p>
+<p>The easiest way to raise one:</p>
+<ol>
+<li>Push your branch to your fork (see <a href="#committing-and-pushing">committing and pushing</a>).</li>
+<li>Open your fork on GitHub (<code>https://github.com/&lt;your-user&gt;/batpred</code>). It normally shows a banner saying that your branch had recent pushes,
+   with a <strong>Compare &amp; pull request</strong> button. Click it.</li>
+<li>
+<p>On the page that opens, check the line at the top. It should read like this:</p>
+<p><code>text
+base repository: springfall2008/batpred   base: main   &lt;-   head repository: &lt;your-user&gt;/batpred   compare: my-change-name</code></p>
+<p>If it doesn't, use the drop-down boxes to change them. In particular, make sure that the base repository is <code>springfall2008/batpred</code>
+(not your fork) and that "compare" is your branch (not <code>main</code>).
+4. Fill in the title and the description (see below). You can choose <strong>Create draft pull request</strong> if you want early feedback before it is ready to merge.
+5. Before you submit, open the <strong>Commits</strong> and <strong>Files changed</strong> tabs and check that they only list your own commits and the files that you meant to change. If they show
+   other work - for example another change of yours - the branch was started from the wrong place.</p>
+</li>
+</ol>
+<p>VS Code may also offer to create the pull request when you publish the branch. You can use that, but the page on GitHub makes it easier to check the base and compare branches.</p>
+<p>If you don't see the banner, go to your fork's page, use the branch drop-down to select your branch, then click Contribute and Open pull request.
+Alternatively, go to the Pull requests tab of <code>springfall2008/batpred</code>, click New pull request, then "compare across forks" and choose
+your fork and your branch.</p>
+<p>The PR should describe the work you've done in a way that
+makes it easy for someone to review your work, and either
+add comments or approve it. A good description covers:</p>
+<ul>
+<li>What the change does and why it is needed</li>
+<li>What is deliberately <strong>not</strong> changed, if a reviewer could reasonably expect it to be
+  (for example, an entity that is intentionally left hard coded) - say why, and ideally also add a comment in the code</li>
+<li>How you tested it - which tests you added, and that the full test suite and the pre-commit checks passed</li>
+<li>Anything that is already failing on <code>main</code> and isn't caused by your change</li>
+<li>The GitHub issues that the PR addresses - writing <code>Fixes #1234</code> in the description links the PR to issue 1234, and closes the issue when the PR is merged</li>
+</ul>
+<p>Once the PR is open:</p>
+<ul>
+<li>Automatic checks are run on every push to the branch (see
+  <a href="#running-the-checks-from-within-github">running the checks from within GitHub</a>). If the automatic checks fail they may auto-correct simple formatting issues (such as removing trailing white space) and will add a commit to your branch. You will need to run <code>git pull</code> before you push again.</li>
+<li>Reviewers may add comments or ask for changes. Make the changes on the same branch and push them - the PR updates automatically.</li>
+</ul>
+<h3 id="keeping-your-branch-up-to-date">Keeping your branch up to date</h3>
+<p>Your branch started from a snapshot of Predbat's <code>main</code>. While your pull request is open, other people's changes are merged into <code>main</code>,
+so your branch falls behind. GitHub shows a message on the PR when this happens, such as "This branch is out-of-date with the base branch"
+or "This branch has conflicts that must be resolved".</p>
+<p>You only need to bring your branch up to date if GitHub reports <strong>conflicts</strong> (the same lines of a file changed in both places),
+or if you want the latest Predbat code in your testing. To do it:</p>
+<pre><code class="language-bash">git fetch upstream
+git merge upstream/main
+git push
+</code></pre>
+<p>Then run the tests again.</p>
+<h4 id="what-does-merge-do">What does merge do?</h4>
+<p><code>git merge upstream/main</code> copies Predbat's newer commits into your branch, and adds one extra commit (a "merge commit") that joins
+the two lines of history together. Nothing that already exists is changed, so it is safe, and the <code>git push</code> is an ordinary push.
+This is the recommended way.</p>
+<h4 id="what-does-rebase-do-and-why-is-it-not-recommended">What does rebase do, and why is it not recommended?</h4>
+<p><code>git rebase upstream/main</code> does the same job differently. It lifts your commits off your branch, brings the branch up to the latest <code>main</code>,
+and then replays your commits on top, so the history looks like one straight line.
+The catch is that each replayed commit is a brand-new commit, so your branch no longer matches the copy on GitHub and a normal <code>git push</code>
+is refused. You must force the push, which replaces the branch on GitHub with your local version.</p>
+<h4 id="what-does-force-with-lease-do">What does <code>--force-with-lease</code> do?</h4>
+<p>If you do rebase, push with <code>git push --force-with-lease</code>. A plain forced push (<code>--force</code>) overwrites the branch on GitHub
+no matter what is there. <code>--force-with-lease</code> only overwrites it if the branch on GitHub is still exactly as you last saw it, and refuses otherwise.
+That matters because other things can add commits to your branch without you knowing - the automatic pre-commit checks do this
+(see <a href="#running-the-checks-from-within-github">running the checks from within GitHub</a>), and so might a reviewer.
+A plain force push would silently delete those commits; <code>--force-with-lease</code> stops and tells you to fetch them first.
+Unless a maintainer asks you to rebase, stick with merge.</p>
+<h4 id="if-there-are-conflicts">If there are conflicts</h4>
+<p>A conflict means that you and someone else changed the same lines of a file, so git can't decide which to keep.
+Before you have opened the pull request, the page for opening it shows "Can't automatically merge" (you can still open it).
+Once it is open, GitHub shows "This branch has conflicts that must be resolved", and the pull request can't be merged until you fix them.
+It is tidier to fix conflicts before opening the pull request, so that it starts clean.
+Resolve them in Codespaces, so that you can run the tests afterwards:</p>
+<ol>
+<li>
+<p>Check that you have no uncommitted changes (the Source Control view should be empty), then bring Predbat's latest code into your branch in the terminal:</p>
+<p><code>bash
+git fetch upstream
+git merge upstream/main</code></p>
+</li>
+<li>
+<p>If git reports conflicts, the Source Control view shows a <strong>Merge Changes</strong> section listing the files that clash. Open each one.</p>
+</li>
+<li>
+<p>Each clash is marked in the file between <code>&lt;&lt;&lt;&lt;&lt;&lt;&lt;</code> and <code>&gt;&gt;&gt;&gt;&gt;&gt;&gt;</code> lines, with <code>=======</code> dividing the two versions. VS Code shows buttons above each clash:</p>
+<ul>
+<li><strong>Accept Current Change</strong> keeps <em>your</em> version (the branch you are on)</li>
+<li><strong>Accept Incoming Change</strong> keeps <em>Predbat's</em> version (from <code>upstream/main</code>)</li>
+<li><strong>Accept Both Changes</strong> keeps both, one after the other</li>
+<li><strong>Compare Changes</strong> shows the two versions side by side</li>
+</ul>
+<p>Often both sets of changes need to be kept, so read each clash carefully. You can also edit the text directly, then delete the marker lines.
+VS Code also offers a three-way Merge Editor (a button at the bottom right of the file).
+4. When every file is done, stage each fixed file (the <code>+</code> beside it in the Merge Changes section) and commit. The commit message is already filled in ("Merge remote-tracking branch 'upstream/main' ...").
+5. Run the tests again, because the merged code is new code, then push:</p>
+<p><code>bash
+git push</code></p>
+</li>
+</ol>
+<p>The pull request updates by itself, and the conflict message goes away.</p>
+<p>If you get stuck, <code>git merge --abort</code> puts your branch back exactly as it was before the merge. If you aren't sure how to resolve a clash,
+ask on the pull request and paste the clash (the text between the <code>&lt;&lt;&lt;&lt;&lt;&lt;&lt;</code> and <code>&gt;&gt;&gt;&gt;&gt;&gt;&gt;</code> lines).</p>
+<h3 id="after-your-pull-request-is-merged">After your pull request is merged</h3>
+<p>Bring your <code>main</code> up to date with Predbat's <code>main</code>. This works as long as you've followed the ground rules and made
+no commits of your own on <code>main</code>:</p>
+<pre><code class="language-bash">git switch main
+git pull
+git fetch upstream
+git merge --ff-only upstream/main
+git push origin main
+</code></pre>
+<p>Why each step is there:</p>
+<ul>
+<li><code>git fetch upstream</code> only <em>downloads</em> Predbat's latest commits. It updates <code>upstream/main</code> (your copy of Predbat's branch) but never
+  changes your own branches, so your <code>main</code> looks the same until you merge.</li>
+<li><code>git pull</code> brings your local <code>main</code> up to date with your fork on GitHub. If git says "Your branch is behind 'origin/main' by N commits, and can be fast-forwarded",
+  your fork has moved ahead (for example after using Sync fork on GitHub) and this step catches up.</li>
+<li><code>git merge --ff-only upstream/main</code> then adds Predbat's newer commits. If it says "Not possible to fast-forward", your <code>main</code> contains commits that Predbat's doesn't:
+  look at them with <code>git log upstream/main..main --oneline</code> and work out why before going further.</li>
+<li><code>git push origin main</code> updates your fork on GitHub.</li>
+</ul>
+<p>If <code>git merge --ff-only</code> says it can't fast-forward because your <code>main</code> has commits of its own, you are probably in the situation that the ground rules are meant to avoid: you made
+a pull request from <code>main</code>. In that case <code>main</code> is the branch of that pull request, so <strong>leave it alone</strong> until the pull request has been merged, and don't reset it or force push it.
+It doesn't stop you doing anything else, because new work starts from <code>upstream/main</code> (see <a href="#creating-a-branch">creating a branch</a>), not from your <code>main</code>. If you want your <code>main</code>
+brought up to date with Predbat while the pull request is open, use <code>git merge upstream/main</code> (without <code>--ff-only</code>), resolve any conflicts and push, as in
+<a href="#keeping-your-branch-up-to-date">keeping your branch up to date</a>.</p>
+<p>An alternative that doesn't use the terminal is the <strong>Sync fork</strong> button on your fork's page on GitHub, followed by <code>git pull</code> in your <code>main</code> branch.</p>
+<p>To confirm that your change has been merged, look at the history of a file you changed in Predbat's branch. Do this first, as your own <code>main</code> doesn't have the change until you update it:</p>
+<pre><code class="language-bash">git fetch upstream
+git log upstream/main --oneline -3 -- apps/predbat/givtcp.py
+</code></pre>
+<p>Your pull request should be at or near the top of the list. The names in brackets after a commit's hash (such as <code>origin/my-change-name, my-change-name</code>) are the branches that currently point at that commit.</p>
+<p>Then delete the finished branch. The <strong>Delete branch</strong> button on the merged pull request removes it from your fork on GitHub, and <code>git branch -d my-change-name</code> removes your local copy.
+If git refuses with "not fully merged", it is because the pull request was merged as a single new commit, so git can't see that your commits are in <code>main</code>.
+Check that the pull request shows as merged, then use <code>git branch -D my-change-name</code>.</p>
+<p>Deleting the branch on GitHub doesn't remove your Codespace's record of it (<code>origin/my-change-name</code>). Tidy that too with <code>git fetch --prune</code>, after which <code>git branch -r</code> no longer lists it. To delete the branch on your fork from the terminal instead of using the button, run <code>git push origin --delete my-change-name</code>.</p>
+<p>You can then start the next change from <a href="#creating-a-branch">creating a branch</a>.</p>
+<h2 id="code-layout">Code layout</h2>
+<p>A few pointers for finding your way around the Predbat repository.</p>
+<ul>
+<li>All code lives in <code>apps/predbat/</code>:</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>predbat.py</code></td>
+<td>The main <code>PredBat</code> class, built from several mixin classes (<code>Fetch</code>, <code>Plan</code>, <code>Execute</code>, <code>Output</code>, <code>UserInterface</code>, etc.). The main loop (<code>update_pred()</code>) runs every 5 minutes: fetch data, run the optimisation, execute the plan, publish results</td>
+</tr>
+<tr>
+<td><code>config.py</code></td>
+<td><code>CONFIG_ITEMS</code> (every user configurable setting, published as Home Assistant entities) and <code>APPS_SCHEMA</code> (validation of <code>apps.yaml</code>)</td>
+</tr>
+<tr>
+<td><code>fetch.py</code></td>
+<td>Gets rates, solar forecasts, historical load and inverter state</td>
+</tr>
+<tr>
+<td><code>plan.py</code></td>
+<td>The optimisation engine - searches charge/discharge window scenarios</td>
+</tr>
+<tr>
+<td><code>execute.py</code></td>
+<td>Sends the resulting commands to the inverter</td>
+</tr>
+<tr>
+<td><code>output.py</code></td>
+<td>Creates and updates the Home Assistant sensors that show the plan and metrics</td>
+</tr>
+<tr>
+<td><code>userinterface.py</code></td>
+<td>Manages the Home Assistant input entities (switches, selects, numbers)</td>
+</tr>
+<tr>
+<td><code>components.py</code>, <code>component_base.py</code></td>
+<td>The plugin system. Each integration (Octopus, Solcast, inverter clouds etc.) is a component</td>
+</tr>
+</tbody>
+</table>
+<p>Some things that are worth knowing before you start:</p>
+<ul>
+<li>Because <code>PredBat</code> is built from mixin classes, they all share one <code>self</code>. Values that several of them need (for example
+  <code>self.currency_symbols</code>) are set in <code>PredBat.reset()</code>. Components and other standalone classes don't inherit from <code>PredBat</code> -
+  they reach it through <code>self.base</code>, or through properties that <code>ComponentBase</code> exposes (and that the test <code>MockBase</code> must then also provide).</li>
+<li>To add or change a user setting, edit <code>CONFIG_ITEMS</code> in <code>config.py</code>. Items can be conditional on other settings
+  (the <code>enable</code> field) and are only published to Home Assistant when enabled.</li>
+<li>
+<p>Use the Storage component for saving and loading cached data, rather than accessing files directly.</p>
+</li>
+<li>
+<p>All documentation lives in the <code>docs</code> folder, in Markdown format</p>
+</li>
+<li>
+<p>The <code>templates</code> folder contains all the <code>apps.yaml</code> templates for different inverter types. Each template should be self-contained so new users can simply copy that template in and configure to their environment.</p>
+</li>
+<li>
+<p><code>apps/predbat/tests</code> - contains all the test scripts for Predbat.</p>
+</li>
+<li>
+<p><code>coverage</code> - scripts to manage the testing process</p>
+</li>
+<li>
+<p><code>.cspell/custom-dictionary-workspace.txt</code> - the custom dictionary file for Predbat. If you add new words to the documentation or code that the spelling checker does not recognise then you need to add them to this file otherwise the pre-commit tests will fail.</p>
+</li>
+</ul>
+<h2 id="testing">Testing</h2>
+<p>Predbat has a unit test suite in <code>apps/predbat/tests/</code>. <strong>Unit tests must be added for all new code.</strong></p>
+<p>All the test commands are run from the <code>coverage/</code> directory in the repository. The scripts in it use paths that are relative to
+that directory, such as <code>../apps/predbat</code> for the code and <code>../requirements.txt</code> for the Python packages, and the tests find
+their configuration files (for example <code>apps.yaml</code>) there too.
+You don't need to copy any files anywhere, and you don't need a Home Assistant system - the tests run against a mock of it.</p>
+<h3 id="setting-up-the-python-environment">Setting up the Python environment</h3>
+<p>The <code>./run_all</code>, <code>./run_pre_commit</code>, <code>./run_random</code>, <code>./run_random_profile</code> and <code>./run_shuffle</code> scripts set up the Python environment themselves. Each time they run, they run <code>source setup.csh</code>, which
+creates a virtual environment in <code>coverage/venv</code> if there isn't one, and installs the packages in <code>requirements.txt</code> into it.
+So the first run takes a little longer, and you don't need to do anything by hand before running them.</p>
+<p>The environment is only active while one of these scripts runs - it isn't left switched on in your terminal.
+The other scripts (<code>run_cov</code>, <code>run_profile</code>, <code>standalone</code>, <code>standalone_ha</code> and the Python helper scripts) don't set it up, so activate it yourself first.
+You also need to activate it when you run Python commands directly, for example the commands in <a href="../random-scenarios/">random-scenarios.md</a>:</p>
+<pre><code class="language-bash">cd coverage
+source setup.csh
+</code></pre>
+<p>Afterwards the terminal prompt starts with <code>(venv)</code>. In a new terminal, once the environment exists, you can just re-activate it:</p>
+<pre><code class="language-bash">cd coverage
+source venv/bin/activate
+</code></pre>
+<h3 id="running-the-tests">Running the tests</h3>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>./run_all</code></td>
+<td>Runs all the tests</td>
+</tr>
+<tr>
+<td><code>./run_all --quick</code></td>
+<td>Skips the slow tests. This is what the GitHub checks run, so it's the one to use before a PR</td>
+</tr>
+<tr>
+<td><code>./run_all --list</code></td>
+<td>Lists all the test names, and which are marked slow</td>
+</tr>
+<tr>
+<td><code>./run_all --test basic_rates</code></td>
+<td>Runs one test, by name</td>
+</tr>
+<tr>
+<td><code>./run_all --test basic_rates --test units</code></td>
+<td>Runs several named tests</td>
+</tr>
+<tr>
+<td><code>./run_all -k octopus_</code></td>
+<td>Runs every test whose name contains the keyword</td>
+</tr>
+<tr>
+<td><code>./run_all --shuffle</code></td>
+<td>Runs the tests in a random order (see <a href="#finding-test-order-dependencies">finding test order dependencies</a>)</td>
+</tr>
+</tbody>
+</table>
+<p>The tests take a while to run, so <strong>always send the output to a file, then search the file afterwards</strong>.
+If you pipe the output straight into <code>grep</code> and search for the wrong thing, you have to run everything again!</p>
+<p>For example, running all the test scripts, putting the script output into a file, checking the end of the file that all tests were run, and then checking for any test failure messages:</p>
+<pre><code class="language-bash">./run_all --quick &gt; /tmp/all_tests.txt 2&gt;&amp;1
+tail -3 /tmp/all_tests.txt
+grep -n &quot;FAILED\|Traceback\|AssertionError&quot; /tmp/all_tests.txt
+</code></pre>
+<h3 id="reading-the-results">Reading the results</h3>
+<ul>
+<li>A successful run finishes with a line like <code>**** All tests passed (4 slow tests skipped, total time: 211.29s) ****</code>.</li>
+<li>A failing test that raises an exception will stop with a traceback (often an <code>AssertionError</code>, with a message saying what was expected),
+  and the run does not end with the "All tests passed" line.</li>
+<li>Tests can also fail by printing an <code>ERROR:</code> line and returning True but no traceback. The unit_test handler will print <code>**** &lt;name&gt;: FAILED in ...s</code> (or <code>**** ERROR: Test &lt;name&gt; FAILED with --test/-k</code>), followed by <code>**** ERROR: Some tests failed</code> at the end of the output.</li>
+<li>Be aware that the test output is long and <strong>contains many <code>Error:</code> and <code>Warn:</code> log lines even in a passing run</strong>. Many tests
+  deliberately feed in bad data (for example corrupt update files or invalid configuration) to prove that Predbat rejects it
+  and reports it correctly. Searching for the word "error" will find these, so it is not a good way to look for failures.
+  Search for <code>Traceback</code> and <code>AssertionError</code>, and check the last line instead.</li>
+<li>To see which test a log line belongs to, look back for the nearest preceding line starting with <code>**** Running:</code>.</li>
+<li>Predbat's own log for the run is written to <code>predbat.log</code> in the <code>coverage/</code> directory, and <code>./run_all</code> deletes the previous one first.
+  When a test fails, this file shows what Predbat was doing, in the same format as its normal log.</li>
+</ul>
+<h3 id="adding-a-unit-test">Adding a unit test</h3>
+<ol>
+<li>Create <code>apps/predbat/tests/test_&lt;feature&gt;.py</code>. Each test is a function that takes <code>my_predbat</code> (a fresh <code>PredBat</code> instance, built for that test by <code>create_predbat()</code>).
+   The function must have a docstring (docstring coverage is enforced). It returns <code>False</code> if the test passed and <code>True</code> if it failed.
+   Tests either use <code>assert</code> statements with a helpful message, or print an <code>ERROR:</code> line and return <code>True</code>.</li>
+<li>
+<p>In <code>apps/predbat/unit_test.py</code>, import your test function(s), next to the existing imports of the other tests:</p>
+<p><code>python
+from tests.test_my_feature import test_my_feature</code></p>
+</li>
+<li>
+<p>Still in <code>unit_test.py</code>, register the test in the <code>TEST_REGISTRY</code> list in <code>main()</code>. Each entry is
+   <code>(name, function, description, slow)</code>. Set <code>slow</code> to <code>True</code> only for tests that take a long time, as they are skipped by <code>--quick</code>:</p>
+<p><code>python
+("my_feature", test_my_feature, "Description of what is tested", False),</code></p>
+</li>
+<li>
+<p>Check that it has been registered, and run it:</p>
+<p><code>bash
+./run_all --list | grep my_feature
+./run_all --test my_feature</code></p>
+</li>
+</ol>
+<p><strong>A common mistake is to write the test function but not import and register it in unit_test.py</strong> (or to register only some of several test functions
+in a file). It is then never run, so can't fail. Use <code>./run_all --list</code> to check that every test function you have written appears.</p>
+<p>Tips for writing good tests:</p>
+<ul>
+<li>Copy the structure of a small, existing test in <code>apps/predbat/tests/</code> that is similar to what you want to test.</li>
+<li>Test the behaviour, not just that the code runs. Include the cases where nothing should change as well as the case where something should.</li>
+<li>Each test gets its own <code>PredBat</code>, so you can change settings and attributes on <code>my_predbat</code> freely: the changes don't reach other tests.
+  State that is <em>not</em> rebuilt for each test is different - module-level variables, class attributes, and anything you monkey patch. If a test changes one of those,
+  restore it afterwards, using <code>try</code>/<code>finally</code> so that it is restored even if the test fails (see <a href="#finding-test-order-dependencies">finding test order dependencies</a>).</li>
+<li>Some config items are only published to Home Assistant when another setting is on (for example <code>expert_mode</code>).
+  If a test reads an entity that isn't there, check for an <code>enable</code> condition on the item in <code>config.py</code>.</li>
+<li>The test messages and comments are spell checked like the rest of the code (see <a href="#enforced-standards">enforced standards</a>).</li>
+</ul>
+<h3 id="finding-test-order-dependencies">Finding test order dependencies</h3>
+<p>Each test builds its own <code>PredBat</code> with <code>create_predbat()</code> (see <code>unit_test.py</code>), so changes to the attributes of that instance can't leak into other tests. What can still leak is module-level or class-level state that <code>create_predbat()</code> doesn't rebuild - for example the <code>PLOT_ENABLED</code> module variable in <code>tests/test_infra.py</code>, or something that a test monkey patches and doesn't undo. A test that changes state like this and doesn't fully restore it can make a <em>later</em> test fail - a bug in the test suite itself, not in Predbat (see issue <a href="https://github.com/springfall2008/batpred/issues/5079">#5079</a>). These only show up when the two tests happen to run in that order, so a clean <code>./run_all</code> doesn't prove there isn't one lurking.</p>
+<p><code>./run_shuffle</code> fuzzes the test order looking for these:</p>
+<ul>
+<li><code>./run_shuffle --hunt --quick</code> - one-liner: keep trying shuffled orderings until a failure is found, narrow it down to the minimal pair of tests that reproduces it, print that repro command, and record the pair in <code>tools/shuffle_fuzz_known_pairs.txt</code> so the next run looks for a <em>different</em> one instead of rediscovering the same pair. This is the normal way to run it.</li>
+<li><code>./run_all --shuffle [--shuffle-seed N]</code> - run the full suite (or whatever <code>--test</code>/<code>-k</code> selects) in a random order directly, without the fuzzing wrapper. Useful for a one-off check or replaying a specific <code>--shuffle-seed</code> a <code>--hunt</code> run reported.</li>
+<li><code>./run_shuffle --bisect &lt;SHUFFLE_SEED&gt;</code> - given a shuffle-seed that's known to fail, narrow down which earlier test caused it, without hunting for a new one.</li>
+<li><code>./run_shuffle --campaign N</code> - repeat hunt-and-bisect for <code>N</code> independent rounds and print a frequency table of which (culprit, victim) pairs recur, to tell a common leak apart from a one-off ordering artefact.</li>
+</ul>
+<p>A found pair only proves that state leaked from one test to another - it doesn't say by itself whether the fix belongs in the culprit test's cleanup, or whether it exposed a real gap in the production code the victim test exercises (e.g. a missing bounds check that would also matter outside of tests). Check both before assuming it's "just" a test hygiene issue.</p>
+<p>This is too slow for a per-commit CI gate (each hunt attempt is a full shuffled suite run, and a failure needs a further round of bisection on top), but cheap to run periodically or before a release.</p>
+<h3 id="replaying-a-debug-dump">Replaying a debug dump</h3>
+<p>When <code>switch.predbat_debug_enable</code> is on, Predbat writes a full state dump called <code>predbat_debug_*.yaml</code> to the <code>debug/</code> folder.
+These are normally attached to bug reports. You can replay one against the code you are working on:</p>
+<pre><code class="language-bash">cd coverage
+./run_all --debug_file &lt;path-to-predbat_debug.yaml&gt;
+</code></pre>
+<p>It lists every config item that differs from its default, recalculates the plan, and writes <code>plan_orig.html</code> and
+<code>plan_final.json</code> into <code>coverage/</code>. Add <code>--redo</code> to recompute the rates, load model and Octopus slots instead of reusing the ones in the dump.</p>
+<p>Example dumps are kept in <code>coverage/cases/*.yaml</code>, and they are replayed as regression tests by <code>./run_all --test debug_cases</code>.
+The dumps are recorded data: the saved settings are loaded back in, but not the display attributes of config items (such as their icons).
+There is no need to update them when you change how entities are presented.</p>
+<h3 id="random-scenario-benchmarking">Random scenario benchmarking</h3>
+<p>Predbat can generate reproducible random scenarios, run them through the optimiser, and compare two runs. This is useful to check that a change to the optimiser
+improves results (or, for a change that shouldn't affect the plan, that nothing has changed) and to compare run times.
+See <a href="../random-scenarios/">random-scenarios.md</a> for the details.</p>
+<h3 id="failure-plots-profiling-and-coverage">Failure plots, profiling and coverage</h3>
+<p>When a model scenario fails, a plot of its SoC and metric is written to <code>&lt;scenario_name&gt;.png</code> in the working directory. Add <code>--plot</code> to also open that plot on screen. It's off by default because displaying it blocks until you close the window, which would stall an unattended or CI run - a failing test would look like a hang rather than reporting the failure.</p>
+<p><code>./run_profile cases/&lt;name&gt;.yaml -s time -n 50</code> profiles the planning of one of the debug dumps, to find slow functions (see <a href="#the-scripts-and-files-in-the-coverage-directory">the scripts and files in the coverage directory</a> for the options).</p>
+<p>For coverage analysis install the 'coverage' library with Python, or use the version installed from <code>requirements.txt</code>.</p>
+<ol>
+<li><code>./run_cov --quick</code></li>
+<li>Open <code>htmlcov/index.html</code> in your web browser</li>
+</ol>
+<h3 id="the-scripts-and-files-in-the-coverage-directory">The scripts and files in the coverage directory</h3>
+<p>Everything here is run from the <code>coverage/</code> directory. Scripts that don't set up the Python environment themselves are marked with an asterisk (*) - activate the environment first (see
+<a href="#setting-up-the-python-environment">setting up the Python environment</a>).</p>
+<h4 id="running-the-tests-and-checks">Running the tests and checks</h4>
+<table>
+<thead>
+<tr>
+<th>Script</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>run_all</code></td>
+<td>Sets up the Python environment, removes any old <code>predbat.log</code> (the log file that Predbat writes as it runs), then runs <code>../apps/predbat/unit_test.py</code>, passing on any options you give it. See <a href="#running-the-tests">running the tests</a></td>
+</tr>
+<tr>
+<td><code>run_pre_commit</code></td>
+<td>Sets up the environment, runs the pre-commit checks on all files, then the quick tests. See <a href="#running-the-checks-locally">running the checks locally</a></td>
+</tr>
+<tr>
+<td><code>run_cov</code> *</td>
+<td>Runs <code>unit_test.py</code> under coverage analysis (passing on options such as <code>--quick</code>), then writes an HTML report to <code>htmlcov/</code>, leaving out the tests themselves</td>
+</tr>
+<tr>
+<td><code>run_shuffle</code></td>
+<td>Sets up the environment, then runs <code>../tools/shuffle_fuzz.py</code> with your options. See <a href="#finding-test-order-dependencies">finding test order dependencies</a></td>
+</tr>
+<tr>
+<td><code>setup.csh</code></td>
+<td>Creates the virtual environment in <code>coverage/venv</code> and installs <code>../requirements.txt</code> into it. Run by the scripts above, or by hand</td>
+</tr>
+<tr>
+<td><code>setup.cfg</code></td>
+<td>Settings for the coverage analysis (it leaves out the installed packages in <code>site-packages</code>)</td>
+</tr>
+</tbody>
+</table>
+<h4 id="profiling-and-benchmarking">Profiling and benchmarking</h4>
+<table>
+<thead>
+<tr>
+<th>Script</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>run_profile</code> *</td>
+<td>Profiles the planning of one debug dump: <code>./run_profile cases/predbat_debug_agile1.yaml</code>. With no arguments it lists the <code>cases/predbat_debug_*.yaml</code> files. Options: <code>-v</code> (or <code>--view</code>) opens the result in snakeviz (<code>pip install snakeviz</code>), <code>-s</code> chooses the sort order (<code>cumulative</code>, <code>time</code>, <code>calls</code> or <code>ncalls</code>), <code>-n</code> sets how many functions to show, and <code>-o</code> chooses the output file</td>
+</tr>
+<tr>
+<td><code>profile_debug.py</code> *</td>
+<td>The Python script behind <code>run_profile</code>. It runs <code>unit_test.py --debug_file</code> under cProfile, saves <code>&lt;name&gt;_profile.prof</code>, and prints the slowest functions</td>
+</tr>
+<tr>
+<td><code>run_random</code></td>
+<td>Sets up the environment, runs the scenarios in <code>cases/random_scenarios.yaml</code> (using <code>agile1</code> as the template), writes <code>random_results.json</code>, and compares it with the stored <code>cases/random_results.json</code>. See <a href="../random-scenarios/">random-scenarios.md</a></td>
+</tr>
+<tr>
+<td><code>run_random_profile</code></td>
+<td>Sets up the environment, profiles random scenario 0 sorted by time within each function, and saves the top 500 functions in <code>profile_cprofile.log</code></td>
+</tr>
+</tbody>
+</table>
+<h4 id="running-against-home-assistant">Running against Home Assistant</h4>
+<table>
+<thead>
+<tr>
+<th>Script</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>standalone</code> *, <code>standalone_ha</code> *, <code>deploy</code></td>
+<td>See <a href="#running-your-code-against-a-live-home-assistant-system-not-codespaces">running your code against a live Home Assistant system</a></td>
+</tr>
+<tr>
+<td><code>setup_git</code></td>
+<td>A personal helper for the project maintainer's Mac: it starts <code>ssh-agent</code>, loads an SSH key from <code>~/.ssh/id_ed25519</code>, and sets the <code>origin</code> remote to <code>git@github.com:springfall2008/batpred.git</code>. <strong>Don't run it</strong> - it would point your <code>origin</code> at the main Predbat repository instead of your fork</td>
+</tr>
+</tbody>
+</table>
+<h4 id="load-predictor-helper-scripts">Load predictor helper scripts</h4>
+<table>
+<thead>
+<tr>
+<th>Script</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>analyze_data.py</code> *, <code>analyze_periods.py</code> *</td>
+<td>Print statistics about the load history (the energy used in each 5 minute step, and for the recent and training periods)</td>
+</tr>
+<tr>
+<td><code>debug_model.py</code> *, <code>debug_predict.py</code> *</td>
+<td>Train the machine learning load predictor (<code>LoadPredictor</code>, in <code>apps/predbat/load_predictor.py</code>) on the load history, and show what the model has learned and what it predicts. <code>debug_predict.py --quick</code> only prints summary statistics</td>
+</tr>
+<tr>
+<td><code>dev_tests/test_process_load_power.py</code></td>
+<td>A manual developer script that runs <code>load_power_data.yaml</code> through the <code>fill_load_from_power</code> code and plots the result. It is not part of the unit test suite</td>
+</tr>
+</tbody>
+</table>
+<p>These are development tools for investigating the load predictor, and aren't run by the unit tests. They read a <code>load_minutes_debug.json</code> file from the <code>coverage/</code> directory
+(and <code>dev_tests</code> needs a <code>load_power_data.yaml</code>). Neither file is in the repository, and where they come from isn't documented here yet.</p>
+<h4 id="configuration-and-test-data">Configuration and test data</h4>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>What it is</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>apps.yaml</code></td>
+<td>The Predbat configuration that the unit tests load. Changing it can change the test results</td>
+</tr>
+<tr>
+<td><code>cases/</code></td>
+<td>Test data. The <code>predbat_debug_*.yaml</code> files are debug dumps, each with a matching <code>.expected.json</code> holding the expected result, and are replayed by <code>./run_all --test debug_cases</code>. <code>random_scenarios.yaml</code> and <code>random_results.json</code> are the scenarios and the stored results used by <code>run_random</code>. The other files (<code>annual_reference_*.json</code>, <code>ml_history_fixture.json.gz</code>, <code>rest_v2.json</code> and <code>rest_v3.json</code>) are reference data used by individual tests</td>
+</tr>
+</tbody>
+</table>
+<h4 id="files-that-the-scripts-create">Files that the scripts create</h4>
+<p>Running the scripts creates files and folders in <code>coverage/</code>, such as <code>venv/</code>, <code>htmlcov/</code>, <code>predbat.log</code>, <code>predbat_standalone/</code>, <code>predbat_standalone_ha/</code>, <code>*_profile.prof</code>,
+<code>profile_cprofile.log</code>, <code>random_results.json</code>, <code>plan_orig.html</code>, <code>plan_final.json</code> and the failure plots (<code>*.png</code>). These are results, not source, so they shouldn't be committed.
+Use <code>git status</code> to check (see <a href="#check-what-you-are-about-to-commit">check what you are about to commit</a>).</p>
+<h3 id="troubleshooting-the-tests">Troubleshooting the tests</h3>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Likely cause</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>apps.yaml</code> or another config file is not found</td>
+<td>You are running from the wrong directory. Run the tests from <code>coverage/</code>. Don't copy <code>apps.yaml</code> or <code>secrets.yaml</code> into other folders to make it work - if you have, delete the copies so they aren't committed by accident</td>
+</tr>
+<tr>
+<td><code>No secrets.yaml file found</code> (an <code>Info</code> message)</td>
+<td>Normal. The tests don't need real secrets</td>
+</tr>
+<tr>
+<td><code>ModuleNotFoundError</code>, or a missing Python package, when you run a Python command directly</td>
+<td>The virtual environment isn't active. See <a href="#setting-up-the-python-environment">setting up the Python environment</a></td>
+</tr>
+<tr>
+<td><code>AttributeError</code> on a new <code>self.something</code> in a test that builds its own mock object</td>
+<td>Tests with their own mock <code>PredBat</code> (or <code>MockBase</code>) need to set the new attribute too</td>
+</tr>
+<tr>
+<td>A test passes alone but fails in a full run (or the reverse)</td>
+<td>Module-level or class-level state leaking between tests. Each test has its own <code>PredBat</code>, so look for globals, class attributes and monkey patches that a test changes and doesn't restore. See <a href="#finding-test-order-dependencies">finding test order dependencies</a></td>
+</tr>
+<tr>
+<td>A test run seems stuck (no new output for many minutes)</td>
+<td>Look for leftover test processes from an earlier run that was interrupted (<code>ps -eo pid,etime,pcpu,cmd \| grep -E "unit_test\|shuffle_fuzz\|run_all" \| grep -v grep</code>) and stop them with <code>kill &lt;pid&gt;</code>. Then press <code>CTRL-C</code> once to stop the stuck run, and run just the test it was stuck on (<code>./run_all --test &lt;name&gt;</code>) to see whether it hangs on its own</td>
+</tr>
+<tr>
+<td>A test you wrote never shows up</td>
+<td>It isn't imported and registered in <code>unit_test.py</code>. See <a href="#adding-a-unit-test">adding a unit test</a></td>
+</tr>
+<tr>
+<td>A test fails and you aren't sure whether your change caused it</td>
+<td>Run it on clean code and compare. Set your changes aside with <code>git stash push -u -m "wip"</code>, run the same <code>./run_all --test ...</code> command, then bring them back with <code>git stash pop</code>. If it fails without your changes too, the failure isn't yours. Make sure you aren't just testing <code>main</code> with your uncommitted edits (see <a href="#working-on-more-than-one-change-at-once">working on more than one change at once</a>)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="coding-standards">Coding standards</h2>
+<h3 id="expected-standards">Expected standards</h3>
+<p>This section will be enhanced following discussions as we go.</p>
+<p>However, here's a starting point:</p>
+<ul>
+<li>Variable names should be <code>lower_case_with_underscores</code> - this fits
+with most existing variables, is a common standard for Python code,
+and also allows the spell checking to check individual words within
+the variable name.</li>
+<li>Use British English spelling (for example "colour", "optimise", "behaviour") in code, comments and documentation.</li>
+<li>'Predbat' should be capitalised, 'SoC' is mixed case as is 'kWh'</li>
+<li>Every function and class needs a docstring (100% coverage is enforced by <code>interrogate</code>).</li>
+<li>The maximum line length is 256 characters for Black, and 250 for Flake8.</li>
+<li>Add unit tests for all new code.</li>
+<li>If you add a new documentation page, add it to <code>mkdocs.yml</code>. If you add or change a user visible setting, update the matching page in <code>docs/</code>.</li>
+</ul>
+<h3 id="enforced-standards">Enforced standards</h3>
+<p>Certain coding standards are enforced within the repository.
+Some of them can be auto-fixed if you do a commit that
+fails one of those standards; other issues will need fixing
+first, as your pull request won't merge in GitHub until it passes.</p>
+<p>These standards are enforced by <a href="https://pre-commit.com">pre-commit</a>,
+a tool which can run other tools to check, and potentially fix
+(for certain types of issues) any mistakes you've made.</p>
+<p>The <code>.pre-commit-config.yaml</code> file lists all checks that are
+currently carried out within the repository. Bear in mind that
+these checks are done according to the config within that file
+in the branch that you are working in,
+so if someone adds a new check, or changes some of the related settings,
+it won't apply on your branch until you've merged in their changes.</p>
+<p>Some of the tools have their own related config files:</p>
+<ul>
+<li>CSpell - <code>.cspell.json</code> and <code>.cspell/custom-dictionary-workspace.txt</code></li>
+<li>Black - <code>pyproject.toml</code></li>
+<li>Markdown Lint - <code>.markdownlint.jsonc</code></li>
+</ul>
+<p>Additional notes on some of the standards:</p>
+<ul>
+<li>CSpell - if you have the spelling check failing due to a valid word
+which is not in the in-built dictionary, please add that word to the end
+of <code>.cspell/custom-dictionary-workspace.txt</code> and stage those changes.
+The spell-check should then pass. Note, that the dictionary file will get
+re-sorted alphabetically when you run <code>pre-commit</code>, so you'll need to
+re-stage the file after it's been sorted.</li>
+</ul>
+<p>Other tips for the spell check: words in code, comments, test messages and documentation are all checked, so avoid inventing words
+(hyphenated or made up verbs, for example) when a plain one will do. Genuine technical terms and abbreviations that the spell check doesn't know belong in the dictionary file.</p>
+<h4 id="running-the-checks-locally">Running the checks locally</h4>
+<p>The <code>run_pre_commit</code> script in the <code>coverage/</code> directory does everything that is needed before you commit. It sets up the
+virtual environment (<code>source setup.csh</code>), runs all the pre-commit checks on every file in the repository, and, if they pass,
+runs the quick test suite (<code>./run_all --quick</code>):</p>
+<pre><code class="language-bash">cd coverage
+./run_pre_commit &gt; /tmp/pre_commit.txt 2&gt;&amp;1
+tail -5 /tmp/pre_commit.txt
+</code></pre>
+<p>As with the tests, send the output to a file as it is long and the run takes a few minutes.
+The script doesn't take any options: anything you type after its name, such as <code>--files</code>, is ignored and it still runs everything.
+If you only want to run the checks (for example after a small documentation change), or to run them on named files or on just the files you have staged,
+use the <code>pre-commit</code> tool directly, as described below.
+Inside the virtual environment, <code>python3 -m pre_commit</code> does the same job as the <code>pre-commit</code> command.</p>
+<p>If you are using a Codespaces environment, you'll already have <code>pre-commit</code>
+installed automatically. You can run it manually, or automatically.</p>
+<p>Running <code>pre-commit</code> manually:</p>
+<ul>
+<li>
+<p>In a terminal window, running <code>pre-commit</code> will run all the checks against any files that you
+have modified and staged.</p>
+</li>
+<li>
+<p>Alternatively, running <code>pre-commit run --all-files</code> will run all the checks
+against all files within the repository.</p>
+</li>
+<li>
+<p>To run the checks on just the files you name, for example after changing one documentation page, use <code>pre-commit run --files docs/developing.md</code>
+(several file names can be given, separated by spaces). This is the quickest check for a small change, and it doesn't run the tests.
+The file names are relative to the directory you are in: from the repository root they are as above, but from the <code>coverage/</code> directory
+the same file is <code>../docs/developing.md</code>. If <code>pre-commit</code> says that it can't find the file, check the path first.</p>
+</li>
+<li>
+<p>Note that if <code>pre-commit</code> makes any changes to any files when it runs, those changes will not be staged. You will need to stage those changes too before committing.</p>
+</li>
+<li>
+<p>You may notice <code>pre-commit</code> mentioning about stashing changes - this is
+because when it runs, any changes that aren't staged are stashed (saved
+away temporarily) so it runs against only the staged changes;
+after it has run, it pulls back those stashed changes, so they appear again (still unstaged).</p>
+</li>
+</ul>
+<p>Running <code>pre-commit</code> automatically:</p>
+<ul>
+<li>
+<p>If you run <code>pre-commit install</code> in a terminal window it will install a pre-commit hook -
+this is a file which tells <code>git</code> to run some code each time you do a
+particular action (a pre-commit hook runs at the start of processing
+a commit, but there are other hooks e.g. pre-push).</p>
+</li>
+<li>
+<p>Now, any time you perform a commit, <code>pre-commit</code> will run
+automatically on the staged files - this is a handy way of making sure
+that you don't accidentally commit code which will fail checks later.</p>
+</li>
+<li>
+<p>You can still run it manually as outlined above, in addition to the
+automated checks that it will do on commits.</p>
+</li>
+</ul>
+<h4 id="running-the-checks-from-within-github">Running the checks from within GitHub</h4>
+<p>When commits are done on pull requests, and in any other scenarios
+added to the <code>on</code> section of <code>.github/workflows/code-quality.yml</code>,
+the GitHub Actions in that file will run.</p>
+<p>In particular, the <a href="https://pre-commit.ci/lite.html">pre-commit.ci lite</a>
+action will run. This uses the <a href="https://github.com/pre-commit-ci/lite-action">pre-commit code</a>
+to run the same checks that get run locally
+(as described in the <code>.pre-commit-config.yaml</code> file).</p>
+<p>This will cause your commit, branch or pull request to get either a green tick
+or a red cross against it, to show whether the code passed the checks or not.
+This will happen automatically when you push code on a branch that has a
+pull request.</p>
+<p>In addition, if <code>pre-commit</code> finds any errors it can fix
+(e.g. a missing blank line at the end of a file, or trailing whitespace),
+it will make a commit of its own to fix those problems and will push that
+commit back to your branch on GitHub. This will then trigger another run,
+which should now pass.</p>
+<p><strong>Note</strong>: This means that <code>pre-commit</code> will be adding commits to
+your branch - this will need you to be pulling changes from GitHub
+so you pick up the changes that have been added by <code>pre-commit</code>
+otherwise, you will hit a problem when you next try to push a commit
+on your branch. You can pull in those changes by running <code>git pull</code>
+, which is the equivalent of running <code>git fetch</code> and then <code>git merge</code>.
+This is no different to working on the same branch with another developer,
+but it will be different to the workflow most of us have when working
+on Predbat.</p>
+<h3 id="before-you-raise-a-pull-request">Before you raise a pull request</h3>
+<ol>
+<li>Check that the new code has unit tests, and they are registered in <code>unit_test.py</code></li>
+<li><code>./run_pre_commit</code> (run from <code>coverage/</code>) passes - it runs the pre-commit checks and then the quick tests, which should finish with "All tests passed"</li>
+<li>Anything user visible is documented, and new documentation pages are in <code>mkdocs.yml</code></li>
+<li><code>git status</code> shows only the files you meant to change</li>
+<li><code>git log --oneline upstream/main..HEAD</code> lists only your own commits</li>
+<li>The PR description says what changed, what deliberately didn't, and how you tested it, and covers every commit in the pull request</li>
+</ol>
+<h2 id="the-c-prediction-kernel">The C++ prediction kernel</h2>
+<p>Predbat has a compiled C++ "kernel" (<code>apps/predbat/prediction_kernel.cpp</code>) that is a fast, bit-for-bit-identical mirror of the Python simulation engine (<code>Prediction.run_prediction()</code> in <code>apps/predbat/prediction.py</code>). It's used to speed up the huge number of scenario evaluations run during planning. It's controlled by the <code>prediction_kernel_enable</code> <code>apps.yaml</code> setting (see <a href="../apps-yaml/#prediction_kernel_enable">apps-yaml.md</a>), On by default; it automatically falls back to the Python engine if the binary for your architecture can't be loaded.</p>
+<h3 id="building-the-c-kernel-locally">Building the C++ kernel locally</h3>
+<p>You don't need a compiler to run Predbat or the normal test suite - if no compiled kernel is present, Predbat transparently falls back to the Python engine.</p>
+<p>To build a kernel for your own machine (for local testing):</p>
+<pre><code class="language-bash">bash apps/predbat/build_kernel.sh
+</code></pre>
+<p>This produces <code>apps/predbat/prediction_kernel_lib.so</code>, built with <code>g++</code>/<code>clang</code>, no external dependencies. It's not committed to the repository (see <code>.gitignore</code>).</p>
+<p>Predbat also ships pre-built binaries for each supported platform/architecture (<code>apps/predbat/prediction_kernel_lib_&lt;arch&gt;.so</code>), which <strong>are</strong> committed to the repository so they're delivered by Predbat's self-update mechanism. These are produced by a separate cross-compilation script using <a href="https://ziglang.org/">zig</a> as the toolchain:</p>
+<pre><code class="language-bash">bash apps/predbat/build_kernel_cross.sh
+</code></pre>
+<p>A GitHub Actions job (<code>kernel-binaries</code> in <code>.github/workflows/code-quality.yml</code>) runs this automatically on pull requests raised from branches in the Predbat repository itself, and commits any changed binaries back to the PR branch - similar to how <code>pre-commit.ci</code> auto-fixes formatting issues. It does <strong>not</strong> run for pull requests from forks, as it can't push to a fork's branch, so on a pull request from your fork it shows as skipped and the binaries are not rebuilt for you. The <code>pre-commit</code> job does run on fork pull requests, and one of its steps verifies the checked-in x86_64 binary (<code>apps/predbat/verify_kernel_binary.py</code>): it fails if the binary is missing, fails to load, is stale (an ABI or parity revision mismatch with the code) or fails the parity tests. So if your change alters the kernel or the Python engine that it mirrors, run <code>build_kernel_cross.sh</code> yourself (it needs zig) and commit the rebuilt binaries in your pull request. If you can't, say so in the pull request description.</p>
+<h3 id="testing-the-kernel">Testing the kernel</h3>
+<p>Three test targets exercise the kernel:</p>
+<ul>
+<li><code>./run_all --test kernel_parity</code> - dual-runs a large set of deterministic edge cases and seeded random scenarios through both engines and asserts the results match to within <code>1e-6</code></li>
+<li><code>./run_all --test model_kernel</code> - runs the standard model test suite (<code>./run_all --test model</code>) with the kernel enabled</li>
+<li><code>./run_all --test optimise_windows_kernel</code> - runs the optimiser test suite with and without the kernel, checking results match and reporting the speedup</li>
+</ul>
+<p>These automatically build a local kernel via <code>build_kernel.sh</code> if one isn't already present, and skip (or fail, if <code>PREDBAT_KERNEL_REQUIRED=1</code> is set, as it is in CI) if the build fails.</p>
+<h3 id="keeping-the-two-engines-in-sync">Keeping the two engines in sync</h3>
+<p><strong>This is important:</strong> if you change the behaviour of the hot loop in <code>Prediction.run_prediction()</code>, you must mirror the change in <code>prediction_kernel.cpp</code>, and bump both <code>KERNEL_PARITY_REVISION</code> (in <code>apps/predbat/prediction_kernel.py</code>) and <code>PK_PARITY_REVISION</code> (in <code>apps/predbat/prediction_kernel.cpp</code>). This isn't just good practice - it's enforced: the two revision numbers are checked when the kernel loads, and a mismatch disables the kernel (falling back to Python) rather than risking silently divergent results. Run <code>./run_all --test kernel_parity</code> before submitting any change to <code>prediction.py</code>'s simulation loop.</p>
+<h2 id="working-on-the-documentation">Working on the documentation</h2>
+<h3 id="overview-of-the-predbat-documentation">Overview of the Predbat documentation</h3>
+<p>The documentation site at <a href="https://springfall2008.github.io/batpred/">https://springfall2008.github.io/batpred/</a>
+is built from Markdown files in this repo.</p>
+<p>The Markdown files used to build the documentation are in the <code>docs/</code> folder,
+with additional config for building the documentation site in <code>mkdocs.yml</code>.</p>
+<p>If you're making minor changes to the documentation e.g. fixing a spelling,
+you can just edit the Markdown files directly, and it will be pushed to the
+main documentation site as outlined in <a href="#the-documentation-build-process">the documentation build process</a>
+section below, once your changes are merged into <code>main</code> and released.</p>
+<p>However, if you're doing more than that, e.g. adding new sections, working
+with lists etc. we recommend you follow the instructions in
+<a href="#working-locally-on-the-documentation">working locally on the documentation</a>
+below, as this will give you a live preview of what the documentation
+will look like once it's built and published. This will avoid any
+unexpected results appearing in the main documentation site.</p>
+<p>If you are adding a new file, please ensure you add that file to
+<code>mkdocs.yml</code>, so it will be linked from the menu in the sidebar.</p>
+<h3 id="the-documentation-build-process">The documentation build process</h3>
+<p>The documentation for the site is built using <code>mkdocs</code>, which will
+already be installed if you're using a GitHub Codespaces environment.</p>
+<p>For a detailed explanation of <code>mkdocs</code> features, please read the
+<code>mkdocs</code> <a href="https://www.mkdocs.org/user-guide/">documentation</a>.</p>
+<p>As briefly covered above, <code>mkdocs.yml</code> contains the config for defining the documentation site,
+and the documentation is built by <code>mkdocs</code> reading the Markdown files in the <code>docs/</code> folder,
+and creating HTML files from those files. <code>mkdocs</code> can be used locally for previewing,
+but is also used as part of the documentation build process that publishes
+the official documentation site.</p>
+<h3 id="working-locally-on-the-documentation">Working locally on the documentation</h3>
+<p>If you are making changes to the documentation, you can see
+a live preview version of the documentation as it will be
+built and deployed.</p>
+<p>This preview version is local to your environment, is
+temporary, and does not impact the published version in any way.</p>
+<p>It's recommended for anything other than simple changes
+like fixing spelling, or adding a sentence or two. Things like
+new sections, lists, new pages etc. are best previewed
+due to the complications of various Markdown standards,
+as what works on GitHub READMEs, for example, does not
+necessarily work with the published documentation site
+(which follows a more strict Markdown standard).</p>
+<p>There are a number of terminal commands that you can use in the Codespaces environment. Open a terminal window in Codespaces by choosing Menu&gt; Terminal &gt; New Terminal.</p>
+<p>To run the live preview, enter <code>mkdocs serve</code> in the terminal window - this will cause <code>mkdocs</code> to build a
+local temporary version of the documentation site,
+and to temporarily publish it on port 8000 - it will
+show the link where you can access the documentation.</p>
+<p>Also, it will watch the <code>docs/</code> folder, and any time you change the
+files, it will rebuild the site, allowing you to see changes to
+the Markdown files in your browser within a few seconds.</p>
+<p>The site will continue being served until you press <code>CTRL-C</code> to
+end the <code>mkdocs serve</code> command.</p>
+<p><em>Note, accessing the site published by <code>mkdocs serve</code> is not
+possible if you are using Codespaces to run VS Code in the browser,
+but it is possible if you're using it via VS Code running locally,
+due to how ports on your environment are shared.</em></p>
+<h3 id="publishing-predbat-documentation">Publishing Predbat documentation</h3>
+<p>Publishing of the documentation is triggered by a GitHub action when a Predbat release is published,
+as defined in <code>.github/workflows/publish-docs.yml</code>.</p>
+<p>This is not normally something you need to be concerned about. As long as you have updated the <code>docs/</code> files, included them in a Predbat PR, then when that PR is merged into Predbat <code>main</code>, the next time a formal Predbat release is published the documentation changes will be automatically published.</p>
+<p>In short, after configuring the build environment, <code>mkdocs</code> builds the
+site then pushes the HTML produced to the <code>gh-pages</code> branch,
+overwriting whatever was there previously.</p>
+<p>GitHub will then detect a new commit on the <code>gh-pages</code> branch,
+and that will trigger another action to run (as defined by GitHub).
+This action will take the HTML files on the <code>gh-pages</code> branch
+and will make them available at <a href="https://springfall2008.github.io/batpred/">https://springfall2008.github.io/batpred/</a>.</p>
+<p>The documentation will be published as it is, with no further
+review process, so please ensure you check the documentation
+that will be built before merging it in.</p>
+<h2 id="using-ai-coding-assistants">Using AI coding assistants</h2>
+<p>The Predbat repository contains a <code>CLAUDE.md</code> file, which gives the same guidance (how to run the tests, the coding standards, and the architecture)
+to AI coding assistants such as Claude Code. If you change how the tests are run or the standards that are enforced, keep that file and this guide consistent.</p>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../todo-list/" class="btn btn-neutral float-left" title="To-do list"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../random-scenarios/" class="btn btn-neutral float-right" title="Random Scenario Benchmarking">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../todo-list/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../random-scenarios/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Hypervolt Component Implementation Plan - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Hypervolt Component Implementation Plan";
+        var mkdocs_page_input_path = "superpowers/plans/2026-10-23-hypervolt-component.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../discovery-catalogue/">Discovery Catalogue</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../hub-live-display/">Optional measured Hub display feed</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Hypervolt Component Implementation Plan</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="hypervolt-component-implementation-plan">Hypervolt Component Implementation Plan</h1>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Goal:</strong> Add a <code>hypervolt</code> cloud component to Predbat that monitors every Hypervolt charger on an account, wires them into car charging, exposes manual controls, and can stop and start each charger from Predbat's car plan.</p>
+<p><strong>Architecture:</strong> One new file, <code>apps/predbat/hypervolt.py</code>, in the shape of <code>wallbox.py</code>. Pure <code>apply_*</code> functions fold JSON-RPC message bodies into a <code>HypervoltCharger</code> dataclass. <code>HypervoltTransport</code> owns the Keycloak tokens, the one REST call, and one long-lived sync websocket per charger (plus a session websocket for API version 2), with a reader task per socket and request/reply correlation so commands are awaitable. <code>HypervoltAPI(ComponentBase)</code> publishes, handles events, auto-configures and runs plan-led control from <code>run()</code> every 60 seconds; it never touches <code>aiohttp</code>.</p>
+<p><strong>Tech Stack:</strong> Python 3, <code>aiohttp</code> (<code>ClientSession.post</code>, <code>.get</code>, <code>.ws_connect</code>; already a dependency), <code>ComponentBase</code>, <code>MockBase</code>, <code>predbat_metrics.record_api_call</code>, <code>utils.parse_car_plan_windows</code> / <code>in_car_plan_window</code>, the Storage component.</p>
+<p><strong>Spec:</strong> <code>docs/superpowers/specs/2026-10-23-hypervolt-component-design.md</code>. Read it before starting; section numbers below refer to it. <code>apps/predbat/wallbox.py</code> and <code>apps/predbat/tests/test_wallbox.py</code> are the model for structure, naming, log style and test style: copy their shape wherever this plan does not say otherwise.</p>
+<h2 id="global-constraints">Global Constraints</h2>
+<ul>
+<li>No new dependency. Do not import <code>websockets</code>, <code>requests</code> or the Home Assistant integration.</li>
+<li>Token endpoint <code>https://kc.prod.hypervolt.co.uk/realms/retail-customers/protocol/openid-connect/token</code>; API host <code>https://api.hypervolt.co.uk/</code>; sockets <code>wss://api.hypervolt.co.uk/ws/charger/{id}/sync</code> and <code>…/session/in-progress</code>. <code>HYPERVOLT_CLIENT_ID = "home-assistant"</code> is a module constant.</li>
+<li>Socket headers: <code>Origin: https://hypervolt.co.uk</code>, <code>User-Agent: Predbat</code>.</li>
+<li>Config keys are exactly <code>hypervolt_username</code>, <code>hypervolt_password</code>, <code>hypervolt_automatic</code> (default <code>True</code>), <code>hypervolt_control</code> (default <code>False</code>). No poll interval key.</li>
+<li>Entity names are <code>{prefix}_hypervolt_{charger_id}_…</code>; the global switch is <code>switch.{prefix}_hypervolt_control</code>. Every entity is published with <code>dashboard_item(..., app="hypervolt")</code>.</li>
+<li>Constants: <code>COMMAND_TIMEOUT_SECONDS = 10</code>, <code>TOKEN_MARGIN_SECONDS = 600</code>, <code>STALE_SECONDS = 240</code> (probe), <code>2 * STALE_SECONDS</code> (reconnect), back-off random 3–12 s × 1.7 capped at 300 s, <code>CHARGER_LIST_SECONDS = 30 * 60</code>, current 6–32 A.</li>
+<li>No state-of-charge sensor and no <code>car_charging_soc</code> wiring.</li>
+<li>The access token never appears in a log line or in <code>--raw</code> output.</li>
+<li>Log lines start <code>Info: hypervolt:</code>, <code>Warn: hypervolt:</code> or <code>Error: hypervolt:</code>.</li>
+<li>Every function and class needs a docstring (<code>interrogate</code> 100%). Line length up to 250. British English. <code>lower_case_with_underscores</code>.</li>
+<li>Before editing an existing symbol (<code>COMPONENT_LIST</code>, <code>APPS_SCHEMA</code>, <code>TEST_REGISTRY</code>) run GitNexus <code>impact({target: "&lt;symbol&gt;", direction: "upstream"})</code> and report the blast radius; before each commit run GitNexus <code>detect_changes()</code> (repository rule in <code>CLAUDE.md</code>).</li>
+<li>Tests are slow: write test output to a file, then read the file. Never pipe a test run into <code>grep</code>.</li>
+<li>New test files are untracked until added, and pre-commit skips untracked files: <code>git add</code> the test file before running <code>./run_pre_commit</code>.</li>
+<li>Work on a branch from <code>main</code>: <code>git checkout main &amp;&amp; git pull &amp;&amp; git checkout -b feat/hypervolt-component</code> before Task 1.</li>
+</ul>
+<p>Test command used throughout (from <code>coverage/</code>): <code>./run_all --test hypervolt &gt; /tmp/hv_test.log 2&gt;&amp;1; tail -40 /tmp/hv_test.log</code>. Pass means the log ends with the suite's success line and no <code>AssertionError</code> or <code>Traceback</code>.</p>
+<h2 id="review-focus">Review Focus</h2>
+<p>Inputs the spec implies but no rule spells out. Each has a test in the task named.</p>
+<ol>
+<li>Predbat restarts while the car sits plugged in, and Hypervolt pushes no pilot status until the cable moves — <code>_connected</code> and <code>_plugged</code> are <code>unavailable</code>, not <code>off</code>, and control neither releases nor forgets the charger. → Task 4 (<code>test_connected_state_unknown_until_pilot</code>), Task 9 (<code>test_control_waits_for_pilot_status</code>).</li>
+<li>A reply arrives for a request id nobody is waiting on (late after a timeout, or from a previous connection) — ignored, no exception, the reader keeps reading. → Task 2 (<code>test_late_reply_is_ignored</code>).</li>
+<li>The socket drops while a command is in flight — the waiting caller gets <code>HypervoltApiError</code> promptly, not a 10 second timeout, and the link reconnects. → Task 5 (<code>test_drop_fails_pending_commands</code>).</li>
+<li>A message body that is not valid JSON, or a snapshot item with an unknown enum value (<code>"release_state": "paused"</code>) — skipped, the rest of the message still applied. → Task 4 (<code>test_apply_snapshot_ignores_bad_items</code>), Task 2 (<code>test_reader_skips_bad_json</code>).</li>
+<li>The account's password changes while Predbat runs, so refresh and sign in both fail — errors are logged once per <code>run()</code>, the component returns False, and the sockets are not left reconnecting with a dead token in a tight loop. → Task 5 (<code>test_reconnect_stops_on_auth_failure</code>), Task 6 (<code>test_run_auth_failure_after_start</code>).</li>
+</ol>
+<h2 id="file-structure">File Structure</h2>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Responsibility</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>apps/predbat/hypervolt.py</code> (create)</td>
+<td>Constants, <code>HypervoltCharger</code>, <code>apply_*</code>, state helpers, errors, <code>charger_api_version</code>, <code>ChargerLink</code>, <code>HypervoltTransport</code>, <code>HypervoltAPI</code>, CLI <code>main()</code></td>
+</tr>
+<tr>
+<td><code>apps/predbat/tests/test_hypervolt.py</code> (create)</td>
+<td>All tests; <code>FakeSocket</code>, <code>_StubTransport</code>, captured <code>MOCK_*</code> fixtures inline</td>
+</tr>
+<tr>
+<td><code>apps/predbat/components.py</code> (modify)</td>
+<td><code>COMPONENT_LIST["hypervolt"]</code> (spec 4.1), after <code>"wallbox"</code></td>
+</tr>
+<tr>
+<td><code>apps/predbat/config.py</code> (modify)</td>
+<td><code>APPS_SCHEMA</code> keys (spec 4.2), after the <code>wallbox_*</code> keys</td>
+</tr>
+<tr>
+<td><code>apps/predbat/unit_test.py</code> (modify)</td>
+<td>import and <code>TEST_REGISTRY</code> entry <code>("hypervolt", test_hypervolt, "Hypervolt EV charger tests (auth, sockets, state, publishing, auto-config, controls, plan-led charging)", False)</code> after <code>wallbox</code></td>
+</tr>
+<tr>
+<td><code>docs/components.md</code>, <code>docs/car-charging.md</code>, <code>docs/apps-yaml.md</code>, <code>docs/devices.md</code>, <code>apps/predbat/config/apps.yaml</code>, <code>CLAUDE.md</code>, <code>AGENTS.md</code>, <code>.github/copilot-instructions.md</code> (modify)</td>
+<td>Task 10</td>
+</tr>
+<tr>
+<td><code>.cspell/custom-dictionary-workspace.txt</code> (modify)</td>
+<td><code>Hypervolt</code>, <code>plugncharge</code>, <code>Keycloak</code> and any other words cspell rejects</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="task-1-transport-authentication-charger-list-and-api-version">Task 1: Transport — authentication, charger list and API version</h3>
+<p><strong>Files:</strong>
+- Create: <code>apps/predbat/hypervolt.py</code>, <code>apps/predbat/tests/test_hypervolt.py</code>
+- Modify: <code>apps/predbat/unit_test.py</code> (registry entry, so the tests run from Task 1)</p>
+<p><strong>Interfaces:</strong>
+- Produces: errors <code>HypervoltError</code> &gt; <code>HypervoltAuthError</code>, <code>HypervoltApiError</code> &gt; <code>HypervoltRefusedError</code>, <code>HypervoltTimeoutError</code>. <code>charger_api_version(charger_id: str, firmware_version: str | None) -&gt; int</code>. <code>charger_major_version(charger_id: str) -&gt; int</code>. <code>HypervoltTransport(log, username, password)</code> with <code>async authenticate() -&gt; str</code> (valid access token, refreshing or signing in as needed), <code>async list_chargers() -&gt; list[dict]</code> (the <code>chargers</code> list), attributes <code>access_token</code>, <code>refresh_token</code>, <code>token_expiry</code> (epoch seconds), and <code>token_due() -&gt; bool</code> (less than <code>TOKEN_MARGIN_SECONDS</code> left).</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<p><code>test_hypervolt(my_predbat=None)</code> calls each test and returns a failure count, as <code>test_wallbox</code> does. Tests, all REST under <code>patch("aiohttp.ClientSession")</code> with Wallbox's <code>_response</code> / <code>_session</code> helpers adapted to form bodies:
+- <code>test_api_version_from_id</code>: a 12-byte id, e.g. <code>str(int("aa" * 12, 16))</code> → major 2; <code>str(int("aa" * 16, 16))</code> → major 3; <code>"junk"</code> → 3. <code>charger_api_version(v2_id, None) == 2</code>, <code>(v2_id, "1.0") == 3</code>, <code>(v2_id, "202111231810.abcdef") == 2</code>, <code>(v3_id, None) == 3</code>.
+- <code>test_sign_in</code>: posts to the token URL with <code>client_id=home-assistant</code>, <code>grant_type=password</code>, <code>scope=openid profile email offline_access</code>, username and password; stores both tokens; <code>token_expiry</code> ≈ now + <code>expires_in</code>.
+- <code>test_token_reused_then_refreshed</code>: a second <code>authenticate()</code> with time to spare makes no call; with <code>token_expiry</code> inside the margin it posts <code>grant_type=refresh_token</code>.
+- <code>test_refresh_rejected_then_sign_in</code>: refresh answers 400 → one password sign in follows.
+- <code>test_bad_credentials</code>: sign in answers 401 → <code>HypervoltAuthError</code>; the password is not in the exception text.
+- <code>test_list_chargers</code>: GET <code>users/me?includes=chargers</code> with <code>Authorization: Bearer &lt;token&gt;</code> returns the <code>chargers</code> list; a 500 raises <code>HypervoltApiError</code>; a 401 clears the access token and retries once after <code>authenticate()</code>.</p>
+<ul>
+<li>
+<p>[ ] <strong>Step 2: Run the tests and confirm they fail</strong> (import error).</p>
+</li>
+<li>
+<p>[ ] <strong>Step 3: Implement</strong> the errors, the two version functions (spec 2.7; constant <code>UPDATED_V2_FIRMWARE_MAX_LEN = 7</code>), and the transport's token handling and <code>list_chargers()</code>. A new <code>aiohttp.ClientSession</code> per REST call with a 30 second total timeout, as Wallbox does; <code>record_api_call("hypervolt", …)</code> on each.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 4: Run the tests and confirm they pass.</strong></p>
+</li>
+<li>
+<p>[ ] <strong>Step 5: Commit</strong> — <code>feat(hypervolt): transport authentication and charger list</code>.</p>
+</li>
+</ul>
+<hr />
+<h3 id="task-2-transport-the-sync-socket-and-requestreply-correlation">Task 2: Transport — the sync socket and request/reply correlation</h3>
+<p><strong>Files:</strong> Modify <code>apps/predbat/hypervolt.py</code>, <code>apps/predbat/tests/test_hypervolt.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: Task 1's <code>authenticate()</code>.
+- Produces: <code>ChargerLink</code> (one charger's sockets, reader tasks, <code>pending: dict[str, asyncio.Future]</code>, <code>api_version</code>). On the transport: <code>async connect(charger_id: str) -&gt; None</code> (starts the sync reader task; returns immediately), <code>async request(charger_id: str, method: str, params: dict | None = None) -&gt; Any</code> (sends, awaits the reply's <code>result</code>; raises <code>HypervoltRefusedError</code> with the server's <code>code</code> and <code>error</code>, <code>HypervoltTimeoutError</code> after <code>COMMAND_TIMEOUT_SECONDS</code>, <code>HypervoltApiError</code> when the charger has no open sync socket), <code>async close() -&gt; None</code>, and the hook <code>on_message(charger_id: str, method: str, body: Any) -&gt; None</code> that Task 4 fills in (a no-op here; tests replace it). <code>next_message_id() -&gt; str</code> unique per call. <code>raw_log: Optional[Callable[[str, dict], None]]</code> called with every received message, token redacted, for the CLI.</p>
+<p>Test double, in the test file: <code>FakeSocket</code> with <code>queue(msg_dict_or_str)</code>, <code>async receive()</code> returning an <code>aiohttp.WSMessage(WSMsgType.TEXT, json, None)</code> from the queue (blocking on an <code>asyncio.Event</code> when empty; a queued <code>None</code> yields <code>WSMsgType.CLOSED</code>), <code>async send_str(s)</code> recording to <code>sent</code>, <code>async close()</code>. Patch <code>aiohttp.ClientSession.ws_connect</code> to return it, as an async context manager.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+<li><code>test_sync_login_and_state_requests</code>: after <code>connect()</code>, the first sent message is <code>login</code> with <code>params == {"token": &lt;token&gt;, "version": 3}</code>; on the reply <code>{"authenticated": true}</code> the link sends <code>sync.snapshot</code>, <code>firmware.version</code>, <code>get.name</code>, and <code>plugncharge.get</code> only when the link's <code>api_version</code> is 3. Every message has <code>"jsonrpc": "2.0"</code> and an <code>id</code>.</li>
+<li><code>test_login_refused</code>: reply <code>{"authenticated": false}</code> closes the socket and the next <code>request()</code> raises <code>HypervoltApiError</code>.</li>
+<li><code>test_request_reply</code>: <code>request(id, "sync.apply", {"release": True})</code> sends that method and params and returns the reply's <code>result</code> matched by <code>id</code>, while an unrelated push arriving first goes to <code>on_message</code> and not to the caller.</li>
+<li><code>test_request_error_reply</code>: an <code>error</code> reply <code>{"code": 409, "error": "Concurrent modifications…"}</code> raises <code>HypervoltRefusedError</code> whose text contains <code>409</code> and the message.</li>
+<li><code>test_request_timeout</code>: no reply → <code>HypervoltTimeoutError</code> (patch <code>COMMAND_TIMEOUT_SECONDS</code> to 0.05) and the pending entry is removed.</li>
+<li><code>test_late_reply_is_ignored</code>: a reply for an unknown id is dropped and the next queued push still reaches <code>on_message</code>.</li>
+<li><code>test_reader_skips_bad_json</code>: a non-JSON frame is skipped; the following frame is processed.</li>
+<li><code>test_replies_and_pushes_reach_on_message</code>: replies to <code>sync.snapshot</code>, <code>plugncharge.get</code>, <code>firmware.version</code>, <code>get.name</code> reach <code>on_message</code> with the method of the request they answer; pushes reach it with their own <code>method</code>.</li>
+<li><code>test_raw_log_redacts_token</code>: with <code>raw_log</code> set, the login message's token appears as <code>********</code>.</li>
+<li>
+<p><code>test_close_cancels_readers</code>: after <code>close()</code> every reader task is done and every socket closed.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 2: Run and confirm failure.</strong></p>
+</li>
+<li>[ ] <strong>Step 3: Implement.</strong> The reader loops on <code>receive()</code>; a reply resolves its future (popping the pending entry) and is also passed to <code>on_message</code> with the request's method; <code>CLOSED</code> / <code>ERROR</code> ends the loop. Send with <code>send_str(json.dumps(...))</code>. Each socket connect is recorded with <code>record_api_call("hypervolt", …)</code>. No reconnect yet (Task 5).</li>
+<li>[ ] <strong>Step 4: Run and confirm pass.</strong></li>
+<li>[ ] <strong>Step 5: Commit</strong> — <code>feat(hypervolt): sync websocket with request/reply correlation</code>.</li>
+</ul>
+<hr />
+<h3 id="task-3-command-line-mode-and-payload-capture-needs-a-real-charger">Task 3: Command line mode and payload capture (needs a real charger)</h3>
+<p><strong>Files:</strong> Modify <code>apps/predbat/hypervolt.py</code> (<code>main()</code>, <code>print_charger_table()</code>, both <code># pragma: no cover</code>), <code>apps/predbat/tests/test_hypervolt.py</code> (fixtures only)</p>
+<p><strong>Interfaces:</strong> Consumes Tasks 1–2. Produces the <code>MOCK_*</code> fixtures Task 4 tests against.</p>
+<ul>
+<li>[ ] <strong>Step 1: Implement <code>main()</code></strong> per spec section 9 with <code>--raw</code> wired to <code>transport.raw_log</code>; <code>--start</code> / <code>--stop</code> send <code>sync.apply {"release": false|true}</code>, <code>--max-current</code> sends <code>{"max_current": amps * 1000}</code>, <code>--mode</code> sends <code>plugncharge.set</code> or <code>sync.apply {"solar_mode"}</code> by API version. Without Task 4, the default output is the raw messages.</li>
+<li>[ ] <strong>Step 2: Capture</strong>, with the maintainer, <code>python3 apps/predbat/hypervolt.py --username … --raw --wait 60</code> in each of: unplugged; plugged and not charging; charging; after <code>--stop</code>; after <code>--start</code>; after unplugging and replugging while connected. Record per message whether <code>get.pilot_status</code> arrives at connect with no cable change (spec 13).</li>
+<li>[ ] <strong>Step 3: Save fixtures</strong> in the test file as <code>MOCK_SNAPSHOT</code>, <code>MOCK_SESSION_CHARGING</code>, <code>MOCK_SESSION_IDLE</code>, <code>MOCK_PILOT_A</code>, <code>MOCK_PILOT_B</code>, <code>MOCK_PILOT_C</code>, <code>MOCK_PLUGNCHARGE_GET</code>, <code>MOCK_PLUGNCHARGE_SET</code>, <code>MOCK_FIRMWARE</code>, <code>MOCK_ERROR_REPLY</code>, with the charger id, name and serial replaced. Add a comment above them stating what the capture established about each spec-13 risk; if pilot status is not pushed at connect, add <code>get.pilot_status</code> to the post-login requests in Task 2's code and its test.</li>
+<li>[ ] <strong>Step 4: Run the suite and confirm it still passes.</strong></li>
+<li>[ ] <strong>Step 5: Commit</strong> — <code>feat(hypervolt): command line test mode and captured payloads</code>.</li>
+</ul>
+<hr />
+<h3 id="task-4-charger-state-dataclass-apply_-and-derived-states">Task 4: Charger state — dataclass, <code>apply_*</code> and derived states</h3>
+<p><strong>Files:</strong> Modify <code>apps/predbat/hypervolt.py</code>, <code>apps/predbat/tests/test_hypervolt.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: Task 2's <code>on_message</code> hook; Task 3's fixtures.
+- Produces:
+  - <code>HypervoltCharger</code> dataclass fields: <code>charger_id: str</code>, <code>model: str = ""</code>, <code>name: str = ""</code>, <code>firmware_version: Optional[str] = None</code>, <code>api_version: int = 2</code>, <code>release_state: Optional[str] = None</code> (<code>"default"</code> / <code>"released"</code>), <code>charging: bool = False</code>, <code>pilot_status: Optional[str] = None</code>, <code>power_w: float = 0.0</code>, <code>session_id: Optional[int] = None</code>, <code>session_energy_kwh: float = 0.0</code>, <code>max_current_a: Optional[int] = None</code>, <code>charge_mode: Optional[str] = None</code>, <code>features: list = field(default_factory=list)</code>, <code>lock_state: Optional[str] = None</code>, <code>last_message: float = 0.0</code>.
+  - <code>apply_snapshot(charger, items) -&gt; None</code>, <code>apply_session(charger, result) -&gt; None</code>, <code>apply_pilot(charger, result) -&gt; None</code>, <code>apply_plugncharge(charger, result) -&gt; None</code>.
+  - <code>connected_state(charger) -&gt; str</code> (<code>"on"</code> / <code>"off"</code> / <code>"unavailable"</code>, spec 5), <code>plugged_state(charger) -&gt; str</code>, <code>status_text(charger) -&gt; str</code>, <code>charge_mode_options(charger) -&gt; list[str]</code>, <code>is_stale(charger, now: float) -&gt; bool</code> (<code>now - last_message &gt; STALE_SECONDS</code>).
+  - Transport: <code>chargers: dict[str, HypervoltCharger]</code>, filled by <code>connect()</code> (from the <code>list_chargers()</code> entry, so <code>model</code> and <code>api_version</code> are known) and updated by <code>on_message</code>, which stamps <code>last_message</code>. On <code>firmware.version</code> it recomputes <code>api_version</code> with <code>charger_api_version</code>; Task 5 acts on a promotion.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+<li><code>test_apply_snapshot</code>: <code>MOCK_SNAPSHOT</code> sets <code>release_state</code>, <code>max_current_a</code> (mA ÷ 1000, an int), <code>charge_mode</code> from <code>solar_mode</code>, <code>features</code>, <code>lock_state</code>.</li>
+<li><code>test_apply_snapshot_ignores_bad_items</code>: <code>[{"release_state": "paused"}, {"max_current": "x"}, {"max_current": 16000}]</code> leaves <code>release_state</code> unchanged, sets <code>max_current_a == 16</code>.</li>
+<li><code>test_apply_session_power</code>: with <code>ev_power</code> → <code>power_w == ev_power</code>; without, <code>true_milli_amps=16000, voltage=240</code> → <code>3840.0</code>; <code>charging</code> false → <code>power_w == 0.0</code>.</li>
+<li><code>test_session_energy_holds_and_resets</code>: session 7 at 2371 Wh → 2.371 kWh; a later lower reading in session 7 keeps 2.371; <code>charging</code> false keeps 2.371 (never unknown); session 8 at 150 Wh → 0.15.</li>
+<li><code>test_apply_pilot</code>: A → <code>"off"</code> from <code>connected_state</code> and <code>plugged_state</code>; B and C → <code>"on"</code>; <code>"E"</code> is ignored.</li>
+<li><code>test_connected_state_unknown_until_pilot</code>: no pilot and not charging → both <code>"unavailable"</code>; no pilot and charging → <code>connected_state == "on"</code>, <code>plugged_state == "unavailable"</code>.</li>
+<li><code>test_apply_plugncharge</code>: the get form <code>{"applied": "boost"}</code> and the set form <code>{"mode": "eco", "applied": true}</code> set the mode; <code>{"mode": "eco", "applied": false}</code> does not; an unknown mode is ignored.</li>
+<li><code>test_status_text</code>: charging → <code>charging</code>; released → <code>stopped</code>; pilot B → <code>connected</code>; pilot A → <code>disconnected</code>; nothing known → <code>unknown</code>.</li>
+<li><code>test_charge_mode_options</code>: base three; with <code>home-battery-drain-prevention</code> in <code>features</code> adds <code>super_eco_battery_safe</code>.</li>
+<li><code>test_captured_payloads</code>: each Task 3 fixture applied in capture order yields the state it was captured in.</li>
+<li>
+<p><code>test_on_message_updates_charger</code>: a push through the transport's <code>on_message</code> updates <code>transport.chargers[id]</code> and stamps <code>last_message</code>; <code>firmware.version</code> <code>"1.0"</code> on a V2 id sets <code>api_version == 3</code>.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 2: Run and confirm failure.</strong></p>
+</li>
+<li>[ ] <strong>Step 3: Implement.</strong> Each <code>apply_*</code> wraps each key in its own guard, so one bad value does not stop the rest.</li>
+<li>[ ] <strong>Step 4: Run and confirm pass.</strong></li>
+<li>[ ] <strong>Step 5: Commit</strong> — <code>feat(hypervolt): charger state from sync and session messages</code>.</li>
+</ul>
+<hr />
+<h3 id="task-5-transport-link-lifecycle">Task 5: Transport — link lifecycle</h3>
+<p><strong>Files:</strong> Modify <code>apps/predbat/hypervolt.py</code>, <code>apps/predbat/tests/test_hypervolt.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: Tasks 1, 2, 4.
+- Produces: <code>async reconnect(charger_id: str) -&gt; None</code>, <code>async reconnect_all() -&gt; None</code>, <code>async probe(charger_id: str) -&gt; None</code> (sends <code>sync.snapshot</code> without awaiting a reply), <code>backoff_seconds: Callable[[], float]</code> attribute on each link (tests set it to return 0), and <code>auth_failed: bool</code> (set when a reconnect's <code>authenticate()</code> raises <code>HypervoltAuthError</code>; reader loops stop reconnecting while it is set).</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+<li><code>test_reconnects_with_backoff</code>: a <code>CLOSED</code> frame makes the reader wait the back-off and open a new socket, which logs in again. Back-off sequence for a seeded <code>random</code>: first value in 3–12; each next ×1.7; never above 300; reset to the initial range after four messages on one connection.</li>
+<li><code>test_drop_fails_pending_commands</code>: a <code>request()</code> in flight when the socket closes raises <code>HypervoltApiError</code> before <code>COMMAND_TIMEOUT_SECONDS</code>.</li>
+<li><code>test_reconnect_stops_on_auth_failure</code>: <code>authenticate()</code> raising <code>HypervoltAuthError</code> during a reconnect sets <code>auth_failed</code> and the reader stops trying; a later successful <code>authenticate()</code> (called by the component) clears it and <code>reconnect_all()</code> restarts the readers.</li>
+<li><code>test_session_socket_only_for_api_2</code>: <code>connect()</code> for an API 2 charger opens both sockets, an API 3 charger only the sync socket; session socket frames go to <code>on_message</code> with method <code>get.session</code>.</li>
+<li><code>test_promotion_to_api_3</code>: a <code>firmware.version</code> reply <code>"1.0"</code> on a V2 id sends <code>plugncharge.get</code> and closes the session socket.</li>
+<li>
+<p><code>test_reconnect_all_uses_new_token</code>: after <code>access_token</code> changes, <code>reconnect_all()</code> closes every socket and the new login carries the new token.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 2: Run and confirm failure.</strong></p>
+</li>
+<li>[ ] <strong>Step 3: Implement.</strong> One reader loop per socket kind; back-off function per spec 3.1; on close, fail every pending future with <code>HypervoltApiError("connection closed")</code>.</li>
+<li>[ ] <strong>Step 4: Run and confirm pass.</strong></li>
+<li>[ ] <strong>Step 5: Commit</strong> — <code>feat(hypervolt): reconnect, back-off, token refresh and API promotion</code>.</li>
+</ul>
+<hr />
+<h3 id="task-6-component-registration-run-loop-and-publishing">Task 6: Component — registration, run loop and publishing</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/hypervolt.py</code>, <code>apps/predbat/tests/test_hypervolt.py</code>, <code>apps/predbat/components.py</code> (spec 4.1), <code>apps/predbat/config.py</code> (spec 4.2)</p>
+<p><strong>Interfaces:</strong>
+- Consumes: the transport (Tasks 1–5). Tests use <code>_StubTransport</code> holding <code>chargers: dict[str, HypervoltCharger]</code>, a settable <code>token_due()</code> and <code>auth_failed</code>, and recording <code>authenticate</code>, <code>list_chargers</code>, <code>connect</code>, <code>reconnect_all</code>, <code>probe</code>, <code>reconnect</code>, <code>request</code>, <code>close</code> calls, in Wallbox's <code>_StubTransport</code> style.
+- Produces: <code>HypervoltAPI.initialize(self, username, password, automatic=True, hypervolt_control=False)</code>; <code>async run(seconds, first) -&gt; bool</code>; <code>async publish_data()</code>; <code>async final()</code>; <code>entity_prefix(charger) -&gt; str</code>; <code>car_order: list[str]</code> (append-only, numeric id order, Wallbox <code>update_car_order</code>); <code>ordered_chargers() -&gt; list[HypervoltCharger]</code>; <code>fresh_chargers(now) -&gt; list[HypervoltCharger]</code>; <code>queued_events: list</code>; <code>async process_events() -&gt; bool</code> (copied from Wallbox, with <code>HypervoltError</code> types).</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+<li><code>test_component_registration</code>: <code>COMPONENT_LIST["hypervolt"]</code> matches spec 4.1 exactly; the four <code>APPS_SCHEMA</code> keys exist with the spec's types.</li>
+<li><code>test_component_missing_credentials</code>: no transport, error logged, <code>run()</code> returns False.</li>
+<li><code>test_run_first_signs_in_lists_and_connects</code>: first run calls <code>authenticate</code>, <code>list_chargers</code>, <code>connect</code> per charger in id order; returns True only once a charger has a fresh message (stub chargers with <code>last_message = now</code> → True; all zero → False).</li>
+<li><code>test_run_refreshes_token</code>: <code>token_due()</code> True → <code>authenticate</code> then <code>reconnect_all</code>.</li>
+<li><code>test_run_probes_then_reconnects_stale</code>: a charger 300 s stale gets <code>probe</code>; 600 s stale gets <code>reconnect</code>; a fresh one gets neither.</li>
+<li><code>test_run_lists_chargers_every_30_minutes</code>: at <code>seconds % CHARGER_LIST_SECONDS == 0</code> the list is re-read and a new charger is connected and appended to <code>car_order</code>.</li>
+<li><code>test_run_auth_failure_after_start</code>: <code>authenticate</code> raising <code>HypervoltAuthError</code> logs one <code>Error: hypervolt:</code> line per run and returns False.</li>
+<li><code>test_publishes_one_charger</code>: exactly the spec-5 entity set, with states from the charger, <code>app="hypervolt"</code>, and the charger name in each friendly name; no control switch while control is unavailable.</li>
+<li><code>test_publishes_two_chargers</code>: both sets, in car order.</li>
+<li><code>test_update_success_only_when_fresh</code>: <code>update_success_timestamp</code> called only when at least one charger is fresh.</li>
+<li>
+<p><code>test_final_closes_transport</code>: <code>final()</code> calls <code>transport.close()</code>.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 2: Run and confirm failure.</strong></p>
+</li>
+<li>[ ] <strong>Step 3: Implement</strong>, following Wallbox <code>run()</code> / <code>publish_data()</code> / <code>charger_attributes()</code>. The <code>hypervolt_attribute_table</code> mirrors Wallbox's with the spec-5 keys; the <code>max_charging_current</code> entry has <code>min</code> 6, <code>max</code> 32, <code>step</code> 1; the <code>charge_mode</code> entry's <code>options</code> come from <code>charge_mode_options(charger)</code>. Run GitNexus <code>impact</code> on <code>COMPONENT_LIST</code> and <code>APPS_SCHEMA</code> before editing them.</li>
+<li>[ ] <strong>Step 4: Run</strong> <code>./run_all --test hypervolt --test components &gt; /tmp/hv_test.log 2&gt;&amp;1</code> <strong>and confirm pass</strong> (<code>components</code> imports every registered class).</li>
+<li>[ ] <strong>Step 5: Commit</strong> — <code>feat(hypervolt): component registration, run loop and publishing</code>.</li>
+</ul>
+<hr />
+<h3 id="task-7-manual-controls">Task 7: Manual controls</h3>
+<p><strong>Files:</strong> Modify <code>apps/predbat/hypervolt.py</code>, <code>apps/predbat/tests/test_hypervolt.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: Task 6's queue and <code>process_events()</code>; <code>transport.request()</code>.
+- Produces: <code>switch_event</code>, <code>number_event</code>, <code>select_event</code> stubs that queue, and their <code>_handler</code> methods; <code>charger_for_entity(entity_id) -&gt; Optional[HypervoltCharger]</code> (whole-id match, as Wallbox's).</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+<li><code>test_controls_queue_rather_than_call</code>: an event makes no transport call until the next <code>run()</code>.</li>
+<li><code>test_switch_charging</code>: <code>turn_on</code> → <code>request(id, "sync.apply", {"release": False})</code>; <code>turn_off</code> → <code>{"release": True}</code>.</li>
+<li><code>test_number_current_clamps_and_ignores_junk</code>: <code>"16"</code> → <code>{"max_current": 16000}</code>; <code>40</code> → <code>32000</code>; <code>3</code> → <code>6000</code>; <code>"abc"</code> → no request.</li>
+<li><code>test_select_charge_mode_by_api_version</code>: API 3 → <code>plugncharge.set {"mode": "eco"}</code>; API 2 → <code>sync.apply {"solar_mode": "eco"}</code>; <code>"turbo"</code> → no request; <code>super_eco_battery_safe</code> without the feature → no request.</li>
+<li><code>test_control_refused_logged_with_reason</code>: <code>HypervoltRefusedError("409 Concurrent…")</code> → a <code>Warn: hypervolt:</code> line containing it; the run still returns True.</li>
+<li>
+<p><code>test_charger_for_entity_requires_whole_id</code>: charger <code>12</code> does not match an entity for charger <code>123</code>.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 2: Run and confirm failure.</strong></p>
+</li>
+<li>[ ] <strong>Step 3: Implement.</strong></li>
+<li>[ ] <strong>Step 4: Run and confirm pass.</strong></li>
+<li>[ ] <strong>Step 5: Commit</strong> — <code>feat(hypervolt): manual charge, current and mode controls</code>.</li>
+</ul>
+<hr />
+<h3 id="task-8-automatic-configuration">Task 8: Automatic configuration</h3>
+<p><strong>Files:</strong> Modify <code>apps/predbat/hypervolt.py</code>, <code>apps/predbat/tests/test_hypervolt.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>car_order</code>.
+- Produces: <code>automatic_config() -&gt; None</code>, called from <code>run()</code> once per car order (Wallbox's <code>_auto_configured_order</code> pattern).</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+<li><code>test_automatic_config_two_chargers</code>: <code>set_arg_auto</code> receives the five spec-6 lists in car order; <code>car_charging_now</code> with <code>overwrite=False</code>; <code>num_cars</code> raised to 2.</li>
+<li><code>test_automatic_config_keeps_user_values</code>: a user <code>car_charging_now</code> survives; a user <code>num_cars</code> of 3 is not lowered.</li>
+<li><code>test_automatic_config_disabled</code>: <code>automatic=False</code> sets nothing.</li>
+<li><code>test_automatic_config_runs_once_per_order</code>: a second run sets nothing; a charger added later triggers one more call.</li>
+<li>
+<p><code>test_automatic_config_api_2_info</code>: an API 2 charger logs one <code>Info: hypervolt:</code> line naming <code>docs/car-charging.md</code>, once, and is still wired.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 2: Run and confirm failure.</strong></p>
+</li>
+<li>[ ] <strong>Step 3: Implement.</strong></li>
+<li>[ ] <strong>Step 4: Run and confirm pass.</strong></li>
+<li>[ ] <strong>Step 5: Commit</strong> — <code>feat(hypervolt): automatic car charging configuration</code>.</li>
+</ul>
+<hr />
+<h3 id="task-9-predbat-led-charging">Task 9: Predbat-led charging</h3>
+<p><strong>Files:</strong> Modify <code>apps/predbat/hypervolt.py</code>, <code>apps/predbat/tests/test_hypervolt.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: Tasks 4, 6, 8; <code>parse_car_plan_windows</code>, <code>in_car_plan_window</code>; <code>self.storage</code>.
+- Produces: <code>enable_control()</code>, <code>async load_control_state()</code>, <code>async save_control_state() -&gt; bool</code>, <code>control_read_only_now() -&gt; bool</code>, <code>refresh_car_windows(now) -&gt; bool</code>, <code>async control_tick(now)</code>, <code>async release_chargers()</code>, <code>async control_charge(now)</code>, <code>async control_one(car_n, charger, wanted)</code>; state <code>control_active</code>, <code>control_enabled</code>, <code>released_by_predbat: set[str]</code>, <code>control_state_dirty</code>. Storage module <code>"hypervolt"</code>, key <code>"control_state"</code>, value <code>{"control_enabled": bool, "released": [ids]}</code>. Port each from the Wallbox method of the same name; the differences are spec 7.2's rules (release state instead of status ids, no lock or OCPP handling, no schedule hand-back). <code>control_tick</code> runs on every <code>run()</code>, not on a poll cadence.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong> (Wallbox's <code>_plan_window</code> and <code>_control_component</code> helpers, adapted)</li>
+<li><code>test_control_needs_automatic</code>: <code>hypervolt_control=True, automatic=False</code> → warning, <code>control_active</code> False.</li>
+<li><code>test_control_starts_inside_window</code>: released, pilot B, inside → <code>{"release": False}</code>; also with no pilot status (API 2) → sent; pilot A → not sent.</li>
+<li><code>test_control_stops_outside_window</code>: default, pilot B, outside → id saved to storage before <code>{"release": True}</code> is requested (assert storage write precedes the request in a shared call log).</li>
+<li><code>test_control_stops_waiting_car</code>: default, pilot B, not charging, outside → stopped (the difference from Wallbox).</li>
+<li><code>test_control_waits_for_pilot_status</code>: default, no pilot, not charging, outside → nothing; a released charger with no pilot is not forgotten.</li>
+<li><code>test_control_forgets_unplugged</code>: a recorded charger at pilot A is dropped from <code>released_by_predbat</code> and nothing is sent.</li>
+<li><code>test_control_skips_stale_and_unplanned</code>: a stale charger and a car with no slot sensor are left alone.</li>
+<li><code>test_control_is_per_car</code>: car 1 reads <code>binary_sensor.predbat_car_charging_slot_1</code>.</li>
+<li><code>test_control_one_command_per_run</code>: a charger whose state has not changed after a command is not sent it again in the same run.</li>
+<li><code>test_control_releases_on_read_only_and_switch_off</code>: each sends <code>{"release": False}</code> to recorded chargers only, then clears and saves.</li>
+<li><code>test_control_state_survives_restart</code>: a new component with the same storage releases a charger an earlier one recorded, with control now off.</li>
+<li><code>test_control_switch_published_only_when_available</code>, <code>test_control_switch_state_survives_restart</code>, <code>test_control_without_storage_still_works</code>, <code>test_control_state_load_is_retried</code>: as their Wallbox namesakes.</li>
+<li>
+<p><code>test_control_failure_does_not_fail_run</code>: <code>HypervoltRefusedError</code> from a control command → one warning, run returns True.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 2: Run and confirm failure.</strong></p>
+</li>
+<li>[ ] <strong>Step 3: Implement.</strong></li>
+<li>[ ] <strong>Step 4: Run and confirm pass.</strong></li>
+<li>[ ] <strong>Step 5: Commit</strong> — <code>feat(hypervolt): Predbat-led charging with persisted release</code>.</li>
+</ul>
+<hr />
+<h3 id="task-10-documentation">Task 10: Documentation</h3>
+<p><strong>Files:</strong> those listed in spec section 11.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the docs</strong>, using the Wallbox sections as the template in each file. <code>docs/car-charging.md</code> "Hypervolt direct integration" must state: the four keys; that Predbat-led charging needs Boost mode and the Hypervolt schedule off; that a V2 charger cannot report a plugged-in car that is not charging (link the existing V2 guidance section); that the charger cannot report the car's state of charge. <code>docs/devices.md</code> keeps the Home Assistant route and adds one line pointing to the direct component. Bump the component count in <code>CLAUDE.md</code>, <code>AGENTS.md</code>, <code>.github/copilot-instructions.md</code> by one and add <code>Hypervolt</code> to the name lists.</li>
+<li>[ ] <strong>Step 2: Run</strong> <code>./run_pre_commit &gt; /tmp/hv_pc.log 2&gt;&amp;1</code> (after <code>git add</code> of every new file) <strong>and confirm it passes</strong>; add rejected words to <code>.cspell/custom-dictionary-workspace.txt</code> and re-stage.</li>
+<li>[ ] <strong>Step 3: Commit</strong> — <code>docs(hypervolt): component, car charging and apps.yaml documentation</code>.</li>
+</ul>
+<hr />
+<h3 id="task-11-full-verification-and-live-check-needs-a-real-charger">Task 11: Full verification and live check (needs a real charger)</h3>
+<ul>
+<li>[ ] <strong>Step 1:</strong> <code>./run_all --quick &gt; /tmp/hv_quick.log 2&gt;&amp;1</code>; confirm no failures. Run <code>./run_shuffle --hunt --quick &gt; /tmp/hv_shuffle.log 2&gt;&amp;1</code> once to check the new tests do not leak state into others.</li>
+<li>[ ] <strong>Step 2:</strong> GitNexus <code>detect_changes({scope: "compare", base_ref: "main"})</code>; confirm only <code>hypervolt.py</code>, the test file, the three registry symbols and docs changed.</li>
+<li>[ ] <strong>Step 3: Live</strong>, with <code>hypervolt_control: True</code> on the maintainer's system, record in the PR description: entities appear with sensible values; <code>switch.&lt;p&gt;_charging</code> off then on stops and restarts a charge; plug in outside a planned window → stopped within one minute; inside a window → starts; turning the control switch off releases a charger Predbat stopped; restart Predbat with the car plugged in and note what <code>_connected</code> shows before the cable moves.</li>
+<li>[ ] <strong>Step 4:</strong> Update spec section 13 with what the live check settled, and add a <code>tools/debug-journal.md</code> entry for Hypervolt (API quirks, pilot status behaviour, release across unplug).</li>
+<li>[ ] <strong>Step 5: Commit</strong>, push and open a draft PR referencing the spec.</li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

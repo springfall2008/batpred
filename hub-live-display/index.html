@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>Optional measured Hub display feed - Predbat Documentation</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Optional measured Hub display feed";
+        var mkdocs_page_input_path = "hub-live-display.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../discovery-catalogue/">Discovery Catalogue</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">Optional measured Hub display feed</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#independent-display-off">Independent display off</a>
+    </li>
+    </ul>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Predbat development</li>
+      <li class="breadcrumb-item active">Optional measured Hub display feed</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="optional-measured-hub-display-feed">Optional measured Hub display feed</h1>
+<!-- cspell:ignore PYTHONPATH -->
+
+<p>This GivEnergy Cloud adapter uses a provider-independent wire contract. The
+companion SaaS and firmware integrations supply the saved independent display
+preference. FoxESS measured data remains unavailable.
+No deployment, enrollment or customer provider change is included.</p>
+<p>Producer opt-in requires both <code>gateway_display_only: true</code> and the new boolean
+<code>gateway_live_display: true</code> (default false), plus <code>gateway_device_id</code> and an
+explicit <code>gateway_inverter_serial</code> string/list. The component registry exposes
+the flag, but SaaS must bind the saved preference and exact physical selection
+to these arguments plus <code>gateway_live_display_binding</code>. The binding must have
+exactly enabled/device_id/provider/source_id fields matching the paired Hub and
+canonical selection. Missing, invalid or disabled bindings cannot produce usable
+actuals. The original raw publisher remains restricted to <code>predbat_data</code>.</p>
+<p>A separate metadata-only publisher constructs a fixed device <code>/config</code> topic
+and whitelist-only <code>{live_display: binding}</code> body. It requires strict display
+role, valid paired device identity and matching topic base. It publishes on
+reconnect and every 60 seconds, sending <code>{enabled:false}</code> when live opt-in is
+absent/off/invalid. These sends are deliberately <strong>non-retained</strong>: replacing the
+shared topic's retained full configuration would erase passive cutover intent,
+mesh keys or other desired settings. Only this display metadata bypasses battery
+write gating; no bus/control configuration is accepted and generic raw config
+publication is still blocked. Failures retry without advancing dedup state.</p>
+<p><code>predbat/devices/&lt;paired Hub&gt;/predbat_data</code> gains <code>live_display</code> only when opted
+in. Version 1 contains <code>v: 1</code>, <code>enabled: true</code>, <code>device_id</code>, <code>provider</code>, <code>source_id</code>,
+and <code>available</code>. Complete actuals add integer <code>observed_at</code> (UTC epoch seconds),
+<code>soc</code> (0..100), <code>capacity_wh</code> (1..1000000), <code>battery_w</code> (+charge), <code>grid_w</code>
+(+export), <code>solar_w</code> and <code>load_w</code>. Signed powers are bounded to +/-1000000 W;
+solar/load are non-negative. Genuine zero is valid. Missing values are omitted,
+never filled from sensors or plan <code>block_soc</code> forecasts. An unavailable message
+clears the receiver's previous actuals.</p>
+<p>Source identity is SHA256 of UTF-8 <code>provider + "\n" + "\n".join(serials)</code>, where
+serials are the sorted, unique uppercase selected physical inverter serials.
+Selections contain 1..16 serials, each <code>[A-Za-z0-9_-]{1,32}</code>. Case-insensitive
+duplicates are rejected. Current provider is <code>givenergy</code>. This binds selection,
+not authority: firmware separately requires authorized device <code>/config</code> opt-in
+with that exact provider/source/device binding. Existing instance and staff MQTT
+principals can publish <code>/config</code>; it is not service-exclusive. Telemetry alone
+cannot enable display or change the binding. Server-issued preference/selection
+configuration is emitted by the separate SaaS follow-up; this branch validates
+it before publication. If opting out removes the Gateway component altogether, the stopped instance
+cannot send a final disable. Matching firmware treats valid non-retained metadata
+as a <strong>150-second monotonic lease</strong>, renewed by this 60-second publisher. It
+expires the external role independently of actual-data freshness after the last
+enable received, applied on the next display-state tick. Telemetry never renews it; retained enable replay is rejected;
+explicit disable is immediate when delivered. This preserves shared retained
+configuration and ordinary passive/local UI without changing control state.
+The customer save-to-engine-config-reload delay is separate, so this is not an
+immediate save-time revocation guarantee. The paired SaaS lifecycle verifier
+exercises real preference SQL save, config output, Components.start/stop, TLS MQTT
+and firmware decoder/projection with deterministic lease time.</p>
+<p>Only one registered inverter provider may be active. Raw GE API samples are
+captured before the existing null-preserving merge, so old fields cannot gain a
+new timestamp. A sample must be complete, timezone stamped, at most 300 seconds
+old, and no more than 30 seconds ahead. The adapter requires the exact GE battery
+set at one known site. EMS, Gateway and extra PV compositions are unavailable.
+Multiple direct batteries require one explicitly common meter identity; grid
+and house load are counted once, battery/PV power summed, actual SoC capacity
+weighted. Different or unknown meters, mismatched sites, sample skew above 60
+seconds, absent nominal capacity/voltage or unsupported providers are unavailable.
+This deliberately leaves some real systems unsupported until topology semantics
+are proven. It does not guess aggregation or use configured fallback capacity.</p>
+<p>Live display publication includes a 60-second heartbeat even when readings are
+unchanged. The compact complete MQTT packet budget is 1400 bytes, including UTF-8
+topic and 16 bytes for protocol header/QoS overhead. Optional marginal matrices
+are omitted if needed; an oversized packet is not published, so receiver expiry
+applies. Ordinary local-controller publishing stays on its existing JSON path.</p>
+<p>Validation:</p>
+<pre><code class="language-sh"># From coverage/, includes the new assertions through the existing registry:
+python ../apps/predbat/unit_test.py --test gateway &gt; /tmp/live-display-registry.log 2&gt;&amp;1
+# From repository root, export actual publisher bytes for firmware host proof:
+PYTHONPATH=apps/predbat python apps/predbat/tests/test_live_display.py /tmp/live-display-wire.json
+# Optionally supply actual synthetic SaaS-helper output as the second path:
+PYTHONPATH=apps/predbat python apps/predbat/tests/test_live_display.py /tmp/live-display-wire.json /tmp/hub-live-display-backend-fixture.json
+</code></pre>
+<p>The fixture is wholly synthetic, with no network or customer credentials. The
+firmware repository's <code>docs/hub-live-display.md</code> documents the matching decoder
+and actual DisplayState projection proof. Impact reports for initialize,
+<code>async_get_inverter_status</code>, <code>_publish_predbat_data</code>, and the gateway test runner
+were LOW in the indexed reference, with the publisher called by Gateway.run.
+The initial index was a reference checkout; source call sites were also
+inspected. The final exact-worktree refreshed index maps the expected Gateway
+run/reconnect/publication paths and GE sample capture. Its aggregate change scan
+reports HIGH because Gateway.run participates in eight indexed execution flows,
+despite LOW individual pre-edit impacts. Existing control publishing and read-only
+handlers are unchanged, and the full gateway CLI regression group passes. This
+aggregate warning requires review and is not a customer deployment clearance.
+Affected paths are raw GE observation capture, optional display publication and
+component argument registration. Controller handoff and boot attachment paths are
+unchanged.</p>
+<h2 id="independent-display-off">Independent display off</h2>
+<p>The protected SaaS <code>gateway_display_visibility</code> preference is separate from
+<code>gateway_display_only</code>. A normal Hub controller can keep every polling/control
+path while <code>gateway_display_enabled: false</code> hides operating data on its screen.
+The publisher sends only device/instance-bound, revision-ordered non-retained
+visibility metadata, fresh for 120 seconds, every 60 seconds and on reconnect.
+No physical control fields use this path.</p>
+<p>Explicit Cloud false retains a metadata-only component for reconnect delivery,
+blocks the final display-data sink, and disables the external measured feed.
+Default-unset Cloud has no optional Gateway component. Firmware persists false
+independently of the unchanged 150-second external feed lease. A saved preference
+is not evidence that an offline Hub applied it. These changes do not implement
+per-inverter primary/secondary selection or automatic takeover.</p>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../plugins/" class="btn btn-neutral float-left" title="🚀 Feature: Plugin System Implementation"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../predheat/" class="btn btn-neutral float-right" title="Predheat">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../plugins/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../predheat/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

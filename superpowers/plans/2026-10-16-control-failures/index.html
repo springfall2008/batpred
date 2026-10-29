@@ -1,0 +1,1972 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Control Failure Detection Implementation Plan - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Control Failure Detection Implementation Plan";
+        var mkdocs_page_input_path = "superpowers/plans/2026-10-16-control-failures.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../discovery-catalogue/">Discovery Catalogue</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../hub-live-display/">Optional measured Hub display feed</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Control Failure Detection Implementation Plan</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="control-failure-detection-implementation-plan">Control Failure Detection Implementation Plan</h1>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Goal:</strong> Detect when the battery does not follow Predbat's Charging / Exporting / Freeze charging / Freeze exporting command, log one warning and count one failure per slot, and publish the counts as HA sensors and on the metrics dashboard.</p>
+<p><strong>Architecture:</strong> A new engine-free module <code>control_monitor.py</code> holds all judgement and bookkeeping (<code>ControlMonitor</code>). <code>execute.py</code> feeds it: <code>execute_plan()</code> sets each inverter's expectation once status is final, <code>apply_inverter_rates()</code> records the rate actually written, and <code>fetch_inverter_data()</code> passes each fresh reading to <code>observe()</code>. <code>predbat.py</code> publishes two sensors (24h count with an <code>events</code> attribute that doubles as the restore store, and a lifetime total) and feeds the Prometheus metrics that the metrics dashboard renders.</p>
+<p><strong>Tech Stack:</strong> Python 3, Predbat's own test harness (<code>apps/predbat/unit_test.py</code> + <code>TEST_REGISTRY</code>), Prometheus client gauges (<code>predbat_metrics.py</code>), a vanilla-JS dashboard fragment (<code>web_metrics_dashboard.py</code>), MkDocs.</p>
+<p><strong>Spec:</strong> <code>docs/superpowers/specs/2026-10-16-control-failures-design.md</code></p>
+<h2 id="global-constraints">Global Constraints</h2>
+<ul>
+<li>Never count anything in read-only mode (<code>set_read_only</code>) — a hard requirement from the user.</li>
+<li>Never count while any inverter is calibrating (<code>inverter.in_calibration</code>).</li>
+<li>Constants exactly: <code>GRACE_S = 300</code>, <code>CONFIRM_READINGS = 3</code>, <code>FAIL_FRACTION = 0.25</code>, <code>FLOOR_W = 200</code>, <code>MAX_GAP_S = 120</code>, <code>MIN_GAP_S = 30</code>, <code>DEFAULT_WINDOW_S = 86400</code>.</li>
+<li>Battery power sign: negative = charging, positive = discharging.</li>
+<li>Entities: <code>predbat.control_failures</code> (24h count, <code>state_class: measurement</code>, unit <code>failures</code>, icon <code>mdi:battery-alert</code>, attributes <code>events</code> = newest 20, <code>by_mode</code>) and <code>predbat.control_failures_total</code> (<code>state_class: total_increasing</code>, unit <code>failures</code>, icon <code>mdi:battery-alert</code>).</li>
+<li>Persistence only through those entities (<code>load_previous_value_from_ha</code> / <code>dashboard_item</code>), never the Storage component.</li>
+<li>Total restore: retried every publish cycle until the total reads as a number; merged once as <code>restored + counted</code>; while unresolved and total is 0 the total entity is not written; after the first write the restore is resolved.</li>
+<li>Docstrings on every function and class (<code>interrogate</code> 100%); British English (CSpell <code>en-gb</code>) — add genuine new words to <code>.cspell/custom-dictionary-workspace.txt</code>; Black line length 256.</li>
+<li>Tests: save output to a file, then grep the file. Run from <code>coverage/</code>: <code>./run_all --test &lt;name&gt; &gt; /tmp/&lt;name&gt;.txt 2&gt;&amp;1; grep -n "ERROR\|FAIL\|Traceback\|passed\|failed" /tmp/&lt;name&gt;.txt</code>.</li>
+<li>Pre-commit: <code>coverage/venv/bin/pre-commit run --files &lt;files&gt;</code> (new files must be <code>git add</code>ed first or pre-commit skips them).</li>
+<li>The shared <code>my_predbat</code> fixture means every test that mutates PredBat state must restore it in a <code>finally</code> (GH#5079).</li>
+</ul>
+<h2 id="review-focus">Review Focus</h2>
+<ol>
+<li><strong>Read-only toggled on between plan runs</strong> — the user switches read-only on and the 60s poll observes before the next <code>execute_plan</code>. Expect: nothing counted. Pinned in Task 3 (<code>test_control_monitor_read_only_between_plan_runs</code>).</li>
+<li><strong>A long charge split into back-to-back windows</strong> — a sustained failure across several contiguous half-hour windows. Expect: one failure, not one per window. Pinned in Task 1 (<code>test_contiguous_window_is_same_slot</code>).</li>
+<li><strong>Plan-cycle fetch and the 60s poll landing seconds apart</strong> with the same stale value. Expect: the near-duplicate is ignored. Pinned in Task 1 (<code>test_close_readings_are_ignored</code>).</li>
+<li><strong>Balancer holds one inverter at 0 W</strong> while the fleet is Charging. Expect: that inverter is not judged (requested below the floor). Pinned in Task 3 (<code>test_control_monitor_uses_written_rate</code>).</li>
+<li><strong>Restart in the middle of a failed slot whose plan has moved on to the next contiguous window.</strong> Expect: no second warning or count, minutes keep accruing. Pinned in Task 2 (<code>test_restart_mid_slot_does_not_recount</code>).</li>
+</ol>
+<hr />
+<h2 id="file-structure">File Structure</h2>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Action</th>
+<th>Responsibility</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>apps/predbat/control_monitor.py</code></td>
+<td>Create</td>
+<td>Constants, <code>judge_reading</code>, <code>format_failure</code>, <code>ControlMonitor</code> (tracking, events, total, restore)</td>
+</tr>
+<tr>
+<td><code>apps/predbat/tests/test_control_monitor.py</code></td>
+<td>Create</td>
+<td>Pure monitor tests + publish/restore tests against <code>my_predbat</code></td>
+</tr>
+<tr>
+<td><code>apps/predbat/execute.py</code></td>
+<td>Modify</td>
+<td>Record written rates; collect per-inverter slots in <code>execute_plan</code>; <code>record_control_expectations</code>; <code>observe_control_failures</code></td>
+</tr>
+<tr>
+<td><code>apps/predbat/tests/test_execute.py</code></td>
+<td>Modify</td>
+<td>Execute-level wiring tests on the <code>ActiveTestInverter</code> fleet</td>
+</tr>
+<tr>
+<td><code>apps/predbat/predbat.py</code></td>
+<td>Modify</td>
+<td>Create the monitor in <code>reset()</code>; <code>publish_control_failures</code>; call it from <code>update_pred</code>; metrics in <code>_emit_snapshot_metrics</code></td>
+</tr>
+<tr>
+<td><code>apps/predbat/predbat_metrics.py</code></td>
+<td>Modify</td>
+<td>Gauges + events list, exported in <code>to_dict()</code></td>
+</tr>
+<tr>
+<td><code>apps/predbat/web_metrics_dashboard.py</code></td>
+<td>Modify</td>
+<td>Section 7 "Control Failures" + <code>mdRenderControlFailures</code></td>
+</tr>
+<tr>
+<td><code>apps/predbat/tests/test_metrics_dashboard_control_failures.py</code></td>
+<td>Create</td>
+<td>Metrics round-trip + section render tests</td>
+</tr>
+<tr>
+<td><code>apps/predbat/unit_test.py</code></td>
+<td>Modify</td>
+<td>Register the new tests</td>
+</tr>
+<tr>
+<td><code>docs/output-data.md</code>, <code>docs/web-interface.md</code></td>
+<td>Modify</td>
+<td>User documentation</td>
+</tr>
+</tbody>
+</table>
+<p><strong>GitNexus impact (run 2026-10-16, index slightly stale):</strong> <code>execute_plan</code>, <code>fetch_inverter_data</code>, <code>_emit_snapshot_metrics</code> are <strong>HIGH</strong> (on the <code>update_pred</code> / <code>run_time_loop</code> main loop, one direct caller each); <code>apply_inverter_rates</code> and <code>get_metrics_dashboard_body</code> are <strong>LOW</strong>. Every edit to the HIGH symbols is an additive call at the end of the function. Re-run <code>impact</code> on each symbol before editing it (CLAUDE.md requirement) and stop if the risk has changed.</p>
+<hr />
+<h3 id="task-1-controlmonitor-core-judgement-tracking-once-per-slot-events">Task 1: ControlMonitor core — judgement, tracking, once-per-slot events</h3>
+<p><strong>Files:</strong>
+- Create: <code>apps/predbat/control_monitor.py</code>
+- Create: <code>apps/predbat/tests/test_control_monitor.py</code>
+- Modify: <code>apps/predbat/unit_test.py</code> (import near line 223, registry entry near line 633)</p>
+<p><strong>Interfaces:</strong>
+- Consumes: nothing.
+- Produces (used by Tasks 2–5):
+  - constants <code>MODE_CHARGING = "Charging"</code>, <code>MODE_EXPORTING = "Exporting"</code>, <code>MODE_FREEZE_CHARGING = "Freeze charging"</code>, <code>MODE_FREEZE_EXPORTING = "Freeze exporting"</code>, <code>JUDGED_MODES</code>, <code>GRACE_S</code>, <code>CONFIRM_READINGS</code>, <code>FAIL_FRACTION</code>, <code>FLOOR_W</code>, <code>MAX_GAP_S</code>, <code>MIN_GAP_S</code>, <code>DEFAULT_WINDOW_S</code>
+  - <code>event_key(event) -&gt; tuple</code>, <code>judge_reading(mode, requested_w, target_percent, battery_power_w, soc_percent) -&gt; True | False | None</code>
+  - <code>ControlMonitor()</code> with attributes <code>tracking: dict[int, dict]</code>, <code>events: list[dict]</code>, <code>total: int</code>, <code>restored: bool</code>
+  - <code>ControlMonitor.set_expectation(inverter_id, mode, slot_start, slot_end, target_percent, now) -&gt; None</code> (times are epoch seconds)
+  - <code>ControlMonitor.clear_expectation(inverter_id=None) -&gt; None</code>
+  - <code>ControlMonitor.observe(inverter_id, battery_power_w, soc_percent, requested_charge_w, requested_discharge_w, now) -&gt; dict | None</code>
+  - event dict keys: <code>inverter, mode, slot_start, slot_end, at, requested_w, measured_w, failed_minutes</code></p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<p>Create <code>apps/predbat/tests/test_control_monitor.py</code>:</p>
+<pre><code class="language-python"># -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+# Test control failure monitor
+# -----------------------------------------------------------------------------
+
+&quot;&quot;&quot;Tests for the control failure monitor.
+
+The expensive failure for this feature is a false alarm - telling a customer their inverter
+ignored Predbat when it was ramping up, legitimately limited, or simply not yet reported. Most of
+these tests therefore assert SILENCE, and the ones that expect a failure check it fires exactly once.
+&quot;&quot;&quot;
+
+from control_monitor import (
+    ControlMonitor,
+    judge_reading,
+    MODE_CHARGING,
+    MODE_EXPORTING,
+    MODE_FREEZE_CHARGING,
+    MODE_FREEZE_EXPORTING,
+    GRACE_S,
+    FLOOR_W,
+)
+
+# 2023-11-14 00:00:00 UTC, so slot times format as 00:00-01:00 in UTC
+T0 = 1699920000.0
+SLOT_START = T0
+SLOT_END = T0 + 3600
+
+
+def close(a, b):
+    &quot;&quot;&quot;True when two floats are equal to within rounding.&quot;&quot;&quot;
+    return abs(a - b) &lt; 1e-6
+
+
+def charging_monitor(target=80.0):
+    &quot;&quot;&quot;A monitor with inverter 0 entering Charging at T0 for the slot T0..T0+1h.&quot;&quot;&quot;
+    monitor = ControlMonitor()
+    monitor.set_expectation(0, MODE_CHARGING, SLOT_START, SLOT_END, target, T0)
+    return monitor
+
+
+def feed(monitor, offsets, power, soc=50.0, charge_w=3000, discharge_w=3000, inverter_id=0):
+    &quot;&quot;&quot;Observe one reading at T0+offset for each offset and return every event that came back.&quot;&quot;&quot;
+    events = []
+    for offset in offsets:
+        event = monitor.observe(inverter_id, power, soc, charge_w, discharge_w, T0 + offset)
+        if event is not None:
+            events.append(event)
+    return events
+
+
+def test_judge_reading():
+    &quot;&quot;&quot;Each mode's failing condition, and the readings that cannot be judged at all.&quot;&quot;&quot;
+    failed = False
+    cases = [
+        # mode, requested, target, power, soc, expected
+        (MODE_CHARGING, 3000, 80, 0, 50, True),  # asked to charge, idle
+        (MODE_CHARGING, 3000, 80, -749, 50, True),  # just under 25%
+        (MODE_CHARGING, 3000, 80, -750, 50, False),  # exactly 25% is passing
+        (MODE_CHARGING, 3000, 80, 0, 80, None),  # target reached - not judged
+        (MODE_CHARGING, FLOOR_W - 1, 80, 0, 50, None),  # too little requested to judge
+        (MODE_CHARGING, None, 80, 0, 50, None),  # nothing written
+        (MODE_EXPORTING, 2000, 20, 499, 50, True),
+        (MODE_EXPORTING, 2000, 20, 500, 50, False),
+        (MODE_EXPORTING, 2000, 20, 0, 20, None),  # at export target - not judged
+        (MODE_FREEZE_CHARGING, None, None, FLOOR_W, 50, False),  # at the floor is tolerated
+        (MODE_FREEZE_CHARGING, None, None, FLOOR_W + 1, 50, True),  # discharging past the floor
+        (MODE_FREEZE_CHARGING, None, None, -3000, 50, False),  # charging is fine during freeze charge
+        (MODE_FREEZE_EXPORTING, None, None, -(FLOOR_W + 1), 50, True),  # charging past the floor
+        (MODE_FREEZE_EXPORTING, None, None, 3000, 50, False),
+        (&quot;Demand&quot;, 3000, 80, 0, 50, None),
+    ]
+    for mode, requested, target, power, soc, expected in cases:
+        got = judge_reading(mode, requested, target, power, soc)
+        if got is not expected:
+            print(&quot;ERROR: judge_reading({}, {}, {}, {}, {}) = {}, expected {}&quot;.format(mode, requested, target, power, soc, got, expected))
+            failed = True
+    return failed
+
+
+def test_nothing_during_grace():
+    &quot;&quot;&quot;Readings inside the grace period are never judged, however bad.&quot;&quot;&quot;
+    monitor = charging_monitor()
+    events = feed(monitor, [60, 120, 180, 240], power=0)
+    if events or monitor.total != 0 or monitor.tracking[0][&quot;consecutive&quot;] != 0:
+        print(&quot;ERROR: grace readings were judged: events {} total {} consecutive {}&quot;.format(events, monitor.total, monitor.tracking[0][&quot;consecutive&quot;]))
+        return True
+    return False
+
+
+def test_fires_on_third_reading():
+    &quot;&quot;&quot;Two failing readings after grace are not enough; the third confirms, with its minutes.&quot;&quot;&quot;
+    monitor = charging_monitor()
+    feed(monitor, [60, 120, 180, 240], power=0)
+    if feed(monitor, [GRACE_S, GRACE_S + 60], power=0):
+        print(&quot;ERROR: fired before the third failing reading&quot;)
+        return True
+    events = feed(monitor, [GRACE_S + 120], power=0)
+    if len(events) != 1 or monitor.total != 1:
+        print(&quot;ERROR: expected exactly one event on the third reading, got {} (total {})&quot;.format(events, monitor.total))
+        return True
+    event = events[0]
+    expected = {&quot;inverter&quot;: 0, &quot;mode&quot;: MODE_CHARGING, &quot;slot_start&quot;: SLOT_START, &quot;slot_end&quot;: SLOT_END, &quot;at&quot;: T0 + GRACE_S + 120, &quot;requested_w&quot;: 3000, &quot;measured_w&quot;: 0}
+    for key, value in expected.items():
+        if event.get(key) != value:
+            print(&quot;ERROR: event {} is {}, expected {}&quot;.format(key, event.get(key), value))
+            return True
+    # Reading at 300 credits nothing (grace ended at 300), then 60s + 60s
+    if not close(event[&quot;failed_minutes&quot;], 2.0):
+        print(&quot;ERROR: failed_minutes {} expected 2.0&quot;.format(event[&quot;failed_minutes&quot;]))
+        return True
+    return False
+
+
+def test_passing_reading_resets():
+    &quot;&quot;&quot;A passing reading resets the run, and the minutes before it are not carried over.&quot;&quot;&quot;
+    monitor = charging_monitor()
+    feed(monitor, [240], power=0)
+    feed(monitor, [GRACE_S, GRACE_S + 60], power=0)
+    feed(monitor, [GRACE_S + 120], power=-3000)
+    if feed(monitor, [GRACE_S + 180, GRACE_S + 240], power=0):
+        print(&quot;ERROR: the run was not reset by a passing reading&quot;)
+        return True
+    events = feed(monitor, [GRACE_S + 300], power=0)
+    if len(events) != 1 or not close(events[0][&quot;failed_minutes&quot;], 3.0):
+        print(&quot;ERROR: expected one event with 3.0 minutes after the reset, got {}&quot;.format(events))
+        return True
+    return False
+
+
+def test_fires_once_and_minutes_grow():
+    &quot;&quot;&quot;Later failing readings in the same slot add minutes to the event but never re-fire.&quot;&quot;&quot;
+    monitor = charging_monitor()
+    feed(monitor, [240, GRACE_S, GRACE_S + 60, GRACE_S + 120], power=0)
+    more = feed(monitor, [GRACE_S + 180, GRACE_S + 240, GRACE_S + 300], power=0)
+    if more or monitor.total != 1 or len(monitor.events) != 1:
+        print(&quot;ERROR: slot fired more than once: {} total {}&quot;.format(more, monitor.total))
+        return True
+    if not close(monitor.events[0][&quot;failed_minutes&quot;], 5.0):
+        print(&quot;ERROR: failed_minutes {} expected 5.0&quot;.format(monitor.events[0][&quot;failed_minutes&quot;]))
+        return True
+    return False
+
+
+def test_new_slot_resets_grace():
+    &quot;&quot;&quot;A non-contiguous new slot starts its own grace.&quot;&quot;&quot;
+    monitor = charging_monitor()
+    feed(monitor, [240, GRACE_S, GRACE_S + 60, GRACE_S + 120], power=0)
+    later = SLOT_END + 600
+    monitor.set_expectation(0, MODE_CHARGING, later, later + 3600, 80.0, T0 + 4500)
+    track = monitor.tracking[0]
+    if track[&quot;entered_at&quot;] != T0 + 4500 or track[&quot;event&quot;] is not None or track[&quot;slot_start&quot;] != later:
+        print(&quot;ERROR: new slot did not start fresh tracking: {}&quot;.format(track))
+        return True
+    if feed(monitor, [4560, 4620, 4680, 4740], power=0):
+        print(&quot;ERROR: new slot judged inside its own grace&quot;)
+        return True
+    return False
+
+
+def test_contiguous_window_is_same_slot():
+    &quot;&quot;&quot;The next back-to-back window continues the slot: same key, same grace, no second count.&quot;&quot;&quot;
+    monitor = charging_monitor()
+    feed(monitor, [240, GRACE_S, GRACE_S + 60, GRACE_S + 120], power=0)
+    monitor.set_expectation(0, MODE_CHARGING, SLOT_START + 1800, SLOT_END + 1800, 80.0, T0 + 1800)
+    track = monitor.tracking[0]
+    if track[&quot;slot_start&quot;] != SLOT_START or track[&quot;entered_at&quot;] != T0 or track[&quot;event&quot;] is None:
+        print(&quot;ERROR: contiguous window started a new slot: {}&quot;.format(track))
+        return True
+    if feed(monitor, [1860, 1920, 1980], power=0) or monitor.total != 1:
+        print(&quot;ERROR: contiguous window counted again, total {}&quot;.format(monitor.total))
+        return True
+    if monitor.events[0][&quot;slot_end&quot;] != SLOT_END + 1800:
+        print(&quot;ERROR: event slot_end not extended: {}&quot;.format(monitor.events[0][&quot;slot_end&quot;]))
+        return True
+    return False
+
+
+def test_new_mode_resets_grace():
+    &quot;&quot;&quot;A different mode in the same slot is a new slot with its own grace.&quot;&quot;&quot;
+    monitor = charging_monitor()
+    monitor.set_expectation(0, MODE_FREEZE_CHARGING, SLOT_START, SLOT_END, None, T0 + 900)
+    track = monitor.tracking[0]
+    if track[&quot;mode&quot;] != MODE_FREEZE_CHARGING or track[&quot;entered_at&quot;] != T0 + 900:
+        print(&quot;ERROR: new mode did not start fresh tracking: {}&quot;.format(track))
+        return True
+    return False
+
+
+def test_reentry_does_not_recount():
+    &quot;&quot;&quot;Charging -&gt; Hold charging -&gt; Charging in the same slot re-attaches to the existing event.&quot;&quot;&quot;
+    monitor = charging_monitor()
+    feed(monitor, [240, GRACE_S, GRACE_S + 60, GRACE_S + 120], power=0)
+    monitor.clear_expectation(0)
+    monitor.set_expectation(0, MODE_CHARGING, SLOT_START, SLOT_END, 80.0, T0 + 900)
+    if monitor.tracking[0][&quot;event&quot;] is not monitor.events[0]:
+        print(&quot;ERROR: re-entry did not re-attach to the slot's event&quot;)
+        return True
+    before = monitor.events[0][&quot;failed_minutes&quot;]
+    if feed(monitor, [1200, 1260, 1320], power=0) or monitor.total != 1:
+        print(&quot;ERROR: re-entry counted the slot again, total {}&quot;.format(monitor.total))
+        return True
+    if not monitor.events[0][&quot;failed_minutes&quot;] &gt; before:
+        print(&quot;ERROR: re-entered slot did not accrue minutes&quot;)
+        return True
+    return False
+
+
+def test_target_reached_is_silent():
+    &quot;&quot;&quot;Charging at/above target and Exporting at/below target are never judged.&quot;&quot;&quot;
+    monitor = charging_monitor(target=80.0)
+    if feed(monitor, [240, 300, 360, 420, 480], power=0, soc=80.0) or monitor.tracking[0][&quot;consecutive&quot;] != 0:
+        print(&quot;ERROR: Charging at target was judged&quot;)
+        return True
+    monitor = ControlMonitor()
+    monitor.set_expectation(0, MODE_EXPORTING, SLOT_START, SLOT_END, 20.0, T0)
+    if feed(monitor, [240, 300, 360, 420, 480], power=0, soc=20.0):
+        print(&quot;ERROR: Exporting at target was judged&quot;)
+        return True
+    return False
+
+
+def test_low_requested_rate_is_silent():
+    &quot;&quot;&quot;A requested rate below the floor (low power, balancer hold) is never judged.&quot;&quot;&quot;
+    monitor = charging_monitor()
+    if feed(monitor, [240, 300, 360, 420, 480], power=0, charge_w=FLOOR_W - 1):
+        print(&quot;ERROR: a below-floor requested rate was judged&quot;)
+        return True
+    if feed(monitor, [540, 600, 660, 720], power=0, charge_w=None):
+        print(&quot;ERROR: an unwritten (None) requested rate was judged&quot;)
+        return True
+    return False
+
+
+def test_exporting_fails_on_low_discharge():
+    &quot;&quot;&quot;Exporting fails below 25% of the requested discharge rate and records that rate.&quot;&quot;&quot;
+    monitor = ControlMonitor()
+    monitor.set_expectation(0, MODE_EXPORTING, SLOT_START, SLOT_END, 20.0, T0)
+    if feed(monitor, [240, 300, 360, 420], power=600, discharge_w=2000):
+        print(&quot;ERROR: Exporting at 30% of the requested rate was judged failing&quot;)
+        return True
+    events = feed(monitor, [480, 540, 600], power=400, discharge_w=2000)
+    if len(events) != 1 or events[0][&quot;requested_w&quot;] != 2000:
+        print(&quot;ERROR: Exporting at 20% did not fail once with requested_w 2000: {}&quot;.format(events))
+        return True
+    return False
+
+
+def test_freeze_modes():
+    &quot;&quot;&quot;Freeze charging fails on discharge, Freeze exporting on charge, each only past the floor.&quot;&quot;&quot;
+    monitor = ControlMonitor()
+    monitor.set_expectation(0, MODE_FREEZE_CHARGING, SLOT_START, SLOT_END, None, T0)
+    if feed(monitor, [240, 300, 360, 420], power=FLOOR_W):
+        print(&quot;ERROR: Freeze charging at the floor was judged failing&quot;)
+        return True
+    events = feed(monitor, [480, 540, 600], power=500)
+    if len(events) != 1 or events[0][&quot;requested_w&quot;] is not None:
+        print(&quot;ERROR: Freeze charging discharging at 500W did not fail once: {}&quot;.format(events))
+        return True
+
+    monitor = ControlMonitor()
+    monitor.set_expectation(0, MODE_FREEZE_EXPORTING, SLOT_START, SLOT_END, None, T0)
+    if feed(monitor, [240, 300, 360, 420], power=3000):
+        print(&quot;ERROR: Freeze exporting while discharging was judged failing&quot;)
+        return True
+    if len(feed(monitor, [480, 540, 600], power=-500)) != 1:
+        print(&quot;ERROR: Freeze exporting charging at 500W did not fail once&quot;)
+        return True
+    return False
+
+
+def test_gap_is_capped():
+    &quot;&quot;&quot;A long gap between readings credits at most MAX_GAP_S.&quot;&quot;&quot;
+    monitor = charging_monitor()
+    feed(monitor, [240], power=0)
+    events = feed(monitor, [GRACE_S, GRACE_S + 60, GRACE_S + 400], power=0)
+    # 0 + 60 + min(340, 120) seconds = 3.0 minutes
+    if len(events) != 1 or not close(events[0][&quot;failed_minutes&quot;], 3.0):
+        print(&quot;ERROR: expected 3.0 capped minutes, got {}&quot;.format(events))
+        return True
+    return False
+
+
+def test_close_readings_are_ignored():
+    &quot;&quot;&quot;Readings closer than MIN_GAP_S to the previous one are ignored entirely.&quot;&quot;&quot;
+    monitor = charging_monitor()
+    feed(monitor, [240], power=0)
+    feed(monitor, [GRACE_S, GRACE_S + 10, GRACE_S + 20], power=0)
+    if monitor.tracking[0][&quot;consecutive&quot;] != 1:
+        print(&quot;ERROR: close readings counted, consecutive {}&quot;.format(monitor.tracking[0][&quot;consecutive&quot;]))
+        return True
+    return False
+
+
+def test_clear_keeps_events():
+    &quot;&quot;&quot;Clearing stops observation but keeps recorded events; clearing None clears every inverter.&quot;&quot;&quot;
+    monitor = charging_monitor()
+    feed(monitor, [240, GRACE_S, GRACE_S + 60, GRACE_S + 120], power=0)
+    monitor.set_expectation(1, MODE_CHARGING, SLOT_START, SLOT_END, 80.0, T0)
+    monitor.clear_expectation(0)
+    if 0 in monitor.tracking or len(monitor.events) != 1:
+        print(&quot;ERROR: clear_expectation(0) lost the event or kept tracking&quot;)
+        return True
+    if monitor.observe(0, 0, 50.0, 3000, 3000, T0 + 900) is not None:
+        print(&quot;ERROR: a cleared inverter was observed&quot;)
+        return True
+    monitor.clear_expectation()
+    if monitor.tracking:
+        print(&quot;ERROR: clear_expectation() left tracking {}&quot;.format(monitor.tracking))
+        return True
+    return False
+
+
+def run_control_monitor_tests(my_predbat):
+    &quot;&quot;&quot;Run all control failure monitor tests.&quot;&quot;&quot;
+    failed = False
+    for name, fn in [
+        (&quot;judge_reading&quot;, test_judge_reading),
+        (&quot;nothing_during_grace&quot;, test_nothing_during_grace),
+        (&quot;fires_on_third_reading&quot;, test_fires_on_third_reading),
+        (&quot;passing_reading_resets&quot;, test_passing_reading_resets),
+        (&quot;fires_once_minutes_grow&quot;, test_fires_once_and_minutes_grow),
+        (&quot;new_slot_resets_grace&quot;, test_new_slot_resets_grace),
+        (&quot;contiguous_window_same_slot&quot;, test_contiguous_window_is_same_slot),
+        (&quot;new_mode_resets_grace&quot;, test_new_mode_resets_grace),
+        (&quot;reentry_does_not_recount&quot;, test_reentry_does_not_recount),
+        (&quot;target_reached_silent&quot;, test_target_reached_is_silent),
+        (&quot;low_requested_rate_silent&quot;, test_low_requested_rate_is_silent),
+        (&quot;exporting_low_discharge&quot;, test_exporting_fails_on_low_discharge),
+        (&quot;freeze_modes&quot;, test_freeze_modes),
+        (&quot;gap_is_capped&quot;, test_gap_is_capped),
+        (&quot;close_readings_ignored&quot;, test_close_readings_are_ignored),
+        (&quot;clear_keeps_events&quot;, test_clear_keeps_events),
+    ]:
+        print(&quot;**** control_monitor: {} ****&quot;.format(name))
+        if fn():
+            print(&quot;ERROR: control_monitor test {} failed&quot;.format(name))
+            failed = True
+    return failed
+</code></pre>
+<p>Register in <code>apps/predbat/unit_test.py</code> — import beside the ledger import (line ~223):</p>
+<pre><code class="language-python">from tests.test_control_monitor import run_control_monitor_tests
+</code></pre>
+<p>and add to <code>TEST_REGISTRY</code> directly after the <code>("control_ledger", ...)</code> entry (line ~633):</p>
+<pre><code class="language-python">        (&quot;control_monitor&quot;, run_control_monitor_tests, &quot;Control failure monitor tests&quot;, False),
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run the tests to verify they fail</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test control_monitor &gt; /tmp/control_monitor.txt 2&gt;&amp;1; grep -n "ERROR\|Traceback\|ModuleNotFoundError" /tmp/control_monitor.txt | head</code>
+Expected: <code>ModuleNotFoundError: No module named 'control_monitor'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Write the implementation</strong></li>
+</ul>
+<p>Create <code>apps/predbat/control_monitor.py</code>:</p>
+<pre><code class="language-python"># -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+# Control failure monitor - detect Predbat's own commands not taking effect
+# -----------------------------------------------------------------------------
+
+&quot;&quot;&quot;Detect when the battery is not doing what Predbat commanded.
+
+The control ledger (control_ledger.py) catches settings changed OUTSIDE Predbat. This catches the
+other half: Predbat asked for Charging, Exporting, Freeze charging or Freeze exporting, and the
+battery's measured power says it is not happening.
+
+The expensive failure here is a false alarm, so judgement is deliberately conservative: a grace
+period after entering a mode, a shortfall measured against the rate actually written (so low-power
+and temperature-limited charging are not failures), and several consecutive failing readings
+before anything is reported. Each failed slot is reported, and counted, once.
+
+This module has no engine dependencies so it can be tested standalone.
+&quot;&quot;&quot;
+
+from datetime import datetime
+
+MODE_CHARGING = &quot;Charging&quot;
+MODE_EXPORTING = &quot;Exporting&quot;
+MODE_FREEZE_CHARGING = &quot;Freeze charging&quot;
+MODE_FREEZE_EXPORTING = &quot;Freeze exporting&quot;
+JUDGED_MODES = (MODE_CHARGING, MODE_EXPORTING, MODE_FREEZE_CHARGING, MODE_FREEZE_EXPORTING)
+
+# Seconds after entering a mode in a slot before any reading is judged - the inverter needs time to
+# act on the command, and cloud integrations can take minutes to report it.
+GRACE_S = 300
+# Consecutive failing readings after grace before a slot is declared failed.
+CONFIRM_READINGS = 3
+# Charging/Exporting fail when the measured power is below this fraction of the rate written.
+FAIL_FRACTION = 0.25
+# Below this requested rate there is too little power to judge; also the wrong-way flow a Freeze
+# mode tolerates before it counts as failing.
+FLOOR_W = 200
+# Cap on the failed time credited between two readings, so a long gap in polling is not counted.
+MAX_GAP_S = 120
+# A reading closer than this to the previous one is ignored - a plan-cycle fetch and the 60s poll
+# can land seconds apart and return the same sensor value.
+MIN_GAP_S = 30
+# The rolling window the 24h sensor reports over.
+DEFAULT_WINDOW_S = 86400
+
+
+def event_key(event):
+    &quot;&quot;&quot;Return the identity of a failure event: (inverter, mode, slot_start).&quot;&quot;&quot;
+    return (event.get(&quot;inverter&quot;), event.get(&quot;mode&quot;), event.get(&quot;slot_start&quot;))
+
+
+def judge_reading(mode, requested_w, target_percent, battery_power_w, soc_percent):
+    &quot;&quot;&quot;
+    Judge one reading against the mode Predbat commanded.
+
+    Battery power follows Predbat's convention: negative is charging, positive is discharging.
+
+    Returns:
+        True if the reading is failing, False if it is passing, None if it cannot be judged (the
+        target is already reached, or too little power was requested to tell).
+    &quot;&quot;&quot;
+    if mode == MODE_CHARGING:
+        if requested_w is None or requested_w &lt; FLOOR_W or target_percent is None or soc_percent &gt;= target_percent:
+            return None
+        return -battery_power_w &lt; FAIL_FRACTION * requested_w
+    if mode == MODE_EXPORTING:
+        if requested_w is None or requested_w &lt; FLOOR_W or target_percent is None or soc_percent &lt;= target_percent:
+            return None
+        return battery_power_w &lt; FAIL_FRACTION * requested_w
+    if mode == MODE_FREEZE_CHARGING:
+        return battery_power_w &gt; FLOOR_W
+    if mode == MODE_FREEZE_EXPORTING:
+        return -battery_power_w &gt; FLOOR_W
+    return None
+
+
+class ControlMonitor:
+    &quot;&quot;&quot;Track, per inverter, whether the battery is following the mode Predbat commanded.&quot;&quot;&quot;
+
+    def __init__(self):
+        &quot;&quot;&quot;Start with nothing tracked, no events and a total of zero.&quot;&quot;&quot;
+        self.tracking = {}  # inverter id -&gt; per-slot tracking state
+        self.events = []  # oldest first; also the durable store published in the sensor attributes
+        self.total = 0  # lifetime count of failed slots
+        self.restored = False  # True once the total has been read back from its entity, or first written
+
+    def _find_event(self, inverter_id, mode, slot_start):
+        &quot;&quot;&quot;Return the newest event for this inverter and mode whose slot contains slot_start, or None.&quot;&quot;&quot;
+        for event in reversed(self.events):
+            if event.get(&quot;inverter&quot;) == inverter_id and event.get(&quot;mode&quot;) == mode and event[&quot;slot_start&quot;] &lt;= slot_start &lt;= event[&quot;slot_end&quot;]:
+                return event
+        return None
+
+    def set_expectation(self, inverter_id, mode, slot_start, slot_end, target_percent, now):
+        &quot;&quot;&quot;
+        Record what this inverter should be doing until the next plan run.
+
+        The same mode with a start inside the current slot is the same slot - the planner splits a
+        long charge into back-to-back windows - so it is extended in place and keeps its grace and
+        counters. Anything else starts fresh tracking, attached to any existing event for that slot
+        so that a re-entry, or a restart, cannot count it twice.
+        &quot;&quot;&quot;
+        current = self.tracking.get(inverter_id)
+        if current and current[&quot;mode&quot;] == mode and current[&quot;slot_start&quot;] &lt;= slot_start &lt;= current[&quot;slot_end&quot;]:
+            current[&quot;slot_end&quot;] = max(current[&quot;slot_end&quot;], slot_end)
+            current[&quot;target_percent&quot;] = target_percent
+            if current[&quot;event&quot;] is not None:
+                current[&quot;event&quot;][&quot;slot_end&quot;] = max(current[&quot;event&quot;][&quot;slot_end&quot;], current[&quot;slot_end&quot;])
+            return
+        event = self._find_event(inverter_id, mode, slot_start)
+        if event is not None:
+            slot_start = event[&quot;slot_start&quot;]
+            slot_end = max(slot_end, event[&quot;slot_end&quot;])
+            event[&quot;slot_end&quot;] = slot_end
+        self.tracking[inverter_id] = {
+            &quot;mode&quot;: mode,
+            &quot;slot_start&quot;: slot_start,
+            &quot;slot_end&quot;: slot_end,
+            &quot;target_percent&quot;: target_percent,
+            &quot;entered_at&quot;: now,
+            &quot;consecutive&quot;: 0,
+            &quot;pending_s&quot;: 0.0,
+            &quot;last_observed_at&quot;: None,
+            &quot;event&quot;: event,
+        }
+
+    def clear_expectation(self, inverter_id=None):
+        &quot;&quot;&quot;Stop judging one inverter, or every inverter when inverter_id is None. Recorded events are kept.&quot;&quot;&quot;
+        if inverter_id is None:
+            self.tracking.clear()
+        else:
+            self.tracking.pop(inverter_id, None)
+
+    def observe(self, inverter_id, battery_power_w, soc_percent, requested_charge_w, requested_discharge_w, now):
+        &quot;&quot;&quot;
+        Judge one reading for one inverter.
+
+        The requested rates are passed per reading rather than fixed when the expectation is set,
+        because the 60s balancer can change them between plan runs. Charging is judged against the
+        charge rate, Exporting against the discharge rate; the Freeze modes ignore both.
+
+        Returns:
+            The new event dict when this reading confirms the slot as failed, otherwise None. A slot
+            returns an event at most once.
+        &quot;&quot;&quot;
+        track = self.tracking.get(inverter_id)
+        if track is None:
+            return None
+        last = track[&quot;last_observed_at&quot;]
+        if last is not None and now - last &lt; MIN_GAP_S:
+            return None
+        track[&quot;last_observed_at&quot;] = now
+        grace_end = track[&quot;entered_at&quot;] + GRACE_S
+        if now &lt; grace_end:
+            return None
+
+        mode = track[&quot;mode&quot;]
+        if mode == MODE_CHARGING:
+            requested_w = requested_charge_w
+        elif mode == MODE_EXPORTING:
+            requested_w = requested_discharge_w
+        else:
+            requested_w = None
+        if not judge_reading(mode, requested_w, track[&quot;target_percent&quot;], battery_power_w, soc_percent):
+            track[&quot;consecutive&quot;] = 0
+            track[&quot;pending_s&quot;] = 0.0
+            return None
+
+        credited = 0.0
+        if last is not None:
+            credited = max(0.0, min(now - max(last, grace_end), MAX_GAP_S))
+
+        event = track[&quot;event&quot;]
+        if event is not None:
+            event[&quot;failed_minutes&quot;] += credited / 60.0
+            return None
+
+        track[&quot;consecutive&quot;] += 1
+        track[&quot;pending_s&quot;] += credited
+        if track[&quot;consecutive&quot;] &lt; CONFIRM_READINGS:
+            return None
+
+        event = {
+            &quot;inverter&quot;: inverter_id,
+            &quot;mode&quot;: mode,
+            &quot;slot_start&quot;: track[&quot;slot_start&quot;],
+            &quot;slot_end&quot;: track[&quot;slot_end&quot;],
+            &quot;at&quot;: now,
+            &quot;requested_w&quot;: requested_w,
+            &quot;measured_w&quot;: battery_power_w,
+            &quot;failed_minutes&quot;: track[&quot;pending_s&quot;] / 60.0,
+        }
+        self.events.append(event)
+        track[&quot;event&quot;] = event
+        self.total += 1
+        return event
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run the tests to verify they pass</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test control_monitor &gt; /tmp/control_monitor.txt 2&gt;&amp;1; grep -n "ERROR\|Traceback\|passed\|failed" /tmp/control_monitor.txt | head -20</code>
+Expected: no <code>ERROR</code>/<code>Traceback</code> lines; the run reports the test passed.</p>
+<ul>
+<li>[ ] <strong>Step 5: Pre-commit and commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/control_monitor.py apps/predbat/tests/test_control_monitor.py apps/predbat/unit_test.py
+coverage/venv/bin/pre-commit run --files apps/predbat/control_monitor.py apps/predbat/tests/test_control_monitor.py apps/predbat/unit_test.py &gt; /tmp/pc1.txt 2&gt;&amp;1; grep -v &quot;Passed\|Skipped&quot; /tmp/pc1.txt
+</code></pre>
+<p>Fix anything reported (CSpell: add genuine words to <code>.cspell/custom-dictionary-workspace.txt</code> and <code>git add</code> it), re-run until clean, then:</p>
+<pre><code class="language-bash">git commit -m &quot;feat(control-monitor): judge each reading against the commanded mode, once per slot
+
+Co-Authored-By: Claude Opus 5.5 &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<hr />
+<h3 id="task-2-controlmonitor-retention-restore-and-log-formatting">Task 2: ControlMonitor retention, restore and log formatting</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/control_monitor.py</code>
+- Modify: <code>apps/predbat/tests/test_control_monitor.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: Task 1's <code>ControlMonitor</code>, <code>event_key</code>, constants.
+- Produces (used by Tasks 3–5):
+  - <code>is_valid_event(event) -&gt; bool</code>
+  - <code>format_failure(event, tz=None) -&gt; str</code> — the full <code>Warn: Control failure: ...</code> line
+  - <code>ControlMonitor.recent_events(now, window_s=DEFAULT_WINDOW_S) -&gt; list[dict]</code>
+  - <code>ControlMonitor.newest_events(limit) -&gt; list[dict]</code> (oldest first)
+  - <code>ControlMonitor.prune(now, window_s=DEFAULT_WINDOW_S) -&gt; None</code>
+  - <code>ControlMonitor.by_mode(events) -&gt; dict[str, int]</code> (static)
+  - <code>ControlMonitor.restore(events, total) -&gt; bool</code> (True once the total is resolved)</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<p>Add to the imports at the top of <code>apps/predbat/tests/test_control_monitor.py</code>:</p>
+<pre><code class="language-python">import json
+
+import pytz
+
+from control_monitor import format_failure, DEFAULT_WINDOW_S
+</code></pre>
+<p>Add these tests above <code>run_control_monitor_tests</code>:</p>
+<pre><code class="language-python">def make_event(at, mode=MODE_CHARGING, inverter_id=0, slot_start=SLOT_START, failed_minutes=2.0):
+    &quot;&quot;&quot;A well-formed event as it would be read back from the sensor attribute.&quot;&quot;&quot;
+    return {&quot;inverter&quot;: inverter_id, &quot;mode&quot;: mode, &quot;slot_start&quot;: slot_start, &quot;slot_end&quot;: slot_start + 3600, &quot;at&quot;: at, &quot;requested_w&quot;: 3000, &quot;measured_w&quot;: 0, &quot;failed_minutes&quot;: failed_minutes}
+
+
+def test_recent_and_prune():
+    &quot;&quot;&quot;recent_events() and prune() use the 24h window; prune keeps an event a live slot still owns.&quot;&quot;&quot;
+    monitor = ControlMonitor()
+    monitor.events = [make_event(T0, slot_start=T0), make_event(T0 + DEFAULT_WINDOW_S + 100, slot_start=T0 + DEFAULT_WINDOW_S)]
+    now = T0 + DEFAULT_WINDOW_S + 200
+    if [event[&quot;at&quot;] for event in monitor.recent_events(now)] != [T0 + DEFAULT_WINDOW_S + 100]:
+        print(&quot;ERROR: recent_events returned {}&quot;.format(monitor.recent_events(now)))
+        return True
+    monitor.tracking[0] = {&quot;event&quot;: monitor.events[0]}
+    monitor.prune(now)
+    if len(monitor.events) != 2:
+        print(&quot;ERROR: prune dropped an event still attached to a live slot&quot;)
+        return True
+    monitor.tracking.clear()
+    monitor.prune(now)
+    if len(monitor.events) != 1:
+        print(&quot;ERROR: prune kept an expired event: {}&quot;.format(monitor.events))
+        return True
+    return False
+
+
+def test_newest_events_and_by_mode():
+    &quot;&quot;&quot;newest_events keeps the newest N oldest-first; by_mode counts per mode.&quot;&quot;&quot;
+    monitor = ControlMonitor()
+    monitor.events = [make_event(T0 + i, slot_start=T0 + i) for i in range(25)]
+    newest = monitor.newest_events(20)
+    if len(newest) != 20 or newest[0][&quot;at&quot;] != T0 + 5 or newest[-1][&quot;at&quot;] != T0 + 24:
+        print(&quot;ERROR: newest_events(20) returned the wrong slice&quot;)
+        return True
+    counts = ControlMonitor.by_mode([make_event(T0), make_event(T0 + 1, mode=MODE_EXPORTING), make_event(T0 + 2)])
+    if counts != {MODE_CHARGING: 2, MODE_EXPORTING: 1}:
+        print(&quot;ERROR: by_mode returned {}&quot;.format(counts))
+        return True
+    return False
+
+
+def test_restore_merges_and_dedupes():
+    &quot;&quot;&quot;Restore merges valid events by key (keeping the larger minutes), skips junk, sorts by time.&quot;&quot;&quot;
+    monitor = ControlMonitor()
+    monitor.events = [make_event(T0 + 50, slot_start=T0, failed_minutes=2.0)]
+    restored = [
+        make_event(T0 + 50, slot_start=T0, failed_minutes=5.0),
+        make_event(T0 + 10, slot_start=T0 + 7200),
+        {&quot;inverter&quot;: 0, &quot;mode&quot;: &quot;Demand&quot;, &quot;slot_start&quot;: T0, &quot;slot_end&quot;: T0, &quot;at&quot;: T0, &quot;failed_minutes&quot;: 0},
+        {&quot;inverter&quot;: True, &quot;mode&quot;: MODE_CHARGING, &quot;slot_start&quot;: T0, &quot;slot_end&quot;: T0, &quot;at&quot;: T0, &quot;failed_minutes&quot;: 0},
+        &quot;not an event&quot;,
+    ]
+    if not monitor.restore(restored, &quot;7&quot;):
+        print(&quot;ERROR: restore with a numeric total did not resolve&quot;)
+        return True
+    if len(monitor.events) != 2 or monitor.events[0][&quot;at&quot;] != T0 + 10:
+        print(&quot;ERROR: merged events wrong or unsorted: {}&quot;.format(monitor.events))
+        return True
+    if not close(monitor.events[1][&quot;failed_minutes&quot;], 5.0):
+        print(&quot;ERROR: duplicate did not keep the larger failed_minutes&quot;)
+        return True
+    if monitor.total != 7 or not monitor.restored:
+        print(&quot;ERROR: total {} restored {}&quot;.format(monitor.total, monitor.restored))
+        return True
+    return False
+
+
+def test_restore_total_adds_once():
+    &quot;&quot;&quot;The total merges as restored + counted, once; unreadable totals leave it unresolved.&quot;&quot;&quot;
+    monitor = ControlMonitor()
+    for unreadable in (None, &quot;unavailable&quot;, &quot;nan&quot;, &quot;inf&quot;, &quot;-3&quot;):
+        if monitor.restore([], unreadable) or monitor.restored:
+            print(&quot;ERROR: restore resolved on unreadable total {!r}&quot;.format(unreadable))
+            return True
+    monitor.total = 2  # failures counted by this process before the restore resolved
+    if not monitor.restore([], &quot;5&quot;) or monitor.total != 7:
+        print(&quot;ERROR: expected restored + counted = 7, got {}&quot;.format(monitor.total))
+        return True
+    monitor.restore([], &quot;5&quot;)
+    if monitor.total != 7:
+        print(&quot;ERROR: a second restore added the total again: {}&quot;.format(monitor.total))
+        return True
+    return False
+
+
+def test_restart_mid_slot_does_not_recount():
+    &quot;&quot;&quot;After a restart mid-slot (plan now on the next contiguous window) the slot is not re-counted.&quot;&quot;&quot;
+    first = charging_monitor()
+    feed(first, [240, GRACE_S, GRACE_S + 60, GRACE_S + 120], power=0)
+    stored = json.loads(json.dumps(first.newest_events(20)))  # what HA hands back
+
+    second = ControlMonitor()
+    second.restore(stored, &quot;1&quot;)
+    second.set_expectation(0, MODE_CHARGING, SLOT_START + 1800, SLOT_END + 1800, 80.0, T0 + 2000)
+    if feed(second, [2300, 2360, 2420, 2480], power=0) or second.total != 1:
+        print(&quot;ERROR: restart re-counted the slot, total {}&quot;.format(second.total))
+        return True
+    if not second.events[0][&quot;failed_minutes&quot;] &gt; stored[0][&quot;failed_minutes&quot;]:
+        print(&quot;ERROR: restored event did not keep accruing minutes&quot;)
+        return True
+    return False
+
+
+def test_format_failure():
+    &quot;&quot;&quot;The Warn: line names the inverter, mode, slot and the power shortfall.&quot;&quot;&quot;
+    failed = False
+    cases = [
+        (make_event(T0), &quot;Warn: Control failure: inverter 0 Charging 00:00-01:00 - battery idle vs 3000W charge requested&quot;),
+        (dict(make_event(T0), measured_w=-120), &quot;Warn: Control failure: inverter 0 Charging 00:00-01:00 - battery charging at 120W vs 3000W charge requested&quot;),
+        (dict(make_event(T0, mode=MODE_EXPORTING), requested_w=2000, measured_w=300), &quot;Warn: Control failure: inverter 0 Exporting 00:00-01:00 - battery discharging at 300W vs 2000W discharge requested&quot;),
+        (dict(make_event(T0, mode=MODE_FREEZE_CHARGING), requested_w=None, measured_w=450), &quot;Warn: Control failure: inverter 0 Freeze charging 00:00-01:00 - battery discharging at 450W, Freeze charging allows at most 200W discharge&quot;),
+        (dict(make_event(T0, mode=MODE_FREEZE_EXPORTING, inverter_id=1), requested_w=None, measured_w=-450), &quot;Warn: Control failure: inverter 1 Freeze exporting 00:00-01:00 - battery charging at 450W, Freeze exporting allows at most 200W charge&quot;),
+    ]
+    for event, expected in cases:
+        got = format_failure(event, pytz.utc)
+        if got != expected:
+            print(&quot;ERROR: format_failure gave\n  {}\nexpected\n  {}&quot;.format(got, expected))
+            failed = True
+    return failed
+</code></pre>
+<p>Add to the list in <code>run_control_monitor_tests</code>:</p>
+<pre><code class="language-python">        (&quot;recent_and_prune&quot;, test_recent_and_prune),
+        (&quot;newest_and_by_mode&quot;, test_newest_events_and_by_mode),
+        (&quot;restore_merges_dedupes&quot;, test_restore_merges_and_dedupes),
+        (&quot;restore_total_adds_once&quot;, test_restore_total_adds_once),
+        (&quot;restart_mid_slot&quot;, test_restart_mid_slot_does_not_recount),
+        (&quot;format_failure&quot;, test_format_failure),
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run the tests to verify they fail</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test control_monitor &gt; /tmp/control_monitor.txt 2&gt;&amp;1; grep -n "ERROR\|Traceback\|ImportError" /tmp/control_monitor.txt | head</code>
+Expected: <code>ImportError: cannot import name 'format_failure'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Write the implementation</strong></li>
+</ul>
+<p>In <code>apps/predbat/control_monitor.py</code>, add below <code>event_key</code>:</p>
+<pre><code class="language-python">def _is_number(value):
+    &quot;&quot;&quot;True for an int or float that is not a bool.&quot;&quot;&quot;
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def is_valid_event(event):
+    &quot;&quot;&quot;True when a restored event has every field the monitor relies on, with sane types.&quot;&quot;&quot;
+    if not isinstance(event, dict):
+        return False
+    inverter_id = event.get(&quot;inverter&quot;)
+    if not isinstance(inverter_id, int) or isinstance(inverter_id, bool):
+        return False
+    if event.get(&quot;mode&quot;) not in JUDGED_MODES:
+        return False
+    return all(_is_number(event.get(field)) for field in (&quot;slot_start&quot;, &quot;slot_end&quot;, &quot;at&quot;, &quot;failed_minutes&quot;))
+</code></pre>
+<p>Add below <code>judge_reading</code>:</p>
+<pre><code class="language-python">def format_failure(event, tz=None):
+    &quot;&quot;&quot;Return the one-line Warn: log message for a newly confirmed failure.&quot;&quot;&quot;
+
+    def clock(timestamp):
+        &quot;&quot;&quot;Format an epoch timestamp as HH:MM in tz.&quot;&quot;&quot;
+        return datetime.fromtimestamp(timestamp, tz).strftime(&quot;%H:%M&quot;)
+
+    measured = int(event.get(&quot;measured_w&quot;) or 0)
+    if measured &lt; 0:
+        power_text = &quot;battery charging at {}W&quot;.format(-measured)
+    elif measured &gt; 0:
+        power_text = &quot;battery discharging at {}W&quot;.format(measured)
+    else:
+        power_text = &quot;battery idle&quot;
+    mode = event[&quot;mode&quot;]
+    if mode == MODE_CHARGING:
+        detail = &quot;{} vs {}W charge requested&quot;.format(power_text, int(event[&quot;requested_w&quot;]))
+    elif mode == MODE_EXPORTING:
+        detail = &quot;{} vs {}W discharge requested&quot;.format(power_text, int(event[&quot;requested_w&quot;]))
+    elif mode == MODE_FREEZE_CHARGING:
+        detail = &quot;{}, {} allows at most {}W discharge&quot;.format(power_text, mode, FLOOR_W)
+    else:
+        detail = &quot;{}, {} allows at most {}W charge&quot;.format(power_text, mode, FLOOR_W)
+    return &quot;Warn: Control failure: inverter {} {} {}-{} - {}&quot;.format(event[&quot;inverter&quot;], mode, clock(event[&quot;slot_start&quot;]), clock(event[&quot;slot_end&quot;]), detail)
+</code></pre>
+<p>Add these methods to <code>ControlMonitor</code>, after <code>observe</code>:</p>
+<pre><code class="language-python">    def recent_events(self, now, window_s=DEFAULT_WINDOW_S):
+        &quot;&quot;&quot;Return the events confirmed within the last window_s seconds, oldest first.&quot;&quot;&quot;
+        return [event for event in self.events if event[&quot;at&quot;] &gt;= now - window_s]
+
+    def newest_events(self, limit):
+        &quot;&quot;&quot;Return the newest limit events, oldest first - the list published as the durable store.&quot;&quot;&quot;
+        return self.events[-limit:] if limit &gt; 0 else []
+
+    def prune(self, now, window_s=DEFAULT_WINDOW_S):
+        &quot;&quot;&quot;Drop events older than the window, except one still attached to a live slot.&quot;&quot;&quot;
+        live = [track.get(&quot;event&quot;) for track in self.tracking.values() if track.get(&quot;event&quot;) is not None]
+        self.events = [event for event in self.events if event[&quot;at&quot;] &gt;= now - window_s or any(event is owned for owned in live)]
+
+    @staticmethod
+    def by_mode(events):
+        &quot;&quot;&quot;Count events per mode.&quot;&quot;&quot;
+        counts = {}
+        for event in events:
+            counts[event[&quot;mode&quot;]] = counts.get(event[&quot;mode&quot;], 0) + 1
+        return counts
+
+    def restore(self, events, total):
+        &quot;&quot;&quot;
+        Merge the events and lifetime total read back from the sensors after a restart.
+
+        Events are merged on every call, de-duplicated by event_key and keeping the larger
+        failed_minutes. The total is merged once, the first time it reads as a number, as
+        restored + total: until then the in-memory total holds only failures counted by this
+        process, and taking the max would drop them.
+
+        Returns:
+            True once the total has been restored, now or on an earlier call.
+        &quot;&quot;&quot;
+        if isinstance(events, list):
+            for item in events:
+                if not is_valid_event(item):
+                    continue
+                existing = next((event for event in self.events if event_key(event) == event_key(item)), None)
+                if existing is None:
+                    self.events.append(dict(item))
+                else:
+                    existing[&quot;failed_minutes&quot;] = max(existing[&quot;failed_minutes&quot;], item[&quot;failed_minutes&quot;])
+            self.events.sort(key=lambda event: event[&quot;at&quot;])
+        if self.restored:
+            return True
+        try:
+            restored_total = int(float(total))
+        except (TypeError, ValueError, OverflowError):
+            return False
+        if restored_total &lt; 0:
+            return False
+        self.total += restored_total
+        self.restored = True
+        return True
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run the tests to verify they pass</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test control_monitor &gt; /tmp/control_monitor.txt 2&gt;&amp;1; grep -n "ERROR\|Traceback\|passed\|failed" /tmp/control_monitor.txt | head -20</code>
+Expected: no <code>ERROR</code>/<code>Traceback</code>; passed.</p>
+<ul>
+<li>[ ] <strong>Step 5: Pre-commit and commit</strong></li>
+</ul>
+<pre><code class="language-bash">coverage/venv/bin/pre-commit run --files apps/predbat/control_monitor.py apps/predbat/tests/test_control_monitor.py &gt; /tmp/pc2.txt 2&gt;&amp;1; grep -v &quot;Passed\|Skipped&quot; /tmp/pc2.txt
+git add apps/predbat/control_monitor.py apps/predbat/tests/test_control_monitor.py
+git commit -m &quot;feat(control-monitor): 24h window, restore merge and the warning line
+
+Co-Authored-By: Claude Opus 5.5 &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<hr />
+<h3 id="task-3-wire-the-monitor-into-execute">Task 3: Wire the monitor into execute</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/predbat.py</code> (import near line 111; <code>reset()</code> near line 347)
+- Modify: <code>apps/predbat/execute.py</code> (imports lines 18–23; <code>apply_inverter_rates</code> ~260–296; <code>execute_plan</code> ~297–1032; <code>fetch_inverter_data</code> end ~1356; two new methods)
+- Modify: <code>apps/predbat/tests/test_execute.py</code> (new tests + calls at the end of <code>run_execute_tests</code>)</p>
+<p><strong>Interfaces:</strong>
+- Consumes: Tasks 1–2 (<code>ControlMonitor</code>, mode constants, <code>format_failure</code>, <code>GRACE_S</code>).
+- Produces:
+  - <code>PredBat.control_monitor: ControlMonitor</code> (created in <code>reset()</code>)
+  - <code>inverter.requested_charge_w</code> / <code>inverter.requested_discharge_w</code>: <code>int | None</code>, set by <code>apply_inverter_rates</code>
+  - <code>Execute.record_control_expectations(status_per_inverter, monitor_slots, now=None) -&gt; None</code>
+  - <code>Execute.observe_control_failures(now=None) -&gt; None</code></p>
+<ul>
+<li>[ ] <strong>Step 1: Run impact analysis</strong></li>
+</ul>
+<p>Run GitNexus <code>impact</code> (upstream) on <code>execute_plan</code>, <code>fetch_inverter_data</code>, <code>apply_inverter_rates</code> and <code>reset</code> (file <code>apps/predbat/predbat.py</code>). Expected: <code>execute_plan</code> and <code>fetch_inverter_data</code> HIGH, <code>apply_inverter_rates</code> LOW. If anything has escalated to CRITICAL, stop and report.</p>
+<ul>
+<li>[ ] <strong>Step 2: Write the failing tests</strong></li>
+</ul>
+<p>In <code>apps/predbat/tests/test_execute.py</code>, add to the imports:</p>
+<pre><code class="language-python">from control_monitor import ControlMonitor, MODE_CHARGING, MODE_EXPORTING, GRACE_S
+</code></pre>
+<p>Add these functions above <code>run_execute_tests</code>:</p>
+<pre><code class="language-python">def control_monitor_charging_scenario(my_predbat, name):
+    &quot;&quot;&quot;
+    Put the two-inverter test fleet into Charging through the real execute path.
+
+    Same arguments as the charge_iboost_no_hold_text scenario, which is known to resolve to Charging
+    on this fleet. soc_kw defaults to 0, so both inverters are below target.
+    &quot;&quot;&quot;
+    return run_execute_test(
+        my_predbat,
+        name,
+        charge_window_best=[{&quot;start&quot;: 12 * 60, &quot;end&quot;: 13 * 60, &quot;average&quot;: 1}],
+        charge_limit_best=[10, 10],
+        assert_charge_time_enable=True,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status=&quot;Charging&quot;,
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=13 * 60,
+    )
+
+
+def test_control_monitor_charging_counts_once(my_predbat):
+    &quot;&quot;&quot;
+    Charging with no battery power: each inverter fails once, with one Warn: line each, and a later
+    reading in the same slot neither warns nor counts again.
+    &quot;&quot;&quot;
+    saved_monitor = my_predbat.control_monitor
+    saved_log = my_predbat.log
+    my_predbat.control_monitor = ControlMonitor()
+    lines = []
+    failed = False
+    try:
+        if control_monitor_charging_scenario(my_predbat, &quot;control_monitor_charging&quot;):
+            return True
+        monitor = my_predbat.control_monitor
+        for inverter in my_predbat.inverters:
+            track = monitor.tracking.get(inverter.id)
+            if track is None or track[&quot;mode&quot;] != MODE_CHARGING:
+                print(&quot;ERROR: inverter {} has no Charging expectation: {}&quot;.format(inverter.id, track))
+                failed = True
+            if inverter.requested_charge_w != 1000:
+                print(&quot;ERROR: inverter {} requested_charge_w {} expected 1000&quot;.format(inverter.id, inverter.requested_charge_w))
+                failed = True
+        if failed:
+            return failed
+        entered = monitor.tracking[0][&quot;entered_at&quot;]
+        for inverter in my_predbat.inverters:
+            inverter.battery_power = 0
+        my_predbat.log = lambda message, *args, **kwargs: lines.append(message)
+        for offset in (GRACE_S, GRACE_S + 60, GRACE_S + 120, GRACE_S + 180):
+            my_predbat.observe_control_failures(now=entered + offset)
+        warns = [line for line in lines if line.startswith(&quot;Warn: Control failure&quot;)]
+        if len(warns) != 2 or monitor.total != 2:
+            print(&quot;ERROR: expected one warning and one count per inverter, got {} warnings, total {}&quot;.format(len(warns), monitor.total))
+            failed = True
+    finally:
+        my_predbat.log = saved_log
+        my_predbat.control_monitor = saved_monitor
+        for inverter in my_predbat.inverters:
+            inverter.battery_power = 0
+    return failed
+
+
+def test_control_monitor_exporting_expectation(my_predbat):
+    &quot;&quot;&quot;Exporting sets an Exporting expectation, with the discharge rate written recorded on the inverter.&quot;&quot;&quot;
+    saved_monitor = my_predbat.control_monitor
+    my_predbat.control_monitor = ControlMonitor()
+    failed = False
+    try:
+        if run_execute_test(
+            my_predbat,
+            &quot;control_monitor_exporting&quot;,
+            export_window_best=[{&quot;start&quot;: 12 * 60, &quot;end&quot;: 13 * 60, &quot;average&quot;: 1}],
+            export_limits_best=[pack_export_limit(EXPORT_MODE_TARGET, 0)],
+            assert_force_export=True,
+            set_charge_window=True,
+            set_export_window=True,
+            soc_kw=10,
+            assert_status=&quot;Exporting&quot;,
+            assert_immediate_soc_target=0,
+            assert_discharge_start_time_minutes=12 * 60,
+            assert_discharge_end_time_minutes=13 * 60 + 1,
+        ):
+            return True
+        for inverter in my_predbat.inverters:
+            track = my_predbat.control_monitor.tracking.get(inverter.id)
+            if track is None or track[&quot;mode&quot;] != MODE_EXPORTING:
+                print(&quot;ERROR: inverter {} has no Exporting expectation: {}&quot;.format(inverter.id, track))
+                failed = True
+            if inverter.requested_discharge_w != 1000:
+                print(&quot;ERROR: inverter {} requested_discharge_w {} expected 1000&quot;.format(inverter.id, inverter.requested_discharge_w))
+                failed = True
+    finally:
+        my_predbat.control_monitor = saved_monitor
+    return failed
+
+
+def test_control_monitor_read_only_records_nothing(my_predbat):
+    &quot;&quot;&quot;A read-only plan run clears every expectation, so nothing can be counted.&quot;&quot;&quot;
+    saved_monitor = my_predbat.control_monitor
+    saved_read_only = my_predbat.set_read_only
+    my_predbat.control_monitor = ControlMonitor()
+    failed = False
+    try:
+        my_predbat.control_monitor.set_expectation(0, MODE_CHARGING, 0, 3600, 80.0, 0)
+        failed = run_execute_test(
+            my_predbat,
+            &quot;control_monitor_read_only&quot;,
+            charge_window_best=[{&quot;start&quot;: 12 * 60, &quot;end&quot;: 13 * 60, &quot;average&quot;: 1}],
+            charge_limit_best=[10, 10],
+            set_charge_window=True,
+            set_export_window=True,
+            read_only=True,
+            assert_status=&quot;Read-Only&quot;,
+            reserve=0,
+            assert_immediate_charge_soc_target_array=[-1, -1],
+            assert_immediate_discharge_soc_target_array=[-1, -1],
+        )
+        if my_predbat.control_monitor.tracking:
+            print(&quot;ERROR: read-only plan run left expectations {}&quot;.format(my_predbat.control_monitor.tracking))
+            failed = True
+    finally:
+        my_predbat.control_monitor = saved_monitor
+        my_predbat.set_read_only = saved_read_only
+    return failed
+
+
+def test_control_monitor_read_only_between_plan_runs(my_predbat):
+    &quot;&quot;&quot;Read-only switched on after the plan ran: the next poll clears the expectations and counts nothing.&quot;&quot;&quot;
+    saved_monitor = my_predbat.control_monitor
+    saved_read_only = my_predbat.set_read_only
+    my_predbat.control_monitor = ControlMonitor()
+    failed = False
+    try:
+        if control_monitor_charging_scenario(my_predbat, &quot;control_monitor_read_only_poll&quot;):
+            return True
+        monitor = my_predbat.control_monitor
+        entered = monitor.tracking[0][&quot;entered_at&quot;]
+        for inverter in my_predbat.inverters:
+            inverter.battery_power = 0
+        my_predbat.set_read_only = True
+        for offset in (GRACE_S, GRACE_S + 60, GRACE_S + 120):
+            my_predbat.observe_control_failures(now=entered + offset)
+        if monitor.total != 0 or monitor.tracking:
+            print(&quot;ERROR: counted in read-only mode: total {} tracking {}&quot;.format(monitor.total, monitor.tracking))
+            failed = True
+    finally:
+        my_predbat.set_read_only = saved_read_only
+        my_predbat.control_monitor = saved_monitor
+    return failed
+
+
+def test_control_monitor_calibration_records_nothing(my_predbat):
+    &quot;&quot;&quot;Calibration on any inverter clears every expectation.&quot;&quot;&quot;
+    failed = balance_fixture(my_predbat, &quot;control_monitor_calibration_setup&quot;)
+    if failed:
+        return failed
+    saved_monitor = my_predbat.control_monitor
+    saved_calibration = [inverter.in_calibration for inverter in my_predbat.inverters]
+    my_predbat.control_monitor = ControlMonitor()
+    try:
+        my_predbat.control_monitor.set_expectation(0, MODE_CHARGING, 0, 3600, 80.0, 0)
+        my_predbat.inverters[1].in_calibration = True
+        my_predbat.execute_plan()
+        if my_predbat.control_monitor.tracking:
+            print(&quot;ERROR: calibration left expectations {}&quot;.format(my_predbat.control_monitor.tracking))
+            failed = True
+    finally:
+        my_predbat.control_monitor = saved_monitor
+        for inverter, calibration in zip(my_predbat.inverters, saved_calibration):
+            inverter.in_calibration = calibration
+            inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
+            inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
+    return failed
+
+
+def test_control_monitor_uses_written_rate(my_predbat):
+    &quot;&quot;&quot;
+    The rate judged is the one apply_inverter_rates actually wrote: a balancer hold at 0W is not
+    judged, an unclaimed rate resolves to max when rates are reset, and to None when they are not.
+    &quot;&quot;&quot;
+    failed = False
+    inverter = my_predbat.inverters[0]
+    try:
+        my_predbat.apply_inverter_rates(inverter, {&quot;charge_rate&quot;: 0, &quot;discharge_rate&quot;: None, &quot;reset_rates&quot;: True})
+        if inverter.requested_charge_w != 0 or inverter.requested_discharge_w != int(inverter.battery_rate_max_discharge * MINUTE_WATT):
+            print(&quot;ERROR: written rates not recorded: charge {} discharge {}&quot;.format(inverter.requested_charge_w, inverter.requested_discharge_w))
+            failed = True
+        monitor = ControlMonitor()
+        monitor.set_expectation(0, MODE_CHARGING, 0, 3600, 80.0, 0)
+        for offset in (GRACE_S, GRACE_S + 60, GRACE_S + 120):
+            monitor.observe(0, 0, 10.0, inverter.requested_charge_w, inverter.requested_discharge_w, offset)
+        if monitor.total != 0:
+            print(&quot;ERROR: a balancer hold at 0W was judged as a failure&quot;)
+            failed = True
+        my_predbat.apply_inverter_rates(inverter, {&quot;charge_rate&quot;: None, &quot;discharge_rate&quot;: None, &quot;reset_rates&quot;: False})
+        if inverter.requested_charge_w is not None or inverter.requested_discharge_w is not None:
+            print(&quot;ERROR: an unwritten rate should record None, got {} / {}&quot;.format(inverter.requested_charge_w, inverter.requested_discharge_w))
+            failed = True
+    finally:
+        my_predbat.apply_inverter_rates(inverter, {&quot;charge_rate&quot;: None, &quot;discharge_rate&quot;: None, &quot;reset_rates&quot;: True})
+    return failed
+</code></pre>
+<p>At the end of <code>run_execute_tests</code>, immediately before the final <code>return failed</code>, add:</p>
+<pre><code class="language-python">    for control_monitor_test in (
+        test_control_monitor_charging_counts_once,
+        test_control_monitor_exporting_expectation,
+        test_control_monitor_read_only_records_nothing,
+        test_control_monitor_read_only_between_plan_runs,
+        test_control_monitor_calibration_records_nothing,
+        test_control_monitor_uses_written_rate,
+    ):
+        failed |= control_monitor_test(my_predbat)
+        if failed:
+            return failed
+</code></pre>
+<p>(<code>pack_export_limit</code>, <code>EXPORT_MODE_TARGET</code> and <code>MINUTE_WATT</code> are already imported in <code>test_execute.py</code>; confirm with <code>grep -n "^from\|^import" apps/predbat/tests/test_execute.py</code> and add any that are missing.)</p>
+<ul>
+<li>[ ] <strong>Step 3: Run the tests to verify they fail</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test execute &gt; /tmp/execute.txt 2&gt;&amp;1; grep -n "ERROR\|Traceback\|AttributeError" /tmp/execute.txt | head</code>
+Expected: <code>AttributeError</code> on <code>control_monitor</code> (not yet created in <code>reset()</code>).</p>
+<ul>
+<li>[ ] <strong>Step 4: Create the monitor in PredBat</strong></li>
+</ul>
+<p>In <code>apps/predbat/predbat.py</code>, add beside <code>from control_ledger import ControlLedger</code>:</p>
+<pre><code class="language-python">from control_monitor import ControlMonitor
+</code></pre>
+<p>In <code>reset()</code>, directly after <code>self.control_ledger_restored = False</code>:</p>
+<pre><code class="language-python">        self.control_monitor = ControlMonitor()
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 5: Record the written rate in <code>apply_inverter_rates</code></strong></li>
+</ul>
+<p>In <code>apps/predbat/execute.py</code>, at the end of <code>apply_inverter_rates</code> (after the discharge-rate <code>if/else</code>), add:</p>
+<pre><code class="language-python">        # The rate this inverter was actually asked for, after balancing - what the control-failure
+        # monitor judges measured power against. None when nothing was written (Monitor mode).
+        if charge_rate is not None:
+            inverter.requested_charge_w = int(charge_rate)
+        else:
+            inverter.requested_charge_w = int(inverter.battery_rate_max_charge * MINUTE_WATT) if reset_rates else None
+        if discharge_rate is not None:
+            inverter.requested_discharge_w = int(discharge_rate)
+        else:
+            inverter.requested_discharge_w = int(inverter.battery_rate_max_discharge * MINUTE_WATT) if reset_rates else None
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 6: Collect each inverter's slot in <code>execute_plan</code></strong></li>
+</ul>
+<p>Add to the imports at the top of <code>execute.py</code>:</p>
+<pre><code class="language-python">from control_monitor import MODE_CHARGING, MODE_EXPORTING, MODE_FREEZE_CHARGING, MODE_FREEZE_EXPORTING, format_failure
+</code></pre>
+<p>Directly after <code>export_rate_alloc = self.allocate_fleet_export_rates()</code> (before the <code>for inverter in self.inverters:</code> loop):</p>
+<pre><code class="language-python">        # Inverter id -&gt; (mode, slot start minutes, slot end minutes, target percent), for the
+        # control-failure monitor. Only the four judged modes are recorded.
+        monitor_slots = {}
+</code></pre>
+<p>In the charge branch, directly after the "Combine contiguous windows" <code>for windows in self.charge_window_best:</code> loop:</p>
+<pre><code class="language-python">                # The slot as planned, before the register adjustments below move the start/end
+                charge_slot = (window[&quot;start&quot;], minutes_end)
+</code></pre>
+<p>After <code>status_per_inverter[inverter.id] = status</code> in the <strong>Freeze charging</strong> block (currently line ~520):</p>
+<pre><code class="language-python">                            monitor_slots[inverter.id] = (MODE_FREEZE_CHARGING, charge_slot[0], charge_slot[1], None)
+</code></pre>
+<p>After <code>status_per_inverter[inverter.id] = status</code> in the <strong>Charging</strong> <code>else:</code> block (currently line ~563):</p>
+<pre><code class="language-python">                                monitor_slots[inverter.id] = (MODE_CHARGING, charge_slot[0], charge_slot[1], inv_target_soc_percent)
+</code></pre>
+<p>After <code>status_per_inverter[inverter.id] = status</code> in the <strong>Exporting</strong> block (currently line ~708):</p>
+<pre><code class="language-python">                        monitor_slots[inverter.id] = (MODE_EXPORTING, window[&quot;start&quot;], window[&quot;end&quot;], calc_percent_limit(discharge_soc, self.soc_max))
+</code></pre>
+<p>After <code>status_per_inverter[inverter.id] = status</code> in the <strong>Freeze exporting</strong> block (currently line ~727):</p>
+<pre><code class="language-python">                            monitor_slots[inverter.id] = (MODE_FREEZE_EXPORTING, window[&quot;start&quot;], window[&quot;end&quot;], None)
+</code></pre>
+<p>Directly after <code>self.apply_rate_intent(intent)</code> (the single apply pass after the loop):</p>
+<pre><code class="language-python">        self.record_control_expectations(status_per_inverter, monitor_slots)
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 7: Add the two monitor methods and the observe call</strong></li>
+</ul>
+<p>Add to the <code>Execute</code> class (after <code>apply_inverter_rates</code>):</p>
+<pre><code class="language-python">    def record_control_expectations(self, status_per_inverter, monitor_slots, now=None):
+        &quot;&quot;&quot;
+        Tell the control-failure monitor what each inverter should now be doing.
+
+        Called at the end of execute_plan() once every inverter's status is final. An inverter is
+        judged only while its final status is the mode its slot was recorded for; in read-only mode
+        or while any inverter is calibrating nothing is judged at all.
+
+        Args:
+            status_per_inverter (dict): inverter id -&gt; final core status from execute_plan()
+            monitor_slots (dict): inverter id -&gt; (mode, slot start minutes, slot end minutes, target percent)
+            now (float): epoch seconds, defaults to time.time()
+        &quot;&quot;&quot;
+        # getattr: partial Execute stubs in the tests never create a monitor
+        monitor = getattr(self, &quot;control_monitor&quot;, None)
+        if monitor is None:
+            return
+        if now is None:
+            now = time.time()
+        if self.set_read_only or any(inverter.in_calibration for inverter in self.inverters):
+            monitor.clear_expectation()
+            return
+        for inverter in self.inverters:
+            slot = monitor_slots.get(inverter.id)
+            if slot is None or slot[0] != status_per_inverter.get(inverter.id):
+                monitor.clear_expectation(inverter.id)
+                continue
+            mode, start_minutes, end_minutes, target_percent = slot
+            slot_start = (self.midnight_utc + timedelta(minutes=start_minutes)).timestamp()
+            slot_end = (self.midnight_utc + timedelta(minutes=end_minutes)).timestamp()
+            monitor.set_expectation(inverter.id, mode, slot_start, slot_end, target_percent, now)
+
+    def observe_control_failures(self, now=None):
+        &quot;&quot;&quot;
+        Judge each inverter's fresh reading against what it was last told to do.
+
+        Called at the end of fetch_inverter_data(), quick or full. Read-only mode or calibration that
+        started since the last plan run clears every expectation here, so nothing is counted in the
+        minutes before execute_plan() next runs.
+
+        Args:
+            now (float): epoch seconds, defaults to time.time()
+        &quot;&quot;&quot;
+        monitor = getattr(self, &quot;control_monitor&quot;, None)
+        if monitor is None or not monitor.tracking or not self.inverters:
+            return
+        if now is None:
+            now = time.time()
+        if self.set_read_only or any(inverter.in_calibration for inverter in self.inverters):
+            monitor.clear_expectation()
+            return
+        for inverter in self.inverters:
+            event = monitor.observe(
+                inverter.id,
+                inverter.battery_power,
+                inverter.soc_percent,
+                getattr(inverter, &quot;requested_charge_w&quot;, None),
+                getattr(inverter, &quot;requested_discharge_w&quot;, None),
+                now,
+            )
+            if event is not None:
+                self.log(format_failure(event, self.local_tz))
+</code></pre>
+<p>At the end of <code>fetch_inverter_data</code>, directly before the final <code>return True</code>:</p>
+<pre><code class="language-python">        self.observe_control_failures()
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 8: Run the tests to verify they pass</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test execute --test control_monitor &gt; /tmp/execute.txt 2&gt;&amp;1; grep -n "ERROR\|Traceback\|passed\|failed" /tmp/execute.txt | head -20</code>
+Expected: no <code>ERROR</code>/<code>Traceback</code>; both pass. If a <code>control_monitor_*</code> scenario's <em>own</em> assertions fail (status or window times), compare its arguments against the <code>charge_iboost_no_hold_text</code> / <code>discharge</code> scenarios in the same file and match them — do not loosen the monitor assertions.</p>
+<ul>
+<li>[ ] <strong>Step 9: Pre-commit and commit</strong></li>
+</ul>
+<pre><code class="language-bash">coverage/venv/bin/pre-commit run --files apps/predbat/execute.py apps/predbat/predbat.py apps/predbat/tests/test_execute.py &gt; /tmp/pc3.txt 2&gt;&amp;1; grep -v &quot;Passed\|Skipped&quot; /tmp/pc3.txt
+git add apps/predbat/execute.py apps/predbat/predbat.py apps/predbat/tests/test_execute.py
+git commit -m &quot;feat(control-monitor): set expectations from execute_plan, observe every inverter read
+
+Co-Authored-By: Claude Opus 5.5 &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<hr />
+<h3 id="task-4-publish-the-sensors-with-the-restart-guard">Task 4: Publish the sensors with the restart guard</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/predbat.py</code> (new method <code>publish_control_failures</code>; call in <code>update_pred</code> after the control-conflicts block ~line 1279)
+- Modify: <code>apps/predbat/tests/test_control_monitor.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>PredBat.control_monitor</code>, <code>ControlMonitor.restore/prune/recent_events/newest_events/by_mode/total/restored</code>.
+- Produces: <code>PredBat.publish_control_failures(now) -&gt; None</code>; entities <code>predbat.control_failures</code>, <code>predbat.control_failures_total</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Run impact analysis</strong></li>
+</ul>
+<p>GitNexus <code>impact</code> upstream on <code>update_pred</code> with <code>file_path: apps/predbat/predbat.py</code>. Expected LOW.</p>
+<ul>
+<li>[ ] <strong>Step 2: Write the failing tests</strong></li>
+</ul>
+<p>Add to <code>apps/predbat/tests/test_control_monitor.py</code> (above <code>run_control_monitor_tests</code>):</p>
+<pre><code class="language-python">class RestoreSource:
+    &quot;&quot;&quot;Stands in for load_previous_value_from_ha so a test decides exactly what the restore reads.&quot;&quot;&quot;
+
+    def __init__(self, my_predbat, events=None, total=None):
+        &quot;&quot;&quot;Wrap my_predbat's loader, answering for the two control-failure entities only.&quot;&quot;&quot;
+        self.my_predbat = my_predbat
+        self.events = events
+        self.total = total
+        self.original = my_predbat.load_previous_value_from_ha
+        my_predbat.load_previous_value_from_ha = self.load
+
+    def load(self, entity, attribute=None):
+        &quot;&quot;&quot;Return the configured value for the control-failure entities, defer for anything else.&quot;&quot;&quot;
+        if entity == self.my_predbat.prefix + &quot;.control_failures&quot; and attribute == &quot;events&quot;:
+            return self.events
+        if entity == self.my_predbat.prefix + &quot;.control_failures_total&quot; and attribute is None:
+            return self.total
+        return self.original(entity, attribute=attribute)
+
+    def close(self):
+        &quot;&quot;&quot;Put the real loader back.&quot;&quot;&quot;
+        self.my_predbat.load_previous_value_from_ha = self.original
+
+
+def publish_setup(my_predbat):
+    &quot;&quot;&quot;Give my_predbat a fresh monitor and forget any earlier publish of the two entities.&quot;&quot;&quot;
+    saved = my_predbat.control_monitor
+    my_predbat.control_monitor = ControlMonitor()
+    for suffix in (&quot;.control_failures&quot;, &quot;.control_failures_total&quot;):
+        my_predbat.dashboard_values.pop(my_predbat.prefix + suffix, None)
+    return saved
+
+
+def published(my_predbat, suffix):
+    &quot;&quot;&quot;The state last published for an entity, or None if it was never written.&quot;&quot;&quot;
+    item = my_predbat.dashboard_values.get(my_predbat.prefix + suffix)
+    return None if item is None else item[&quot;state&quot;]
+
+
+def test_publish_fresh_install(my_predbat):
+    &quot;&quot;&quot;Nothing to restore and nothing counted: the 24h sensor publishes 0, the total is not written.&quot;&quot;&quot;
+    saved = publish_setup(my_predbat)
+    source = RestoreSource(my_predbat)
+    failed = False
+    try:
+        my_predbat.publish_control_failures(T0)
+        if published(my_predbat, &quot;.control_failures&quot;) != 0:
+            print(&quot;ERROR: 24h sensor not published as 0&quot;)
+            failed = True
+        if published(my_predbat, &quot;.control_failures_total&quot;) is not None or my_predbat.control_monitor.restored:
+            print(&quot;ERROR: a 0 total was written over a total that could not be read&quot;)
+            failed = True
+        # The first counted failure is written, and resolves the restore
+        my_predbat.control_monitor.events.append(make_event(T0 + 60))
+        my_predbat.control_monitor.total = 1
+        my_predbat.publish_control_failures(T0 + 120)
+        if published(my_predbat, &quot;.control_failures_total&quot;) != 1 or not my_predbat.control_monitor.restored:
+            print(&quot;ERROR: first failure on a fresh install did not publish the total&quot;)
+            failed = True
+        attributes = my_predbat.dashboard_values[my_predbat.prefix + &quot;.control_failures&quot;][&quot;attributes&quot;]
+        if published(my_predbat, &quot;.control_failures&quot;) != 1 or attributes[&quot;by_mode&quot;] != {MODE_CHARGING: 1} or len(attributes[&quot;events&quot;]) != 1:
+            print(&quot;ERROR: 24h sensor attributes wrong: {}&quot;.format(attributes))
+            failed = True
+    finally:
+        source.close()
+        my_predbat.control_monitor = saved
+    return failed
+
+
+def test_publish_restores_total_and_events(my_predbat):
+    &quot;&quot;&quot;A readable total and events are restored and re-published.&quot;&quot;&quot;
+    saved = publish_setup(my_predbat)
+    source = RestoreSource(my_predbat, events=[make_event(T0 - 60)], total=&quot;7&quot;)
+    failed = False
+    try:
+        my_predbat.publish_control_failures(T0)
+        if published(my_predbat, &quot;.control_failures_total&quot;) != 7 or published(my_predbat, &quot;.control_failures&quot;) != 1:
+            print(&quot;ERROR: restore not published: total {} 24h {}&quot;.format(published(my_predbat, &quot;.control_failures_total&quot;), published(my_predbat, &quot;.control_failures&quot;)))
+            failed = True
+    finally:
+        source.close()
+        my_predbat.control_monitor = saved
+    return failed
+
+
+def test_publish_late_restore_adds_counted(my_predbat):
+    &quot;&quot;&quot;Unreadable at first, readable later, with a failure counted in between: total = restored + counted.&quot;&quot;&quot;
+    saved = publish_setup(my_predbat)
+    source = RestoreSource(my_predbat)
+    failed = False
+    try:
+        my_predbat.publish_control_failures(T0)
+        my_predbat.control_monitor.total = 1  # counted between the two publish cycles
+        source.total = &quot;5&quot;
+        my_predbat.publish_control_failures(T0 + 300)
+        if published(my_predbat, &quot;.control_failures_total&quot;) != 6:
+            print(&quot;ERROR: late restore published {} expected 6&quot;.format(published(my_predbat, &quot;.control_failures_total&quot;)))
+            failed = True
+    finally:
+        source.close()
+        my_predbat.control_monitor = saved
+    return failed
+</code></pre>
+<p>Change <code>run_control_monitor_tests</code> so the publish tests, which need <code>my_predbat</code>, also run — append after the existing loop, before <code>return failed</code>:</p>
+<pre><code class="language-python">    for name, fn in [
+        (&quot;publish_fresh_install&quot;, test_publish_fresh_install),
+        (&quot;publish_restores&quot;, test_publish_restores_total_and_events),
+        (&quot;publish_late_restore&quot;, test_publish_late_restore_adds_counted),
+    ]:
+        print(&quot;**** control_monitor: {} ****&quot;.format(name))
+        if fn(my_predbat):
+            print(&quot;ERROR: control_monitor test {} failed&quot;.format(name))
+            failed = True
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 3: Run the tests to verify they fail</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test control_monitor &gt; /tmp/control_monitor.txt 2&gt;&amp;1; grep -n "ERROR\|Traceback\|AttributeError" /tmp/control_monitor.txt | head</code>
+Expected: <code>AttributeError: ... has no attribute 'publish_control_failures'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 4: Implement <code>publish_control_failures</code></strong></li>
+</ul>
+<p>In <code>apps/predbat/predbat.py</code>, add this method to <code>PredBat</code> directly after <code>_emit_snapshot_metrics</code>:</p>
+<pre><code class="language-python">    def publish_control_failures(self, now):
+        &quot;&quot;&quot;
+        Publish the control-failure sensors, restoring their history first if not yet done.
+
+        The two entities ARE the durable store: the events attribute and the total's state are what
+        restore() reads back after a restart. The restore is retried every cycle until the total
+        reads back as a number, and while it is unresolved a total of 0 is not written - publishing
+        0 over a total that merely could not be read yet would register as a reset in HA long-term
+        statistics.
+
+        Args:
+            now (float): epoch seconds
+        &quot;&quot;&quot;
+        monitor = self.control_monitor
+        if not monitor.restored:
+            monitor.restore(
+                self.load_previous_value_from_ha(self.prefix + &quot;.control_failures&quot;, attribute=&quot;events&quot;),
+                self.load_previous_value_from_ha(self.prefix + &quot;.control_failures_total&quot;),
+            )
+        monitor.prune(now)
+        recent = monitor.recent_events(now)
+        by_mode = monitor.by_mode(recent)
+        self.dashboard_item(
+            self.prefix + &quot;.control_failures&quot;,
+            state=len(recent),
+            attributes={
+                &quot;friendly_name&quot;: &quot;Control failures (24h)&quot;,
+                &quot;state_class&quot;: &quot;measurement&quot;,
+                &quot;unit_of_measurement&quot;: &quot;failures&quot;,
+                &quot;icon&quot;: &quot;mdi:battery-alert&quot;,
+                &quot;events&quot;: monitor.newest_events(20),
+                &quot;by_mode&quot;: by_mode,
+            },
+        )
+        if monitor.restored or monitor.total &gt; 0:
+            self.dashboard_item(
+                self.prefix + &quot;.control_failures_total&quot;,
+                state=monitor.total,
+                attributes={
+                    &quot;friendly_name&quot;: &quot;Control failures (total)&quot;,
+                    &quot;state_class&quot;: &quot;total_increasing&quot;,
+                    &quot;unit_of_measurement&quot;: &quot;failures&quot;,
+                    &quot;icon&quot;: &quot;mdi:battery-alert&quot;,
+                },
+            )
+            # Once written, the entity holds our own value, so there is nothing left to restore
+            monitor.restored = True
+        if recent:
+            self.log(&quot;Control failures: {} slot(s) in the last 24h {}&quot;.format(len(recent), by_mode))
+</code></pre>
+<p>In <code>update_pred</code>, directly after the control-conflicts block's
+<code>self.log("Control interference: ...")</code> <code>if</code> statement, add:</p>
+<pre><code class="language-python">        self.publish_control_failures(now_ts)
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 5: Run the tests to verify they pass</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test control_monitor &gt; /tmp/control_monitor.txt 2&gt;&amp;1; grep -n "ERROR\|Traceback\|passed\|failed" /tmp/control_monitor.txt | head -20</code>
+Expected: no <code>ERROR</code>/<code>Traceback</code>; passed.</p>
+<ul>
+<li>[ ] <strong>Step 6: Pre-commit and commit</strong></li>
+</ul>
+<pre><code class="language-bash">coverage/venv/bin/pre-commit run --files apps/predbat/predbat.py apps/predbat/tests/test_control_monitor.py &gt; /tmp/pc4.txt 2&gt;&amp;1; grep -v &quot;Passed\|Skipped&quot; /tmp/pc4.txt
+git add apps/predbat/predbat.py apps/predbat/tests/test_control_monitor.py
+git commit -m &quot;feat(control-monitor): publish 24h and lifetime sensors, guard the total on restart
+
+Co-Authored-By: Claude Opus 5.5 &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<hr />
+<h3 id="task-5-metrics-dashboard-section-and-documentation">Task 5: Metrics, dashboard section and documentation</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/predbat_metrics.py</code> (gauges after the control-ownership block ~line 142; <code>to_dict()</code> ~line 245)
+- Modify: <code>apps/predbat/predbat.py</code> (<code>_emit_snapshot_metrics</code>, after the control-ledger lines ~796)
+- Modify: <code>apps/predbat/web_metrics_dashboard.py</code> (section markup after Section 6 ~line 140; render function after <code>mdRenderControlConflicts</code>; call in <code>mdRenderAll</code>)
+- Create: <code>apps/predbat/tests/test_metrics_dashboard_control_failures.py</code>
+- Modify: <code>apps/predbat/unit_test.py</code> (import + 2 registry entries after the <code>control_conflicts_dashboard</code> entry ~line 690)
+- Modify: <code>docs/output-data.md</code> (new section after <code>## Alert data</code>), <code>docs/web-interface.md</code> (Metrics View list)</p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>PredBat.control_monitor</code>.
+- Produces: <code>metrics().control_failures_24h</code>, <code>metrics().control_failures_total</code> (gauges), <code>metrics().control_failures_events</code> (list); <code>to_dict()</code> keys <code>control_failures_24h</code>, <code>control_failures_total</code>, <code>control_failures_events</code>; JS <code>mdRenderControlFailures(d)</code>, containers <code>mdFailureCards</code>, <code>mdFailureTable</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Run impact analysis</strong></li>
+</ul>
+<p>GitNexus <code>impact</code> upstream on <code>_emit_snapshot_metrics</code>, <code>to_dict</code> (file <code>apps/predbat/predbat_metrics.py</code>) and <code>get_metrics_dashboard_body</code>. Expected: <code>_emit_snapshot_metrics</code> HIGH (main loop), the others LOW.</p>
+<ul>
+<li>[ ] <strong>Step 2: Write the failing tests</strong></li>
+</ul>
+<p>Create <code>apps/predbat/tests/test_metrics_dashboard_control_failures.py</code>:</p>
+<pre><code class="language-python"># -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+# fmt off
+# pylint: disable=consider-using-f-string
+# pylint: disable=line-too-long
+# pylint: disable=attribute-defined-outside-init
+
+&quot;&quot;&quot;
+Test that the control failure monitor's data reaches the Metrics Dashboard: the counts and events
+_emit_snapshot_metrics() writes must round-trip through to_dict(), and the dashboard body must
+render them.
+&quot;&quot;&quot;
+
+import time
+
+from control_monitor import ControlMonitor, MODE_CHARGING
+from predbat_metrics import metrics
+from web_metrics_dashboard import get_metrics_dashboard_body
+
+
+def test_control_failures_metrics_round_trip(my_predbat):
+    &quot;&quot;&quot;
+    _emit_snapshot_metrics() must publish the 24h count, the lifetime total and the event detail.
+
+    Uses real wall-clock time: _emit_snapshot_metrics() calls time.time() internally.
+    &quot;&quot;&quot;
+    print(&quot;**** test_control_failures_metrics_round_trip ****&quot;)
+    saved = my_predbat.control_monitor
+    failed = False
+    try:
+        monitor = ControlMonitor()
+        now = time.time()
+        monitor.events = [
+            {&quot;inverter&quot;: 0, &quot;mode&quot;: MODE_CHARGING, &quot;slot_start&quot;: now - 3600, &quot;slot_end&quot;: now, &quot;at&quot;: now - 3000, &quot;requested_w&quot;: 3000, &quot;measured_w&quot;: 0, &quot;failed_minutes&quot;: 4.0},
+            {&quot;inverter&quot;: 1, &quot;mode&quot;: MODE_CHARGING, &quot;slot_start&quot;: now - 3600, &quot;slot_end&quot;: now, &quot;at&quot;: now - 2900, &quot;requested_w&quot;: 3000, &quot;measured_w&quot;: -100, &quot;failed_minutes&quot;: 2.0},
+        ]
+        monitor.total = 9
+        my_predbat.control_monitor = monitor
+
+        my_predbat._emit_snapshot_metrics()
+        data = metrics().to_dict()
+
+        if data[&quot;control_failures_24h&quot;] != 2:
+            print(&quot;ERROR: control_failures_24h {} expected 2&quot;.format(data[&quot;control_failures_24h&quot;]))
+            failed = True
+        if data[&quot;control_failures_total&quot;] != 9:
+            print(&quot;ERROR: control_failures_total {} expected 9&quot;.format(data[&quot;control_failures_total&quot;]))
+            failed = True
+        if [event[&quot;inverter&quot;] for event in data[&quot;control_failures_events&quot;]] != [0, 1]:
+            print(&quot;ERROR: events not published oldest-first: {}&quot;.format(data[&quot;control_failures_events&quot;]))
+            failed = True
+    finally:
+        my_predbat.control_monitor = saved
+    return failed
+
+
+def test_control_failures_dashboard_renders_section(my_predbat):
+    &quot;&quot;&quot;The dashboard body must contain a Control Failures section wired into the 30s refresh.&quot;&quot;&quot;
+    print(&quot;**** test_control_failures_dashboard_renders_section ****&quot;)
+    body = get_metrics_dashboard_body(&quot;{}&quot;)
+    failed = False
+    for needle in (&quot;Control Failures&quot;, &quot;mdFailureCards&quot;, &quot;mdFailureTable&quot;, &quot;mdRenderControlFailures(d)&quot;, &quot;d.control_failures_events&quot;, &quot;d.control_failures_24h&quot;, &quot;d.control_failures_total&quot;):
+        if needle not in body:
+            print(&quot;ERROR: dashboard body is missing {}&quot;.format(needle))
+            failed = True
+    return failed
+</code></pre>
+<p>Register in <code>apps/predbat/unit_test.py</code> — import beside the control-conflicts dashboard import (~line 265):</p>
+<pre><code class="language-python">from tests.test_metrics_dashboard_control_failures import test_control_failures_metrics_round_trip, test_control_failures_dashboard_renders_section
+</code></pre>
+<p>and add after the <code>("control_conflicts_dashboard", ...)</code> registry entry (~line 690):</p>
+<pre><code class="language-python">        (&quot;control_failures_metrics&quot;, test_control_failures_metrics_round_trip, &quot;Metrics dashboard control_failures round-trip tests&quot;, False),
+        (&quot;control_failures_dashboard&quot;, test_control_failures_dashboard_renders_section, &quot;Metrics dashboard control_failures section render tests&quot;, False),
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 3: Run the tests to verify they fail</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test control_failures_metrics --test control_failures_dashboard &gt; /tmp/cf_metrics.txt 2&gt;&amp;1; grep -n "ERROR\|Traceback\|KeyError" /tmp/cf_metrics.txt | head</code>
+Expected: <code>KeyError: 'control_failures_24h'</code> and <code>ERROR: dashboard body is missing ...</code> lines.</p>
+<ul>
+<li>[ ] <strong>Step 4: Add the metrics</strong></li>
+</ul>
+<p>In <code>apps/predbat/predbat_metrics.py</code>, after the control-ownership block (after <code>self.control_conflicts_sustained_controls = []</code>):</p>
+<pre><code class="language-python">        # -- Control failure monitor ----------------------------------------------
+        self.control_failures_24h = _gauge(&quot;predbat_control_failures_24h&quot;, &quot;Slots where the battery did not follow Predbat's command in the last 24h&quot;)
+        self.control_failures_total = _gauge(&quot;predbat_control_failures_total&quot;, &quot;Lifetime count of slots where the battery did not follow Predbat's command&quot;)
+        # Plain data for the dashboard table, as for control_conflicts_events
+        self.control_failures_events = []
+</code></pre>
+<p>In <code>to_dict()</code>, after the <code>"control_conflicts_sustained_controls"</code> entry:</p>
+<pre><code class="language-python">            # Control failure monitor
+            &quot;control_failures_24h&quot;: _val(self.control_failures_24h),
+            &quot;control_failures_total&quot;: _val(self.control_failures_total),
+            &quot;control_failures_events&quot;: self.control_failures_events,
+</code></pre>
+<p>In <code>apps/predbat/predbat.py</code> <code>_emit_snapshot_metrics</code>, after <code>m.control_conflicts_sustained_controls = sustained</code>:</p>
+<pre><code class="language-python">        # Control failure monitor
+        m.control_failures_24h.set(len(self.control_monitor.recent_events(time.time())))
+        m.control_failures_total.set(self.control_monitor.total)
+        m.control_failures_events = self.control_monitor.newest_events(20)
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 5: Add the dashboard section</strong></li>
+</ul>
+<p>In <code>apps/predbat/web_metrics_dashboard.py</code>, after the Section 6 <code>&lt;/section&gt;</code> (the Control Conflicts section) and before the closing <code>&lt;/div&gt;</code>:</p>
+<pre><code class="language-html">&lt;!-- Section 7: Control Failures --&gt;
+&lt;section&gt;
+  &lt;h2&gt;Control Failures&lt;/h2&gt;
+  &lt;div class=&quot;md-card-grid&quot; id=&quot;mdFailureCards&quot;&gt;&lt;/div&gt;
+  &lt;div style=&quot;margin-top:1rem;&quot; id=&quot;mdFailureTable&quot;&gt;&lt;/div&gt;
+&lt;/section&gt;
+</code></pre>
+<p>After the <code>mdRenderControlConflicts</code> function:</p>
+<pre><code class="language-javascript">function mdClock(ts) {
+  if (!ts) return '—';
+  var t = new Date(ts * 1000);
+  return ('0' + t.getHours()).slice(-2) + ':' + ('0' + t.getMinutes()).slice(-2);
+}
+
+function mdRenderControlFailures(d) {
+  var events = d.control_failures_events || [];
+  var count = d.control_failures_24h || 0;
+  var cards = [
+    {label:'Failed Slots (24h)',  value: mdFmt(count, 0),                         cls: count &gt; 0 ? 'md-status-warn' : 'md-status-ok'},
+    {label:'Failed Slots (Total)', value: mdFmt(d.control_failures_total || 0, 0), cls: ''},
+  ];
+  var h = '';
+  cards.forEach(function (c) {
+    h += '&lt;div class=&quot;md-card&quot;&gt;&lt;div class=&quot;md-label&quot;&gt;' + c.label + '&lt;/div&gt;'
+      + '&lt;div class=&quot;md-value ' + c.cls + '&quot;&gt;' + c.value + '&lt;/div&gt;&lt;/div&gt;';
+  });
+  document.getElementById('mdFailureCards').innerHTML = h;
+
+  if (events.length === 0) {
+    document.getElementById('mdFailureTable').innerHTML = '&lt;div class=&quot;md-card&quot; style=&quot;text-align:center;&quot;&gt;No control failures in the last 24h&lt;/div&gt;';
+    return;
+  }
+  var t = '&lt;table&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;When&lt;/th&gt;&lt;th&gt;Inverter&lt;/th&gt;&lt;th&gt;Mode&lt;/th&gt;&lt;th&gt;Slot&lt;/th&gt;&lt;th&gt;Requested&lt;/th&gt;&lt;th&gt;Measured&lt;/th&gt;&lt;th&gt;Failed Minutes&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;&lt;tbody&gt;';
+  /* Newest first for reading, even though the source list is oldest-first for storage. */
+  events.slice().reverse().forEach(function (e) {
+    t += '&lt;tr&gt;&lt;td&gt;' + mdAgo(e.at) + '&lt;/td&gt;&lt;td&gt;' + e.inverter + '&lt;/td&gt;&lt;td&gt;' + (e.mode || '—') + '&lt;/td&gt;'
+      + '&lt;td&gt;' + mdClock(e.slot_start) + '–' + mdClock(e.slot_end) + '&lt;/td&gt;'
+      + '&lt;td&gt;' + (e.requested_w === null || e.requested_w === undefined ? '—' : mdFmt(e.requested_w, 0) + 'W') + '&lt;/td&gt;'
+      + '&lt;td&gt;' + mdFmt(e.measured_w, 0) + 'W&lt;/td&gt;&lt;td&gt;' + mdFmt(e.failed_minutes, 1) + '&lt;/td&gt;&lt;/tr&gt;';
+  });
+  t += '&lt;/tbody&gt;&lt;/table&gt;';
+  document.getElementById('mdFailureTable').innerHTML = t;
+}
+</code></pre>
+<p>In <code>mdRenderAll</code>, after <code>mdRenderControlConflicts(d);</code>:</p>
+<pre><code class="language-javascript">  mdRenderControlFailures(d);
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 6: Document the feature</strong></li>
+</ul>
+<p>In <code>docs/output-data.md</code>, add after the <code>## Alert data</code> section (before <code>## Predbat Logfile</code>):</p>
+<pre><code class="language-markdown">## Control failure data
+
+Predbat checks that the battery actually does what it was commanded during each Charging, Exporting (force export), Freeze charging and Freeze exporting slot.
+Five minutes after an inverter enters one of these modes, Predbat compares the measured battery power against the rate it asked that inverter for.
+If the battery stays well short of it (below 25% of the requested rate) or, in a freeze mode, flows the wrong way by more than 200W, for three readings in a row, the slot is counted as a control failure.
+Each failed slot logs one warning and is counted once, however long it lasts.
+Nothing is checked in read-only mode or while an inverter is calibrating.
+
+- **predbat.control_failures** - the number of failed slots in the last 24 hours. The `events` attribute lists recent failures (inverter, mode, slot times, requested and measured power, and how many minutes the battery was not following the command) and `by_mode` breaks the count down by mode.
+- **predbat.control_failures_total** - the lifetime count of failed slots, suitable for Home Assistant long-term statistics.
+
+Common causes are an inverter app or schedule overriding Predbat's mode, a battery management system limiting the charge or discharge rate, a command that never reached the inverter, or a cloud integration that reports battery power several minutes late.
+The same data is shown in the Control Failures section of the [Metrics view](web-interface.md#metrics-view).
+</code></pre>
+<p>In <code>docs/web-interface.md</code>, change <code>contains the following 5 sections:</code> to <code>contains the following sections:</code> and add after the <strong>API &amp; Solar Status</strong> bullet (after the "Solar status shows ..." line):</p>
+<pre><code class="language-markdown">- **Control Failures** - shows how many charge, export and freeze slots in the last 24 hours (and in total) the battery did not follow Predbat's command, with a table of recent failures - see [control failure data](output-data.md#control-failure-data)
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 7: Run the tests to verify they pass</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test control_failures_metrics --test control_failures_dashboard --test control_conflicts_metrics --test control_conflicts_dashboard &gt; /tmp/cf_metrics.txt 2&gt;&amp;1; grep -n "ERROR\|Traceback\|passed\|failed" /tmp/cf_metrics.txt | head -20</code>
+Expected: no <code>ERROR</code>/<code>Traceback</code>; all four pass.</p>
+<ul>
+<li>[ ] <strong>Step 8: Pre-commit and commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/predbat_metrics.py apps/predbat/predbat.py apps/predbat/web_metrics_dashboard.py apps/predbat/tests/test_metrics_dashboard_control_failures.py apps/predbat/unit_test.py docs/output-data.md docs/web-interface.md
+coverage/venv/bin/pre-commit run --files apps/predbat/predbat_metrics.py apps/predbat/predbat.py apps/predbat/web_metrics_dashboard.py apps/predbat/tests/test_metrics_dashboard_control_failures.py apps/predbat/unit_test.py docs/output-data.md docs/web-interface.md &gt; /tmp/pc5.txt 2&gt;&amp;1; grep -v &quot;Passed\|Skipped&quot; /tmp/pc5.txt
+git commit -m &quot;feat(control-monitor): metrics, Control Failures dashboard section and docs
+
+Co-Authored-By: Claude Opus 5.5 &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<hr />
+<h3 id="task-6-whole-branch-verification">Task 6: Whole-branch verification</h3>
+<p><strong>Files:</strong> none new.</p>
+<ul>
+<li>[ ] <strong>Step 1: Quick suite</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --quick &gt; /tmp/quick.txt 2&gt;&amp;1; grep -n "ERROR\|Traceback\|FAILED\|failed" /tmp/quick.txt | head -30</code>
+Expected: no failures. Any failure in an unrelated test: re-run that test alone; if it passes alone, hunt the order dependency with <code>./run_shuffle --bisect</code> rather than ignoring it.</p>
+<ul>
+<li>[ ] <strong>Step 2: Full pre-commit</strong></li>
+</ul>
+<p>Run: <code>coverage/venv/bin/pre-commit run --all-files &gt; /tmp/pc_all.txt 2&gt;&amp;1; grep -v "Passed\|Skipped" /tmp/pc_all.txt</code>
+Expected: clean (re-stage <code>.cspell/custom-dictionary-workspace.txt</code> if it was re-sorted).</p>
+<ul>
+<li>[ ] <strong>Step 3: Scope check</strong></li>
+</ul>
+<p>Run GitNexus <code>detect_changes({scope: "compare", base_ref: "main"})</code>. Expected: changed symbols limited to <code>control_monitor.py</code>, <code>apply_inverter_rates</code>, <code>execute_plan</code>, <code>fetch_inverter_data</code>, the two new <code>Execute</code> methods, <code>reset</code>, <code>update_pred</code>, <code>_emit_snapshot_metrics</code>, <code>publish_control_failures</code>, <code>PrometheusMetrics.__init__</code>/<code>to_dict</code>, <code>get_metrics_dashboard_body</code>, and tests. Anything else is unintended — investigate before continuing.</p>
+<ul>
+<li>[ ] <strong>Step 4: Debug-dump replay (no behaviour change to the plan)</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test debug_cases &gt; /tmp/debug_cases.txt 2&gt;&amp;1; grep -n "ERROR\|Traceback\|failed" /tmp/debug_cases.txt | head</code>
+Expected: passes — the monitor only observes, so golden plans are unchanged.</p>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>
