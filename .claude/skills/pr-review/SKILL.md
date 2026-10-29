@@ -65,7 +65,7 @@ Work through each angle below in turn, on the whole diff. Read the enclosing fun
       "Not SOLID" with no concrete break is not a finding.
 - **Batpred conventions** (from `CLAUDE.md` and past regressions). Flag only a clear break, and quote the rule:
     - A change to the simulation in `Prediction.run_prediction()` (`apps/predbat/prediction.py`) with no matching change to `apps/predbat/prediction_kernel.cpp`. The C++ kernel is meant to be a bit-for-bit mirror, and `test_kernel_parity.py` checks it.
-    - A test that assigns to `my_predbat.*` or `my_predbat.args[...]` without restoring it in a `finally`. Every test shares one fixture, so leaked state breaks an unrelated later test.
+    - Each test gets its own `PredBat` from `create_predbat()`, so instance attributes can't leak between tests. Module-level or class-level state that a test doesn't rebuild (for example `PLOT_ENABLED` in `tests/test_infra.py`) can, and a test that changes it without restoring it can make an unrelated _later_ test fail depending on run order.
     - Direct file access where the Storage component should be used.
     - New long-lived state on `PredBat` that the debug dump (`create_debug_yaml()`) would serialise and that holds secrets or tuple-keyed dicts. Those keys must go in `DEBUG_EXCLUDE_LIST` (`apps/predbat/utils.py`), or the dump either leaks or cannot be replayed (#5569).
     - A function or class with no docstring, or a non-`lower_case_with_underscores` name.

@@ -33,7 +33,7 @@ from const import PREDICT_STEP, PREDBAT_MAX_CARS, EXPORT_MODE_TARGET, FULL_EXPOR
 from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in_iboost_slot, export_limit_from_stored
 
 # Expected ABI/parity revisions of the shared library (see prediction_kernel.cpp)
-KERNEL_ABI_VERSION = 8
+KERNEL_ABI_VERSION = 10
 KERNEL_PARITY_REVISION = 19
 
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
@@ -167,6 +167,7 @@ class PkScenario(ctypes.Structure):
         ("export_start", ctypes.POINTER(ctypes.c_int32)),
         ("export_end", ctypes.POINTER(ctypes.c_int32)),
         ("soc_out", ctypes.POINTER(ctypes.c_double)),
+        ("export_floor_soc", ctypes.POINTER(ctypes.c_double)),
         ("n_charge", ctypes.c_int32),
         ("n_export", ctypes.c_int32),
         ("pv_scenario", ctypes.c_int32),
@@ -210,6 +211,8 @@ class PkBatchJob(ctypes.Structure):
         ("export_start", ctypes.POINTER(ctypes.c_int32)),
         ("export_end", ctypes.POINTER(ctypes.c_int32)),
         ("soc_out", ctypes.POINTER(ctypes.c_double)),
+        ("export_end_soc_out", ctypes.POINTER(ctypes.c_double)),
+        ("export_floor_soc", ctypes.POINTER(ctypes.c_double)),
         ("n_charge", ctypes.c_int32),
         ("n_export", ctypes.c_int32),
         ("pv_scenario", ctypes.c_int32),
@@ -217,6 +220,7 @@ class PkBatchJob(ctypes.Structure):
         ("step", ctypes.c_int32),
         ("soc_range_start_step", ctypes.c_int32),
         ("soc_range_end_step", ctypes.c_int32),
+        ("phase", ctypes.c_int32),
     ]
 
 
@@ -237,15 +241,36 @@ class BatchJob:
 
     run_prediction_kernel_batch reads only the input fields (charge_limit, charge_window,
     export_window, export_limits, pv_scenario, end_record) and the SoC range steps. step, sim_hash,
-    want_range, range_window and result belong to the batch runner in prediction_batch.py, which is
+    want_range, range_window, want_export_end_soc and result belong to the batch runner in prediction_batch.py, which is
     the only thing that creates these; they live here so the ctypes layer can be tested on its own.
     step is deliberately not one of the kernel's inputs - run_prediction_kernel_batch overrides it
     with PREDICT_STEP, so it is only read when a job falls back to the Python engine.
     """
 
-    __slots__ = ("charge_limit", "charge_window", "export_window", "export_limits", "pv_scenario", "end_record", "step", "soc_range_start_step", "soc_range_end_step", "sim_hash", "want_range", "range_window", "result")
+    __slots__ = (
+        "charge_limit",
+        "charge_window",
+        "export_window",
+        "export_limits",
+        "pv_scenario",
+        "end_record",
+        "step",
+        "soc_range_start_step",
+        "soc_range_end_step",
+        "sim_hash",
+        "want_range",
+        "range_window",
+        "want_export_end_soc",
+        "need_export_end_soc",
+        "export_end_soc",
+        "export_end_key",
+        "export_floor_soc",
+        "floor_twin",
+        "base_hash",
+        "result",
+    )
 
-    def __init__(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step, soc_range_start_step=-1, soc_range_end_step=-1, sim_hash=None, want_range=False, range_window=None):
+    def __init__(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step, soc_range_start_step=-1, soc_range_end_step=-1, sim_hash=None, want_range=False, range_window=None, want_export_end_soc=False):
         """Record one job's trial inputs; result stays None until the batch is flushed"""
         self.charge_limit = charge_limit
         self.charge_window = charge_window
@@ -259,6 +284,18 @@ class BatchJob:
         self.sim_hash = sim_hash
         self.want_range = want_range
         self.range_window = range_window
+        # Also report the SoC at the end of each export window (PkBatchJob.export_end_soc_out), in the
+        # result (want_export_end_soc) or only to the batch runner, for a pv10 twin (need_export_end_soc)
+        self.want_export_end_soc = want_export_end_soc
+        self.need_export_end_soc = False
+        self.export_end_soc = None
+        self.export_end_key = None
+        # The export floor for this job: SoCs per export window (export_floor_soc), or the nominal twin
+        # job in the same batch whose window-end SoCs to floor from (floor_twin, run a phase earlier)
+        self.export_floor_soc = None
+        self.floor_twin = None
+        # prediction_cache_base of the inputs, when the batch runner has computed it
+        self.base_hash = None
         self.result = None
 
 
@@ -912,7 +949,8 @@ def reset_kernel_run_state(pred):
 def run_prediction_kernel_batch(pred, jobs, n_threads=1):
     """Run a whole fan-out of prediction scenarios through the kernel in one pk_run_batch call.
 
-    Returns a list of (result_tuple, soc_range_min, soc_range_max) in job order, where result_tuple
+    Returns a list of (result_tuple, soc_range_min, soc_range_max, export_end_soc) in job order, where
+    export_end_soc is the window-end SoC list for a job that asked for one and None otherwise, and result_tuple
     is the same 17-field tuple Prediction.run_prediction() returns, or None for a job the kernel
     refused - the caller re-runs those through the Python engine. Returns None when the batch could
     not be run at all (no kernel, no batch entry point, or a non-zero return code).
@@ -930,6 +968,11 @@ def run_prediction_kernel_batch(pred, jobs, n_threads=1):
     if not lib or not KERNEL_HAS_BATCH or not getattr(pred, "kernel_handle", 0):
         return None
 
+    # Jobs floored from a twin's window-end SoCs run in phase 1, after every phase 0 job (the twins
+    # among them); results are handed back in the caller's order
+    order = [index for index, job in enumerate(jobs) if job.floor_twin is None] + [index for index, job in enumerate(jobs) if job.floor_twin is not None]
+    caller_jobs = jobs
+    jobs = [caller_jobs[index] for index in order]
     n_jobs = len(jobs)
     job_array = (PkBatchJob * n_jobs)()
     result_array = (PkBatchResult * n_jobs)()
@@ -957,6 +1000,10 @@ def run_prediction_kernel_batch(pred, jobs, n_threads=1):
     # so their marshalled PkExportLimit buffer is memoised the same way and on the same terms - keyed
     # on identity, with the list retained so an id() cannot be recycled mid-batch.
     limits_cache = {}
+    # One window-end SoC buffer per job that asks for it, None otherwise, in job order - and by job, so a
+    # phase 1 job can point its floor at its twin's buffer
+    export_end_buffers = []
+    export_end_by_job = {}
 
     def limit_arrays(export_limits):
         """Marshal an export limit list into its PkExportLimit buffer, reusing an earlier job's where possible"""
@@ -981,6 +1028,20 @@ def run_prediction_kernel_batch(pred, jobs, n_threads=1):
         pk_job.export_start = export_start
         pk_job.export_end = export_end
         pk_job.soc_out = None
+        export_end_buffer = (ctypes.c_double * len(job.export_window))() if (job.want_export_end_soc or job.need_export_end_soc) and job.export_window else None
+        pk_job.export_end_soc_out = export_end_buffer
+        export_end_buffers.append(export_end_buffer)
+        export_end_by_job[id(job)] = export_end_buffer
+        floor_buffer = None
+        pk_job.phase = 0
+        if job.floor_twin is not None:
+            floor_buffer = export_end_by_job.get(id(job.floor_twin))
+            pk_job.phase = 1
+        elif job.export_floor_soc is not None and len(job.export_floor_soc) == len(job.export_window):
+            # A memo entry is either a ctypes buffer kept from an earlier twin or a list from the direct path
+            floor_buffer = job.export_floor_soc if isinstance(job.export_floor_soc, ctypes.Array) else double_array(job.export_floor_soc)
+            buffers.append(floor_buffer)
+        pk_job.export_floor_soc = floor_buffer
         pk_job.n_charge = len(job.charge_window)
         pk_job.n_export = len(job.export_window)
         pk_job.pv_scenario = int(job.pv_scenario)
@@ -995,17 +1056,31 @@ def run_prediction_kernel_batch(pred, jobs, n_threads=1):
 
     reset_kernel_run_state(pred)
 
-    results = []
+    ordered = []
     for index in range(n_jobs):
         batch_result = result_array[index]
         if batch_result.status != 0:
-            results.append((None, 0.0, 0.0))
+            ordered.append((None, 0.0, 0.0, None))
             continue
-        results.append((kernel_result_tuple(pred, batch_result.result, {}), batch_result.soc_range_min, batch_result.soc_range_max))
+        export_end_soc = None
+        if jobs[index].want_export_end_soc or jobs[index].need_export_end_soc:
+            buffer = export_end_buffers[index]
+            # A caller asking for the SoCs gets a list; a twin's only reader is the batch, which keeps
+            # the buffer itself (the memo and the floor take either)
+            if buffer is None:
+                export_end_soc = []
+            elif jobs[index].want_export_end_soc:
+                export_end_soc = list(buffer)
+            else:
+                export_end_soc = buffer
+        ordered.append((kernel_result_tuple(pred, batch_result.result, {}), batch_result.soc_range_min, batch_result.soc_range_max, export_end_soc))
+    results = [None] * n_jobs
+    for position, index in enumerate(order):
+        results[index] = ordered[position]
     return results
 
 
-def run_prediction_kernel(pred, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step, cache):
+def run_prediction_kernel(pred, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step, cache, export_floor_soc=None):
     """Run one prediction scenario through the C++ kernel.
 
     The caller's requested step is intentionally ignored - the kernel always simulates at
@@ -1039,6 +1114,10 @@ def run_prediction_kernel(pred, charge_limit, charge_window, export_window, expo
     # measured 52.8us -> 28.5us per scenario, for a value that was being thrown away.
     soc_out = (ctypes.c_double * n_steps)() if not cache else None
     scenario.soc_out = soc_out
+    floor_buffer = None
+    if export_floor_soc is not None and len(export_floor_soc) == len(export_window):
+        floor_buffer = export_floor_soc if isinstance(export_floor_soc, ctypes.Array) else double_array(export_floor_soc)
+    scenario.export_floor_soc = floor_buffer
     scenario.n_charge = len(charge_window)
     scenario.n_export = len(export_window)
     scenario.pv_scenario = int(pv_scenario)

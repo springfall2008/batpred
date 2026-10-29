@@ -28,3 +28,14 @@ test('operating-mode selector includes every backend mode and selects Control SO
   assert.deepEqual(options, modes)
   assert.match(html, /<option value="Control SOC only" selected="">Control SOC only<\/option>/)
 })
+
+test('unknown and starting status are neutral rather than healthy', () => {
+  for (const status of ['Unknown', 'Unavailable', 'Starting', '']) {
+    const html = renderToStaticMarkup(React.createElement(module.exports.default, {
+      status, mode: 'Monitor', version: '', lastUpdated: null, configOk: true,
+      active: false, readOnly: true, debugEnabled: false
+    }))
+    assert.match(html, /status-dot status-unknown/)
+    assert.doesNotMatch(html, /status-dot status-ok/)
+  }
+})

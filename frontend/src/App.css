@@ -223,7 +223,10 @@
 /* Plan recalculation is safe to leave running while the user continues working. */
 .plan-calculating-overlay.is-non-blocking {
   inset: auto 1rem 1rem auto;
-  display: block;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.5rem;
   background: transparent;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
@@ -250,6 +253,12 @@
   display: flex;
   flex-direction: column;
   gap: 0.15rem;
+}
+
+.plan-calculating-message.chart-loading-message {
+  width: auto;
+  max-width: 100%;
+  padding: 0.6rem 0.8rem;
 }
 
 .plan-calculating-message strong {
@@ -287,9 +296,57 @@
     left: 0.75rem;
   }
 
-  .plan-calculating-overlay.is-non-blocking .plan-calculating-message {
+  .plan-calculating-overlay.is-non-blocking .plan-calculating-message:not(.chart-loading-message) {
     width: 100%;
   }
+}
+
+.data-freshness {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1rem;
+  padding: 0.6rem 0.8rem;
+  margin-bottom: 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.app-content > main:has(> .charts-page),
+.app-content > main:has(> .overview-page) {
+  display: flex;
+  flex-direction: column;
+}
+
+.app-content > main:has(> .overview-page) > .data-freshness {
+  margin: 0;
+  flex: 0 0 auto;
+}
+
+.app-content > main:has(> .overview-page) > .overview-page {
+  flex: 1 0 auto;
+  height: auto;
+  min-height: calc(100dvh - 94px);
+}
+
+.app-content > #main-content:has(> .overview-page) {
+  height: auto;
+  min-height: 100dvh;
+}
+
+.navigation-horizontal .app-content > #main-content:has(> .overview-page) {
+  min-height: calc(100dvh - 56px);
+}
+
+@media (min-width: 901px) {
+  .app-content > main:has(> .overview-page) .overview-stage {
+    min-height: 36rem;
+    container-type: normal;
+  }
+  .app-content > main:has(> .overview-page) .overview-scene { width: 100%; }
 }
 
 /* ============================================================

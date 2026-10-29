@@ -1520,7 +1520,7 @@ export default function PlanVisual({ plan }: PlanVisualProps) {
               }}
               aria-hidden="true"
             >
-              <span>NOW</span>
+              <span>Now</span>
             </div>
           )}
         </div>

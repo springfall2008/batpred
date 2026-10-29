@@ -63,6 +63,7 @@ export type PlanRow = {
 }
 
 export type Plan = {
+  timestamp?: string | null
   rows: PlanRow[]
   reason_templates: Record<string, string>
   currency_symbols?: string | string[]

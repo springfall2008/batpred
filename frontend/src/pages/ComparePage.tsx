@@ -128,7 +128,7 @@ function ComparisonChart({ data, rolling = false }: { data: CompareData, rolling
     return () => chart.destroy()
   }, [data, rolling])
 
-  return <div className="compare-chart"><canvas ref={canvasRef} /></div>
+  return <div className="compare-chart"><canvas ref={canvasRef} role="img" aria-label={rolling ? '7-day rolling average tariff cost comparison' : 'Daily true cost comparison of tariffs and actual costs'} /></div>
 }
 
 /** Compare configured tariffs using Predbat's stored scenario results. */

@@ -51,7 +51,13 @@
 // three arrays. Same three fields, but one buffer and one stride, with the (99.0, 100.0) gap gone
 // because mode is explicit (GH#4914).
 // ABI 8: io_credit, the bird-in-hand credit per step (prediction.py io_confirmed_credit), follows io_flag.
-#define PK_ABI_VERSION 8
+// ABI 9: PkBatchJob::export_end_soc_out - the rounded SoC at the step each export window ends, so plan
+// scoring can floor pv10 export targets at where nominal reached without materialising the SoC series.
+// ABI 10: export_floor_soc on PkScenario and PkBatchJob - one SoC per export window that each target
+// export's target is raised to (as a whole percent, rounded down), mirroring floor_export_limits in
+// prediction_batch.py - and PkBatchJob::phase, so a batch can floor a job from its nominal twin's
+// export_end_soc_out within one call.
+#define PK_ABI_VERSION 10
 // Parity 14: the explicit (mode, target, power) fields replace the packed double throughout the hot
 // loop (see the ABI 6 note); the floor a target exports to now reads the target field, matching
 // prediction.py.
@@ -283,6 +289,7 @@ struct PkScenario {
     const int32_t *export_start;
     const int32_t *export_end;
     double *soc_out;              // caller-allocated, n_steps entries, filled with round(soc, 3)
+    const double *export_floor_soc; // optional, n_export entries: raise each target export to this SoC (-1 = none)
 
     int32_t n_charge;
     int32_t n_export;
@@ -332,6 +339,13 @@ struct PkBatchJob {
     const int32_t *export_start;
     const int32_t *export_end;
     double *soc_out; // optional, null to skip
+    // Optional, null to skip: n_export entries, each the rounded SoC at the step a target export window
+    // ends (predict_soc[int((end - minutes_now) / 5) * 5]), or -1 for any other window or a step not simulated
+    double *export_end_soc_out;
+    // Optional, null to skip: n_export entries, the export floor SoCs (see PkScenario). May point at
+    // another job's export_end_soc_out in the same batch, in which case that job must be in phase 0
+    // and this one in phase 1.
+    const double *export_floor_soc;
 
     int32_t n_charge;
     int32_t n_export;
@@ -340,6 +354,8 @@ struct PkBatchJob {
     int32_t step;
     int32_t soc_range_start_step; // <0 to skip the SoC range scan
     int32_t soc_range_end_step;   // inclusive
+    // 0 or 1. Phase 0 jobs all run before any phase 1 job; the jobs must be ordered by phase.
+    int32_t phase;
 };
 
 // Result for one batched scenario; field order MUST match the ctypes Structure in
@@ -376,6 +392,8 @@ struct PkScratch {
     std::vector<int32_t> charge_member, export_member;
     std::vector<int32_t> clipped_start, clipped_end;
     std::vector<double> clipped_limit;
+    std::vector<int32_t> export_end_at_step;
+    std::vector<int32_t> export_floor_percent;
 
     PkScratch()
     {
@@ -677,7 +695,7 @@ static const ContextStore *lookup_context(int64_t handle)
 // soc_out may be null (see PkBatchJob). soc_range_min/max are optional out-params: when non-null and
 // soc_range_start_step >= 0, they receive the min/max of the rounded SoC over that inclusive step
 // range, mirroring the predict_soc scan in Prediction.thread_run_prediction_charge_min_max.
-static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResult *out, int32_t soc_range_start_step, int32_t soc_range_end_step, double *soc_range_min_out, double *soc_range_max_out, PkScratch &scratch)
+static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResult *out, int32_t soc_range_start_step, int32_t soc_range_end_step, double *soc_range_min_out, double *soc_range_max_out, double *export_end_soc_out, PkScratch &scratch)
 {
     const PkContext *c = &store->ctx;
     const std::vector<double> &soc_pct_threshold = store->soc_percent_threshold;
@@ -711,6 +729,46 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
 
     build_window_membership(charge_window_optimised, n_charge_clipped, clipped_start.data(), clipped_end.data(), clipped_limit.data(), nullptr, false, c->minutes_now, n_steps);
     build_window_membership(export_window_optimised, s->n_export, s->export_start, s->export_end, nullptr, s->export_limits, true, c->minutes_now, n_steps);
+
+    // The step each export window ends at, for export_end_soc_out - looked up per step rather than
+    // scanning the windows inside the hot loop. The first window to end at a step owns the slot; any
+    // other ending at the same step copies its value after the loop.
+    // Export floors as whole percents per window - floor_export_limits in prediction_batch.py: a target
+    // export is raised to min(floor(soc / soc_max * 100), 100) when that is above its own target
+    std::vector<int32_t> &export_floor_percent = scratch.export_floor_percent;
+    const bool has_export_floor = s->export_floor_soc != nullptr && c->soc_max > 0;
+    if (has_export_floor) {
+        export_floor_percent.assign(s->n_export, -1);
+        for (int32_t i = 0; i < s->n_export; i++) {
+            const double floor_soc = s->export_floor_soc[i];
+            if (floor_soc >= 0 && s->export_limits[i].mode == PK_EXPORT_MODE_TARGET) {
+                const double percent = std::floor(floor_soc / c->soc_max * 100.0);
+                export_floor_percent[i] = percent > 100.0 ? 100 : static_cast<int32_t>(percent);
+            }
+        }
+    }
+
+    std::vector<int32_t> &export_end_at_step = scratch.export_end_at_step;
+    const bool want_export_end_soc = export_end_soc_out != nullptr;
+    if (want_export_end_soc) {
+        export_end_at_step.assign(n_steps, -1);
+        for (int32_t i = 0; i < s->n_export; i++) {
+            export_end_soc_out[i] = -1.0;
+            // Only a target export can be floored, so only those are recorded - most windows in a
+            // pre-clip plan are idle, and each recorded value costs a round_py
+            if (s->export_limits[i].mode != PK_EXPORT_MODE_TARGET) {
+                continue;
+            }
+            const int32_t rel = s->export_end[i] - c->minutes_now;
+            if (rel < 0) {
+                continue;
+            }
+            const int32_t k = (rel / 5 * 5) / step;
+            if (k < n_steps && export_end_at_step[k] < 0) {
+                export_end_at_step[k] = i;
+            }
+        }
+    }
 
     // Initial state - prediction.py:435-490
     double soc = c->soc_kw;
@@ -824,7 +882,10 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         // for EXPORT_MODE_TARGET and are ignored by the branches that handle the other two modes.
         const PkExportLimit export_now = export_window_active ? s->export_limits[export_window_n] : PkExportLimit{PK_EXPORT_MODE_IDLE, 0, 1.0};
         const int32_t export_mode_now = export_now.mode;
-        const int32_t export_target_now = export_now.target;
+        int32_t export_target_now = export_now.target;
+        if (has_export_floor && export_window_active && export_floor_percent[export_window_n] > export_target_now) {
+            export_target_now = export_floor_percent[export_window_n];
+        }
         const double export_power_now = export_now.power;
 
         // Find charge limit - prediction.py:609-620
@@ -853,10 +914,14 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         // result feeds soc_out and the SoC range and nothing else - so skipping it when a batched
         // scenario wants neither cannot change the simulation.
         const bool in_soc_range = want_soc_range && k >= soc_range_start_step && k <= soc_range_end_step;
-        if (s->soc_out || in_soc_range) {
+        const bool at_export_end = want_export_end_soc && export_end_at_step[k] >= 0;
+        if (s->soc_out || in_soc_range || at_export_end) {
             const double soc_rounded = round_py(soc, 3);
             if (s->soc_out) {
                 s->soc_out[k] = soc_rounded;
+            }
+            if (at_export_end) {
+                export_end_soc_out[export_end_at_step[k]] = soc_rounded;
             }
             if (in_soc_range) {
                 if (soc_rounded < soc_range_min) {
@@ -1470,6 +1535,21 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             *soc_range_max_out = 0.0;
         }
     }
+    if (want_export_end_soc) {
+        for (int32_t i = 0; i < s->n_export; i++) {
+            if (s->export_limits[i].mode != PK_EXPORT_MODE_TARGET) {
+                continue;
+            }
+            const int32_t rel = s->export_end[i] - c->minutes_now;
+            if (rel < 0) {
+                continue;
+            }
+            const int32_t k = (rel / 5 * 5) / step;
+            if (k < n_steps && export_end_at_step[k] >= 0 && export_end_at_step[k] != i) {
+                export_end_soc_out[i] = export_end_soc_out[export_end_at_step[k]];
+            }
+        }
+    }
     return 0;
 }
 
@@ -1481,7 +1561,7 @@ int32_t pk_run(int64_t handle, const PkScenario *s, PkResult *out)
     if (!c) {
         return 1;
     }
-    return pk_run_one(c, s, out, -1, -1, nullptr, nullptr, thread_scratch());  // c is the store
+    return pk_run_one(c, s, out, -1, -1, nullptr, nullptr, nullptr, thread_scratch());  // c is the store
 }
 
 // Run n_jobs scenarios against one context in a single call.
@@ -1505,6 +1585,7 @@ static void run_batch_job(const ContextStore *c, const PkBatchJob &job, PkBatchR
     scenario.export_start = job.export_start;
     scenario.export_end = job.export_end;
     scenario.soc_out = job.soc_out;
+    scenario.export_floor_soc = job.export_floor_soc;
     scenario.n_charge = job.n_charge;
     scenario.n_export = job.n_export;
     scenario.pv_scenario = job.pv_scenario;
@@ -1513,7 +1594,7 @@ static void run_batch_job(const ContextStore *c, const PkBatchJob &job, PkBatchR
     out.soc_range_min = 0.0;
     out.soc_range_max = 0.0;
     out.pad = 0;
-    out.status = pk_run_one(c, &scenario, &out.result, job.soc_range_start_step, job.soc_range_end_step, &out.soc_range_min, &out.soc_range_max, scratch);
+    out.status = pk_run_one(c, &scenario, &out.result, job.soc_range_start_step, job.soc_range_end_step, &out.soc_range_min, &out.soc_range_max, job.export_end_soc_out, scratch);
 }
 
 
@@ -1689,17 +1770,13 @@ static PkThreadPool *pool_singleton()
 //
 // n_threads <= 1 runs serially. Per-job failures land in that job's status field rather than
 // aborting the batch, so one malformed scenario cannot discard the rest of the fan-out.
-int32_t pk_run_batch(int64_t handle, const PkBatchJob *jobs, int32_t n_jobs, PkBatchResult *results, int32_t n_threads)
+// Run one phase of a batch. Scenarios within a phase are independent - each reads the shared const
+// context and writes only its own result slot - so they are split across threads by stride.
+static void run_batch_phase(const ContextStore *c, const PkBatchJob *jobs, int32_t n_jobs, PkBatchResult *results, int32_t n_threads)
 {
-    const ContextStore *c = lookup_context(handle);
-    if (!c) {
-        return 1;
+    if (n_jobs <= 0) {
+        return;
     }
-    if (!jobs || !results || n_jobs < 0) {
-        return 2;
-    }
-    // Scenarios are independent - each reads the shared const context and writes only its own result
-    // slot - so they are split across threads by stride.
     if (n_threads > 1 && n_jobs > 1) {
         std::lock_guard<std::mutex> dispatch(g_dispatch_mutex);
         int32_t use = n_threads < n_jobs ? n_threads : n_jobs;
@@ -1712,13 +1789,39 @@ int32_t pk_run_batch(int64_t handle, const PkBatchJob *jobs, int32_t n_jobs, PkB
         }
         if (use > 1) {
             pool->run(c, jobs, n_jobs, results, use);
-            return 0;
+            return;
         }
-        // No workers available - fall through and run the batch inline.
+        // No workers available - fall through and run the phase inline.
     }
     for (int32_t i = 0; i < n_jobs; i++) {
         run_batch_job(c, jobs[i], results[i], thread_scratch());
     }
+}
+
+int32_t pk_run_batch(int64_t handle, const PkBatchJob *jobs, int32_t n_jobs, PkBatchResult *results, int32_t n_threads)
+{
+    const ContextStore *c = lookup_context(handle);
+    if (!c) {
+        return 1;
+    }
+    if (!jobs || !results || n_jobs < 0) {
+        return 2;
+    }
+    // Phase 0 jobs run before phase 1 jobs, so a phase 1 job can be floored from a phase 0 twin's
+    // export_end_soc_out. The jobs must be ordered by phase; anything else is refused.
+    int32_t split = n_jobs;
+    for (int32_t i = 0; i < n_jobs; i++) {
+        if (jobs[i].phase != 0 && jobs[i].phase != 1) {
+            return 3;
+        }
+        if (jobs[i].phase == 1 && split == n_jobs) {
+            split = i;
+        } else if (jobs[i].phase == 0 && split != n_jobs) {
+            return 3;
+        }
+    }
+    run_batch_phase(c, jobs, split, results, n_threads);
+    run_batch_phase(c, jobs + split, n_jobs - split, results + split, n_threads);
     return 0;
 }
 

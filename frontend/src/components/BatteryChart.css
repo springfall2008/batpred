@@ -30,7 +30,7 @@
 
 .battery-chart-header p {
   margin-top: 0.2rem;
-  font-size: 0.74rem;
+  font-size: 0.75rem;
   color: var(--color-text-muted);
 }
 
@@ -51,15 +51,23 @@
 }
 
 .battery-chart-range button {
+  min-height: 32px;
   padding: 0.35rem 0.55rem;
   border: 0;
   border-radius: 6px;
   background: transparent;
   color: var(--color-text-muted);
   font: inherit;
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   font-weight: 700;
   cursor: pointer;
+}
+
+@media (pointer: coarse) {
+  .battery-chart-range button {
+    min-height: 44px;
+    min-width: 44px;
+  }
 }
 
 .battery-chart-range button.is-active {
@@ -89,7 +97,7 @@
 .battery-chart-summary small {
   overflow: hidden;
   color: var(--color-text-muted);
-  font-size: 0.65rem;
+  font-size: 0.75rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -123,7 +131,7 @@
   border-radius: 6px;
   background: color-mix(in srgb, var(--color-warning) 10%, transparent);
   color: var(--color-text-secondary);
-  font-size: 0.72rem;
+  font-size: 0.75rem;
 }
 
 .battery-chart-legend {
@@ -141,7 +149,7 @@
   align-items: center;
   gap: 0.6rem;
   color: var(--color-text-secondary);
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   line-height: 1.2;
   cursor: help;
   outline: none;
@@ -153,7 +161,8 @@
 
 .battery-chart-legend-item:focus-visible {
   border-radius: 4px;
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-current) 45%, transparent);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .battery-chart-legend-marker {
@@ -198,7 +207,7 @@
   background: var(--color-tooltip-bg);
   color: var(--color-tooltip-text);
   box-shadow: var(--shadow-tooltip);
-  font-size: 0.68rem;
+  font-size: 0.75rem;
   font-weight: 500;
   line-height: 1.4;
   text-align: left;
@@ -223,7 +232,7 @@
   padding: 0.65rem 0;
   border-top: 1px solid var(--color-border);
   color: var(--color-text-secondary);
-  font-size: 0.72rem;
+  font-size: 0.75rem;
 }
 
 .battery-chart-comparisons summary {
@@ -253,7 +262,7 @@
 .battery-chart-comparisons label small {
   margin-left: auto;
   color: var(--color-text-muted);
-  font-size: 0.6rem;
+  font-size: 0.75rem;
 }
 
 .battery-chart-band-key {
@@ -261,7 +270,7 @@
   gap: 1.75rem;
   padding: 0 1rem 0.85rem;
   color: var(--color-text-muted);
-  font-size: 0.65rem;
+  font-size: 0.75rem;
 }
 
 @media (max-width: 760px) {

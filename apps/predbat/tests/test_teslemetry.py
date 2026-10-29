@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch, AsyncMock
 
 from tests.test_infra import create_aiohttp_mock_response, create_aiohttp_mock_session, run_async
-from teslemetry import TeslemetryAPI, OPERATION_MODES, OPTIONS_TIME_FULL, DEFAULT_SCHEDULE, FORCED_ASSERT_SECONDS
+from teslemetry import TeslemetryAPI, OPERATION_MODES, OPTIONS_TIME_FULL, DEFAULT_SCHEDULE, FORCED_ASSERT_SECONDS, EXPORT_PERMISSION_RECHECK_SECONDS
 
 
 class FakeStorage:
@@ -64,6 +64,11 @@ class MockTeslemetryAPI(TeslemetryAPI):
         # written against it still exercise that path, and the TBC tests opt in explicitly.
         self.tbc_control = False
         self.hybrid_override = None
+        self.battery_export_override = None
+        self.battery_export_permitted = True
+        self._battery_export_warned = False
+        self._battery_export_reported = None
+        self._last_export_permission_check = 0
         self.battery_type = None
         self.powerwall_3 = False
         self._reserve_band_warned = False
@@ -2191,6 +2196,134 @@ def test_teslemetry_hybrid_registered_as_an_optional_apps_yaml_key():
     assert APPS_SCHEMA["teslemetry_hybrid"] == {"type": "boolean"}
 
 
+def _site_info_without_net_meter_mode(net_meter_mode=None):
+    """A Powerwall 3 site_info with net_meter_mode removed, or set to the given value (GH#5710)."""
+    site_info = copy.deepcopy(SITE_INFO_PW3_EXPANSION)
+    site_info["response"]["components"].pop("net_meter_mode")
+    if net_meter_mode is not None:
+        site_info["response"]["components"]["net_meter_mode"] = net_meter_mode
+    return site_info
+
+
+def _export_warnings(api):
+    """Return the logged warnings about the battery export permission."""
+    return [message for message in api.log_messages if message.startswith("Warn:") and "not permitted to export battery energy" in message]
+
+
+def test_teslemetry_battery_export_permitted_from_net_meter_mode():
+    """net_meter_mode battery_ok means the Powerwall may export battery energy; missing, or any other value, means the
+    installer left the site at Solar Only, so the binary sensor reads off and one warning says what to do (GH#5710)."""
+    sensor = "binary_sensor.predbat_teslemetry_battery_export_permitted"
+
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO_PW3_EXPANSION
+    assert run_async(api.fetch_site_info()) is True
+    assert api.dashboard_items[sensor]["state"] == "on"
+    assert api.dashboard_items[sensor]["attributes"]["net_meter_mode"] == "battery_ok"
+    assert api.battery_export_permitted is True
+    assert _export_warnings(api) == []
+
+    for net_meter_mode, named in ((None, "not set"), ("pv_only", "pv_only")):
+        api = MockTeslemetryAPI()
+        api.mock_responses["/api/1/energy_sites/123456/site_info"] = _site_info_without_net_meter_mode(net_meter_mode)
+        assert run_async(api.fetch_site_info()) is True
+        assert api.dashboard_items[sensor]["state"] == "off", net_meter_mode
+        assert api.battery_export_permitted is False
+        warnings = _export_warnings(api)
+        assert len(warnings) == 1, warnings
+        assert "site export permission is {}".format(named) in warnings[0]
+        assert "Solar and Battery" in warnings[0] and "teslemetry_battery_export" in warnings[0]
+        # Once per boot, not once per read
+        api.update_battery_export_permitted(api.mock_responses["/api/1/energy_sites/123456/site_info"]["response"]["components"])
+        assert len(_export_warnings(api)) == 1
+
+
+def test_teslemetry_battery_export_override_from_apps_yaml():
+    """teslemetry_battery_export overrides the detection either way, and an override is a choice, not a fault to warn about."""
+    sensor = "binary_sensor.predbat_teslemetry_battery_export_permitted"
+    for site_info, override in ((_site_info_without_net_meter_mode(), True), (SITE_INFO_PW3_EXPANSION, False)):
+        api = MockTeslemetryAPI()
+        api.battery_export_override = override
+        api.mock_responses["/api/1/energy_sites/123456/site_info"] = site_info
+        assert run_async(api.fetch_site_info()) is True
+        assert api.dashboard_items[sensor]["state"] == ("on" if override else "off")
+        assert api.battery_export_permitted is override
+        assert _export_warnings(api) == []
+        assert any("teslemetry_battery_export in apps.yaml" in message for message in api.log_messages)
+
+
+def test_teslemetry_battery_export_rechecked_until_permitted():
+    """While battery export is not permitted, run() re-reads site_info every EXPORT_PERMISSION_RECHECK_SECONDS and
+    lifts the restriction once net_meter_mode reads battery_ok - the installer usually fixes it while Predbat is
+    running. A permitted site is never re-read, so fetch_site_info stays once per process for everyone else."""
+    sensor = "binary_sensor.predbat_teslemetry_battery_export_permitted"
+    path = "/api/1/energy_sites/123456/site_info"
+    api, calls = _make_run_api_with_fetch_capture()
+    api.fetch_site_info = TeslemetryAPI.fetch_site_info.__get__(api)
+    api.mock_responses[path] = _site_info_without_net_meter_mode()
+
+    def site_info_reads():
+        """Count the site_info requests made so far."""
+        return sum(1 for request in api.requests_made if request[1] == path)
+
+    assert run_async(api.run(0, True)) is True
+    assert api.dashboard_items[sensor]["state"] == "off"
+    assert site_info_reads() == 1
+    # Not yet due
+    assert run_async(api.run(EXPORT_PERMISSION_RECHECK_SECONDS - 300, False)) is True
+    assert site_info_reads() == 1
+    # Due, still blocked: the restriction stays and the warning is not repeated
+    assert run_async(api.run(EXPORT_PERMISSION_RECHECK_SECONDS, False)) is True
+    assert site_info_reads() == 2
+    assert api.dashboard_items[sensor]["state"] == "off"
+    assert len(_export_warnings(api)) == 1
+    # The installer fixes it
+    api.mock_responses[path] = SITE_INFO_PW3_EXPANSION
+    assert run_async(api.run(2 * EXPORT_PERMISSION_RECHECK_SECONDS, False)) is True
+    assert site_info_reads() == 3
+    assert api.dashboard_items[sensor]["state"] == "on"
+    assert any("battery export permitted" in message for message in api.log_messages)
+    # Permitted now, so no more re-reads
+    assert run_async(api.run(4 * EXPORT_PERMISSION_RECHECK_SECONDS, False)) is True
+    assert site_info_reads() == 3
+
+
+def test_teslemetry_battery_export_not_rechecked_with_an_override():
+    """teslemetry_battery_export: false is the user's choice, so no site_info re-read can undo it."""
+    path = "/api/1/energy_sites/123456/site_info"
+    api, calls = _make_run_api_with_fetch_capture()
+    api.fetch_site_info = TeslemetryAPI.fetch_site_info.__get__(api)
+    api.battery_export_override = False
+    api.mock_responses[path] = SITE_INFO_PW3_EXPANSION
+    assert run_async(api.run(0, True)) is True
+    assert run_async(api.run(2 * EXPORT_PERMISSION_RECHECK_SECONDS, False)) is True
+    assert sum(1 for request in api.requests_made if request[1] == path) == 1
+    assert api.battery_export_permitted is False
+
+
+def test_teslemetry_initialize_sets_battery_export_override():
+    """initialize stores teslemetry_battery_export as True/False; anything else is None, meaning "decide from site_info"."""
+    api = MockTeslemetryAPI()
+    for value, expected in ((True, True), (False, False), (None, None), ("true", None), ("auto", None)):
+        api.initialize(battery_export=value)
+        assert api.battery_export_override is expected, value
+        assert api.battery_export_permitted is True
+
+
+def test_teslemetry_battery_export_registered_as_an_optional_apps_yaml_key():
+    """teslemetry_battery_export has no registry default, so unset reaches the component as None, and both it and the
+    inverter-side battery_export_permitted arg are in the apps.yaml schema."""
+    from components import COMPONENT_LIST
+    from config import APPS_SCHEMA
+
+    arg = COMPONENT_LIST["teslemetry"]["args"]["battery_export"]
+    assert arg["config"] == "teslemetry_battery_export"
+    assert arg["required"] is False
+    assert "default" not in arg
+    assert APPS_SCHEMA["teslemetry_battery_export"] == {"type": "boolean"}
+    assert APPS_SCHEMA["battery_export_permitted"]["sensor_type"] == "boolean"
+
+
 def test_teslemetry_site_info_publishes_site_info_entity():
     """site_info is republished wholesale as a review entity, nesting intact."""
     api = MockTeslemetryAPI()
@@ -2280,6 +2413,7 @@ def test_teslemetry_automatic_config_sets_args():
     assert api.args_set["discharge_target_soc"] == ["number.predbat_teslemetry_schedule_discharge_soc"]
     assert api.args_set["scheduled_discharge_enable"] == ["switch.predbat_teslemetry_schedule_discharge_enable"]
     assert api.args_set["schedule_write_button"] == ["switch.predbat_teslemetry_schedule_write"]
+    assert api.args_set["battery_export_permitted"] == ["binary_sensor.predbat_teslemetry_battery_export_permitted"]
 
 
 def test_teslemetry_automatic_config_skips_unpublished_rate_sensors():
@@ -3134,6 +3268,12 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_hybrid_override_from_apps_yaml()
     test_teslemetry_initialize_sets_hybrid_override()
     test_teslemetry_hybrid_registered_as_an_optional_apps_yaml_key()
+    test_teslemetry_battery_export_permitted_from_net_meter_mode()
+    test_teslemetry_battery_export_override_from_apps_yaml()
+    test_teslemetry_battery_export_rechecked_until_permitted()
+    test_teslemetry_battery_export_not_rechecked_with_an_override()
+    test_teslemetry_initialize_sets_battery_export_override()
+    test_teslemetry_battery_export_registered_as_an_optional_apps_yaml_key()
     if my_predbat is not None:
         test_teslemetry_hybrid_unset_reaches_the_component_as_none(my_predbat)
     test_teslemetry_site_info_publishes_site_info_entity()

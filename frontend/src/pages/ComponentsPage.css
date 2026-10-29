@@ -102,7 +102,7 @@
   white-space: nowrap;
 }
 
-.component-summary .is-active strong { color: var(--color-success); }
+.component-summary .is-active strong { color: var(--color-success-text); }
 .component-summary .is-error strong { color: var(--color-danger); }
 .component-summary .is-disabled strong { color: var(--color-text-muted); }
 
@@ -200,9 +200,9 @@
 
 .component-meta dt {
   color: var(--color-text-muted);
-  font-size: 0.62rem;
+  font-size: 0.75rem;
   font-weight: 700;
-  text-transform: uppercase;
+  text-transform: none;
 }
 
 .component-meta dd {
@@ -268,10 +268,10 @@
 
 .component-settings em {
   margin-left: 0.35rem;
-  color: var(--color-warning);
-  font-size: 0.58rem;
+  color: var(--color-warning-text);
+  font-size: 0.75rem;
   font-style: normal;
-  text-transform: uppercase;
+  text-transform: none;
 }
 
 .components-error,

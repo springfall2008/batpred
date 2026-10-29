@@ -23,6 +23,7 @@ type ChartsPageProps = {
   plan: Plan
   loadMlEnabled: boolean
   predheatEnabled: boolean
+  onLoadingChange?: (loading: boolean) => void
 }
 
 const chartNames = ['battery', 'power', 'cost', 'rates', 'inday', 'solar', 'savings', 'degradation', 'marginal', 'carbon', 'loadml', 'predheat'] as const
@@ -44,7 +45,7 @@ const chartLabels: Record<ChartName, string> = {
 }
 
 /** Fetch and display Predbat's modern charts. */
-export default function ChartsPage({ plan, loadMlEnabled, predheatEnabled }: ChartsPageProps) {
+export default function ChartsPage({ plan, loadMlEnabled, predheatEnabled, onLoadingChange }: ChartsPageProps) {
   const visibleChartNames = chartNames.filter((chart) => (chart !== 'carbon' || plan.carbon_enable) && (chart !== 'loadml' || loadMlEnabled) && (chart !== 'predheat' || predheatEnabled))
   const [storedSelectedChart, setSelectedChart] = useStoredState<ChartName>(
     'predbat-chart-selected',
@@ -52,10 +53,12 @@ export default function ChartsPage({ plan, loadMlEnabled, predheatEnabled }: Cha
     visibleChartNames
   )
   const selectedChart = visibleChartNames.includes(storedSelectedChart) ? storedSelectedChart : 'battery'
-  const [data, setData] = useState<ChartData | null>(null)
+  const [chartData, setChartData] = useState<Partial<Record<ChartName, ChartData>>>({})
+  const data = chartData[selectedChart] ?? null
   const [error, setError] = useState<string | null>(null)
 
   const fetchChart = useCallback(async (signal?: AbortSignal) => {
+    onLoadingChange?.(true)
     try {
       const response = await fetch(`../api/chart_data?chart=${selectedChart}`, {
         cache: 'no-store',
@@ -66,30 +69,45 @@ export default function ChartsPage({ plan, loadMlEnabled, predheatEnabled }: Cha
         throw new Error(`HTTP ${response.status}`)
       }
 
-      const chartData = (await response.json()) as ChartData
-      setData(chartData)
+      const result = (await response.json()) as ChartData
+      if (signal?.aborted) return
+      setChartData((current) => ({ ...current, [selectedChart]: result }))
       setError(null)
+      return result
     } catch (fetchError) {
-      if (fetchError instanceof DOMException && fetchError.name === 'AbortError') {
+      if (signal?.aborted || (fetchError instanceof DOMException && fetchError.name === 'AbortError')) {
         return
       }
 
       const detail = fetchError instanceof Error ? fetchError.message : 'Unknown error'
       setError(`${chartLabels[selectedChart]} chart data could not be loaded. ${detail}`)
+    } finally {
+      if (!signal?.aborted) onLoadingChange?.(false)
     }
-  }, [selectedChart])
+  }, [selectedChart, onLoadingChange])
 
   useEffect(() => {
     const controller = new AbortController()
-    const initialTimer = window.setTimeout(() => fetchChart(controller.signal), 0)
-    const refreshTimer = window.setInterval(() => fetchChart(), 5 * 60 * 1000)
+    let refreshTimer: number
+
+    async function refreshChart() {
+      const result = await fetchChart(controller.signal)
+      if (!controller.signal.aborted) {
+        // Retry startup data promptly; schedule after completion so slow requests cannot overlap.
+        const delay = result ? (result.ready ? 5 * 60 * 1000 : 5000) : 30_000
+        refreshTimer = window.setTimeout(refreshChart, delay)
+      }
+    }
+
+    const initialTimer = window.setTimeout(refreshChart, 0)
 
     return () => {
       controller.abort()
+      onLoadingChange?.(false)
       window.clearTimeout(initialTimer)
-      window.clearInterval(refreshTimer)
+      window.clearTimeout(refreshTimer)
     }
-  }, [fetchChart])
+  }, [fetchChart, onLoadingChange])
 
   return (
     <div className="charts-page">
@@ -106,7 +124,6 @@ export default function ChartsPage({ plan, loadMlEnabled, predheatEnabled }: Cha
               className={selectedChart === chart ? 'is-active' : ''}
               aria-pressed={selectedChart === chart}
               onClick={() => {
-                setData(null)
                 setError(null)
                 setSelectedChart(chart)
               }}

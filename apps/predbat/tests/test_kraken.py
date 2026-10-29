@@ -70,6 +70,9 @@ def make_kraken_api(provider="edf", account_id="A-TEST123", auth_method="api_key
     api.count_errors = 0
     api.run_timeout = 3600
     api.initialize(provider=provider, account_id=account_id, key=key, auth_method=auth_method, **kwargs)
+    # Not on Flextras by default, so run() tests never reach edfenergy.com; Flextras tests
+    # delete this to get the real method back.
+    api.async_fetch_flextras_hours = AsyncMock(return_value=None)
     return api
 
 
@@ -632,6 +635,78 @@ def test_standing_charge_null_payment_method_unchanged():
         {"value_inc_vat": 47.0, "valid_from": "2026-07-01T00:00:00Z", "valid_to": "2026-10-01T00:00:00Z", "payment_method": None},
     ]
     assert _fetch_standing_charge_with_rows(rows) == 48.0 / 100.0
+
+
+def _days_from_now(days):
+    """ISO timestamp the given number of days from the real clock (negative for the past)."""
+    return (datetime.now(timezone.utc) + timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _both_orders(rows):
+    """The rows as listed and reversed: neither Kraken endpoint promises an order (GH#5573)."""
+    return [rows, list(reversed(rows))]
+
+
+def test_standing_charge_skips_row_that_has_not_started():
+    """GH#5573: a price change published ahead of time must not be used before it starts."""
+    rows = [
+        {"value_inc_vat": 55.0, "valid_from": _days_from_now(10), "valid_to": None, "payment_method": "DIRECT_DEBIT"},
+        {"value_inc_vat": 52.0, "valid_from": _days_from_now(-30), "valid_to": _days_from_now(10), "payment_method": "DIRECT_DEBIT"},
+        {"value_inc_vat": 50.0, "valid_from": _days_from_now(-90), "valid_to": _days_from_now(-30), "payment_method": "DIRECT_DEBIT"},
+    ]
+    for ordered in _both_orders(rows):
+        assert _fetch_standing_charge_with_rows(ordered) == 52.0 / 100.0
+
+
+def test_standing_charge_skips_row_that_has_ended():
+    """GH#5573: a row whose valid_to has passed is history, even when it is listed first."""
+    rows = [
+        {"value_inc_vat": 50.0, "valid_from": _days_from_now(-90), "valid_to": _days_from_now(-30), "payment_method": None},
+        {"value_inc_vat": 52.0, "valid_from": _days_from_now(-30), "valid_to": None, "payment_method": None},
+    ]
+    for ordered in _both_orders(rows):
+        assert _fetch_standing_charge_with_rows(ordered) == 52.0 / 100.0
+
+
+def test_standing_charge_latest_start_wins_when_rows_overlap():
+    """When more than one row covers now the most recent valid_from wins, and an open start is the oldest."""
+    rows = [
+        {"value_inc_vat": 40.0, "valid_from": None, "valid_to": None},
+        {"value_inc_vat": 48.0, "valid_from": _days_from_now(-60), "valid_to": None},
+        {"value_inc_vat": 52.0, "valid_from": _days_from_now(-5), "valid_to": _days_from_now(5)},
+    ]
+    for ordered in _both_orders(rows):
+        assert _fetch_standing_charge_with_rows(ordered) == 52.0 / 100.0
+
+
+def test_standing_charge_keeps_direct_debit_row_among_rows_covering_now():
+    """Choosing the row in force still leaves the GH#5502 Direct Debit preference in charge of a tie."""
+    rows = [
+        {"value_inc_vat": 61.0, "valid_from": _days_from_now(-30), "valid_to": None, "payment_method": "NON_DIRECT_DEBIT"},
+        {"value_inc_vat": 52.0, "valid_from": _days_from_now(-30), "valid_to": None, "payment_method": "DIRECT_DEBIT"},
+        {"value_inc_vat": 65.0, "valid_from": _days_from_now(10), "valid_to": None, "payment_method": "NON_DIRECT_DEBIT"},
+        {"value_inc_vat": 56.0, "valid_from": _days_from_now(10), "valid_to": None, "payment_method": "DIRECT_DEBIT"},
+    ]
+    for ordered in _both_orders(rows):
+        assert _fetch_standing_charge_with_rows(ordered) == 52.0 / 100.0
+
+
+def test_standing_charge_none_when_no_row_covers_now():
+    """With nothing in force the charge is None, so run() keeps the value it already had."""
+    only_ended = [{"value_inc_vat": 50.0, "valid_from": _days_from_now(-90), "valid_to": _days_from_now(-1)}]
+    only_future = [{"value_inc_vat": 55.0, "valid_from": _days_from_now(1), "valid_to": None}]
+    assert _fetch_standing_charge_with_rows(only_ended) is None
+    assert _fetch_standing_charge_with_rows(only_future) is None
+
+
+def test_standing_charge_ignores_rows_it_cannot_read():
+    """A row that is not an object is skipped, and an unparseable bound counts as open."""
+    rows = [
+        None,
+        "not a row",
+        {"value_inc_vat": 50.0, "valid_from": "not a timestamp", "valid_to": None},
+    ]
+    assert _fetch_standing_charge_with_rows(rows) == 50.0 / 100.0
 
 
 def test_fetch_standing_charges_rest_404_falls_back_to_graphql():
@@ -1967,6 +2042,44 @@ def test_fetch_standing_charges_graphql_parses_connection_edges():
     assert abs(result - 0.6195) < 1e-6
 
 
+def _fetch_standing_charge_graphql_with_nodes(nodes):
+    """Run async_fetch_standing_charges_graphql() against an applicableStandingCharges window holding the given nodes."""
+    api = make_kraken_api()
+    api.account_id = "A-AA8A473C"
+    api.async_graphql_query = AsyncMock(return_value={"applicableStandingCharges": {"edges": [{"node": node} for node in nodes]}})
+    return asyncio.run(api.async_fetch_standing_charges_graphql("1170001829927"))
+
+
+def test_fetch_standing_charges_graphql_picks_row_covering_now():
+    """GH#5573: the 3-day window can span a price change, so the charge in force now is used, not the first listed."""
+    nodes = [
+        {"value": 63.0, "validFrom": _days_from_now(1), "validTo": None},
+        {"value": 61.0, "validFrom": _days_from_now(-30), "validTo": _days_from_now(1)},
+    ]
+    for ordered in _both_orders(nodes):
+        result = _fetch_standing_charge_graphql_with_nodes(ordered)
+        assert result is not None
+        assert abs(result - 0.61) < 1e-6
+
+
+def test_fetch_standing_charges_graphql_latest_start_wins_when_rows_overlap():
+    """GH#5573: of two rows covering now the one that started most recently is the current charge."""
+    nodes = [
+        {"value": 60.0, "validFrom": _days_from_now(-60), "validTo": None},
+        {"value": 62.0, "validFrom": _days_from_now(-2), "validTo": None},
+    ]
+    for ordered in _both_orders(nodes):
+        result = _fetch_standing_charge_graphql_with_nodes(ordered)
+        assert result is not None
+        assert abs(result - 0.62) < 1e-6
+
+
+def test_fetch_standing_charges_graphql_none_when_no_row_covers_now():
+    """GH#5573: a window holding only a row that has not started (or has ended) gives no standing charge."""
+    assert _fetch_standing_charge_graphql_with_nodes([{"value": 63.0, "validFrom": _days_from_now(1), "validTo": None}]) is None
+    assert _fetch_standing_charge_graphql_with_nodes([{"value": 61.0, "validFrom": _days_from_now(-30), "validTo": _days_from_now(-1)}]) is None
+
+
 def test_save_and_load_kraken_cache_round_trip():
     """save_kraken_cache persists state that load_kraken_cache restores into a fresh instance."""
     from datetime import datetime
@@ -2064,7 +2177,7 @@ def test_discover_smart_devices_filters_live_ev():
     api.async_graphql_query = AsyncMock(
         return_value={
             "devices": [
-                {"id": "dev-ev-1", "deviceType": "ELECTRIC_VEHICLES", "status": {"current": "LIVE"}, "__typename": "SmartFlexVehicle", "make": "Tesla", "model": "M3", "provider": "JEDLIX"},
+                {"id": "dev-ev-1", "deviceType": "ELECTRIC_VEHICLES", "status": {"current": "LIVE"}, "__typename": "SmartFlexVehicle", "make": "Tesla", "model": "M3"},
                 {"id": "dev-meter", "deviceType": "ELECTRICITY_METERS", "status": {"current": "LIVE"}, "__typename": "SmartFlexDevice"},
                 {"id": "dev-ev-suspended", "deviceType": "ELECTRIC_VEHICLES", "status": {"current": "SUSPENDED"}, "__typename": "SmartFlexVehicle"},
             ]
@@ -2075,6 +2188,17 @@ def test_discover_smart_devices_filters_live_ev():
     dev = api.intelligent_devices["dev-ev-1"]
     assert dev["make"] == "Tesla" and dev["is_charger"] is False
     assert dev["planned_dispatches"] == [] and dev["completed_dispatches"] == []
+    # provider is filled from make, as the Octopus component does (#5754)
+    assert dev["provider"] == "Tesla"
+
+
+def test_devices_query_does_not_request_deprecated_provider():
+    """Kraken deprecated the SmartFlex device provider field (removal on or after 2027-04-15); asking for it would fail every devices query (#5754)."""
+    from kraken import KRAKEN_DEVICES_QUERY
+
+    fields = KRAKEN_DEVICES_QUERY.format(account_number="A-1234ABCD").split()
+    assert "provider" not in fields, KRAKEN_DEVICES_QUERY
+    assert "make" in fields and "deviceType" in fields
 
 
 def test_normalize_dispatches_field_mapping():
@@ -2515,7 +2639,7 @@ def test_kraken_api_edge_block_uses_all_bound_backoff_helpers():
     api._kraken_token_request = AsyncMock(side_effect=_blocked)
     assert asyncio.run(api.check_and_refresh_oauth_token()) is False
     assert api.oauth_failed is False, "a CDN block must not latch oauth_failed"
-    assert api.token_mint_block_count == 1
+    assert api.token_mint_backoff.count == 1
 
     # log_token_mint_backoff - suppressed call inside the window
     api._kraken_token_request = AsyncMock()
@@ -2523,12 +2647,12 @@ def test_kraken_api_edge_block_uses_all_bound_backoff_helpers():
     api._kraken_token_request.assert_not_called()
 
     # clear_token_mint_backoff - deadline elapsed, mint succeeds
-    api.token_mint_blocked_until = datetime.now(timezone.utc) - timedelta(seconds=1)
+    api.token_mint_backoff.until = datetime.now(timezone.utc) - timedelta(seconds=1)
     api._kraken_token_request = AsyncMock(return_value={"token": "recovered-jwt", "refreshToken": "recovered-refresh", "exp": int(time.time()) + 3600})
     assert asyncio.run(api.check_and_refresh_oauth_token()) is True
     assert api.access_token == "recovered-jwt"
-    assert api.token_mint_blocked_until is None
-    assert api.token_mint_block_count == 0
+    assert api.token_mint_backoff.until is None
+    assert api.token_mint_backoff.count == 0
 
 
 def test_graphql_query_expired_jwt_refreshes_and_retries():
@@ -2689,3 +2813,515 @@ def test_discover_smart_devices_keeps_dispatches_fetched_at():
     asyncio.run(api.async_discover_smart_devices())
 
     assert api.intelligent_devices["dev-1"]["dispatches_fetched_at"] == "2026-10-16T09:00:00+00:00"
+
+
+# ── EDF Flextras booked free hours ───────────────────────────────────────────
+
+
+def _flextras_screen(items):
+    """A Flextras hours screen in the shape EDF serve it, with the given BOOKED_HOURS_LIST items."""
+    return {
+        "screen": "REWARD_HOURS",
+        "version": "1.0",
+        "components": [
+            {"id": "reward_hours_banner_1", "type": "REWARD_HOURS_BANNER", "props": {"title": "x"}},
+            {"id": "booked_hours_list_1", "type": "BOOKED_HOURS_LIST", "props": {"bonusHours": 4, "totalRemainingHours": 0, "items": items}},
+        ],
+    }
+
+
+def _flextras_slot(date, start, end):
+    """One booked hourly slot as it appears in rawTimeSlots."""
+    return {"slotId": f"SLOT-{date}-{start[:2]}-{end[:2]}", "date": date, "startTime": start, "endTime": end, "status": "SELECTED"}
+
+
+def _flextras_api():
+    """An EDF api with the real Flextras fetch restored, a known tariff and mocked publishing."""
+    api = make_kraken_api(provider="edf")
+    del api.async_fetch_flextras_hours
+    api.current_tariff = {"tariff_code": "E-1R-VAR-01", "product_code": "VAR-01"}
+    api.import_rates = [{"value_inc_vat": 24.5}]
+    api.tariff_fetched_at = datetime.now()
+    api.rates_fetched_at = datetime.now()
+    api.dashboard_item = MagicMock()
+    api.set_arg = MagicMock()
+    api.update_success_timestamp = MagicMock()
+    return api
+
+
+def test_flextras_parse_joins_adjacent_hours_and_keeps_gaps():
+    """Back-to-back hours become one window; hours with a gap between them stay separate."""
+    from kraken import KrakenAPI
+
+    body = _flextras_screen(
+        [
+            {"rawTimeSlots": [_flextras_slot("2026-10-10", "09:00", "10:00"), _flextras_slot("2026-10-10", "10:00", "11:00")]},
+            {"rawTimeSlots": [_flextras_slot("2026-11-01", "00:00", "01:00"), _flextras_slot("2026-11-01", "02:00", "03:00")]},
+        ]
+    )
+    assert KrakenAPI.parse_flextras_booked_hours(body) == [
+        {"start": "2026-10-10T08:00:00+0000", "end": "2026-10-10T10:00:00+0000"},
+        {"start": "2026-11-01T00:00:00+0000", "end": "2026-11-01T01:00:00+0000"},
+        {"start": "2026-11-01T02:00:00+0000", "end": "2026-11-01T03:00:00+0000"},
+    ]
+
+
+def test_flextras_parse_reads_uk_local_time_across_the_clock_change():
+    """The same wall-clock hour maps to 08:00 UTC in BST and 09:00 UTC in GMT."""
+    from kraken import KrakenAPI
+
+    bst = KrakenAPI.parse_flextras_booked_hours(_flextras_screen([{"rawTimeSlots": [_flextras_slot("2026-10-24", "09:00", "10:00")]}]))
+    gmt = KrakenAPI.parse_flextras_booked_hours(_flextras_screen([{"rawTimeSlots": [_flextras_slot("2026-10-26", "09:00", "10:00")]}]))
+    assert bst[0]["start"] == "2026-10-24T08:00:00+0000"
+    assert gmt[0]["start"] == "2026-10-26T09:00:00+0000"
+
+
+def test_flextras_parse_hour_over_midnight_ends_next_day():
+    """An 11pm-midnight hour is dated by the day it starts."""
+    from kraken import KrakenAPI
+
+    parsed = KrakenAPI.parse_flextras_booked_hours(_flextras_screen([{"rawTimeSlots": [_flextras_slot("2026-11-07", "23:00", "00:00")]}]))
+    assert parsed == [{"start": "2026-11-07T23:00:00+0000", "end": "2026-11-08T00:00:00+0000"}]
+
+
+def test_flextras_parse_distinguishes_nothing_booked_from_unrecognised():
+    """A recognised screen with no bookings is [], anything else is None so the caller keeps what it had."""
+    from kraken import KrakenAPI
+
+    assert KrakenAPI.parse_flextras_booked_hours(_flextras_screen([])) == []
+    assert KrakenAPI.parse_flextras_booked_hours({"components": [{"type": "FAQ_LIST", "props": {}}]}) is None
+    assert KrakenAPI.parse_flextras_booked_hours({"error": "nope"}) is None
+    assert KrakenAPI.parse_flextras_booked_hours(None) is None
+
+
+def test_flextras_parse_skips_malformed_slots():
+    """A slot with a missing or unparseable time is dropped, not raised on."""
+    from kraken import KrakenAPI
+
+    body = _flextras_screen([{"rawTimeSlots": [{"date": "2026-10-10", "startTime": None}, {"date": "bad", "startTime": "09:00", "endTime": "10:00"}, "junk", _flextras_slot("2026-10-10", "12:00", "13:00")]}, "junk"])
+    assert KrakenAPI.parse_flextras_booked_hours(body) == [{"start": "2026-10-10T11:00:00+0000", "end": "2026-10-10T12:00:00+0000"}]
+
+
+def test_flextras_parse_reads_the_live_screen_shape():
+    """The BOOKED_HOURS_LIST component as EDF served it live on 25 Oct 2026 (identifiers replaced): one booked weekend morning."""
+    from kraken import KrakenAPI
+
+    slots = [{"slotId": f"SLOT-2026-10-31-0{hour}-0{hour + 1}", "date": "2026-10-31", "startTime": f"0{hour}:00", "endTime": f"0{hour + 1}:00", "status": "SELECTED"} for hour in range(4)]
+    body = {
+        "screen": "REWARD_HOURS",
+        "version": "1.0",
+        "components": [
+            {"id": "reward_hours_banner_1", "type": "REWARD_HOURS_BANNER", "order": 1, "status": "SUCCESS", "props": {"title": "No electricity hours"}},
+            {
+                "id": "booked_hours_list_1",
+                "type": "BOOKED_HOURS_LIST",
+                "order": 2,
+                "status": "SUCCESS",
+                "props": {
+                    "title": "Booked hours",
+                    "bonusHours": 4,
+                    "bonusHoursRemaining": 0,
+                    "totalRemainingHours": 0,
+                    "items": [{"id": "booked-1-20261031", "date": "2026-10-31T00:00:00.000Z", "dateInText": "Saturday, 31 October", "rawTimeSlots": slots, "isAfterCutOff": False}],
+                },
+            },
+            # Unbooked entitlement is a count in its own component, never a slot in the booked list
+            {"id": "hours_to_use_1", "type": "HOURS_TO_USE_LIST", "order": 3, "status": "SUCCESS", "props": {"hoursLeft": 0, "items": [{"id": "x", "type": "bonus"}]}},
+        ],
+    }
+    assert KrakenAPI.parse_flextras_booked_hours(body) == [{"start": "2026-10-31T00:00:00+0000", "end": "2026-10-31T04:00:00+0000"}]
+
+
+def test_flextras_parse_prices_only_selected_slots():
+    """Only a SELECTED slot (or one with no status) is a booking; any other status is skipped and logged once per parse."""
+    from kraken import KrakenAPI
+
+    available = dict(_flextras_slot("2026-10-10", "09:00", "10:00"), status="AVAILABLE")
+    released = dict(_flextras_slot("2026-10-10", "10:00", "11:00"), status="RELEASED")
+    released_again = dict(_flextras_slot("2026-10-10", "11:00", "12:00"), status="RELEASED")
+    no_status = {key: value for key, value in _flextras_slot("2026-10-10", "14:00", "15:00").items() if key != "status"}
+    body = _flextras_screen([{"rawTimeSlots": [available, released, released_again, _flextras_slot("2026-10-10", "12:00", "13:00"), no_status]}])
+
+    messages = []
+    assert KrakenAPI.parse_flextras_booked_hours(body, log=messages.append) == [
+        {"start": "2026-10-10T11:00:00+0000", "end": "2026-10-10T12:00:00+0000"},
+        {"start": "2026-10-10T13:00:00+0000", "end": "2026-10-10T14:00:00+0000"},
+    ]
+    assert len(messages) == 2, messages
+    assert any("AVAILABLE" in message for message in messages) and any("RELEASED" in message for message in messages), messages
+    # The log is optional, so existing callers are unchanged
+    assert KrakenAPI.parse_flextras_booked_hours(body) == [
+        {"start": "2026-10-10T11:00:00+0000", "end": "2026-10-10T12:00:00+0000"},
+        {"start": "2026-10-10T13:00:00+0000", "end": "2026-10-10T14:00:00+0000"},
+    ]
+
+
+def test_flextras_parse_wrong_shape_is_unrecognised_not_empty():
+    """A booked list of the wrong type, or one EDF mark as failed, is None (keep what is held), never [] and never raised on."""
+    from kraken import KrakenAPI
+
+    def screen_with_props(props, status=None):
+        """A screen whose BOOKED_HOURS_LIST carries the given props and component status."""
+        component = {"type": "BOOKED_HOURS_LIST", "props": props}
+        if status is not None:
+            component["status"] = status
+        return {"components": [component]}
+
+    slot = _flextras_slot("2026-10-10", "09:00", "10:00")
+    # items that are not a list: a dict would iterate its keys and read as "nothing booked"; a scalar would raise
+    assert KrakenAPI.parse_flextras_booked_hours(screen_with_props({"items": {"booked-1": {"rawTimeSlots": [slot]}}})) is None
+    assert KrakenAPI.parse_flextras_booked_hours(screen_with_props({"items": 5})) is None
+    assert KrakenAPI.parse_flextras_booked_hours(screen_with_props({"items": True})) is None
+    # rawTimeSlots that are not a list
+    assert KrakenAPI.parse_flextras_booked_hours(screen_with_props({"items": [{"rawTimeSlots": 3}]})) is None
+    assert KrakenAPI.parse_flextras_booked_hours(screen_with_props({"items": [{"rawTimeSlots": {"0": slot}}]})) is None
+    # A component EDF report as failed says nothing about what is booked
+    assert KrakenAPI.parse_flextras_booked_hours(screen_with_props({"items": []}, status="ERROR")) is None
+    # A successful component, or one with no status, is still read; absent items mean nothing booked
+    assert KrakenAPI.parse_flextras_booked_hours(screen_with_props({"items": [{"rawTimeSlots": [slot]}]}, status="SUCCESS")) == [{"start": "2026-10-10T08:00:00+0000", "end": "2026-10-10T09:00:00+0000"}]
+    assert KrakenAPI.parse_flextras_booked_hours(screen_with_props({})) == []
+    assert KrakenAPI.parse_flextras_booked_hours(screen_with_props({"items": [{"rawTimeSlots": None}]})) == []
+
+
+def test_flextras_run_publishes_booked_hours_and_wires_free_electricity():
+    """An EDF account with booked hours gets a free electricity sensor wired into octopus_free_electricity."""
+    api = _flextras_api()
+    api.async_find_property_id = AsyncMock(return_value="12345")
+    api.check_and_refresh_oauth_token = AsyncMock(return_value=True)
+    api.access_token = "jwt-token"
+
+    future = (datetime.now(timezone.utc) + timedelta(days=2)).strftime("%Y-%m-%d")
+    body = _flextras_screen([{"rawTimeSlots": [_flextras_slot(future, "09:00", "10:00"), _flextras_slot(future, "10:00", "11:00")]}])
+    response = AsyncMock(status=200)
+    response.json = AsyncMock(return_value=body)
+    session = AsyncMock()
+    session.get = MagicMock(return_value=AsyncMock(__aenter__=AsyncMock(return_value=response), __aexit__=AsyncMock(return_value=None)))
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=session):
+        asyncio.run(api.run(120, False))
+
+    url = session.get.call_args.args[0]
+    assert url == "https://www.edfenergy.com/support/energyhub/api/weekend-saver/v1/A-TEST123/12345/ui/hours"
+    assert session.get.call_args.kwargs["headers"]["Authorization"] == "jwt-token"
+
+    entity = api.get_entity_name("sensor", "free_electricity")
+    api.set_arg.assert_any_call("octopus_free_electricity", entity)
+    call = [c for c in api.dashboard_item.call_args_list if c.args[0] == entity][0]
+    events = call.kwargs["attributes"]["events"]
+    assert len(events) == 1, "two back-to-back hours are one session"
+    assert events[0]["rate"] == 0
+    # fetch_octopus_sessions() parses these with str2time
+    from utils import str2time
+
+    assert (str2time(events[0]["end"]) - str2time(events[0]["start"])) == timedelta(hours=2)
+    assert api.flextras_property_id == "12345"
+
+
+def test_flextras_not_fetched_for_eon():
+    """E.ON Next has no Flextras, so it is never asked."""
+    api = make_kraken_api(provider="eon")
+    api.current_tariff = {"tariff_code": "E-1R-VAR-01", "product_code": "VAR-01"}
+    api.import_rates = [{"value_inc_vat": 24.5}]
+    api.tariff_fetched_at = datetime.now()
+    api.rates_fetched_at = datetime.now()
+    api.dashboard_item = MagicMock()
+    api.set_arg = MagicMock()
+    api.update_success_timestamp = MagicMock()
+
+    asyncio.run(api.run(120, False))
+
+    api.async_fetch_flextras_hours.assert_not_called()
+    assert not [c for c in api.set_arg.call_args_list if c.args[0] == "octopus_free_electricity"]
+
+
+def test_flextras_unavailable_is_asked_once_per_refresh_and_not_wired():
+    """A non-200 (not on Flextras) is not retried every cycle, not a Kraken failure, and wires nothing."""
+    api = _flextras_api()
+    api.async_find_property_id = AsyncMock(return_value="12345")
+    api.check_and_refresh_oauth_token = AsyncMock(return_value=True)
+    api.access_token = "jwt-token"
+
+    response = AsyncMock(status=403)
+    session = AsyncMock()
+    session.get = MagicMock(return_value=AsyncMock(__aenter__=AsyncMock(return_value=response), __aexit__=AsyncMock(return_value=None)))
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=session):
+        asyncio.run(api.run(120, False))
+        asyncio.run(api.run(180, False))
+
+    assert session.get.call_count == 1, "a second cycle inside the refresh period must not ask again"
+    assert api.failures_total == 0
+    assert not [c for c in api.set_arg.call_args_list if c.args[0] == "octopus_free_electricity"]
+    assert len([c for c in api.log.call_args_list if "Flextras hours not available" in str(c)]) == 1
+
+
+def test_flextras_failed_fetch_keeps_held_sessions():
+    """A fetch that fails leaves the booked hours already held untouched."""
+    api = _flextras_api()
+    held = [{"start": "2030-01-05T09:00:00+0000", "end": "2030-01-05T10:00:00+0000"}]
+    api.flextras_sessions = list(held)
+    api.async_fetch_flextras_hours = AsyncMock(return_value=None)
+
+    asyncio.run(api.run(120, False))
+
+    assert api.flextras_sessions == held
+
+
+def test_flextras_merge_drops_withdrawn_future_hours_but_keeps_started_ones():
+    """A future hour handed back disappears; an hour already under way stays even if the screen drops it."""
+    api = _flextras_api()
+    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    started = {"start": (now - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%S+0000"), "end": (now + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%S+0000")}
+    withdrawn = {"start": (now + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S+0000"), "end": (now + timedelta(days=1, hours=1)).strftime("%Y-%m-%dT%H:%M:%S+0000")}
+    old = {"start": (now - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%S+0000"), "end": (now - timedelta(days=3) + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S+0000")}
+    fresh = {"start": (now + timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%S+0000"), "end": (now + timedelta(days=2, hours=1)).strftime("%Y-%m-%dT%H:%M:%S+0000")}
+    api.flextras_sessions = [old, started, withdrawn]
+
+    assert api._merge_flextras_sessions([fresh]) == [started, fresh]
+
+
+def test_flextras_cache_round_trip():
+    """Property id, sessions and the attempt stamp survive a restart, and cached sessions publish on the first run."""
+    api = _flextras_api()
+    storage = attach_fake_storage(api)
+    api.flextras_property_id = "12345"
+    api.flextras_sessions = [{"start": "2030-01-05T09:00:00+0000", "end": "2030-01-05T10:00:00+0000"}]
+    api.flextras_fetched_at = datetime.now()
+    asyncio.run(api.save_kraken_cache())
+
+    restored = _flextras_api()
+    restored.base.components = api.base.components
+    assert storage.data
+    restored.async_fetch_flextras_hours = AsyncMock(return_value=None)
+    asyncio.run(restored.run(0, True))
+
+    assert restored.flextras_property_id == "12345"
+    assert restored.flextras_sessions == api.flextras_sessions
+    restored.async_fetch_flextras_hours.assert_not_called()
+    restored.set_arg.assert_any_call("octopus_free_electricity", restored.get_entity_name("sensor", "free_electricity"))
+
+
+def test_find_property_id_reads_first_property():
+    """The properties query's first id is the one the Flextras URL needs; a failed query is None."""
+    api = make_kraken_api()
+    api.async_graphql_query = AsyncMock(return_value={"properties": [{"id": 987}, {"id": 654}]})
+    assert asyncio.run(api.async_find_property_id()) == "987"
+    api.async_graphql_query = AsyncMock(return_value=None)
+    assert asyncio.run(api.async_find_property_id()) is None
+
+
+# ── Command line --config (apps.yaml) ────────────────────────────────────────
+
+
+def _cli_settings(**given):
+    """The CLI's settings dict as main() builds it, with every field unset unless given."""
+    from kraken import KRAKEN_CLI_CONFIG_KEYS, KRAKEN_CLI_OAUTH_KEYS
+
+    settings = {name: None for name in list(KRAKEN_CLI_CONFIG_KEYS) + list(KRAKEN_CLI_OAUTH_KEYS)}
+    settings.update(given)
+    return settings
+
+
+def test_kraken_cli_config_keys_match_component():
+    """Every apps.yaml key the CLI reads is one the Kraken component actually declares."""
+    from components import COMPONENT_LIST
+    from kraken import KRAKEN_CLI_CONFIG_KEYS
+
+    declared = {spec.get("config") for spec in COMPONENT_LIST["kraken"]["args"].values() if spec.get("config")}
+    for cli_name, config_key in KRAKEN_CLI_CONFIG_KEYS.items():
+        assert config_key in declared, f"{cli_name} maps to {config_key}, which the kraken component does not declare: {sorted(declared)}"
+
+
+def test_kraken_cli_config_oauth_takes_token_and_refresh_settings():
+    """A SaaS-style OAuth config supplies the access token as key, plus the token and refresh settings."""
+    from kraken import merge_kraken_cli_settings
+
+    config = {
+        "kraken_provider": "edf",
+        "kraken_account_id": "A-1234ABCD",
+        "kraken_auth_method": "oauth",
+        "kraken_key": "access-token",
+        "kraken_token_hash": "hash",
+        "kraken_token_expires_at": datetime(2026, 10, 24, 20, 0, tzinfo=timezone.utc),
+        "kraken_email": "ignored@example.com",
+        "user_id": "inst-1",
+        "supabase_url": "https://x.supabase.co",
+        "supabase_key": "anon",
+    }
+    merged, used = merge_kraken_cli_settings(_cli_settings(), config)
+
+    assert merged["auth_method"] == "oauth"
+    assert merged["api_key"] == "access-token"
+    assert merged["account_id"] == "A-1234ABCD"
+    assert merged["token_hash"] == "hash"
+    assert isinstance(merged["token_expires"], str), "a YAML timestamp arrives as a datetime; the CLI passes a string"
+    assert (merged["user_id"], merged["supabase_url"], merged["supabase_key"]) == ("inst-1", "https://x.supabase.co", "anon")
+    assert merged["email"] is None, "email is not an OAuth credential"
+    assert "kraken_email" not in used and "kraken_key" in used
+
+
+def test_kraken_cli_config_command_line_wins():
+    """An explicit command line value beats the file, and a command line key overrides the file's OAuth method."""
+    from kraken import merge_kraken_cli_settings
+
+    config = {"kraken_account_id": "A-FROMFILE", "kraken_auth_method": "oauth", "kraken_key": "access-token", "kraken_token_hash": "hash"}
+    merged, used = merge_kraken_cli_settings(_cli_settings(account_id="A-CLI", api_key="sk_live_cli"), config)
+
+    assert merged["account_id"] == "A-CLI"
+    assert merged["api_key"] == "sk_live_cli"
+    assert merged["auth_method"] == "api_key"
+    assert merged["token_hash"] is None, "an OAuth token hash does not apply to an API key run"
+    assert used == []
+
+
+def test_kraken_cli_config_email_method_skips_key():
+    """With kraken_auth_method: email, the email and password are used and a stray kraken_key is not."""
+    from kraken import merge_kraken_cli_settings
+
+    config = {"kraken_account_id": "A-1", "kraken_auth_method": "email", "kraken_email": "me@example.com", "kraken_password": "pw", "kraken_key": "stale"}
+    merged, _ = merge_kraken_cli_settings(_cli_settings(), config)
+
+    assert (merged["email"], merged["password"], merged["api_key"]) == ("me@example.com", "pw", None)
+
+
+def test_kraken_cli_config_reads_apps_yaml_with_secrets():
+    """load_apps_yaml resolves !secret from a secrets.yaml beside the file, as --config sets it up."""
+    import tempfile
+    from utils import load_apps_yaml
+    from kraken import merge_kraken_cli_settings
+
+    with tempfile.TemporaryDirectory() as folder:
+        apps = os.path.join(folder, "apps.yaml")
+        with open(apps, "w") as handle:
+            handle.write("pred_bat:\n  module: predbat\n  kraken_provider: edf\n  kraken_account_id: A-1234ABCD\n  kraken_auth_method: api_key\n  kraken_key: !secret kraken_key\n")
+        with open(os.path.join(folder, "secrets.yaml"), "w") as handle:
+            handle.write("kraken_key: sk_live_secret\n")
+        saved = os.environ.get("PREDBAT_SECRETS_FILE")
+        os.environ["PREDBAT_SECRETS_FILE"] = os.path.join(folder, "secrets.yaml")
+        try:
+            config, _ = load_apps_yaml(apps, log=lambda *a, **k: None)
+        finally:
+            if saved is None:
+                os.environ.pop("PREDBAT_SECRETS_FILE", None)
+            else:
+                os.environ["PREDBAT_SECRETS_FILE"] = saved
+
+    merged, used = merge_kraken_cli_settings(_cli_settings(), config)
+    assert merged["api_key"] == "sk_live_secret"
+    assert merged["provider"] == "edf" and merged["account_id"] == "A-1234ABCD"
+    assert set(used) == {"kraken_provider", "kraken_account_id", "kraken_auth_method", "kraken_key"}
+
+
+KRAKEN_CLOUDFRONT_403_BODY = "<!DOCTYPE HTML><HTML><HEAD><TITLE>ERROR: The request could not be satisfied</TITLE></HEAD><BODY>Request blocked.\nGenerated by cloudfront (CloudFront)</BODY></HTML>"
+KRAKEN_RATE_LIMIT_RESPONSE = (200, {"errors": [{"message": "Too many requests.", "extensions": {"errorCode": "KT-CT-1199"}}]}, "", {})
+KRAKEN_SUCCESS_RESPONSE = (200, {"data": {"ok": True}}, "", {})
+
+
+def make_graphql_session(*responses):
+    """Session whose posts hand out the given (status, json, text, headers) responses in turn, the last repeating."""
+    queue = list(responses)
+
+    def post(*args, **kwargs):
+        """Wrap the next queued response in an async context manager."""
+        status, json_body, text, headers = queue.pop(0) if len(queue) > 1 else queue[0]
+        resp = AsyncMock()
+        resp.status = status
+        resp.json = AsyncMock(return_value=json_body)
+        resp.text = AsyncMock(return_value=text)
+        resp.headers = headers
+        ctx = AsyncMock()
+        ctx.__aenter__ = AsyncMock(return_value=resp)
+        ctx.__aexit__ = AsyncMock(return_value=None)
+        return ctx
+
+    session = AsyncMock()
+    session.post = MagicMock(side_effect=post)
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=None)
+    return session
+
+
+def make_rate_limit_api():
+    """KrakenAPI with a valid token, so queries reach the network mock."""
+    api = make_kraken_api()
+    api.access_token = "jwt-token-123"
+    api.check_and_refresh_oauth_token = AsyncMock(return_value=True)
+    return api
+
+
+def test_graphql_query_rate_limit_pauses_queries():
+    """A KT-CT-1199 pauses the queries after it, rather than sending the rest of the poll into the same limit."""
+    from kraken import GRAPHQL_RATE_LIMIT_BACKOFF_BASE_SECONDS
+
+    api = make_rate_limit_api()
+    session = make_graphql_session(KRAKEN_RATE_LIMIT_RESPONSE)
+    before = datetime.now(timezone.utc)
+    with patch("aiohttp.ClientSession", return_value=session):
+        assert asyncio.run(api.async_graphql_query("query { a }", "first")) is None
+        assert api.graphql_backoff.until >= before + timedelta(seconds=GRAPHQL_RATE_LIMIT_BACKOFF_BASE_SECONDS - 1)
+        # Timed in UTC, the same clock as the mint backoff, so a clock change cannot stretch or shorten it
+        assert api.graphql_backoff.until.utcoffset() == timedelta(0)
+        assert asyncio.run(api.async_graphql_query("query { b }", "second")) is None
+
+    assert session.post.call_count == 1, "the query after a rate limit was still sent"
+    assert api.check_and_refresh_oauth_token.call_count == 1, "a held query should not touch the token"
+
+
+def test_graphql_query_429_honours_retry_after():
+    """An HTTP 429 pauses queries for at least its Retry-After."""
+    api = make_rate_limit_api()
+    session = make_graphql_session((429, None, "Too Many Requests", {"Retry-After": "600"}))
+    before = datetime.now(timezone.utc)
+    with patch("aiohttp.ClientSession", return_value=session):
+        asyncio.run(api.async_graphql_query("query { a }", "q"))
+
+    assert api.graphql_backoff.until >= before + timedelta(seconds=599)
+
+
+def test_graphql_query_edge_block_pauses_queries():
+    """A CDN block page on a query pauses queries too."""
+    api = make_rate_limit_api()
+    session = make_graphql_session((403, None, KRAKEN_CLOUDFRONT_403_BODY, {}))
+    with patch("aiohttp.ClientSession", return_value=session):
+        asyncio.run(api.async_graphql_query("query { a }", "q"))
+
+    assert api.graphql_backoff.until is not None
+    logged = " ".join(str(c.args[0]) for c in api.log.call_args_list)
+    assert "edge/WAF blocked" in logged, logged
+
+
+def test_graphql_query_plain_error_does_not_pause():
+    """An ordinary HTTP error is not a rate limit."""
+    api = make_rate_limit_api()
+    session = make_graphql_session((400, None, '{"errors": [{"message": "bad field"}]}', {}))
+    with patch("aiohttp.ClientSession", return_value=session):
+        asyncio.run(api.async_graphql_query("query { a }", "q"))
+
+    assert api.graphql_backoff.until is None
+
+
+def test_graphql_query_rate_limit_doubles_then_clears():
+    """Consecutive rate limits double the pause; the first success clears it."""
+    from kraken import GRAPHQL_RATE_LIMIT_BACKOFF_BASE_SECONDS
+
+    api = make_rate_limit_api()
+    session = make_graphql_session(KRAKEN_RATE_LIMIT_RESPONSE, KRAKEN_RATE_LIMIT_RESPONSE, KRAKEN_SUCCESS_RESPONSE)
+    with patch("aiohttp.ClientSession", return_value=session):
+        asyncio.run(api.async_graphql_query("query { a }", "q"))
+        api.graphql_backoff.until = datetime.now(timezone.utc) - timedelta(seconds=1)
+        before = datetime.now(timezone.utc)
+        asyncio.run(api.async_graphql_query("query { a }", "q"))
+        assert api.graphql_backoff.count == 2
+        assert api.graphql_backoff.until >= before + timedelta(seconds=2 * GRAPHQL_RATE_LIMIT_BACKOFF_BASE_SECONDS - 1)
+        api.graphql_backoff.until = datetime.now(timezone.utc) - timedelta(seconds=1)
+        result = asyncio.run(api.async_graphql_query("query { a }", "q"))
+
+    assert result == {"ok": True}
+    assert api.graphql_backoff.count == 0
+    assert api.graphql_backoff.until is None
+    logged = " ".join(str(c.args[0]) for c in api.log.call_args_list)
+    assert "rate limit cleared" in logged, logged

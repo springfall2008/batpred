@@ -38,6 +38,10 @@ export default function ConfigPage() {
   const [tariffMessage, setTariffMessage] = useState('')
 
   const load = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    setTariff(null)
+    setTariffError('')
     try {
       const response = await fetch('../api/config', { cache: 'no-store' })
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
@@ -60,6 +64,7 @@ export default function ConfigPage() {
       }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Unable to load configuration')
+      setTariffError('Tariff analysis is unavailable because configuration could not be loaded. Use Refresh to try again.')
     } finally {
       setLoading(false)
     }
@@ -211,7 +216,7 @@ export default function ConfigPage() {
               </tbody>
             </table></div>
           </section>)}
-          {!visibleItems.length && <div className="config-empty">No settings match that filter.</div>}
+          {!visibleItems.length && !error && <div className="config-empty">{items.length ? 'No settings match that filter.' : 'No configuration settings are available.'}</div>}
         </div>
       )}
     </section>

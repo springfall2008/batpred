@@ -443,9 +443,9 @@ def run_web_apps_edit_tests(my_predbat):
         apps_js = get_apps_js("{}")
         print("Test: entity JSON stays inside the script and preserves markup as data")
         states = {
-            'sensor.<b>sample</b>': {
+            "sensor.<b>sample</b>": {
                 "state": '</ScRiPt><b>sample</b><!--<script> & "quoted"',
-                "unit_of_measurement": '<em>kWh</em>',
+                "unit_of_measurement": "<em>kWh</em>",
             }
         }
         states_js = get_apps_js(json.dumps(states))

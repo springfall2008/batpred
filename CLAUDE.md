@@ -58,7 +58,8 @@ It lists every config item that differs from its default, recalculates the plan,
 
 ### Finding test order dependencies
 
-All tests share one `PredBat`/HA fixture, so a test that mutates shared state without fully restoring it can make an unrelated _later_ test fail depending on run order (see issue [#5079](https://github.com/springfall2008/batpred/issues/5079)). `./run_shuffle --hunt --quick` (from `coverage/`) fuzzes the test order, bisects any failure down to the minimal (culprit, victim) pair, and records it so the next run looks for a different one. See "Finding test order dependencies" in [docs/developing.md](docs/developing.md) for the full set of modes (`--bisect`, `--campaign`).
+Each test gets its own `PredBat` from `create_predbat()`, so instance attributes can't leak between tests. Module-level or class-level state that it doesn't rebuild (for example `PLOT_ENABLED` in `tests/test_infra.py`) can, and a test that changes it without restoring it can make an unrelated _later_ test fail depending on run order (see issue [#5079](https://github.com/springfall2008/batpred/issues/5079)).
+`./run_shuffle --hunt --quick` (from `coverage/`) fuzzes the test order, bisects any failure down to the minimal (culprit, victim) pair, and records it so the next run looks for a different one. See "Finding test order dependencies" in [docs/developing.md](docs/developing.md) for the full set of modes (`--bisect`, `--campaign`).
 
 ### Debugging notes
 
@@ -95,7 +96,7 @@ The main loop (`update_pred()`) runs every 5 minutes: fetch data → run optimiz
 ### Core Modules
 
 | Module | Role |
-|--------|------|
+| ------ | ---- |
 | `plan.py` | Optimization engine — multi-threaded search across thousands of charge/discharge window scenarios |
 | `predict.py` / `prediction.py` | Battery SOC prediction models, PV generation, load forecasting |
 | `fetch.py` | Pulls PV forecasts, historical load, rate data, and inverter state |
@@ -172,10 +173,21 @@ This project is indexed by GitNexus as **batpred** (20066 symbols, 65406 relatio
 ## Resources
 
 | Resource | Use for |
-| --- | --- |
+| -------- | ------- |
 | `gitnexus://repo/batpred/context` | Codebase overview, check index freshness |
 | `gitnexus://repo/batpred/clusters` | All functional areas |
 | `gitnexus://repo/batpred/processes` | All execution flows |
 | `gitnexus://repo/batpred/process/{name}` | Step-by-step execution trace |
+
+## CLI
+
+| Task | Read this skill file |
+| ---- | -------------------- |
+| Understand architecture / "How does X work?" | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md` |
+| Blast radius / "What breaks if I change X?" | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
+| Trace bugs / "Why is X failing?" | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md` |
+| Rename / extract / split / refactor | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md` |
+| Tools, resources, schema reference | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md` |
+| Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
 
 <!-- gitnexus:end -->

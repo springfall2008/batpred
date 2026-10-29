@@ -32,6 +32,8 @@
 .plan-view-tabs {
   display: flex;
   align-self: flex-start;
+  flex-wrap: wrap;
+  max-width: 100%;
   gap: 0.25rem;
   padding: 0.25rem;
   border: 1px solid var(--color-border);
@@ -48,6 +50,8 @@
   font: inherit;
   font-size: 0.75rem;
   font-weight: 700;
+  white-space: nowrap;
+  min-height: 44px;
   cursor: pointer;
 }
 
@@ -103,7 +107,7 @@
 
 .plan-detail-header p {
   margin: 0.2rem 0 0;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   color: var(--color-text-muted);
 }
 
@@ -123,7 +127,7 @@
   width: 100%;
   min-width: 1050px;
   border-collapse: collapse;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
 }
 
 .plan-table th {
@@ -135,10 +139,10 @@
   background: var(--color-surface);
   color: var(--color-text-muted);
   text-align: left;
-  font-size: 0.62rem;
+  font-size: 0.75rem;
   font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  text-transform: none;
+  letter-spacing: normal;
 }
 
 .plan-table td {
@@ -181,7 +185,7 @@
   align-items: center;
   padding: 0.2rem 0.45rem;
   border-radius: 999px;
-  font-size: 0.65rem;
+  font-size: 0.75rem;
   font-weight: 700;
   white-space: nowrap;
 }
@@ -235,6 +239,15 @@
     align-self: center;
   }
 
+  .plan-table td.plan-time,
+  .plan-table thead th:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 21;
+    background: var(--color-surface);
+    box-shadow: 1px 0 var(--color-border);
+  }
+
   .plan-page-header h1 {
     font-size: 1.25rem;
   }
@@ -246,16 +259,16 @@
   /* Size mobile columns from their content and scroll only when the data needs it. */
   .plan-table,
   .plan-table.is-debug {
-    width: 100%;
-    min-width: max-content;
+    width: max-content;
+    min-width: 100%;
     table-layout: auto;
-    font-size: clamp(0.46rem, 1.55vw, 0.62rem);
+    font-size: 0.75rem;
   }
 
   .plan-table th {
-    width: 1%;
+    width: auto;
     padding: 0.35rem 0.09rem;
-    font-size: 0.46rem;
+    font-size: 0.75rem;
     line-height: 1.1;
     letter-spacing: 0;
     text-align: center;
@@ -263,7 +276,7 @@
   }
 
   .plan-table td {
-    width: 1%;
+    width: auto;
     padding: 0.35rem 0.09rem;
     text-align: center;
   }

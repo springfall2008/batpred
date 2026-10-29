@@ -263,7 +263,7 @@ function CloudComposite() {
       <span className="overview-cloud-layer is-back" />
       <span className="overview-cloud-layer is-middle" />
       <span className="overview-cloud-layer is-front" />
-      <svg className="overview-cloud-filter-definitions" width="0" height="0" focusable="false">
+      <svg className="overview-cloud-filter-definitions" width="0" height="0" focusable="false" aria-hidden="true">
         <defs>
           <filter id="overview-cloud-filter-back" x="-50%" y="-80%" width="200%" height="260%">
             <feTurbulence type="fractalNoise" baseFrequency="0.012" numOctaves="3" seed="11" result="noise" />
@@ -505,7 +505,7 @@ export default function OverviewPage({ plan, powerFlow, updatedAt }: OverviewPag
 
           <OverviewCard className="overview-card-home" connector="home" icon={faHouse} title="Home" main={formatPower(powerFlow.house_power)} mainTone={getOverviewPowerTone(powerFlow.house_power, 'is-home')}>
             <Detail label="Used today" value={formatEnergy(powerFlow.totals.load_today)} />
-            <Detail label="Predbat Status" value={actions.current.label} tone={actionTone(actions.current.label)} subvalue={currentActionDetail} />
+            <Detail label="Planned action" value={actions.current.label} tone={actionTone(actions.current.label)} subvalue={currentActionDetail} />
             <Detail label="Next Action" value={actions.next.label} tone={actionTone(actions.next.label)} subvalue={nextActionDetail} />
           </OverviewCard>
 

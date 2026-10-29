@@ -22,7 +22,7 @@
 
 .plan-table-header p {
   margin: 0.2rem 0 0;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   color: var(--color-text-muted);
 }
 
@@ -37,7 +37,7 @@
   min-width: 100%;
   table-layout: auto;
   border-collapse: collapse;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
 }
 
 .plan-debug-notice {
@@ -50,7 +50,7 @@
   border-bottom: 1px solid var(--color-border);
   background: color-mix(in srgb, var(--color-current) 8%, var(--color-surface));
   color: var(--color-text-secondary);
-  font-size: 0.68rem;
+  font-size: 0.75rem;
   line-height: 1.4;
 }
 
@@ -88,10 +88,10 @@
   border-bottom: 1px solid var(--color-border);
   color: var(--color-text-muted);
   text-align: left;
-  font-size: 0.62rem;
+  font-size: 0.75rem;
   font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  text-transform: none;
+  letter-spacing: normal;
   white-space: nowrap;
   overflow: visible;
 }
@@ -136,10 +136,10 @@
   border-top: 1px solid var(--color-border);
   border-bottom: 1px solid var(--color-border);
   color: var(--color-text);
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.035em;
+  text-transform: none;
+  letter-spacing: normal;
 }
 
 .plan-time {
@@ -157,9 +157,9 @@
   border-radius: 999px;
   background: color-mix(in srgb, var(--color-text) 10%, transparent);
   color: var(--color-text);
-  font-size: 0.55rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-size: 0.75rem;
+  text-transform: none;
+  letter-spacing: normal;
 }
 
 .plan-number {
@@ -168,7 +168,7 @@
 }
 
 .plan-pv-value.is-generating {
-  color: var(--color-flow-solar);
+  color: var(--color-solar-text);
   font-weight: 700;
 }
 
@@ -207,7 +207,7 @@
   display: block;
   margin-top: 0.12rem;
   color: var(--color-text-muted);
-  font-size: 0.58rem;
+  font-size: 0.75rem;
   font-weight: 500;
   line-height: 1.2;
 }
@@ -237,10 +237,30 @@
   gap: 0.35rem;
   padding: 0.2rem 0.45rem;
   border-radius: 999px;
-  font-size: 0.65rem;
+  font-size: 0.75rem;
   font-weight: 700;
   white-space: nowrap;
   cursor: help;
+}
+
+.plan-action,
+.plan-rate-button,
+.plan-load-button,
+.plan-target-button,
+.plan-colour-style button {
+  min-height: 32px;
+  min-width: 32px;
+}
+
+@media (pointer: coarse) {
+  .plan-action,
+  .plan-rate-button,
+  .plan-load-button,
+  .plan-target-button,
+  .plan-colour-style button {
+    min-height: 44px;
+    min-width: 44px;
+  }
 }
 
 /* A split Predbat slot remains one editable control, with one badge per action. */
@@ -329,7 +349,7 @@
 }
 
 .plan-column-heading .plan-tooltip-trigger {
-  font-size: 0.65rem;
+  font-size: 0.75rem;
   color: var(--color-text-muted);
   opacity: 1;
   cursor: help;
@@ -382,7 +402,7 @@
   border-radius: 7px;
   background: color-mix(in srgb, var(--color-surface) 96%, var(--color-text) 4%);
   box-shadow: 0 8px 24px color-mix(in srgb, var(--color-text) 16%, transparent);
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   font-weight: 400;
   line-height: 1.4;
   text-align: left;
@@ -452,7 +472,7 @@
  */
 .plan-row.is-past td {
   background: color-mix(in srgb, var(--color-bg) 80%, var(--color-surface));
-  color: color-mix(in srgb, var(--color-text-secondary) 68%, var(--color-bg));
+  color: var(--color-text-secondary);
 }
 
 .plan-row.is-past .plan-time,
@@ -461,7 +481,7 @@
 }
 
 .plan-row.is-past .plan-pv-value.is-generating {
-  color: color-mix(in srgb, var(--color-flow-solar) 78%, var(--color-bg));
+  color: var(--color-solar-text);
 }
 
 /*
@@ -490,7 +510,7 @@
   background: color-mix(in srgb, var(--color-surface) 96%, var(--color-text) 4%);
   box-shadow: 0 8px 24px color-mix(in srgb, var(--color-text) 16%, transparent);
   color: var(--color-text-secondary);
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   font-weight: 400;
   line-height: 1.4;
   text-align: left;
@@ -539,7 +559,7 @@
 
 .plan-action-chevron {
   margin-left: 0.1rem;
-  font-size: 0.55rem;
+  font-size: 0.75rem;
   opacity: 0.65;
 }
 
@@ -566,7 +586,7 @@
   border-radius: 999px;
   background: color-mix(in srgb, var(--event-colour) 14%, transparent);
   color: var(--event-colour);
-  font-size: 0.55rem;
+  font-size: 0.75rem;
   font-weight: 700;
   line-height: 1;
   white-space: nowrap;
@@ -627,7 +647,7 @@
 .plan-action-menu-reason {
   padding: 0.45rem 0.5rem;
   color: var(--color-text-muted);
-  font-size: 0.68rem;
+  font-size: 0.75rem;
   line-height: 1.4;
 }
 
@@ -640,10 +660,10 @@
 .plan-action-menu-title {
   padding: 0.1rem 0.5rem 0.3rem;
   color: var(--color-text-muted);
-  font-size: 0.66rem;
+  font-size: 0.75rem;
   font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  letter-spacing: normal;
+  text-transform: none;
 }
 
 .plan-action-menu button {
@@ -661,7 +681,7 @@
   background: transparent;
   color: var(--color-text-secondary);
   font: inherit;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   text-align: left;
   cursor: pointer;
 }
@@ -696,7 +716,7 @@
 .plan-action-menu-status {
   padding: 0.45rem 0.5rem;
   color: var(--color-text-muted);
-  font-size: 0.68rem;
+  font-size: 0.75rem;
 }
 
 .plan-action-menu-error {
@@ -705,7 +725,7 @@
   border-radius: 5px;
   background: color-mix(in srgb, #dc2626 10%, var(--color-surface));
   color: #dc2626;
-  font-size: 0.68rem;
+  font-size: 0.75rem;
   line-height: 1.35;
 }
 
@@ -789,16 +809,16 @@
   flex-direction: column;
   gap: 0.35rem;
   color: var(--color-text-secondary);
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   font-weight: 700;
 }
 
 .plan-cell-popover-title {
   color: var(--color-text-muted);
-  font-size: 0.66rem;
+  font-size: 0.75rem;
   font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  letter-spacing: normal;
+  text-transform: none;
 }
 
 .plan-rate-input {
@@ -822,7 +842,7 @@
 .plan-rate-input > span {
   white-space: nowrap;
   color: var(--color-text-muted);
-  font-size: 0.65rem;
+  font-size: 0.75rem;
 }
 
 .plan-cell-popover button {
@@ -832,7 +852,7 @@
   background: var(--color-bg);
   color: var(--color-text);
   font: inherit;
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   cursor: pointer;
 }
 
@@ -847,7 +867,7 @@
 
 .plan-rate-error {
   color: #dc2626;
-  font-size: 0.67rem;
+  font-size: 0.75rem;
   line-height: 1.35;
 }
 
@@ -940,7 +960,7 @@
 
   .plan-action-menu-title {
     padding: 0.2rem 0.55rem 0.45rem;
-    font-size: 0.7rem;
+    font-size: 0.75rem;
   }
 
   .plan-action-menu button {
@@ -965,7 +985,7 @@
   }
 
   .plan-cell-popover-title {
-    font-size: 0.7rem;
+    font-size: 0.75rem;
   }
 
   .plan-cell-popover label {

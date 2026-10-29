@@ -41,10 +41,10 @@
 }
 
 .metric-label {
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  text-transform: none;
+  letter-spacing: normal;
 }
 
 .metric-value {
@@ -122,7 +122,7 @@
 }
 
 .rate-good {
-  color: var(--color-success);
+  color: var(--color-success-text);
 }
 
 .rate-bad {
@@ -252,7 +252,7 @@
   align-items: center;
   gap: 0.35rem;
   color: var(--color-charge);
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   font-weight: 600;
   text-decoration: none;
 }
@@ -338,12 +338,11 @@
   margin-bottom: 0.5rem;
 }
 
-.plan-summary-context-now,
-.plan-summary-context-next {
-  font-size: 0.7rem;
+.plan-summary-context-now, .plan-summary-context-next {
+  font-size: 0.75rem;
   font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  letter-spacing: normal;
+  text-transform: none;
   color: var(--color-text-muted);
 }
 

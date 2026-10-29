@@ -529,7 +529,7 @@ function PlanSummary({ plan, showPlanLink = true }: PlanSummaryProps) {
       </div>
 
       <div className="plan-summary-context">
-        <span className="plan-summary-context-now">Now</span>
+        <span className="plan-summary-context-now">Plan snapshot</span>
 
         <span className="plan-summary-context-next">Next</span>
       </div>
@@ -540,7 +540,7 @@ function PlanSummary({ plan, showPlanLink = true }: PlanSummaryProps) {
                     Live battery level plus active charge/export indicator.
                    -------------------------------------------------------- */}
         <div className="plan-summary-metric">
-          <span className="metric-label">Battery SOC</span>
+          <span className="metric-label">Battery SOC at plan generation</span>
 
           <strong className={`metric-value battery-value ${getActionClass(currentActionType)}`}>
             {isCharging && <FontAwesomeIcon icon={faBolt} className="battery-charging-icon" />}

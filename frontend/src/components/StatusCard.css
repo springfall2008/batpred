@@ -37,14 +37,14 @@
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
-  min-height: 1.75rem;
+  min-height: 32px;
   padding: 0.25rem 0.55rem;
-  color: var(--color-success);
+  color: var(--color-success-text);
   background: color-mix(in srgb, var(--color-success) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--color-success) 45%, transparent);
   border-radius: 999px;
   font: inherit;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   font-weight: 700;
   cursor: pointer;
 }
@@ -54,7 +54,7 @@
 }
 
 .status-card-update:focus-visible {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -63,12 +63,11 @@
   cursor: wait;
 }
 
-.status-card-label,
-.status-card-detail > span {
-  font-size: 0.72rem;
+.status-card-label, .status-card-detail > span {
+  font-size: 0.75rem;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  text-transform: none;
+  letter-spacing: normal;
   color: var(--color-text-muted);
 }
 
@@ -93,6 +92,10 @@
 
 .status-ok {
   background: var(--color-success);
+}
+
+.status-unknown {
+  background: var(--color-text-muted);
 }
 
 .status-warning {
@@ -133,7 +136,7 @@
 }
 
 .status-card-detail span {
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   color: var(--color-text-muted);
 }
 
@@ -189,13 +192,21 @@
 }
 
 .status-card-select {
+  min-height: 32px;
   width: 100%;
   max-width: 240px;
   padding: 0.45rem 0.6rem;
   color: var(--color-text);
   background: var(--color-surface);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-field-border);
   border-radius: 6px;
+}
+
+@media (pointer: coarse) {
+  .status-card-update,
+  .status-card-select {
+    min-height: 44px;
+  }
 }
 
 /* Toggle switch */
@@ -203,7 +214,7 @@
   position: relative;
   display: inline-block;
   width: 42px;
-  height: 24px;
+  height: 32px;
   flex-shrink: 0;
   cursor: pointer;
 }
@@ -219,7 +230,7 @@
 /* Switch track */
 .toggle-slider {
   position: absolute;
-  inset: 0;
+  inset: 4px 0;
   background: var(--color-border);
   border-radius: 999px;
   transition: background 0.2s ease;
@@ -251,7 +262,7 @@
 
 /* Keyboard focus */
 .toggle-switch input:focus-visible + .toggle-slider {
-  outline: 2px solid var(--color-success);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -316,4 +327,9 @@
     padding-left: 0;
     border-left: none;
   }
+}
+
+@media (pointer: coarse) {
+  .toggle-switch { width: 44px; height: 44px; }
+  .toggle-slider { inset-block: 10px; }
 }

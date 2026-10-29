@@ -1544,9 +1544,11 @@ def test_mcp_public_registration(my_predbat):
 
     def request(data):
         """Make an OAuth form/JSON request without a listener."""
+
         async def body():
             """Return the dummy request body."""
             return data
+
         return SimpleNamespace(headers={"Content-Type": "application/json"}, method="POST", remote="127.0.0.1", host="localhost:8199", json=body, post=body)
 
     async def check():
@@ -1598,6 +1600,7 @@ def test_mcp_public_registration(my_predbat):
 
 def test_mcp_authorize_html_escaping(my_predbat):
     """OAuth query and failed-form values cannot introduce markup into the secret form."""
+
     class LoginParser(HTMLParser):
         """Collect login elements and hidden field values from the actual response."""
 
@@ -1617,14 +1620,16 @@ def test_mcp_authorize_html_escaping(my_predbat):
     server = web_mcp.PredbatMCPServer.__new__(web_mcp.PredbatMCPServer)
     server.initialize(True, "dummy-private-secret", 8199)
     server.log = lambda message: None
-    marker = '\"><script>audit_marker</script><input name="audit_injected" value="'
+    marker = '"><script>audit_marker</script><input name="audit_injected" value="'
     values = {"client_id": marker, "redirect_uri": "https://client.invalid/" + marker, "response_type": "code", "state": marker, "code_challenge": marker, "code_challenge_method": "S256"}
 
     async def check():
         """Check both initial GET and failed POST login responses."""
+
         async def post():
             """Return an unauthenticated form containing markup characters."""
             return dict(values, secret="incorrect")
+
         for method in ["GET", "POST"]:
             request = SimpleNamespace(method=method, query=values, post=post, remote="127.0.0.1")
             response = await server.oauth_authorize(request)
@@ -1657,8 +1662,12 @@ def test_mcp_oauth_scopes(my_predbat):
         controls.append((name, value))
 
     base = SimpleNamespace(
-        prefix="predbat", plan_interval_minutes=30, CONFIG_ITEMS=[item], ha_interface=SimpleNamespace(set_state_external=set_state_external),
-        async_manual_select=async_manual_select, now_utc=datetime(2026, 10, 22, 12, tzinfo=timezone.utc),
+        prefix="predbat",
+        plan_interval_minutes=30,
+        CONFIG_ITEMS=[item],
+        ha_interface=SimpleNamespace(set_state_external=set_state_external),
+        async_manual_select=async_manual_select,
+        now_utc=datetime(2026, 10, 22, 12, tzinfo=timezone.utc),
     )
     server = web_mcp.PredbatMCPServer.__new__(web_mcp.PredbatMCPServer)
     server.initialize(True, "dummy-mcp-secret", 8199)

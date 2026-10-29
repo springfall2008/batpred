@@ -21,8 +21,10 @@ import asyncio
 from datetime import datetime
 
 
-# 2 hours in seconds — refresh when less than this remaining
-TOKEN_REFRESH_THRESHOLD = 2 * 60 * 60
+# Refresh when less than this remains (seconds). Kept well under the shortest token lifetime in
+# use: EDF's Kraken OAuth token lives one hour, so the old 2-hour threshold made every single
+# request refresh first - one oauth-refresh edge-function call per Kraken query.
+TOKEN_REFRESH_THRESHOLD = 30 * 60
 
 # The oauth-refresh edge function (and the provider behind it) can fail transiently —
 # an HTTP 502 has been seen in the wild — so a refresh is retried before being given up on.

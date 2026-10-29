@@ -50,14 +50,20 @@
   background: var(--color-bg);
 }
 
+@media (max-width: 700px) {
+  .charts-page-header { flex-direction: column; }
+  .charts-page-tabs { justify-content: flex-start; }
+}
+
 .charts-page-tabs button {
+  min-height: 44px;
   padding: 0.35rem 0.65rem;
   border: 0;
   border-radius: 6px;
   background: transparent;
   color: var(--color-text-muted);
   font: inherit;
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   font-weight: 700;
   cursor: pointer;
 }

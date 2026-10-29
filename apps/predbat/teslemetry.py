@@ -55,6 +55,13 @@ ENERGY_POLL_SECONDS = 300
 # while costing at most 3 extra commands per fire (~36/day worst case), and is long enough not to
 # fight a user who has just changed mode in the Tesla app.
 FORCED_ASSERT_SECONDS = 2 * 60 * 60
+# While site_info says the Powerwall may not export battery energy, it is re-read this often so the
+# restriction lifts once the installer fixes the permission (GH#5710). Only blocked sites re-read it:
+# the response is large, and fetch_site_info itself stays once per process.
+EXPORT_PERMISSION_RECHECK_SECONDS = 60 * 60
+# components.net_meter_mode value of a site whose installer-level export permission (Tesla One >
+# Import & Export Limits) allows battery export. Any other value, or the key missing, means solar only.
+NET_METER_MODE_BATTERY_OK = "battery_ok"
 # Approximate usable capacity per Powerwall unit (kWh), used only to ESTIMATE soc_max when the API
 # exposes no capacity field at all (observed on some Powerwall 3 firmware, whose site_info and
 # live_status omit total_pack_energy/nameplate_energy/energy_left). Users can override soc_max in apps.yaml.
@@ -138,7 +145,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
     # literal because components.py imports component modules lazily, and a test pins the two together.
     DEFAULT_TBC_CONTROL = True
 
-    def initialize(self, key="", site_id="", base_url=TESLEMETRY_DEFAULT_URL, automatic=False, tbc_control=DEFAULT_TBC_CONTROL, hybrid=None, auth_method=None, token_expires_at=None, token_hash=None, **kwargs):
+    def initialize(self, key="", site_id="", base_url=TESLEMETRY_DEFAULT_URL, automatic=False, tbc_control=DEFAULT_TBC_CONTROL, hybrid=None, battery_export=None, auth_method=None, token_expires_at=None, token_hash=None, **kwargs):
         """Initialise the Teslemetry component from configuration.
 
         Args:
@@ -155,6 +162,8 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
                 back into the real-rate tariff and reserve-driven charging.
             hybrid: teslemetry_hybrid - True/False forces Predbat's inverter_hybrid setting; unset (None) lets
                 automatic_config decide from the Powerwall model (on for a Powerwall 3, off otherwise).
+            battery_export: teslemetry_battery_export - True/False forces whether the Powerwall is treated as
+                permitted to export battery energy; unset (None) decides from site_info's net_meter_mode.
             auth_method: "api_key" (default, static Teslemetry token) or "oauth" (direct Fleet API; token
                 refresh is driven externally by predbat.com via OAuthMixin's oauth-refresh edge function).
             token_expires_at: OAuth access-token expiry (ISO string or epoch); only used in oauth mode.
@@ -193,6 +202,12 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self.tbc_control = tbc_control
         # teslemetry_hybrid is a boolean in APPS_SCHEMA; unset reaches here as None, meaning "decide from the model"
         self.hybrid_override = hybrid if isinstance(hybrid, bool) else None
+        # teslemetry_battery_export follows the same convention: unset is None, "decide from site_info"
+        self.battery_export_override = battery_export if isinstance(battery_export, bool) else None
+        self.battery_export_permitted = True  # Until site_info says otherwise, set by update_battery_export_permitted
+        self._battery_export_warned = False
+        self._battery_export_reported = None  # The value last logged, so the Info line appears on each change only
+        self._last_export_permission_check = 0
         self.battery_type = None  # components.battery_type from site_info: solar_powerwall (PW3) or ac_powerwall (PW2)
         self.powerwall_3 = False  # battery_type solar_powerwall AND a "Powerwall 3" gateway, set by fetch_site_info
         self._reserve_band_warned = False
@@ -460,6 +475,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self.battery_type = components.get("battery_type")
         # battery_type alone is not trusted to mean a Powerwall 3 - a Powerwall+ might report solar_powerwall too
         self.powerwall_3 = self.battery_type == "solar_powerwall" and any(gateway.get("part_name") == "Powerwall 3" for gateway in components.get("gateways") or [])
+        self.update_battery_export_permitted(components)
         nameplate_wh = response.get("nameplate_energy", 0)
         gateway_kwh = self.gateway_energy_kwh(response)
         battery_count = response.get("battery_count")
@@ -518,6 +534,50 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             self._last_sent["backup_reserve"] = int(backup_reserve)  # Same drift-correction rationale as operation_mode above.
         return True
 
+    def update_battery_export_permitted(self, components):
+        """Decide from site_info's components whether the Powerwall may export battery energy, and publish it.
+
+        Tesla's installer-level export permission (Tesla One > Import & Export Limits) defaults to Solar Only,
+        sits above the customer_preferred_export_rule Predbat writes, and cannot be changed over the API. A
+        site left at Solar Only accepts every export command and then only covers the house load (GH#5710).
+        net_meter_mode reads battery_ok on sites that export and is missing on those that do not. Tesla does
+        not document the field, so teslemetry_battery_export can override the result either way.
+
+        The binary sensor is what Predbat plans from, through the battery_export_permitted inverter arg.
+        """
+        net_meter_mode = components.get("net_meter_mode")
+        if self.battery_export_override is not None:
+            permitted, reason = self.battery_export_override, "teslemetry_battery_export in apps.yaml"
+        else:
+            permitted, reason = net_meter_mode == NET_METER_MODE_BATTERY_OK, "auto: net_meter_mode {}".format(net_meter_mode or "not set")
+        if not permitted and self.battery_export_override is None and not self._battery_export_warned:
+            self.log(
+                'Warn: Teslemetry: site export permission is {} - this Powerwall is not permitted to export battery energy, so Predbat will not plan battery exports. Ask your installer to set Import & Export Limits to "Solar and Battery" in Tesla One, or contact Tesla support. Set teslemetry_battery_export: true if the site does export'.format(
+                    net_meter_mode or "not set"
+                )
+            )
+            self._battery_export_warned = True
+        if permitted != self._battery_export_reported:
+            self.log("Info: Teslemetry battery export {} ({})".format("permitted" if permitted else "not permitted", reason))
+            self._battery_export_reported = permitted
+        self.battery_export_permitted = permitted
+        attributes = {"friendly_name": "Powerwall Battery Export Permitted", "net_meter_mode": net_meter_mode, "reason": reason}
+        self.dashboard_item(self.entity("battery_export_permitted", domain="binary_sensor"), "on" if permitted else "off", attributes, app="teslemetry")
+
+    async def recheck_battery_export_permitted(self):
+        """Re-read site_info for the export permission alone, so a fix made by the installer lifts the restriction.
+
+        Deliberately not fetch_site_info: that also re-seeds the control entities and the dedupe cache, which
+        is accepted to happen once per process (see the note there). Returns True when a response was read.
+        """
+        data = await self._request("GET", "/api/1/energy_sites/{}/site_info".format(self.site_id))
+        if not data:
+            return False
+        response = data.get("response", {})
+        self.publish_site_info(response)
+        self.update_battery_export_permitted(response.get("components") or {})
+        return True
+
     async def fetch_energy_today(self):
         """Fetch today's cumulative energy, publishing daily kWh sensors.
 
@@ -571,6 +631,12 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         success = True
         if not self.site_info_done:
             self.site_info_done = await self.fetch_site_info()
+            self._last_export_permission_check = seconds
+        elif not self.battery_export_permitted and self.battery_export_override is None and (seconds - self._last_export_permission_check) >= EXPORT_PERMISSION_RECHECK_SECONDS:
+            # The timer moves on whether or not the read succeeds: a failing site_info read is retried
+            # an hour later, not every cycle, as the restriction already in place is the safe state.
+            self._last_export_permission_check = seconds
+            await self.recheck_battery_export_permitted()
         if not self.schedule_loaded:
             await self.load_schedule()
             self.schedule_loaded = True
@@ -893,6 +959,9 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self.set_arg("discharge_target_soc", [self.entity("schedule_discharge_soc", domain="number")])
         self.set_arg("scheduled_discharge_enable", [self.entity("schedule_discharge_enable", domain="switch")])
         self.set_arg("schedule_write_button", [self.entity("schedule_write", domain="switch")])
+        # Published by fetch_site_info before automatic_config runs. Read every cycle by the inverter, so a
+        # later re-check that lifts the restriction needs no re-wiring (GH#5710).
+        self.set_arg("battery_export_permitted", [self.entity("battery_export_permitted", domain="binary_sensor")])
         # A Powerwall 3 (battery_type solar_powerwall with a "Powerwall 3" gateway) is a hybrid inverter: solar on its own DC inputs shares
         # the one AC nameplate with the battery, so inverter_limit must cap them combined. Every other
         # Powerwall is AC coupled - with hybrid on, get_total_inverted() would fold a separately inverted

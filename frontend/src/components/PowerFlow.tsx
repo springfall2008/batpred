@@ -5,15 +5,16 @@ import './PowerFlow.css'
 
 type PowerFlowProps = {
   data: PowerFlowData
+  stale?: boolean
 }
 
-function PowerFlow({ data }: PowerFlowProps) {
+function PowerFlow({ data, stale = false }: PowerFlowProps) {
   return (
     <section className="power-flow-card">
       <div className="power-flow-header">
         <div>
           <h2>Power Flow</h2>
-          <span className="power-flow-subtitle">Live energy flow around your home</span>
+          <span className="power-flow-subtitle">{stale ? 'Last known energy flow · refresh overdue or failed' : 'Energy flow at the latest live snapshot'}</span>
         </div>
       </div>
 
