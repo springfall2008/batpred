@@ -1177,19 +1177,38 @@ class Output:
         charging (set_charge_low_power) throttles the rate dynamically minute-by-minute, so it has
         to be recomputed the same way the prediction engine works it out (find_charge_rate()), and
         then capped at the inverter limit as the prediction does (GH#5394).
+
+        Returns (rate_kw, low_power): the rate achieved after the charge curve, and whether low power
+        charging asked for less than the maximum charge rate. The curve tapering a full rate charge
+        near the top of the battery is not low power - only the requested rate decides that.
+
+        The maximum is the one the prediction engine uses at the start of the slot: a hybrid inverter
+        whose DC charge rate is above its AC one can take the PV above the AC rate on top of it. When the
+        window starts part-way through the row, the slot starts at the window's first prediction step.
         """
         window = self.charge_window_best[charge_window_n]
+        # A row can start before its charge window does; start from the first prediction step
+        # inside the window, as the engine does, so pre-window minutes don't count as charge time
+        window_relative_start = -(-(window["start"] - self.minutes_now) // PREDICT_STEP) * PREDICT_STEP
+        if minute_relative_start < window_relative_start < self.forecast_minutes:
+            minute_relative_start = window_relative_start
+            minute_start = minute_relative_start + self.minutes_now
         soc = self.predict_soc_best.get(minute_relative_start, self.soc_kw)
+        battery_rate_max_charge = self.battery_rate_max_charge
+        if self.inverter_hybrid and (self.battery_rate_max_charge_dc > battery_rate_max_charge):
+            pv_above = max((pv_forecast_minute_step.get(minute_relative_start, 0.0) / PREDICT_STEP) - battery_rate_max_charge, 0)
+            battery_rate_max_charge += min(self.battery_rate_max_charge_dc - battery_rate_max_charge, pv_above)
         pv_window_kwh = 0.0
         if self.set_charge_low_power:
-            window_end_rel = min(window["end"] - self.minutes_now, self.forecast_minutes)
+            # The window end is floored to a step boundary, as the prediction engine does
+            window_end_rel = min(max(((window["end"] - self.minutes_now) // PREDICT_STEP) * PREDICT_STEP, minute_relative_start), self.forecast_minutes)
             pv_window_kwh = sum(pv_forecast_minute_step.get(m, 0.0) for m in range(minute_relative_start, window_end_rel, PREDICT_STEP))
-        _, charge_rate_now_curve = find_charge_rate(
+        charge_rate_now, charge_rate_now_curve = find_charge_rate(
             minute_start,
             soc,
             window,
             self.charge_limit_best[charge_window_n],
-            self.battery_rate_max_charge,
+            battery_rate_max_charge,
             self.soc_max,
             self.battery_charge_power_curve,
             self.set_charge_low_power,
@@ -1210,7 +1229,11 @@ class Output:
         if self.inverter_hybrid:
             charge_rate_limit += pv_forecast_minute_step.get(minute_relative_start, 0.0) / PREDICT_STEP
         charge_rate_now_curve = min(charge_rate_now_curve, charge_rate_limit)
-        return dp2(charge_rate_now_curve * MINUTE_WATT / 1000.0)
+        # Compared in whole watts, find_charge_rate() steps the rate down in watts and converts back.
+        # Low power is what was asked for, and only slows the charge when it asks for less than the
+        # inverter can pass; the inverter cap alone is the full rate, not low power
+        low_power = dp0(charge_rate_now * MINUTE_WATT) < dp0(min(battery_rate_max_charge, charge_rate_limit) * MINUTE_WATT)
+        return dp2(charge_rate_now_curve * MINUTE_WATT / 1000.0), low_power
 
     def publish_html_plan(self, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record, publish=True, prediction=None, car_hold_minutes=None, status_warnings=None):
         """
@@ -1550,8 +1573,11 @@ class Output:
                         state = "Chrg&nearr;"
                         state_color = "#3AEE85"
                         raw_state = "Chrg"
-                        rate_kw = self.get_charge_rate_kw(charge_window_n, minute_start, minute_relative_start, pv_forecast_minute_step)
+                        rate_kw, charge_low_power = self.get_charge_rate_kw(charge_window_n, minute_start, minute_relative_start, pv_forecast_minute_step)
                         reason_parts.append({"code": "charge_low_rate", "params": {"target_percent": limit_percent, "rate": rate_text_import, "rate_kw": "{:.2f}".format(rate_kw)}})
+                        if charge_low_power:
+                            # Snail symbol
+                            state += "&#x1F40C;"
 
                     if self.charge_window_best[charge_window_n]["start"] in self.manual_charge_times:
                         state += " &#8526;"

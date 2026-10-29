@@ -111,7 +111,9 @@ charging and discharging activity - if Predbat plans this, the state will show a
 
 - **Limit %** - Alongside any battery activity (charging, discharging, etc) there will be a SoC limit. This limit is what the SoC is planned to be at the end of the slot.
 e.g. 'Charge&nearr; 70%' is charge to 70% SoC, and 'Exp&searr; 4%' is force exporting the battery to the 4% reserve level.<BR>
-If Predbat is planning a slow charge or slow export then the limit will be preceded by a snail symbol (&#x1F40C;) and will be shown as 'limit.tens_of_percentage_rate_reduction'. e.g.: 16.3 means limit of 16% and charge/discharge at 70% of normal rate.
+If Predbat is planning a slow charge or slow export then the State will be followed by a snail symbol (&#x1F40C;).<BR>
+For a slow export, with plan debug enabled, the limit will also be shown as 'limit.tens_of_percentage_rate_reduction'. e.g.: 16.3 means limit of 16% and discharge at 70% of normal rate.<BR>
+For a slow charge ([low power charging mode](customisation.md#inverter-control-options)) the rate is worked out as the slot runs, so the planned rate is shown in the slot's description instead.
 
 - **PV kWh** - The predicted solar forecast for the half-hour slot, estimated from the [Solcast Forecast](apps-yaml.md#solcast-solar-forecast).<BR>
 If the PV forecast is above 0.2kWh for the slot it will be coloured Melon Red with a little sun symbol, above 0.1kWh it will be Yellow with a sun symbol,
