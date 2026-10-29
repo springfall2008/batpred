@@ -431,6 +431,9 @@ class Inverter:
         self.registers_moved = 0
         # Per-control write backoff state, keyed by entity_id - see _write_attempts().
         self.write_backoff = {}
+        # The last eco toggle problem adjust_inverter_mode() warned about, so it is said once rather than every
+        # cycle (#4909). Set here, not in refresh_config(), which runs every cycle and would reset it each time.
+        self.eco_toggle_warned = None
 
         self._init_attribute_defaults()
 
@@ -2901,7 +2904,31 @@ class Inverter:
             inverter_mode                      string
 
         """
-        inverter_mode_configured = "inverter_mode" in self.base.args
+        if self.inv_has_ge_eco_toggle:
+            entity_id = self.base.get_arg("inverter_mode", indirect=False, index=self.id)
+            # The eco toggle can only be turned on and off through a switch (or an input_boolean standing in for
+            # one). GivEnergy 3-phase inverters have no eco mode register, so GE Cloud creates no switch, and a mode
+            # select, sensor or fixed value bound in its place cannot be switched. Either way every write would fail,
+            # so skip it (and the window sleep below) and say why once rather than every cycle (#4909)
+            problem = None
+            missing = entity_id is None or entity_id == ""
+            if missing:
+                problem = "No entity_id for ECO Toggle, inverter_mode should be set to xxx_enable_eco_mode (expected on GivEnergy 3-phase inverters, which have no eco mode - otherwise turn on ge_cloud_automatic or set it in apps.yaml)"
+            elif not is_entity_id(entity_id):
+                problem = "ECO Toggle inverter_mode is the fixed value {} rather than a switch, so eco mode cannot be changed - set it to xxx_enable_eco_mode, or remove it if the inverter has no eco mode".format(entity_id)
+            elif entity_id.split(".")[0] not in ["switch", "input_boolean"]:
+                problem = "ECO Toggle inverter_mode {} is not a switch so cannot be turned on or off - set it to xxx_enable_eco_mode, or remove it if the inverter has no eco mode (GivEnergy 3-phase)".format(entity_id)
+            if problem:
+                if problem != self.eco_toggle_warned:
+                    self.log("Warn: Inverter {} adjust_inverter_mode: {}".format(self.id, problem))
+                self.eco_toggle_warned = problem
+                # A wrong entity means eco mode can never be controlled, so the status keeps showing it every cycle;
+                # a missing one is expected on hardware without eco mode, so only the log says so
+                if not missing:
+                    self.base.record_status("Warn: Inverter {} inverter_mode {} cannot be used as an ECO Toggle, set it to the xxx_enable_eco_mode switch".format(self.id, entity_id), had_errors=True)
+                return
+            self.eco_toggle_warned = None
+
         if changed_start_end:
             # XXX: Workaround for GivTCP window state update time to take effort
             self.base.log("Sleeping (workaround) as start/end of discharge window was just adjusted")
@@ -2928,16 +2955,11 @@ class Inverter:
         # Change inverter mode
         if old_inverter_mode != new_inverter_mode:
             self.log("Inverter {} current mode is {} and new target is {} has_ge_eco_toggle {}".format(self.id, old_inverter_mode, new_inverter_mode, self.inv_has_ge_eco_toggle))
-            entity_id = self.base.get_arg("inverter_mode", indirect=False, index=self.id)
             if self.inv_has_ge_eco_toggle:
                 # GE has an eco toggle rather than a mode, so we write the opposite of the force export to the eco toggle
-                if entity_id:
-                    self.write_and_poll_switch("inverter_mode", entity_id, new_inverter_mode == "on")
-                else:
-                    if not inverter_mode_configured:
-                        self.log("Warn: Inverter {} adjust_inverter_mode: No entity_id for ECO Toggle, inverter_mode should be set to xxx_enable_eco_mode".format(self.id))
-                    return
+                self.write_and_poll_switch("inverter_mode", entity_id, new_inverter_mode == "on")
             else:
+                entity_id = self.base.get_arg("inverter_mode", indirect=False, index=self.id)
                 self.write_and_poll_option("inverter_mode", entity_id, new_inverter_mode)
 
             # Notify

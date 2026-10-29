@@ -1576,13 +1576,198 @@ def test_adjust_ge_eco_toggle(test_name, ha, inv, prev_eco_state, force_export, 
     return failed
 
 
+def test_adjust_ge_eco_toggle_warns_once(ha, inv):
+    """
+    An eco toggle that cannot be written is warned about once, not every cycle (#4909).
+
+    GivEnergy 3-phase inverters have no eco mode register, so GE Cloud creates no enable_eco_mode switch
+    and adjust_inverter_mode() runs against nothing on every plan cycle. A mode select bound in its place
+    has no turn_on service, so writing it would retry an invalid call. Both are skipped with a single
+    warning, which is said again only once the problem changes or has been fixed and comes back.
+    """
+    failed = False
+    print("Test: eco_toggle_warns_once")
+
+    # refresh_config() below re-derives the inverter's whole state, so all of it is put back afterwards
+    orig_inv_state = dict(inv.__dict__)
+    orig_args = {key: (list(value) if isinstance(value, list) else value) for key, value in inv.base.args.items()}
+    orig_log = inv.base.log
+    orig_record_status = inv.base.record_status
+    orig_dummy_items = dict(ha.dummy_items)
+
+    inv.inv_has_ge_eco_toggle = True
+    inv.inv_has_ge_inverter_mode = False
+    inv.eco_toggle_warned = None
+    inv.rest_data = None
+    inv.rest_api = None
+    log_messages = []
+    status_errors = []
+    sleeps = []
+    inv.base.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
+    inv.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
+    inv.base.record_status = lambda msg, had_errors=False, **kwargs: status_errors.append(str(msg)) if had_errors else None
+    inv.sleep = lambda seconds: sleeps.append(seconds)
+    # Every switch write is recorded, so a refused binding can be shown never to reach one
+    switch_writes = []
+    real_write_and_poll_switch = inv.write_and_poll_switch
+
+    def recording_write_and_poll_switch(name, entity_id, new_value):
+        """Record the write, then carry it out."""
+        switch_writes.append(entity_id)
+        return real_write_and_poll_switch(name, entity_id, new_value)
+
+    inv.write_and_poll_switch = recording_write_and_poll_switch
+
+    def warnings(text):
+        """How many warnings so far mention text."""
+        return sum(1 for msg in log_messages if msg.startswith("Warn:") and text in msg)
+
+    try:
+        # No switch at all: one warning across several cycles, in both directions
+        # A cycle's refresh_config() runs between the calls, as execute does, and must not reset the warning
+        inv.base.args.pop("inverter_mode", None)
+        for force_export in [False, False, True, False]:
+            inv.adjust_inverter_mode(force_export)
+            inv.refresh_config(quiet=True)
+            inv.inv_has_ge_eco_toggle = True
+            inv.inv_has_ge_inverter_mode = False
+            inv.rest_data = None
+            inv.rest_api = None
+            inv.base.args.pop("inverter_mode", None)
+        if warnings("No entity_id for ECO Toggle") != 1:
+            print("ERROR: expected one missing-switch warning over four cycles, got {}: {}".format(warnings("No entity_id for ECO Toggle"), log_messages))
+            failed = True
+        if any("current mode is" in msg for msg in log_messages):
+            print("ERROR: a missing eco toggle should not log a mode change every cycle: {}".format(log_messages))
+            failed = True
+        if status_errors:
+            print("ERROR: a missing eco toggle is expected on 3-phase hardware and should not be a status error: {}".format(status_errors))
+            failed = True
+        # Nothing can be written, so the window-change sleep that waits for the write to settle is skipped too
+        inv.adjust_inverter_mode(True, changed_start_end=True)
+        if sleeps:
+            print("ERROR: adjust_inverter_mode slept {} with no eco toggle to write".format(sleeps))
+            failed = True
+
+        # A mode select bound in its place: a new problem, so warned once, and never written
+        inv.base.args["inverter_mode"] = "select.givtcp_mode"
+        ha.dummy_items["select.givtcp_mode"] = "Export (Paused)"
+        for force_export in [False, True, False]:
+            inv.adjust_inverter_mode(force_export)
+        if warnings("is not a switch") != 1:
+            print("ERROR: expected one not-a-switch warning over three cycles, got {}: {}".format(warnings("is not a switch"), log_messages))
+            failed = True
+        if ha.get_state("select.givtcp_mode") != "Export (Paused)":
+            print("ERROR: the select should not have been written, now {}".format(ha.get_state("select.givtcp_mode")))
+            failed = True
+        # A wrong entity is a configuration error, so the status keeps showing it every cycle
+        if len(status_errors) != 3:
+            print("ERROR: expected a status error on each of three cycles with a select bound, got {}".format(status_errors))
+            failed = True
+
+        # A fixed value is reported as one, not as an entity of the wrong kind, and is a status error too
+        errors_before = len(status_errors)
+        inv.base.args["inverter_mode"] = "Eco"
+        inv.adjust_inverter_mode(False)
+        if warnings("is the fixed value Eco") != 1 or len(status_errors) != errors_before + 1:
+            print("ERROR: expected a fixed-value warning and status error for inverter_mode Eco: {} {}".format(log_messages, status_errors))
+            failed = True
+
+        # YAML "inverter_mode: off" arrives as False - a fixed value too, not a missing entity
+        errors_before = len(status_errors)
+        inv.base.args["inverter_mode"] = False
+        inv.adjust_inverter_mode(True)
+        if warnings("is the fixed value False") != 1 or len(status_errors) != errors_before + 1:
+            print("ERROR: expected a fixed-value warning and status error for inverter_mode False: {} {}".format(log_messages, status_errors))
+            failed = True
+
+        # An integration's sensor is not a switch either: refused rather than overwritten with set_state
+        errors_before = len(status_errors)
+        inv.base.args["inverter_mode"] = "sensor.givtcp_mode"
+        ha.dummy_items["sensor.givtcp_mode"] = "Eco"
+        inv.adjust_inverter_mode(True)
+        if ha.get_state("sensor.givtcp_mode") != "Eco" or warnings("sensor.givtcp_mode is not a switch") != 1 or len(status_errors) != errors_before + 1:
+            print("ERROR: a sensor bound as the eco toggle should be refused with a status error, not written: state {} logs {}".format(ha.get_state("sensor.givtcp_mode"), log_messages))
+            failed = True
+
+        # None of the refused bindings - missing, select, fixed values, sensor - got as far as a write
+        if switch_writes:
+            print("ERROR: a refused eco toggle binding was written: {}".format(switch_writes))
+            failed = True
+
+        # An input_boolean standing in for the switch is written like one, with no warning or status error
+        warnings_before = sum(1 for msg in log_messages if msg.startswith("Warn:"))
+        errors_before = len(status_errors)
+        inv.base.args["inverter_mode"] = "input_boolean.eco_mode"
+        ha.dummy_items["input_boolean.eco_mode"] = "on"
+        inv.adjust_inverter_mode(True)
+        if ha.get_state("input_boolean.eco_mode") != "off":
+            print("ERROR: an input_boolean eco toggle should have been turned off for export, got {}".format(ha.get_state("input_boolean.eco_mode")))
+            failed = True
+        if sum(1 for msg in log_messages if msg.startswith("Warn:")) != warnings_before or len(status_errors) != errors_before:
+            print("ERROR: a working input_boolean eco toggle should raise no warning or status error: {} {}".format(log_messages[-3:], status_errors[errors_before:]))
+            failed = True
+
+        # A select fixed with a working toggle and then bound again is warned about again
+        inv.base.args["inverter_mode"] = "select.givtcp_mode"
+        inv.adjust_inverter_mode(False)
+        if warnings("select.givtcp_mode is not a switch") != 2:
+            print("ERROR: a select coming back after a working toggle should be warned about again, got {}".format(warnings("select.givtcp_mode is not a switch")))
+            failed = True
+
+        # Missing, then fixed with a real switch, then missing again: the fix resets the warning, so the same
+        # problem coming back is said again
+        inv.base.args.pop("inverter_mode", None)
+        inv.adjust_inverter_mode(False)
+        missing_warnings = warnings("No entity_id for ECO Toggle")
+        inv.base.args["inverter_mode"] = "switch.enable_eco_mode"
+        ha.dummy_items["switch.enable_eco_mode"] = "off"
+        inv.adjust_inverter_mode(False)
+        if ha.get_state("switch.enable_eco_mode") != "on":
+            print("ERROR: the eco switch should have been turned on, got {}".format(ha.get_state("switch.enable_eco_mode")))
+            failed = True
+        # A working switch still waits for a moved export window to settle before writing
+        del sleeps[:]
+        errors_before = len(status_errors)
+        inv.adjust_inverter_mode(True, changed_start_end=True)
+        if len(status_errors) != errors_before:
+            print("ERROR: a working eco switch should raise no status error: {}".format(status_errors[errors_before:]))
+            failed = True
+        if sleeps.count(30) != 1 or ha.get_state("switch.enable_eco_mode") != "off":
+            print("ERROR: a working eco switch should sleep 30s on a window change then write, slept {} state {}".format(sleeps, ha.get_state("switch.enable_eco_mode")))
+            failed = True
+        inv.base.args.pop("inverter_mode", None)
+        inv.adjust_inverter_mode(False)
+        if warnings("No entity_id for ECO Toggle") != missing_warnings + 1:
+            print("ERROR: a missing switch after a working one should be warned about again, got {} then {}".format(missing_warnings, warnings("No entity_id for ECO Toggle")))
+            failed = True
+    except Exception:
+        import traceback
+
+        print("ERROR: the eco toggle test raised:")
+        traceback.print_exc()
+        failed = True
+    finally:
+        inv.__dict__.clear()
+        inv.__dict__.update(orig_inv_state)
+        inv.base.args.clear()
+        inv.base.args.update(orig_args)
+        inv.base.log = orig_log
+        inv.base.record_status = orig_record_status
+        ha.dummy_items.clear()
+        ha.dummy_items.update(orig_dummy_items)
+
+    return failed
+
+
 def test_adjust_ge_eco_toggle_missing_entity(test_name, inv, force_export, inverter_mode_arg, expect_warning):
     """
     Test GE eco-toggle adjust_inverter_mode when inverter_mode entity is missing.
 
     inverter_mode_arg:
       - "unset": remove inverter_mode from args (expect warning)
-      - None: explicitly set inverter_mode to None (expect no warning)
+      - None: inverter_mode set but empty for this inverter, as GE Cloud leaves a 3-phase unit in a mixed
+        fleet (expect warning - it is said once now, so there is no per-cycle noise left to spare)
     """
     failed = False
     print("Test: {} force_export={}".format(test_name, force_export))
@@ -1594,6 +1779,7 @@ def test_adjust_ge_eco_toggle_missing_entity(test_name, inv, force_export, inver
 
     inv.inv_has_ge_eco_toggle = True
     inv.inv_has_ge_inverter_mode = False
+    inv.eco_toggle_warned = None
     inv.rest_data = None
     inv.rest_api = None
     if inverter_mode_arg == "unset":
@@ -1614,6 +1800,7 @@ def test_adjust_ge_eco_toggle_missing_entity(test_name, inv, force_export, inver
 
     inv.inv_has_ge_eco_toggle = orig_has_ge_eco_toggle
     inv.inv_has_ge_inverter_mode = orig_has_ge_inverter_mode
+    inv.eco_toggle_warned = None
     inv.base.log = orig_log
     inv.log = orig_inv_log
     if orig_has_inverter_mode_arg:
@@ -5932,8 +6119,9 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_adjust_ge_eco_toggle("eco_toggle_no_change_export", ha, inv, "off", True, "off")
     failed |= test_adjust_ge_eco_toggle_missing_entity("eco_toggle_missing_entity_unset_enable", inv, False, "unset", True)
     failed |= test_adjust_ge_eco_toggle_missing_entity("eco_toggle_missing_entity_unset_export", inv, True, "unset", True)
-    failed |= test_adjust_ge_eco_toggle_missing_entity("eco_toggle_missing_entity_none_enable", inv, False, None, False)
-    failed |= test_adjust_ge_eco_toggle_missing_entity("eco_toggle_missing_entity_none_export", inv, True, None, False)
+    failed |= test_adjust_ge_eco_toggle_missing_entity("eco_toggle_missing_entity_none_enable", inv, False, None, True)
+    failed |= test_adjust_ge_eco_toggle_missing_entity("eco_toggle_missing_entity_none_export", inv, True, None, True)
+    failed |= test_adjust_ge_eco_toggle_warns_once(ha, inv)
     failed |= test_fox_no_predbat_inverter_mode_control("fox_no_predbat_inverter_mode_control", my_predbat)
     if failed:
         return failed
