@@ -1044,6 +1044,7 @@ def test_inverter_def_enphase():
     assert idef["charge_time_entity_is_option"] is True
     assert idef["can_span_midnight"] is False
     assert idef["target_soc_used_for_discharge"] is True
+    assert idef["reserve_above_soc_charges_from_grid"] is True
 
 
 def test_run_first_polls_all_tiers():

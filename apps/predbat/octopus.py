@@ -3210,8 +3210,9 @@ class Octopus:
         """
         try:
             r = requests.get(url, timeout=120)
-        except requests.exceptions.ConnectionError:
-            self.log("Warn: Octopus: Unable to download Octopus data from URL {} (ConnectionError)".format(url))
+        except requests.exceptions.RequestException as e:
+            # RequestException covers ReadTimeout as well as ConnectionError - a read timeout is not a ConnectionError (#5743)
+            self.log("Warn: Octopus: Unable to download Octopus data from URL {} ({})".format(url, type(e).__name__))
             self.record_status("Warn: Unable to download Octopus free session data", debug=url, had_errors=True)
             return None
 
@@ -3472,8 +3473,9 @@ class Octopus:
                 self.log("Download {}".format(url))
             try:
                 r = requests.get(url, headers={"accept": "application/json", "user-agent": "predbat/1.0"}, timeout=20)
-            except requests.exceptions.ConnectionError:
-                self.log("Warn: Octopus: Unable to download Octopus data from URL {} (ConnectionError)".format(url))
+            except requests.exceptions.RequestException as e:
+                # RequestException covers ReadTimeout as well as ConnectionError - a read timeout is not a ConnectionError (#5743)
+                self.log("Warn: Octopus: Unable to download Octopus data from URL {} ({})".format(url, type(e).__name__))
                 self.record_status("Warn: Unable to download Octopus data from cloud", debug=url, had_errors=True)
                 return {}
             if r.status_code not in [200, 201]:

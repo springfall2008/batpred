@@ -2533,13 +2533,15 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                     app="gecloud",
                 )
                 self.charger_control_publish_guest("gecloud")
-                try:
-                    await self.charger_control_tick(self.now_utc_exact)
-                except EVCCommandFailed as exc:
-                    # Already logged as an error by async_send_evc_command; nothing is recorded as
-                    # done, so the next cycle tries again - for a release, that is what stops a
-                    # stopped car being stranded
-                    self.log("GECloud: Warn: EV charger control failed, will retry: {}".format(exc))
+            try:
+                # Every cycle, whether or not control is on: with ge_cloud_evc_control since turned off,
+                # a charger an earlier session stopped is still released (#5788)
+                await self.charger_control_tick(self.now_utc_exact)
+            except EVCCommandFailed as exc:
+                # Already logged as an error by async_send_evc_command; nothing is recorded as
+                # done, so the next cycle tries again - for a release, that is what stops a
+                # stopped car being stranded
+                self.log("GECloud: Warn: EV charger control failed, will retry: {}".format(exc))
 
         if first or devices_changed or (seconds % (10 * 60) == 0):
             # Get All registers every now and again in case user changes them

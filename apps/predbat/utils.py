@@ -388,20 +388,25 @@ def _mask_secrets_in_place(value):
             _mask_secrets_in_place(entry)
 
 
-def load_secrets(log=None):
+def load_secrets(log=None, secrets_file=None):
     """
     Load secrets from secrets.yaml file
-    Priority: PREDBAT_SECRETS_FILE env var, ./secrets.yaml, /config/secrets.yaml
+    Priority: secrets_file argument (else PREDBAT_SECRETS_FILE env var), ./secrets.yaml, /config/secrets.yaml
+
+    A caller that passes secrets_file has already resolved it (Hass.__init__ reads
+    PREDBAT_SECRETS_FILE once per instance), so the environment is only consulted here
+    when no path is given.
     """
     import yaml
 
     log = log or (lambda message, **kwargs: print(message))
     secrets = {}
+    preferred_location = secrets_file if secrets_file is not None else os.getenv("PREDBAT_SECRETS_FILE")
     secrets_file = None
 
     # Try loading from different locations in priority order
     possible_locations = [
-        os.getenv("PREDBAT_SECRETS_FILE"),
+        preferred_location,
         "secrets.yaml",
         "/homeassistant/secrets.yaml",
         "/conf/secrets.yaml",
@@ -443,7 +448,7 @@ def load_secrets(log=None):
     return secrets
 
 
-def load_apps_yaml(apps_file=None, log=None):
+def load_apps_yaml(apps_file=None, log=None, secrets_file=None):
     """
     Load an apps.yaml-format file and return its pred_bat section, with !secret references resolved
 
@@ -452,12 +457,14 @@ def load_apps_yaml(apps_file=None, log=None):
     for a malformed file and KeyError when the pred_bat section is missing, leaving the caller to
     decide whether that is fatal.
 
+    apps_file and secrets_file default to $PREDBAT_APPS_FILE / $PREDBAT_SECRETS_FILE when not given.
+
     Returns (args, secrets).
     """
     import yaml
 
     log = log or (lambda message, **kwargs: print(message))
-    secrets = load_secrets(log=log)
+    secrets = load_secrets(log=log, secrets_file=secrets_file)
 
     def secret_constructor(loader, node):
         """YAML constructor for the !secret tag, resolving against the secrets just loaded."""
