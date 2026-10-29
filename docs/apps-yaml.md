@@ -598,6 +598,48 @@ The default is 0.
   plan_random_delay: 30
 ```
 
+### predbat_repository
+
+**Advanced** - for testing against a fork of Predbat. The **select.predbat_update** drop-down lists the released versions of Predbat, which always come from the official repository (`springfall2008/batpred`),
+and **main**, which by default is the main branch of the official repository.
+You can set `predbat_repository` (format `owner/repo`) to get **main** from your own fork instead:
+
+```yaml
+  predbat_repository: your-github-user/batpred
+```
+
+- Only **main** (and the [predbat_branch](#predbat_branch) entry) use this setting, the released versions are always read from the official repository.
+- If `switch.predbat_auto_update` is on, Predbat may re-install the latest release a few minutes after `main` is installed. Turn auto update off while testing.
+- You can also set the environment variable `PREDBAT_REPOSITORY` (same `owner/repo` format), `predbat_repository` in `apps.yaml` takes priority.
+
+### predbat_branch
+
+**Advanced** - for testing branches of Predbat, for example a pull request you are working on. Setting `predbat_branch` adds extra entries to the **select.predbat_update** drop-down, `branch: <your branch name>`,
+which install that branch. It can be a single branch or a list, so you can switch between several:
+
+```yaml
+  predbat_repository: your-github-user/batpred
+  predbat_branch:
+    - fix/my-feature
+    - feat/another-feature
+```
+
+or for just one branch:
+
+```yaml
+  predbat_branch: fix/my-feature
+```
+
+- Each branch is installed from `predbat_repository`, or from the official repository if `predbat_repository` is not set.
+- `predbat_branch` only adds entries to the drop-down. It does not change what **main** is, which is the main branch of `predbat_repository` (or of the official repository if that is not set), and the released versions always come from the official repository.
+- Branch names can contain letters, numbers, `.`, `_`, `-` and `/`. A branch with any other character in its name is not offered, and a warning is written to the Predbat log.
+- The drop-down holds a maximum of 25 entries in total. This includes **main**, your branches and then as many of the most recent Predbat releases as will fit.
+At most 10 branches are shown, any more are ignored (with a warning in the log), and the more branches you add the fewer older releases appear in the drop-down.
+- The branch is downloaded when you select it, so if you push more changes to the branch, select the entry again to pick them up.
+- The drop-down is built when Predbat starts, so restart Predbat after changing `predbat_branch`.
+- If `switch.predbat_auto_update` is on, Predbat may re-install the latest release a few minutes after a branch is installed. Turn auto update off while testing a branch.
+- To go back to normal operation remove `predbat_branch` and `predbat_repository` from `apps.yaml`, restart Predbat and select a released version.
+
 ## Inverter information
 
 The template `apps.yaml` for each inverter type comes pre-configured with regular expressions that should auto-discover the Home Assistant entity names for that inverter type.
@@ -2181,7 +2223,7 @@ whether you are within an Octopus Energy "smart charge" slot
 (see [car charging documentation](car-charging.md#taking-planned-slots-from-another-sensor))
 - **octopus_ready_time** - Octopus Energy integration sensor for when the car charging will be completed by
 - **octopus_charge_limit** - Octopus Energy integration sensor for car charging limit
-- **octopus_charge_limit_is_additive** - Optional list of booleans, one per car. Set to `true` when Octopus supplies a percentage to add rather than a final SOC target. Predbat then follows the dispatch energy and keeps `car_charging_limit` as the absolute SOC ceiling. Detected automatically from the `is_charger` attribute with Octopus Direct; set explicitly for other integrations without that attribute. Set to `false` to use an absolute Octopus target.
+- **octopus_charge_limit_is_additive** - Optional list of booleans, one per car. Set to `true` when Octopus supplies a percentage to add rather than a final SOC target. Predbat adds the target to the car SOC recorded at plug-in, while retaining `car_charging_limit` as the absolute SOC ceiling. Detected automatically from the `is_charger` attribute with Octopus Direct; set explicitly for other integrations without that attribute. Set to `false` to use an absolute Octopus target.
 - **octopus_slot_low_rate** - Whether Octopus Intelligent Slots reported will be at the lowest rate if at home
 - **octopus_slot_max** - Maximum cheap rate dispatch time per 24-hour period, set in 30-minute slots (12 is 6 hours). It is counted in the minutes of each dispatch, so a 10-minute dispatch uses 10 minutes of it. It is per Octopus account, so with more than one car it is shared between all the cars with an `octopus_intelligent_slot` entry, in clock time (see [Multiple cars with Octopus Intelligent Go](car-charging.md#multiple-cars-with-octopus-intelligent-go-iog))
 - **intelligent_dispatch_billing** - `auto` (default), `octopus` or `window`: whether a planned dispatch half hour is billed cheap only when the car charges in it (`octopus`) or whenever the dispatch was in force (`window`, E.ON Next Drive Smart). `auto` picks `window` for the Kraken component on `kraken_provider: eon`
