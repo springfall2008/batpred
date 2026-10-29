@@ -2198,6 +2198,12 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.components = Components(self)
             self.components.initialize(phase=0)
 
+            # Do not start phase-0 dependents (notably HAHistory) when HA interface
+            # construction failed. They cannot recover without it, and their startup
+            # wait would delay the standalone runner's retry by up to ten minutes.
+            if not self.ha_interface:
+                raise ValueError("HA interface not found")
+
             # Initialise plugin system early so plugins can register web endpoints
             # before the web server starts
             try:
@@ -2212,9 +2218,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             if not self.components.start(phase=0):
                 self.log("Error: Some components failed to start (phase0)")
                 self.record_status("Error: Some components failed to start (phase0)", had_errors=True)
-
-            if not self.ha_interface:
-                raise ValueError("HA interface not found")
 
             # Call plugin initialisation hooks after components are ready
             if self.plugin_system:

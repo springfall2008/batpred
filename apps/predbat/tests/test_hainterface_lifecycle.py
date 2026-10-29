@@ -123,8 +123,7 @@ def test_hainterface_initialize_api_check_failed(my_predbat=None):
     ha_interface.api_started = False
     ha_interface.api_stop = False
 
-    with patch("ha.requests.get") as mock_get:
-        # First call (app check) returns None, second call (services check) returns None
+    with patch("ha.requests.get") as mock_get, patch("ha.time.monotonic", side_effect=[0, 601]), patch("ha.time.sleep"):
         mock_get.return_value = create_mock_requests_response(500, None)
 
         try:
@@ -134,13 +133,121 @@ def test_hainterface_initialize_api_check_failed(my_predbat=None):
         except ValueError:
             print("✓ ValueError raised on API check failure")
 
-    if not any("Unable to connect" in log for log in mock_base.log_messages):
-        print("ERROR: Should log connection failure")
+    if not any("did not become ready" in log for log in mock_base.log_messages):
+        print("ERROR: Should log startup retry timeout")
         failed += 1
     else:
-        print("✓ Connection failure logged")
+        print("✓ Startup retry timeout logged")
 
     return failed
+
+
+def _make_uninitialized_ha_interface(mock_base):
+    """Create an HAInterface instance suitable for exercising initialize()."""
+    ha_interface = object.__new__(HAInterface)
+    ha_interface.base = mock_base
+    ha_interface.log = mock_base.log
+    ha_interface.api_started = False
+    ha_interface.api_stop = False
+    return ha_interface
+
+
+def test_hainterface_initialize_retries_transient_statuses(my_predbat=None):
+    """Transient startup statuses, including 408 and 429, are retried until success."""
+    mock_base = MockBase()
+    ha_interface = _make_uninitialized_ha_interface(mock_base)
+    responses = [create_mock_requests_response(status, {}) for status in (503, 408, 429)]
+    responses.append(create_mock_requests_response(200, [{"domain": "test"}]))
+    with patch("ha.requests.get", side_effect=responses) as mock_get, patch("ha.time.sleep") as mock_sleep:
+        ha_interface.initialize("http://test", "test_key", False, False, False)
+    if mock_get.call_count != 4 or mock_sleep.call_count != 3 or ha_interface.ha_key != "test_key":
+        print("ERROR: expected transient startup responses to retry through success")
+        return 1
+    print("✓ Transient startup responses retried through success")
+    return 0
+
+
+def test_hainterface_initialize_rejects_nonretryable_status(my_predbat=None):
+    """A non-retryable 4xx response fails immediately without sleeping."""
+    mock_base = MockBase()
+    ha_interface = _make_uninitialized_ha_interface(mock_base)
+    responses = [create_mock_requests_response(401, {})]
+    with patch("ha.requests.get", side_effect=responses) as mock_get, patch("ha.time.sleep") as mock_sleep:
+        try:
+            ha_interface.initialize("http://test", "test_key", False, False, False)
+        except ValueError:
+            pass
+        else:
+            print("ERROR: expected non-retryable 401 to fail initialization")
+            return 1
+    if mock_get.call_count != 1 or mock_sleep.called or ha_interface.ha_key is not None:
+        print("ERROR: non-retryable 401 was not rejected immediately")
+        return 1
+    print("✓ Non-retryable 401 rejected immediately")
+    return 0
+
+
+def test_hainterface_initialize_retry_deadline(my_predbat=None):
+    """The retry loop exits and clears the key when its deadline expires."""
+    mock_base = MockBase()
+    ha_interface = _make_uninitialized_ha_interface(mock_base)
+    with patch("ha.requests.get", return_value=create_mock_requests_response(503, {})) as mock_get, patch("ha.time.monotonic", side_effect=[0, 601]), patch("ha.time.sleep") as mock_sleep:
+        try:
+            ha_interface.initialize("http://test", "test_key", False, False, False)
+        except ValueError:
+            pass
+        else:
+            print("ERROR: expected initialization to fail at the retry deadline")
+            return 1
+    if mock_get.call_count != 1 or mock_sleep.called or ha_interface.ha_key is not None:
+        print("ERROR: retry deadline did not stop initialization cleanly")
+        return 1
+    print("✓ Retry deadline stops initialization cleanly")
+    return 0
+
+
+def test_predbat_stops_phase0_start_without_ha_interface(my_predbat):
+    """Phase-0 components are not started if construction failed to provide HAInterface."""
+    original_components = my_predbat.components
+    original_interface = my_predbat.ha_interface
+
+    class FakeComponents:
+        """Track component startup while simulating a missing HA interface."""
+
+        def __init__(self, base):
+            self.base = base
+            self.started = False
+
+        def initialize(self, phase):
+            """Simulate phase-0 HA component initialization failing."""
+            self.base.ha_interface = None
+
+        def start(self, phase):
+            """Record whether phase-0 dependents were started."""
+            self.started = True
+            return True
+
+    try:
+        components = FakeComponents(my_predbat)
+        my_predbat.now_utc_real = my_predbat.now_utc
+        with patch("predbat.Components", return_value=components), patch.object(my_predbat, "reset"), patch.object(my_predbat, "update_time"), patch.object(my_predbat, "record_status"):
+            try:
+                my_predbat.initialize()
+            except ValueError as error:
+                if str(error) != "HA interface not found":
+                    raise
+            else:
+                print("ERROR: expected initialization to stop without HAInterface")
+                return 1
+        if components.started:
+            print("ERROR: phase-0 dependent components started without HAInterface")
+            return 1
+    finally:
+        my_predbat.components = original_components
+        my_predbat.ha_interface = original_interface
+
+    print("✓ Phase-0 startup stopped before dependents without HAInterface")
+    return 0
 
 
 def test_hainterface_initialize_db_mirror(my_predbat=None):
@@ -451,6 +558,10 @@ def run_hainterface_lifecycle_tests(my_predbat):
     failed += test_hainterface_initialize_db_primary(my_predbat)
     failed += test_hainterface_initialize_no_key_no_db(my_predbat)
     failed += test_hainterface_initialize_api_check_failed(my_predbat)
+    failed += test_hainterface_initialize_retries_transient_statuses(my_predbat)
+    failed += test_hainterface_initialize_rejects_nonretryable_status(my_predbat)
+    failed += test_hainterface_initialize_retry_deadline(my_predbat)
+    failed += test_predbat_stops_phase0_start_without_ha_interface(my_predbat)
     failed += test_hainterface_initialize_db_mirror(my_predbat)
     failed += test_hainterface_is_alive_not_started(my_predbat)
     failed += test_hainterface_is_alive_no_websocket(my_predbat)

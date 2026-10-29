@@ -35,6 +35,8 @@ from component_base import ComponentBase
 # Maximum days of history fetched per request. Long windows are split so only one chunk's
 # response body, decoded string and parsed objects are resident at a time.
 HISTORY_CHUNK_DAYS = 3
+HA_STARTUP_API_RETRY_INTERVAL = 5
+HA_STARTUP_API_RETRY_TIMEOUT = 10 * 60
 
 
 class RunThread(threading.Thread):
@@ -400,6 +402,7 @@ class HAInterface(ComponentBase):
         self.db_cursor = None
         self.websocket_active = False
         self.api_errors = 0
+        self.last_api_status = None
         self.last_success_timestamp = None
 
         self.state_data = {}
@@ -434,11 +437,33 @@ class HAInterface(ComponentBase):
                 self.slug = res["data"]["slug"]
                 self.log("Info: App slug is {}".format(self.slug))
 
-            check = self.api_call("/api/services")
-            if not check:
-                self.log("Warn: Unable to connect directly to Home Assistant at {}, please check your configuration of ha_url/ha_key".format(self.ha_url))
-                self.ha_key = None
-                raise ValueError
+            # Supervisor can start this app before Home Assistant Core is ready. Retry
+            # transient proxy/API failures instead of failing component construction.
+            deadline = time.monotonic() + HA_STARTUP_API_RETRY_TIMEOUT
+            attempts = 0
+            while True:
+                check = self.api_call("/api/services", silent=True)
+                if isinstance(check, list):
+                    break
+
+                status = self.last_api_status
+                if status is not None and 400 <= status < 500 and status not in (408, 429):
+                    self.log("Error: Home Assistant rejected the startup API request with HTTP {}".format(status))
+                    self.ha_key = None
+                    raise ValueError
+
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self.log("Error: Home Assistant API did not become ready within {} seconds".format(HA_STARTUP_API_RETRY_TIMEOUT))
+                    self.ha_key = None
+                    raise ValueError
+
+                attempts += 1
+                if attempts == 1 or attempts % 6 == 0:
+                    self.log("Warn: Home Assistant API is not ready during startup (HTTP {}); retrying".format(status if status is not None else "unavailable"))
+                # Keep boot-time proxy failures from tripping the runtime fatal-error limit.
+                self.api_errors = 0
+                time.sleep(min(HA_STARTUP_API_RETRY_INTERVAL, remaining))
 
         if self.db_enable:
             # Open the SQL Lite database called predbat.db using the DatabaseManager
@@ -1134,6 +1159,7 @@ class HAInterface(ComponentBase):
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
+        self.last_api_status = None
         try:
             if post:
                 if data_in:
@@ -1145,6 +1171,7 @@ class HAInterface(ComponentBase):
                     response = requests.get(url, headers=headers, params=data_in, timeout=TIMEOUT)
                 else:
                     response = requests.get(url, headers=headers, timeout=TIMEOUT)
+            self.last_api_status = response.status_code
             data = response.json()
             self.api_errors = 0
         except requests.exceptions.JSONDecodeError:
@@ -1154,7 +1181,8 @@ class HAInterface(ComponentBase):
 
             data = None
         except (requests.Timeout, requests.exceptions.ReadTimeout):
-            self.log("Warn: Timeout from {}".format(url))
+            if not silent:
+                self.log("Warn: Timeout from {}".format(url))
             self.api_errors += 1
             data = None
         except requests.exceptions.ConnectionError as e:
