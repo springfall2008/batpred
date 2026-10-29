@@ -1011,7 +1011,7 @@ def test_charge_balancing_through_execute_plan(my_predbat):
 
 def test_calibration_discards_intent_collected_so_far(my_predbat):
     """
-    When any inverter is calibrating the whole fleet is put to full rates and the loop breaks.
+    When any inverter is calibrating the whole fleet is put to full rates and the loop is skipped.
 
     Inverters processed BEFORE the calibrating one have already recorded their planned intent,
     though. Applying that afterwards writes those planned rates straight back over the
@@ -3167,14 +3167,11 @@ def run_execute_tests(my_predbat):
 
     failed |= run_execute_test(my_predbat, "calibration", in_calibration=True, assert_status="Calibration", assert_charge_time_enable=False, assert_reserve=0, assert_soc_target=100)
 
-    # Regression for PR #4466: inverter 0 genuinely charges and reaches "Charging" (populating
-    # status_per_inverter[0]) before inverter 1 - processed second - enters calibration mode and
-    # breaks out of the loop. The headline status must stay "Calibration", not resolve back to the
-    # stale "Charging" state inverter 0 left behind in status_per_inverter.
-    # The per-inverter asserts below capture the real half-processed state the break leaves behind:
-    # inverter 0 keeps the charge window/immediate targets it was already given, inverter 1 never
-    # reached those calls, and isCharging stays True from inverter 0 (pre-existing behaviour, since
-    # the calibration branch breaks without resetting it).
+    # Regression for PR #4466: inverter 0 has a charge window and inverter 1 - processed second - is
+    # in calibration mode. The headline status must be "Calibration", not "Charging" from inverter 0.
+    # While inverter 1 calibrates, inverter 0 is not given this cycle's charge and the charge it was left
+    # with is cancelled, so it does not grid charge at the full calibration rate, and with nothing
+    # charging the charging sensor is off. Inverter 1's own modes are its firmware's and are not written.
     failed |= run_execute_test(
         my_predbat,
         "calibration_after_charging_inverter",
@@ -3183,15 +3180,66 @@ def run_execute_tests(my_predbat):
         set_charge_window=True,
         set_export_window=True,
         in_calibration_array=[False, True],
-        assert_charge_time_enable_array=[True, False],
+        assert_charge_time_enable=False,
         assert_status="Calibration",
         assert_reserve=0,
         assert_soc_target=100,
         assert_charge_start_time_minutes=-1,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
-        assert_immediate_charge_soc_target_array=[100, -1],
+        assert_immediate_charge_soc_target_array=[0, -1],
         assert_immediate_discharge_soc_target_array=[100, -1],
-        assert_is_charging=True,
+        assert_is_charging=False,
+    )
+    # The same with inverter 0 exporting: its force export is cancelled, so it does not go on
+    # exporting at the full calibration discharge rate, and the exporting sensor is off
+    failed |= run_execute_test(
+        my_predbat,
+        "calibration_after_exporting_inverter",
+        export_window_best=[{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 1}],
+        export_limits_best=[pack_export_limit(EXPORT_MODE_TARGET, 0)],
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=10,
+        in_calibration_array=[False, True],
+        assert_force_export=False,
+        assert_status="Calibration",
+        assert_reserve=0,
+        assert_soc_target=100,
+        assert_immediate_charge_soc_target_array=[0, -1],
+        assert_immediate_discharge_soc_target_array=[100, -1],
+    )
+    # The calibrating inverter first: the inverter after it has its charge cancelled all the same,
+    # and the calibrating inverter's own charge and export modes are left to its firmware
+    failed |= run_execute_test(
+        my_predbat,
+        "calibration_first_inverter",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best,
+        set_charge_window=True,
+        set_export_window=True,
+        in_calibration_array=[True, False],
+        assert_charge_time_enable=False,
+        assert_status="Calibration",
+        assert_reserve=0,
+        assert_soc_target=100,
+        assert_immediate_charge_soc_target_array=[-1, 0],
+        assert_immediate_discharge_soc_target_array=[-1, 100],
+        assert_is_charging=False,
+    )
+    # Read-only still wins over calibration: nothing is written
+    failed |= run_execute_test(
+        my_predbat,
+        "calibration_read_only",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best,
+        set_charge_window=True,
+        set_export_window=True,
+        in_calibration_array=[False, True],
+        read_only=True,
+        assert_status="Read-Only",
+        reserve=0,
+        assert_immediate_charge_soc_target_array=[-1, -1],
+        assert_immediate_discharge_soc_target_array=[-1, -1],
     )
     if failed:
         return failed
