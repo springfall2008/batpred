@@ -117,7 +117,7 @@
 }
 
 .overview-weather-toggle:focus-visible {
-  outline: 2px solid var(--color-accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -211,24 +211,27 @@
   padding: 1rem;
   border: 1px solid rgb(255 255 255 / 92%);
   border-radius: 0.8rem;
-  background: rgb(255 255 255 / 78%);
+  background: var(--color-surface);
   box-shadow: 0 8px 28px rgb(34 46 58 / 12%);
   backdrop-filter: blur(14px);
 }
 
 .overview-updated {
-  position: absolute;
-  right: clamp(0.75rem, 1.5vw, 1.5rem);
-  bottom: 0.75rem;
+  display: block;
+  align-self: flex-end;
+  margin-top: 0.75rem;
   color: var(--color-text-muted);
-  font-size: 0.65rem;
+  font-size: 0.75rem;
   line-height: 1.4;
   text-align: right;
+  padding: 0.2rem 0.4rem;
+  border-radius: 4px;
+  background: var(--color-surface);
 }
 
 [data-theme='dark'] .overview-card {
   border-color: rgb(255 255 255 / 52%);
-  background: rgb(24 30 37 / 78%);
+  background: var(--color-surface);
   box-shadow: 0 10px 30px rgb(0 0 0 / 24%);
 }
 
@@ -716,7 +719,7 @@
 .overview-battery-soc {
   display: grid;
   gap: 0.35rem;
-  color: var(--color-success);
+  color: var(--color-success-text);
 }
 
 .overview-battery-track {
@@ -761,12 +764,12 @@
 
 .overview-battery-icon.is-medium,
 .overview-battery-soc.is-medium {
-  color: var(--color-warning);
+  color: var(--color-warning-text);
 }
 
 .overview-battery-icon.is-healthy,
 .overview-battery-soc.is-healthy {
-  color: var(--color-success);
+  color: var(--color-success-text);
 }
 
 .overview-card-solar .overview-card-icon {
@@ -779,7 +782,7 @@
 
 .overview-card-grid .overview-card-main-subvalue,
 .overview-card-grid .overview-detail-subvalue {
-  font-size: 0.68rem;
+  font-size: 0.75rem;
   line-height: 1.1;
 }
 
@@ -798,15 +801,15 @@
 }
 
 .is-solar {
-  color: var(--color-flow-solar);
+  color: var(--color-solar-text);
 }
 
 .is-charge {
-  color: var(--color-charge);
+  color: var(--color-charge-text);
 }
 
 .is-export {
-  color: var(--color-export);
+  color: var(--color-export-text);
 }
 
 .is-import {
@@ -819,7 +822,7 @@
 
 .is-home,
 .is-demand {
-  color: var(--color-flow-home);
+  color: var(--color-success-text);
 }
 
 @keyframes overview-flow {
@@ -1092,4 +1095,8 @@
   .overview-battery-soc.is-charging .overview-battery-track span::after {
     animation: none;
   }
+}
+
+@media (pointer: coarse) {
+  .overview-weather-toggle { min-height: 44px; }
 }

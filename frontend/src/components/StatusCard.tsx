@@ -57,7 +57,8 @@ function formatTimeAgo(value: string | null) {
 }
 
 function getStatusHealth(status: string) {
-  const normalized = status.toLowerCase()
+  const normalized = status.trim().toLowerCase()
+  if (['', 'unknown', 'unavailable', 'starting', 'pending'].includes(normalized)) return 'unknown'
 
   if (normalized.includes('error') || normalized.includes('unhealthy')) {
     return 'error'
@@ -160,7 +161,7 @@ function StatusCard({
 
         {/* Last update */}
         <div className="status-card-detail">
-          <span>Plan Updated</span>
+          <span>Plan generated</span>
 
           <strong>{formatTimeAgo(lastUpdated)}</strong>
         </div>

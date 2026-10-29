@@ -183,8 +183,8 @@
   z-index: 1;
   background: var(--color-surface);
   color: var(--color-text-muted);
-  font-size: 0.62rem;
-  text-transform: uppercase;
+  font-size: 0.75rem;
+  text-transform: none;
 }
 
 .internals-table td:first-child { min-width: 13rem; }

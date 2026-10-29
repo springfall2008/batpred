@@ -31,10 +31,9 @@ function MetricCard({ label, value, detail, tone }: { label: string; value: stri
 }
 
 /** Display operational metrics that complement the main dashboard cards. */
-export default function MetricsPanel({ lastStarted }: { lastStarted: string | null }) {
+export default function MetricsPanel({ lastStarted, now }: { lastStarted: string | null; now: number }) {
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null)
   const [error, setError] = useState(false)
-  const [refreshedAt, setRefreshedAt] = useState<Date | null>(null)
 
   useEffect(() => {
     let active = true
@@ -46,7 +45,6 @@ export default function MetricsPanel({ lastStarted }: { lastStarted: string | nu
         const data = await response.json() as DashboardMetrics
         if (active) {
           setMetrics(data)
-          setRefreshedAt(new Date())
           setError(false)
         }
       } catch {
@@ -71,6 +69,9 @@ export default function MetricsPanel({ lastStarted }: { lastStarted: string | nu
   const conflicts = [...metrics.control_conflicts_events].reverse()
   const quotaPercent = metrics.solcast_api_limit > 0 ? Math.min(100, metrics.solcast_api_used / metrics.solcast_api_limit * 100) : 0
   const metricsReady = metrics.last_update_timestamp > 0
+  if (!metricsReady) {
+    return <section className="metrics-panel metrics-panel-message"><h2>Performance and health</h2><p>Awaiting the first completed Predbat update. Energy and health readings are not available yet.</p>{error && <p>Metrics refresh failed.</p>}</section>
+  }
 
   return (
     <section className="metrics-panel" aria-labelledby="metrics-heading">
@@ -79,7 +80,7 @@ export default function MetricsPanel({ lastStarted }: { lastStarted: string | nu
           <h2 id="metrics-heading">Performance and health</h2>
           <p>Energy, cost and service metrics collected by Predbat.</p>
         </div>
-        <small>{error ? 'Refresh failed · showing previous values' : refreshedAt ? `Updated ${refreshedAt.toLocaleTimeString()}` : ''}</small>
+        <small>{error ? 'Refresh failed · showing previous metrics · ' : 'Metrics snapshot · '}generated {formatMetricAge(metrics.last_update_timestamp, now / 1000)}</small>
       </header>
 
       <div className="metrics-section">
@@ -92,8 +93,8 @@ export default function MetricsPanel({ lastStarted }: { lastStarted: string | nu
             detail={metricsReady ? (metrics.config_warnings ? `${metrics.config_warnings} warnings` : 'No warnings') : 'Awaiting first Predbat update'}
             tone={metricsReady ? (metrics.config_valid ? (metrics.config_warnings ? 'warning' : 'good') : 'bad') : undefined}
           />
-          <MetricCard label="Plan" value={metrics.plan_valid ? 'Valid' : 'Stale'} detail={`${metrics.plan_age_minutes.toFixed(0)} minutes old`} tone={metrics.plan_valid ? 'good' : 'warning'} />
-          <MetricCard label="Uptime" value={formatUptime(lastStarted, refreshedAt)} />
+          <MetricCard label="Plan at metrics snapshot" value={metrics.plan_valid ? 'Valid' : 'Stale'} detail={`${metrics.plan_age_minutes.toFixed(0)} minutes old at snapshot time`} tone={metrics.plan_valid ? 'good' : 'warning'} />
+          <MetricCard label="Uptime" value={formatUptime(lastStarted, new Date(now))} />
           <MetricCard label="Errors" value={errors.toFixed(0)} tone={errors ? 'warning' : 'good'} />
           <MetricCard label="Load history" value={`${metrics.data_age_days.toFixed(1)} days`} detail={`${metrics.data_age_required_days.toFixed(0)} days required`} tone={metrics.data_age_days >= metrics.data_age_required_days ? 'good' : 'warning'} />
         </div>

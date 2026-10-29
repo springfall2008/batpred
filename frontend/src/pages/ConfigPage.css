@@ -13,14 +13,14 @@
 .config-page-header button {
   display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.42rem 0.65rem;
   border: 1px solid var(--color-border); border-radius: 7px; background: var(--color-surface);
-  color: var(--color-text); font: inherit; font-size: 0.72rem; font-weight: 700; cursor: pointer;
+  color: var(--color-text); font: inherit; font-size: 0.75rem; font-weight: 700; cursor: pointer;
 }
 .config-toolbar, .config-group, .config-error, .config-validation-errors, .config-empty {
   border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-surface);
 }
 .config-toolbar { padding: 0.75rem; }
-.config-toolbar input { width: min(30rem, 100%); padding: 0.55rem 0.7rem; border: 1px solid var(--color-border); border-radius: 7px; background: var(--color-bg); color: var(--color-text); font: inherit; }
-.config-toolbar span { color: var(--color-text-muted); font-size: 0.72rem; white-space: nowrap; }
+.config-toolbar input { width: min(30rem, 100%); padding: 0.55rem 0.7rem; border: 1px solid var(--color-field-border); border-radius: 7px; background: var(--color-bg); color: var(--color-text); font: inherit; }
+.config-toolbar span { color: var(--color-text-muted); font-size: 0.75rem; white-space: nowrap; }
 .tariff-helper {
   min-width: 0; max-width: 100%; overflow: hidden; border: 1px solid color-mix(in srgb, var(--color-current) 35%, var(--color-border));
   border-radius: 10px; background: var(--color-surface);
@@ -28,17 +28,17 @@
 .tariff-helper > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; padding: 0.9rem 1rem; background: color-mix(in srgb, var(--color-current) 7%, var(--color-bg)); }
 .tariff-helper h2, .tariff-helper p { margin: 0; }
 .tariff-helper h2 { color: var(--color-text); font-size: 1rem; }
-.tariff-helper header p { margin-top: 0.2rem; color: var(--color-text-muted); font-size: 0.72rem; }
-.tariff-helper header > strong { padding: 0.3rem 0.55rem; border-radius: 999px; background: var(--color-current); color: white; font-size: 0.68rem; white-space: nowrap; }
-.tariff-helper-rates { display: flex; flex-wrap: wrap; gap: 1.5rem; padding: 0.7rem 1rem; border-block: 1px solid var(--color-border); color: var(--color-text-muted); font-size: 0.72rem; }
+.tariff-helper header p { margin-top: 0.2rem; color: var(--color-text-muted); font-size: 0.75rem; }
+.tariff-helper header > strong { padding: 0.3rem 0.55rem; border-radius: 999px; background: var(--color-current); color: white; font-size: 0.75rem; white-space: nowrap; }
+.tariff-helper-rates { display: flex; flex-wrap: wrap; gap: 1.5rem; padding: 0.7rem 1rem; border-block: 1px solid var(--color-border); color: var(--color-text-muted); font-size: 0.75rem; }
 .tariff-helper-rates b { margin-left: 0.25rem; color: var(--color-text); }
 .tariff-helper-review { display: grid; gap: 0.65rem; padding: 0.85rem 1rem; }
 .tariff-helper-review label { display: flex; align-items: flex-start; gap: 0.65rem; color: var(--color-text-secondary); cursor: pointer; }
 .tariff-helper-review input { margin-top: 0.2rem; accent-color: var(--color-current); }
 .tariff-helper-review label span, .tariff-helper-review label strong, .tariff-helper-review label small { display: block; }
 .tariff-helper-review label strong { color: var(--color-text); font-size: 0.76rem; }
-.tariff-helper-review label small { margin-top: 0.15rem; color: var(--color-text-muted); font-size: 0.68rem; line-height: 1.4; }
-.tariff-helper-review button { justify-self: start; padding: 0.5rem 0.75rem; border: 0; border-radius: 7px; background: var(--color-current); color: white; font: inherit; font-size: 0.72rem; font-weight: 700; cursor: pointer; }
+.tariff-helper-review label small { margin-top: 0.15rem; color: var(--color-text-muted); font-size: 0.75rem; line-height: 1.4; }
+.tariff-helper-review button { justify-self: start; padding: 0.5rem 0.75rem; border: 0; border-radius: 7px; background: var(--color-current); color: white; font: inherit; font-size: 0.75rem; font-weight: 700; cursor: pointer; }
 .tariff-helper-review button:disabled { opacity: 0.5; cursor: default; }
 .tariff-helper-result { padding: 0.85rem 1rem; color: var(--color-text-secondary); font-size: 0.75rem; }
 .config-groups { display: grid; gap: 1rem; min-width: 0; max-width: 100%; }
@@ -53,7 +53,7 @@
 .config-table th:nth-child(4) { width: 30%; }
 .config-table th, .config-table td { padding: 0.7rem 0.8rem; border-bottom: 1px solid var(--color-border); text-align: left; }
 .config-table td { vertical-align: middle; }
-.config-table th { position: sticky; top: 0; background: var(--color-surface); color: var(--color-text-muted); font-size: 0.82rem; text-transform: uppercase; }
+.config-table th { position: sticky; top: 0; background: var(--color-surface); color: var(--color-text-muted); font-size: 0.82rem; text-transform: none; }
 .config-table tbody tr:last-child td { border-bottom: 0; }
 .config-table strong, .config-table small { display: block; }
 .config-table strong { color: var(--color-text); }
@@ -67,14 +67,32 @@
 }
 .config-help:hover::after, .config-help:focus::after { display: block; }
 .config-table small { margin-top: 0.2rem; color: var(--color-text-muted); font-size: 0.82rem; line-height: 1.4; }
-.config-table td.is-changed { color: var(--color-warning); font-weight: 700; }
-.config-table select, .config-table input[type='number'] { width: min(16rem, 100%); padding: 0.42rem 0.5rem; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-bg); color: var(--color-text); font: inherit; }
+.config-table td.is-changed { color: var(--color-warning-text); font-weight: 700; }
+
+@media (max-width: 700px) {
+  .config-table { width: 36rem; min-width: 36rem; }
+  .config-table th:nth-child(1) { width: 9rem; }
+  .config-table th:nth-child(2), .config-table th:nth-child(3) { width: 6rem; }
+  .config-table th:nth-child(4) { width: 15rem; }
+
+  .config-table tr > :first-child {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    min-width: 9rem;
+    max-width: 9rem;
+    overflow-wrap: anywhere;
+    background: var(--color-surface);
+    box-shadow: 1px 0 var(--color-border);
+  }
+}
+.config-table select, .config-table input[type='number'] { width: min(16rem, 100%); padding: 0.42rem 0.5rem; border: 1px solid var(--color-field-border); border-radius: 6px; background: var(--color-bg); color: var(--color-text); font: inherit; }
 .config-switch {
     position: relative;
     display: inline-flex;
     align-items: center;
     gap: 7px;
-    min-height: 24px;
+    min-height: 32px;
     font-weight: 700;
     cursor: pointer;
 }
@@ -124,7 +142,7 @@
 }
 
 .config-switch input:focus-visible + i {
-    outline: 2px solid var(--color-current);
+    outline: 2px solid var(--focus-ring);
     outline-offset: 2px;
 }
 
@@ -164,4 +182,10 @@
   .config-page-header, .config-toolbar { align-items: flex-start; flex-direction: column; }
   .config-toolbar input { width: 100%; }
   .config-table th:nth-child(3), .config-table td:nth-child(3) { display: none; }
+  .config-table { width: 23rem; min-width: 23rem; }
+  .config-table th:nth-child(4) { width: 8rem; }
+}
+
+@media (pointer: coarse) {
+  .config-switch { min-height: 44px; }
 }

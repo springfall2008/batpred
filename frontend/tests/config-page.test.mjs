@@ -1,0 +1,102 @@
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import vm from 'node:vm'
+import { createRequire } from 'node:module'
+import { test } from 'node:test'
+import ts from 'typescript'
+
+const require = createRequire(import.meta.url)
+const source = fs.readFileSync(new URL('../src/pages/ConfigPage.tsx', import.meta.url), 'utf8')
+
+function configPage() {
+  const slots = [], effects = [], requests = []
+  let cursor = 0, tree
+  const hooks = {
+    useState(initial) {
+      const index = cursor++
+      if (!(index in slots)) slots[index] = initial
+      return [slots[index], next => { slots[index] = typeof next === 'function' ? next(slots[index]) : next }]
+    },
+    useCallback(callback) { return callback },
+    useMemo(callback) { return callback() },
+    useEffect(effect) { if (!tree) effects.push(effect) }
+  }
+  const module = { exports: {} }
+  vm.runInNewContext(ts.transpileModule(source, {
+    compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 }
+  }).outputText, {
+    module, exports: module.exports, Error,
+    fetch(url) { return new Promise(resolve => requests.push({ url, resolve })) },
+    require(specifier) {
+      if (specifier === 'react') return hooks
+      if (specifier.endsWith('.css')) return {}
+      if (specifier.endsWith('/configGroups')) return { CONFIG_GROUPS: ['System'], configGroup: () => 'System' }
+      if (specifier.endsWith('/tariffHelper')) return { analyseTariff: () => ({ profile: 'Test tariff', importMin: 1, importMax: 2, exportMin: null, suggestions: [] }) }
+      return require(specifier)
+    }
+  })
+  const nodes = node => !node || typeof node !== 'object' ? [] : [node, ...[node.props?.children].flat(Infinity).flatMap(nodes)]
+  const render = () => {
+    cursor = 0
+    tree = module.exports.default()
+    effects.splice(0).forEach(effect => effect())
+    return nodes(tree)
+  }
+  const text = node => typeof node === 'string' || typeof node === 'number' ? String(node) : [node?.props?.children].flat(Infinity).map(child => child ? text(child) : '').join('')
+  render()
+  return {
+    requests,
+    text: () => { render(); return text(tree) },
+    refresh() { render().find(node => node.type === 'button').props.onClick(); render() },
+    search(value) { render().find(node => node.props.type === 'search').props.onChange({ target: { value } }); render() },
+    async respond(index, data, status = 200) {
+      requests[index].resolve({ ok: status === 200, status, json: async () => data })
+      await new Promise(resolve => setImmediate(resolve))
+      render()
+    }
+  }
+}
+
+const item = { name: 'active', friendly_name: 'Active', entity: 'switch.active', type: 'switch', value: true, default: false }
+
+test('failed initial configuration load reports unavailable analysis without a false empty result', async () => {
+  const page = configPage()
+  await page.respond(0, null, 503)
+  assert.match(page.text(), /Unable to update configuration: HTTP 503/)
+  assert.match(page.text(), /Tariff analysis is unavailable because configuration could not be loaded/)
+  assert.doesNotMatch(page.text(), /Analysing tariff|Loading configuration|No settings match|No configuration settings/)
+  assert.equal(page.requests.length, 1)
+
+  page.refresh()
+  assert.match(page.text(), /Loading configuration/)
+  await page.respond(1, { items: [item] })
+  await page.respond(2, {})
+  assert.match(page.text(), /Test tariff/)
+  assert.match(page.text(), /Active/)
+  assert.doesNotMatch(page.text(), /HTTP 503|unavailable|Loading configuration/)
+})
+
+test('successful empty configuration differs from an unmatched filter', async () => {
+  const page = configPage()
+  await page.respond(0, { items: [] })
+  await page.respond(1, {})
+  assert.match(page.text(), /No configuration settings are available/)
+  assert.doesNotMatch(page.text(), /No settings match/)
+
+  page.refresh()
+  await page.respond(2, { items: [item] })
+  await page.respond(3, {})
+  page.search('missing setting')
+  assert.match(page.text(), /No settings match that filter/)
+})
+
+test('failed refresh removes stale tariff suggestions while retaining loaded settings', async () => {
+  const page = configPage()
+  await page.respond(0, { items: [item] })
+  await page.respond(1, {})
+  page.refresh()
+  await page.respond(2, null, 500)
+  assert.match(page.text(), /Active/)
+  assert.match(page.text(), /Tariff analysis is unavailable/)
+  assert.doesNotMatch(page.text(), /Test tariff|Analysing tariff/)
+})

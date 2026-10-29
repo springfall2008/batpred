@@ -66,9 +66,9 @@
 .discovery-toolbar span,
 .discovery-toolbar label { color: var(--color-text-muted); font-size: 0.72rem; }
 .discovery-toolbar label { display: flex; align-items: center; gap: 0.4rem; }
-.discovery-warning { border-color: var(--color-warning); color: var(--color-warning); }
+.discovery-warning { border-color: var(--color-warning); color: var(--color-warning-text); }
 .discovery-error { border-color: var(--color-danger); color: var(--color-danger); }
-.discovery-clear { border-color: var(--color-success); color: var(--color-success); }
+.discovery-clear { border-color: var(--color-success); color: var(--color-success-text); }
 .discovery-empty { color: var(--color-text-muted); }
 
 .discovery-page section > h2 {

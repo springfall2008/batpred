@@ -4,6 +4,9 @@ Notes distilled from maintainer debugging sessions and triage-bot runs on this r
 
 Every entry is an observation from a past investigation, not a statement about current main. The code moves. Use these as "look here first", confirm against the working tree before you put anything in a comment, and say what you actually confirmed rather than what this file says.
 
+- **Modern charts waiting after startup (2026-10-29).** Distinguish slow HTTP from a quick `chart_data` response with `ready: false`: the latter means forecast data is not published yet. `ChartsPage` previously retried both ready and unready responses only every five minutes. Verify its readiness-dependent polling before investigating rendering performance; the regression tests use controlled responses and timers.
+- **Modern dashboard freshness (2026-10-29).** Plan JSON has its own `timestamp`; `power_flow.updated_at` is the last completed power refresh and is `None` until one completes. A successful HTTP response can therefore contain startup zero defaults or an old snapshot. Compare those source times, not the request time, before diagnosing a plan/live discrepancy; the refresh time does not prove each individual sensor is current.
+
 ## Replay the reporter's debug file
 
 The most useful attachment on a bug report is `predbat_debug.yaml` — a full state dump the test harness can replay against current main:

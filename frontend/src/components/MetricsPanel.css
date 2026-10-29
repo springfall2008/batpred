@@ -37,7 +37,7 @@
 .metrics-panel-header p,
 .metrics-panel-header small {
   color: var(--color-text-muted);
-  font-size: 0.7rem;
+  font-size: 0.75rem;
 }
 
 .metrics-panel-header p {
@@ -62,7 +62,7 @@
 .metrics-section h3 {
   margin-bottom: 0.7rem;
   color: var(--color-text-secondary);
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.055em;
 }
@@ -102,7 +102,7 @@
 .metrics-card small {
   overflow: hidden;
   color: var(--color-text-muted);
-  font-size: 0.64rem;
+  font-size: 0.75rem;
   text-overflow: ellipsis;
 }
 
@@ -126,7 +126,7 @@
   border-radius: 8px;
   background: color-mix(in srgb, var(--color-danger) 8%, var(--color-surface));
   color: var(--color-text-secondary);
-  font-size: 0.72rem;
+  font-size: 0.75rem;
 }
 
 .metrics-config-errors > strong { color: var(--color-danger); }
@@ -136,12 +136,12 @@
 .metrics-config-errors a { color: var(--color-current); font-weight: 700; }
 
 .metrics-card .is-good {
-  color: var(--color-success);
+  color: var(--color-success-text);
 }
 
 .metrics-card .is-warning,
 .metrics-table-wrap td.is-warning {
-  color: var(--color-warning);
+  color: var(--color-warning-text);
 }
 
 .metrics-card .is-bad {
@@ -157,7 +157,7 @@
 .metrics-table-wrap table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.7rem;
+  font-size: 0.75rem;
 }
 
 .metrics-table-wrap th,
@@ -171,9 +171,9 @@
 .metrics-table-wrap th {
   background: var(--color-bg);
   color: var(--color-text-muted);
-  font-size: 0.62rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-size: 0.75rem;
+  text-transform: none;
+  letter-spacing: normal;
 }
 
 .metrics-table-wrap tr:last-child td {
@@ -183,7 +183,7 @@
 .metrics-empty {
   padding: 1rem;
   color: var(--color-text-muted);
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   text-align: center;
 }
 
@@ -270,7 +270,7 @@
 .metrics-section-description {
   margin: 0;
   color: var(--color-text-muted);
-  font-size: 0.7rem;
+  font-size: 0.75rem;
 }
 
 .metrics-chart-card h4 {
