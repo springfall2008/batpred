@@ -228,7 +228,7 @@ from tests.test_load_free_slot import test_load_free_slot
 from tests.test_car_charging_now import test_car_charging_now
 from tests.test_octopus_charge_target import test_octopus_charge_target
 from tests.test_octopus_slots_change import test_octopus_slots_change
-from tests.test_dynamic_load import test_dynamic_load_car_slot_cancellation, test_dynamic_load_high_load_baseline
+from tests.test_dynamic_load import test_dynamic_load_car_slot_cancellation, test_dynamic_load_high_load_baseline, test_dynamic_load_high_live_confirm
 from tests.test_dynamic_load_car import test_dynamic_load_car_not_charging
 from tests.test_octopus_dispatch_hold import test_octopus_dispatch_hold
 from tests.test_dispatch_billing_window import test_dispatch_billing_window
@@ -586,6 +586,7 @@ def main():
         ("record_status_run_state", test_record_status_run_state, "The status sensor's run_state attribute holds the run's plain state", False),
         ("dynamic_load_car", test_dynamic_load_car_slot_cancellation, "Dynamic load car slot cancellation tests", False),
         ("dynamic_load_high", test_dynamic_load_high_load_baseline, "Dynamic load high-load baseline tests", False),
+        ("dynamic_load_high_live", test_dynamic_load_high_live_confirm, "Dynamic load high load confirmed by live load tests", False),
         ("dynamic_load_car_not_charging", test_dynamic_load_car_not_charging, "Dynamic load car not charging tests", False),
         ("octopus_dispatch_hold", test_octopus_dispatch_hold, "Octopus dispatch hold tests", False),
         ("dispatch_billing_window", test_dispatch_billing_window, "Dispatch billing window tests (E.ON)", False),
