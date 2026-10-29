@@ -641,26 +641,6 @@ def _merge_minute_windows(minutes):
     return sorted(tuple(window) for window in windows)
 
 
-def _tou_window_to_local(start_minute, end_minute, utc_offset_minutes):
-    """
-    Shift a TOU window given in UTC minutes into wall-clock minutes from local midnight.
-
-    The measurements API labels UTC instants, so a meter whose off-peak period is fixed to local
-    time reports it shifted by whatever offset was in force when it was sampled. Both ends move
-    together so the window keeps its length, and the pair is then normalised as a unit so the start
-    falls within the day while a window crossing midnight keeps an end beyond 1440.
-    """
-    start_minute += utc_offset_minutes
-    end_minute += utc_offset_minutes
-    while start_minute < 0:
-        start_minute += 24 * 60
-        end_minute += 24 * 60
-    while start_minute >= 24 * 60:
-        start_minute -= 24 * 60
-        end_minute -= 24 * 60
-    return start_minute, end_minute
-
-
 def _localise_wall_clock(local_tz, wall_clock):
     """
     Attach a zone to a naive wall-clock time, taking the offset in force at that time.
@@ -681,17 +661,15 @@ def _localise_wall_clock(local_tz, wall_clock):
             wall_clock = wall_clock.replace(second=0, microsecond=0) + timedelta(minutes=1)
 
 
-def _tou_windows_from_measurements(response_data):
+def _tou_samples_from_measurements(response_data):
     """
-    Derive the meter's off-peak windows from measurement TOU bucket labels.
+    Read the labelled half-hours out of a measurements response as (UTC start, TOU label) pairs.
 
-    Returns (start_minute, end_minute) offsets from UTC midnight, or None when the response carries
-    no labels or only a single bucket, in which case there is nothing to distinguish an off-peak
-    period and the caller should fall back to the hard-wired windows.
+    Returns them in time order, or None when the response carries no labels at all.
     """
     if not response_data:
         return None
-    labels_by_slot = {}
+    samples = []
     for prop in (response_data.get("account", {}) or {}).get("properties", []) or []:
         for edge in (prop.get("measurements", {}) or {}).get("edges", []) or []:
             node = edge.get("node", {}) or {}
@@ -699,15 +677,54 @@ def _tou_windows_from_measurements(response_data):
             label = _slot_tou_label(node)
             if not stamp or not label:
                 continue
-            start = str2time(stamp).astimezone(timezone.utc)
-            labels_by_slot.setdefault(start.hour * 60 + start.minute, []).append(label)
-    if not labels_by_slot:
+            samples.append((str2time(stamp).astimezone(timezone.utc), label))
+    # Order by time alone, so a half-hour the response repeats keeps the API's own order
+    return sorted(samples, key=lambda sample: sample[0]) if samples else None
+
+
+def _dominant_label(labels):
+    """
+    Pick the label voted most often from a time-ordered list.
+
+    A slot's votes can tie on the local clock, where the changeover day adds or removes one. A tie
+    goes to the label seen most recently - the meter's current schedule - so the result never
+    depends on set ordering.
+    """
+    last_seen = {label: index for index, label in enumerate(labels)}
+    return max(last_seen, key=lambda label: (labels.count(label), last_seen[label]))
+
+
+def _tou_windows_from_samples(samples, local_tz=None):
+    """
+    Derive the meter's off-peak windows from labelled half-hour samples.
+
+    Returns (start_minute, end_minute) offsets from UTC midnight, or from local midnight when
+    local_tz is given, or None when there are no samples or only a single bucket, in which case
+    there is nothing to distinguish an off-peak period and the caller should fall back to the
+    hard-wired windows.
+
+    The labels are stamped as UTC instants. A meter switching on local time moves by an hour in UTC
+    across a clock change, so for such a meter each slot is placed by its own local wall-clock time
+    rather than shifted afterwards by a single offset - a sample straddling the change would
+    otherwise split its votes between two UTC positions, and today's offset would misplace the
+    days sampled before the change.
+    """
+    if not samples:
         return None
-    dominant = {slot: max(set(values), key=values.count) for slot, values in labels_by_slot.items()}
+    labels_by_slot = {}
+    for start, label in samples:
+        start = start.astimezone(local_tz or timezone.utc)
+        labels_by_slot.setdefault(start.hour * 60 + start.minute, []).append(label)
+    dominant = {slot: _dominant_label(values) for slot, values in labels_by_slot.items()}
     off_peak = _off_peak_tou_label(set(dominant.values()))
     if not off_peak or len(set(dominant.values())) < 2:
         return None
     return _merge_minute_windows(sorted(slot for slot, label in dominant.items() if label == off_peak))
+
+
+def _tou_windows_from_measurements(response_data, local_tz=None):
+    """Derive the meter's off-peak windows straight from a measurements response - see _tou_windows_from_samples."""
+    return _tou_windows_from_samples(_tou_samples_from_measurements(response_data), local_tz=local_tz)
 
 
 class OctopusAPI(ComponentBase):
@@ -765,7 +782,7 @@ class OctopusAPI(ComponentBase):
         self.automatic = automatic
         self.commands = []
         self.mpan = None
-        self.tou_windows = None
+        self.tou_samples = None
         self.tou_windows_day = None
         self.free_electricity_events = []
 
@@ -2001,21 +2018,23 @@ class OctopusAPI(ComponentBase):
         """
         return bool(tariff_code) and "IOG-SMB" in tariff_code
 
-    async def async_get_tou_night_windows(self, days=7):
+    async def async_get_tou_night_windows(self, days=7, local_tz=None):
         """
         Read the meter's real off-peak windows from the measurements API's TOU bucket labels.
 
         Octopus labels every half-hour interval with the time-of-use bucket it bills against, which
         is the meter's actual switching schedule rather than something inferred from the tariff
-        code. Returns (start_minute, end_minute) offsets from UTC midnight, or None when the labels
-        are unavailable so the caller falls back to the hard-wired windows. The result is cached
-        for the day, since a meter's schedule does not change between polls.
+        code. Returns (start_minute, end_minute) offsets from UTC midnight, or from local midnight
+        when local_tz is given for a meter on local time, or None when the labels are unavailable
+        so the caller falls back to the hard-wired windows. The labelled samples are cached for the
+        day, since a meter's schedule does not change between polls, and either clock is read from
+        them.
         """
         if not self.mpan or not self.account_id:
             return None
         today = self.now_utc_exact.astimezone(timezone.utc).strftime(DATE_STR_FORMAT)
         if self.tou_windows_day == today:
-            return self.tou_windows
+            return _tou_windows_from_samples(self.tou_samples, local_tz=local_tz)
 
         end_at = self.now_utc_exact.astimezone(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         start_at = end_at - timedelta(days=days)
@@ -2032,14 +2051,13 @@ class OctopusAPI(ComponentBase):
         except Exception as error:  # noqa: BLE001 - a diagnostic lookup must never break rate fetching
             self.log("Warn: OctopusAPI: TOU bucket lookup failed ({}), falling back to hard-wired windows".format(error))
             response_data = None
-        windows = _tou_windows_from_measurements(response_data)
         # Only a lookup that returned data settles the day. A failed or rate-limit-held one is
         # retried on the next fetch rather than leaving the hard-wired windows in place until
         # UTC midnight.
         if response_data is not None:
             self.tou_windows_day = today
-        self.tou_windows = windows
-        return windows
+        self.tou_samples = _tou_samples_from_measurements(response_data)
+        return _tou_windows_from_samples(self.tou_samples, local_tz=local_tz)
 
     def _fallback_night_window(self, tariff_code, log_unknown=True):
         """
@@ -2064,9 +2082,9 @@ class OctopusAPI(ComponentBase):
         Get day and night rates from Octopus.
 
         Selects the correct night/day window based on the tariff type:
-        - IOG TOU (product_code contains INTELLI+IOG+TOU): 23:30 to 05:30 (crosses midnight)
-        - Economy 7 (tariff_code starts with E-2R-) or unknown (400-error fallback): 00:30 to 07:30
-        - GO and other day/night tariffs: 00:30 to 05:30
+        - IOG TOU (product_code contains INTELLI+IOG+TOU): 23:30 to 05:30 local (crosses midnight)
+        - Economy 7 (tariff_code starts with E-2R-): 00:30 to 07:30 UTC
+        - GO, and any tariff code not recognised: 00:30 to 05:30 local
         """
         mdata = []
         self.log("Info: OctopusAPI: tariff has day and night rates, fetching both")
@@ -2094,21 +2112,15 @@ class OctopusAPI(ComponentBase):
                 # The guaranteed window taken below is the only fixed part of an IOG day.
                 self.log("Info: OctopusAPI: Tariff {} is Intelligent GO, its off-peak periods are dispatch-driven so the TOU labels are not read as a schedule".format(tariff_code))
             else:
-                tou_windows = await self.async_get_tou_night_windows()
+                # The labels are UTC instants, but only some meters are on a UTC-fixed schedule. Read
+                # them on whichever clock this tariff's off-peak period is really fixed to - holding a
+                # summer-sampled window at its UTC offset would run it an hour early through winter.
+                anchor_utc = self._fallback_night_window(tariff_code, log_unknown=False).get("utc", False)
+                tou_windows = await self.async_get_tou_night_windows(local_tz=None if anchor_utc else self.now_utc_exact.tzinfo)
                 if tou_windows:
-                    # The labels are UTC instants, but only some meters are on a UTC-fixed schedule.
-                    # Anchor them to whichever clock this tariff's off-peak period is really fixed to,
-                    # converting the offsets to wall-clock minutes for a local one - holding a
-                    # summer-sampled window at its UTC offset would run it an hour early through winter.
-                    anchor_utc = self._fallback_night_window(tariff_code, log_unknown=False).get("utc", False)
-                    if anchor_utc:
-                        windows = sorted((start_minute, end_minute, True) for start_minute, end_minute in tou_windows)
-                    else:
-                        utc_offset = self.now_utc_exact.utcoffset()
-                        utc_offset_minutes = int(utc_offset.total_seconds() // 60) if utc_offset else 0
-                        windows = sorted((*_tou_window_to_local(start_minute, end_minute, utc_offset_minutes), False) for start_minute, end_minute in tou_windows)
-                    applied_windows = [(start_minute, end_minute) for start_minute, end_minute, _ in windows]
-                    self.log("Info: OctopusAPI: Using off-peak windows {} ({} minutes from midnight) from measurement TOU labels, anchored to {}".format(applied_windows, "UTC" if anchor_utc else "local", "UTC" if anchor_utc else "local time"))
+                    windows = [(start_minute, end_minute, anchor_utc) for start_minute, end_minute in tou_windows]
+                    clock_name = "UTC" if anchor_utc else "local"
+                    self.log("Info: OctopusAPI: Using off-peak windows {} ({} minutes from midnight) from measurement TOU labels, anchored to {} time".format(tou_windows, clock_name, clock_name))
             if not windows:
                 window = self._fallback_night_window(tariff_code)
                 start_minute = window["start"][0] * 60 + window["start"][1]
@@ -2118,10 +2130,10 @@ class OctopusAPI(ComponentBase):
                 windows = [(start_minute, end_minute, window.get("utc", False))]
                 self.log("Info: OctopusAPI: Using hard-wired night rate window {} anchored to {} based on tariff code {}".format(window, "UTC" if window.get("utc", False) else "local time", tariff_code))
 
-            # Anchor each window to whichever clock it is fixed to. Economy 7 and any TOU-derived
-            # schedule are UTC, so anchoring them locally would run them an hour early through
-            # British Summer Time; GO and Intelligent GO are local wall-clock windows and must not
-            # move with the seasons. A hand-configured schedule may mix the two.
+            # Anchor each window to whichever clock it is fixed to. Economy 7 is UTC, so anchoring it
+            # locally would run it an hour early through British Summer Time; GO and Intelligent GO
+            # are local wall-clock windows and must not move with the seasons. A TOU-derived schedule
+            # takes its tariff's clock, and a hand-configured one may mix the two.
             utc_midnight = self.now_utc_exact.astimezone(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
             local_tz = self.now_utc_exact.tzinfo
             local_midnight_naive = self.now_utc_exact.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
