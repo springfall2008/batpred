@@ -352,18 +352,20 @@ def _run_dynamic_load_high_live_confirm(my_predbat):
     my_predbat.metric_dynamic_load_adjust = True
 
     cases = [
-        # (description, counter kW, live load_power, expected status, expect a baseline)
-        ("counter step 9.6kW, live load 692W - not confirmed", 9.6, 692, "baseline", False),
-        ("counter 9.6kW, live load 7000W - confirmed", 9.6, 7000, "high", True),
-        ("counter 9.6kW, live load 4700W - within 90% of the threshold, confirmed", 9.6, 4700, "high", True),
-        ("counter 9.6kW, live load unavailable - counter stands as before", 9.6, "unavailable", "high", True),
-        ("counter 9.6kW, load_power not configured - counter alone as before", 9.6, None, "high", True),
-        ("counter 0.7kW, live load 7000W - only a high counter is confirmed", 0.7, 7000, "low", False),
+        # (description, previous status, counter kW, live load_power, expected status, expect a baseline, expect a re-plan)
+        ("from low: counter step 9.6kW, live load 692W - not confirmed, stays low", "low", 9.6, 692, "low", False, False),
+        ("from baseline: counter step 9.6kW, live load 692W - not confirmed, stays baseline", "baseline", 9.6, 692, "baseline", False, False),
+        ("from high: counter 9.6kW, live load 692W - not confirmed, drops the raised load", "high", 9.6, 692, "baseline", False, True),
+        ("from low: counter 9.6kW, live load 7000W - confirmed", "low", 9.6, 7000, "high", True, True),
+        ("from low: counter 9.6kW, live load 4700W - within 90% of the threshold, confirmed", "low", 9.6, 4700, "high", True, True),
+        ("from low: counter 9.6kW, live load unavailable - counter stands as before", "low", 9.6, "unavailable", "high", True, True),
+        ("from low: counter 9.6kW, load_power not configured - counter alone as before", "low", 9.6, None, "high", True, True),
+        ("from baseline: counter 0.7kW, live load 7000W - only a high counter is confirmed", "baseline", 0.7, 7000, "low", False, True),
     ]
-    for test_n, (description, counter_kw, live_state, expected_status, expect_baseline) in enumerate(cases, start=1):
+    for test_n, (description, previous, counter_kw, live_state, expected_status, expect_baseline, expect_replan) in enumerate(cases, start=1):
         print("Test {}: {}".format(test_n, description))
         _set_live_load(my_predbat, live_state)
-        my_predbat.load_last_status = "baseline"
+        my_predbat.load_last_status = previous
         my_predbat.load_last_period = counter_kw
 
         replan = my_predbat.dynamic_load()
@@ -374,9 +376,17 @@ def _run_dynamic_load_high_live_confirm(my_predbat):
         if bool(my_predbat.dynamic_load_baseline) != expect_baseline:
             print("ERROR: Expected baseline {}, got {}".format("entries" if expect_baseline else "none", my_predbat.dynamic_load_baseline))
             failed = True
-        if replan != (expected_status != "baseline"):
-            print("ERROR: Expected dynamic_load() to return {} for status '{}', got {}".format(expected_status != "baseline", expected_status, replan))
+        if replan != expect_replan:
+            print("ERROR: Expected dynamic_load() to return {}, got {}".format(expect_replan, replan))
             failed = True
+
+    # The car check classifies without a previous status, so its view of an unconfirmed high is unchanged: not "low"
+    print("Test {}: car check view of an unconfirmed high is not low".format(len(cases) + 1))
+    _set_live_load(my_predbat, 692)
+    my_predbat.load_last_period = 9.6
+    if my_predbat.dynamic_load_classify() != "baseline":
+        print("ERROR: Expected dynamic_load_classify() with no previous status to return 'baseline', got '{}'".format(my_predbat.dynamic_load_classify()))
+        failed = True
 
     if not failed:
         print("*** Dynamic load high load confirmed by live load test PASSED")

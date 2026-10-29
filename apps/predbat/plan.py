@@ -247,7 +247,7 @@ class Plan:
         threshold_car = self.car_charging_threshold_kw()
 
         # Last period load analysis
-        self.load_last_status = self.dynamic_load_classify()
+        self.load_last_status = self.dynamic_load_classify(prev_last_load_status)
 
         # Update entity for last load
         self.dashboard_item(
@@ -372,7 +372,7 @@ class Plan:
         """
         return self.car_charging_threshold * MINUTE_WATT / 1000
 
-    def dynamic_load_classify(self):
+    def dynamic_load_classify(self, previous=None):
         """
         Classify load_last_period as "high" (above the battery's discharge rate), "low" (below both the
         battery rate and the car's low-load cut-off, so no car can be charging) or "baseline".
@@ -386,13 +386,16 @@ class Plan:
         whole kWh (Solis) reads as 0 or 12kW over five minutes, so each step looks like a load spike. A live
         reading below the threshold makes it "baseline": no evidence either way. With no live reading the
         counter stands as before, so a load_power sensor that is down does not switch dynamic load off.
+
+        previous is the last status, from dynamic_load(): an unconfirmed reading leaves a "low" or "baseline"
+        status as it was, so a counter step is not a status change and does not force a re-plan.
         """
         threshold_battery = self.battery_rate_max_discharge * MINUTE_WATT / 1000
         if self.load_last_period >= threshold_battery:
             _, live_load = self.dynamic_load_car_live_load()
             if live_load is not None and live_load < threshold_battery * 0.9:
                 self.log("Dynamic load last period {:.2f}kW is high but live load {:.2f}kW does not confirm it".format(self.load_last_period, live_load))
-                return "baseline"
+                return previous if previous in ("low", "baseline") else "baseline"
             return "high"
         if (self.load_last_period < (threshold_battery * 0.9)) and (self.load_last_period < self.dynamic_load_car_low_kw()):
             return "low"
