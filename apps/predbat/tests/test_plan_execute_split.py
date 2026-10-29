@@ -9,9 +9,13 @@
 # pylint: disable=attribute-defined-outside-init
 """Characterisation and unit tests for the plan_once()/execute_once() split of update_pred()."""
 
+import itertools
 from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
+
+# Gives each recompute of the fake calculate_plan a plan no earlier one had
+_plan_marker = itertools.count(1)
 
 _STATE_ATTRS = [
     "plugin_system",
@@ -35,6 +39,9 @@ _STATE_ATTRS = [
     "charge_limit_best",
     "export_window_best",
     "export_limits_best",
+    "plan_preclip",
+    "plan_made_by_version",
+    "plan_version_content",
     "local_tz",
     "now_utc_real",
     "now_utc",
@@ -91,8 +98,13 @@ def _quiet_bookkeeping(my_predbat):
     my_predbat.args["plan_random_delay"] = 0  # avoids the real random sleep in update_pred's aged-plan path
 
 
-def _patch_pipeline(my_predbat, stack, inverter_ok=True, plan_valid_after=True, real_time=False):
-    """Patch the fetch/plan/execute pipeline on my_predbat, returning a dict of the created mocks. real_time=True leaves update_time unpatched."""
+def _patch_pipeline(my_predbat, stack, inverter_ok=True, plan_valid_after=True, real_time=False, same_plan=False, drop_head=False):
+    """
+    Patch the fetch/plan/execute pipeline on my_predbat, returning a dict of the created mocks. real_time=True leaves update_time unpatched.
+
+    A recompute makes a plan unlike any before it, unless same_plan=True. drop_head=True removes the head charge
+    window as the real calculate_plan does once that window has ended, recompute or not.
+    """
     mocks = {}
     names = ("save_current_config",) if real_time else ("update_time", "save_current_config")
     for name in names + ("download_predbat_releases", "fetch_config_options", "publish_rate_and_threshold", "save_plan"):
@@ -103,7 +115,14 @@ def _patch_pipeline(my_predbat, stack, inverter_ok=True, plan_valid_after=True, 
 
     def fake_calculate_plan(recompute=True, debug_mode=False, publish=True):
         """Stand-in for calculate_plan that marks the plan valid when a recompute is requested."""
+        if drop_head and my_predbat.charge_window_best:
+            del my_predbat.charge_window_best[0]
+            del my_predbat.charge_limit_best[0]
         if recompute and plan_valid_after:
+            if not same_plan:
+                marker = next(_plan_marker)
+                my_predbat.charge_window_best = [{"start": 0, "end": 30, "average": float(marker)}, {"start": 60, "end": 90, "average": float(marker)}]
+                my_predbat.charge_limit_best = [50.0, 100.0]
             my_predbat.plan_valid = True
             my_predbat.plan_last_updated = my_predbat.now_utc
         return recompute
@@ -127,6 +146,7 @@ def _scenario_fused_fresh_plan(my_predbat):
     failed = 0
     my_predbat.plan_valid = True
     my_predbat.plan_last_updated = my_predbat.now_utc
+    my_predbat.plan_version_content = my_predbat.plan_content()
     with ExitStack() as stack:
         mocks = _patch_pipeline(my_predbat, stack)
         my_predbat.update_pred(scheduled=True)
@@ -172,6 +192,49 @@ def _scenario_fused_aged_plan(my_predbat):
     failed = _check(failed, mocks["fetch_inverter_data"].call_count == 2, "aged plan: inverter data fetched twice")
     failed = _check(failed, mocks["save_plan"].call_count == 1, "aged plan: new plan persisted")
     failed = _check(failed, my_predbat.plan_version == version_before + 1, "aged plan: version advances once")
+    return failed
+
+
+def _scenario_fused_aged_plan_unchanged(my_predbat):
+    """An aged plan that recomputes to exactly the plan already in force is neither re-versioned nor re-saved."""
+    failed = 0
+    my_predbat.plan_valid = True
+    my_predbat.plan_last_updated = my_predbat.now_utc - timedelta(minutes=9)
+    my_predbat.plan_version_content = my_predbat.plan_content()
+    version_before = my_predbat.plan_version
+    with ExitStack() as stack:
+        mocks = _patch_pipeline(my_predbat, stack, same_plan=True)
+        my_predbat.update_pred(scheduled=True)
+    failed = _check(failed, mocks["calculate_plan"].call_count == 2, "aged plan unchanged: still recomputed")
+    failed = _check(failed, mocks["execute_plan"].call_count == 2, "aged plan unchanged: executed twice")
+    failed = _check(failed, mocks["save_plan"].call_count == 0, "aged plan unchanged: save_plan not called")
+    failed = _check(failed, my_predbat.plan_version == version_before, "aged plan unchanged: version not advanced")
+    return failed
+
+
+def _scenario_head_window_dropped(my_predbat):
+    """A plan reused as time moves on is re-versioned and re-saved once its head window drops, and not again while it stays the same."""
+    failed = 0
+    my_predbat.plan_valid = True
+    my_predbat.plan_last_updated = my_predbat.now_utc
+    my_predbat.charge_window_best = [{"start": 0, "end": 30, "average": 5.0}, {"start": 60, "end": 90, "average": 5.0}]
+    my_predbat.charge_limit_best = [50.0, 100.0]
+    my_predbat.plan_version_content = my_predbat.plan_content()
+    version_before = my_predbat.plan_version
+    with ExitStack() as stack:
+        mocks = _patch_pipeline(my_predbat, stack, drop_head=True)
+        artifact = my_predbat.plan_once(scheduled=True)
+    failed = _check(failed, artifact and artifact.get("recomputed") is False, "head dropped: plan reused, not recomputed")
+    failed = _check(failed, len(my_predbat.charge_window_best) == 1, "head dropped: head window removed")
+    failed = _check(failed, mocks["save_plan"].call_count == 1, "head dropped: save_plan called once")
+    failed = _check(failed, my_predbat.plan_version == version_before + 1, "head dropped: version advances once")
+    failed = _check(failed, artifact and artifact.get("plan_version") == version_before + 1, "head dropped: artifact carries the new version")
+
+    with ExitStack() as stack:
+        mocks = _patch_pipeline(my_predbat, stack)
+        my_predbat.plan_once(scheduled=True)
+    failed = _check(failed, mocks["save_plan"].call_count == 0, "head dropped: nothing changed on the next cycle, save_plan not called")
+    failed = _check(failed, my_predbat.plan_version == version_before + 1, "head dropped: version unchanged on the next cycle")
     return failed
 
 
@@ -248,6 +311,7 @@ def _scenario_plan_once_reuse(my_predbat):
     failed = 0
     my_predbat.plan_valid = True
     my_predbat.plan_last_updated = my_predbat.now_utc
+    my_predbat.plan_version_content = my_predbat.plan_content()
     with ExitStack() as stack:
         mocks = _patch_pipeline(my_predbat, stack)
         artifact = my_predbat.plan_once(scheduled=True)
@@ -333,10 +397,12 @@ class _FakeStorage:
     def __init__(self):
         """Create the empty in-memory store."""
         self.saved = {}
+        self.expiry = {}
 
     async def save(self, namespace, key, data, format="json", expiry=None):
-        """Record the payload under (namespace, key)."""
+        """Record the payload and its expiry under (namespace, key)."""
         self.saved[(namespace, key)] = data
+        self.expiry[(namespace, key)] = expiry
 
     async def load(self, namespace, key):
         """Return the previously saved payload, or None."""
@@ -377,6 +443,12 @@ def _scenario_plan_version_bump(my_predbat):
         _patch_pipeline(my_predbat, stack)
         artifact = my_predbat.plan_once(scheduled=False)
     failed = _check(failed, my_predbat.plan_version == 2, "plan version: bumped to 2 on forced recompute")
+
+    with ExitStack() as stack:
+        mocks = _patch_pipeline(my_predbat, stack, same_plan=True)
+        my_predbat.plan_once(scheduled=False)
+    failed = _check(failed, my_predbat.plan_version == 2, "plan version: unchanged when a forced recompute makes the same plan")
+    failed = _check(failed, mocks["save_plan"].call_count == 0, "plan version: identical plan not re-saved")
     return failed
 
 
@@ -404,6 +476,59 @@ def _scenario_plan_version_persistence(my_predbat):
     my_predbat.load_plan()
     failed = _check(failed, my_predbat.plan_version == 7, "plan version persistence: load_plan restored version 7")
     failed = _check(failed, my_predbat.plan_valid, "plan version persistence: load_plan marked plan valid")
+    my_predbat.components = None
+    return failed
+
+
+def _scenario_stale_plan_restored(my_predbat):
+    """
+    The saved plan never expires: load_plan restores it however old it is and becomes the baseline a change is
+    measured from. One made on an earlier day is restored invalid, as its window minutes count from that day's
+    midnight, so the first run recomputes before anything executes it.
+    """
+    failed = 0
+    storage = _FakeStorage()
+    my_predbat.components = _FakeComponents(storage)
+    now = datetime(2026, 1, 10, 20, 0, tzinfo=timezone.utc)
+    windows = [{"start": 1260, "end": 1290, "average": 5.0}]
+
+    def save_at(saved_at, version):
+        """Save a one-window plan stamped at saved_at."""
+        my_predbat.now_utc = saved_at
+        my_predbat.plan_last_updated = saved_at
+        my_predbat.plan_last_updated_minutes = saved_at.hour * 60 + saved_at.minute
+        my_predbat.plan_version = version
+        my_predbat.charge_window_best = [dict(window) for window in windows]
+        my_predbat.charge_limit_best = [80.0]
+        my_predbat.export_window_best = []
+        my_predbat.export_limits_best = []
+        my_predbat.plan_valid = True
+        my_predbat.save_plan()
+
+    def load_at(load_time):
+        """Clear the plan, then restore it with the clock at load_time."""
+        my_predbat.now_utc = load_time
+        my_predbat.plan_valid = False
+        my_predbat.plan_version = 0
+        my_predbat.charge_window_best = []
+        my_predbat.charge_limit_best = []
+        my_predbat.plan_version_content = None
+        my_predbat.load_plan()
+
+    save_at(now - timedelta(hours=10), 3)
+    failed = _check(failed, storage.expiry.get(("predbat", "plan")) is None, "stale plan: saved without an expiry")
+
+    load_at(now)
+    failed = _check(failed, my_predbat.charge_window_best == windows, "stale plan: a plan 10 hours old is restored")
+    failed = _check(failed, my_predbat.plan_version == 3, "stale plan: its version is restored")
+    failed = _check(failed, my_predbat.plan_valid, "stale plan: a plan from earlier today is restored valid")
+    failed = _check(failed, my_predbat.plan_version_content == my_predbat.plan_content(), "stale plan: the restored plan is the change baseline")
+
+    save_at(now - timedelta(days=3), 4)
+    load_at(now)
+    failed = _check(failed, my_predbat.charge_window_best == windows, "stale plan: a plan 3 days old is restored")
+    failed = _check(failed, my_predbat.plan_version == 4, "stale plan: the old plan's version is restored")
+    failed = _check(failed, not my_predbat.plan_valid, "stale plan: a plan from an earlier day is restored invalid, to recompute before executing")
     my_predbat.components = None
     return failed
 
@@ -535,6 +660,8 @@ def test_plan_execute_split(my_predbat):
         failed += _scenario_fused_fresh_plan(my_predbat)
         failed += _scenario_fused_recompute(my_predbat)
         failed += _scenario_fused_aged_plan(my_predbat)
+        failed += _scenario_fused_aged_plan_unchanged(my_predbat)
+        failed += _scenario_head_window_dropped(my_predbat)
         failed += _scenario_fused_inverter_failure(my_predbat)
         failed += _scenario_fused_zero_rates(my_predbat)
         failed += _scenario_fused_template(my_predbat)
@@ -545,6 +672,7 @@ def test_plan_execute_split(my_predbat):
         failed += _scenario_execute_once(my_predbat)
         failed += _scenario_plan_version_bump(my_predbat)
         failed += _scenario_plan_version_persistence(my_predbat)
+        failed += _scenario_stale_plan_restored(my_predbat)
         failed += _scenario_plan_at_default(my_predbat)
         failed += _scenario_plan_at_drives_time(my_predbat)
         failed += _scenario_plan_at_rounding(my_predbat)

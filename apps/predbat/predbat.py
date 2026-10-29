@@ -18,6 +18,7 @@ single orchestrator that runs the main prediction/optimisation loop every 5 minu
 """
 
 import copy
+import json
 import os
 import sys
 from datetime import datetime, timedelta, timezone
@@ -391,6 +392,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.plan_last_updated = None
         self.plan_last_updated_minutes = 0
         self.plan_version = 0
+        self.plan_version_content = None
         self.plugin_system = None
         self.calculate_plan_every = 5
         self.prediction_started = False
@@ -934,21 +936,37 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             "predbat_version": self.plan_made_by_version,
         }
         try:
-            # storage.load() checks expiry against real wall-clock time (datetime.now(timezone.utc)),
-            # the same convention every other expiry-bearing storage.save() call in the codebase
-            # uses (github.py, octopus.py, enphase.py, fox.py, kraken.py, solax.py, etc.) - self.now_utc
-            # is Predbat's own simulated/plan clock, which is deliberately not real time during a
-            # debug-file replay or a test, and can drift from it. Using it here made a freshly-saved
-            # plan look already-expired the instant it was written whenever that drift exceeded 8
-            # hours (#5079).
-            expiry = datetime.now(timezone.utc) + timedelta(hours=8)
-            run_async(storage.save("predbat", "plan", plan_data, format="json", expiry=expiry))
+            # No expiry: the plan is only re-saved when it changes, so an unchanged plan can be any age, and
+            # load_plan() restores it however old it is and decides itself whether it can be executed
+            run_async(storage.save("predbat", "plan", plan_data, format="json"))
             self.log("Saved plan to storage")
         except Exception as e:
             self.log("Warning: Failed to save plan: {}".format(e))
 
+    def plan_content(self):
+        """The current plan as a comparable string, without its timestamps - what one plan_version stands for."""
+        preclip = self.plan_preclip
+        if isinstance(preclip, (list, tuple)) and len(preclip) == 4:
+            preclip = [preclip[0], preclip[1], preclip[2], export_limits_to_stored(preclip[3])]
+        return json.dumps([self.charge_window_best, self.charge_limit_best, self.export_window_best, export_limits_to_stored(self.export_limits_best), preclip], sort_keys=True, default=str)
+
+    def save_plan_if_changed(self):
+        """
+        Advance plan_version and save the plan, only if it differs from the plan the current version was given to.
+
+        A recompute that lands on the same plan, or a run that reuses it, changes nothing; a head window dropped
+        as time moved on, or a new plan, does. Returns True when the plan was saved.
+        """
+        content = self.plan_content()
+        if content == self.plan_version_content:
+            return False
+        self.plan_version += 1
+        self.plan_version_content = content
+        self.save_plan()
+        return True
+
     def load_plan(self):
-        """Restore a previously saved plan from storage if it is recent enough."""
+        """Restore the previously saved plan from storage, however old it is."""
         storage = self.components.get_component("storage") if self.components else None
         if not storage:
             self.log("Warning: Storage component unavailable, cannot load plan")
@@ -1004,8 +1022,17 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.plan_version = plan_data.get("plan_version", 0)
         # Saves from before the version was recorded come back as made by an unknown version
         self.plan_made_by_version = plan_data.get("predbat_version")
-        self.plan_valid = True
-        self.log("Restored saved plan from {:.0f} minutes ago: {} charge windows, {} export windows".format(age_minutes, len(self.charge_window_best), len(self.export_window_best)))
+        # The restored plan is the one its version stands for, so a recompute that remakes it is not a change
+        self.plan_version_content = self.plan_content()
+        # Window minutes count from the midnight of the day the plan was made. One made on an earlier day is
+        # kept, but invalid, so the first run recomputes it before anything executes it
+        midnight = self.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        self.plan_valid = saved_dt >= midnight
+        self.log(
+            "Restored saved plan from {:.0f} minutes ago: {} charge windows, {} export windows{}".format(
+                age_minutes, len(self.charge_window_best), len(self.export_window_best), "" if self.plan_valid else ", made on an earlier day so it will be recomputed before use"
+            )
+        )
 
     def _debug_enable_auto_scope(self):
         """Write a raw debug.yaml this cycle if switch.predbat_debug_enable is on, and
@@ -1334,10 +1361,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         # Calculate the new plan (or re-use existing)
         recompute = self.calculate_plan(recompute=recompute)
 
-        # Persist the plan so it can be restored immediately on next startup
-        if recompute and self.plan_valid:
-            self.plan_version += 1
-            self.save_plan()
+        # Persist the plan so it can be restored immediately on next startup, if a recompute or an expired head window changed it
+        if self.plan_valid:
+            self.save_plan_if_changed()
 
         # Publish rate data
         self.publish_rate_and_threshold()
@@ -1398,8 +1424,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 # Calculate an updated plan, fetch the inverter data again and execute the plan
                 self.calculate_plan(recompute=True)
                 if self.plan_valid:
-                    self.plan_version += 1
-                    self.save_plan()
+                    self.save_plan_if_changed()
                 executed = self.execute_once(refetch_inverter=True)
                 if executed is None:
                     return
