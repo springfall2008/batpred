@@ -157,8 +157,9 @@ class Marginal:
             "timestamp": self.now_utc.isoformat(),
         }
 
-        min_import_cost = self.rate_min
-        max_import_cost = self.rate_max
+        # Base tariff, not rate_min/rate_max: a free session zeroes rate_min, so nothing could ever read as cheap (#5382)
+        min_import_cost = self.rate_min_base
+        max_import_cost = self.rate_max_base
 
         cheap_threshold = min_import_cost * 1.2  # Example threshold for "cheap" energy
         moderate_threshold = max(max_import_cost * 0.5, min_import_cost * 1.5)  # "Moderate" if above cheap but below half of max
