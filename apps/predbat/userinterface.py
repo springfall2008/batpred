@@ -165,7 +165,8 @@ class UserInterface:
                 value = None
             index = None
 
-        if index and value is not None:
+        if index and value is not None and not APPS_SCHEMA.get(arg, {}).get("single_value_ok", False):
+            # A single_value_ok item (#5369) may be one value for every entry, so reading it by index is not a mistake
             self.log("Warn: item {} is incorrectly setup, element {} has value {}".format(arg, index, value))
 
         # If we have a list of items get each and add them up or return them as a list
@@ -308,10 +309,16 @@ class UserInterface:
                         self.log("Warn: Out of range index {} within item {} value {}".format(index, arg, value))
                         value = None
             elif overrides:
+                # An override with no index of a single_value_ok item (#5369) is one value for every entry, as
+                # the item itself can be, so it applies whichever index is read
+                broadcast = APPS_SCHEMA.get(arg, {}).get("single_value_ok", False)
                 for override in overrides:
                     override_index = override.get("index", 0)
                     if override_index is None:
-                        override_index = 0
+                        if broadcast:
+                            override_index = index
+                        else:
+                            override_index = 0
                     if override_index == index:
                         value = override.get("value", value)
                         self.log("Note: API Overridden arg {} value {}".format(arg, value))

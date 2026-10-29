@@ -1860,7 +1860,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                                 errors += 1
                                 continue
                     elif required_entries > 1:
-                        if not optional_entries:
+                        # single_value_ok: one plain value applies to every entry (#5369)
+                        if not optional_entries and not spec.get("single_value_ok", False):
                             self.log("Warn: Validation of apps.yaml found configuration item '{}' is not a list, but requires {} entries based on {}".format(name, required_entries, entries))
                             self.arg_errors[name] = "Invalid type, expected list"
                             errors += 1

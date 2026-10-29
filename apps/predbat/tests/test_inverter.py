@@ -616,6 +616,103 @@ def test_battery_rate_max_source(test_name, my_predbat, ha, inverter_type, charg
     return failed
 
 
+def test_inverter_reserve_max_forms(my_predbat):
+    """
+    Test
+       inverter_reserve_max and inverter_battery_rate_min are read both as one value for every inverter and as a
+       per-inverter list, without warning, and a manual API override still applies as it did before.
+
+    GH#5369: the validator wants one entry per inverter, but the reader took the whole list and failed
+    the int conversion, logging "Return bad int value" every cycle and falling back to 100.
+    """
+    failed = False
+    print("Test: test_inverter_reserve_max_forms")
+
+    saved = {arg: copy.deepcopy(my_predbat.args.get(arg, None)) for arg in ("inverter_type", "inverter_reserve_max", "inverter_battery_rate_min", "num_inverters")}
+    try:
+        my_predbat.args["num_inverters"] = 2
+        my_predbat.args["inverter_type"] = ["GE", "GE"]
+        for case, value, expect in (("list", [97, 98], [97, 98]), ("single", 98, [98, 98]), ("unset", None, [100, 100])):
+            if value is None:
+                my_predbat.args.pop("inverter_reserve_max", None)
+            else:
+                my_predbat.args["inverter_reserve_max"] = value
+            for inverter_id in (0, 1):
+                logged = []
+                saved_log = my_predbat.log
+                my_predbat.log = lambda message, *args, **kwargs: logged.append(message)
+                try:
+                    inv = Inverter(my_predbat, inverter_id)
+                finally:
+                    my_predbat.log = saved_log
+                if inv.reserve_max != expect[inverter_id]:
+                    print("ERROR: test_inverter_reserve_max_forms: {}: inverter {} reserve_max should be {} got {}".format(case, inverter_id, expect[inverter_id], inv.reserve_max))
+                    failed = True
+                warned = [message for message in logged if "inverter_reserve_max is incorrectly setup" in message]
+                if warned:
+                    print("ERROR: test_inverter_reserve_max_forms: {}: inverter {} should not warn, got {}".format(case, inverter_id, warned))
+                    failed = True
+        # inverter_battery_rate_min takes the same two forms, in watts
+        for case, value, expect in (("rate_min list", [200, 100], [200, 100]), ("rate_min single", 200, [200, 200]), ("rate_min unset", None, [0, 0])):
+            if value is None:
+                my_predbat.args.pop("inverter_battery_rate_min", None)
+            else:
+                my_predbat.args["inverter_battery_rate_min"] = value
+            for inverter_id in (0, 1):
+                # A single value read per inverter id gave the right number but warned "incorrectly setup" every refresh
+                logged = []
+                saved_log = my_predbat.log
+                my_predbat.log = lambda message, *args, **kwargs: logged.append(message)
+                try:
+                    inv = Inverter(my_predbat, inverter_id)
+                finally:
+                    my_predbat.log = saved_log
+                rate_min_w = round(inv.battery_rate_min * MINUTE_WATT)
+                if rate_min_w != expect[inverter_id]:
+                    print("ERROR: test_inverter_reserve_max_forms: {}: inverter {} battery_rate_min should be {}W got {}W".format(case, inverter_id, expect[inverter_id], rate_min_w))
+                    failed = True
+                warned = [message for message in logged if "inverter_battery_rate_min is incorrectly setup" in message]
+                if warned:
+                    print("ERROR: test_inverter_reserve_max_forms: {}: inverter {} should not warn, got {}".format(case, inverter_id, warned))
+                    failed = True
+        # A manual API override with no index applies to every inverter, as docs/manual-api.md says, and one
+        # with an index only to that inverter
+        my_predbat.args["inverter_reserve_max"] = 98
+        my_predbat.args["inverter_battery_rate_min"] = 200
+        try:
+            my_predbat.api_select("manual_api", "inverter_reserve_max=95")
+            my_predbat.api_select("manual_api", "inverter_battery_rate_min(1)=500")
+            my_predbat.manual_api = my_predbat.api_select_update("manual_api")
+            for inverter_id, expect_reserve, expect_rate in ((0, 95, 200), (1, 95, 500)):
+                inv = Inverter(my_predbat, inverter_id)
+                rate_min_w = round(inv.battery_rate_min * MINUTE_WATT)
+                if inv.reserve_max != expect_reserve or rate_min_w != expect_rate:
+                    print("ERROR: test_inverter_reserve_max_forms: API override on inverter {} should give reserve_max {} and rate_min {}W, got {} and {}W".format(inverter_id, expect_reserve, expect_rate, inv.reserve_max, rate_min_w))
+                    failed = True
+        finally:
+            my_predbat.api_select("manual_api", "off")
+            my_predbat.manual_api = my_predbat.api_select_update("manual_api")
+        # An item that is not single_value_ok still warns when a single value is read by index
+        logged = []
+        saved_log = my_predbat.log
+        my_predbat.log = lambda message, *args, **kwargs: logged.append(message)
+        try:
+            my_predbat.resolve_arg("inverter_limit", 3600, index=1)
+        finally:
+            my_predbat.log = saved_log
+        if not any("inverter_limit is incorrectly setup" in message for message in logged):
+            print("ERROR: test_inverter_reserve_max_forms: a single inverter_limit read by index should still warn, got {}".format(logged))
+            failed = True
+    finally:
+        for arg, value in saved.items():
+            if value is None:
+                my_predbat.args.pop(arg, None)
+            else:
+                my_predbat.args[arg] = value
+
+    return failed
+
+
 def test_solis_cloud_rate_limits(test_name, my_predbat, ha, user_limits, expect_charge, expect_discharge, expect_export):
     """
     Test
@@ -6009,6 +6106,7 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_battery_rate_max_source("battery_rate_max_percent_only", my_predbat, ha, "GEC", None, charge_rate_max=None, battery_rate_max_arg="sensor.battery_rate_max", expect_rate_raw=9984)
     failed |= test_battery_rate_max_source("battery_rate_max_percent_only_ge", my_predbat, ha, "GE", None, charge_rate_max=None, battery_rate_max_arg="sensor.battery_rate_max", expect_rate_raw=9984)
     failed |= test_battery_rate_max_source("battery_rate_max_no_source", my_predbat, ha, "GEC", None, charge_rate_max=None, battery_rate_max_arg=None, expect_rate_raw=2600)
+    failed |= test_inverter_reserve_max_forms(my_predbat)
     if failed:
         return failed
 
