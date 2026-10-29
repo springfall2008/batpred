@@ -489,10 +489,43 @@ class Execute:
         # Inverter id -> (mode, slot start minutes, slot end minutes, target percent), for the
         # control-failure monitor. Only the four judged modes are recorded.
         monitor_slots = {}
-        for inverter in self.inverters:
-            if inverter.id not in self.count_inverter_writes:
-                self.count_inverter_writes[inverter.id] = 0
 
+        # Inverters in calibration mode are driven by their own firmware, so while any is calibrating
+        # the plan is not executed on any inverter this cycle (read-only mode, below, still wins).
+        # Deciding this before the loop keeps the inverters ahead of a calibrating one from being given
+        # this cycle's charge or export only to have it taken away again.
+        for inverter in self.inverters:
+            self.count_inverter_writes.setdefault(inverter.id, 0)
+        calibrating = [] if self.set_read_only else [inverter for inverter in self.inverters if inverter.in_calibration]
+        if calibrating:
+            status = RUN_STATE_CALIBRATION
+            calibrating_ids = ", ".join(str(inverter.id) for inverter in calibrating)
+            self.log("Inverter(s) {} in calibration mode, not executing plan and enabling charge/discharge at full rate.".format(calibrating_ids))
+            for inverter in self.inverters:
+                inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
+                inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
+                inverter.adjust_battery_target(100.0, False)
+                inverter.adjust_reserve(0)
+                # Cancel a charge or export the other inverters were left with by the last cycle, as
+                # reset_inverter() does, or they go on grid charging or force exporting at the full rates
+                # above for as long as calibration lasts. A calibrating inverter's own charge and export
+                # modes are its firmware's, so only the rates, target and reserve above are written to it.
+                if not inverter.in_calibration:
+                    if self.set_charge_window:
+                        inverter.disable_charge_window()
+                        inverter.adjust_charge_immediate(0)
+                        inverter.adjust_pause_mode()
+                    if self.set_export_window:
+                        inverter.adjust_force_export(False)
+                        inverter.adjust_export_immediate(int(EXPORT_LIMIT_IDLE))
+            # Those writes go through the ordinary helpers, so they CONFER ownership - in
+            # exactly the mode where the inverter's own firmware is driving its settings.
+            # A value found moved next cycle is the inverter calibrating, not a third
+            # party, so ownership is dropped after the writes rather than before them.
+            self.clear_control_ledger("inverter(s) {} calibrating, so the firmware is driving the settings".format(calibrating_ids))
+
+        # Skipped entirely while an inverter calibrates
+        for inverter in [] if calibrating else self.inverters:
             # Read-only mode
             if self.set_read_only:
                 if self.set_read_only_axle:
@@ -500,26 +533,6 @@ class Execute:
                 else:
                     status = RUN_STATE_READ_ONLY
                 continue
-            # Inverter is in calibration mode
-            if inverter.in_calibration:
-                status = RUN_STATE_CALIBRATION
-                self.log("Inverter {} is in calibration mode, not executing plan and enabling charge/discharge at full rate.".format(inverter.id))
-                for inverter in self.inverters:
-                    inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
-                    inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
-                    inverter.adjust_battery_target(100.0, False)
-                    inverter.adjust_reserve(0)
-                # Those writes go through the ordinary helpers, so they CONFER ownership - in
-                # exactly the mode where the inverter's own firmware is driving its settings.
-                # A value found moved next cycle is the inverter calibrating, not a third
-                # party, so ownership is dropped after the writes rather than before them.
-                self.clear_control_ledger("inverter {} is calibrating, so its own firmware is driving the settings".format(inverter.id))
-                # Inverters processed before this one already recorded their planned intent.
-                # Applying it now would write those rates straight back over the full-rate
-                # calibration settings above, and keeping it as the poll baseline would have the
-                # 60s poll re-apply them for as long as calibration lasts.
-                intent.clear()
-                break
 
             charge_rate = None
             discharge_rate = None
@@ -1179,7 +1192,7 @@ class Execute:
 
         # Single point at which rates reach the hardware. Runs after the loop so a balancer can see
         # the whole fleet before anything is written. Inverters that were skipped by the read-only
-        # branch (continue) or the calibration branch (break) recorded no intent and are not written.
+        # branch (continue), or skipped while an inverter calibrates, recorded no intent and are not written.
         self.apply_rate_intent(intent)
         self.record_control_expectations(status_per_inverter, monitor_slots)
 
