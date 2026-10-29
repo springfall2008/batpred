@@ -2207,7 +2207,8 @@ class OctopusAPI(ComponentBase):
                             self.failures_total += 1
                             self.log("Warn: OctopusAPI: Error downloading Octopus data from URL {} (No Results) - {}".format(url, detail))
                             return {}
-                        url = data.get("next", None)
+                        # The new host still links further pages on the old one (GH#5786)
+                        url = migrate_octopus_url(data.get("next", None))
                         pages += 1
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 self.failures_total += 1
@@ -3505,7 +3506,8 @@ class Octopus:
                 self.log("Warn: Octopus: Error downloading Octopus data from URL {} (No Results)".format(url))
                 self.record_status("Warn: Octopus: Error downloading Octopus data from cloud", debug=url, had_errors=True)
                 return {}
-            url = data.get("next", None)
+            # The new host still links further pages on the old one (GH#5786)
+            url = migrate_octopus_url(data.get("next", None))
             pages += 1
 
         mdata = filter_payment_method(mdata)

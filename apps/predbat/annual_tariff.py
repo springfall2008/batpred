@@ -173,7 +173,8 @@ class AnnualTariff:
                 truncated = True
                 break
             rows += data["results"]
-            url = data.get("next", None)
+            # The new host still links further pages on the old one (GH#5786)
+            url = migrate_octopus_url(data.get("next", None))
             pages += 1
 
         # A run only reaches its natural end when `url` runs out on its own. If a page

@@ -137,6 +137,34 @@ def test_octopus_domain(my_predbat):
         print("  ERROR: a new-domain URL should be fetched unchanged with no hint, got {} / {}".format(requested, logged))
         failed = True
 
+    print("Test: a further page the new host links on the old one is fetched from the new host")
+    page_urls = []
+
+    class FakeResponse:
+        """A rate page whose next link points at the old host, as the new host's do."""
+
+        status_code = 200
+
+        def __init__(self, url):
+            """Page 1 links page 2 on the old host; page 2 is the last."""
+            self.url = url
+
+        def json(self):
+            """The page's rates and its next link."""
+            rate = {"value_inc_vat": 10.0, "valid_from": "2024-06-12T00:00:00Z", "valid_to": "2024-06-12T00:30:00Z"}
+            return {"results": [rate], "next": OLD_AGILE_URL + "?page=2" if "page=2" not in self.url else None}
+
+    def fake_get(url, **kwargs):
+        """Record the page asked for."""
+        page_urls.append(url)
+        return FakeResponse(url)
+
+    with patch("octopus.requests.get", side_effect=fake_get):
+        my_predbat.download_octopus_rates_func(NEW_AGILE_URL)
+    if page_urls != [NEW_AGILE_URL, NEW_AGILE_URL + "?page=2"]:
+        print("  ERROR: expected both pages from the new host, got {}".format(page_urls))
+        failed = True
+
     print("Test: an annual tariff naming the old domain resolves its URLs to the new one, {dno_region} included")
     config = {
         "import_octopus_url": "https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-{dno_region}/standard-unit-rates/",
