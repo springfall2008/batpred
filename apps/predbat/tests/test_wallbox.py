@@ -1843,7 +1843,7 @@ def _private_status():
     """A status carrying every private field a Wallbox payload can hold, each with a value to look for."""
     status = _status(name="Garage")
     status["config_data"].update({"timezone": "Europe/Madrid", "country": {"iso2": "ES", "code": "ESP"}, "zipcode": "08019"})
-    status.update({"car_plate": "AB12CDE", "user_name": "Jane Bloggs", "user_id": 556677})
+    status.update({"car_plate": "AB12CDE", "user_name": "Jane Smith", "user_id": 556677})
     return status
 
 
@@ -1874,7 +1874,7 @@ def test_discovery_private_fields_never_reported():
     """The charger nickname, location, number plate and account user never reach the report."""
     component = _started_component({101: _private_status()})
     text = str(component.build_discovery())
-    for private in ("Garage", "Europe/Madrid", "ES", "08019", "AB12CDE", "Jane Bloggs", "556677"):
+    for private in ("Garage", "Europe/Madrid", "ES", "08019", "AB12CDE", "Jane Smith", "556677"):
         assert private not in text, "{} leaked into {}".format(private, text)
     print("  ✓ Discovery never reports private Wallbox fields")
 

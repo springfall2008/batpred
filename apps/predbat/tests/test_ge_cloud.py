@@ -355,6 +355,9 @@ def test_ge_cloud(my_predbat=None):
         ("discovery_record_load_today_ignored", _test_discovery_record_load_today_ignored, "load_today stays in the record despite ge_cloud_load_today_ignore"),
         ("discovery_record_pv_only", _test_discovery_record_pv_only_carries_generation, "PV-only record carries pv_power and pv_today only"),
         ("discovery_write_and_poll_sleep", _test_discovery_write_and_poll_sleep, "GE Cloud write_and_poll_sleep is 10"),
+        ("discovery_evc", _test_build_discovery_evc, "build_discovery reports EV chargers with a stub car"),
+        ("discovery_evc_round_trip", _test_build_discovery_evc_round_trip, "EV charger records round-trip through the Coordinator and Redactor"),
+        ("discovery_evc_skips_unread", _test_build_discovery_evc_skips_unread_charger, "an EV charger with no serial yet is not reported"),
         ("publish_evc_device", _test_publish_evc_device, "Publish EVC device status"),
         ("automatic_config_evc", _test_async_automatic_config_evc, "Automatic config for EV chargers"),
         ("evc_control", _test_evc_control, "EV charger control from the car plan"),
@@ -8785,6 +8788,76 @@ def _test_evc_control_off_releases_held(my_predbat):
     return run_async(test())
 
 
+def _evc_discovery_ge(evc_devices, publish=True):
+    """A charger-only MockGECloudDirect holding these EV chargers (uuid -> evc_device entry).
+
+    With publish, every entity GE Cloud's EV charger automatic config binds is staged in the state
+    store under the lowercased serial, exactly as publish_evc_device()/publish_evc_data() name them.
+    """
+    ge = MockGECloudDirect()
+    ge.inverter_monitor = False
+    ge.inverter_control = False
+    ge.devices_dict = {}
+    ge.evc_device_list = list(evc_devices)
+    ge.evc_device = copy.deepcopy(evc_devices)
+    ge.evc_devices_dict = [{"uuid": uuid, "alias": entry.get("alias")} for uuid, entry in evc_devices.items()]
+    if publish:
+        for entry in evc_devices.values():
+            stem = "predbat_gecloud_{}".format(entry["serial_number"]).lower()
+            for entity_id in ("binary_sensor." + stem + "_evc_car_connected", "binary_sensor." + stem + "_evc_car_plugged", "sensor." + stem + "_evc_energy_active_import_register", "sensor." + stem + "_evc_power_active_import"):
+                ge.entity_states[entity_id] = "on"
+    return ge
+
+
+def _test_build_discovery_evc(my_predbat):
+    """An EV charger is a chargers record keyed by its hardware serial, with a stub car; its alias is never reported"""
+    ge = _evc_discovery_ge({"evc-1": {"uuid": "evc-1", "alias": "Garage", "serial_number": "EV2244G123"}})
+    report = ge.build_discovery()
+    assert report["inverters"] == []
+    charger, car = report["chargers"][0], report["cars"][0]
+    assert charger["device_id"] == "gecloud:EV2244G123", charger
+    assert charger["hardware_ids"] == {"serial": "EV2244G123"}, charger
+    assert charger["info"] == {"vendor": "GivEnergy"}, charger
+    assert set(charger["entities"]) == {"car_charging_planned", "car_charging_plugged", "car_charging_energy", "car_charging_power"}, charger["entities"]
+    assert charger["entities"]["car_charging_energy"]["entity_id"] == "sensor.predbat_gecloud_ev2244g123_evc_energy_active_import_register"
+    assert car == {"device_id": "gecloud:EV2244G123:car", "charged_by": "gecloud:EV2244G123", "flags": ["stub"]}, car
+    text = str(report)
+    assert "Garage" not in text and "evc-1" not in text, "neither the alias nor the cloud uuid may be reported: {}".format(text)
+    return 0
+
+
+def _test_build_discovery_evc_round_trip(my_predbat):
+    """An upper-case serial with lower-cased entity ids: all four entities survive validation and redaction, the serial stays readable"""
+    from coordinator import Coordinator
+    from mock_base import MockBase as SharedMockBase
+
+    ge = _evc_discovery_ge({"evc-1": {"uuid": "evc-1", "serial_number": "EV2244G123"}})
+    logs = []
+    coordinator = Coordinator(SharedMockBase())
+    coordinator.log = logs.append
+    coordinator.report("gecloud", ge.build_discovery())
+    cleaned = coordinator.reports["gecloud"]
+    assert len(cleaned["chargers"][0]["entities"]) == 4, cleaned
+    assert cleaned["cars"][0]["flags"] == ["stub"], cleaned
+    catalogue = coordinator.catalogue()
+    redacted = catalogue["chargers"][0]
+    assert len(redacted["entities"]) == 4, redacted
+    assert redacted["entities"]["car_charging_power"]["entity_id"] == "sensor.predbat_gecloud_ev2244g123_evc_power_active_import", redacted["entities"]
+    assert "EV2244G123" in str(catalogue), "the charger serial is hardware, and stays readable"
+    assert not [line for line in logs if line.startswith("Warn")], logs
+    return 0
+
+
+def _test_build_discovery_evc_skips_unread_charger(my_predbat):
+    """A charger that has not answered with a serial yet is not reported"""
+    ge = _evc_discovery_ge({"evc-1": {"uuid": "evc-1", "serial_number": "EV2244G123"}, "evc-2": {"uuid": "evc-2"}}, publish=False)
+    ge.evc_device["evc-2"] = {"uuid": "evc-2"}
+    report = ge.build_discovery()
+    assert [charger["device_id"] for charger in report["chargers"]] == ["gecloud:EV2244G123"], report["chargers"]
+    assert "chargers" in report and len(report["cars"]) == 1
+    return 0
+
+
 def _test_evc_only_run(my_predbat):
     """With ge_cloud_evc_direct and no ge_cloud_direct, run() never reads, writes or reports an inverter, but still serves the EV charger"""
 
@@ -8808,6 +8881,9 @@ def _test_evc_only_run(my_predbat):
         report = ge_cloud.build_discovery()
         if report["inverters"] or report["automatic"] is not False:
             print("ERROR: no inverter should be reported, got {}".format(report))
+            return 1
+        if [charger["device_id"] for charger in report.get("chargers", [])] != ["gecloud:evc-1-sn"]:
+            print("ERROR: the EV charger should be reported, got {}".format(report.get("chargers")))
             return 1
         if calls["site"]:
             print("ERROR: the inverter site should not be looked up, got {} update_site calls".format(calls["site"]))
