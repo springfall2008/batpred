@@ -47,6 +47,7 @@ class ActiveTestInverter:
         self.inv_has_target_soc = True
         self.inv_has_charge_enable_time = True
         self.inv_has_timed_pause = True
+        self.inv_reserve_above_soc_charges_from_grid = False
         self.inv_has_discharge_enable_time = True
         self.inv_has_ge_eco_toggle = False
         self.inv_has_ge_inverter_mode = False
@@ -230,6 +231,7 @@ def run_execute_test(
     set_reserve_enable=True,
     has_timed_pause=True,
     has_timed_pause_array=None,
+    reserve_above_soc_charges_from_grid=False,
     has_target_soc=True,
     has_charge_enable_time=True,
     has_ge_eco_toggle=False,
@@ -343,6 +345,7 @@ def run_execute_test(
         inverter.battery_rate_max_discharge = inv_rate_w / 1000.0 / 60.0
         inverter.battery_rate_max_export = inv_export_w / 1000.0 / 60.0
         inverter.inv_has_timed_pause = has_timed_pause_array[inverter.id] if has_timed_pause_array else has_timed_pause
+        inverter.inv_reserve_above_soc_charges_from_grid = reserve_above_soc_charges_from_grid
         inverter.inv_has_target_soc = has_target_soc
         inverter.inv_has_charge_enable_time = has_charge_enable_time
         inverter.inv_has_ge_eco_toggle = has_ge_eco_toggle
@@ -2020,6 +2023,18 @@ def test_fetch_inverter_data_battery_export_not_permitted(my_predbat):
     return failed
 
 
+def test_reserve_above_soc_inverter_types():
+    """Only the inverter types that charge up to a reserve above their SoC opt in to a hold reserve that never leads the SoC."""
+    from config import INVERTER_DEF
+
+    failed = False
+    opted_in = sorted(name for name, idef in INVERTER_DEF.items() if idef.get("reserve_above_soc_charges_from_grid", False))
+    if opted_in != ["EnphaseCloud", "TESLA"]:
+        print("ERROR: reserve_above_soc_charges_from_grid should be set for EnphaseCloud and TESLA only, got {}".format(opted_in))
+        failed = True
+    return failed
+
+
 def run_execute_tests(my_predbat):
     print("**** Running execute tests ****\n")
 
@@ -2029,6 +2044,7 @@ def run_execute_tests(my_predbat):
     failed |= test_fetch_inverter_data_no_extra_pv_when_sensors_match_inverters(my_predbat)
     failed |= test_inverter_reads_battery_export_permitted(my_predbat)
     failed |= test_fetch_inverter_data_battery_export_not_permitted(my_predbat)
+    failed |= test_reserve_above_soc_inverter_types()
     if failed:
         return failed
 
@@ -3341,6 +3357,71 @@ def run_execute_tests(my_predbat):
         assert_soc_target=100,
         assert_immediate_soc_target=100,
         has_timed_pause=False,
+    )
+    if failed:
+        return failed
+
+    # Freeze on reserve at a fractional SoC (60.8%): most inverters get the rounded SoC + 1 ...
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_freeze1b_reserve_leads_soc",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best_frz,
+        assert_charge_time_enable=False,
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=6.08,
+        assert_pause_discharge=False,
+        assert_status="Freeze charging",
+        assert_discharge_rate=0,
+        assert_reserve=62,
+        assert_soc_target=100,
+        assert_immediate_soc_target=61,
+        has_timed_pause=False,
+    )
+    if failed:
+        return failed
+
+    # ... but a Powerwall charges from the grid to reach a reserve above its SoC, so it gets the SoC rounded down
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_freeze1b_tesla_reserve_not_above_soc",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best_frz,
+        assert_charge_time_enable=False,
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=6.08,
+        assert_pause_discharge=False,
+        assert_status="Freeze charging",
+        assert_discharge_rate=0,
+        assert_reserve=60,
+        assert_soc_target=100,
+        assert_immediate_soc_target=61,
+        has_timed_pause=False,
+        reserve_above_soc_charges_from_grid=True,
+    )
+    if failed:
+        return failed
+
+    # Hold charging at 49.6% against a 50% target: target + 1 normally, never above the SoC on a Powerwall
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_hold2b_tesla_reserve_not_above_soc",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best2,
+        assert_charge_time_enable=False,
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=4.96,
+        assert_pause_discharge=False,
+        assert_status="Hold charging",
+        assert_discharge_rate=0,
+        assert_reserve=49,
+        assert_soc_target=100,
+        assert_immediate_soc_target=50,
+        has_timed_pause=False,
+        reserve_above_soc_charges_from_grid=True,
     )
     if failed:
         return failed

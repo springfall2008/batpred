@@ -577,6 +577,9 @@ class Inverter:
         self.inv_has_target_soc = INVERTER_DEF[self.inverter_type]["has_target_soc"]
         self.inv_has_reserve_soc = INVERTER_DEF[self.inverter_type]["has_reserve_soc"]
         self.inv_has_timed_pause = INVERTER_DEF[self.inverter_type]["has_timed_pause"]
+        # True when a reserve above the SoC makes the battery charge from the grid to reach it, so a
+        # hold on reserve must not lead the SoC. Defaults False so an inverter type has to opt in.
+        self.inv_reserve_above_soc_charges_from_grid = INVERTER_DEF[self.inverter_type].get("reserve_above_soc_charges_from_grid", False)
         self.inv_charge_time_format = INVERTER_DEF[self.inverter_type]["charge_time_format"]
         self.inv_charge_time_entity_is_option = INVERTER_DEF[self.inverter_type]["charge_time_entity_is_option"]
         self.inv_clock_time_format = INVERTER_DEF[self.inverter_type]["clock_time_format"]

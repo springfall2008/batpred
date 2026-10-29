@@ -53,6 +53,21 @@ CHARGE_SIDE_STATES = set(CHARGE_STATE_PRECEDENCE)
 EXPORT_SIDE_STATES = set(EXPORT_STATE_PRECEDENCE)
 
 
+def hold_reserve_percent(inverter, target_percent):
+    """Reserve percent that holds an inverter's battery at target_percent.
+
+    Most inverters only stop discharging at the reserve, so one above the target keeps the SoC from
+    drifting down. An inverter that charges from the grid to reach a reserve above its SoC (a Tesla
+    Powerwall does, even with grid charging disallowed) would turn that into a grid import, and each
+    cycle's rounded-up SoC would ratchet the reserve higher again, so it never gets a reserve above
+    the SoC rounded down.
+    """
+    if inverter.inv_reserve_above_soc_charges_from_grid:
+        live_percent = int(inverter.soc_kw / inverter.soc_max * 100.0) if inverter.soc_max > 0 else 0
+        return min(target_percent, live_percent, 100)
+    return min(target_percent + 1, 100)
+
+
 def resolve_multi_inverter_status(status_per_inverter, current_status):
     """Resolve one headline status across a multi-inverter fleet.
 
@@ -651,7 +666,7 @@ class Execute:
                                 inverter.disable_charge_window()
                                 disabled_charge_window = True
                                 if self.set_reserve_enable and (not inverter.inv_has_timed_pause):
-                                    inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
+                                    inverter.adjust_reserve(hold_reserve_percent(inverter, inverter.soc_percent))
                                     resetReserve = False
                             else:
                                 inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
@@ -689,7 +704,7 @@ class Execute:
 
                                         # Hold on reserve if we can't pause or won't pause the discharge (due to higher battery level)
                                         if self.set_reserve_enable and (not inverter.inv_has_timed_pause or (inverter.soc_percent > inv_target_soc_percent)):
-                                            inverter.adjust_reserve(min(inv_target_soc_percent + 1, 100, inverter.reserve_max))
+                                            inverter.adjust_reserve(min(hold_reserve_percent(inverter, inv_target_soc_percent), inverter.reserve_max))
                                             resetReserve = False
                                     else:
                                         inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
@@ -977,7 +992,7 @@ class Execute:
                                     if discharge_rate is None:
                                         discharge_rate = 0
                                     if self.set_reserve_enable:
-                                        inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
+                                        inverter.adjust_reserve(hold_reserve_percent(inverter, inverter.soc_percent))
                                         resetReserve = False
                                 if hold_applied:
                                     self.log("Disabling battery discharge whilst car {} is charging".format(car_n))
@@ -1009,7 +1024,7 @@ class Execute:
                         if discharge_rate is None:
                             discharge_rate = 0
                         if self.set_reserve_enable:
-                            inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
+                            inverter.adjust_reserve(hold_reserve_percent(inverter, inverter.soc_percent))
                             resetReserve = False
                     boostHolding = True
                     self.log("Disabling battery discharge whilst iBoost is running")
