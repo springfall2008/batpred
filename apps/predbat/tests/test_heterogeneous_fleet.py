@@ -19,7 +19,6 @@ fixed. Where that is the case the expectation says so and names the finding.
 """
 
 from tests.fleet_rig import FLEET_FIXTURES, fleet_balance_power, fleet_spread, setup_fleet, split_fleet_target
-from tests.test_balance_inverters import run_balance as run_balance_pass
 
 # What each fixture aggregates to: (fleet soc_max kWh, per-inverter soc_max, per-inverter rate W).
 # Guards the rig itself - a fleet whose members quietly collapse to the same capacity or the same
@@ -124,14 +123,24 @@ def enable_balance(my_predbat, discharge=False, charge=False, crosscharge=False,
     my_predbat.balance_inverters_threshold_discharge = threshold
 
 
-def run_balance(my_predbat):
+def run_balance(my_predbat, owner="demand"):
     """
     Run one balancer pass against the fleet and return the services it called.
+
+    Drives the path execute_plan takes: a rate intent with nothing claimed, owned by owner
+    ("demand", "export" or "charge"), mutated by balance_inverter_rates() and applied once.
     """
     ha = my_predbat.ha_interface
     ha.service_store_enable = True
     ha.get_service_store()
-    run_balance_pass(my_predbat)
+    my_predbat.balance_inverters_enable = True
+    my_predbat.set_read_only = False
+    intent = {}
+    for inverter in my_predbat.inverters:
+        intent[inverter.id] = {"charge_rate": None, "discharge_rate": None, "pause_charge": False, "pause_discharge": False, "owner": owner}
+    my_predbat.balance_inverter_rates(intent)
+    for inverter in my_predbat.inverters:
+        my_predbat.apply_inverter_rates(inverter, intent[inverter.id])
     services = ha.get_service_store()
     ha.service_store_enable = False
     return services
@@ -172,13 +181,16 @@ def test_target_split(my_predbat):
 def test_balance_power_envelope(my_predbat):
     """
     The fleet's balance-preserving power ceiling, and the fact that a matched fleet has none.
+
+    This pins the rig's own fleet_balance_power() arithmetic, the reference a balance-preserving
+    allocator would be checked against. No Predbat code runs here.
     """
     print("Test: fleet balance power envelope")
     failed = False
     for name, (want_balance, want_max, want_ratio) in EXPECTED_BALANCE_POWER.items():
         balance_power = fleet_balance_power(name)
         max_power = sum(member.rate_max for member in FLEET_FIXTURES[name])
-        failed |= report(round(balance_power) != want_balance, "{}: P_balance {} should be {}".format(round(balance_power), want_balance, name))
+        failed |= report(round(balance_power) != want_balance, "{}: P_balance {} should be {}".format(name, round(balance_power), want_balance))
         failed |= report(max_power != want_max, "{}: P_max {} should be {}".format(name, max_power, want_max))
         failed |= report(round(balance_power / max_power, 3) != want_ratio, "{}: ratio {} should be {}".format(name, round(balance_power / max_power, 3), want_ratio))
     return failed
@@ -203,10 +215,11 @@ def test_force_export_balance_unreachable(my_predbat):
     """
     Discharge balancing is structurally unreachable during a force export (F6).
 
-    can_power_house asks whether the rest of the fleet could carry the current battery power on
-    its own. Under a force export every inverter is already at its max rate, so total battery
-    power is the sum of the rates and removing any one of them always fails the test - however
-    far out of balance the fleet is. The same fleet at the same spread does balance under an
+    The discharge hold in utils.balance_inverters() asks whether the other inverters' usable
+    discharge rate (less 200W) could carry the current battery power on their own. Under a force
+    export every inverter is already at its max rate, so total battery power is the sum of the
+    rates and removing any one of them always fails that check - however far out of balance the
+    fleet is. The same fleet at the same spread does balance under an
     ordinary house load, which is what makes this a wrong predicate rather than a safe refusal.
     """
     print("Test: discharge balancing during force export")
@@ -214,10 +227,11 @@ def test_force_export_balance_unreachable(my_predbat):
     fleet = FLEET_FIXTURES["issue_4842"]
     export_power = [member.rate_max for member in fleet]
 
-    # Force export: every inverter discharging flat out into the grid
-    setup_fleet(my_predbat, "issue_4842", soc=[46, 100, 45], battery_power=export_power, load_power=0, grid_power=[-power for power in export_power])
+    # Force export: every inverter discharging flat out into the grid (grid power is +ve export),
+    # with the executor's intent owned by the export
+    setup_fleet(my_predbat, "issue_4842", soc=[46, 100, 45], battery_power=export_power, load_power=0, grid_power=export_power)
     enable_balance(my_predbat, discharge=True, threshold=1)
-    services = run_balance(my_predbat)
+    services = run_balance(my_predbat, owner="export")
     failed |= report(zeroed_rates(services, "discharge"), "no discharge rate should be zeroed during a force export today (F6), services were {}".format(services))
 
     # Same fleet, same 55 point spread, ordinary house load - balancing does happen
