@@ -122,6 +122,17 @@ PREDBAT_MAX_CARS = 8  # Matches PK_MAX_CARS in prediction_kernel.cpp and the car
 # A car_charging_now sensor that reports a charging power (in W, after unit conversion) rather than
 # on/off counts as charging from this power: above a charger's standby draw, below the smallest charge
 CAR_CHARGING_NOW_POWER_W = 200
+# car_energy_reported_load check (GH#5318): a load sensor that includes the charger can never read less than the charger's own
+# energy over the same window. Windows of this many minutes over the last day are checked, and a window only counts as
+# evidence when the charger delivered at least the minimum and more than RATIO times the load in that window, and in the same
+# window shifted by every offset up to LAG minutes either way. The shift is what tolerates a lag between the two sensors: in the
+# window a session starts or ends in, a lagging sensor can show a fraction of the charge however high the ratio. It takes this
+# many such windows to warn.
+CAR_ENERGY_LOAD_CHECK_WINDOW = 30
+CAR_ENERGY_LOAD_CHECK_MIN_KWH = 1.0
+CAR_ENERGY_LOAD_CHECK_RATIO = 2.0
+CAR_ENERGY_LOAD_CHECK_LAG = 15
+CAR_ENERGY_LOAD_CHECK_WINDOWS = 2
 # A manually tracked car with no charge recorded keeps counting from up to this long ago, for energy its charger's history records late
 CAR_MANUAL_SOC_LATE_MINUTES = 60
 # A manually tracked car is only reset once its plugged-in sensor has read unplugged for this long - a charger reconnecting can read unplugged for a few minutes

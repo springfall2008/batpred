@@ -34,6 +34,11 @@ from const import (
     PREDBAT_MAX_CARS,
     CAR_CHARGING_LIMIT_UNCAPPED,
     CAR_CHARGING_NOW_POWER_W,
+    CAR_ENERGY_LOAD_CHECK_WINDOW,
+    CAR_ENERGY_LOAD_CHECK_MIN_KWH,
+    CAR_ENERGY_LOAD_CHECK_RATIO,
+    CAR_ENERGY_LOAD_CHECK_LAG,
+    CAR_ENERGY_LOAD_CHECK_WINDOWS,
     CAR_MANUAL_SOC_LATE_MINUTES,
     CAR_MANUAL_SOC_UNPLUG_MINUTES,
     CAR_MANUAL_SOC_IDLE_MINUTES,
@@ -1482,6 +1487,10 @@ class Fetch:
 
         # Car charging hold - when enabled battery is held during car charging in simulation
         self.car_charging_energy = self.load_car_energy(self.now_utc)
+        # Only the live plan's view: compare.py re-runs this fetch per candidate tariff (save=False), and a tariff
+        # config that turns car_energy_reported_load Off would otherwise clear the warned flag and re-arm the warning
+        if save:
+            self.check_car_energy_reported_load()
 
         # Log current values
         self.log("Current data so far today: load {}kWh, import {}kWh, export {}kWh, PV {}kWh".format(dp2(self.load_minutes_now), dp2(self.import_today_now), dp2(self.export_today_now), dp2(self.pv_today_now)))
@@ -4749,3 +4758,68 @@ class Fetch:
         else:
             self.log("Car charging hold {}, threshold {}kWh".format(self.car_charging_hold, self.car_charging_threshold * 60.0))
         return self.car_charging_energy
+
+    def car_energy_exceeds_load_windows(self):
+        """
+        Count the windows over the last day in which car_charging_energy recorded clearly more than the house load.
+
+        A load sensor that includes the charger can never read less than the charger's own energy over the same window,
+        so each such window is evidence it does not (see CAR_ENERGY_LOAD_CHECK_* in const.py). Both series are the raw
+        incrementing data, indexed in minutes back from now - load_minutes has nothing subtracted from it yet.
+
+        The load is compared over the window shifted by every offset up to CAR_ENERGY_LOAD_CHECK_LAG minutes either way,
+        and the window only counts if the car exceeds it at every shift. Where a session starts or ends part-way through a
+        window, a sensor that lags the other shows only part of that charge there, so an unshifted comparison would count it.
+
+        The window in progress is left out: a cloud-polled load sensor can be many minutes behind the charger's, so it
+        reads short there. A window with no load at all is skipped - a house always draws something, so a flat stretch
+        is missing data (before the history starts, or where minute_data() padded over a reset), not evidence. A gap
+        inside the history is not flat: minute_data() interpolates across it, so a load-sensor outage of some hours over
+        a charge spreads that charge thinly across the gap and can still count.
+        """
+        window = CAR_ENERGY_LOAD_CHECK_WINDOW
+        lag = CAR_ENERGY_LOAD_CHECK_LAG
+        end = 24 * 60 + window + lag
+        # Running totals of the per-minute energy, so any window's energy is one subtraction: total[b] - total[a] covers minutes a to b-1
+        car_total = [0.0]
+        load_total = [0.0]
+        for minute in range(end):
+            car_total.append(car_total[-1] + self.get_from_incrementing(self.car_charging_energy, minute))
+            load_total.append(load_total[-1] + self.get_from_incrementing(self.load_minutes, minute))
+
+        windows = 0
+        for start in range(window, 24 * 60 + window, window):
+            car_energy = car_total[start + window] - car_total[start]
+            load_energy = load_total[start + window] - load_total[start]
+            load_shifted = max(load_total[start + shift + window] - load_total[start + shift] for shift in range(-lag, lag + 1))
+            if load_energy > 0 and car_energy >= CAR_ENERGY_LOAD_CHECK_MIN_KWH and car_energy > load_shifted * CAR_ENERGY_LOAD_CHECK_RATIO:
+                windows += 1
+        return windows
+
+    def check_car_energy_reported_load(self):
+        """
+        Warn when car_energy_reported_load is On but the load sensor evidently does not include the car charger (GH#5318,
+        from #5317). Warned once, and not again until no window shows it: the windows move with now, so a borderline count
+        can dip below the threshold and back from one cycle to the next. A cycle with no data for either series (a failed
+        history fetch) is no evidence either way, so it leaves the flag alone; turning the switch Off clears it.
+
+        With the switch On, Predbat subtracts car_charging_energy from the load history (when car_charging_hold is also On,
+        the default) and, for an Octopus Intelligent car
+        without a car_charging_now sensor, reads low house load as the car not charging. Against a load sensor that excludes
+        the charger, the first empties the load history and the second cancels dispatches that are really charging.
+        """
+        if not self.car_energy_reported_load:
+            self.car_energy_reported_load_warned = False
+            return
+        if not self.car_charging_energy or not self.load_minutes:
+            return
+        windows = self.car_energy_exceeds_load_windows()
+        if windows >= CAR_ENERGY_LOAD_CHECK_WINDOWS and not self.car_energy_reported_load_warned:
+            self.log(
+                "Warn: car_charging_energy recorded more than twice the house load in {} half hours of the last day, so the load sensor cannot include that charging, "
+                "but switch.predbat_car_energy_reported_load is On. If car_charging_energy is only the car charger, turn the switch Off, and set car_charging_now to the charger's "
+                "charging power or status sensor so Octopus Intelligent dispatches are checked against the car rather than the house load".format(windows)
+            )
+            self.car_energy_reported_load_warned = True
+        elif windows == 0:
+            self.car_energy_reported_load_warned = False
