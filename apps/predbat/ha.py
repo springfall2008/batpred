@@ -73,7 +73,7 @@ class EntityHistory:
     oldest to newest so the epoch array stays sorted.
     """
 
-    __slots__ = ["epochs", "states", "state_exceptions", "shared_attributes", "attribute_exceptions"]
+    __slots__ = ["epochs", "states", "state_exceptions", "shared_attributes", "attribute_exceptions", "anchored"]
 
     def __init__(self):
         """
@@ -84,6 +84,8 @@ class EntityHistory:
         self.state_exceptions = {}
         self.shared_attributes = None
         self.attribute_exceptions = {}
+        # True while the first record is one prune() re-stamped at its cutoff rather than a real change
+        self.anchored = False
 
     def __len__(self):
         """
@@ -204,7 +206,8 @@ class EntityHistory:
             anchor_epoch = self.epochs[index]
         self.epochs = self.epochs[index:]
         self.states = self.states[index:]
-        if anchor_epoch is not None:
+        self.anchored = anchor_epoch is not None
+        if self.anchored:
             self.epochs[0] = cutoff_epoch
         if self.state_exceptions:
             self.state_exceptions = self._prune_exceptions(self.state_exceptions, cutoff_epoch, anchor_epoch)
@@ -336,8 +339,13 @@ class HAHistory(ComponentBase):
 
                 if older_entries:
                     # Rebuild the store with the older entries merged in (rare, only happens
-                    # when more days of history are requested than previously cached)
-                    combined = older_entries + store.to_records()
+                    # when more days of history are requested than previously cached). A re-stamped
+                    # prune anchor is dropped: the older entries already hold the state in force at the
+                    # cutoff, and the anchor would contradict them if the cache had missed a change
+                    stored_records = store.to_records()
+                    if store.anchored:
+                        stored_records = stored_records[1:]
+                    combined = older_entries + stored_records
                     combined.sort(key=lambda x: str2time(x.get("last_updated")))
                     self.history_data[entity_id] = EntityHistory.from_records(combined)
             else:

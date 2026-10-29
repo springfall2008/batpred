@@ -577,6 +577,55 @@ def test_hahistory_update_entity_merge_new(my_predbat=None):
     return failed
 
 
+def test_hahistory_merge_drops_restamped_anchor(my_predbat=None):
+    """Test a more-days merge replaces the record prune re-stamped at the cutoff with the fetched data"""
+    print("\n=== Testing HAHistory update_entity() merge over a re-stamped prune anchor ===")
+    failed = 0
+
+    entity_id = "sensor.battery"
+    base_time = datetime(2025, 12, 25, 10, 0, 0, tzinfo=pytz.UTC)
+    cutoff = base_time + timedelta(days=2)
+
+    def record(state, offset):
+        """Build a history record stamped offset after base_time"""
+        return {"state": state, "last_updated": (base_time + offset).isoformat(), "attributes": {}}
+
+    # The cache missed the change to 5 a day in (a failed chunk), so prune re-stamps 7 at the cutoff,
+    # and the refetch must not leave 7 asserted at the cutoff after the 5 it supplies
+    full_history = [record("7", timedelta(0)), record("5", timedelta(days=1)), record("9", timedelta(days=3))]
+    for label, cached, expected in [
+        ("a cache that missed a change", [full_history[0], full_history[2]], [7.0, 5.0, 9.0]),
+        ("a complete cache", full_history, [7.0, 5.0, 9.0]),
+    ]:
+        ha_history = HAHistory(MockBase())
+        ha_history.initialize()
+        ha_history.update_entity(entity_id, [dict(entry) for entry in cached])
+        ha_history.history_data[entity_id].prune(cutoff.timestamp())
+        ha_history.update_entity(entity_id, [dict(entry) for entry in full_history])
+        states = [entry["state"] for entry in ha_history.history_data[entity_id]]
+        if states != expected:
+            print(f"ERROR: Merge over {label}: expected states {expected}, got {states}")
+            failed += 1
+        else:
+            print(f"✓ Merge over {label} drops the re-stamped anchor")
+
+    # A real record exactly on the cutoff is not a re-stamped anchor, so the merge keeps it
+    ha_history = HAHistory(MockBase())
+    ha_history.initialize()
+    on_cutoff = [record("7", timedelta(0)), record("8", timedelta(days=2)), record("9", timedelta(days=3))]
+    ha_history.update_entity(entity_id, [dict(entry) for entry in on_cutoff])
+    ha_history.history_data[entity_id].prune(cutoff.timestamp())
+    ha_history.update_entity(entity_id, [dict(entry) for entry in on_cutoff])
+    states = [entry["state"] for entry in ha_history.history_data[entity_id]]
+    if states != [7.0, 8.0, 9.0]:
+        print(f"ERROR: Merge over a record on the cutoff: expected [7.0, 8.0, 9.0], got {states}")
+        failed += 1
+    else:
+        print("✓ Merge keeps a real record that lands on the cutoff")
+
+    return failed
+
+
 def test_hahistory_prune_history(my_predbat=None):
     """Test HAHistory prune_history() removes old entries"""
     print("\n=== Testing HAHistory prune_history() ===")
@@ -1055,6 +1104,7 @@ def run_hahistory_tests(my_predbat):
     # Data management tests
     failed += test_hahistory_update_entity_filter_attributes(my_predbat)
     failed += test_hahistory_update_entity_merge_new(my_predbat)
+    failed += test_hahistory_merge_drops_restamped_anchor(my_predbat)
     failed += test_hahistory_prune_history(my_predbat)
     failed += test_hahistory_prune_empty_history(my_predbat)
 
