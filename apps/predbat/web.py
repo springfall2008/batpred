@@ -24,7 +24,7 @@ import os
 import os.path
 import sys
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 import shutil
 import html as html_module
@@ -112,119 +112,182 @@ from marginal import MARGINAL_EXTRA_KWH_LEVEL_NAMES, MARGINAL_EXTRA_KWH_LEVELS, 
 DEBUG_HISTORY_DOWNLOAD_MAX = 16
 
 
-def state_as_of_slots(records, slots):
+# The /entity history table has a row per half hour, each expanding to the 5-minute slots inside it
+HISTORY_TABLE_ROW_MINUTES = 30
+HISTORY_TABLE_SLOT_MINUTES = 5
+
+
+def history_value_at(records, stamps, when):
     """
-    Resolve each slot to the state in effect at it - the most recent record at or before the slot.
+    Return the value an entity held at an instant - its most recent record at or before it - or "-" before its first.
 
-    records must be a list of (timestamp, value) ordered oldest first. Returns
-    {slot: (value, changed, prev_value)} where value is "-" for slots preceding the first record and
-    changed marks a slot whose value differs from the one shown at the previous slot.
+    records is a list of (timestamp, value) ordered oldest first, stamps the same timestamps alone, for bisecting.
     """
-    filled = {}
-    last_value = None
-    previous = None
-    index = 0
-
-    for slot in sorted(slots):
-        while index < len(records) and records[index][0] <= slot:
-            last_value = records[index][1]
-            index += 1
-        value = last_value if last_value is not None else "-"
-        filled[slot] = (value, value != "-" and value != previous, previous)
-        previous = value
-
-    return filled
+    index = bisect.bisect_right(stamps, when)
+    return records[index - 1][1] if index else "-"
 
 
-def build_entity_history_table_data(entity_selections, entity_data_fetch):
+def history_period_kind(records, stamps, start, end):
     """
-    Resolve the /entity history table's 30-minute rows and their 5-minute detail slots.
+    Classify what an entity did over the period (start, end].
+
+    Returns "changed" when it left the period on a different value from the one it entered with, "reverted"
+    when it left on the same value but held another somewhere inside, and None when it held one value
+    throughout. An entity's first record is where its history starts, not a change.
+    """
+    first = bisect.bisect_right(stamps, start)
+    last = bisect.bisect_right(stamps, end)
+    if first == last:
+        return None
+    entered = records[first - 1][1] if first else records[first][1]
+    if records[last - 1][1] != entered:
+        return "changed"
+    if any(value != entered for _, value in records[first:last]):
+        return "reverted"
+    return None
+
+
+def floor_to_history_slot(when):
+    """Round a UTC instant down to its 5-minute slot. Every UTC offset is a multiple of 15 minutes, so this is a local 5-minute mark too."""
+    return when.replace(minute=when.minute - when.minute % HISTORY_TABLE_SLOT_MINUTES, second=0, microsecond=0)
+
+
+def floor_to_local_half_hour(when, local_tz):
+    """Round an instant down to the start of its half hour on the local clock, returned in UTC (so UTC+05:45 rows start on :00 and :30 too)."""
+    local = when.astimezone(local_tz)
+    return local.replace(minute=local.minute - local.minute % HISTORY_TABLE_ROW_MINUTES, second=0, microsecond=0).astimezone(timezone.utc)
+
+
+def build_entity_history_table_data(entity_selections, entity_data_fetch, local_tz=timezone.utc):
+    """
+    Build the /entity history table: 30-minute rows, newest first, each expanding to its 5-minute slots.
 
     entity_selections: list of {"entity_id": ..., "attribute": ...} (attribute may be None for state)
     entity_data_fetch: dict of entity_id -> history as returned by get_history_with_now(), i.e. [[record, ...]]
+    local_tz: the timezone rows are laid out on and labelled in - HA/DB history is UTC
 
-    Every slot reports the state as of its own timestamp. Summarising a window by the last sample
-    taken inside it instead let a momentary blip stand for the whole window - one stray "Lost"
-    record at 21:57 made the entire 21:30 row read "Lost" - and that value then carried forward
-    into every later slot that had no sample of its own, turning a blip into hours of downtime.
+    Every cell shows the value at the time on its left, never a sample taken inside its period: summarising
+    a window by its last sample let one stray "Lost" record at 21:57 make a whole row read "Lost", and that
+    carried forward into every later row. A cell's colour says what happened since the slot before it, so a
+    row covers its own line and the detail slots it expands to: "changed" (pink) when the value moved and
+    stayed moved, "reverted" (blue) when it moved and came back. A change therefore marks the row it
+    happened in, and expanding that row shows the 5-minute slot it happened at.
 
-    Returns (entity_filled_30min, entity_filled_5min, sorted_timestamps_30min, all_display_slots_5min):
-      entity_filled_30min / entity_filled_5min: one dict per selection, {slot: (value, changed, prev_value)}
-      sorted_timestamps_30min: the 30-min row timestamps, newest first
-      all_display_slots_5min: the 5-min slots covering each 30-min row's own window (offsets 0 to +25)
+    Rows run without gaps from the first record to the newest across all selections, and never past it -
+    the newest is normally the current state get_history_with_now() appends, so nothing in the future shows.
+
+    Returns a list of rows, newest first:
+      {"time": datetime, "cells": [(value, kind), ...], "details": [{"time": datetime, "cells": [...]}, ...]}
+    with a cell per selection, kind being "changed", "reverted" or None, and details newest first.
     """
+    slot = timedelta(minutes=HISTORY_TABLE_SLOT_MINUTES)
+    row_length = timedelta(minutes=HISTORY_TABLE_ROW_MINUTES)
     entity_records = []
-    all_timestamps_30min = set()
-    following_timestamps_30min = set()
+    all_stamps = []
 
     for selection in entity_selections:
-        entity_id = selection["entity_id"]
         attribute = selection["attribute"]
-        history = entity_data_fetch[entity_id]
+        history = entity_data_fetch.get(selection["entity_id"])
         records = []
+        for item in (history[0] if history else None) or []:
+            if "last_updated" not in item:
+                continue
+            try:
+                last_updated_stamp = str2time(item["last_updated"]).astimezone(timezone.utc)
+            except (ValueError, TypeError):
+                continue
+            all_stamps.append(last_updated_stamp)
 
-        if history and len(history) >= 1:
-            history = history[0]
-            if history:
-                for item in history:
-                    if "last_updated" not in item:
-                        continue
-                    try:
-                        last_updated_stamp = str2time(item["last_updated"])
-                    except (ValueError, TypeError):
-                        continue
+            if attribute:
+                attributes = item.get("attributes")
+                # A record with no attributes at all says nothing about this one, rather than that it became None
+                if not isinstance(attributes, dict):
+                    continue
+                state = attributes.get(attribute, None)
+            else:
+                state = item.get("state", None)
 
-                    # Get state or attribute value
-                    if attribute:
-                        state = item.get("attributes", {}).get(attribute, None)
-                    else:
-                        state = item.get("state", None)
+            if state is None:
+                state = "None"
+            records.append((last_updated_stamp, state))
 
-                    if state is None:
-                        state = "None"
-
-                    records.append((last_updated_stamp, state))
-
-                    # A record makes the window it landed in a row, so activity is always on screen
-                    minutes = last_updated_stamp.hour * 60 + last_updated_stamp.minute
-                    rounded_minutes_30 = (minutes // 30) * 30
-                    window_start = last_updated_stamp.replace(minute=rounded_minutes_30 % 60, hour=rounded_minutes_30 // 60, second=0, microsecond=0)
-                    all_timestamps_30min.add(window_start)
-
-                    # A row reports the state at its own start, so a change part way through a window
-                    # first shows in the NEXT row. An entity that only records on a change leaves that
-                    # window empty, and without a row there the change was hidden as "unchanged" until
-                    # the next record - which was then flagged as the change, hours late.
-                    following_timestamps_30min.add(window_start + timedelta(minutes=30))
-
-        # str2time is only reliable for ordering once parsed - the raw strings mix UTC history with
-        # the local-time "now" record get_history_with_now() appends
+        # The raw strings mix UTC history with the local-time "now" record get_history_with_now() appends
         records.sort(key=lambda record: record[0])
-        entity_records.append(records)
+        entity_records.append((records, [record[0] for record in records]))
 
-    # Never add a row beyond the newest record, that would be a row in the future
-    newest_record = max((records[-1][0] for records in entity_records if records), default=None)
-    for following in following_timestamps_30min:
-        if following <= newest_record:
-            all_timestamps_30min.add(following)
+    if not all_stamps:
+        return []
 
-    # Sort timestamps in reverse chronological order
-    sorted_timestamps_30min = sorted(all_timestamps_30min, reverse=True)
+    def cells_for(when, period_start, period_end):
+        """Each selection's value at when, and what it did over (period_start, period_end]."""
+        return [(history_value_at(records, stamps, when), history_period_kind(records, stamps, period_start, period_end)) for records, stamps in entity_records]
 
-    # Detail slots are the 5-min marks INSIDE each row's own half hour, so expanding a row explains
-    # that row rather than describing the preceding half hour
-    all_display_slots_5min = set()
-    for ts_30 in sorted_timestamps_30min:
-        for offset in range(0, 30, 5):
-            all_display_slots_5min.add(ts_30 + timedelta(minutes=offset))
+    # A record shows from the first slot at or after it; the newest slot is the last one already reached
+    oldest = min(all_stamps)
+    first_slot = floor_to_history_slot(oldest)
+    if first_slot < oldest:
+        first_slot += slot
+    newest_slot = floor_to_history_slot(max(all_stamps))
 
-    entity_filled_30min = []
-    entity_filled_5min = []
-    for records in entity_records:
-        entity_filled_30min.append(state_as_of_slots(records, sorted_timestamps_30min))
-        entity_filled_5min.append(state_as_of_slots(records, all_display_slots_5min))
+    rows = []
+    row_time = floor_to_local_half_hour(min(first_slot, newest_slot), local_tz)
+    while row_time <= newest_slot:
+        row_end = min(row_time + row_length - slot, newest_slot)
+        details = []
+        detail_time = row_time + slot
+        while detail_time <= row_end:
+            details.append({"time": detail_time.astimezone(local_tz), "cells": cells_for(detail_time, detail_time - slot, detail_time)})
+            detail_time += slot
+        details.reverse()
+        rows.append({"time": row_time.astimezone(local_tz), "cells": cells_for(row_time, row_time - slot, row_end), "details": details})
+        row_time += row_length
 
-    return entity_filled_30min, entity_filled_5min, sorted_timestamps_30min, all_display_slots_5min
+    rows.reverse()
+    return rows
+
+
+def render_entity_history_rows(rows, num_cols):
+    """
+    Render the /entity history table body from build_entity_history_table_data() rows.
+
+    Each 30-minute row is clickable and followed by its hidden 5-minute detail rows. Rows where nothing
+    changed are folded into an "N unchanged slots hidden" separator, except the oldest, so the table
+    opens on its changes.
+    """
+    cell_classes = {"changed": ' class="changed-cell"', "reverted": ' class="reverted-cell"'}
+    text = ""
+    row_index = 0
+    skipped_count = 0
+    oldest_idx = len(rows) - 1
+
+    for i, row in enumerate(rows):
+        if i != oldest_idx and not any(kind for _, kind in row["cells"]):
+            skipped_count += 1
+            continue
+
+        if skipped_count > 0:
+            col_span = 1 + num_cols
+            text += f'<tr class="gap-row"><td colspan="{col_span}" style="text-align:center; font-style:italic; font-size:0.85em; color:var(--text-secondary,#888); border-top:2px dashed #aaa; border-bottom:2px dashed #aaa; padding:4px;">— {skipped_count} unchanged slot{"s" if skipped_count != 1 else ""} hidden —</td></tr>\n'
+            skipped_count = 0
+
+        # Main 30-minute row (clickable)
+        text += f'<tr class="history-row" onclick="toggleDetailRow({row_index})" id="row_{row_index}">'
+        text += f"<td>▶ {row['time'].strftime(TIME_FORMAT)}</td>"
+        for value, kind in row["cells"]:
+            text += f"<td{cell_classes.get(kind, '')}>{html_module.escape(str(value))}</td>"
+        text += "</tr>\n"
+
+        # Detail rows: the remaining 5-minute slots inside this row's own half hour, newest first
+        for detail in row["details"]:
+            text += f'<tr class="detail-row" id="detail_{row_index}">'
+            text += f"<td>  {detail['time'].strftime(TIME_FORMAT)}</td>"
+            for value, kind in detail["cells"]:
+                text += f"<td{cell_classes.get(kind, '')}>{html_module.escape(str(value))}</td>"
+            text += "</tr>\n"
+
+        row_index += 1
+
+    return text
 
 
 def split_entities_for_charting(entities, entity_data_fetch):
@@ -1271,20 +1334,26 @@ class WebInterface(ComponentBase):
     async def get_history_with_now(self, entity_id, days, attribute=None):
         """
         Get history for an entity including the current state
+
+        The current state is stamped at the real time, not now_utc - that is the start of the 5-minute
+        cycle, so it could land before records HA had already made since. Asked for the whole state
+        (attribute=None) it carries the current attributes too, so an attribute read from it is current
+        rather than missing.
         """
         history = copy.deepcopy(self.get_history_wrapper(entity_id, days, required=False, tracked=False))  # Copy to avoid modifying original history
         current_value = self.get_state_wrapper(entity_id=entity_id, attribute=attribute)
         if current_value is not None:
-            if not history:
-                history = [[]]
-                if attribute:
-                    history[0].append({"attributes": {attribute: current_value}, "last_updated": (self.now_now_utc - timedelta(days=days)).strftime(TIME_FORMAT_HA)})
-                else:
-                    history[0].append({"state": current_value, "last_updated": (self.now_utc - timedelta(days=days)).strftime(TIME_FORMAT_HA)})
             if attribute:
-                history[0].append({"attributes": {attribute: current_value}, "last_updated": self.now_utc.strftime(TIME_FORMAT_HA)})
+                current = {"attributes": {attribute: current_value}}
             else:
-                history[0].append({"state": current_value, "last_updated": self.now_utc.strftime(TIME_FORMAT_HA)})
+                current = {"state": current_value}
+                current_state = self.get_state_wrapper(entity_id, raw=True)
+                if isinstance(current_state, dict) and isinstance(current_state.get("attributes"), dict):
+                    current["attributes"] = current_state["attributes"]
+            now = self.now_utc_exact
+            if not history:
+                history = [[dict(current, last_updated=(now - timedelta(days=days)).strftime(TIME_FORMAT_HA))]]
+            history[0].append(dict(current, last_updated=now.strftime(TIME_FORMAT_HA)))
 
         return history
 
@@ -1543,6 +1612,7 @@ class WebInterface(ComponentBase):
                 body.dark-mode .reverted-cell { background-color: #0d2e4a; color: #90caff; }
                 </style>
                 """
+                text += '<p style="font-size:0.9em;">Each row shows the value at its time. <span class="changed-cell" style="padding:0 4px;">Changed</span> during that half hour, <span class="reverted-cell" style="padding:0 4px;">changed and changed back</span>. Click a row to see its 5-minute slots.</p>\n'
                 text += '<button onclick="downloadEntityCSV()" style="margin-bottom: 10px; padding: 7px 14px; background-color: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">&#11015; Download CSV</button>\n'
                 text += "<table>\n"
 
@@ -1559,79 +1629,9 @@ class WebInterface(ComponentBase):
                     text += f"<th>{friendly_name}{attr_display}{unit_display}</th>"
                 text += "</tr>\n"
 
-                # Collect and bucket history data for all entities (both 30-min summary and 5-min detail)
-                entity_filled_30min, entity_filled_5min, sorted_timestamps_30min, _ = build_entity_history_table_data(entity_selections, entity_data_fetch)
-
-                # Pre-compute per-row cell classes so we can decide which rows to show
-                num_cols = len(entity_selections)
-                row_data = []  # list of (timestamp_30, [(value, cell_class), ...], has_highlight)
-                for timestamp_30 in sorted_timestamps_30min:
-                    cells = []
-                    has_highlight = False
-                    for filled_30, filled_5 in zip(entity_filled_30min, entity_filled_5min):
-                        value, is_changed, prev_value = filled_30.get(timestamp_30, ("-", False, None))
-                        if is_changed:
-                            cell_class = ' class="changed-cell"'
-                            has_highlight = True
-                        else:
-                            # Flag a row that held its value at both ends but moved somewhere inside its own half hour
-                            sub_vals = [filled_5.get(timestamp_30 + timedelta(minutes=off), ("-", False, None))[0] for off in range(5, 30, 5)]
-                            if any(v != value for v in sub_vals):
-                                cell_class = ' class="reverted-cell"'
-                                has_highlight = True
-                            else:
-                                cell_class = ""
-                        cells.append((value, cell_class))
-                    row_data.append((timestamp_30, cells, has_highlight))
-
-                # Build table rows — skip unchanged rows (except the oldest), inserting gap rows on skips
-                row_index = 0
-                oldest_idx = len(row_data) - 1
-                skipped_count = 0
-                prev_row_ts = None  # Previous row_data entry (visible or skipped) — for detecting history gaps
-                for i, (timestamp_30, cells, has_highlight) in enumerate(row_data):
-                    is_oldest = i == oldest_idx
-
-                    # Count slots absent from history entirely (gap between consecutive row_data entries).
-                    # Using prev_row_ts (not prev visible ts) avoids double-counting rows already
-                    # incremented via skipped_count += 1 below.
-                    if prev_row_ts is not None:
-                        gap_minutes = int((prev_row_ts - timestamp_30).total_seconds() / 60)
-                        missing_slots = max(0, (gap_minutes // 30) - 1)
-                        skipped_count += missing_slots
-
-                    prev_row_ts = timestamp_30
-
-                    if not has_highlight and not is_oldest:
-                        skipped_count += 1
-                        continue
-
-                    # If we skipped rows (present-but-unchanged OR absent from history), emit a gap separator
-                    if skipped_count > 0:
-                        col_span = 1 + num_cols
-                        text += f'<tr class="gap-row"><td colspan="{col_span}" style="text-align:center; font-style:italic; font-size:0.85em; color:var(--text-secondary,#888); border-top:2px dashed #aaa; border-bottom:2px dashed #aaa; padding:4px;">— {skipped_count} unchanged slot{"s" if skipped_count != 1 else ""} hidden —</td></tr>\n'
-                        skipped_count = 0
-
-                    # Main 30-minute row (clickable)
-                    text += f'<tr class="history-row" onclick="toggleDetailRow({row_index})" id="row_{row_index}">'
-                    text += f"<td>▶ {timestamp_30.strftime(TIME_FORMAT)}</td>"
-                    for value, cell_class in cells:
-                        text += f"<td{cell_class}>{value}</td>"
-                    text += "</tr>\n"
-
-                    # Detail rows: the remaining 5-minute slots inside this row's own half hour,
-                    # newest first to match the table's ordering (the row itself covers offset 0)
-                    for offset in range(25, 0, -5):
-                        detail_time = timestamp_30 + timedelta(minutes=offset)
-                        text += f'<tr class="detail-row" id="detail_{row_index}">'
-                        text += f"<td>  {detail_time.strftime(TIME_FORMAT)}</td>"
-                        for filled in entity_filled_5min:
-                            value, is_changed, prev_value = filled.get(detail_time, ("-", False, None))
-                            cell_class = ' class="changed-cell"' if is_changed else ""
-                            text += f"<td{cell_class}>{value}</td>"
-                        text += "</tr>\n"
-
-                    row_index += 1
+                # 30-minute rows with their 5-minute detail slots, laid out on the local clock
+                history_rows = build_entity_history_table_data(entity_selections, entity_data_fetch, local_tz=self.local_tz)
+                text += render_entity_history_rows(history_rows, len(entity_selections))
 
                 text += "</table><br>\n"
 
@@ -1647,12 +1647,8 @@ class WebInterface(ComponentBase):
                     sel_attr_disp = f" - {sel_attr}" if sel_attr else ""
                     csv_col_headers.append(f"{sel_friendly}{sel_attr_disp}{sel_unit_disp}")
                 csv_all_rows = []
-                for ts in sorted_timestamps_30min:
-                    row_vals = [ts.strftime(TIME_FORMAT)]
-                    for filled_30 in entity_filled_30min:
-                        val, _, _ = filled_30.get(ts, ("-", False, None))
-                        row_vals.append(str(val))
-                    csv_all_rows.append(row_vals)
+                for history_row in history_rows:
+                    csv_all_rows.append([history_row["time"].strftime(TIME_FORMAT)] + [str(value) for value, _ in history_row["cells"]])
                 csv_data_json = json.dumps({"headers": csv_col_headers, "rows": csv_all_rows})
                 text += f"<script>var csvData = {csv_data_json};\n"
                 text += """function downloadEntityCSV() {
