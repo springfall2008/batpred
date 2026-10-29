@@ -68,6 +68,7 @@ def test_load_ml(my_predbat=None):
         ("component_init_predictor_last_train_time", _test_component_init_predictor_sets_last_train_time, "LoadMLComponent _init_predictor sets last_train_time from embedded training_timestamp"),
         ("nan_inf_robustness", _test_nan_inf_robustness, "LoadPredictor handles NaN, Inf, and None across input channels without NaN loss"),
         ("database_zero_preservation", _test_database_zero_preservation, "Database save/load preserves 0.0 values across roundtrip"),
+        ("database_iboost_prep_mismatch", _test_database_iboost_prep_mismatch, "Database is discarded when its iBoost subtraction differs from the current config"),
         ("curriculum_90day_intermediate_passes", _test_curriculum_90day_intermediate_passes, "Curriculum training across 90-day window with 8 intermediate passes"),
         # ("real_data_training", _test_real_data_training, "Train on real data with chart"),
         # ("pretrained_model_prediction", _test_pretrained_model_prediction, "Load pre-trained model and generate predictions with chart"),
@@ -2506,6 +2507,106 @@ def _test_component_fetch_load_data():
 
         print("    ✓ Rate history is fetched as optional data")
 
+    # Test: iBoost/diverter energy is subtracted from the training load, as the standard forecast does (GH#5825)
+    async def test_iboost_energy_subtraction(iboost_energy_subtract=True):
+        """With iboost_energy_today configured and iboost_energy_subtract on, each step's load loses that step's
+        iBoost energy (floored at zero); with the switch off the load is left alone and the sensor isn't fetched."""
+        mock_base = MockBase()
+
+        # Load: 1.0 kWh per 5-min step over 24h (backwards cumulative, minute 0 = now)
+        load_data = {}
+        cumulative = 289.0
+        for minute in range(0, 1446, 5):
+            load_data[minute] = cumulative
+            cumulative -= 1.0
+
+        # iBoost: 0.4 kWh per step, except 1.5 kWh in the step ending at minute 700 (exceeds load, must floor at 0)
+        iboost_data = {}
+        cumulative = 200.0
+        for minute in range(0, 1446, 5):
+            iboost_data[minute] = cumulative
+            cumulative -= 1.5 if minute == 700 else 0.4
+
+        def mock_get_arg(key, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
+            return {
+                "load_today": ["sensor.load_today"],
+                "load_power": None,
+                "car_charging_energy": None,
+                "car_charging_hold": False,
+                "iboost_energy_today": ["sensor.eddi_energy_today"],
+                "iboost_energy_subtract": iboost_energy_subtract,
+            }.get(key, default)
+
+        def mock_import_export(days, now_utc, key, **kwargs):
+            """Return iBoost history for the iBoost key and nothing for anything else (rates)"""
+            return dict(iboost_data) if key == "iboost_energy_today" else {}
+
+        mock_base.get_arg = mock_get_arg
+        mock_base.minute_data_load = MagicMock(return_value=(dict(load_data), 1.0))
+        mock_base.minute_data_import_export = MagicMock(side_effect=mock_import_export)
+        mock_base.fill_load_from_power = MagicMock(side_effect=lambda x, y: x)
+
+        component = LoadMLComponent(mock_base, load_ml_enable=True)
+        result_data, _, result_now, _, _, _, _ = await component._fetch_load_data()
+
+        iboost_calls = [call for call in mock_base.minute_data_import_export.call_args_list if call.args[2] == "iboost_energy_today"]
+        if iboost_energy_subtract:
+            assert len(iboost_calls) == 1, f"Expected iboost_energy_today to be fetched once, got {iboost_calls}"
+            for minute in (5, 100, 1435):
+                assert abs(result_data[minute] - 0.6) < 0.001, f"At minute {minute} expected 0.6 kWh (1.0 load - 0.4 iBoost), got {result_data[minute]}"
+            assert result_data[700] == 0, f"At minute 700 iBoost (1.5) exceeds load (1.0), expected 0 kWh, got {result_data[700]}"
+            print("    ✓ iBoost energy subtracted from ML training load")
+        else:
+            assert not iboost_calls, f"iboost_energy_today must not be fetched with iboost_energy_subtract off, got {iboost_calls}"
+            for minute in (5, 100, 700, 1435):
+                assert abs(result_data[minute] - 1.0) < 0.001, f"At minute {minute} expected 1.0 kWh with subtraction off, got {result_data[minute]}"
+            print("    ✓ iBoost energy left in ML training load with iboost_energy_subtract off")
+
+    # Test: the car threshold heuristic judges diverter-free load, as get_filtered_load_window does
+    async def test_iboost_before_car_threshold():
+        """With no car sensor (threshold mode), a step whose load only crosses the car threshold because of the
+        diverter must not have the car estimate subtracted: iBoost comes off first, then the threshold is tested."""
+        mock_base = MockBase()
+
+        # Load 1.0 kWh per step (above the 0.5 kWh/step threshold), iBoost 0.6 kWh per step -> 0.4 kWh clean load
+        load_data = {}
+        iboost_data = {}
+        load_cumulative = 289.0
+        iboost_cumulative = 200.0
+        for minute in range(0, 1446, 5):
+            load_data[minute] = load_cumulative
+            iboost_data[minute] = iboost_cumulative
+            load_cumulative -= 1.0
+            iboost_cumulative -= 0.6
+
+        def mock_get_arg(key, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
+            return {
+                "load_today": ["sensor.load_today"],
+                "load_power": None,
+                "car_charging_energy": None,
+                "car_charging_hold": True,
+                "car_charging_threshold": 6.0,
+                "car_charging_rate": 7.5,
+                "iboost_energy_today": ["sensor.eddi_energy_today"],
+                "iboost_energy_subtract": True,
+            }.get(key, default)
+
+        def mock_import_export(days, now_utc, key, **kwargs):
+            """Return iBoost history for the iBoost key and nothing for anything else (rates)"""
+            return dict(iboost_data) if key == "iboost_energy_today" else {}
+
+        mock_base.get_arg = mock_get_arg
+        mock_base.minute_data_load = MagicMock(return_value=(dict(load_data), 1.0))
+        mock_base.minute_data_import_export = MagicMock(side_effect=mock_import_export)
+        mock_base.fill_load_from_power = MagicMock(side_effect=lambda x, y: x)
+
+        component = LoadMLComponent(mock_base, load_ml_enable=True)
+        result_data, _, _, _, _, _, _ = await component._fetch_load_data()
+
+        for minute in (5, 100, 700, 1435):
+            assert abs(result_data[minute] - 0.4) < 0.001, f"At minute {minute} expected 0.4 kWh (1.0 load - 0.6 iBoost, below car threshold), got {result_data[minute]}"
+        print("    ✓ Car threshold tested on load after iBoost subtraction")
+
     # Run all sub-tests
     print("  Running LoadMLComponent._fetch_load_data tests:")
     run_async(test_basic_fetch())
@@ -2521,6 +2622,9 @@ def _test_component_fetch_load_data():
     run_async(test_temperature_no_data())
     run_async(test_step_size_calculation())
     run_async(test_rate_history_is_optional())
+    run_async(test_iboost_energy_subtraction())
+    run_async(test_iboost_energy_subtraction(iboost_energy_subtract=False))
+    run_async(test_iboost_before_car_threshold())
     print("  All _fetch_load_data tests passed!")
 
 
@@ -3369,6 +3473,84 @@ def _test_database_zero_preservation():
             assert 10 not in component3.temperature_data
             assert component3.pv_data.get(5) == 1.5
             assert 0 not in component3.pv_data
+
+    asyncio.run(run_test())
+
+
+def _test_database_iboost_prep_mismatch():
+    """Test that a saved database is only reloaded when its iBoost subtraction matches the current config (GH#5825)."""
+    import asyncio
+    import json
+    from load_ml_component import LoadMLComponent
+
+    class MockBase:
+        """Minimal base for LoadMLComponent with switchable iBoost subtraction."""
+
+        def __init__(self, config_root, iboost_subtract):
+            """Initialize MockBase."""
+            self.prefix = "predbat"
+            self.config_root = config_root
+            self.now_utc = datetime.now(timezone.utc)
+            self.midnight_utc = self.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+            self.minutes_now = (self.now_utc - self.midnight_utc).seconds // 60
+            self.local_tz = timezone.utc
+            self.args = {}
+            self.log_messages = []
+            self.iboost_subtract = iboost_subtract
+
+        def log(self, msg):
+            """Record log message."""
+            self.log_messages.append(msg)
+
+        def get_arg(self, key, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
+            """Mock get_arg, with an iBoost sensor configured and the switch as given."""
+            return {"load_today": ["sensor.load_today"], "iboost_energy_today": ["sensor.eddi_energy_today"], "iboost_energy_subtract": self.iboost_subtract}.get(key, default)
+
+    async def save_and_reload(tmpdir, save_subtract, load_subtract, drop_flag=False):
+        """Save a database with one iBoost setting, optionally strip the flag as a pre-fix file would lack it, and reload it with another."""
+        filepath = os.path.join(tmpdir, "predbat_ml_history.npz")
+        component = LoadMLComponent(MockBase(tmpdir, save_subtract), load_ml_enable=True)
+        component.database_filepath = filepath
+        component.load_ml_database_days = 1
+        component.load_data = {m: 0.25 for m in range(0, 1440, 5)}
+        component.load_data_age_days = 1.0
+        await component.save_database_history()
+
+        if drop_flag:
+            with np.load(filepath, allow_pickle=False) as saved:
+                arrays = {key: saved[key] for key in saved.files}
+            metadata = json.loads(str(arrays["metadata_json"]))
+            metadata.pop("iboost_subtracted")
+            arrays["metadata_json"] = np.array(json.dumps(metadata))
+            np.savez_compressed(filepath, **arrays)
+
+        base = MockBase(tmpdir, load_subtract)
+        component2 = LoadMLComponent(base, load_ml_enable=True)
+        component2.database_filepath = filepath
+        await component2.load_database_history()
+        return component2, base
+
+    async def run_test():
+        """Run the matching, mismatching and pre-fix database cases."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            component, base = await save_and_reload(tmpdir, True, True)
+            assert component.load_data and len(component.load_data) == 288, f"Matching iBoost prep should reload all 288 steps, got {len(component.load_data or {})}"
+
+            component, base = await save_and_reload(tmpdir, False, False)
+            assert component.load_data and len(component.load_data) == 288, f"Matching (off) iBoost prep should reload all 288 steps, got {len(component.load_data or {})}"
+
+            component, base = await save_and_reload(tmpdir, False, True)
+            assert not component.load_data, "Database saved without iBoost subtraction must be discarded once subtraction is on"
+            assert any("iBoost subtraction mismatch" in msg for msg in base.log_messages), f"Expected a mismatch warning, got {base.log_messages}"
+
+            component, base = await save_and_reload(tmpdir, True, False)
+            assert not component.load_data, "Database saved with iBoost subtraction must be discarded once subtraction is off"
+
+            component, base = await save_and_reload(tmpdir, True, True, drop_flag=True)
+            assert not component.load_data, "A pre-fix database (no iboost_subtracted flag) must be discarded when subtraction is on"
+
+            component, base = await save_and_reload(tmpdir, True, False, drop_flag=True)
+            assert component.load_data and len(component.load_data) == 288, "A pre-fix database must still reload when no iBoost subtraction applies"
 
     asyncio.run(run_test())
 
