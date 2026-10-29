@@ -1855,14 +1855,14 @@ def _capture_reports(component):
 
 
 def test_discovery_record():
-    """A charger keyed by its hardware serial, its cloud id pseudonymised, with a stub car and the bound entities."""
+    """A charger keyed by its hardware serial, its Wallbox charger id alongside, with a stub car and the bound entities."""
     component = _started_component()
     report = component.build_discovery()
     assert report["automatic"] is True
     charger, car = report["chargers"][0], report["cars"][0]
     assert charger["device_id"] == "wallbox:900001", charger
-    assert charger["hardware_ids"] == {"serial": "900001"}, charger
-    assert charger["account_ids"] == {"charger_id": "101"}, charger
+    assert charger["hardware_ids"] == {"serial": "900001", "charger_id": "101"}, charger
+    assert "account_ids" not in charger, charger
     assert charger["info"] == {"vendor": "Wallbox", "model": "PLP1-0-2-4-9-002-E", "firmware": "5.5.10"}, charger
     assert set(charger["entities"]) == {"car_charging_planned", "car_charging_plugged", "car_charging_energy", "car_charging_power"}, charger["entities"]
     assert charger["entities"]["car_charging_planned"]["entity_id"] == "binary_sensor.predbat_wallbox_101_connected"
@@ -1886,8 +1886,7 @@ def test_discovery_no_serial_fallback():
     component = _started_component({101: status})
     charger = component.build_discovery()["chargers"][0]
     assert charger["device_id"] == "wallbox:charger:101", charger
-    assert "hardware_ids" not in charger, charger
-    assert charger["account_ids"] == {"charger_id": "101"}, charger
+    assert charger["hardware_ids"] == {"charger_id": "101"}, charger
     print("  ✓ Discovery falls back to the cloud id when there is no serial")
 
 
@@ -1918,7 +1917,7 @@ def test_discovery_refreshed_between_polls():
 
 
 def test_discovery_round_trip():
-    """Through the real Coordinator and Redactor: entities and the stub flag survive, the cloud id is hidden."""
+    """Through the real Coordinator and Redactor: entities, the stub flag and the charger id all survive, readable."""
     from coordinator import Coordinator
 
     component = _started_component({4417302: _status()})
@@ -1932,8 +1931,11 @@ def test_discovery_round_trip():
     assert not [line for line in logs if line.startswith("Warn")], logs
     coordinator.assemble()
     catalogue = str(coordinator.catalogue())
-    assert "4417302" not in catalogue, "the Wallbox cloud id must be pseudonymised"
+    assert "4417302" in catalogue, "the Wallbox charger id is not secret, and stays readable"
     assert "900001" in catalogue, "the hardware serial stays readable"
+    redacted = coordinator.catalogue()["chargers"][0]
+    assert redacted["entities"]["car_charging_power"]["entity_id"] == "sensor.predbat_wallbox_4417302_power", redacted["entities"]
+    assert not [line for line in logs if line.startswith("Warn")], logs
     print("  ✓ Discovery report round-trips through the Coordinator and Redactor")
 
 

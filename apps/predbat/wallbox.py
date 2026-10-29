@@ -548,9 +548,9 @@ class WallboxAPI(ComponentBase, CarChargerControl):
         """Describe each charger, and the car it charges, for the discovery catalogue.
 
         One charger record per charger in car order (ordered_chargers()), keyed "wallbox:{serial}" by
-        the hardware serial. The Wallbox charger id is a cloud database id rather than hardware, so it
-        is reported only as an account id, which the catalogue pseudonymises; a charger whose status
-        carries no serial is still reported, as "wallbox:charger:{id}", rather than going missing.
+        the hardware serial, with the Wallbox charger id - the id its entities are named by - beside it
+        in hardware_ids. Neither is secret, so both stay readable in the catalogue. A charger whose
+        status carries no serial is still reported, as "wallbox:charger:{id}", rather than going missing.
         Wallbox knows nothing about the vehicle, so each car is a stub. The entities are the four
         automatic_config() binds, filtered to those Home Assistant has seen; car_charging_now is left
         out because it only re-binds the power sensor.
@@ -576,10 +576,11 @@ class WallboxAPI(ComponentBase, CarChargerControl):
             if charger.software_version:
                 info["firmware"] = charger.software_version
             device_id = "wallbox:{}".format(charger.serial) if charger.serial else "wallbox:charger:{}".format(charger.charger_id)
+            hardware_ids = {"serial": charger.serial} if charger.serial else {}
+            hardware_ids["charger_id"] = str(charger.charger_id)
             record, car = charger_with_stub_car(
                 device_id,
-                hardware_ids={"serial": charger.serial} if charger.serial else None,
-                account_ids={"charger_id": str(charger.charger_id)},
+                hardware_ids=hardware_ids,
                 info=info,
                 entities=self.discovery_entities(descriptors),
             )

@@ -2788,6 +2788,13 @@ def test_discovery_zappi_record():
     print("  ✓ Discovery reports a Zappi with a stub car and its bound entities")
 
 
+def test_discovery_automatic_follows_automatic_zappi():
+    """With myenergi_automatic_zappi off no Zappi entity is bound, so the report must not claim automatic."""
+    component = _discovery_component([_zappi(12345678)], automatic_zappi=False)
+    assert "car_charging_energy" not in component.base.args, "the Zappi must not have been wired"
+    assert component.build_discovery()["automatic"] is False
+    print("  ✓ Discovery automatic flag follows myenergi_automatic_zappi")
+
 def test_discovery_cloud_alias_never_reported():
     """The cloud transport's user-chosen alias and the hub serial (a login identifier) never reach the report."""
     cloud_zappi = normalise_cloud_device(MOCK_CLOUD_ZAPPI_STATUS, MOCK_CLOUD_ZAPPI_META)
@@ -2990,6 +2997,7 @@ def test_myenergi(my_predbat=None):
     test_number_event_handler_ignores_other_number_entities()
     test_discovery_none_without_zappi()
     test_discovery_zappi_record()
+    test_discovery_automatic_follows_automatic_zappi()
     test_discovery_cloud_alias_never_reported()
     test_discovery_round_trip()
     test_discovery_login_serial_pseudonymised_without_hub()

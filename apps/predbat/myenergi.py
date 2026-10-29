@@ -863,7 +863,8 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
             )
             chargers.append(charger)
             cars.append(car)
-        return {"automatic": self.automatic, "chargers": chargers, "cars": cars}
+        # Both switches gate the Zappi wiring in automatic_config(), so both decide whether these were bound
+        return {"automatic": bool(self.automatic and self.automatic_zappi), "chargers": chargers, "cars": cars}
 
     def automatic_config(self):
         """Wire the device sensors into Predbat's load and car planning inputs.

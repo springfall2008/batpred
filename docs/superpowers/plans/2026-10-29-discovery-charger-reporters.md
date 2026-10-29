@@ -135,18 +135,18 @@ Decisions:
 Decisions:
 - One record per charger from `self.ordered_chargers()`.
 - `device_id` is `"wallbox:{charger.serial}"`. When `serial` is empty, fall back to `"wallbox:charger:{charger_id}"`; never skip the charger.
-- `hardware_ids` is `{"serial": charger.serial}` when known. `account_ids` is `{"charger_id": str(charger.charger_id)}`. The charger id is a Wallbox cloud database id, not hardware, so it is pseudonymised like other site/system ids. Entity ids embed it, so the redacted view substitutes it there too, and `?raw=1` shows the original.
+- `hardware_ids` is `{"serial": charger.serial, "charger_id": str(charger.charger_id)}`, with `serial` only when known. The charger id is not secret (maintainer decision, 2026-10-29), so it stays readable, as do the entity ids that embed it.
 - `info` is `{"vendor": "Wallbox", "model": charger.part_number, "firmware": charger.software_version}`, keeping only the non-empty values.
 - Entities with prefix `"{prefix}_wallbox_{charger_id}"`: `car_charging_planned` = `binary_sensor.{p}_connected`, `car_charging_plugged` = `binary_sensor.{p}_plugged`, `car_charging_energy` = `sensor.{p}_session_energy` and `car_charging_power` = `sensor.{p}_power`.
 - `automatic` comes from `self.automatic`.
 - In `run()`, replace `if …: return await self.poll(seconds, first)` / `return True` with: assign `ok` from `poll()` or `True`, then call `self.refresh_discovery()`, then `return ok`. The rate-limit `skip_cycles` early return, and exceptions raised out of `poll()`, still skip the call. Both are failure paths and are retried next cycle.
 
 - [ ] **Step 1: Write failing tests:**
-  - `test_discovery_record`: `_started_component` gives a charger `device_id` of `"wallbox:900001"`, `info.model` equal to the fixture's `part_number`, `account_ids == {"charger_id": "101"}`, the four entity keys, and a stub car.
+  - `test_discovery_record`: `_started_component` gives a charger `device_id` of `"wallbox:900001"`, `info.model` equal to the fixture's `part_number`, `hardware_ids == {"serial": "900001", "charger_id": "101"}`, the four entity keys, and a stub car.
   - `test_discovery_private_fields_never_reported`: the fixture's charger `name` ("Garage"), `zipcode`, `car_plate` and `user_name` values are all absent from `str(report)`.
-  - `test_discovery_no_serial_fallback`: a payload with `serial_number` removed gives `device_id == "wallbox:charger:101"` and no `hardware_ids`.
+  - `test_discovery_no_serial_fallback`: a payload with `serial_number` removed gives `device_id == "wallbox:charger:101"` and `hardware_ids == {"charger_id": "101"}`.
   - `test_discovery_second_charger_refiles`: run one cycle with a single charger, then add a second to the stub transport and run a list cycle (`seconds = CHARGER_LIST_SECONDS`). The recorded `report_discovery` calls are 2, and the last one has 2 chargers in car order.
-  - `test_discovery_round_trip`: a ≥6-digit `charger_id` (e.g. `"4417302"`), through `Coordinator.report` then `assemble()` then `catalogue()`. All four entities and the stub flag survive validation, and the raw `"4417302"` is absent from the redacted catalogue.
+  - `test_discovery_round_trip`: a ≥6-digit `charger_id` (e.g. `"4417302"`), through `Coordinator.report` then `assemble()` then `catalogue()`. All four entities and the stub flag survive validation and redaction, and `"4417302"` stays readable in the redacted catalogue.
 - [ ] **Step 2: Run to verify they fail.** Run `./run_all --test wallbox > /tmp/t3.txt 2>&1`.
 - [ ] **Step 3: Implement** as decided above.
 - [ ] **Step 4: Run to verify they pass.** Expected: `test_wallbox` passes in full.
