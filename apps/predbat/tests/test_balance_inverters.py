@@ -120,6 +120,12 @@ def run_balance_inverters_tests(my_predbat):
     if failed:
         return failed
 
+    # Test 13: Peer close to a high reserve cannot take over
+    print("Test 13: Peer close to a high reserve cannot take over the discharge")
+    failed |= test_balance_peer_near_high_reserve(my_predbat)
+    if failed:
+        return failed
+
     return failed
 
 
@@ -667,6 +673,55 @@ def test_balance_below_threshold(my_predbat):
         return True
 
     print("✓ Test passed: No adjustments made when below threshold")
+    return False
+
+
+def test_balance_peer_near_high_reserve(my_predbat):
+    """
+    Test that a peer sitting just above a high reserve does not count as able to take over (#5835)
+    Expected: the low SoC inverter keeps discharging, as the only peer is 2 points above its 38% reserve
+
+    The balancer requires a peer to be at least 4 SoC points above its reserve. With the reserve
+    passed in kWh (3.8 kWh of a 10 kWh battery) the peer looked 36 points clear, so the low
+    inverter was held and the house load fell on a battery with almost nothing left to give.
+    """
+    # Setup: Inverter 0 at 30% (reserve 4%), Inverter 1 at 40% with a 38% backup reserve, both discharging
+    setup_two_inverters(
+        my_predbat,
+        soc1=30,
+        soc2=40,
+        reserve1=4,
+        reserve2=38,
+        battery_power1=1000,
+        battery_power2=1000,
+        discharge_rate1=2600,
+        discharge_rate2=2600,
+    )
+    ha = my_predbat.ha_interface
+
+    # Enable balance
+    my_predbat.balance_inverters_discharge = True
+    my_predbat.balance_inverters_charge = False
+    my_predbat.balance_inverters_crosscharge = False
+    my_predbat.balance_inverters_threshold_charge = 5
+    my_predbat.balance_inverters_threshold_discharge = 5
+
+    # Clear service store
+    ha.service_store_enable = True
+    ha.get_service_store()
+
+    run_balance(my_predbat)
+
+    # Check services called
+    services = ha.get_service_store()
+    ha.service_store_enable = False
+
+    for service, kwargs in services:
+        if service == "number/set_value" and kwargs.get("entity_id") == "number.discharge_rate" and kwargs.get("value") == 0:
+            print("ERROR: Inverter 0 discharge was held although its only peer is 2 points above its 38% reserve, services {}".format(services))
+            return True
+
+    print("✓ Test passed: Low SoC inverter keeps discharging when the peer is close to its reserve")
     return False
 
 
