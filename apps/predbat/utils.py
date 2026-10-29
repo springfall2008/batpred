@@ -483,6 +483,42 @@ def load_apps_yaml(apps_file=None, log=None, secrets_file=None):
     return config["pred_bat"], secrets
 
 
+def describe_apps_yaml_error(exc, apps_file=None, secret_names=()):
+    """
+    Turn an exception raised by load_apps_yaml() into a one-line, actionable log message
+
+    The common case is a mistyped secret reference - 'api_key: !openrouter_api_key' or
+    'api_key: !secrets openrouter_api_key' - which PyYAML reports as an unknown tag, because only
+    !secret has a constructor registered. Startup cannot continue without apps.yaml, so the best
+    Predbat can do is say where the problem is and what was probably meant (GH#5530).
+
+    The tag is only repeated when it names a key in secrets.yaml (secret_names): a raw credential
+    pasted after a '!' is an unknown tag too, and redaction cannot catch it in predbat.log because
+    it was never loaded as a secret.
+    """
+    apps_file = apps_file or os.getenv("PREDBAT_APPS_FILE", "apps.yaml")
+
+    if isinstance(exc, KeyError):
+        return "Error: Unable to load {} - it has no pred_bat section; Predbat's settings must be nested under a top-level 'pred_bat:' key".format(apps_file)
+    if isinstance(exc, OSError):
+        return "Error: Unable to load {} - {}".format(apps_file, exc)
+
+    match = re.match(r"could not determine a constructor for the tag '!([^']*)'", str(getattr(exc, "problem", "") or ""))
+    if match:
+        tag = match.group(1)
+        mark = getattr(exc, "problem_mark", None)
+        where = " at line {} column {}".format(mark.line + 1, mark.column + 1) if mark is not None else ""
+        if tag in secret_names:
+            return "Error: Unable to load {} - unknown tag '!{}'{}; only !secret is supported, did you mean '!secret {}'?".format(apps_file, tag, where, tag)
+        if tag.lower() in ("secret", "secrets"):
+            return "Error: Unable to load {} - unknown tag '!{}'{}; only !secret is supported, did you mean '!secret <name>'?".format(apps_file, tag, where)
+        return "Error: Unable to load {} - unknown tag{} (not shown in case it is a credential); only !secret is supported, did you mean '!secret <name>'?".format(apps_file, where)
+
+    # PyYAML's own text already names the file, line and column, just across several lines
+    detail = " ".join(str(exc).split())
+    return "Error: Unable to load {} - it is not valid YAML: {}".format(apps_file, detail)
+
+
 def mask_secret_args(args):
     """
     Return a deep copy of an apps.yaml-style args dict with credential-like keys redacted.
