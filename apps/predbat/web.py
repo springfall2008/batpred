@@ -101,6 +101,7 @@ from config import APPS_SCHEMA, CONFIG_ITEMS
 from compare import check_compare_list
 import debug_history
 from web_annual import AnnualPage
+from web_theme import WebTheme
 from web_chat import WebChat
 from web_metrics_dashboard import get_metrics_dashboard_css, get_metrics_dashboard_body
 from predbat_metrics import metrics_handler, metrics_json_handler, metrics, PROMETHEUS_AVAILABLE
@@ -835,6 +836,7 @@ class WebInterface(ComponentBase):
 
         self.annual_page = AnnualPage(self)
         self.chat_page = WebChat(self)
+        self.theme_page = WebTheme(self)
 
     def register_endpoint(self, path, handler, method="GET"):
         """
@@ -3942,9 +3944,11 @@ chart.render();
 
     def _register_modern_ui_routes(self, app):
         """Mount modern pages and their assets alongside the classic interface."""
+        app.router.add_get("/api/theme", self.theme_page.get)
+        app.router.add_post("/api/theme", self.theme_page.post)
         app.router.add_get("/ui", self.html_modern_ui_redirect)
         app.router.add_get("/ui/", self.html_modern_ui)
-        for page in ("dash", "plan", "overview", "charts", "entity", "compare", "annual", "chat", "config", "apps", "apps_editor", "components", "log", "browse", "discovery", "cards", "internals", "docs"):
+        for page in ("dash", "plan", "overview", "charts", "entity", "compare", "annual", "chat", "config", "apps", "apps_editor", "components", "log", "browse", "discovery", "cards", "internals", "docs", "theme"):
             app.router.add_get("/ui/" + page, self.html_modern_ui)
         app.router.add_get("/ui/{filename:predbat_ui[^/]*}", self.html_modern_ui_asset)
 
@@ -3959,9 +3963,9 @@ chart.render();
     async def html_modern_ui_asset(self, request, filename=None):
         """Serve only flat, prefixed UI assets from the installation directory."""
         filename = filename if filename is not None else request.match_info.get("filename", "")
-        if not re.fullmatch(r"predbat_ui(?:_[A-Za-z0-9_.-]+)?\.(?:html|js|css|webp|svg|png)", filename):
+        if not re.fullmatch(r"predbat_ui(?:_[A-Za-z0-9_.-]+)?\.(?:html|js|css|webp|svg|png|woff2)", filename):
             raise web.HTTPNotFound()
-        asset_path = os.path.join(os.path.dirname(__file__), filename)
+        asset_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), filename)
         if os.path.islink(asset_path) or not os.path.isfile(asset_path):
             if filename == "predbat_ui.html":
                 return web.Response(status=503, text="Modern web interface files are unavailable")

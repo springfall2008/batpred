@@ -321,11 +321,6 @@
   flex-direction: column;
 }
 
-.app-content > main:has(> .overview-page) > .data-freshness {
-  margin: 0;
-  flex: 0 0 auto;
-}
-
 .app-content > main:has(> .overview-page) > .overview-page {
   flex: 1 0 auto;
   height: auto;

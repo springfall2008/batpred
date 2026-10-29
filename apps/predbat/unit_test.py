@@ -47,6 +47,7 @@ from tests.test_car_manual_soc import run_car_manual_soc_tests
 from tests.test_car_max_rate import run_car_max_rate_tests
 from tests.test_fetch_config_options import test_fetch_config_options
 from tests.test_multi_inverter import run_inverter_multi_tests
+from tests.test_heterogeneous_fleet import test_heterogeneous_fleet
 from tests.test_window2minutes import test_window2minutes
 from tests.test_car_plan_windows import test_car_plan_windows
 from tests.test_hass_watcher import test_hass_watcher
@@ -147,6 +148,7 @@ from tests.test_plan_totals_js import test_plan_totals_js
 from tests.test_metrics_dashboard_soc_refresh import test_soc_chart_center_text_reads_live_data
 from tests.test_web_functions import run_web_functions_tests, run_web_logo_image_tests, run_web_dark_mode_preference_tests
 from tests.test_web_power_flow import run_web_power_flow_tests
+from tests.test_web_theme import run_web_theme_tests
 from tests.test_web_security import run_web_security_tests
 from tests.test_interval_bounds import test_interval_bounds
 from tests.test_web_discovery import run_web_discovery_tests
@@ -614,6 +616,7 @@ def main():
         ("interval_bounds", test_interval_bounds, "Bounded provider time intervals", False),
         ("web_security", run_web_security_tests, "Web listener and file security regressions", False),
         ("web_power_flow", run_web_power_flow_tests, "Power flow diagram car charging tests", False),
+        ("web_theme", run_web_theme_tests, "Shared theme settings tests", False),
         ("web_discovery", run_web_discovery_tests, "Discovery catalogue web page tests", False),
         ("web_logo_image", run_web_logo_image_tests, "Local logo image route tests (issue #4562)", False),
         ("web_dark_mode_preference", run_web_dark_mode_preference_tests, "Dark mode follows OS prefers-color-scheme when unset (issue #4800)", False),
@@ -737,6 +740,7 @@ def main():
         ("octopus_free", test_octopus_free, "Octopus free electricity tests", False),
         ("battery_curve_keys", run_battery_curve_keys_tests, "Battery curve keys tests", False),
         ("balance_inverters", run_balance_inverters_tests, "Balance inverters tests", False),
+        ("heterogeneous_fleet", test_heterogeneous_fleet, "Heterogeneous multi-inverter fleet tests (#4856)", False),
         ("balance_pure", run_balance_pure_tests, "Pure balance_inverters function tests", False),
         ("allocate_export", run_allocate_export_tests, "Export rate allocator tests", False),
         # GE Cloud unit tests

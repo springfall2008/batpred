@@ -5,12 +5,14 @@ import gzip
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from web import WebInterface
+from web_theme import WebTheme
 
 
 async def check_empty_asset_responses(server, etag, modified):
@@ -49,11 +51,13 @@ async def check_modern_ui_assets():
         (root / "predbat_ui.js").write_bytes(javascript)
         (root / "predbat_ui_style.css").write_text("body { color: black; }")
         (root / "predbat_ui_scene.webp").write_bytes(b"RIFF-webp-fixture")
+        (root / "predbat_ui_retro.woff2").write_bytes(b"wOF2-font-fixture")
         for name in ("apps.yaml", "secrets.yaml", "web.py", "other.js", "predbat_ui_secrets.yaml"):
             (root / name).write_text("private configuration")
         (root / "predbat_ui_link.js").symlink_to(root / "secrets.yaml")
         (root / "predbat_ui_directory.js").mkdir()
         interface = WebInterface.__new__(WebInterface)
+        interface.theme_page = WebTheme(SimpleNamespace(storage=SimpleNamespace(load=AsyncMock(return_value=None), age=AsyncMock(return_value=None))))
         app = web.Application()
         interface.default_page = "./plan"
         app.router.add_get("/", interface.html_default)
@@ -68,10 +72,12 @@ async def check_modern_ui_assets():
                 assert landing.headers["Cache-Control"] == "no-store"
                 redirect = await client.get("/ui", allow_redirects=False)
                 assert redirect.status == 302 and redirect.headers["Location"] == "./ui/"
-                for page in ("plan", "apps_editor", "chat", "annual", "cards"):
+                for page in ("plan", "apps_editor", "chat", "annual", "cards", "theme"):
                     page_response = await client.get("/ui/" + page)
                     assert page_response.status == 200 and await page_response.read() == html
                 assert (await client.get("/ui/unknown")).status == 404
+                theme = await client.get("/api/theme")
+                assert theme.status == 200 and (await theme.json())["preset"] == "predbat"
                 response = await client.get("/ui/", headers={"Accept-Encoding": "identity"})
                 assert response.status == 200
                 assert await response.read() == html
@@ -87,9 +93,11 @@ async def check_modern_ui_assets():
                 assert "Accept-Encoding" in response.headers["Vary"]
                 assert gzip.decompress(await response.read()) == javascript
                 assert response.headers["Cache-Control"] == "no-cache"
-                for name in ("predbat_ui_style.css", "predbat_ui_scene.webp"):
+                for name in ("predbat_ui_style.css", "predbat_ui_scene.webp", "predbat_ui_retro.woff2"):
                     response = await client.get("/ui/" + name)
                     assert response.status == 200, name
+                    if name.endswith(".woff2"):
+                        assert response.content_type == "font/woff2"
                 for name in (
                     "apps.yaml",
                     "secrets.yaml",

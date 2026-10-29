@@ -33,43 +33,36 @@ test('snapshot age advances without a request; refresh failures do not reset sou
 const app = fs.readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8')
 const declarations = app.slice(app.indexOf('  const planTimestamp ='), app.indexOf('  const activityOverlay ='))
 const module = { exports: {} }
-vm.runInNewContext(compile(`export function inspect({planData, powerFlowData, powerFlowUpdatedAt, freshnessNow, apiErrors, statusData, active = false, calculating = false}) {${declarations}; return {notice: freshnessNotice, livePowerFlow, navigationPlanStatus};}`), {
+vm.runInNewContext(compile(`export function inspect({planData, powerFlowData, powerFlowUpdatedAt, freshnessNow, apiErrors, statusData, active = false}) {${declarations}; return {livePowerFlow, navigationPlanStatus, powerFreshness};}`), {
   module, exports: module.exports, require, snapshotAge, snapshotState
 })
 const state = { planData: { plan: { timestamp: '2026-10-29T10:00:00Z' } }, powerFlowData: { soc_percent: 0 }, powerFlowUpdatedAt: now, freshnessNow: now, apiErrors: {}, statusData: { calculating: false } }
-const markup = result => renderToStaticMarkup(result.notice)
 
 test('live zero is preserved after a completed source refresh; startup defaults are withheld', () => {
   assert.equal(module.exports.inspect(state).livePowerFlow.soc_percent, 0)
   const startup = module.exports.inspect({ ...state, powerFlowUpdatedAt: null })
   assert.equal(startup.livePowerFlow, null)
-  assert.match(markup(startup), /Live readings unavailable/)
+  assert.equal(startup.powerFreshness, 'unavailable')
 })
 
-test('old snapshots and failed refreshes remain visible with truthful cached labels', () => {
+test('old snapshots and failed refreshes retain stale or unavailable status', () => {
   const cached = module.exports.inspect({ ...state, freshnessNow: now + 3_600_000 })
   assert.equal(cached.navigationPlanStatus, 'stale')
-  assert.match(markup(cached), /Cached plan.*1h 0m ago/)
-  assert.match(markup(cached), /Last known readings.*1h 0m ago/)
+  assert.equal(cached.powerFreshness, 'stale')
   const failed = module.exports.inspect({ ...state, apiErrors: { plan: 'offline', powerFlow: 'offline', status: 'offline' } })
-  assert.match(markup(failed), /Cached plan/)
-  assert.match(markup(failed), /Last known readings/)
-  assert.match(markup(failed), /Status refresh failed/)
+  assert.equal(failed.powerFreshness, 'stale')
   assert.equal(failed.navigationPlanStatus, 'unavailable')
 })
 
-test('recalculating labels the retained plan as previous rather than replacing its timestamp', () => {
+test('recalculating retains calculation status', () => {
   const result = module.exports.inspect({ ...state, active: true, calculating: true, freshnessNow: now + 120_000 })
-  assert.match(markup(result), /Previous plan.*2 min ago.*recalculating/)
   assert.equal(result.navigationPlanStatus, 'calculating')
 })
 
-test('a missing or invalid plan timestamp is never described as recently generated', () => {
+test('a missing or invalid plan timestamp has unavailable status', () => {
   for (const timestamp of [null, 'invalid', '2026-10-29T10:10:00Z']) {
     const result = module.exports.inspect({ ...state, planData: { plan: { timestamp } } })
-    assert.match(markup(result), /generation time unavailable/)
     assert.equal(result.navigationPlanStatus, 'unavailable')
-    assert.doesNotMatch(markup(result), /generated less than a minute ago/)
   }
 })
 

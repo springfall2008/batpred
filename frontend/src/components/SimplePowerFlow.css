@@ -25,15 +25,19 @@
   color: var(--color-text);
 }
 .simple-node-icon svg { width: 23px; height: 23px; }
+.simple-node-icon.soc-low { color: var(--color-battery-low); }
+.simple-node-icon.soc-medium { color: var(--color-battery-medium); }
+.simple-node-icon.soc-high { color: var(--color-battery-high); }
 .simple-node-power { fill: currentColor; font-size: 13px; font-weight: 600; }
 .simple-node-label { fill: var(--color-text-muted); font-size: 14px; }
 .simple-node-soc { fill: var(--color-text); font-size: 12px; }
 .simple-node-power.is-muted { fill: var(--color-text-muted); }
 .flow-solar { color: var(--color-flow-solar, #f59e0b); }
-.flow-grid { color: var(--color-current, #3b82f6); }
+.flow-grid { color: var(--color-flow-grid, #6b7280); }
 .flow-export { color: var(--color-export, #a855f7); }
-.flow-charge { color: #ec4899; }
-.flow-battery, .flow-home { color: #40b5ad; }
+.flow-charge { color: var(--color-charge); }
+.flow-battery { color: var(--color-flow-battery); }
+.flow-home { color: var(--color-flow-home); }
 .flow-car { color: var(--color-success, #22c55e); }
 .flow-heat-pump { color: #b9c63a; }
 .simple-flow-base {

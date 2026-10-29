@@ -15,13 +15,13 @@ test('production frontend files are flat, prefixed, non-empty and reference inst
   assert.ok(names.includes('predbat_ui.js'))
   assert.ok(names.includes('predbat_ui_style.css'))
   for (const name of names) {
-    assert.match(name, /^predbat_ui(?:_[A-Za-z0-9_.-]+)?\.(?:html|js|css|webp|svg|png)$/)
+    assert.match(name, /^predbat_ui(?:_[A-Za-z0-9_.-]+)?\.(?:html|js|css|webp|svg|png|woff2)$/)
     const file = new URL(name, directory)
     const info = await stat(file)
     assert.ok(info.isFile() && info.size > 0, name)
     if (/\.(?:html|js|css)$/.test(name)) {
       const content = await readFile(file, 'utf8')
-      for (const [reference] of content.matchAll(/predbat_ui(?:_[A-Za-z0-9_.-]+)?\.(?:js|css|webp|svg|png)/g)) {
+      for (const [reference] of content.matchAll(/predbat_ui(?:_[A-Za-z0-9_.-]+)?\.(?:js|css|webp|svg|png|woff2)/g)) {
         assert.ok(names.includes(reference), `${name} references missing asset ${reference}`)
       }
     }

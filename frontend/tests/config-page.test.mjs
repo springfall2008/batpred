@@ -7,8 +7,9 @@ import ts from 'typescript'
 
 const require = createRequire(import.meta.url)
 const source = fs.readFileSync(new URL('../src/pages/ConfigPage.tsx', import.meta.url), 'utf8')
+const appSource = fs.readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8')
 
-function configPage() {
+function configPage(onUpdatePendingChange = () => {}) {
   const slots = [], effects = [], requests = []
   let cursor = 0, tree
   const hooks = {
@@ -25,7 +26,7 @@ function configPage() {
   vm.runInNewContext(ts.transpileModule(source, {
     compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 }
   }).outputText, {
-    module, exports: module.exports, Error,
+    module, exports: module.exports, Error, URLSearchParams,
     fetch(url) { return new Promise(resolve => requests.push({ url, resolve })) },
     require(specifier) {
       if (specifier === 'react') return hooks
@@ -38,7 +39,7 @@ function configPage() {
   const nodes = node => !node || typeof node !== 'object' ? [] : [node, ...[node.props?.children].flat(Infinity).flatMap(nodes)]
   const render = () => {
     cursor = 0
-    tree = module.exports.default()
+    tree = module.exports.default({ onUpdatePendingChange })
     effects.splice(0).forEach(effect => effect())
     return nodes(tree)
   }
@@ -49,6 +50,7 @@ function configPage() {
     text: () => { render(); return text(tree) },
     refresh() { render().find(node => node.type === 'button').props.onClick(); render() },
     search(value) { render().find(node => node.props.type === 'search').props.onChange({ target: { value } }); render() },
+    select(name, value) { render().find(node => node.type === 'select' && node.props.name === name).props.onChange({ target: { value } }); render() },
     async respond(index, data, status = 200) {
       requests[index].resolve({ ok: status === 200, status, json: async () => data })
       await new Promise(resolve => setImmediate(resolve))
@@ -58,6 +60,31 @@ function configPage() {
 }
 
 const item = { name: 'active', friendly_name: 'Active', entity: 'switch.active', type: 'switch', value: true, default: false }
+
+test('the update selector shows pending immediately and clears it on success or failure', async () => {
+  const pending = []
+  const page = configPage(value => pending.push(value))
+  const update = { name: 'update', friendly_name: 'Predbat update', entity: 'select.predbat_update', type: 'select', value: 'old', default: 'old', options: ['old', 'new'] }
+  await page.respond(0, { items: [update] })
+  await page.respond(1, {})
+  page.select('update', 'new')
+  assert.deepEqual(pending, [true])
+  await page.respond(2, {})
+  assert.deepEqual(pending, [true, false])
+  page.select('update', 'old')
+  assert.deepEqual(pending, [true, false, true])
+  await page.respond(3, null, 503)
+  assert.deepEqual(pending, [true, false, true, false])
+  assert.match(page.text(), /Unable to update configuration: HTTP 503/)
+})
+
+test('the global update indicator responds to a pending selector or server update', () => {
+  const expression = appSource.match(/const updating = (.+)/)[1]
+  for (const [updating, configUpdatePending, expected] of [[false, false, false], [false, true, true], [true, false, true]]) {
+    assert.equal(vm.runInNewContext(expression, { statusData: { updating }, configUpdatePending }), expected)
+  }
+  assert.match(appSource, /<ConfigPage onUpdatePendingChange=\{setConfigUpdatePending\}/)
+})
 
 test('failed initial configuration load reports unavailable analysis without a false empty result', async () => {
   const page = configPage()

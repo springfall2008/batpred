@@ -6,6 +6,10 @@ const theme = fs.readFileSync(new URL('../src/styles/theme.css', import.meta.url
 const [light, dark] = theme.split(":root[data-theme='dark']")
 
 function rgb(css, token) {
+  if (token === 'bg') {
+    const mode = css === dark ? 'dark' : 'light'
+    return theme.match(new RegExp(`--default-${mode}-bg: #([a-f0-9]{6});`))[1].match(/../g).map(value => parseInt(value, 16) / 255)
+  }
   const pattern = new RegExp(`--color-${token}: #([a-f0-9]{6});`)
   const hex = (css.match(pattern) ?? light.match(pattern))[1]
   return hex.match(/../g).map(value => parseInt(value, 16) / 255)

@@ -20,7 +20,7 @@ function cssColour(styles: CSSStyleDeclaration, name: string, fallback: string):
 }
 
 /** Display the live battery and power charts plus today's cumulative energy totals. */
-export default function MetricsCharts({ metrics }: { metrics: DashboardMetrics }) {
+export default function MetricsCharts({ metrics, socBoundaries }: { metrics: DashboardMetrics; socBoundaries: { low: number; medium: number } }) {
   const socRef = useRef<HTMLCanvasElement>(null)
   const powerRef = useRef<HTMLCanvasElement>(null)
   const energyRef = useRef<HTMLCanvasElement>(null)
@@ -43,7 +43,7 @@ export default function MetricsCharts({ metrics }: { metrics: DashboardMetrics }
       solar: cssColour(styles, '--color-flow-solar', '#f59e0b'),
       import: cssColour(styles, '--color-danger', '#dc2626'),
       export: cssColour(styles, '--color-export', '#7c3aed'),
-      battery: cssColour(styles, '--color-battery-high', '#22c55e'),
+      battery: cssColour(styles, `--color-battery-${metrics.battery_soc_percent <= socBoundaries.low ? 'low' : metrics.battery_soc_percent <= socBoundaries.medium ? 'medium' : 'high'}`, '#22c55e'),
       track: cssColour(styles, '--color-battery-track', '#e5e7eb'),
       border: cssColour(styles, '--color-border', '#e5e7eb'),
       text: cssColour(styles, '--color-text', '#111827'),
@@ -153,7 +153,7 @@ export default function MetricsCharts({ metrics }: { metrics: DashboardMetrics }
       powerChart.destroy()
       energyChart.destroy()
     }
-  }, [metrics, themeRevision])
+  }, [metrics, themeRevision, socBoundaries])
 
   return (
     <>

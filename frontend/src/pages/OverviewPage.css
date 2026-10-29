@@ -32,8 +32,21 @@
     linear-gradient(145deg, #18212a 0%, #2b3641 48%, #111820 100%);
 }
 
+:root[data-preset='retro'][data-theme='dark'] .overview-page {
+  background: transparent;
+}
+
+:root[data-preset='retro'][data-theme='light'] .overview-page {
+  background: transparent;
+  color: var(--color-text);
+}
+
 .overview-page.is-night .overview-page-header p {
   color: #cbd5e1;
+}
+
+:root[data-preset='retro'][data-theme='light'] .overview-page.is-night .overview-page-header p {
+  color: var(--color-text-secondary);
 }
 
 .overview-page-header {
@@ -81,6 +94,11 @@
 .overview-page.is-night .overview-weather-toggle {
   border-color: rgb(255 255 255 / 22%);
   background: rgb(15 23 42 / 45%);
+}
+
+:root[data-preset='retro'][data-theme='light'] .overview-page.is-night .overview-weather-toggle {
+  border-color: rgb(100 116 139 / 28%);
+  background: rgb(255 255 255 / 55%);
 }
 
 .overview-weather-toggle-track {
@@ -752,24 +770,19 @@
   animation: overview-battery-charge-fill 1.8s ease-in-out infinite;
 }
 
-.overview-battery-icon.is-charging,
-.overview-battery-soc.is-charging {
-  color: var(--color-charge);
-}
-
 .overview-battery-icon.is-low,
 .overview-battery-soc.is-low {
-  color: var(--color-danger);
+  color: var(--color-battery-low);
 }
 
 .overview-battery-icon.is-medium,
 .overview-battery-soc.is-medium {
-  color: var(--color-warning-text);
+  color: var(--color-battery-medium);
 }
 
 .overview-battery-icon.is-healthy,
 .overview-battery-soc.is-healthy {
-  color: var(--color-success-text);
+  color: var(--color-battery-high);
 }
 
 .overview-card-solar .overview-card-icon {
