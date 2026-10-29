@@ -61,8 +61,8 @@ pred_bat:
 
   soc_percent:
     - sensor.sigen_plant_battery_state_of_charge
-  soc_kw:
-    - sensor.sigen_plant_available_max_discharging_capacity
+  # soc_kw is intentionally not configured: sigen_plant_available_max_discharging_capacity refers to the DC capacity, and does not align
+  # with the actual SOC reported by the battery. As per the Predbat documentation, soc_kw is not needed in conjunction with soc_percent.
   soc_max:
     - sensor.sigen_plant_rated_energy_capacity
   battery_temperature:

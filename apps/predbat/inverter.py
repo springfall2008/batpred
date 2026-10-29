@@ -411,6 +411,9 @@ class Inverter:
         # used to be reseeded every cycle because the object itself was rebuilt every cycle).
         self.count_register_writes = 0
         self.created_attributes = {}
+        # Set once an invalid battery_scaling read has been warned about, so a source that keeps
+        # reading invalid warns once rather than every cycle (#5368); cleared by a valid read.
+        self.battery_scaling_invalid_warned = False
         # Commit-once state, keyed by scope - see commit_needed(). Each entry is the last state that
         # scope actually committed to this inverter; a scope absent from the dict has committed
         # nothing yet in this run, so its next call commits once. commit_pending marks a scope whose
@@ -525,9 +528,12 @@ class Inverter:
             # read as valid, rather than inventing one; only fall back to 1.0 if nothing valid has
             # ever been read for this inverter.
             last_known = self.base.get_arg("battery_scaling_last_known", default=1.0, index=self.id)
-            self.log("Warn: Inverter {} battery_scaling read as {} which is not a valid scaling factor, retaining last known value {} for this cycle".format(self.id, self.battery_scaling, last_known))
+            level = "Info" if self.battery_scaling_invalid_warned else "Warn"
+            self.battery_scaling_invalid_warned = True
+            self.log("{}: Inverter {} battery_scaling read as {} which is not a valid scaling factor, retaining last known value {} for this cycle".format(level, self.id, self.battery_scaling, last_known))
             self.battery_scaling = last_known
         else:
+            self.battery_scaling_invalid_warned = False
             self.base.set_arg("battery_scaling_last_known", self.battery_scaling, index=self.id)
         self.battery_scaling_config = self.battery_scaling
 
