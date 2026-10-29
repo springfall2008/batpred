@@ -118,12 +118,21 @@ class PluginSystem:
 
         # Look for plugin classes or initialisation functions
         plugin_instance = None
+        attempted = set()
 
         # Plugin discovery fallthrough (try in order of preference):
 
-        # 1. MOST PREFERRED: Class name ends with "Plugin"
+        # 1. MOST PREFERRED: Class name ends with "Plugin" AND is defined in this
+        # module. inspect.getmembers() returns members ALPHABETICALLY, so without the
+        # __module__ check a plugin whose class sorts after an imported one silently
+        # gets the wrong class instantiated: `from plugin_system import PredBatPlugin`
+        # puts the base class in the namespace, so e.g. SocKeepPublishPlugin (sorting
+        # after PredBatPlugin) had the abstract base constructed instead — the plugin
+        # logged as loaded successfully and did nothing. Whether a plugin works should
+        # not depend on the alphabet.
         for name, obj in inspect.getmembers(plugin_module, inspect.isclass):
-            if name.endswith("Plugin"):
+            if name.endswith("Plugin") and obj.__module__ == plugin_module.__name__:
+                attempted.add(obj)
                 try:
                     self.log(f"Initialising plugin class (name-based): {name}")
                     plugin_instance = obj(self.base)
@@ -131,10 +140,22 @@ class PluginSystem:
                 except Exception as e:
                     self.log(f"Failed to initialise plugin class {name}: {e}")
 
-        # 2. FALLBACK: Class has PREDBAT_PLUGIN = True attribute
+        # 2. FALLBACK: Class has PREDBAT_PLUGIN = True attribute AND is defined in
+        # this module. The same __module__ guard as strategy 1, and for the same
+        # reason: PredBatPlugin itself sets PREDBAT_PLUGIN = True as its discovery
+        # marker, so every plugin that does `from plugin_system import PredBatPlugin`
+        # has a matching class sitting in its namespace. Without the guard this
+        # fallback re-introduces exactly the bug strategy 1 just fixed, and it is
+        # reachable in the two cases where strategy 1 declines: the plugin class does
+        # not end in "Plugin", or it raised during __init__ and left plugin_instance
+        # None. Both end with the abstract base constructed, the plugin logged as
+        # loaded, and nothing registered.
+        # Classes strategy 1 already tried are skipped: a "Plugin" class inherits the
+        # marker, so without this one that raised in __init__ is constructed twice and
+        # any side effect before the raise happens twice.
         if plugin_instance is None:
             for name, obj in inspect.getmembers(plugin_module, inspect.isclass):
-                if hasattr(obj, "PREDBAT_PLUGIN") and getattr(obj, "PREDBAT_PLUGIN"):
+                if getattr(obj, "PREDBAT_PLUGIN", False) and obj.__module__ == plugin_module.__name__ and obj not in attempted:
                     try:
                         self.log(f"Initialising plugin class (attribute-based): {name}")
                         plugin_instance = obj(self.base)
@@ -162,6 +183,16 @@ class PluginSystem:
                     self.log(f"Failed to register hooks for plugin {plugin_name}: {e}")
         else:
             self.log(f"No plugin class or initialisation function found in {plugin_name}")
+            # A plugin class must be DEFINED in the _plugin.py file; one imported from
+            # another module is skipped. Name any that were, so a re-exported class is
+            # diagnosable from the log rather than silently not loading.
+            imported = [
+                f"{name} (from {obj.__module__})"
+                for name, obj in inspect.getmembers(plugin_module, inspect.isclass)
+                if (name.endswith("Plugin") or getattr(obj, "PREDBAT_PLUGIN", False)) and obj.__module__ not in (plugin_module.__name__, PredBatPlugin.__module__)
+            ]
+            if imported:
+                self.log(f"Plugin classes in {plugin_name} that are imported, not defined there, are not loaded: {', '.join(imported)}")
 
     def get_plugin(self, plugin_name: str):
         """

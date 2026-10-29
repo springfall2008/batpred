@@ -24,6 +24,7 @@
 
 - Plugin files must end with `_plugin.py` for auto-discovery
 - Plugins can be simple classes, inherit from `PredBatPlugin`, or use initialization functions
+- A plugin class must be defined in the `_plugin.py` file itself. Classes imported from another module, including `PredBatPlugin`, are never instantiated. To keep the implementation in a helper module, define a thin subclass in the `_plugin.py` file or use `initialize_plugin()`
 - Web endpoints can be registered by plugins for custom interfaces (e.g., metrics endpoints)
 - Full error handling and logging throughout the plugin lifecycle
 - No breaking changes to existing functionality
