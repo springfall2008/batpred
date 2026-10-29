@@ -200,6 +200,29 @@ def _test_db_manager_set_get_state(my_predbat=None):
             assert parsed_ts.day == expected_gmt0_time.day, f"Timezone conversion failed: expected day {expected_gmt0_time.day}, got {parsed_ts.day}"
             print(f"✓ Timezone conversion verified: GMT+2 10:00 -> GMT+0 {parsed_ts.strftime('%H:%M:%S')}")
 
+            # Test 3b: Negative, half-hour and quarter-hour offsets must convert exactly (issue #5693)
+            offset_cases = [
+                ("sensor.test_tz_minus5", datetime(2025, 12, 25, 10, 0, 0, tzinfo=timezone(timedelta(hours=-5))), datetime(2025, 12, 25, 15, 0, 0)),
+                ("sensor.test_tz_plus0530", datetime(2025, 12, 25, 10, 0, 0, tzinfo=timezone(timedelta(hours=5, minutes=30))), datetime(2025, 12, 25, 4, 30, 0)),
+                ("sensor.test_tz_minus0330", datetime(2025, 12, 25, 22, 0, 0, tzinfo=timezone(timedelta(hours=-3, minutes=-30))), datetime(2025, 12, 26, 1, 30, 0)),
+                ("sensor.test_tz_plus0545", datetime(2025, 12, 25, 0, 30, 0, tzinfo=timezone(timedelta(hours=5, minutes=45))), datetime(2025, 12, 24, 18, 45, 0)),
+            ]
+            for case_entity, case_timestamp, expected_utc in offset_cases:
+                result_case = await loop.run_in_executor(None, db_mgr.set_state_db, case_entity, "1", {}, case_timestamp)
+                assert result_case["last_changed"] == expected_utc.strftime(TIME_FORMAT_DB), f"{case_timestamp.isoformat()} returned last_changed {result_case['last_changed']}, expected {expected_utc.strftime(TIME_FORMAT_DB)}"
+                retrieved_case = await loop.run_in_executor(None, db_mgr.get_state_db, case_entity)
+                assert retrieved_case is not None, f"get_state_db returned None for {case_entity}"
+                stored_ts = datetime.strptime(retrieved_case[timestamp_field].rstrip("Z"), TIME_FORMAT_DB)
+                assert stored_ts == expected_utc, f"{case_timestamp.isoformat()} stored as {stored_ts}, expected {expected_utc}"
+            print("✓ Negative and fractional-hour offsets convert to the exact UTC time")
+
+            # Test 3c: A naive timestamp is refused rather than silently assumed to be host-local time
+            try:
+                await loop.run_in_executor(None, db_mgr.set_state_db, "sensor.test_tz_naive", "1", {}, datetime(2025, 12, 25, 10, 0, 0))
+                assert False, "set_state_db accepted a naive timestamp"
+            except ValueError:
+                print("✓ Naive timestamp rejected")
+
             # Test 4: Update existing entity with new state
             state3 = "50.0"
             await loop.run_in_executor(None, db_mgr.set_state_db, entity_id, state3, attributes)
