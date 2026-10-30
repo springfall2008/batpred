@@ -847,8 +847,16 @@ class Inverter:
             self.base.args["scheduled_discharge_enable"][self.id] = self.create_entity("scheduled_discharge_enable", "on")
 
         if not self.inv_has_reserve_soc:
-            self.create_missing_arg("reserve", self.reserve)
-            self.base.args["reserve"][self.id] = self.create_entity("reserve", self.reserve, device_class=None, uom="%", icon="mdi:battery-lock")
+            # The dummy is a percentage, read back above as reserve_percent_current, so it is seeded with
+            # reserve_percent - seeding it with the kWh self.reserve fed kWh to the balancer as a percent (#5850)
+            self.create_missing_arg("reserve", self.reserve_percent)
+            reserve_entity = self.create_entity("reserve", self.reserve_percent, device_class=None, uom="%", icon="mdi:battery-lock")
+            self.base.args["reserve"][self.id] = reserve_entity
+            # create_entity() keeps a state that already exists, so a dummy an earlier version seeded in kWh
+            # would never be corrected. There is no device-side reserve to preserve: Predbat owns this value,
+            # and the only writes it makes here (adjust_reserve(0), clamped up to reserve_percent) are this number
+            if self.base.get_arg("reserve", default=None, index=self.id, required_unit="%") != self.reserve_percent:
+                self.base.set_state_wrapper(reserve_entity, state=self.reserve_percent, attributes=self.created_attributes[reserve_entity])
 
         if not self.inv_has_target_soc:
             self.create_missing_arg("charge_limit", 100)
