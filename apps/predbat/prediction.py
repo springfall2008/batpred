@@ -18,7 +18,8 @@ plans and select the one with the lowest cost metric.
 """
 
 from datetime import timedelta
-from const import PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, RUN_EVERY, TIME_FORMAT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
+import math
+from const import PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, RUN_EVERY, TIME_FORMAT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, MINUTE_WATT
 
 from utils import (
     remove_intersecting_windows,
@@ -69,6 +70,65 @@ def get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, inverter_hybri
     return total_inverted
 
 
+def _read_car_planning_grid_charge_support_w(base):
+    """Validate the internal, default-off shadow flag before constructing any kernel context."""
+    raw = getattr(base, "plan_grid_charge_support_w", 0.0)
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)) or not math.isfinite(raw) or raw < 0:
+        raise ValueError("Invalid combined grid-charge support setpoint")
+    return float(raw)
+
+
+def compute_car_planning_grid_charge_support(
+    support_w,
+    load_kwh,
+    pv_now_kwh,
+    inverter_hybrid,
+    inverter_loss,
+    charge_rate_step,
+    charge_headroom_dc,
+    discharge_rate_now_curve_step,
+    battery_to_min,
+    inverter_limit,
+    step,
+):
+    """Return signed DC battery flow, PV allocation and an intra-step import envelope.
+
+    Energy arguments are kWh per step. PV serves load first; only surplus hybrid
+    PV charges directly on DC. Grid headroom is AC and incurs conversion loss.
+    A charge request may instead supply a deficit, bounded by existing discharge
+    rate, reserve energy and remaining inverter throughput. Average energy cannot
+    hide a reserve reached mid-step: the returned peak includes the unsupported tail.
+    """
+    cap_energy = support_w * step / MINUTE_WATT
+    if inverter_hybrid:
+        pv_for_load_dc = min(pv_now_kwh, load_kwh / inverter_loss, inverter_limit)
+        pv_surplus_dc = max(pv_now_kwh - pv_for_load_dc, 0)
+        grid_load = max(load_kwh - pv_for_load_dc * inverter_loss, 0)
+    else:
+        pv_surplus_dc = 0
+        grid_load = load_kwh - pv_now_kwh
+    deficit_dc = max(grid_load - cap_energy, 0) / inverter_loss
+    peak_energy = 0.0
+    if deficit_dc > 0:
+        conversion_room = max(inverter_limit - (min(pv_now_kwh, inverter_limit) if inverter_hybrid else 0), 0)
+        full_discharge = min(deficit_dc, discharge_rate_now_curve_step, conversion_room)
+        battery_draw = min(full_discharge, battery_to_min)
+        pv_dc = 0.0
+        if battery_to_min < full_discharge - 1e-12:
+            peak_energy = max(grid_load, 0)
+    else:
+        full_charge = min(charge_rate_step, pv_surplus_dc + max(cap_energy - grid_load, 0) * inverter_loss)
+        charge = min(full_charge, max(charge_headroom_dc, 0))
+        battery_draw = -charge
+        pv_dc = min(charge, pv_surplus_dc)
+        if charge > 0 and charge < full_charge - 1e-12:
+            # Charging finishes before the step ends: retain its initial power,
+            # not just the smaller time-averaged energy shown in the normal trace.
+            peak_energy = max(grid_load + max(full_charge - pv_surplus_dc, 0) / inverter_loss, 0)
+    pv_ac = (pv_now_kwh - pv_dc) * (inverter_loss if inverter_hybrid else 1)
+    return battery_draw, pv_dc, pv_ac, peak_energy * MINUTE_WATT / step
+
+
 class Prediction(PredictionBatch):
     """
     Class to hold prediction input and output data and the run function
@@ -99,6 +159,8 @@ class Prediction(PredictionBatch):
         car_charging_slots, when given, replaces base.car_charging_slots - the live plan passes
         car_charging_slots_model() so a car charging now outside its plan is modelled too.
         """
+        self.plan_grid_charge_support_w = _read_car_planning_grid_charge_support_w(base)
+        self.plan_grid_support_import = None
         if base:
             self.minutes_now = base.minutes_now
             self.log = base.log
@@ -172,6 +234,8 @@ class Prediction(PredictionBatch):
             self.inverter_hybrid = base.inverter_hybrid
             self.inverter_limit = base.inverter_limit
             self.export_limit = base.export_limit
+            # Diagnostic only, in W. It does not modify dispatch, costs or candidate selection.
+            self.import_limit = getattr(base, "import_limit", 0.0)
             self.pv_ac_limit = base.pv_ac_limit
             self.battery_rate_min = base.battery_rate_min
             self.battery_rate_max_charge = base.battery_rate_max_charge
@@ -218,7 +282,7 @@ class Prediction(PredictionBatch):
             self.charge_scaling10 = base.charge_scaling10
 
             # C++ prediction kernel context (0 = kernel unavailable, Python engine is used)
-            self.prediction_kernel_enable = getattr(base, "prediction_kernel_enable", False)
+            self.prediction_kernel_enable = getattr(base, "prediction_kernel_enable", False) and not self.plan_grid_charge_support_w
             self.kernel_handle = 0
             if self.prediction_kernel_enable:
                 self.kernel_handle = create_kernel_context(self, static_cache=kernel_static_cache)
@@ -541,6 +605,10 @@ class Prediction(PredictionBatch):
         if pv_scenario in EXPORT_FLOOR_SCENARIOS and export_floor and export_window:
             export_floor_soc = self.nominal_export_end_socs(charge_limit, charge_window, export_window, export_limits, end_record, step)
 
+        # Only saved Python runs report this diagnostic. Clear it even on a cache/kernel return
+        # so a later trial cannot appear to have inherited a successful check of a different plan.
+        self.import_limit_diagnostics = None
+
         # The cache key is only wanted when the cache is actually in play - a saving run always
         # simulates - so it is not computed otherwise. Building it as one tuple hash keeps the
         # per-window hashing in C rather than looping in Python, which matters because this runs on
@@ -603,6 +671,20 @@ class Prediction(PredictionBatch):
         predict_pv_power = {}
         predict_state = {}
         predict_grid_power = {}
+        import_diagnostics = None
+        if save and self.import_limit > 0:
+            import_diagnostics = {
+                "limit_w": self.import_limit,
+                "peak_w": 0.0,
+                "excess_kwh": 0.0,
+                "minutes_over": 0,
+                "first_exceeded": None,
+                "step_minutes": step,
+                "checked_minutes": 0,
+                "start": (self.midnight_utc + timedelta(minutes=self.minutes_now)).strftime(TIME_FORMAT),
+                "end": (self.midnight_utc + timedelta(minutes=self.minutes_now + self.forecast_minutes)).strftime(TIME_FORMAT),
+            }
+        self.plan_grid_support_import = {} if self.plan_grid_charge_support_w else None
         predict_load_power = {}
         predict_iboost = {}
         predict_carbon_g = {}
@@ -756,6 +838,7 @@ class Prediction(PredictionBatch):
         # Simulate each forward minute
         minute = 0
         while minute < self.forecast_minutes:
+            support_peak_w = 0.0
             # Minute yesterday can wrap if days_previous is only 1
             minute_absolute = minute + self.minutes_now
             prev_soc = soc
@@ -1180,6 +1263,23 @@ class Prediction(PredictionBatch):
                         pv_in_period = pv_compare / step * charge_time_remains
                         potential_import = min((charge_rate_now_curve * charge_time_remains) - pv_in_period, (charge_limit_n - soc))
                         metric_keep += max(potential_import * import_rate, 0)
+
+                # Explicit shadow-only physics; no flag is placed on the live base.
+                if self.plan_grid_charge_support_w:
+                    battery_draw, pv_dc, pv_ac, support_peak_w = compute_car_planning_grid_charge_support(
+                        self.plan_grid_charge_support_w,
+                        load_yesterday,
+                        pv_now,
+                        inverter_hybrid,
+                        inverter_loss,
+                        charge_rate_now_curve_step,
+                        max(min(charge_limit_n, soc_max) - soc, 0) / battery_loss,
+                        discharge_rate_now_curve_step,
+                        battery_to_min,
+                        inverter_limit,
+                        step,
+                    )
+                    battery_state = "f+" if battery_draw < 0 else "f/" if battery_draw > 0 else "f~"
             else:
                 # ECO Mode.
                 #
@@ -1393,6 +1493,28 @@ class Prediction(PredictionBatch):
                 # The car in a dispatch that has gone away is met by the grid (or PV surplus), never the battery
                 diff += car_gone_kwh
 
+            # Observe the raw whole-site AC balance, before presentation rounding. Do not clamp
+            # grid demand, invent battery discharge, or change a candidate's cost. This covers the
+            # full displayed forecast, including steps after the optimiser's end_record boundary.
+            if import_diagnostics is not None:
+                # A modelled car outside the house CT is absent from diff; it still shares the
+                # grid connection. Net it against any surplus, without counting metered cars twice.
+                import_w = max(diff + car_load_energy_bypass, 0.0) * MINUTE_WATT / step
+                import_diagnostics["peak_w"] = max(import_diagnostics["peak_w"], import_w)
+                import_diagnostics["checked_minutes"] += step
+                if import_w - self.import_limit > 1e-6:
+                    import_diagnostics["excess_kwh"] += (import_w - self.import_limit) * step / MINUTE_WATT
+                    import_diagnostics["minutes_over"] += step
+                    if import_diagnostics["first_exceeded"] is None:
+                        import_diagnostics["first_exceeded"] = stamp
+            if self.plan_grid_support_import is not None:
+                # Raw whole-horizon evidence, including the intra-step boundary peak.
+                # Keep the cost/energy trace unchanged rather than replacing it with
+                # worst-case power. The optional import diagnostics remain independent.
+                average_w = max(diff + car_load_energy_bypass, 0) * MINUTE_WATT / step
+                peak_w = max(average_w, support_peak_w + (car_gone_kwh + car_load_energy_bypass) * MINUTE_WATT / step)
+                self.plan_grid_support_import[minute] = (average_w, peak_w)
+
             # Metric keep - pretend the battery is empty and you have to import instead of using the battery
             if best_soc_keep > 0 and soc <= best_soc_keep:
                 metric_keep += (best_soc_keep - soc) * import_rate * keep_minute_scaling * step / 60.0
@@ -1506,6 +1628,7 @@ class Prediction(PredictionBatch):
             minute += step
 
         hours_left = minute_left / 60.0
+        self.import_limit_diagnostics = import_diagnostics
         if self.debug_enable or save:
             self.hours_left = hours_left
             self.final_car_soc = final_car_soc

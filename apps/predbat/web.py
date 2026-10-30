@@ -2567,6 +2567,7 @@ chart.render();
         # Get client's newest data timestamp from query parameters
         client_newest_timestamp = request.rel_url.query.get("newest_timestamp")
         client_overrides_hash = request.rel_url.query.get("overrides_hash")
+        client_plan_view = request.rel_url.query.get("plan_simulation") == "1"
 
         # Fetch plan data
         plan_entity = self.prefix + ".plan_html"
@@ -2575,6 +2576,10 @@ chart.render();
 
         # Get JSON data (with timestamps embedded in the JSON)
         plan_json = self.get_state_wrapper(entity_id=plan_entity, attribute="raw", default=None)
+        from car_charging_view import build_car_charging_plan_view, render_car_charging_preview
+
+        report = getattr(self.base, "car_charging_report", None)
+        plan_json = build_car_charging_plan_view(plan_json, report)
         plan_timestamp = plan_json.get("timestamp", None) if plan_json else None
 
         yesterday_json = self.get_state_wrapper(entity_id=yesterday_entity, attribute="json", default=None)
@@ -2641,11 +2646,12 @@ chart.render();
             # No server data available yet
             data_unchanged = True
 
-        if data_unchanged:
+        if data_unchanged and not isinstance(report, dict) and not client_plan_view:
             return web.json_response({"unchanged": True, "overrides_hash": overrides_hash})
 
         # Build full response with data
         response_data = {"unchanged": False, "plan": plan_json, "yesterday": yesterday_json, "baseline": baseline_json, "overrides": overrides, "overrides_hash": overrides_hash}
+        response_data["car_charging_view"] = render_car_charging_preview(report, self.get_state_wrapper(entity_id=self.prefix + ".best_import_limit", raw=True))
 
         return web.json_response(response_data)
 
@@ -2660,6 +2666,12 @@ chart.render();
 
         # Add CSS
         text += get_plan_css()
+
+        # Only the existing web table changes; the HA plan and controls do not.
+        from car_charging_view import build_car_charging_plan_view, render_car_charging_preview
+
+        preview = render_car_charging_preview(getattr(self.base, "car_charging_report", None), self.get_state_wrapper(entity_id=self.prefix + ".best_import_limit", raw=True))
+        text += '<div id="carChargingPreview">' + preview + "</div>"
 
         # Add warning/error divs
         text += '<div id="staleWarning" style="display:none; padding:10px; background:#fff3cd; color:#856404; border:1px solid #ffc107; margin-bottom:10px;">&#9888;&#65039; Plan data is stale</div>'
@@ -2679,6 +2691,7 @@ chart.render();
 
         # Fetch all three JSON datasets
         plan_json = self.get_state_wrapper(entity_id=self.prefix + ".plan_html", attribute="raw", default=None)
+        plan_json = build_car_charging_plan_view(plan_json, getattr(self.base, "car_charging_report", None))
         yesterday_json = self.get_state_wrapper(entity_id=self.prefix + ".cost_yesterday", attribute="json", default=None)
         baseline_json = self.get_state_wrapper(entity_id=self.prefix + ".savings_yesterday_predbat", attribute="json", default=None)
 

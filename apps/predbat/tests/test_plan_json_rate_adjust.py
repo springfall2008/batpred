@@ -213,8 +213,8 @@ def run_test_plan_json_rate_adjust(my_predbat):
         if car_row.get("car_charging") != 0 or car_row.get("car_charging_cancelled") != 3.0:
             print("ERROR: Expected car_charging 0 and car_charging_cancelled 3.0, got {} and {}".format(car_row.get("car_charging"), car_row.get("car_charging_cancelled")))
             failed = True
-    if "<td id=car bgcolor=#FFFFCC>3.0?</td>" not in html_plan:
-        print("ERROR: Expected the cancelled car slot cell '3.0?' on #FFFFCC in the HTML plan")
+    if "<td id=car bgcolor=#FFFFCC>3.00?</td>" not in html_plan:
+        print("ERROR: Expected the cancelled car slot cell '3.00?' on #FFFFCC in the HTML plan")
         failed = True
     if raw_plan.get("totals", {}).get("car_charging", 0) != 0:
         print("ERROR: Cancelled kWh must not count towards the planned car total, got {}".format(raw_plan.get("totals", {}).get("car_charging")))
@@ -233,8 +233,8 @@ def run_test_plan_json_rate_adjust(my_predbat):
     if car_row is None or car_row.get("car_charging") != 2.0 or car_row.get("car_charging_cancelled") != 3.0:
         print("ERROR: Expected car_charging 2.0 and car_charging_cancelled 3.0, got {}".format(car_row and (car_row.get("car_charging"), car_row.get("car_charging_cancelled"))))
         failed = True
-    if ">2.0 +3.0?</td>" not in html_plan:
-        print("ERROR: Expected the car cell to show the live 2.0 and the cancelled +3.0?")
+    if ">2.00 +3.00?</td>" not in html_plan:
+        print("ERROR: Expected the car cell to show the live 2.00 and the cancelled +3.00?")
         failed = True
     my_predbat.car_charging_slots[1] = []
     my_predbat.num_cars = saved_num_cars

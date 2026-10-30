@@ -1843,6 +1843,36 @@ See [Service API](inverter-setup.md#has_service_api) for details.
 
 Note that **device_id** will be passed to the service automatically, or it can be set in `apps.yaml`.
 
+#### YAML anchors in service examples
+
+Service mappings in `apps.yaml` can use ordinary YAML reuse, not a Predbat function or a Home Assistant script. The [Deye/Solarman template](inverter-setup.md#deye-solarman-local) is one example. In `- &disable_sources`, `&disable_sources` gives that service mapping a name (an **anchor**). A later `- *disable_sources` is an **alias** for the same mapping. YAML resolves this before Predbat executes the service list; it does not call a subroutine or start a separate sequence.
+
+The first anchored entry is still a real step in its list, not just a definition. The anchor names are local to this YAML document and must be defined before an alias uses them. For example, the Deye `charge_stop_service` reuses the earlier disable-sources step with `*disable_sources`.
+
+The YAML **merge key** `<<: *disable_sources` copies that mapping's keys into a new step. An explicitly supplied key overrides the reused value, so this changes only the option from `Disabled` to `Grid`:
+
+```yaml
+  - <<: *disable_sources
+    option: "Grid"
+```
+
+Given the Deye anchor, the fully expanded step is:
+
+```yaml
+  - service: select.select_option
+    entity_id: >-
+      select.{deye_entity_prefix}_program_1_charging,
+      select.{deye_entity_prefix}_program_2_charging,
+      select.{deye_entity_prefix}_program_3_charging,
+      select.{deye_entity_prefix}_program_4_charging,
+      select.{deye_entity_prefix}_program_5_charging,
+      select.{deye_entity_prefix}_program_6_charging
+    option: "Grid"
+    verify: true
+```
+
+It therefore enables grid charging on the same six entities while keeping verification enabled. The mapping's name does not make this an extra disable operation: Predbat sees `option: "Grid"` after YAML loading. This is the [YAML merge-key syntax](https://yaml.org/type/merge.html), not a template-specific control command. See [verified service sequences](inverter-setup.md#verified-service-sequences) for observation and failure handling.
+
 ### MQTT API
 
 Some Inverters are enabled with an MQTT API, in this case certain MQTT messages are send via the HA MQTT service.
@@ -2227,6 +2257,8 @@ whether you are within an Octopus Energy "smart charge" slot
 (see [car charging documentation](car-charging.md))
 - **car_charging_planned** - Indicates when your EV is plugged in and planned to charge during low-rate slots.
 - **car_charging_planned_response** - Values for the car_charging_planned sensor that indicate that the car is plugged in and will charge in the next low rate slot.
+- **car_charging_warning_states** - Optional exact connection codes accepted with log-only warnings by EV/battery planning (default empty). No warning waives connection validity, permission, metering or execution checks. Set this beside the other flat car options.
+- **car_charging_state_validity** - Optional `{attribute, valid_states}` vehicle telemetry quality policy for EV/battery planning. No vendor attribute is assumed; configured missing or invalid quality fails closed. See [connection and observation policy](car-battery-planning.md#connection-observations-and-consent).
 - **car_charging_plugged** - Optional, indicates only whether your EV is plugged in, even after its charge has finished. Used to reset the manual car SoC when the car is unplugged; **car_charging_planned** is not used for this, as many chargers turn it off when a charge finishes.
 - **car_charging_now** - Sensor to indicate when the EV is charging, used to hold the house battery for the car. Either an on/off sensor or a charging power sensor (W or kW, 200W or more counts as charging)
 - **car_charging_now_response** - Responses for car_charging_now to indicate that the car is charging (default `yes`, `on`, `enable`, `true` and `charging`). The sensor state must match one of them, ignoring case
@@ -2246,6 +2278,30 @@ whether you are within an Octopus Energy "smart charge" slot
 - **hypervolt_password** - Password for the above Hypervolt account
 - **hypervolt_automatic** - Register the Hypervolt chargers with Predbat as cars (default `True`)
 - **hypervolt_control** - Let Predbat stop and start the Hypervolt chargers from its own car charging plan (default `False`)
+
+### Coordinated EV and battery planning
+
+`car_charging_plan_mode` defaults to `off`, preserving ordinary native behaviour.
+`shadow` searches and replays on isolated inputs without candidate actuation;
+`apply` is an explicit execution request subject to independent safety and evidence
+gates. The currently supported execution topology is **one car and one inverter**,
+not the general multi-car topology documented above.
+
+Use the existing `car_charging_soc`, `car_charging_plugged`, `import_limit`, car
+rate, loss and target settings. All additional arguments are flat profile keys,
+not a replacement feature YAML block. See the complete [flat argument reference](car-battery-planning.md#flat-configuration)
+for `car_charging_session`, `car_charging_priority`, `car_charging_control_model`,
+`inverter_grid_support`, consent, observations and execution attestations.
+[Device cadence and measurement tolerances](car-battery-planning.md#device-cadence-and-measurement-tolerances)
+also use flat `car_charging_*` keys.
+
+The native `battery_min_window_minutes` select offers 5, 15, 30 and 60 minutes,
+defaulting to 30 only for new installations. Explicitly preserve an existing saved
+choice, including 5, during [offline migration](car-battery-planning.md#offline-migration).
+The planning report uses existing car-slot attributes with `source: predbat`;
+there is no separate planning sensor. The sole external EV executor must independently
+enforce an expiring lease. Neither configuration migration nor passing replay
+proves commissioning, physical charging or sustained delivery.
 
 ## myenergi Integration
 

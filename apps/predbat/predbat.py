@@ -531,6 +531,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.current_charge_limit_kwh = 0.0
         self.inverter_limit = 0.0
         self.export_limit = 0.0
+        # Whole-site diagnostic threshold, stored in W (not kWh/minute). 0 disables reporting.
+        self.import_limit = 0.0
         self.charge_limit = []
         self.charge_limit_best = []
         self.charge_window = []
@@ -1447,7 +1449,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         """
 
         # Notify listeners that plan has been executed (consumed by gateway, plugins, etc.)
-        if self.plugin_system:
+        from car_charging_execute import native_plan_hook_allowed
+
+        if self.plugin_system and native_plan_hook_allowed(self):
             self.plugin_system.call_hooks(
                 "on_plan_executed",
                 charge_windows=self.charge_window_best,
@@ -2445,6 +2449,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.check_entity_refresh()
         self.validate_config_check_retry()
         if not self.prediction_started:
+            from car_charging_execute import refresh_car_charging_lease
+
+            refresh_car_charging_lease(self)
             # A car's charging slots cancelled or resumed by dynamic load - replan now, not in 5 minutes
             self.dynamic_load_car_poll()
             # A car starting or stopping charging - apply or release "Hold for car" now, not in 5 minutes

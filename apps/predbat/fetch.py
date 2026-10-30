@@ -18,7 +18,10 @@ battery temperature, and other sensor inputs. Converts all data to per-minute
 dictionaries for use by the prediction engine.
 """
 
+from car_charging_config import read_car_charging_config
+
 from datetime import datetime, timedelta
+from math import isfinite
 from utils import minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative, MinuteArray, strptime_aware, is_entity_id, intelligent_device_is_charger
 from const import (
     MINUTE_WATT,
@@ -42,6 +45,7 @@ from const import (
     CLOUD_WINDOW_MINUTES,
     CLOUD_ARRAY_MARGIN,
     PV_ARRAY_KWP_UNKNOWN,
+    IMPORT_LIMIT_DEFAULT_W,
 )
 from predbat_metrics import metrics
 from futurerate import FutureRate
@@ -86,6 +90,18 @@ class Fetch:
     historical load/PV data, battery temperature, car charging energy,
     and other sensor inputs. Converts all data to per-minute dictionaries.
     """
+
+    def fetch_import_limit(self):
+        """Read one finite, non-negative site threshold in W; never coerce bad input to off.
+
+        This first stage accepts a literal YAML number only. Read the raw argument because
+        get_arg with a numeric default coerces invalid values to that default, hiding errors.
+        The generic float schema does not reject lists, booleans or non-finite values.
+        """
+        value = self.args.get("import_limit", IMPORT_LIMIT_DEFAULT_W)
+        if type(value) not in (int, float) or not isfinite(value) or value < 0:
+            raise ValueError("import_limit must be a finite non-negative scalar number in W (0 disables diagnostics)")
+        return float(value)
 
     def get_cloud_factor(self, minutes_now, pv_data, pv_data10):
         """
@@ -1862,6 +1878,10 @@ class Fetch:
                 self.log("Car {} charging is exclusive, will not plan other cars".format(car_n))
                 break
 
+        from car_charging_arrival import prepare_arrival_forecast
+
+        prepare_arrival_forecast(self)
+
     def car_planned_slot_entity(self, planned_entity_id_list, car_n, slot_entity_id):
         """
         The sensor a car's planned dispatches are read from, where that is not its slot sensor.
@@ -2209,7 +2229,7 @@ class Fetch:
             "active": active if isinstance(active, str) and active else None,
         }
 
-    def car_manual_soc_mirror(self):
+    def car_manual_soc_mirror(self, managed_cars=None):
         """
         Show a car's sensor SoC in its manual SoC kWh entity when the car is not tracked manually.
 
@@ -2219,14 +2239,32 @@ class Fetch:
         A car with no SoC sensor is left alone: there is no level to show, and writing the 0 it is planned from
         over a car that has only stopped being tracked for now - its switch turned off, or a regular expression
         that did not match at startup - would lose the tracked value for when it is tracked again.
+
+        A car whose SoC is managed by the combined recurring session is also left alone: the level held in
+        car_charging_soc is then the session's provisional figure, not an observed state of charge, and
+        publishing it as the manual SoC would overwrite the user's real value with a placeholder.
         """
+        if managed_cars is None:
+            managed_cars = set()
         for car_n in range(min(self.num_cars, len(self.car_charging_soc))):
+            if car_n in managed_cars:
+                continue
             if car_n < len(self.car_charging_manual_soc) and self.car_charging_manual_soc[car_n]:
                 continue
             if not self.car_arg_configured("car_charging_soc", car_n):
                 continue
             car_postfix = "" if car_n == 0 else "_" + str(car_n)
             self.expose_config("car_charging_manual_soc_kwh" + car_postfix, dp3(self.car_charging_soc[car_n]))
+
+    def car_sensor_soc_kwh(self, car_n):
+        """Keep native percentage SOC by default; convert only explicit car energy inputs."""
+        value = self.get_arg("car_charging_soc", 0.0, index=car_n)
+        unit = self.get_arg("car_charging_soc_unit", "%", index=car_n, indirect=False)
+        if unit == "kWh":
+            return value
+        if unit != "%":
+            raise ValueError("car_charging_soc_unit must be % or kWh")
+        return value * self.car_charging_battery_size[car_n] / 100.0
 
     def fetch_sensor_data_cars(self, save=True):
         """
@@ -2236,6 +2274,11 @@ class Fetch:
         live plan; diagnostics that record state across cycles must be skipped in that case.
         """
 
+        from car_charging_recurring import recurring_enabled
+
+        plan_soc = recurring_enabled(read_car_charging_config(self))
+        # The standing combined policy reads its own SOC after availability checks.
+        # Native zero entries are inactive model placeholders, not observed SOC.
         # Work out current car SoC and limit
         self.car_charging_loss = 1 - float(self.get_arg("car_charging_loss"))
 
@@ -2251,8 +2294,8 @@ class Fetch:
         for car_n in range(self.num_cars):
             if car_n < len(self.car_charging_manual_soc) and self.car_charging_manual_soc[car_n]:
                 self.car_charging_soc[car_n] = self.car_manual_soc_kwh(car_n)
-            else:
-                self.car_charging_soc[car_n] = (self.get_arg("car_charging_soc", 0.0, index=car_n) * self.car_charging_battery_size[car_n]) / 100.0
+            elif not (plan_soc and car_n == 0):
+                self.car_charging_soc[car_n] = self.car_sensor_soc_kwh(car_n)
 
         # Get octopus intelligent slot configuration - could be single value or list for multiple cars
         entity_id_config = self.get_arg("octopus_intelligent_slot", indirect=False)
@@ -2354,11 +2397,11 @@ class Fetch:
                 if size:
                     self.car_charging_battery_size[car_n] = size
                     # Recalculate car SoC now that battery size has been updated from Octopus data
-                    if car_n < len(self.car_charging_manual_soc) and not self.car_charging_manual_soc[car_n]:
-                        self.car_charging_soc[car_n] = (self.get_arg("car_charging_soc", 0.0, index=car_n) * self.car_charging_battery_size[car_n]) / 100.0
-                    elif car_n < len(self.car_charging_manual_soc):
+                    if car_n < len(self.car_charging_manual_soc) and self.car_charging_manual_soc[car_n]:
                         # Clamped again to Octopus's battery size, which can be larger than the configured one
                         self.car_charging_soc[car_n] = self.car_manual_soc_kwh(car_n)
+                    elif not (plan_soc and car_n == 0):
+                        self.car_charging_soc[car_n] = self.car_sensor_soc_kwh(car_n)
                 if rate:
                     # Octopus's figure only ever raises the configured rate, never lowers it. Where Octopus's catalogue
                     # gives the charger more than one power, the component passes on the lowest (catalogue_value(), #5438)
@@ -2485,11 +2528,15 @@ class Fetch:
         # Log final car SoC (initialised before the IOG loop, updated per-car after Octopus battery_size is read)
         if self.num_cars:
             car_charging_limit_percent = [dp1(limit / size * 100) if size else 0 for limit, size in zip(self.car_charging_limit, self.car_charging_battery_size)]
-            self.log("Cars: SoC: {}kWh, Charge limit {}% ({}kWh), plan time {}, battery size {}kWh".format(self.car_charging_soc, car_charging_limit_percent, self.car_charging_limit, self.car_charging_plan_time, self.car_charging_battery_size))
+            displayed_soc = ["combined-managed" if plan_soc and index == 0 else value for index, value in enumerate(self.car_charging_soc)]
+            self.log("Cars: SoC: {}kWh, Charge limit {}% ({}kWh), plan time {}, battery size {}kWh".format(displayed_soc, car_charging_limit_percent, self.car_charging_limit, self.car_charging_plan_time, self.car_charging_battery_size))
 
         # Live plan only, as for car_manual_soc_track() - a compare.py re-run must not publish anything
         if save:
-            self.car_manual_soc_mirror()
+            # A car managed by the combined recurring session holds a provisional SoC, not an observed
+            # one, so it is not mirrored into the manual SoC entity.
+            managed_cars = {0} if plan_soc else set()
+            self.car_manual_soc_mirror(managed_cars=managed_cars)
 
     def octopus_charge_target_is_added(self, entity_id, car_n=0):
         """
@@ -4522,6 +4569,7 @@ class Fetch:
         self.inverter_loss = 1.0 - self.get_arg("inverter_loss")
         self.inverter_hybrid = self.get_arg("inverter_hybrid")
         self.pv_ac_limit = self.get_arg("pv_ac_limit", 0.0) / MINUTE_WATT
+        self.import_limit = self.fetch_import_limit()
         self.inverter_freeze_export_discharge_rate = max(self.get_arg("inverter_freeze_export_discharge_rate", 0.0), 0.0) / MINUTE_WATT
         self.log("Freeze Export discharge rate configured: {:.0f} W".format(self.inverter_freeze_export_discharge_rate * MINUTE_WATT))
         self.base_load = self.get_arg("base_load", 100) / 1000.0

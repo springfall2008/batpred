@@ -221,6 +221,13 @@ class Output:
         """
         Publish the car charging plan
         """
+        # Fetch calls this before execution. Explicit combined apply must not leak
+        # the independently optimised legacy EV plan to the existing HA executor.
+        from car_charging_execute import publish_car_charging_slot
+        from car_charging_publish import car_plan_attributes
+
+        if publish_car_charging_slot(self):
+            return
         postfix = ""
         for car_n in range(self.num_cars):
             # A list of its own per car - shared, every car after the first also carried the windows of
@@ -232,7 +239,14 @@ class Output:
                 self.dashboard_item(
                     "binary_sensor." + self.prefix + "_car_charging_slot" + postfix,
                     state="off",
-                    attributes={"planned": plan, "cost": None, "kWh": None, "friendly_name": "Predbat car charging slot" + postfix, "icon": "mdi:home-lightning-bolt-outline"},
+                    attributes={
+                        **(car_plan_attributes(getattr(self, "car_charging_report", None)) if car_n == 0 else {}),
+                        "planned": plan,
+                        "cost": None,
+                        "kWh": None,
+                        "friendly_name": "Predbat car charging slot" + postfix,
+                        "icon": "mdi:home-lightning-bolt-outline",
+                    },
                 )
                 self.dashboard_item(
                     self.prefix + ".car_charging_start" + postfix,
@@ -303,6 +317,7 @@ class Output:
                     "binary_sensor." + self.prefix + "_car_charging_slot" + postfix,
                     state="on" if slot else "off",
                     attributes={
+                        **(car_plan_attributes(getattr(self, "car_charging_report", None)) if car_n == 0 else {}),
                         "planned": plan,
                         "cost": dp2(total_cost),
                         "kwh": dp2(total_kwh),
@@ -1760,13 +1775,13 @@ class Output:
                 # charging in the same step, not only when no car is charging
                 car_charging_cancelled = self.car_charge_slot_kwh_cancelled(minute_start, minute_end)
                 if car_charging_kwh > 0.0:
-                    car_charging_str = str(car_charging_kwh)
+                    car_charging_str = "{:.2f}".format(car_charging_kwh)
                     if car_charging_cancelled > 0.0:
-                        car_charging_str += " +" + str(car_charging_cancelled) + "?"
+                        car_charging_str += " +{:.2f}?".format(car_charging_cancelled)
                     car_color = "FFFF00"
                     car_rate = self.car_charge_slot_rate(minute_start, minute_end)
                 elif car_charging_cancelled > 0.0:
-                    car_charging_str = str(car_charging_cancelled) + "?"
+                    car_charging_str = "{:.2f}?".format(car_charging_cancelled)
                     car_color = "#FFFFCC"
                 else:
                     car_charging_str = "&#9866;"
@@ -2013,7 +2028,7 @@ class Output:
         if plan_debug and self.load_forecast:
             html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(xload_total))
         if self.num_cars > 0:
-            html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(car_total))
+            html += "<td bgcolor=#FFFFFF><b>{:.2f}</b></td>".format(car_total)
         if self.iboost_enable:
             iboost_amount_str = "&#9866;"
             iboost_amount_end = self.predict_iboost_best.get(minute_relative_slot_end, 0)
@@ -3363,8 +3378,14 @@ class Output:
                     if end_minutes <= start_minutes:
                         continue
 
-                    for minute in range(start_minutes, end_minutes, PREDICT_STEP):
-                        load_reported += yesterday_load_step.get(minute, 0)
+                    # Live EV leases retain seconds-precision boundaries. History
+                    # uses integer five-minute buckets: integrate their overlap
+                    # instead of truncating the lease or passing floats to range.
+                    first_step = math.floor(start_minutes / PREDICT_STEP) * PREDICT_STEP
+                    last_step = math.ceil(end_minutes / PREDICT_STEP) * PREDICT_STEP
+                    overlaps = [(minute, min(end_minutes, minute + PREDICT_STEP) - max(start_minutes, minute)) for minute in range(first_step, last_step, PREDICT_STEP)]
+                    for minute, overlap in overlaps:
+                        load_reported += yesterday_load_step.get(minute, 0) * overlap / PREDICT_STEP
                     if load_reported < kwh_drain:
                         # The slot is reporting more energy than the load, so we need to adjust the slot energy down to the real load
                         # e.g. Octopus can over report energy in the period
@@ -3377,10 +3398,19 @@ class Output:
 
                     # Subtract the energy for the period from the historical load as it will be added back in again during the simulation
                     total_hours = (end_minutes - start_minutes) / 60.0
-                    subtract_amount = khw / total_hours * PREDICT_STEP / 60.0
-                    for minute in range(start_minutes, end_minutes, PREDICT_STEP):
+                    removed_kwh = 0
+                    for minute, overlap in overlaps:
+                        if minute not in yesterday_load_step:
+                            continue
+                        subtract_amount = khw / total_hours * overlap / 60.0
                         load_value = yesterday_load_step.get(minute, 0)
-                        yesterday_load_step[minute] = max(load_value - subtract_amount, 0)
+                        # An aggregate cap cannot guarantee enough load in each
+                        # partially covered bucket. Never borrow energy from its
+                        # uncovered part, or add back energy we could not remove.
+                        removed = min(subtract_amount, max(load_value, 0) * overlap / PREDICT_STEP)
+                        yesterday_load_step[minute] = max(load_value - removed, 0)
+                        removed_kwh += removed
+                    slot["kwh"] = min(khw, removed_kwh)
 
     def plan_row_holding_for_car(self, minute_start, minute_end, car_hold_minutes=None):
         """

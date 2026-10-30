@@ -364,7 +364,12 @@ class Plan:
         """
         now_slots = self.car_charging_now_slots
         # Always a fresh list per car, so a caller that edits the model can never edit the published plan
-        return [(now_slots[car_n] if car_n < len(now_slots) else []) + list(slots) for car_n, slots in enumerate(self.car_charging_slots)]
+        model = [(now_slots[car_n] if car_n < len(now_slots) else []) + list(slots) for car_n, slots in enumerate(self.car_charging_slots)]
+        from car_charging_arrival import model_arrival_slots
+
+        if model and not model[0]:
+            model[0] = model_arrival_slots(self)
+        return model
 
     def car_charging_threshold_kw(self):
         """
@@ -2537,6 +2542,15 @@ class Plan:
                 for line in text_lines:
                     self.log(line)
                 self.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, self.end_record)
+
+        # The opt-in EV/battery planner consumes the same native forecasts.
+        # Shadow is isolated; only explicit apply may stage validated intents.
+        # Counterfactual tariff/debug calculations must not replace the live
+        # report or pending intent merely because they suppress HA publication.
+        if publish:
+            from car_charging_plan import evaluate_car_charging
+
+            evaluate_car_charging(self, publish=True)
 
         # Record planning duration for SLO metrics
         self.plan_last_duration_seconds = time.time() - plan_start_time
@@ -5370,6 +5384,32 @@ class Plan:
                 else:
                     self.export_limits_best[window_n] = pack_export_limit(EXPORT_MODE_IDLE)
 
+    def publish_import_limit_diagnostics(self, pred):
+        """Publish the final best forecast's diagnostic, never an enforcement/feasibility claim."""
+        attributes = {
+            "friendly_name": "Best plan grid import limit diagnostic",
+            "icon": "mdi:transmission-tower-import",
+            "scope": "whole_site",
+            "enforced": False,
+            "limit_w": self.import_limit,
+            "peak_w": None,
+            "excess_kwh": None,
+            "minutes_over": None,
+            "first_exceeded": None,
+            "step_minutes": None,
+            "checked_minutes": 0,
+            "start": None,
+            "end": None,
+        }
+        state = "disabled" if self.import_limit == 0 else "unavailable"
+        diagnostic = getattr(pred, "import_limit_diagnostics", None)
+        if self.import_limit > 0 and diagnostic and diagnostic["limit_w"] == self.import_limit and diagnostic["checked_minutes"] == pred.forecast_minutes and pred.forecast_minutes > 0:
+            attributes.update(diagnostic)
+            attributes["peak_w"] = round(diagnostic["peak_w"], 3)
+            attributes["excess_kwh"] = round(diagnostic["excess_kwh"], 6)
+            state = "exceeded" if diagnostic["minutes_over"] else "within_limit"
+        self.dashboard_item(self.prefix + ".best_import_limit", state=state, attributes=attributes)
+
     def run_prediction(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, save=None, step=PREDICT_STEP):
         """
         Run a prediction scenario given a charge limit, options to save the results or not to HA entity
@@ -5665,6 +5705,7 @@ class Plan:
 
             if save and save == "best":
                 self.log("Saving plan best values to HA entities")
+                self.publish_import_limit_diagnostics(pred)
                 self.dashboard_item(
                     self.prefix + ".best_battery_hours_left",
                     state=dp2(hours_left),
