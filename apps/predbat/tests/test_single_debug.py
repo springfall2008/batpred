@@ -280,7 +280,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     )
     my_predbat.log("Final plan soc_min {} final_soc {}".format(soc_min, soc))
 
-    html_plan, raw_plan = my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, my_predbat.end_record)
+    html_plan, raw_plan = my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, my_predbat.end_record, show_scenarios=True)
     filename = "plan_final.html"
     open(filename, "w").write(html_plan)
     filename = "plan_final.json"

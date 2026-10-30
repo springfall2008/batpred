@@ -73,6 +73,12 @@ REASON_TEMPLATES = {
     "status_warning": "Predbat reported a problem during this slot: {warnings}",
 }
 
+# The plan is scored against the expected forecast and its PV10 and PV90 alternatives, but the table shows only
+# the expected one (#5871). A row carries the other scenarios' values as positional lists in this order, with the
+# order and the scenario names published once per plan rather than repeated on every row.
+PLAN_SCENARIO_FIELDS = ["soc_percent", "pv_forecast", "load_forecast", "cost_change", "total_cost"]
+PLAN_SCENARIO_NAMES = {"10": "PV10 (low solar, high use)", "90": "PV90 (high solar, low use)"}
+
 
 def yesterday_slot_is_exporting(slot_status):
     """True when a historical ``predbat.status`` string (already lower-cased) represents export
@@ -1212,9 +1218,70 @@ class Output:
         charge_rate_now_curve = min(charge_rate_now_curve, charge_rate_limit)
         return dp2(charge_rate_now_curve * MINUTE_WATT / 1000.0)
 
-    def publish_html_plan(self, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record, publish=True, prediction=None, car_hold_minutes=None, status_warnings=None):
+    def plan_scenario_sources(self, pv_forecast_minute_step10, load_minutes_step10):
+        """
+        The final plan's PV10 and PV90 runs to show beside the expected one (#5871), keyed by scenario.
+
+        Each entry is (soc by minute, metric by minute, PV step, load step). A scenario that was not run on the
+        final plan - PV90 while it is disabled - has an empty SoC series and is left out.
+        """
+        sources = {}
+        if self.predict_soc_best10:
+            sources["10"] = (self.predict_soc_best10, self.predict_metric_best10, pv_forecast_minute_step10, load_minutes_step10)
+        if self.predict_soc_best90:
+            sources["90"] = (self.predict_soc_best90, self.predict_metric_best90, self.pv_forecast_minute90_step, self.load_minutes_step90)
+        return sources
+
+    def plan_row_scenarios(self, scenario_sources, minute_relative_start, minute_relative_slot_end, expected):
+        """
+        A plan row's values under each other scenario, in PLAN_SCENARIO_FIELDS order (#5871).
+
+        expected is the row's own values in the same order. A scenario whose values all match them, at the
+        precision the table shows, is left out, so rows where the scenarios agree carry nothing extra.
+        Returns a dict keyed by scenario, or None when every scenario matches.
+        """
+        result = {}
+        for key, (soc, metric, pv_step, load_step) in scenario_sources.items():
+            pv = 0.0
+            load = 0.0
+            for offset in range(minute_relative_start, minute_relative_slot_end, PREDICT_STEP):
+                pv += pv_step.get(offset, 0.0)
+                load += load_step.get(offset, 0.0)
+            metric_start = metric.get(minute_relative_start, 0.0)
+            metric_end = metric.get(minute_relative_slot_end, metric_start)
+            # + 0.0 turns a rounded -0.0 into 0.0, so it compares equal and reads cleanly
+            values = [calc_percent_limit(soc.get(minute_relative_start, 0.0), self.soc_max), dp2(pv) + 0.0, dp2(load) + 0.0, dp2((metric_end - metric_start) / 100.0) + 0.0, dp2(metric_start / 100.0) + 0.0]
+            if values != expected:
+                result[key] = values
+        return result or None
+
+    def plan_scenario_title(self, field, expected, row_scenarios):
+        """
+        A title attribute listing one plan cell's value in every scenario (#5871), or "" when they all agree.
+
+        field is the position in PLAN_SCENARIO_FIELDS and expected the cell's own value.
+        """
+        if not row_scenarios:
+            return ""
+        values = [("Expected", expected)] + [(PLAN_SCENARIO_NAMES[key], scenario[field]) for key, scenario in sorted(row_scenarios.items())]
+        name = PLAN_SCENARIO_FIELDS[field]
+        if name == "soc_percent":
+            parts = ["{} {}%".format(label, value) for label, value in values]
+        elif name in ("pv_forecast", "load_forecast"):
+            parts = ["{} {:.2f} kWh".format(label, value) for label, value in values]
+        elif name == "cost_change":
+            parts = ["{} {:+d}{}".format(label, int(round(value * 100)), self.currency_symbols[1]) for label, value in values]
+        else:
+            parts = ["{} {}{:.2f}".format(label, self.currency_symbols[0], value) for label, value in values]
+        return ' title="' + ", ".join(parts) + '"'
+
+    def publish_html_plan(self, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record, publish=True, prediction=None, car_hold_minutes=None, status_warnings=None, show_scenarios=False):
         """
         Publish the current plan in HTML format
+
+        show_scenarios adds the final plan's PV10 and PV90 outcomes to each row, as tooltips in the HTML and as
+        per-row lists in the JSON (#5871). Only the live plan passes it - the History, compare and debug-pass
+        tables have no matching scenario runs.
 
         car_hold_minutes, when given, is the set of plan minutes whose recorded status was "Hold for car":
         the Yesterday actual-history table shows measured SoC, so its car icon comes from what happened
@@ -1249,6 +1316,10 @@ class Output:
         car_total = 0
         raw_plan = {}
         raw_plan["rows"] = []
+        scenario_sources = self.plan_scenario_sources(pv_forecast_minute_step10, load_minutes_step10) if show_scenarios else {}
+        if scenario_sources:
+            raw_plan["scenario_fields"] = PLAN_SCENARIO_FIELDS
+            raw_plan["scenario_names"] = {key: PLAN_SCENARIO_NAMES[key] for key in scenario_sources}
 
         import_cost_threshold = self.rate_import_cost_threshold
         export_cost_threshold = self.rate_export_cost_threshold
@@ -1425,6 +1496,10 @@ class Output:
             metric_start = self.predict_metric_best.get(minute_relative_start, 0.0)
             metric_end = self.predict_metric_best.get(minute_relative_slot_end, metric_start)
             metric_change = metric_end - metric_start
+            row_scenarios = None
+            if scenario_sources:
+                row_expected = [soc_percent, raw_pv_forecast, raw_load_forecast, dp2(metric_change / 100.0), dp2(metric_start / 100.0)]
+                row_scenarios = self.plan_row_scenarios(scenario_sources, minute_relative_start, minute_relative_slot_end, row_expected)
 
             # Raw state for raw plan
             raw_state = "Demand"
@@ -1877,8 +1952,8 @@ class Output:
                 html += cell_style + " "
                 html += "bgcolor=" + state_color + ">" + state + "</td>"
                 html += "<td bgcolor=#FFFFFF> " + show_limit + "</td>"
-            html += "<td id=pv bgcolor=" + pv_color + ">" + str(pv_forecast) + pv_symbol + "</td>"
-            html += "<td id=load data-minute=" + str(minute) + " bgcolor=" + load_color + ">" + str(load_forecast) + "</td>"
+            html += "<td id=pv bgcolor=" + pv_color + self.plan_scenario_title(1, raw_pv_forecast, row_scenarios) + ">" + str(pv_forecast) + pv_symbol + "</td>"
+            html += "<td id=load data-minute=" + str(minute) + " bgcolor=" + load_color + self.plan_scenario_title(2, raw_load_forecast, row_scenarios) + ">" + str(load_forecast) + "</td>"
             if plan_debug:
                 html += "<td id=clip bgcolor=" + clipped_color + ">" + clipped_str + "</td>"
             if plan_debug and self.load_forecast:
@@ -1887,9 +1962,9 @@ class Output:
                 html += "<td id=car bgcolor=" + car_color + ">" + car_charging_str + "</td>"
             if self.iboost_enable:
                 html += "<td bgcolor=" + iboost_color + ">" + iboost_amount_str + " </td>"
-            html += "<td id=soc data-minute=" + str(minute) + " bgcolor=" + soc_color + ">" + str(soc_percent) + soc_sym + "</td>"
-            html += "<td id=cost bgcolor=" + cost_color + ">" + str(cost_str) + "</td>"
-            html += "<td id=total_cost bgcolor=#FFFFFF>" + str(total_str) + "</td>"
+            html += "<td id=soc data-minute=" + str(minute) + " bgcolor=" + soc_color + self.plan_scenario_title(0, soc_percent, row_scenarios) + ">" + str(soc_percent) + soc_sym + "</td>"
+            html += "<td id=cost bgcolor=" + cost_color + self.plan_scenario_title(3, dp2(metric_change / 100.0), row_scenarios) + ">" + str(cost_str) + "</td>"
+            html += "<td id=total_cost bgcolor=#FFFFFF" + self.plan_scenario_title(4, dp2(metric_start / 100.0), row_scenarios) + ">" + str(total_str) + "</td>"
             if self.carbon_enable:
                 html += "<td id=carbon bgcolor=" + carbon_intensity_color + ">" + str(carbon_intensity) + " </td>"
                 html += "<td id=total_carbon bgcolor=" + carbon_color + "> " + str(carbon_str) + " </td>"
@@ -1984,6 +2059,8 @@ class Output:
             json_row["soc_sym"] = soc_sym
             json_row["cost_change"] = dp2(metric_change / 100.0)
             json_row["total_cost"] = dp2(metric_start / 100.0)
+            if row_scenarios:
+                json_row["scenarios"] = row_scenarios
             if self.carbon_enable:
                 json_row["carbon_intensity"] = carbon_intensity
                 json_row["carbon_change"] = carbon_change

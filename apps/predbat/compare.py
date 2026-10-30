@@ -104,6 +104,11 @@ COMPARE_PLAN_STATE = (
     "rate_best_cost_threshold_charge",
     "rate_best_cost_threshold_export",
     "io_confirmed_tiebreak",
+    # The live plan's PV10 and PV90 series behind its scenario tooltips (#5871)
+    "predict_soc_best10",
+    "predict_metric_best10",
+    "predict_soc_best90",
+    "predict_metric_best90",
 )
 # Battery and inverter values a tariff can override, reset after each tariff as well as at the end
 COMPARE_HARDWARE_STATE = ("soc_max", "battery_rate_max_charge", "battery_rate_max_charge_dc", "battery_rate_max_discharge", "battery_rate_max_export", "inverter_limit")
