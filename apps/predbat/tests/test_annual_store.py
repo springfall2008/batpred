@@ -12,7 +12,7 @@
 import asyncio
 import datetime
 
-from annual_store import INDEX_NAME, MAX_RUNS, STORAGE_MODULE, _discard_run, backfill_summaries, build_label, build_summary, delete_run, list_runs, load_plan, load_run, save_run
+from annual_store import INDEX_NAME, MAX_RUNS, STORAGE_MODULE, _discard_run, backfill_summaries, build_label, build_summary, delete_run, list_runs, load_plan, load_run, save_run, solar_array_kwp
 from tests.test_infra import run_async
 
 
@@ -174,6 +174,22 @@ def test_annual_store(my_predbat):
     if "Agile" not in label:
         print("  ERROR: the label should name the tariff, got {!r}".format(label))
         failed = True
+
+    print("Test: an array given as panels is labelled with its kWp, not left out (#4395)")
+    label = build_label({"solar": [{"panels": 12, "panel_watts": 450}, {"kwp": 2.0}]})
+    if "7.4kWp" not in label:
+        print("  ERROR: 12 x 450 W panels plus a 2 kWp array should label as 7.4kWp, got {!r}".format(label))
+        failed = True
+    label = build_label({"solar": {"panels": 10, "panel_watts": None}})
+    if "4.0kWp" not in label:
+        print("  ERROR: a single array given as a mapping, with an empty panel_watts, should label as 4.0kWp, got {!r}".format(label))
+        failed = True
+
+    print("Test: solar_array_kwp treats unusable values as 0 rather than raising (#4395)")
+    for bad in [{"kwp": "nan"}, {"kwp": True}, {"kwp": 10**400}, {"panels": "lots"}, "not-a-dict"]:
+        if solar_array_kwp(bad) != 0.0:
+            print("  ERROR: solar_array_kwp({!r}) should be 0.0, got {!r}".format(bad, solar_array_kwp(bad)))
+            failed = True
 
     print("Test: a label is still produced for a config with no battery or solar")
     label = build_label({"tariff": {"rates_import": [{"rate": 25.0}]}})

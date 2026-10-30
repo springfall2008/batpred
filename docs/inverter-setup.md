@@ -1933,7 +1933,6 @@ To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to fo
 
 - All the Sigenergy entities referenced in `apps.yaml` need to be enabled for Predbat to use them. The following are disabled by default and will need enabling:
 
-    - sensor.sigen_plant_available_max_discharging_capacity
     - sensor.sigen_plant_daily_load_consumption
     - number.sigen_plant_ess_backup_state_of_charge
     - number.sigen_plant_ess_charge_cut_off_state_of_charge

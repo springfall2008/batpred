@@ -13,8 +13,40 @@ Storage abstraction rather than the filesystem, because there may not be one.
 
 import copy
 import datetime
+import math
 
 MAX_RUNS = 20
+# A typical domestic panel in 2026. Only used to turn a panel count into kWp.
+DEFAULT_PANEL_WATTS = 400.0
+
+
+def _finite_or_none(value):
+    """Return the value as a finite float, or None when it is not a usable number (bools included)."""
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def solar_array_kwp(array):
+    """Return one solar array's peak power in kW, whether it was given as kwp or as panels.
+
+    For display from a stored (raw) config, which carries only the field the user chose: an array
+    given as panels has no kwp (#4395). An empty panel_watts means the default, as on the web form;
+    anything unusable counts as 0.
+    """
+    if not isinstance(array, dict):
+        return 0.0
+    if "kwp" in array:
+        return _finite_or_none(array.get("kwp")) or 0.0
+    panels = _finite_or_none(array.get("panels")) or 0.0
+    panel_watts = _finite_or_none(array.get("panel_watts") or DEFAULT_PANEL_WATTS) or 0.0
+    return panels * panel_watts / 1000.0
+
+
 STORAGE_MODULE = "annual"
 INDEX_NAME = "runs_index"
 
@@ -57,8 +89,10 @@ def build_label(config):
         parts.append("no battery")
 
     solar = config.get("solar")
+    if isinstance(solar, dict):
+        solar = [solar]
     if solar:
-        total_kwp = sum(array.get("kwp", 0) for array in solar if isinstance(array, dict))
+        total_kwp = sum(solar_array_kwp(array) for array in solar)
         if total_kwp:
             parts.append("{}kWp".format(round(total_kwp, 2)))
     else:
