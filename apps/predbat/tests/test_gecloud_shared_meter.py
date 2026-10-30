@@ -249,7 +249,7 @@ async def polling_uses_raw_sources():
     # The merged native control cache keeps b's old fields after a failed read, but the
     # corrected site meter must become unknown rather than borrowing that old AC flow.
     responses["b"] = None
-    assert not await ge.run(120, False)
+    assert await ge.run(120, False), "Missing load samples must not back off all Cloud polling/control"
     assert ge.status["b"]["inverter"]["power"] == -2500
     assert ge.live_display_samples["b"] is None
     assert ge.dashboard_items["sensor.predbat_gecloud_shared_load_power"]["state"] == "unavailable"
