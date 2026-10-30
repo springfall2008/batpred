@@ -7612,8 +7612,9 @@ def get_plan_renderer_js():
         }
 
         const defaultLoadValue = manualLoadValue !== undefined ? manualLoadValue : 0.5;
-        let html = `<td id=load data-minute="${minutesFromMidnight}" bgcolor=${bgColor}${titleAttr} onclick="toggleForceDropdown('${dropdownId}')" class="clickable-time-cell">`;
-        html += `${displayValue}${isOverride ? ' &#8526;' : ''}`;
+        let html = `<td id=load data-minute="${minutesFromMidnight}" bgcolor=${bgColor} onclick="toggleForceDropdown('${dropdownId}')" class="clickable-time-cell">`;
+        // The scenario tooltip sits on the value, not the cell, so it doesn't cover the override menu
+        html += `<span${titleAttr}>${displayValue}</span>${isOverride ? ' &#8526;' : ''}`;
         html += '<div class="dropdown">';
         html += `<div id="${dropdownId}" class="dropdown-content">`;
         html += '<label>Adjust load (kWh):</label>';
@@ -7633,8 +7634,9 @@ def get_plan_renderer_js():
         const isOverride = overrides.manual_soc.some(r => r.minutes === minutesFromMidnight);
         const isOverrideMax = overrides.manual_soc_max.some(r => r.minutes === minutesFromMidnight);
 
-        let html = `<td id=soc data-minute="${minutesFromMidnight}" bgcolor=${bgColor}${titleAttr} onclick="toggleForceDropdown('${dropdownId}')" class="clickable-time-cell">`;
-        html += `${socValue}${socSym}${isOverride ? ' &#8526;' : ''}${isOverrideMax ? ' &#11015;' : ''}`;
+        let html = `<td id=soc data-minute="${minutesFromMidnight}" bgcolor=${bgColor} onclick="toggleForceDropdown('${dropdownId}')" class="clickable-time-cell">`;
+        // The scenario tooltip sits on the value, not the cell, so it doesn't cover the override menu
+        html += `<span${titleAttr}>${socValue}${socSym}</span>${isOverride ? ' &#8526;' : ''}${isOverrideMax ? ' &#11015;' : ''}`;
         html += '<div class="dropdown">';
         html += `<div id="${dropdownId}" class="dropdown-content">`;
         html += '<label>Minimum SOC (%):</label>';

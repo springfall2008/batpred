@@ -77,7 +77,8 @@ REASON_TEMPLATES = {
 # the expected one (#5871). A row carries the other scenarios' values as positional lists in this order, with the
 # order and the scenario names published once per plan rather than repeated on every row.
 PLAN_SCENARIO_FIELDS = ["soc_percent", "pv_forecast", "load_forecast", "cost_change", "total_cost"]
-PLAN_SCENARIO_NAMES = {"10": "PV10 (low solar, high use)", "90": "PV90 (high solar, low use)"}
+# PV10 is the low solar, high use case and PV90 the high solar, low use one
+PLAN_SCENARIO_NAMES = {"10": "Pessimistic", "90": "Optimistic"}
 
 
 def yesterday_slot_is_exporting(slot_status):
@@ -1222,11 +1223,12 @@ class Output:
         """
         The final plan's PV10 and PV90 runs to show beside the expected one (#5871), keyed by scenario.
 
-        Each entry is (soc by minute, metric by minute, PV step, load step). A scenario that was not run on the
-        final plan - PV90 while it is disabled - has an empty SoC series and is left out.
+        Each entry is (soc by minute, metric by minute, PV step, load step). A scenario the plan is not scored
+        against is left out: PV10 at a zero weight (its run is still made, for the Best10 chart), and PV90 at a zero
+        weight, when it is not run and its SoC series is empty.
         """
         sources = {}
-        if self.predict_soc_best10:
+        if self.predict_soc_best10 and self.pv_metric10_weight > 0:
             sources["10"] = (self.predict_soc_best10, self.predict_metric_best10, pv_forecast_minute_step10, load_minutes_step10)
         if self.predict_soc_best90:
             sources["90"] = (self.predict_soc_best90, self.predict_metric_best90, self.pv_forecast_minute90_step, self.load_minutes_step90)
@@ -1281,8 +1283,8 @@ class Output:
         """
         Publish the current plan in HTML format
 
-        show_scenarios adds the final plan's PV10 and PV90 outcomes to each row, as tooltips in the HTML and as
-        per-row lists in the JSON (#5871). Only the live plan passes it - the History, compare and debug-pass
+        show_scenarios adds the final plan's PV10 and PV90 outcomes to each row: a SoC tooltip in the HTML, and
+        per-row lists in the JSON that the web UI turns into tooltips (#5871). Only the live plan passes it - the History, compare and debug-pass
         tables have no matching scenario runs.
 
         car_hold_minutes, when given, is the set of plan minutes whose recorded status was "Hold for car":
@@ -1954,8 +1956,8 @@ class Output:
                 html += cell_style + " "
                 html += "bgcolor=" + state_color + ">" + state + "</td>"
                 html += "<td bgcolor=#FFFFFF> " + show_limit + "</td>"
-            html += "<td id=pv bgcolor=" + pv_color + self.plan_scenario_title(1, raw_pv_forecast, row_scenarios) + ">" + str(pv_forecast) + pv_symbol + "</td>"
-            html += "<td id=load data-minute=" + str(minute) + " bgcolor=" + load_color + self.plan_scenario_title(2, raw_load_forecast, row_scenarios) + ">" + str(load_forecast) + "</td>"
+            html += "<td id=pv bgcolor=" + pv_color + ">" + str(pv_forecast) + pv_symbol + "</td>"
+            html += "<td id=load data-minute=" + str(minute) + " bgcolor=" + load_color + ">" + str(load_forecast) + "</td>"
             if plan_debug:
                 html += "<td id=clip bgcolor=" + clipped_color + ">" + clipped_str + "</td>"
             if plan_debug and self.load_forecast:
@@ -1964,9 +1966,11 @@ class Output:
                 html += "<td id=car bgcolor=" + car_color + ">" + car_charging_str + "</td>"
             if self.iboost_enable:
                 html += "<td bgcolor=" + iboost_color + ">" + iboost_amount_str + " </td>"
+            # Only the SoC cell carries the scenario tooltip in the HTML, where it is repeated on every row; the web
+            # UI builds tooltips for the other cells from the row's JSON (#5871)
             html += "<td id=soc data-minute=" + str(minute) + " bgcolor=" + soc_color + self.plan_scenario_title(0, soc_percent, row_scenarios) + ">" + str(soc_percent) + soc_sym + "</td>"
-            html += "<td id=cost bgcolor=" + cost_color + self.plan_scenario_title(3, dp2(metric_change / 100.0), row_scenarios) + ">" + str(cost_str) + "</td>"
-            html += "<td id=total_cost bgcolor=#FFFFFF" + self.plan_scenario_title(4, dp2(metric_start / 100.0), row_scenarios) + ">" + str(total_str) + "</td>"
+            html += "<td id=cost bgcolor=" + cost_color + ">" + str(cost_str) + "</td>"
+            html += "<td id=total_cost bgcolor=#FFFFFF>" + str(total_str) + "</td>"
             if self.carbon_enable:
                 html += "<td id=carbon bgcolor=" + carbon_intensity_color + ">" + str(carbon_intensity) + " </td>"
                 html += "<td id=total_carbon bgcolor=" + carbon_color + "> " + str(carbon_str) + " </td>"

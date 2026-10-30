@@ -112,13 +112,14 @@ def run_test_plan_scenarios(my_predbat):
             print("ERROR: first row scenarios expected {} got {}".format(expected, row.get("scenarios")))
             failed = True
 
-        print("Test: the HTML cells carry a title= tooltip listing every scenario")
-        soc_title = 'title="Expected 50%&#10;{} 40%&#10;{} 60%"'.format(PLAN_SCENARIO_NAMES["10"], PLAN_SCENARIO_NAMES["90"])
+        print("Test: in the HTML only the SoC cell carries the tooltip, one scenario per line")
+        soc_title = 'title="Expected 50%&#10;Pessimistic 40%&#10;Optimistic 60%"'
         if soc_title not in html:
             print("ERROR: expected the SoC tooltip {} in the plan HTML".format(soc_title))
             failed = True
-        if html.count('title="Expected ') < 5:
-            print("ERROR: expected tooltips on the SoC, PV, load, cost and total cells, found {}".format(html.count('title="Expected ')))
+        rows_with_scenarios = sum(1 for plan_row in raw_plan["rows"] if "scenarios" in plan_row)
+        if html.count('title="Expected ') != rows_with_scenarios:
+            print("ERROR: expected one tooltip per row (the SoC cell), found {} for {} rows".format(html.count('title="Expected '), rows_with_scenarios))
             failed = True
 
         print("Test: a row where every scenario matches the expected one carries nothing extra")
@@ -142,6 +143,17 @@ def run_test_plan_scenarios(my_predbat):
             print("ERROR: expected only PV10, got names {} row {}".format(raw_plan.get("scenario_names"), _first_row(raw_plan).get("scenarios")))
             failed = True
 
+        print("Test: PV10 is left out when the plan is not scored against it")
+        saved_weight10 = my_predbat.pv_metric10_weight
+        my_predbat.pv_metric10_weight = 0.0
+        my_predbat.predict_soc_best90 = _flat_soc(my_predbat, 6.0)
+        my_predbat.predict_metric_best90 = _flat_metric(my_predbat, 0.5)
+        _, raw_plan = my_predbat.publish_html_plan(pv_step, pv_step, load_step, load_step, my_predbat.end_record, publish=False, show_scenarios=True)
+        my_predbat.pv_metric10_weight = saved_weight10
+        if list(raw_plan.get("scenario_names", {}).keys()) != ["90"]:
+            print("ERROR: with pv_metric10_weight 0 only PV90 should be shown, got {}".format(raw_plan.get("scenario_names")))
+            failed = True
+
         print("Test: without show_scenarios (History, compare, debug passes) nothing is added")
         html, raw_plan = my_predbat.publish_html_plan(pv_step, pv_step, load_step, load_step, my_predbat.end_record, publish=False)
         if "scenario_fields" in raw_plan or any("scenarios" in row for row in raw_plan["rows"]) or 'title="Expected ' in html:
@@ -158,6 +170,10 @@ def run_test_plan_scenarios(my_predbat):
         renderer_js = get_plan_renderer_js()
         if "function scenarioTitle(" not in renderer_js or renderer_js.count("scenarioTitle(jsonData, row,") < 5:
             print("ERROR: expected scenarioTitle() and its use on the SoC, PV, load, cost and total cells")
+            failed = True
+        # On the editable cells the tooltip sits on the value, so it doesn't cover the override menu
+        if renderer_js.count("<span${titleAttr}>") != 2 or "${titleAttr} onclick" in renderer_js:
+            print("ERROR: expected the editable SoC and load cells to put the tooltip on a span around the value")
             failed = True
         jsonData = {"scenario_fields": PLAN_SCENARIO_FIELDS, "scenario_names": PLAN_SCENARIO_NAMES, "currency_symbols": ["£", "p"]}
         row = {"scenarios": {"90": [60, 0.1, 0.25, -0.12, 1.5], "10": [40, 0.0, 0.5, 0.2, -2.25]}}
