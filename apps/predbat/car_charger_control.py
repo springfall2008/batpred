@@ -134,7 +134,8 @@ class CarChargerControl:
                 Left as None neither survives a restart.
             control: The component's control setting from apps.yaml. None (unset) lets control
                 run wherever the component's automatic setup maps chargers to cars; False turns
-                it off; True also drives a charger whose Octopus arrangement cannot be told.
+                it off; True also drives a charger whose Octopus arrangement cannot be told, and a charger Octopus
+                drives when octopus_intelligent_planned_slot filters that car's dispatches.
             switch_prefix: The component's entity name, e.g. "gecloud", for its guest charging
                 switch. Left as None the component has no guest switch.
             control_setting: The apps.yaml name of the control setting, e.g. "ge_cloud_evc_control",
@@ -206,7 +207,8 @@ class CarChargerControl:
 
         True: Octopus switches the charger itself, so Predbat must leave it alone or the two
         would fight - whatever octopus_intelligent_charging says, as that switch only changes
-        Predbat's own planning and Octopus goes on driving the charger regardless. False: there
+        Predbat's own planning and Octopus goes on driving the charger regardless. The one
+        exception is control: true with a planned sensor, see charger_control_drive_one(). False: there
         is no Octopus Intelligent car here, or Octopus drives the car rather than the charger -
         see charger_control_octopus_drives_car() for what Predbat does then. None: the car is on
         Octopus Intelligent but which device Octopus drives cannot be told, or not yet.
@@ -248,6 +250,16 @@ class CarChargerControl:
         if isinstance(is_charger, str) and is_charger.strip().lower() in ("unknown", "unavailable", "none", ""):
             return None
         return parse_control_setting(is_charger)
+
+    def charger_control_filters_dispatches(self, car_n):
+        """Does Predbat stop car car_n's charger outside the dispatches octopus_intelligent_planned_slot keeps, though Octopus drives it?
+
+        control: true plus a planned sensor, see charger_control_drive_one(). Car 0's Ohme slots stay with the Ohme.
+        """
+        if self.charger_control_config is not True or (car_n == 0 and self.charger_control_slots_claimed()):
+            return False
+        dispatch_sensor = self.charger_control_dispatch_sensor(car_n)
+        return self.charger_control_octopus_drives_charger(car_n) is True and self.charger_control_planned_sensor(car_n, dispatch_sensor) is not None
 
     def charger_control_octopus_drives_car(self, car_n):
         """Does Octopus Intelligent deliver this car's dispatches by driving the car itself?
@@ -518,11 +530,14 @@ class CarChargerControl:
     def charger_control_dispatch_active(self, car_n, now):
         """Is an Octopus Intelligent dispatch running for this car right now?
 
-        Only reached for a charger Predbat drives, so here Octopus drives the car. The plan
-        carries the dispatches too, but is only republished every 5 minutes and leaves out a
-        dispatch Octopus has not given any energy yet - following the dispatch sensor as well
-        stops the charger holding the car off for the first minutes of a new dispatch. With
-        octopus_intelligent_charging off Predbat follows only its own plan.
+        Only reached for a charger Predbat drives: Octopus drives the car, or the charger and the
+        user has Predbat filter it. The plan carries the dispatches too, but is only republished
+        every 5 minutes and leaves out a dispatch Octopus has not given any energy yet - following
+        the dispatch sensor as well stops the charger holding the car off for the first minutes of
+        a new dispatch. With octopus_intelligent_charging off Predbat follows only its own plan.
+
+        The planned dispatches come from octopus_intelligent_planned_slot where it is set, as they
+        do for the car's plan, so a dispatch that sensor leaves out does not run the charger.
 
         The dispatch times on the sensor are judged against the clock rather than its on/off
         state, which only refreshes every couple of minutes and would run the charger on past
@@ -533,13 +548,18 @@ class CarChargerControl:
         slot = self.charger_control_dispatch_sensor(car_n)
         if not slot:
             return False
+        planned_slot = self.charger_control_planned_sensor(car_n, slot)
+        reads = [(planned_slot or slot, "planned_dispatches"), (slot, "completed_dispatches")]
+        if planned_slot:
+            reads.append((planned_slot, "completed_dispatches"))
         dispatches = []
-        for attribute in ("planned_dispatches", "completed_dispatches"):
-            value = self.get_state_wrapper(slot, attribute=attribute)
+        for entity_id, attribute in reads:
+            value = self.get_state_wrapper(entity_id, attribute=attribute)
             if isinstance(value, list):
                 dispatches.extend(value)
         if not dispatches:
-            return self.get_state_wrapper(slot) == "on"
+            # The slot sensor's state would put back the dispatches the planned sensor left out
+            return False if planned_slot else self.get_state_wrapper(slot) == "on"
         for dispatch in dispatches:
             if not isinstance(dispatch, dict):
                 continue
@@ -561,6 +581,25 @@ class CarChargerControl:
         if not slot or (isinstance(slot, str) and slot.startswith("re:")):
             return None
         return slot
+
+    def charger_control_planned_sensor(self, car_n, slot):
+        """The sensor this car's planned dispatches come from in place of its slot sensor, or None.
+
+        The same rule as Fetch.car_planned_slot_entity() and its caller: none set, a regex that matched
+        nothing, the slot sensor itself, or octopus_intelligent_slot_action_config in use all leave the
+        slot sensor as the plan.
+        """
+        if "octopus_intelligent_slot_action_config" in self.args:
+            return None
+        planned = self.get_arg("octopus_intelligent_planned_slot", None, indirect=False)
+        if planned and not isinstance(planned, list):
+            planned = [planned]
+        if not planned or car_n >= len(planned):
+            return None
+        planned = planned[car_n]
+        if not planned or not isinstance(planned, str) or planned.startswith("re:") or planned == slot:
+            return None
+        return planned
 
     async def charger_control_tick(self, now):
         """Run one cycle of charger control, releasing rather than just going quiet.
@@ -724,9 +763,11 @@ class CarChargerControl:
         # Predbat to drive it to the dispatches - or has turned Octopus Intelligent charging off in
         # Predbat, which then plans the car itself and drives the charger to that plan
         car_driven = drives is False and self.get_arg("octopus_intelligent_charging", True) and not self.get_arg("octopus_intelligent_charger_follows_car", False) and self.charger_control_octopus_drives_car(car_n)
+        # Octopus drives the charger, but control: true plus a planned sensor filtering its dispatches has Predbat stop it outside them
+        filtered = self.charger_control_filters_dispatches(car_n)
         # An explicit control: true is the user saying their charger is not the Octopus
         # device, so it overrides "cannot tell" - but never a known charge point
-        if drives is True or car_driven or (drives is None and self.charger_control_config is not True):
+        if (drives is True and not filtered) or car_driven or (drives is None and self.charger_control_config is not True):
             if drives:
                 why = "octopus"
             elif car_driven:
