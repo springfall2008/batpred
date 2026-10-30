@@ -36,6 +36,9 @@ from const import (
     RUN_STATE_HOLD_FOR_IBOOST,
     RUN_STATE_READ_ONLY,
     RUN_STATE_CALIBRATION,
+    EXPORT_STATUS_NONE,
+    EXPORT_STATUS_TARGET,
+    EXPORT_STATUS_FREEZE,
 )
 from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate, balance_inverters, allocate_export_rates, export_mode_of, export_power_of, export_target_of, get_charge_rate_curve, get_discharge_rate_curve
 from predbat_metrics import metrics
@@ -102,6 +105,24 @@ def resolve_multi_inverter_status(status_per_inverter, current_status):
     if export_states_present:
         return next(candidate for candidate in EXPORT_STATE_PRECEDENCE if candidate in export_states_present)
     return current_status
+
+
+# The export_status each export-side run state publishes; Hold exporting is not exporting, so it is none
+EXPORT_STATUS_OF_STATE = {RUN_STATE_EXPORTING: EXPORT_STATUS_TARGET, RUN_STATE_FREEZE_EXPORTING: EXPORT_STATUS_FREEZE}
+
+
+def resolve_export_status(status_per_inverter):
+    """Which kind of export the fleet is running, published as the exporting sensor's export_status (#5125).
+
+    Derived from the same per-inverter states as resolve_multi_inverter_status(), so EXPORT_STATE_PRECEDENCE
+    stays the only ordering: when inverters disagree, the most active export state wins, and active export
+    (stored capacity going to the grid) is shown over freeze export (PV surplus only).
+    """
+    states_present = set(status_per_inverter.values())
+    for state in EXPORT_STATE_PRECEDENCE:
+        if state in states_present:
+            return EXPORT_STATUS_OF_STATE.get(state, EXPORT_STATUS_NONE)
+    return EXPORT_STATUS_NONE
 
 
 def build_status_extra(status_extra_parts):
@@ -1197,7 +1218,7 @@ class Execute:
         status_extra = build_status_extra(status_extra_parts)
 
         # Set the charge/discharge status information
-        self.set_charge_export_status(isCharging, isExporting, not (isCharging or isExporting))
+        self.set_charge_export_status(isCharging, isExporting, not (isCharging or isExporting), export_status=resolve_export_status(status_per_inverter))
         self.isCharging = isCharging
         self.isExporting = isExporting
 
