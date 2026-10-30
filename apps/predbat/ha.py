@@ -328,6 +328,8 @@ class HAHistory(ComponentBase):
         self.history_entities = {}
         self.history_data = {}
         self.history_lock = threading.Lock()
+        # Entities restored by import_snapshot() that the update loop has not refreshed yet
+        self.history_restored = set()
 
     def add_entity(self, entity_id, days):
         """
@@ -461,10 +463,10 @@ class HAHistory(ComponentBase):
         """
         entities = {}
         with self.history_lock:
-            # add_entity() can add to history_entities without the lock, so iterate over copies
-            history_data = dict(self.history_data)
+            # add_entity() can add to history_entities without the lock, so iterate over a copy
+            # (every writer of history_data holds the lock)
             for entity_id, days in list(self.history_entities.items()):
-                store = history_data.get(entity_id, None)
+                store = self.history_data.get(entity_id, None)
                 if store is None:
                     store = EntityHistory()
                 entities[entity_id] = {
@@ -513,6 +515,7 @@ class HAHistory(ComponentBase):
         with self.history_lock:
             self.history_entities = history_entities
             self.history_data = history_data
+            self.history_restored = set(history_data.keys())
         return len(history_entities)
 
     async def run(self, seconds, first):
@@ -535,14 +538,22 @@ class HAHistory(ComponentBase):
                     continue
                 store = self.history_data.get(entity_id, None)
                 last_updated_time = datetime.fromtimestamp(store.epochs[-1], timezone.utc) if store and len(store) > 0 else None
+                restored = entity_id in self.history_restored
+                self.history_restored.discard(entity_id)
+                if restored and last_updated_time and last_updated_time < now - timedelta(days=entity_days):
+                    # A restored snapshot that ends before the retention window holds nothing the window needs
+                    # and cannot say what changed since it was taken. Drop it and refetch the whole window,
+                    # exactly as a cold start would. Only restored stores: a store kept up to date here can
+                    # legitimately end before the window when the sensor has not changed for a long time
+                    with self.history_lock:
+                        if self.history_data.get(entity_id, None) is store:
+                            del self.history_data[entity_id]
+                    last_updated_time = None
                 if last_updated_time:
-                    # Fetch only what is newer than the store, but never further back than the entity's
-                    # retention (a restored snapshot can be old). days spans the same window as from_time
-                    # so a history source that only honours days (the database) still covers the gap
-                    window_start = now - timedelta(days=entity_days)
-                    from_time = max(last_updated_time, window_start)
-                    days = max(1, (now - from_time).total_seconds() / (24 * 60 * 60))
-                    history_data = ha_interface.get_history(entity_id, now, days=days, from_time=from_time)
+                    # Fetch only what is newer than the store. days spans the same window as from_time so
+                    # a history source that only honours days (the database) still covers the whole gap
+                    days = max(1, (now - last_updated_time).total_seconds() / (24 * 60 * 60))
+                    history_data = ha_interface.get_history(entity_id, now, days=days, from_time=last_updated_time)
                     if history_data and len(history_data) > 0:
                         history_data = history_data[0]
                         self.update_entity(entity_id, history_data)

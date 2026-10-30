@@ -1228,37 +1228,108 @@ def test_hahistory_snapshot_database_delta(my_predbat=None):
     return failed
 
 
-def test_hahistory_snapshot_stale_delta_clamped(my_predbat=None):
-    """Test the update after importing a snapshot older than the retention only fetches the retention window"""
-    print("\n=== Testing HAHistory stale snapshot delta is clamped to retention ===")
+class MockTimedHistoryInterface:
+    """Stand-in history source over timed records, like Home Assistant: honours from_time and starts with the state in force"""
+
+    def __init__(self, records):
+        self.records = records
+        self.get_history_calls = []
+
+    def get_history(self, entity_id, now, days=30, from_time=None):
+        self.get_history_calls.append({"entity_id": entity_id, "now": now, "days": days, "from_time": from_time})
+        start = from_time if from_time else now - timedelta(days=days)
+        records = self.records.get(entity_id, [])
+        before = [record for record in records if str2time(record["last_updated"]) <= start]
+        history = [dict(record) for record in records if str2time(record["last_updated"]) > start]
+        if before:
+            history.insert(0, dict(before[-1], last_updated=start.isoformat()))
+        return [history] if history else None
+
+
+def _history_summary(ha_history, entity_id):
+    """States and anchoring of an entity's store, with real (non re-stamped) records' times"""
+    store = ha_history.history_data.get(entity_id)
+    if store is None:
+        return None
+    records = store.to_records()
+    return {
+        "states": [record["state"] for record in records],
+        "anchored": store.anchored,
+        "times": [record["last_updated"] for record in (records[1:] if store.anchored else records)],
+    }
+
+
+def test_hahistory_stale_snapshot_matches_cold_start(my_predbat=None):
+    """Test restoring a snapshot that ends before the retention window gives the same store as a cold start"""
+    print("\n=== Testing HAHistory stale snapshot matches a cold start ===")
 
     async def run_test():
         failed = 0
-        source = _snapshot_fixture(datetime.now(pytz.UTC) - timedelta(days=60))
-        mock_base = MockBase()
-        ha_history = HAHistory(mock_base)
-        ha_history.initialize()
-        mock_ha = MockHAInterface()
-        mock_base.components.register_component("ha", mock_ha)
-        ha_history.import_snapshot(source.export_snapshot())
-        start = datetime.now(pytz.UTC)
-        await ha_history.run(seconds=120, first=False)
+        now = datetime.now(pytz.UTC)
+        entity_id = "sensor.mode"
 
-        calls = {call["entity_id"]: call for call in mock_ha.get_history_calls}
-        for entity_id in ["sensor.battery_soc", "select.mode"]:
-            entity_days = source.history_entities[entity_id]
-            call = calls.get(entity_id)
-            if call is None or call["from_time"] is None:
-                print(f"ERROR: {entity_id} should be refreshed with a from_time")
+        def record(state, age):
+            return {"state": state, "last_updated": (now - age).isoformat(), "attributes": {}}
+
+        # A at T-60d is all the snapshot holds; B at T-30d and C at T-2d happened after it was taken
+        records = [record("A", timedelta(days=60)), record("B", timedelta(days=30)), record("C", timedelta(days=2))]
+        source = HAHistory(MockBase())
+        source.initialize()
+        source.add_entity(entity_id, 7)
+        source.update_entity(entity_id, [dict(records[0])])
+        snapshot = source.export_snapshot()
+
+        for label, interface_class in [("database-style", MockDatabaseHistoryInterface), ("Home Assistant-style", MockTimedHistoryInterface)]:
+            results = {}
+            for path in ["snapshot", "cold start"]:
+                mock_base = MockBase()
+                ha_history = HAHistory(mock_base)
+                ha_history.initialize()
+                mock_base.components.register_component("ha", interface_class({entity_id: records}))
+                if path == "snapshot":
+                    ha_history.import_snapshot(snapshot)
+                else:
+                    ha_history.add_entity(entity_id, 7)
+                await ha_history.run(seconds=0, first=True)
+                results[path] = _history_summary(ha_history, entity_id)
+            if results["snapshot"] != results["cold start"]:
+                print(f"ERROR: {label} stale snapshot gave {results['snapshot']}, cold start gave {results['cold start']}")
                 failed += 1
-            elif call["from_time"] < start - timedelta(days=entity_days, seconds=5) or call["days"] > entity_days:
-                print(f"ERROR: {entity_id} fetch should stay within {entity_days} days, got from_time {call['from_time']} days {call['days']}")
+            elif "A" in (results["snapshot"] or {}).get("states", []):
+                print(f"ERROR: {label} stale snapshot kept the out of window state A")
                 failed += 1
         return failed
 
     failed = run_async(run_test())
     if failed == 0:
-        print("OK: test_hahistory_snapshot_stale_delta_clamped")
+        print("OK: test_hahistory_stale_snapshot_matches_cold_start")
+    return failed
+
+
+def test_hahistory_static_store_keeps_delta(my_predbat=None):
+    """Test a store kept up to date in this run is not refetched just because its sensor has not changed within the window"""
+    print("\n=== Testing HAHistory static sensor store keeps the delta fetch ===")
+
+    async def run_test():
+        now = datetime.now(pytz.UTC)
+        entity_id = "sensor.static"
+        mock_base = MockBase()
+        ha_history = HAHistory(mock_base)
+        ha_history.initialize()
+        mock_ha = MockHAInterface()
+        mock_base.components.register_component("ha", mock_ha)
+        ha_history.add_entity(entity_id, 1)
+        ha_history.update_entity(entity_id, [{"state": "on", "last_updated": (now - timedelta(days=1, hours=1)).isoformat(), "attributes": {}}])
+        await ha_history.run(seconds=120, first=False)
+        call = mock_ha.get_history_calls[-1] if mock_ha.get_history_calls else None
+        if entity_id not in ha_history.history_data or call is None or call["from_time"] is None:
+            print(f"ERROR: A store kept up to date should be refreshed by a delta and kept, got call {call}")
+            return 1
+        return 0
+
+    failed = run_async(run_test())
+    if failed == 0:
+        print("OK: test_hahistory_static_store_keeps_delta")
     return failed
 
 
@@ -1303,20 +1374,36 @@ def test_hahistory_export_tolerates_new_entity(my_predbat=None):
     failed = 0
 
     ha_history = _snapshot_fixture()
+    added = []
 
-    class AddingStore(dict):
-        """A store whose lookups track a new entity, standing in for another thread calling add_entity()"""
+    class AddingHistory(EntityHistory):
+        """A store whose epochs read tracks a new entity, standing in for another thread calling add_entity() mid-export"""
 
-        def get(self, key, default=None):
-            ha_history.add_entity("sensor.new_" + key, 1)
-            return super().get(key, default)
+        @property
+        def epochs(self):
+            added.append("sensor.new_{}".format(len(added)))
+            ha_history.add_entity(added[-1], 1)
+            return self.real_epochs
 
-    ha_history.history_data = AddingStore(ha_history.history_data)
+        @epochs.setter
+        def epochs(self, value):
+            self.real_epochs = value
+
+    entity_id = "sensor.battery_soc"
+    original = ha_history.history_data[entity_id]
+    store = AddingHistory()
+    for name in ["epochs", "states", "state_exceptions", "shared_attributes", "attribute_exceptions", "anchored"]:
+        setattr(store, name, getattr(original, name))
+    ha_history.history_data[entity_id] = store
+    added.clear()
     try:
         data = ha_history.export_snapshot()
     except RuntimeError as exc:
         print(f"ERROR: export_snapshot() raised {exc}")
         return 1
+    if not added:
+        print("ERROR: The test hook should have added an entity during export")
+        failed += 1
     target = HAHistory(MockBase())
     target.initialize()
     if target.import_snapshot(data) < 3:
@@ -1567,7 +1654,8 @@ def run_hahistory_tests(my_predbat):
     failed += test_hahistory_snapshot_golden(my_predbat)
     failed += test_hahistory_snapshot_replaces_store(my_predbat)
     failed += test_hahistory_snapshot_database_delta(my_predbat)
-    failed += test_hahistory_snapshot_stale_delta_clamped(my_predbat)
+    failed += test_hahistory_stale_snapshot_matches_cold_start(my_predbat)
+    failed += test_hahistory_static_store_keeps_delta(my_predbat)
     failed += test_hahistory_run_tolerates_import_mid_loop(my_predbat)
     failed += test_hahistory_export_tolerates_new_entity(my_predbat)
 
