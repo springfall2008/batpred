@@ -61,6 +61,10 @@ CHARGE_CURVE_MAX_SOC_STEP = 10
 _NOT_COMMITTED = object()
 
 
+class ServiceSequenceError(ValueError):
+    """A local validation/observation failure whose diagnostic is safe to log."""
+
+
 def within_fuzzy(value, target, fuzzy, fuzzy_below=None):
     """
     Whether a numeric read counts as target: within fuzzy either side, or within fuzzy_below when it is
@@ -3405,6 +3409,131 @@ class Inverter:
         new_current = round(power / self.battery_voltage, self.inv_current_dp)
         self.write_and_poll_value(f"timed_{direction}_current", self.base.get_arg(f"timed_{direction}_current", indirect=False, index=self.id), new_current, fuzzy=1)
 
+    def service_sequence_number(self, value):
+        """Parse a finite numeric service value without accepting booleans as zero/one."""
+        if isinstance(value, bool):
+            raise ServiceSequenceError("boolean is not a numeric control value")
+        number = float(value)
+        if not math.isfinite(number):
+            raise ServiceSequenceError("non-finite control value")
+        return number
+
+    def service_sequence_matches(self, entity_id, expected):
+        """Compare an HA observation, not a hardware acknowledgement, with a service target."""
+        state = self.base.get_state_wrapper(entity_id, refresh=True)
+        return self.service_sequence_state_matches(state, expected)
+
+    def service_sequence_state_matches(self, state, expected):
+        """Match a raw state without substituting a default for unavailable numeric data."""
+        if isinstance(expected, float):
+            try:
+                return self.service_sequence_number(state) == expected
+            except (ValueError, TypeError, OverflowError):
+                return False
+        return state == expected
+
+    def prepare_service_sequence(self, service_list, data, extra_data):
+        """Resolve and validate every observed step before allowing the first write."""
+        actions = {
+            "number/set_value": ("value", None),
+            "input_number/set_value": ("value", None),
+            "select/select_option": ("option", None),
+            "input_select/select_option": ("option", None),
+            "switch/turn_on": (None, "on"),
+            "switch/turn_off": (None, "off"),
+            "input_boolean/turn_on": (None, "on"),
+            "input_boolean/turn_off": (None, "off"),
+        }
+        full_data = {**data, **extra_data, "reserve_soc": math.ceil(self.service_sequence_number(self.reserve_percent))}
+        steps = []
+        for template in service_list:
+            if not isinstance(template, dict) or template.get("verify") is not True:
+                raise ServiceSequenceError("every step must have verify: true")
+            resolved = {}
+            for key, value in template.items():
+                if key != "verify":
+                    resolved[key] = self.base.resolve_arg(template, value, indirect=False, index=self.id if isinstance(value, list) else None, default=None, extra_args=full_data)
+            service = resolved.get("service")
+            if not isinstance(service, str) or service.replace(".", "/") not in actions:
+                raise ServiceSequenceError("unsupported observed service")
+            service = service.replace(".", "/")
+            field, expected = actions[service]
+            if set(resolved) != {"service", "entity_id"} | ({field} if field else set()):
+                raise ServiceSequenceError("observed services require only service, entity_id and their value/option")
+            entity_ids = resolved["entity_id"]
+            if not isinstance(entity_ids, str):
+                raise ServiceSequenceError("entity_id must resolve to a string (comma-separated for a group)")
+            entities = [entity.strip() for entity in entity_ids.split(",")]
+            entity_domain = service.split("/")[0]
+            if len(set(entities)) != len(entities) or any(not re.fullmatch(entity_domain + r"\.[a-z0-9_]+", entity) for entity in entities):
+                raise ServiceSequenceError("invalid or duplicate entity_id for observed service")
+            if field == "value":
+                expected = self.service_sequence_number(resolved[field])
+            elif field == "option":
+                expected = resolved[field]
+                if not isinstance(expected, str) or not expected:
+                    raise ServiceSequenceError("option must be a non-empty string")
+            for entity in entities:
+                state = self.base.get_state_wrapper(entity, refresh=True)
+                if state is None or str(state).lower() in ("unknown", "unavailable", "none", ""):
+                    raise ServiceSequenceError("{} has no available state".format(entity))
+                if field == "value":
+                    self.service_sequence_number(state)
+                    lower, upper, step = [self.service_sequence_number(self.base.get_state_wrapper(entity, attribute=attribute)) for attribute in ("min", "max", "step")]
+                    if lower > upper or step <= 0 or not lower <= expected <= upper:
+                        raise ServiceSequenceError("{} target is outside its numeric bounds".format(entity))
+                    ticks = (expected - lower) / step
+                    if not math.isfinite(ticks) or not math.isclose(ticks, round(ticks), rel_tol=0, abs_tol=1e-7):
+                        raise ServiceSequenceError("{} target does not match its numeric step".format(entity))
+                elif field == "option":
+                    options = self.base.get_state_wrapper(entity, attribute="options")
+                    if not isinstance(options, list) or expected not in options or state not in options:
+                        raise ServiceSequenceError("{} has an unsupported option".format(entity))
+                elif state not in ("on", "off"):
+                    raise ServiceSequenceError("{} has an invalid switch state".format(entity))
+            service_data = {"entity_id": ",".join(entities)}
+            if field:
+                service_data[field] = expected
+            steps.append((service, service_data, entities, expected))
+        return steps
+
+    def call_service_sequence(self, service, service_list, data, extra_data):
+        """Apply opt-in observed steps in order, stopping on failure without speculative rollback.
+
+        Repeated entities are intentional (disable, set target, enable). Compare their FINAL
+        values first so an unchanged charge does not disable/re-enable on every plan cycle.
+        HA can expose cached/optimistic state: this is not a physical confirmation or transaction.
+        """
+        try:
+            steps = self.prepare_service_sequence(service_list, data, extra_data)
+            final = {entity: expected for _, _, entities, expected in steps for entity in entities}
+            if all(self.service_sequence_matches(entity, expected) for entity, expected in final.items()):
+                return
+            observed = {}
+            for service_name, service_data, entities, expected in steps:
+                if not all(self.service_sequence_matches(entity, value) for entity, value in observed.items()):
+                    raise ServiceSequenceError("an earlier step no longer reads as observed")
+                if not all(self.service_sequence_matches(entity, expected) for entity in entities):
+                    if not self.base.call_service_wrapper(service_name, **service_data):
+                        raise ServiceSequenceError("{} was not accepted".format(service_name))
+                    # Wait on HA only; this does not request faster hardware polling.
+                    for entity in entities:
+                        state = self._poll_after_write(entity, lambda state, expected=expected: self.service_sequence_state_matches(state, expected))
+                        if not self.service_sequence_state_matches(state, expected):
+                            raise ServiceSequenceError("{} was not observed".format(entity))
+                    self.count_register_writes += len(entities)
+                observed.update({entity: expected for entity in entities})
+                if not all(self.service_sequence_matches(entity, value) for entity, value in observed.items()):
+                    raise ServiceSequenceError("{} was not observed".format(service_name))
+            self.log("Inverter {} service {} final state observed in Home Assistant".format(self.id, service))
+        except Exception as error:
+            # A transport exception must also stop the rest of the sequence. Avoid logging its
+            # potentially credential-bearing response; validation errors above are local text.
+            reason = str(error) if isinstance(error, ServiceSequenceError) else type(error).__name__
+            message = "Warn: Inverter {} service {} sequence stopped: {}".format(self.id, service, reason)
+            self.log(message)
+            self.base.record_status(message, had_errors=True)
+
     def call_service_template(self, service, data, domain="charge", extra_data=None):
         """
         Call a service template with data
@@ -3412,11 +3541,20 @@ class Inverter:
         if extra_data is None:
             extra_data = {}
         service_list = self.base.args.get(service, "")
+        # An explicit empty list handles a deliberate no-op, suppressing the caller's fallback.
+        if service_list == []:
+            return True
         if not service_list:
             return False
 
         if not isinstance(service_list, list):
             service_list = [service_list]
+
+        if any(isinstance(step, dict) and "verify" in step for step in service_list):
+            self.base.last_service_hash.pop(domain, None)
+            self.call_service_sequence(service, service_list, data, extra_data)
+            # Keep the configured/handled contract, even on failure (never downgrade a freeze).
+            return True
 
         hash_index = domain
         last_service_hash = self.base.last_service_hash.get(hash_index, "")

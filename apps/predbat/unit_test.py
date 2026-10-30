@@ -57,6 +57,8 @@ from tests.test_config_json_format import test_config_json_format
 from tests.test_history_attribute import test_history_attribute
 from tests.test_previous_value_provider import test_previous_value_provider
 from tests.test_inverter import run_inverter_tests
+from tests.test_service_sequences import run_service_sequence_tests
+from tests.test_deye_solarman_template import run_deye_solarman_template_tests
 from tests.test_basic_rates import test_basic_rates
 from tests.test_clock import run_clock_tests
 from tests.test_rate_export_max_forward_calc import test_rate_export_max_forward_calc
@@ -502,6 +504,8 @@ def main():
         ("kernel_parity", run_kernel_parity_tests, "C++ prediction kernel vs Python engine parity tests", False),
         ("prediction_batch", run_prediction_batch_tests, "Batched prediction fan-out tests", False),
         ("inverter", run_inverter_tests, "Inverter tests", False),
+        ("service_sequences", run_service_sequence_tests, "Observed custom inverter service sequences", False),
+        ("deye_solarman_template", run_deye_solarman_template_tests, "Shared Deye/Solarman template through native controls", False),
         ("execute", run_execute_tests, "Execute tests", False),
         ("multi_inverter_status", test_multi_inverter_status, "Multi-inverter headline status resolution tests (#4446)", False),
         ("load_car_energy", test_load_car_energy_warns_when_configured_entity_has_no_data, "car_charging_energy configured-but-empty warning tests (#4458 follow-up)", False),

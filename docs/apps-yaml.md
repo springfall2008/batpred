@@ -1843,6 +1843,36 @@ See [Service API](inverter-setup.md#has_service_api) for details.
 
 Note that **device_id** will be passed to the service automatically, or it can be set in `apps.yaml`.
 
+#### YAML anchors in service examples
+
+Service mappings in `apps.yaml` can use ordinary YAML reuse, not a Predbat function or a Home Assistant script. The [Deye/Solarman template](inverter-setup.md#deye-solarman-local) is one example. In `- &disable_sources`, `&disable_sources` gives that service mapping a name (an **anchor**). A later `- *disable_sources` is an **alias** for the same mapping. YAML resolves this before Predbat executes the service list; it does not call a subroutine or start a separate sequence.
+
+The first anchored entry is still a real step in its list, not just a definition. The anchor names are local to this YAML document and must be defined before an alias uses them. For example, the Deye `charge_stop_service` reuses the earlier disable-sources step with `*disable_sources`.
+
+The YAML **merge key** `<<: *disable_sources` copies that mapping's keys into a new step. An explicitly supplied key overrides the reused value, so this changes only the option from `Disabled` to `Grid`:
+
+```yaml
+  - <<: *disable_sources
+    option: "Grid"
+```
+
+Given the Deye anchor, the fully expanded step is:
+
+```yaml
+  - service: select.select_option
+    entity_id: >-
+      select.{deye_entity_prefix}_program_1_charging,
+      select.{deye_entity_prefix}_program_2_charging,
+      select.{deye_entity_prefix}_program_3_charging,
+      select.{deye_entity_prefix}_program_4_charging,
+      select.{deye_entity_prefix}_program_5_charging,
+      select.{deye_entity_prefix}_program_6_charging
+    option: "Grid"
+    verify: true
+```
+
+It therefore enables grid charging on the same six entities while keeping verification enabled. The mapping's name does not make this an extra disable operation: Predbat sees `option: "Grid"` after YAML loading. This is the [YAML merge-key syntax](https://yaml.org/type/merge.html), not a template-specific control command. See [verified service sequences](inverter-setup.md#verified-service-sequences) for observation and failure handling.
+
 ### MQTT API
 
 Some Inverters are enabled with an MQTT API, in this case certain MQTT messages are send via the HA MQTT service.
