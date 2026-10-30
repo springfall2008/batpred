@@ -7571,9 +7571,14 @@ def get_plan_renderer_js():
 
     // Render load cell with dropdown for load adjustments
     // Tooltip listing one plan cell's value in every scenario the plan was scored against (#5871). field is the
-    // position in jsonData.scenario_fields and expected the cell's own value; empty when the row has no scenarios.
+    // position in jsonData.scenario_fields and expected the cell's own value; empty when the row has no scenarios
+    // or every scenario has the same value for this cell.
     function scenarioTitle(jsonData, row, field, expected) {
         if (!row.scenarios || !jsonData.scenario_fields) {
+            return '';
+        }
+        const keys = Object.keys(row.scenarios).sort();
+        if (keys.every(key => row.scenarios[key][field] === expected)) {
             return '';
         }
         const name = jsonData.scenario_fields[field];
@@ -7588,13 +7593,15 @@ def get_plan_renderer_js():
                 const pence = Math.round(value * 100);
                 return `${pence >= 0 ? '+' : ''}${pence}${jsonData.currency_symbols[1]}`;
             }
-            // Written as the Total column is, with the minus before the currency symbol
-            return `${value < 0 ? '-' : ''}${jsonData.currency_symbols[0]}${Math.abs(Number(value)).toFixed(2)}`;
+            // Written as this view's Total column is
+            return `${jsonData.currency_symbols[0]}${Number(value).toFixed(2)}`;
         };
-        const parts = [`Expected ${format(expected)}`];
-        for (const key of Object.keys(row.scenarios).sort()) {
+        // The text goes inside a double-quoted attribute, so escape it (a currency symbol could carry a quote)
+        const escape = (text) => String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        const parts = [escape(`Expected ${format(expected)}`)];
+        for (const key of keys) {
             const label = (jsonData.scenario_names && jsonData.scenario_names[key]) || `PV${key}`;
-            parts.push(`${label} ${format(row.scenarios[key][field])}`);
+            parts.push(escape(`${label} ${format(row.scenarios[key][field])}`));
         }
         // One scenario per line - &#10; is a line break inside a title attribute
         return ` title="${parts.join('&#10;')}"`;

@@ -25,7 +25,7 @@ from output import PLAN_SCENARIO_FIELDS, PLAN_SCENARIO_NAMES
 from tests.test_plan_why_reason import _flat_soc, _setup_baseline
 from web_helper import get_plan_renderer_js
 
-SCENARIO_ATTRIBUTES = ("predict_soc_best10", "predict_metric_best10", "predict_soc_best90", "predict_metric_best90", "pv_forecast_minute90_step", "load_minutes_step90")
+SCENARIO_ATTRIBUTES = ("predict_soc_best10", "predict_metric_best10", "predict_soc_best90", "predict_metric_best90", "pv_forecast_minute90_step", "load_minutes_step90", "pv_metric10_weight")
 
 
 def _flat_metric(my_predbat, pence_per_step):
@@ -144,12 +144,11 @@ def run_test_plan_scenarios(my_predbat):
             failed = True
 
         print("Test: PV10 is left out when the plan is not scored against it")
-        saved_weight10 = my_predbat.pv_metric10_weight
         my_predbat.pv_metric10_weight = 0.0
         my_predbat.predict_soc_best90 = _flat_soc(my_predbat, 6.0)
         my_predbat.predict_metric_best90 = _flat_metric(my_predbat, 0.5)
         _, raw_plan = my_predbat.publish_html_plan(pv_step, pv_step, load_step, load_step, my_predbat.end_record, publish=False, show_scenarios=True)
-        my_predbat.pv_metric10_weight = saved_weight10
+        my_predbat.pv_metric10_weight = saved["pv_metric10_weight"]
         if list(raw_plan.get("scenario_names", {}).keys()) != ["90"]:
             print("ERROR: with pv_metric10_weight 0 only PV90 should be shown, got {}".format(raw_plan.get("scenario_names")))
             failed = True
@@ -166,7 +165,12 @@ def run_test_plan_scenarios(my_predbat):
             print("ERROR: expected -0.0 normalised to 0.0, got {}".format(values))
             failed = True
 
-        print("Test: the web renderer's scenarioTitle() builds the same tooltip as the HTML")
+        print("Test: the HTML SoC tooltip is left out when every scenario shows the same SoC")
+        if my_predbat.plan_scenario_soc_title(50, {"10": [50, 0.1, 0.2, 0.0, 1.0], "90": [50, 0.0, 0.3, 0.0, 2.0]}) != "":
+            print("ERROR: matching SoCs should give no SoC tooltip, even when other values differ")
+            failed = True
+
+        print("Test: the web renderer's scenarioTitle() builds the same SoC tooltip as the HTML, and the other cells' too")
         renderer_js = get_plan_renderer_js()
         if "function scenarioTitle(" not in renderer_js or renderer_js.count("scenarioTitle(jsonData, row,") < 5:
             print("ERROR: expected scenarioTitle() and its use on the SoC, PV, load, cost and total cells")
@@ -181,23 +185,93 @@ def run_test_plan_scenarios(my_predbat):
             (0, 50, ' title="Expected 50%&#10;{} 40%&#10;{} 60%"'.format(PLAN_SCENARIO_NAMES["10"], PLAN_SCENARIO_NAMES["90"])),
             (2, 0.3, ' title="Expected 0.30 kWh&#10;{} 0.50 kWh&#10;{} 0.25 kWh"'.format(PLAN_SCENARIO_NAMES["10"], PLAN_SCENARIO_NAMES["90"])),
             (3, 0.05, ' title="Expected +5p&#10;{} +20p&#10;{} -12p"'.format(PLAN_SCENARIO_NAMES["10"], PLAN_SCENARIO_NAMES["90"])),
-            (4, 1.0, ' title="Expected £1.00&#10;{} -£2.25&#10;{} £1.50"'.format(PLAN_SCENARIO_NAMES["10"], PLAN_SCENARIO_NAMES["90"])),
+            # The web UI's Total column writes the sign after the currency symbol, and the tooltip matches it
+            (4, 1.0, ' title="Expected £1.00&#10;{} £-2.25&#10;{} £1.50"'.format(PLAN_SCENARIO_NAMES["10"], PLAN_SCENARIO_NAMES["90"])),
+            # Every scenario has the same PV as the cell: no tooltip, although other values differ
+            (1, 0.1, None),
         ]
+        node_ran = True
         for field, expected_value, want in checks:
-            got = _run_scenario_title(jsonData, row, field, expected_value)
+            if field == 1:
+                row_same_pv = {"scenarios": {"90": [60, 0.1, 0.25, -0.12, 1.5], "10": [40, 0.1, 0.5, 0.2, -2.25]}}
+                got = _run_scenario_title(jsonData, row_same_pv, field, expected_value)
+                want = ""
+            else:
+                got = _run_scenario_title(jsonData, row, field, expected_value)
             if got is None:
                 print("  (node not installed - scenarioTitle() output not executed)")
+                node_ran = False
                 break
-            python_title = my_predbat.plan_scenario_title(field, expected_value, row["scenarios"])
-            if got != want or python_title != want:
-                print("ERROR: field {} tooltip expected {!r}, JS gave {!r}, Python gave {!r}".format(field, want, got, python_title))
+            if got != want:
+                print("ERROR: field {} tooltip expected {!r}, JS gave {!r}".format(field, want, got))
                 failed = True
-        if _run_scenario_title(jsonData, {}, 0, 50) not in (None, ""):
-            print("ERROR: a row without scenarios should get no tooltip")
-            failed = True
+        if node_ran:
+            python_title = my_predbat.plan_scenario_soc_title(50, row["scenarios"])
+            if python_title != checks[0][2]:
+                print("ERROR: the HTML SoC tooltip {!r} should match the web UI's {!r}".format(python_title, checks[0][2]))
+                failed = True
+            if _run_scenario_title(jsonData, {}, 0, 50) != "":
+                print("ERROR: a row without scenarios should get no tooltip")
+                failed = True
+            quoted = _run_scenario_title(dict(jsonData, currency_symbols=['"', "p"]), row, 4, 1.0)
+            if "&quot;1.00" not in quoted or 'title=""' in quoted:
+                print("ERROR: a quote in the currency symbol should be escaped in the tooltip, got {!r}".format(quoted))
+                failed = True
     finally:
         for name, value in saved.items():
             setattr(my_predbat, name, value if value is not None else {})
+    failed |= _run_calculate_plan_tests()
 
     print("**** Plan scenario tooltip tests {} ****".format("FAILED" if failed else "PASSED"))
+    return failed
+
+
+def _run_calculate_plan_tests():
+    """
+    calculate_plan() runs PV90 on the final plan only while it is weighted, clears it otherwise, and leaves the
+    expected run's series in place (#5871). A fresh instance is planned from the random benchmark template, as
+    test_plan_pv10_hedge does, so the shared one is untouched.
+    """
+    # Imported here: unit_test imports this module, so a top-level import would be circular
+    import contextlib
+    import io
+
+    from tests.test_infra import reset_inverter
+    from tests.test_plan_pv10_hedge import _scenario
+    from tests.test_random_scenarios import RANDOM_TEMPLATE, apply_scenario_to_predbat
+    from unit_test import create_predbat
+
+    failed = False
+    print("Test: calculate_plan() runs PV90 on the final plan only while it is weighted")
+    plan_predbat = create_predbat()
+    with contextlib.redirect_stdout(io.StringIO()):
+        reset_inverter(plan_predbat)
+        plan_predbat.read_debug_yaml(RANDOM_TEMPLATE)
+        plan_predbat.config_root = "./"
+        plan_predbat.save_restore_dir = "./"
+        plan_predbat.load_user_config()
+        apply_scenario_to_predbat(plan_predbat, _scenario())
+        plan_predbat.args["threads"] = 0
+        plan_predbat.debug_enable = False
+        plan_predbat.pv_metric90_weight = 0.15
+        plan_predbat.plan_valid = False
+        plan_predbat.calculate_plan(recompute=True)
+        soc90 = plan_predbat.predict_soc_best90
+        soc_best = plan_predbat.predict_soc_best
+        # The expected run must be the last one: its series is what a fresh nominal run of the same plan gives
+        plan_predbat.run_prediction(plan_predbat.charge_limit_best, plan_predbat.charge_window_best, plan_predbat.export_window_best, plan_predbat.export_limits_best, False, end_record=plan_predbat.end_record, save="best")
+        nominal = plan_predbat.predict_soc_best
+        plan_predbat.pv_metric90_weight = 0.0
+        plan_predbat.plan_valid = False
+        plan_predbat.calculate_plan(recompute=True)
+        soc90_off = plan_predbat.predict_soc_best90
+    if not soc90 or soc90 == soc_best:
+        print("ERROR: with PV90 weighted, calculate_plan() should keep a PV90 series distinct from the expected one")
+        failed = True
+    if soc_best != nominal:
+        print("ERROR: predict_soc_best after calculate_plan() should be the expected run's, not a scenario run's")
+        failed = True
+    if soc90_off != {}:
+        print("ERROR: with PV90 at zero weight, calculate_plan() should clear the PV90 series, got {} entries".format(len(soc90_off)))
+        failed = True
     return failed

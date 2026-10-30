@@ -1257,27 +1257,20 @@ class Output:
                 result[key] = values
         return result or None
 
-    def plan_scenario_title(self, field, expected, row_scenarios):
+    def plan_scenario_soc_title(self, soc_percent, row_scenarios):
         """
-        A title attribute listing one plan cell's value in every scenario, one per line (#5871), or "" when they all agree.
+        A title attribute listing a plan row's SoC in every scenario, one per line (#5871).
 
-        field is the position in PLAN_SCENARIO_FIELDS and expected the cell's own value.
+        Returns "" when the row carries no scenarios or every scenario shows the same SoC. The web UI builds the same
+        tooltip, and those for the PV, load, cost and total cells, with scenarioTitle() in web_helper.py.
         """
         if not row_scenarios:
             return ""
-        values = [("Expected", expected)] + [(PLAN_SCENARIO_NAMES[key], scenario[field]) for key, scenario in sorted(row_scenarios.items())]
-        name = PLAN_SCENARIO_FIELDS[field]
-        if name == "soc_percent":
-            parts = ["{} {}%".format(label, value) for label, value in values]
-        elif name in ("pv_forecast", "load_forecast"):
-            parts = ["{} {:.2f} kWh".format(label, value) for label, value in values]
-        elif name == "cost_change":
-            parts = ["{} {:+d}{}".format(label, int(round(value * 100)), self.currency_symbols[1]) for label, value in values]
-        else:
-            # Written as the Total column is, with the minus before the currency symbol
-            parts = ["{} {}{}{:.2f}".format(label, "-" if value < 0 else "", self.currency_symbols[0], abs(value)) for label, value in values]
+        socs = [("Expected", soc_percent)] + [(PLAN_SCENARIO_NAMES[key], scenario[0]) for key, scenario in sorted(row_scenarios.items())]
+        if all(value == soc_percent for _, value in socs):
+            return ""
         # One scenario per line - &#10; is a line break inside a title attribute
-        return ' title="' + "&#10;".join(parts) + '"'
+        return ' title="' + "&#10;".join("{} {}%".format(label, value) for label, value in socs) + '"'
 
     def publish_html_plan(self, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record, publish=True, prediction=None, car_hold_minutes=None, status_warnings=None, show_scenarios=False):
         """
@@ -1968,7 +1961,7 @@ class Output:
                 html += "<td bgcolor=" + iboost_color + ">" + iboost_amount_str + " </td>"
             # Only the SoC cell carries the scenario tooltip in the HTML, where it is repeated on every row; the web
             # UI builds tooltips for the other cells from the row's JSON (#5871)
-            html += "<td id=soc data-minute=" + str(minute) + " bgcolor=" + soc_color + self.plan_scenario_title(0, soc_percent, row_scenarios) + ">" + str(soc_percent) + soc_sym + "</td>"
+            html += "<td id=soc data-minute=" + str(minute) + " bgcolor=" + soc_color + self.plan_scenario_soc_title(soc_percent, row_scenarios) + ">" + str(soc_percent) + soc_sym + "</td>"
             html += "<td id=cost bgcolor=" + cost_color + ">" + str(cost_str) + "</td>"
             html += "<td id=total_cost bgcolor=#FFFFFF>" + str(total_str) + "</td>"
             if self.carbon_enable:
