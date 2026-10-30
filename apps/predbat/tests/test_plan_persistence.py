@@ -212,7 +212,7 @@ def test_execution_state_saved_with_expiry(my_predbat):
 def test_execution_state_stale_item_ignored(my_predbat):
     tmpdir, storage = _execution_state_env(my_predbat)
     try:
-        limit = max(my_predbat.calculate_plan_every, 30)
+        limit = 30
         _store_state(storage, age_minutes=limit + 5)
         _set_flags(my_predbat, False, 0, False, 0)
         my_predbat.load_execution_state()
@@ -245,6 +245,42 @@ def test_execution_state_reconfirms_when_old(my_predbat):
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+def test_execution_state_restored_age_drives_reconfirm(my_predbat):
+    tmpdir, storage = _execution_state_env(my_predbat)
+    try:
+        _store_state(storage, age_minutes=25)
+        my_predbat.load_execution_state()
+        assert _flags(my_predbat) == (True, 90, False, 0)
+        assert my_predbat.save_execution_state() is True
+        _store_state(storage, age_minutes=2)
+        my_predbat.execution_state_saved = None
+        my_predbat.execution_state_saved_at = None
+        my_predbat.load_execution_state()
+        assert my_predbat.save_execution_state() is False
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_execution_state_future_or_naive_timestamp_ignored(my_predbat):
+    tmpdir, storage = _execution_state_env(my_predbat)
+    try:
+        _store_state(storage, age_minutes=-60)
+        _set_flags(my_predbat, False, 0, False, 0)
+        my_predbat.load_execution_state()
+        assert _flags(my_predbat) == (False, 0, False, 0)
+        assert my_predbat.execution_state_saved is None
+        naive = datetime.now().replace(microsecond=0).isoformat()
+        _store_state(storage, saved_at=naive)
+        my_predbat.load_execution_state()
+        assert _flags(my_predbat) == (False, 0, False, 0)
+        # A small amount of clock skew ahead is tolerated
+        _store_state(storage, age_minutes=-2)
+        my_predbat.load_execution_state()
+        assert _flags(my_predbat) == (True, 90, False, 0)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 EXECUTION_STATE_TESTS = [
     test_execution_state_roundtrip,
     test_execution_state_absent,
@@ -258,6 +294,8 @@ EXECUTION_STATE_TESTS = [
     test_execution_state_saved_with_expiry,
     test_execution_state_stale_item_ignored,
     test_execution_state_reconfirms_when_old,
+    test_execution_state_restored_age_drives_reconfirm,
+    test_execution_state_future_or_naive_timestamp_ignored,
 ]
 
 

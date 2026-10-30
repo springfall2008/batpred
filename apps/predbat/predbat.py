@@ -119,6 +119,9 @@ from control_monitor import ControlMonitor
 
 # Unchanged execution flags are re-saved this often, so their saved_at tracks the last time they were seen to hold
 EXECUTION_STATE_RECONFIRM_MINUTES = 10
+# Saved flags older than this are not believed on load, and one dated further than the clock skew allowance ahead is not either
+EXECUTION_STATE_MAX_AGE_MINUTES = 30
+EXECUTION_STATE_MAX_FUTURE_MINUTES = 5
 
 
 class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, Marginal, Execute, Output, UserInterface, GitHub):
@@ -1026,15 +1029,20 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         if not isinstance(state, dict):
             return
         # Flags describe the inverter right now, so only a recent save is believed
-        max_age = timedelta(minutes=max(self.calculate_plan_every, 30))
+        max_age = timedelta(minutes=EXECUTION_STATE_MAX_AGE_MINUTES)
         try:
             saved_at = datetime.fromisoformat(state.get("saved_at"))
-            if saved_at.tzinfo is None:
-                saved_at = saved_at.replace(tzinfo=timezone.utc)
         except (ValueError, TypeError):
             self.log("Execution state has no valid timestamp, ignoring")
             return
-        age = datetime.now(timezone.utc) - saved_at
+        if saved_at.tzinfo is None:
+            self.log("Execution state timestamp has no timezone, ignoring")
+            return
+        now = datetime.now(timezone.utc)
+        age = now - saved_at
+        if age < -timedelta(minutes=EXECUTION_STATE_MAX_FUTURE_MINUTES):
+            self.log("Execution state is dated {:.0f} minutes in the future, ignoring".format(-age.total_seconds() / 60))
+            return
         if age > max_age:
             self.log("Execution state is {:.0f} minutes old, too old to trust, ignoring".format(age.total_seconds() / 60))
             return
@@ -1047,7 +1055,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         if not restored:
             return
         self.execution_state_saved = self.execution_state_values()
-        self.execution_state_saved_at = saved_at
+        self.execution_state_saved_at = min(saved_at, now)
         self.log("Restored execution state: charging={} (target {}) exporting={} (target {})".format(self.isCharging, self.isCharging_Target, self.isExporting, self.isExporting_Target))
 
     def load_plan(self):
