@@ -359,6 +359,7 @@ def test_predheat_optional_energy_history(my_predbat):
         predicted_targets = []
 
         def simulate(volume_temp, heating_active, save="best", last_predict_minute=None):
+            """Record the replayed setpoint and pass volume temperature through both simulation passes."""
             predicted_targets.append(predheat.get_historical(predheat.target_temperature, 0, default=20.0))
             return volume_temp, {}
 
