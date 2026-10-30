@@ -11,7 +11,7 @@
 from datetime import datetime, timedelta, timezone
 import requests
 from ha import run_async
-from download import DEFAULT_PREDBAT_REPOSITORY, resolve_predbat_repository
+from download import DEFAULT_PREDBAT_REPOSITORY, MAX_PREDBAT_BRANCH_OPTIONS, resolve_predbat_repository, is_valid_predbat_branch, predbat_branch_option
 from utils import dp1
 from predbat import THIS_VERSION, THIS_VERSION_DISPLAY
 
@@ -30,6 +30,35 @@ class GitHub:
         if isinstance(repository, str):
             repository = repository.strip()
         return resolve_predbat_repository(repository=repository)
+
+    def get_predbat_branches(self):
+        """Return the list of branches from the ``predbat_branch`` apps.yaml setting, which can be a single name or a list.
+
+        Each one is offered as a 'branch: <name>' entry in the update drop-down and installs that branch
+        from ``get_predbat_repository()``. The "main" entry is not affected. Blank entries and duplicates are dropped.
+        """
+        value = self.get_arg("predbat_branch", default="", indirect=False)
+        if isinstance(value, str):
+            value = [value]
+        elif not isinstance(value, (list, tuple)):
+            value = []
+        branches = []
+        for branch in value:
+            if isinstance(branch, str):
+                branch = branch.strip()
+                if branch and branch not in branches:
+                    branches.append(branch)
+        return branches
+
+    def warn_predbat_branch_once(self, key, message):
+        """Log a predbat_branch warning once per run.
+
+        download_predbat_releases() runs every plan cycle, so a persistent mistake in apps.yaml would otherwise
+        repeat the same warning every 5 minutes. Restarting Predbat logs it again.
+        """
+        if key not in self.predbat_branch_warned:
+            self.predbat_branch_warned.add(key)
+            self.log(message)
 
     def _load_github_url_cache_from_storage(self):
         """Load the persisted GitHub URL cache from storage on the first call."""
@@ -154,6 +183,20 @@ class GitHub:
 
             self.log("Predbat {} repository {} version {} currently running, latest version is {}, latest beta is {}".format(__file__, repository, THIS_VERSION_DISPLAY, self.releases["latest"], self.releases["latest_beta"]))
             PREDBAT_UPDATE_OPTIONS = ["main"]
+
+            # Offer the branches from apps.yaml (predbat_branch) as extra choices, installed from predbat_repository
+            branch_count = 0
+            for branch in self.get_predbat_branches():
+                if branch == "main":
+                    continue
+                if not is_valid_predbat_branch(branch):
+                    self.warn_predbat_branch_once(("invalid", branch), "Warn: predbat_branch '{}' is not valid, it can only contain letters, numbers, '.', '_', '-' and '/', so it is not offered as an update option".format(branch))
+                elif branch_count >= MAX_PREDBAT_BRANCH_OPTIONS:
+                    self.warn_predbat_branch_once(("limit", branch), "Warn: predbat_branch '{}' is not offered as an update option, at most {} branches are shown".format(branch, MAX_PREDBAT_BRANCH_OPTIONS))
+                else:
+                    PREDBAT_UPDATE_OPTIONS.append(predbat_branch_option(branch))
+                    branch_count += 1
+
             this_tag = THIS_VERSION
             new_version = False
 

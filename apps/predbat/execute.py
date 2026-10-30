@@ -190,7 +190,7 @@ class Execute:
             snapshot.append(
                 {
                     "soc_percent": inverter.soc_percent,
-                    "reserve_percent": inverter.reserve_current,
+                    "reserve_percent": inverter.reserve_percent_current,
                     "battery_power": inverter.battery_power,
                     "pv_power": inverter.pv_power,
                     "grid_power": inverter.grid_power,

@@ -762,8 +762,14 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         return new_tariff
 
     def build_rates_url(self, product_code, tariff_code):
-        """Construct public REST rates URL from base URL + tariff info."""
-        return f"{self.base_url}/v1/products/{product_code}/electricity-tariffs/{tariff_code}/standard-unit-rates/"
+        """Construct public REST rates URL from base URL + tariff info.
+
+        Bounded to the window Predbat reads back (_rates_window), otherwise the endpoint returns every
+        period since the contract started, which on a long fixed contract grows past the page cap (#5572).
+        The API still returns a period that started before the window and is open-ended.
+        """
+        start, end = (moment.astimezone(timezone.utc) for moment in self._rates_window())
+        return f"{self.base_url}/v1/products/{product_code}/electricity-tariffs/{tariff_code}/standard-unit-rates/?period_from={start.strftime('%Y-%m-%dT%H:%M:%SZ')}&period_to={end.strftime('%Y-%m-%dT%H:%M:%SZ')}&page_size=1500"
 
     def build_standing_charge_url(self, product_code, tariff_code):
         """Construct public REST standing charge URL."""
@@ -1355,25 +1361,30 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
     def _published_rates(self, rates):
         """Trim a rate list to the window Predbat reads back, for publishing as a sensor attribute.
 
-        A long fixed contract returns every period since it started - about three a day, so a few
-        months reaches 255+ periods (~38 KB), past Home Assistant's 16 KB recorder limit for a
-        state's attributes (#5534). Predbat reads the sensor back through fetch_octopus_rates(),
+        A long fixed contract used to return every period since it started - about three a day, so a
+        few months reached 255+ periods (~38 KB), past Home Assistant's 16 KB recorder limit for a
+        state's attributes (#5534). The REST request is now bounded to this same window (#5572), but
+        a cache saved before that can still hold the full history, so trimming here stays. Predbat reads the sensor back through fetch_octopus_rates(),
         whose minute_data() keeps only (forecast_days + 1) days either side of midnight and drops
         the rest, so publish just that and the plan sees exactly the rates it did before. The
         back end is deliberately wider than the Octopus component's -24h: when fetches keep
         failing, rate_replicate() copies the last real day forward from up to two days back, and
-        trimming that away would lose the rates sooner than before. The in-memory list and the
-        cache keep the full set.
+        trimming that away would lose the rates sooner than before.
 
         The forward end has one day to spare: the sensor is republished only on the first run and
         when a rates refresh is due (every 30 minutes), so one published just before midnight can
         still be what Predbat reads just after it, when its own window has moved on a day. forecast_days is worked out as fetch.py does,
         including its 24 hour minimum.
         """
+        start, end = self._rates_window()
+        return self._rates_in_window(rates, start, end)
+
+    def _rates_window(self):
+        """Return the (start, end) UTC window of rates Predbat reads back - see _published_rates for why."""
         forecast_hours = max(self.get_arg("forecast_hours", 48), 24)
         forecast_days = int((forecast_hours + 23) / 24)
         midnight = self.midnight_utc
-        return self._rates_in_window(rates, midnight - timedelta(days=forecast_days + 1), midnight + timedelta(days=forecast_days + 2))
+        return midnight - timedelta(days=forecast_days + 1), midnight + timedelta(days=forecast_days + 2)
 
     def _publish_rate_sensors(self):
         """Publish the import/export rate + standing-charge sensors from the current in-memory data.
