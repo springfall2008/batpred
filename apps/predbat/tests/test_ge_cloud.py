@@ -5279,7 +5279,7 @@ def _test_async_automatic_config(my_predbat):
         assert ge.config_args.get("load_power") == ["sensor.predbat_gecloud_shared_load_power", 0], "load_power should use the complete AC site balance on a shared meter"
         assert ge.config_args.get("import_today") == ["sensor.predbat_gecloud_battery001_grid_import_total"], "import_today should use first battery only when ge_cloud_automatic_shared_ct overrides"
         assert ge.config_args.get("export_today") == ["sensor.predbat_gecloud_battery001_grid_export_total"], "export_today should use first battery only when ge_cloud_automatic_shared_ct overrides"
-        assert ge.config_args.get("load_today") == ["sensor.predbat_gecloud_shared_load_total"], "load_today should record newly measured site load"
+        assert ge.config_args.get("load_today") == ["sensor.predbat_gecloud_battery001_consumption_total"], "load_today should preserve the existing native history binding"
 
         # Test 3f: ge_cloud_automatic_split_ct=True forces split CT even with duplicate meter serials
         ge.config_args = {"ge_cloud_automatic_split_ct": True}
