@@ -2595,6 +2595,8 @@ class Fetch:
             # Read below once the dispatches are in; none without Octopus Intelligent slots. A compare.py run (save False)
             # keeps this cycle's, as the record is the same whatever the tariff
             self.octopus_cap_idle = None
+        # The slot sensor's own planned dispatches for a car whose planned dispatches come from another sensor
+        self.octopus_slots_raw_planned = {}
 
         if entity_id_list:
             # Process each car's intelligent slot configuration
@@ -2641,6 +2643,7 @@ class Fetch:
                             charger_planned = self.get_state_wrapper(entity_id=planned_entity_id, attribute="planned_dispatches") or self.get_state_wrapper(entity_id=planned_entity_id, attribute="plannedDispatches")
                             planned_completed = self.get_state_wrapper(entity_id=planned_entity_id, attribute="completed_dispatches") or self.get_state_wrapper(entity_id=planned_entity_id, attribute="completedDispatches")
                             # Only once both reads have worked, so a failure leaves the slot sensor's plan whole
+                            self.octopus_slots_raw_planned[car_n] = planned or []
                             planned = charger_planned
                             planned_completed = planned_completed or []
                         except (ValueError, TypeError):
