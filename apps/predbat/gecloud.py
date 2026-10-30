@@ -321,6 +321,64 @@ GE_CLOUD_TIME_SELECT_FORMAT = "HH:MM:SS"
 GE_CLOUD_CLOCK_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 
 
+class SharedMeterLoad:
+    """Measure load behind one explicitly shared grid meter from complete AC-flow samples.
+
+    Cloud consumption is inverter-relative and can be clipped at zero. It cannot be added
+    or inverted to recover site load. AC output already includes the inverter's PV/battery
+    contribution, so neither DC channel is added again here.
+    """
+
+    def __init__(self, members, total_kwh=0, grid_member=None):
+        """Keep a monotonic measured-energy counter, but never restore a sampling baseline."""
+        self.members = tuple(sorted(members))
+        self.grid_member = grid_member or self.members[0]
+        self.total_kwh = total_kwh if isinstance(total_kwh, (int, float)) and not isinstance(total_kwh, bool) and math.isfinite(total_kwh) and total_kwh >= 0 else 0
+        self.previous = None
+
+    def sample(self, samples, now):
+        """Return site W or an unknown reason; integrate only advancing, aligned source frames."""
+        try:
+            times, ac = {}, 0
+            for member in self.members:
+                raw = samples.get(member)
+                if str(raw.get("status", "")).lower() != "normal":
+                    raise ValueError("inverter source is not Normal")
+                stamp = datetime.fromisoformat(raw["time"].replace("Z", "+00:00"))
+                if stamp.tzinfo is None or not -30 <= (now - stamp).total_seconds() <= 300:
+                    raise ValueError("missing or stale source time")
+                times[member] = stamp.timestamp()
+                value = raw["inverter"]["power"]
+                if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
+                    raise ValueError("missing inverter AC power")
+                ac += value
+            grid = samples[self.grid_member]["grid"]["power"]
+            if not isinstance(grid, (int, float)) or isinstance(grid, bool) or not math.isfinite(grid):
+                raise ValueError("missing shared grid power")
+            if max(times.values()) - min(times.values()) > 30:
+                raise ValueError("source times differ by more than 30 seconds")
+            load = ac - grid
+            if load < 0:
+                raise ValueError("AC flows do not describe a non-negative site load")
+        except (KeyError, TypeError, ValueError, AttributeError) as exc:
+            self.previous = None
+            return None, str(exc)
+
+        stamp = min(times.values())
+        if self.previous is not None:
+            previous_times, previous_stamp, previous_load = self.previous
+            if any(times[member] < previous_times[member] for member in self.members):
+                self.previous = None
+                return None, "source time moved backwards"
+            if any(times[member] == previous_times[member] for member in self.members):
+                return load, None  # Repeated provider samples are not new measured energy.
+            elapsed = stamp - previous_stamp
+            if 0 < elapsed <= 300:
+                self.total_kwh += (previous_load + load) / 2 * elapsed / 3600000
+        self.previous = (times, stamp, load)
+        return load, None
+
+
 def ge_code_message(data, code):
     """Describe a GivEnergy result code, preferring the plain-English message the API returned."""
     message = data.get("message", None) if isinstance(data, dict) else None
@@ -1750,38 +1808,30 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         # Use the first battery serial for the ge_cloud_serial (for status)
         self.set_arg("ge_cloud_serial", devices["battery"][0])
 
-        # Detect shared CT clamp: when multiple inverters share a single physical grid CT clamp
-        # (no dedicated external meters, or duplicate meter serial numbers), grid and load
-        # measurements are identical across all inverters and must not be summed.
-        # Apply the same "single source + zeros" pattern used by the EMS path.
+        # A shared GRID meter says nothing about the scope of native consumption: each
+        # inverter combines that meter with its own AC flow, and may clip consumption at zero.
         if num_inverters > 1 and not devices.get("ems"):
-            battery_meters = devices.get("battery_meters", {})
-            all_meter_serials = []
-            for bat in batteries:
-                all_meter_serials.extend(battery_meters.get(bat, []))
-            has_duplicate_serials = len(all_meter_serials) != len(set(all_meter_serials))
-            has_shared_ct = False
-            if has_duplicate_serials:
-                has_shared_ct = True
-                reason = "duplicate meter serials"
-            else:
-                reason = "meters are not duplicated"
-            if self.get_arg("ge_cloud_automatic_split_ct", default=False):
-                has_shared_ct = False
-                reason = "split CT override"
-            elif self.get_arg("ge_cloud_automatic_shared_ct", default=False):
-                has_shared_ct = True
-                reason = "shared CT override"
-            if has_shared_ct:
-                self.log("GECloud: Multiple inverters sharing a single CT clamp detected ({}) — using first inverter only for grid and load measurements".format(reason))
-                self.set_arg("grid_power", [f"sensor.{self.prefix}_gecloud_{batteries[0]}_grid_power"] + [0 for _ in range(num_inverters - 1)])
-                self.set_arg("load_power", [f"sensor.{self.prefix}_gecloud_{batteries[0]}_consumption_power"] + [0 for _ in range(num_inverters - 1)])
-                self.set_arg("import_today", [f"sensor.{self.prefix}_gecloud_{batteries[0]}_grid_import_total"])
-                self.set_arg("export_today", [f"sensor.{self.prefix}_gecloud_{batteries[0]}_grid_export_total"])
+            if self._shared_ct(devices, batteries):
+                anchor = min(batteries)  # A source-order change must not swap lifetime counters.
+                self.log("GECloud: Shared grid meter: using {} for grid/energy and complete inverter AC flows for site load".format(anchor))
+                self.set_arg("grid_power", [f"sensor.{self.prefix}_gecloud_{anchor}_grid_power"] + [0 for _ in range(num_inverters - 1)])
+                self.set_arg("load_power", [f"sensor.{self.prefix}_gecloud_shared_load_power"] + [0 for _ in range(num_inverters - 1)])
+                self.set_arg("import_today", [f"sensor.{self.prefix}_gecloud_{anchor}_grid_import_total"])
+                self.set_arg("export_today", [f"sensor.{self.prefix}_gecloud_{anchor}_grid_export_total"])
                 if not self.get_arg("ge_cloud_load_today_ignore", default=False):
-                    self.set_arg("load_today", [f"sensor.{self.prefix}_gecloud_{batteries[0]}_consumption_total"])
+                    self.set_arg("load_today", [f"sensor.{self.prefix}_gecloud_shared_load_total"])
+                    if not getattr(self, "shared_meter_disabled_ge_cloud_data", False):
+                        self.ge_cloud_data_before_shared_meter = self.ge_cloud_data_before_ems if self.ems_disabled_ge_cloud_data else self.get_arg("ge_cloud_data", default=None, indirect=False)
+                        self.shared_meter_disabled_ge_cloud_data = True
+                    # The downloaded per-inverter consumption history has the same scope defect.
+                    # Record new corrected history; do not relabel the old sum as site load.
+                    self.set_arg("ge_cloud_data", False)
             else:
-                self.log("GECloud: Multiple inverters detected, using all inverters for grid and load measurements ({})".format(reason))
+                self.log("GECloud: Separate or unconfirmed grid meters: retaining per-inverter readings")
+
+        if not self._shared_ct(devices, batteries) and getattr(self, "shared_meter_disabled_ge_cloud_data", False):
+            self.set_arg("ge_cloud_data", self.ge_cloud_data_before_shared_meter)
+            self.shared_meter_disabled_ge_cloud_data = False
 
         # reconfigure for EMS
         if devices["ems"]:
@@ -1813,7 +1863,8 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             self.set_arg("grid_power", [f"sensor.{self.prefix}_gecloud_{ems}_grid_power"] + [0 for _ in range(num_inverters - 1)])
         elif self.ems_disabled_ge_cloud_data:
             # The EMS has left the account since it turned GE Cloud Data off, so put back what it replaced
-            self.set_arg("ge_cloud_data", self.ge_cloud_data_before_ems)
+            shared_load = self._shared_ct(devices, batteries) and not self.get_arg("ge_cloud_load_today_ignore", default=False)
+            self.set_arg("ge_cloud_data", False if shared_load else self.ge_cloud_data_before_ems)
             self.ems_disabled_ge_cloud_data = False
 
         # Determine the model of the inverter, if at least one inverter has AC or AIO in the name then we assume AC coupled and turn off the hybrid switch
@@ -1869,23 +1920,66 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         names = {regname_to_ha(register.get("name", "")) for register in self.settings.get(device, {}).values()}
         return next((candidate for candidate in candidates if candidate in names), None)
 
+    async def publish_shared_meter_load(self):
+        """Publish measured AC site load once after all raw inverter samples have been collected.
+
+        Storage preserves only the measured total. Restart, missing samples and source gaps
+        discard the baseline, so none of the unobserved interval becomes measured energy.
+        Raw Cloud consumption entities and their old history are left unchanged.
+        """
+        devices = self.devices_dict
+        batteries = [serial.lower() for serial in devices.get("battery", [])]
+        if not self._shared_ct(devices, batteries):
+            self._shared_meter_load = None
+            return True
+        members = sorted(set(batteries + [serial.lower() for serial in devices.get("pv", [])]))
+        meter = getattr(self, "_shared_meter_load", None)
+        try:
+            if meter is None or meter.members != tuple(members):
+                saved = await self.storage.load("gecloud", "shared_meter_load") if self.storage else None
+                anchor = min(batteries)
+                total = saved.get("total_kwh", 0) if isinstance(saved, dict) and saved.get("members") == members and saved.get("grid_member") == anchor else 0
+                meter = self._shared_meter_load = SharedMeterLoad(members, total, grid_member=anchor)
+            # PV-only units are included in the AC balance only when the user included them
+            # in this site's PV configuration. Otherwise the group has an unresolved scope.
+            if devices.get("pv") and not self.get_arg("ge_cloud_automatic_split_pv", default=False):
+                meter.previous = None
+                power, error = None, "PV-only sources require ge_cloud_automatic_split_pv or an independent load sensor"
+            else:
+                power, error = meter.sample(self.live_display_samples, self.now_utc_exact)
+            if power is not None and self.storage:
+                saved = await self.storage.save("gecloud", "shared_meter_load", {"members": members, "grid_member": meter.grid_member, "total_kwh": meter.total_kwh}, format="json", expiry=None)
+                if not saved:
+                    raise OSError("Storage did not save the measured total")
+        except Exception as exc:
+            # Do not retain a freshly advanced in-memory counter after persistence failed.
+            # Reload the durable total next cycle, with no baseline across the failure.
+            self._shared_meter_load = None
+            power, error = None, "could not preserve measured energy ({})".format(type(exc).__name__)
+        if error != getattr(self, "_shared_meter_error", None):
+            self.log("Warn: GECloud shared meter load unavailable: {}".format(error) if error else "GECloud: Shared meter load is available again")
+            self._shared_meter_error = error
+        attrs = {"source": "sum(inverter AC output) - shared grid export", "complete": error is None, "unknown_reason": error}
+        self.dashboard_item(f"sensor.{self.prefix}_gecloud_shared_load_power", power if power is not None else "unavailable", attributes=dict(attribute_table["consumption_power"], **attrs), app="gecloud")
+        self.dashboard_item(
+            f"sensor.{self.prefix}_gecloud_shared_load_total",
+            round(meter.total_kwh, 6) if power is not None else "unavailable",
+            attributes=dict(attribute_table["consumption_total"], **attrs, measured_intervals_only=True),
+            app="gecloud",
+        )
+        return error is None
+
     def _shared_ct(self, devices, batteries):
-        """
-        Whether async_automatic_config() reads grid and load from the first inverter only, as it does
-        when several inverters share one CT clamp. A copy of its detection (a duplicated meter serial)
-        and of its two override settings, split winning over shared.
-        """
-        if len(batteries) <= 1 or devices.get("ems"):
+        """Whether every selected inverter reports one shared grid meter, never just a duplicate subset."""
+        if len(batteries) <= 1 or devices.get("ems") or devices.get("gateway"):
             return False
-        battery_meters = devices.get("battery_meters") or {}
-        meter_serials = []
-        for battery in batteries:
-            meter_serials.extend(battery_meters.get(battery) or [])
+        battery_meters = {serial.lower(): meters for serial, meters in (devices.get("battery_meters") or {}).items()}
         if self.get_arg("ge_cloud_automatic_split_ct", default=False):
             return False
         if self.get_arg("ge_cloud_automatic_shared_ct", default=False):
             return True
-        return len(meter_serials) != len(set(meter_serials))
+        meters = [{str(meter).strip() for meter in (battery_meters.get(battery.lower()) or []) if meter is not None and not isinstance(meter, bool) and str(meter).strip()} for battery in batteries]
+        return all(len(group) == 1 and group == meters[0] for group in meters)
 
     def _export_limit_share(self, device):
         """This logical inverter's equal share of the site grid export limit - the value publish_site_export_limit() publishes - or None."""
@@ -1975,11 +2069,18 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         if features["discharge_power_percent"] and not features["discharge_rate"]:
             register("discharge_rate_percent", "number", ["inverter_discharge_power_percentage", "discharge_power_rate"], unit="%")
 
-        if self._shared_ct(devices, batteries) and index > 0:
-            entities["grid_power"] = {"value": 0, "access": "r"}
-            entities["load_power"] = {"value": 0, "access": "r"}
-            for setting in ("import_today", "export_today", "load_today"):
-                entities.pop(setting, None)
+        if self._shared_ct(devices, batteries):
+            if index == 0:
+                sensor("grid_power", min(batteries), "grid_power")
+                sensor("import_today", min(batteries), "grid_import_total")
+                sensor("export_today", min(batteries), "grid_export_total")
+                entities["load_power"] = {"entity_id": f"sensor.{self.prefix}_gecloud_shared_load_power", "access": "r"}
+                entities["load_today"] = {"entity_id": f"sensor.{self.prefix}_gecloud_shared_load_total", "access": "r"}
+            else:
+                entities["grid_power"] = {"value": 0, "access": "r"}
+                entities["load_power"] = {"value": 0, "access": "r"}
+                for setting in ("import_today", "export_today", "load_today"):
+                    entities.pop(setting, None)
 
         ems = devices.get("ems")
         if ems:
@@ -2608,6 +2709,8 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             if device in self.pending_writes:
                 self.pending_writes[device] = []
 
+        if not await self.publish_shared_meter_load():
+            return False
         self.update_success_timestamp()
         return True
 

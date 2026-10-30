@@ -330,6 +330,7 @@ def test_ge_cloud(my_predbat=None):
         ("publish_registers_bracketed_options", _test_publish_registers_bracketed_options, "Publish registers with bracketed or unparseable option validation"),
         ("publish_evc_data", _test_publish_evc_data, "Publish EVC data"),
         ("automatic_config", _test_async_automatic_config, "Automatic config"),
+        ("shared_meter_load", _test_shared_meter_load, "Shared grid scope, AC load, freshness and restart regressions"),
         ("grid_charge_only", _test_grid_charge_only, "Charge rate marked grid_charge_only on the 3-phase register set"),
         ("discovery_direct", _test_build_discovery_battery_only_direct, "build_discovery: single battery, direct composition"),
         ("discovery_grid_charge_only", _test_build_discovery_grid_charge_only, "build_discovery: no Freeze Export on the 3-phase register set"),
@@ -5275,10 +5276,10 @@ def _test_async_automatic_config(my_predbat):
         await ge.async_automatic_config(devices)
 
         assert ge.config_args.get("grid_power") == ["sensor.predbat_gecloud_battery001_grid_power", 0], "grid_power should use first battery + zero when ge_cloud_automatic_shared_ct overrides"
-        assert ge.config_args.get("load_power") == ["sensor.predbat_gecloud_battery001_consumption_power", 0], "load_power should use first battery + zero when ge_cloud_automatic_shared_ct overrides"
+        assert ge.config_args.get("load_power") == ["sensor.predbat_gecloud_shared_load_power", 0], "load_power should use the complete AC site balance on a shared meter"
         assert ge.config_args.get("import_today") == ["sensor.predbat_gecloud_battery001_grid_import_total"], "import_today should use first battery only when ge_cloud_automatic_shared_ct overrides"
         assert ge.config_args.get("export_today") == ["sensor.predbat_gecloud_battery001_grid_export_total"], "export_today should use first battery only when ge_cloud_automatic_shared_ct overrides"
-        assert ge.config_args.get("load_today") == ["sensor.predbat_gecloud_battery001_consumption_total"], "load_today should use first battery only when ge_cloud_automatic_shared_ct overrides"
+        assert ge.config_args.get("load_today") == ["sensor.predbat_gecloud_shared_load_total"], "load_today should record newly measured site load"
 
         # Test 3f: ge_cloud_automatic_split_ct=True forces split CT even with duplicate meter serials
         ge.config_args = {"ge_cloud_automatic_split_ct": True}
@@ -5817,7 +5818,8 @@ def _test_build_discovery_shared_meter(my_predbat):
 
     result = run_async(ge.run(seconds=0, first=True))
 
-    assert result is True
+    assert result is False, "Discovery without actual shared-meter samples must not report healthy metering"
+    assert ge.dashboard_items["sensor.predbat_gecloud_shared_load_power"]["state"] == "unavailable"
     report = reports[0]
     inverters = report["inverters"]
     assert len(inverters) == 2
@@ -8930,3 +8932,10 @@ def _test_inverter_control_off_user_writes(my_predbat):
         return 0
 
     return run_async(test())
+
+
+def _test_shared_meter_load(my_predbat):
+    """Run isolated meter-scope regressions with sanitised source observations."""
+    from tests.test_gecloud_shared_meter import run_shared_meter_tests
+
+    return run_shared_meter_tests()
