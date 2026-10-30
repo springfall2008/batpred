@@ -544,6 +544,35 @@ COMPONENT_LIST = {
         "phase": 1,
         "can_restart": True,
     },
+    "growatt": {
+        "class": "growatt.GrowattAPI",
+        "name": "Growatt OpenAPI",
+        "inverter": True,
+        "event_filter": "predbat_growatt_",
+        "args": {
+            # Predbat.com injects the OAuth access token into growatt_key. The refresh token
+            # remains server-side and OAuthMixin asks the oauth-refresh edge function for a
+            # replacement when this token is close to expiry.
+            "key": {"required": False, "secret": True, "config": "growatt_key"},
+            "auth_method": {"required": False, "default": "oauth", "config": "growatt_auth_method"},
+            "token_expires_at": {"required": False, "config": "growatt_token_expires_at"},
+            "token_hash": {"required": False, "secret": True, "config": "growatt_token_hash"},
+            "inverter_sn": {"required": False, "config": "growatt_inverter_sn"},
+            "automatic": {"required": False, "default": False, "config": "growatt_automatic"},
+            "automatic_ignore_pv": {"required": False, "default": False, "config": "growatt_automatic_ignore_pv"},
+            "control_enable": {"required": False, "default": True, "config": "growatt_control_enable"},
+            "base_url": {"required": False, "default": "https://opencloud.growatt.com", "config": "growatt_base_url"},
+            "battery_rate_max": {"required": False, "config": "growatt_battery_rate_max"},
+            "api_delay": {"required": False, "default": 0.2, "config": "growatt_api_delay"},
+            # Growatt documents one deviceDispatch call per five seconds per device.
+            "min_write_interval": {"required": False, "default": 5, "config": "growatt_min_write_interval"},
+        },
+        # token_hash alone is enough for OAuthMixin to obtain the current token from the
+        # SaaS refresh endpoint after a restart whose embedded access token has expired.
+        "required_or": ["key", "token_hash"],
+        "phase": 1,
+        "can_restart": True,
+    },
     "enphase": {
         "class": "enphase.EnphaseAPI",
         "name": "Enphase API",

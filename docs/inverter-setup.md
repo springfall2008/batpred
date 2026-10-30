@@ -46,6 +46,7 @@ Once you get everything working please share the configuration as a GitHub issue
    | [Fox](#fox) | [Foxess](https://github.com/nathanmarlor/foxess_modbus/) | [fox.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fox.yaml) |
    | [Fox Cloud](#fox-cloud) | Predbat | [fox_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/fox_cloud.yaml) |
    | [Fronius GEN24](#fronius-gen24) | [Fronius](https://www.home-assistant.io/integrations/fronius/) + [fronius-modbus-control](https://github.com/knackerbrot/fronius-modbus-control) | [fronius.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fronius.yaml) |
+   | [Growatt Cloud OpenAPI](#growatt-cloud-openapi) | Predbat built-in | Configured by Predbat.com OAuth setup |
    | [Growatt with Solar Assistant](#growatt-with-solar-assistant) | [Solar Assistant](https://solar-assistant.io/help/home-assistant/setup) | [spa.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt_spa.yaml) or [sph.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt_sph.yaml) |
    | [Hanchu ESS Cloud](#hanchu-ess-cloud) | Predbat | [hanchu.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/hanchu.yaml) |
    | [Hanchu iESS](#hanchu-iess) | [hanchu-ess-ha](https://github.com/upton68/hanchu-ess-ha) | [hanchu_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/hanchu_cloud.yaml) |
@@ -620,6 +621,26 @@ Edit `apps.yaml`:
 - The Fronius integration provides power sensors named `sensor.solarnet_power_battery`, `sensor.solarnet_power_photovoltaics`, `sensor.solarnet_power_load` and `sensor.solarnet_power_grid`. These entity names are standard for the HA Fronius integration and should not need changing.
 - The `grid_power_invert: true` and `load_power_invert: true` settings in the template are required because Fronius reports these values with the opposite sign convention to what Predbat expects.
 - If your inverter has a `RvrtTms` register that is stuck at a non-zero value from a previous session, battery control commands may revert unexpectedly. See the [fronius-modbus-control README](https://github.com/knackerbrot/fronius-modbus-control#the-rvrttms-gotcha) for how to resolve this.
+
+## Growatt Cloud OpenAPI
+
+**Experimental**
+
+Predbat's built-in Growatt component uses Growatt's public OAuth OpenAPI. On Predbat.com, connect the Growatt account in inverter setup, approve access in Growatt, then select the authorised inverter. The service stores and refreshes the OAuth credential and supplies the selected serial and regional API base to the engine. Do not paste a Growatt account password into Predbat.
+
+The component publishes live SoC, battery, grid, PV and load power, device ratings and the available daily energy counters. With automatic setup enabled, it also creates Predbat's standard schedule controls and registers the inverter as `GrowattCloud`.
+
+Before enabling control for a first tester:
+
+1. Start with `growatt_control_enable: false` and confirm the five power-flow values and their signs against the Growatt app. Predbat should show battery power negative while charging and positive while discharging, and grid power negative while importing
+2. Confirm the reported battery capacity, battery maximum power and inverter rating
+3. Set the customer's real `export_limit` manually if it is below the inverter rating
+4. Enable control and test one future charge window at a modest rate. Growatt receives UTC slots, so confirm the Growatt app shows the intended local time after conversion. The Predbat log records each slot table sent, as an `Info: Growatt API request /oauth2/deviceDispatch` line
+5. Test a discharge window above the inverter's own minimum SoC. Confirm forced discharge works on that model and stops when Predbat removes the slot at its software floor
+
+The important limitation is that Growatt's public dispatch has no writable SoC target or reserve. Predbat watches one-minute telemetry and removes a charge slot at the target or a discharge slot at the greatest of the planned export floor, Predbat reserve and the inverter's reported `dischargeCutOffSOC`. This can react up to one poll late, and ordinary self-consumption after a forced-discharge slot is removed may still use the battery down to its local inverter minimum. Treat the first live run as a hardware test, not as confirmation that every Growatt model behaves identically.
+
+If the customer cannot use the OpenAPI route, the existing Solar Assistant setup below remains available.
 
 ## Growatt with Solar Assistant
 

@@ -258,6 +258,7 @@ from tests.test_hanchu_api import run_hanchu_api_tests
 from tests.test_hanchu_control import run_hanchu_control_tests
 from tests.test_hanchu_publish import run_hanchu_publish_tests
 from tests.test_hanchu_cli import run_hanchu_cli_tests
+from tests.test_growatt import run_growatt_tests
 from tests.test_alphaess_api import run_alphaess_api_tests
 from tests.test_alphaess_config import run_alphaess_config_tests
 from tests.test_alphaess_publish import run_alphaess_publish_tests
@@ -712,6 +713,7 @@ def main():
         ("hanchu_control", run_hanchu_control_tests, "Hanchu control-logic tests", False),
         ("hanchu_publish", run_hanchu_publish_tests, "Hanchu publish/config tests", False),
         ("hanchu_cli", run_hanchu_cli_tests, "Hanchu command-line harness helper tests", False),
+        ("growatt", run_growatt_tests, "Growatt OpenAPI component tests", False),
         ("enphase_api", run_enphase_api_tests, "Enphase API tests", False),
         ("solcast", run_solcast_tests, "Solcast API tests", False),
         ("open_meteo", run_open_meteo_tests, "Open-Meteo solar forecast provider tests", False),
