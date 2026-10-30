@@ -630,7 +630,8 @@ class WebInterface(ComponentBase):
         text = ""
         attributes = {}
         if from_db:
-            history = self.get_history_wrapper(entity, 1, required=False)
+            # Untracked: a tracked entity is re-read every 2 minutes until restart, and the entity pages call this for every entity they list
+            history = self.get_history_wrapper(entity, 1, required=False, tracked=False)
             if history and len(history) >= 1:
                 history = history[0]
                 if history:
