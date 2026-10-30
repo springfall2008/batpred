@@ -47,6 +47,7 @@ function configPage(onUpdatePendingChange = () => {}) {
   render()
   return {
     requests,
+    nodes: render,
     text: () => { render(); return text(tree) },
     refresh() { render().find(node => node.type === 'button').props.onClick(); render() },
     search(value) { render().find(node => node.props.type === 'search').props.onChange({ target: { value } }); render() },
@@ -60,6 +61,30 @@ function configPage(onUpdatePendingChange = () => {}) {
 }
 
 const item = { name: 'active', friendly_name: 'Active', entity: 'switch.active', type: 'switch', value: true, default: false }
+
+test('configuration controls identify their settings and associated validation errors', async () => {
+  const page = configPage()
+  const select = { name: 'mode', friendly_name: 'Operating mode', entity: 'select.mode', type: 'select', value: 'one', default: 'one', options: ['one'] }
+  const number = { name: 'limit', friendly_name: 'Charge limit', entity: 'input_number.limit', type: 'number', value: 50, default: 50 }
+  await page.respond(0, { items: [item, select, number], errors: { active: 'Check active', mode: 'Check mode', limit: 'Check limit' } })
+  await page.respond(1, {})
+  const nodes = page.nodes()
+  for (const [name, label] of [['active', 'Active'], ['mode', 'Operating mode'], ['limit', 'Charge limit']]) {
+    const control = nodes.find(node => node.props?.['aria-label'] === label && ['input', 'select'].includes(node.type))
+    assert.equal(control.props['aria-invalid'], true)
+    assert.equal(control.props['aria-' + 'described' + 'by'], `config-error-${name}`)
+    assert.ok(nodes.some(node => node.props?.id === `config-error-${name}`))
+  }
+})
+
+test('switch labels match the displayed boolean values for enabled and disabled settings', async () => {
+  const page = configPage()
+  const off = { ...item, name: 'carbon_enable', friendly_name: 'Carbon enable', entity: 'switch.carbon', value: false, default: true }
+  await page.respond(0, { items: [item, off] })
+  await page.respond(1, {})
+  const switches = page.nodes().filter(node => node.type === 'label' && node.props.className === 'config-switch')
+  assert.deepEqual(switches.map(node => node.props.children[2].props.children), ['true', 'false'])
+})
 
 test('the update selector shows pending immediately and clears it on success or failure', async () => {
   const pending = []

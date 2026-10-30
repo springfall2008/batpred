@@ -50,6 +50,7 @@
 .metric-value {
   font-size: 1.5rem;
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
   line-height: 1.2;
   color: var(--color-text);
 }
@@ -91,8 +92,13 @@
   color: var(--color-text-subtle);
 }
 
-.reason-tooltip:hover {
-  color: var(--color-text-secondary);
+.reason-tooltip summary { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; min-height: 24px; cursor: pointer; list-style: none; }
+.reason-tooltip summary::-webkit-details-marker { display: none; }
+
+@media (hover: hover) {
+  .reason-tooltip:hover {
+    color: var(--color-text-secondary);
+  }
 }
 
 .reason-tooltip-content {
@@ -116,7 +122,7 @@
   transition: opacity 0.15s ease;
 }
 
-.reason-tooltip:hover .reason-tooltip-content {
+.reason-tooltip[open] .reason-tooltip-content {
   visibility: visible;
   opacity: 1;
 }
@@ -257,8 +263,10 @@
   text-decoration: none;
 }
 
-.plan-summary-full-link:hover {
-  text-decoration: underline;
+@media (hover: hover) {
+  .plan-summary-full-link:hover {
+    text-decoration: underline;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

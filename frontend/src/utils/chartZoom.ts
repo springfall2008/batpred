@@ -1,11 +1,12 @@
 import { Chart, type ChartEvent, type Plugin } from 'chart.js'
 import zoomPlugin from 'chartjs-plugin-zoom'
 
-const chartZoomHint = 'Scroll or pinch to zoom. Drag to pan. Double-click to reset.'
+const chartZoomHint = 'Scroll or pinch to zoom. Drag to pan. Double-click to reset. Keyboard: + and - zoom, left and right arrows pan, Home resets.'
 type ScaleRange = { min?: number; max?: number }
 
 const savedZoomRanges = new WeakMap<HTMLCanvasElement, Record<string, ScaleRange>>()
 const resettingCharts = new WeakSet<Chart>()
+const keyboardHandlers = new WeakMap<Chart, (event: KeyboardEvent) => void>()
 
 /** Zoom may produce intermediate ticks outside the original timestamp range. */
 export function formatChartTimestamp(value: unknown, options: Intl.DateTimeFormatOptions): string {
@@ -17,7 +18,20 @@ export function formatChartTimestamp(value: unknown, options: Intl.DateTimeForma
 const resetZoomOnDoubleClick: Plugin = {
   id: 'resetZoomOnDoubleClick',
   afterInit(chart) {
+    if (chart.options.plugins?.zoom?.pan?.enabled === false) return
     chart.canvas.title = chartZoomHint
+    chart.canvas.tabIndex = 0
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === '+' || event.key === '=') chart.zoom(1.2)
+      else if (event.key === '-') chart.zoom(1 / 1.2)
+      else if (event.key === 'ArrowLeft') chart.pan({ x: 50, y: 0 })
+      else if (event.key === 'ArrowRight') chart.pan({ x: -50, y: 0 })
+      else if (event.key === 'Home') chart.resetZoom()
+      else return
+      event.preventDefault()
+    }
+    keyboardHandlers.set(chart, onKeyDown)
+    chart.canvas.addEventListener('keydown', onKeyDown)
   },
   beforeUpdate(chart) {
     const ranges = savedZoomRanges.get(chart.canvas)
@@ -32,6 +46,9 @@ const resetZoomOnDoubleClick: Plugin = {
     savedZoomRanges.delete(chart.canvas)
   },
   beforeDestroy(chart) {
+    const handler = keyboardHandlers.get(chart)
+    if (handler) chart.canvas.removeEventListener('keydown', handler)
+    keyboardHandlers.delete(chart)
     if (!chart.isZoomedOrPanned()) return
 
     const ranges = Object.fromEntries(

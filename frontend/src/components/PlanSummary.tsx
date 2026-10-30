@@ -577,19 +577,18 @@ function PlanSummary({ plan, batterySoc, batteryStale, socBoundaries, showPlanLi
             <span>{getStateLabel(current)}</span>
           </strong>
 
-          <span className="state-reason">
+          <div className="state-reason">
             <FontAwesomeIcon icon={socDirectionIcon} />
 
             <span>SOC {socDirection}</span>
 
             {currentExplanation && (
-              <span className="reason-tooltip">
-                <FontAwesomeIcon icon={faCircleInfo} />
-
+              <details className="reason-tooltip">
+                <summary aria-label={`Why this action? ${currentExplanation}`}><FontAwesomeIcon icon={faCircleInfo} aria-hidden="true" /></summary>
                 <span className="reason-tooltip-content">{currentExplanation}</span>
-              </span>
+              </details>
             )}
-          </span>
+          </div>
         </div>
 
         {/* --------------------------------------------------------

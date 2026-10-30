@@ -89,4 +89,43 @@
   .browse-file-manager {
     height: calc(100dvh - 7rem) !important;
   }
+
+  .browse-file-manager .files.list .files-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 0.5rem;
+    padding: 0.4rem;
+  }
+
+  .browse-file-manager .files.list .files-header .file-select-all { display: none; }
+  .browse-file-manager .files.list .files-header .file-name,
+  .browse-file-manager .files.list .files-header .file-date,
+  .browse-file-manager .files.list .files-header .file-size { width: auto; padding: 0; }
+
+  .browse-file-manager .files.list .file-item-container {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.15rem 0.5rem;
+    padding: 0.5rem;
+  }
+
+  .browse-file-manager .files.list .file-item {
+    grid-column: 1 / -1;
+    width: auto;
+    min-width: 0;
+    height: auto;
+    padding: 0;
+  }
+
+  .browse-file-manager .files.list .file-item .file-name {
+    max-width: none;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .browse-file-manager .files.list .modified-date,
+  .browse-file-manager .files.list .size {
+    width: auto;
+    justify-content: flex-start;
+  }
 }

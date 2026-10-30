@@ -1,6 +1,6 @@
 import { useEffect, useState, type CSSProperties } from 'react'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
-import { faBatteryQuarter, faBatteryHalf, faBatteryThreeQuarters, faHouse, faMoon, faSolarPanel, faSun } from '@fortawesome/free-solid-svg-icons'
+import { faArrowTrendUp, faBatteryQuarter, faBatteryHalf, faBatteryThreeQuarters, faBolt, faHouse, faMoon, faSolarPanel, faSun } from '@fortawesome/free-solid-svg-icons'
 import type { IconDefinition } from '@fortawesome/fontawesome-svg-core'
 import GridIcon from '../components/GridIcon'
 import { COLOURS, DEFAULT_THEME, type ColourKey, type ThemeSettings } from '../hooks/useThemeSettings'
@@ -23,6 +23,7 @@ const PRESETS = [
   ['retro', 'Retro', 'A classic green-screen look'],
   ['custom', 'Custom', 'Make the colours your own']
 ] as const
+const ENERGY_COLOURS = [['flow-home', 'Home'], ['flow-solar', 'Solar'], ['flow-grid', 'Import'], ['export', 'Export'], ['charge', 'Charging']] as const
 const COLOUR_ICONS: Record<ColourKey, IconDefinition | null> = {
   'battery-low': faBatteryQuarter, 'battery-medium': faBatteryHalf, 'battery-high': faBatteryThreeQuarters,
   charge: faBatteryHalf, export: null, 'flow-solar': faSolarPanel, 'flow-grid': null, 'flow-home': faHouse
@@ -84,11 +85,11 @@ export default function ThemePage({ saved, draft, setDraft, dirty, error, confli
         <p>Choose colours for each appearance.</p>
         <div className="theme-colour-table-wrap"><table className="theme-colour-table">
           <colgroup><col /><col /><col className="theme-colour-light" /><col className="theme-colour-dark" /></colgroup>
-          <thead><tr><th scope="col" aria-label="Category" /><th scope="col">Colour</th><th scope="col" className="theme-colour-light"><FontAwesomeIcon icon={faSun} aria-hidden="true" /> Light</th><th scope="col" className="theme-colour-dark"><FontAwesomeIcon icon={faMoon} aria-hidden="true" /> Dark</th></tr></thead>
-          {([['Energy flows', COLOURS.slice(3)], ['Battery levels', COLOURS.slice(0, 3)]] as const).map(([heading, entries]) => <tbody key={heading}>
+          <thead><tr><th scope="col" aria-label="Category" /><th scope="col" aria-label="Colour" /><th scope="col" className="theme-colour-light"><FontAwesomeIcon icon={faSun} aria-hidden="true" /> Light</th><th scope="col" className="theme-colour-dark"><FontAwesomeIcon icon={faMoon} aria-hidden="true" /> Dark</th></tr></thead>
+          {([['Energy flows', ENERGY_COLOURS], ['Battery levels', COLOURS.slice(0, 3)]] as const).map(([heading, entries]) => <tbody key={heading}>
             {entries.map(([key, label], index) => <tr key={key}>
               {index === 0 && <th className="theme-colour-group" scope="rowgroup" rowSpan={entries.length}><span>{heading}</span></th>}
-              <th scope="row"><span className="theme-colour-name"><span className="theme-colour-icon" aria-hidden="true">{COLOUR_ICONS[key] ? <FontAwesomeIcon icon={COLOUR_ICONS[key]!} /> : <GridIcon />}</span>{label}</span></th>
+              <th scope="row" title={label}><span className="theme-colour-name"><span className="theme-colour-icon" aria-hidden="true">{COLOUR_ICONS[key] ? <FontAwesomeIcon icon={COLOUR_ICONS[key]!} /> : <GridIcon />}{key === 'charge' && <FontAwesomeIcon className="theme-colour-icon-badge" icon={faBolt} />}{key === 'export' && <FontAwesomeIcon className="theme-colour-icon-badge" icon={faArrowTrendUp} />}</span><span className="theme-colour-label">{label}</span></span></th>
               {(['light', 'dark'] as const).map(palette => {
                 const value = colour(key, palette)
                 const background = styles.getPropertyValue(`--default-${palette}-bg`).trim()

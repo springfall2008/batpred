@@ -195,21 +195,21 @@ export default function ConfigPage({ onUpdatePendingChange }: { onUpdatePendingC
                 const disabled = saving === item.entity || saving === 'tariff-helper'
                 return (
                   <tr key={item.entity} className={validationErrors[item.name] ? 'has-error' : ''}>
-                    <td><div className="config-setting-name"><strong>{item.friendly_name}</strong><span className="config-help" tabIndex={0} aria-label={item.description} data-tooltip={item.description}><FontAwesomeIcon icon={faCircleInfo} /></span></div><small>{item.entity}</small>{validationErrors[item.name] && <span className="config-item-error">{validationErrors[item.name]}</span>}</td>
-                    <td className={changed ? 'is-changed' : ''}>{String(item.value)} {item.unit}</td>
-                    <td>{String(item.default)} {item.unit}</td>
+                    <td><div className="config-setting-name"><strong>{item.friendly_name}</strong><span className="config-help" tabIndex={0} aria-label={item.description} data-tooltip={item.description}><FontAwesomeIcon icon={faCircleInfo} /></span></div><small>{item.entity}</small>{validationErrors[item.name] && <span id={`config-error-${item.name}`} className="config-item-error">{validationErrors[item.name]}</span>}</td>
+                    <td className={changed ? 'is-changed' : ''}><span className="config-mobile-label">Current: </span>{String(item.value)} {item.unit}</td>
+                    <td><span className="config-mobile-label">Default: </span>{String(item.default)} {item.unit}</td>
                     <td>
                       {item.type === 'switch' ? (
                         <label className="config-switch">
-                          <input type="checkbox" checked={Boolean(item.value)} disabled={disabled} onChange={(event) => save(item, event.target.checked)} />
-                          <i aria-hidden="true" /><span>{item.value ? 'On' : 'Off'}</span>
+                          <input type="checkbox" aria-label={item.friendly_name} aria-invalid={Boolean(validationErrors[item.name])} aria-describedby={validationErrors[item.name] ? `config-error-${item.name}` : undefined} checked={Boolean(item.value)} disabled={disabled} onChange={(event) => save(item, event.target.checked)} />
+                          <i aria-hidden="true" /><span>{String(Boolean(item.value))}</span>
                         </label>
                       ) : item.type === 'select' ? (
-                        <select name={item.name} aria-label={item.friendly_name} autoComplete="off" value={String(item.value)} disabled={disabled} onChange={(event) => save(item, event.target.value)}>
+                        <select name={item.name} aria-label={item.friendly_name} aria-invalid={Boolean(validationErrors[item.name])} aria-describedby={validationErrors[item.name] ? `config-error-${item.name}` : undefined} autoComplete="off" value={String(item.value)} disabled={disabled} onChange={(event) => save(item, event.target.value)}>
                           {item.options.map((option) => <option key={String(option)} value={String(option)}>{String(option) || 'None'}</option>)}
                         </select>
                       ) : item.type === 'input_number' || item.type === 'number' ? (
-                        <input type="number" name={item.name} aria-label={item.friendly_name} autoComplete="off" defaultValue={Number(item.value)} min={item.min ?? undefined} max={item.max ?? undefined} step={item.step ?? undefined} disabled={disabled} onBlur={(event) => Number(event.target.value) !== Number(item.value) && save(item, Number(event.target.value))} />
+                        <input type="number" name={item.name} aria-label={item.friendly_name} aria-invalid={Boolean(validationErrors[item.name])} aria-describedby={validationErrors[item.name] ? `config-error-${item.name}` : undefined} autoComplete="off" defaultValue={Number(item.value)} min={item.min ?? undefined} max={item.max ?? undefined} step={item.step ?? undefined} disabled={disabled} onBlur={(event) => Number(event.target.value) !== Number(item.value) && save(item, Number(event.target.value))} />
                       ) : <span>{String(item.value)}</span>}
                     </td>
                   </tr>

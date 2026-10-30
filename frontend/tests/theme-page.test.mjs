@@ -45,6 +45,13 @@ test('theme editor exposes separate palettes, thresholds and contrast warnings',
   assert.match(html, /Energy flows/)
   assert.match(html, /scope="rowgroup" rowSpan="5"><span>Energy flows/)
   assert.match(html, /scope="rowgroup" rowSpan="3"><span>Battery levels/)
+  const names = ['Home', 'Solar', 'Import', 'Export', 'Charging']
+  const positions = names.map(name => html.indexOf(`title="${name}"`))
+  assert.ok(positions.every((position, index) => position >= 0 && (index === 0 || position > positions[index - 1])))
+  assert.match(html, /data-icon="bolt"/)
+  assert.match(html, /data-icon="arrow-trend-up"/)
+  assert.match(html, /aria-label="Import light"/)
+  assert.match(html, /aria-label="Export dark"/)
   assert.ok(html.indexOf('Energy flows') < html.indexOf('Battery levels'))
   assert.equal((html.match(/data-palette="light"/g) || []).length, 8)
   assert.equal((html.match(/data-palette="dark"/g) || []).length, 8)

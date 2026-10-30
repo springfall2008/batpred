@@ -49,8 +49,10 @@
   cursor: pointer;
 }
 
-.status-card-update:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--color-success) 20%, transparent);
+@media (hover: hover) {
+  .status-card-update:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--color-success) 20%, transparent);
+  }
 }
 
 .status-card-update:focus-visible {
