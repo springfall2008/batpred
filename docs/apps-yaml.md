@@ -431,6 +431,8 @@ Docker users can change the web port for the Predbat web interface by setting **
   web_port: 5052
 ```
 
+**web_bind** selects the network address on which the web server listens. It defaults to `0.0.0.0` (all IPv4 interfaces) for compatibility. Set `web_bind: "127.0.0.1"` for access only from the same host, or use a specific private interface address. This restricts network reachability; it does not add authentication. Home Assistant ingress must be able to reach the selected address, so keep the default for the app unless you have verified its ingress networking. Restart Predbat after changing this setting.
+
 ### notify_devices
 
 A list of device names to notify when Predbat sends a notification. The default is just 'notify' which contacts all mobile devices
@@ -2221,6 +2223,7 @@ whether you are within an Octopus Energy "smart charge" slot
 (see [car charging documentation](car-charging.md#taking-planned-slots-from-another-sensor))
 - **octopus_ready_time** - Octopus Energy integration sensor for when the car charging will be completed by
 - **octopus_charge_limit** - Octopus Energy integration sensor for car charging limit
+- **octopus_charge_limit_is_additive** - Optional list of booleans, one per car. Set to `true` when Octopus supplies a percentage to add rather than a final SOC target. Predbat adds the target to the car SOC recorded at plug-in, while retaining `car_charging_limit` as the absolute SOC ceiling. Detected automatically from the `is_charger` attribute with Octopus Direct; set explicitly for other integrations without that attribute. Set to `false` to use an absolute Octopus target.
 - **octopus_slot_low_rate** - Whether Octopus Intelligent Slots reported will be at the lowest rate if at home
 - **octopus_slot_max** - Maximum cheap rate dispatch time per 24-hour period, set in 30-minute slots (12 is 6 hours). It is counted in the minutes of each dispatch, so a 10-minute dispatch uses 10 minutes of it. It is per Octopus account, so with more than one car it is shared between all the cars with an `octopus_intelligent_slot` entry, in clock time (see [Multiple cars with Octopus Intelligent Go](car-charging.md#multiple-cars-with-octopus-intelligent-go-iog))
 - **intelligent_dispatch_billing** - `auto` (default), `octopus` or `window`: whether a planned dispatch half hour is billed cheap only when the car charges in it (`octopus`) or whenever the dispatch was in force (`window`, E.ON Next Drive Smart). `auto` picks `window` for the Kraken component on `kraken_provider: eon`
@@ -3047,3 +3050,7 @@ If you want to set days_previous to take an average of the house load over all t
     - 7
     - 8
 ```
+
+## Use the modern interface
+
+Both web interfaces are always available. Use **Try the new interface** or **Classic interface** in the menu to switch; your browser remembers your choice. The `web_ui` setting is no longer needed. See [Use the modern interface](web-interface.md#use-the-modern-interface) for the optional EV and ASHP entities used by Overview.

@@ -73,12 +73,14 @@ boostable
 Bottlecap
 brickatius
 britkat1980
+bunx
 bwignore
 byok
 cadata
 calcsize
 calib
 callees
+calvind
 Cantarell
 cbat
 CDLL
@@ -89,6 +91,7 @@ ceyyyy
 CGNAT
 Chae
 Chaf
+charg
 chargedischarge
 chargeenergytotal
 chargefreeze
@@ -96,6 +99,7 @@ chargehold
 chargelater
 chargelimit
 chargepower
+chartjs
 CHECKCODE
 chg
 Chrg
@@ -122,6 +126,7 @@ creds
 crosscharge
 ctrdis
 ctypes
+cubone
 customauthorizer
 customisation
 Customise
@@ -229,6 +234,7 @@ euids
 EVAC
 evc
 EVDC
+evenodd
 evergen
 evilspringfall
 evse
@@ -343,6 +349,7 @@ inva
 invb
 invbatpower
 invname
+invopop
 iot
 IPPROTO
 isinstance
@@ -359,6 +366,7 @@ kaiming
 keepalive
 kellerza
 keydb
+keymap
 khtml
 killall
 Kiritimati
@@ -384,6 +392,8 @@ libc
 libyaml
 LIFEPO
 linebreak
+linecap
+linejoin
 linestyle
 Liskov
 lmt
@@ -414,6 +424,7 @@ mdi
 mdlrc
 measurand
 measurands
+metacharacters
 Meteo
 Meteoalarm
 meterpoint
@@ -481,6 +492,7 @@ notgithub
 notsn
 nrgheat
 numpy
+nums
 OCPP
 octo
 octoplus
@@ -512,6 +524,8 @@ pac
 packettypes
 paho
 parseable
+partlycloudy
+pathlib
 pbat
 pbgw
 pcharging
@@ -633,6 +647,8 @@ setpoints
 setstate
 SFMB
 sg05lp1
+shiki
+shikijs
 SIGALRM
 sigcloud
 sigen
@@ -686,6 +702,7 @@ suback
 subclassing
 submessage
 substep
+subvalue
 sunspec
 sunsynk
 supabase
@@ -726,12 +743,14 @@ tmpfs
 tmrw
 tojson
 topbar
+TOTL
 tottime
 trapezoidally
 trapz
 Trefor
 treforsiphone
 treforsouthwell
+TRGT
 triggerable
 trydan
 tunables
@@ -778,6 +797,7 @@ Vallery
 varh
 venv
 Victron
+VIEWBOX
 visibilitychange
 vvwwxxabcdefyyzzuu
 waf
@@ -803,6 +823,7 @@ xaxistooltip
 xlabel
 xlim
 xload
+Xmark
 xrtkq
 xtest
 xticks

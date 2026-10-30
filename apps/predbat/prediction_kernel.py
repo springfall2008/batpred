@@ -22,6 +22,7 @@ rejected at load time rather than producing divergent results.
 
 import array
 import ctypes
+import math
 import struct
 import os
 import platform
@@ -33,7 +34,7 @@ from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in
 
 # Expected ABI/parity revisions of the shared library (see prediction_kernel.cpp)
 KERNEL_ABI_VERSION = 10
-KERNEL_PARITY_REVISION = 18
+KERNEL_PARITY_REVISION = 19
 
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
 KERNEL_MAX_CARS = PREDBAT_MAX_CARS
@@ -750,6 +751,8 @@ def create_kernel_context(pred, static_cache=None):
         return 0
 
     try:
+        if not math.isfinite(pred.soc_kw) or not math.isfinite(pred.soc_max) or pred.soc_max <= 0 or not 0 <= pred.soc_kw <= pred.soc_max:
+            return 0
         forecast_minutes = pred.forecast_minutes
         minutes_now = pred.minutes_now
         num_cars = pred.num_cars

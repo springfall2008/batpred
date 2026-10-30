@@ -2180,6 +2180,21 @@ class Inverter:
         if device_max is not None:
             reserve = min(reserve, device_max)
 
+        if self.inverter_type == "GS" and self.inv_has_reserve_soc and self.base.set_reserve_enable and self.base.get_arg("energy_control_switch", indirect=False, index=self.id):
+            # Pre-FB00 Self-Use ignores Backup SOC; the no-grid reserve mode enforces it
+            # without charging from the grid to reach a reserve raised above the current SoC.
+            was_holding = getattr(self, "solis_reserve_hold", False)
+            self.solis_reserve_hold = reserve > self.reserve_percent and reserve >= self.soc_percent
+            solax_modes = SOLAX_SOLIS_MODES_NEW if self.base.get_arg("solax_modbus_new", True) else SOLAX_SOLIS_MODES
+            if self.solis_reserve_hold:
+                if not was_holding:
+                    self.solis_reserve_release_mode = 35
+                self.write_solis_energy_control(17, solax_modes, "reserve hold")
+            elif was_holding:
+                self.write_solis_energy_control(self.solis_reserve_release_mode, solax_modes, "release reserve hold")
+            elif solax_modes.get(str(self.base.get_state_wrapper(self.base.get_arg("energy_control_switch", indirect=False, index=self.id), ""))) == 17:
+                self.write_solis_energy_control(35, solax_modes, "reset reserve hold")
+
         if current_reserve != reserve:
             self.base.log("Inverter {} Current Reserve is {}% and new target is {}%".format(self.id, dp0(current_reserve), dp0(reserve)))
             self.write_and_poll_value("reserve", reserve_entity, reserve)
@@ -3316,6 +3331,9 @@ class Inverter:
             # adjust_charge_immediate / adjust_export_immediate instead.
             solax_modes = SOLAX_SOLIS_MODES_NEW if self.base.get_arg("solax_modbus_new", True) else SOLAX_SOLIS_MODES
             new_switch = 35 if (enable or direction == "eco") else 33
+            if self.inv_has_reserve_soc and self.base.set_reserve_enable and getattr(self, "solis_reserve_hold", False):
+                self.solis_reserve_release_mode = new_switch
+                new_switch = 17
             self.write_solis_energy_control(new_switch, solax_modes, f"{direction} {enable}", warn_missing=(direction == "charge" and enable))
 
         # MQTT
@@ -3402,6 +3420,10 @@ class Inverter:
             # entity is genuinely absent).
             self.log("Warn: Inverter {} battery_voltage is {}, skipping current calculation for {}".format(self.id, self.battery_voltage, direction))
             return
+        # A GS battery-current register can reset 0 A to its maximum. During a reserve
+        # hold, reserve blocks discharge; keep a valid nonzero current limit available.
+        if direction == "discharge" and power == 0 and self.inverter_type == "GS" and self.inv_has_reserve_soc and self.base.set_reserve_enable and getattr(self, "solis_reserve_hold", False):
+            power = self.battery_rate_max_discharge * MINUTE_WATT
         new_current = round(power / self.battery_voltage, self.inv_current_dp)
         self.write_and_poll_value(f"timed_{direction}_current", self.base.get_arg(f"timed_{direction}_current", indirect=False, index=self.id), new_current, fuzzy=1)
 

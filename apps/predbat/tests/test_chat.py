@@ -1581,10 +1581,8 @@ def test_busy_rejects_a_second_turn(my_predbat):
 def test_search_source_runs_off_the_loop(my_predbat):
     """search_source is dispatched to a worker thread, so a slow scan cannot stall the loop.
 
-    read_source stays inline because it is bounded work, but search_source compiles and runs a
-    model-supplied regular expression, and Python's re engine backtracks with no timeout - a
-    pathological pattern must not be able to freeze the component's only event loop. This is
-    proved, not assumed: a fast heartbeat coroutine races a slow synchronous replacement for
+    read_source stays inline because it is bounded work, but search_source scans several files.
+    A fast heartbeat coroutine races a slow synchronous replacement for
     search_source on the same loop. If the dispatch ever ran the search inline instead of via
     run_in_executor, the heartbeat would stall for the whole 0.3s the search takes.
     """
@@ -1799,6 +1797,71 @@ def test_write_confirmation_rejected(my_predbat):
         failed = True
 
     return failed
+
+
+def test_write_confirmation_rejects_replayed_provider_id(my_predbat):
+    """A stale approval cannot approve a different call that reuses the provider's ID."""
+    print("**** Testing one-use write approval identities ****")
+    agent = _agent_with_fake(my_predbat, _text_response("unused"))
+    agent.confirm_writes_enabled = lambda: True
+    dispatched = []
+
+    async def record_dispatch(conversation_id, name, arguments):
+        """Record dummy actions without changing configuration or hardware."""
+        dispatched.append(dict(arguments))
+        return {"success": True, "data": None}
+
+    agent._dispatch = record_dispatch
+
+    async def exercise():
+        """Schedule two confirmations deterministically and replay the first answer."""
+        cid = await agent.store.create()
+        agent.deadline = time.monotonic() + 60
+        tasks = []
+
+        async def pending_id():
+            """Wait briefly for the task to publish its confirmation card."""
+            for _ in range(100):
+                if agent.pending_confirm:
+                    return next(iter(agent.pending_confirm))
+                await asyncio.sleep(0.001)
+            raise AssertionError("No pending confirmation was published")
+
+        def call(value):
+            """Build different actions with the same lower-trust provider identifier."""
+            return {"id": "reused-provider-id", "function": {"name": "set_config", "arguments": json.dumps({"entity_id": "dummy", "value": value})}}
+
+        try:
+            tasks.append(asyncio.create_task(agent._run_one_tool(cid, "turn-a", call(1))))
+            first = await pending_id()
+            assert first != "reused-provider-id"
+            assert agent.confirm(first, cid, True)
+            assert not agent.confirm(first, cid, True), "An approval could be answered twice"
+            await asyncio.wait_for(tasks[-1], 1)
+
+            tasks.append(asyncio.create_task(agent._run_one_tool(cid, "turn-b", call(2))))
+            second = await pending_id()
+            assert second != first
+            assert not agent.confirm(first, cid, True), "A stale approval accepted the later action"
+            assert not agent.confirm(second, "another-conversation", True)
+            assert not tasks[-1].done() and dispatched == [{"entity_id": "dummy", "value": 1}]
+            assert agent.confirm(second, cid, False)
+            await asyncio.wait_for(tasks[-1], 1)
+            assert len(dispatched) == 1, "The declined later action was dispatched"
+            messages = await agent.store.get_messages(cid)
+            assert len(messages) == 2 and all(message["tool_call_id"] == "reused-provider-id" for message in messages)
+            approvals = agent.store.get_approvals(cid)
+            assert [entry["call_id"] for entry in approvals] == [first, second]
+            assert [entry["status"] for entry in approvals] == ["approved", "rejected"]
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    with _fast_confirm_poll():
+        asyncio.run(exercise())
+    return False
 
 
 def test_write_confirmation_timeout(my_predbat):
@@ -3121,7 +3184,7 @@ def test_confirmation_card_resolves_nested_paths(my_predbat):
             failed = True
 
         # Credentials never reach the transcript, at either level.
-        for key in ("ha_key", "forecast_solar[0].api_key"):
+        for key in ("ha_key", "forecast_solar[0].api_key", "forecast_solar", "forecast_solar[0]"):
             shown = json.dumps(card(key, "new"))
             if "REAL-KEY" in shown or "REAL-HA-TOKEN" in shown:
                 print("ERROR: the card exposed a credential for {}: {}".format(key, shown))
@@ -4319,6 +4382,7 @@ def test_ollama_zero_context_length_is_treated_as_absent(my_predbat):
 def run_chat_tests(my_predbat):
     """Run every chat agent test, returning True if any of them failed."""
     failed = False
+    failed |= test_write_confirmation_rejects_replayed_provider_id(my_predbat)
     failed |= test_model_catalogue_is_cached_per_endpoint(my_predbat)
     failed |= test_ollama_context_length_is_what_the_server_will_actually_give(my_predbat)
     failed |= test_ollama_context_length_survives_a_server_that_cannot_answer(my_predbat)

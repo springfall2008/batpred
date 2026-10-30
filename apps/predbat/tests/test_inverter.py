@@ -118,6 +118,100 @@ def test_solis_energy_control(test_name, my_predbat, ha, inverter_type, switch_s
     return failed
 
 
+def test_solis_gs_reserve_hold(my_predbat, ha):
+    """GS holds survive target writes, avoid 0 A, and release for charge, export and reset."""
+    print("Test: solis_gs_reserve_hold")
+    saved_args = copy.deepcopy(my_predbat.args)
+    saved_items = copy.deepcopy(ha.dummy_items)
+    saved_reserve_enable = my_predbat.set_reserve_enable
+    entity_id = "select.solis_energy_storage_control_switch"
+    reserve_entity = "number.solis_backup_mode_soc"
+    current_entity = "number.solis_battery_discharge_current"
+    calls = []
+    orig_call = my_predbat.call_service_wrapper
+    try:
+        my_predbat.args.update({"inverter_type": ["GS"], "energy_control_switch": entity_id, "reserve": [reserve_entity], "timed_discharge_current": [current_entity]})
+        ha.dummy_items.update({entity_id: "Self-Use", reserve_entity: 9, current_entity: 51.5})
+        inv = Inverter(my_predbat, 0, quiet=True)
+        inv.sleep = dummy_sleep
+        inv.inv_has_reserve_soc = True
+        my_predbat.args["reserve"] = [reserve_entity]
+        inv.reserve_percent = 9
+        inv.reserve_max = 100
+        inv.soc_percent = 60
+        inv.battery_voltage = 58.2
+        inv.battery_rate_max_discharge = 3000 / MINUTE_WATT
+        my_predbat.set_reserve_enable = True
+        my_predbat.call_service_wrapper = lambda service, **kwargs: calls.append((service, kwargs)) or orig_call(service, **kwargs)
+
+        # Executor order: raise reserve, set target, then apply the zero-rate intent.
+        inv.adjust_reserve(61)
+        assert ha.get_state(entity_id) == "Backup/Reserve - No Grid Charging"
+        assert float(ha.get_state(reserve_entity)) == 61
+        inv.mimic_target_soc(0)
+        inv.set_current_from_power("discharge", 0)
+        assert ha.get_state(entity_id) == "Backup/Reserve - No Grid Charging"
+        assert float(ha.get_state(current_entity)) > 0
+        assert not any(data.get("entity_id") == current_entity and data.get("value") == 0 for _, data in calls)
+
+        # A later poll must not toggle the mode while holding.
+        calls.clear()
+        inv.adjust_reserve(61)
+        inv.mimic_target_soc(0)
+        inv.adjust_charge_immediate(60, freeze=True)
+        inv.adjust_export_immediate(100)
+        assert ha.get_state(entity_id) == "Backup/Reserve - No Grid Charging"
+        assert not any(data.get("entity_id") == entity_id for _, data in calls)
+
+        # Resetting reserve releases the hold for demand, charge and export.
+        inv.adjust_reserve(0)
+        assert float(ha.get_state(reserve_entity)) == 9
+        assert ha.get_state(entity_id) == "Self-Use"
+        assert not inv.solis_reserve_hold
+        inv.mimic_target_soc(100)
+        assert ha.get_state(entity_id) == "Self-Use"
+        inv.mimic_target_soc(10, discharge=True)
+        assert ha.get_state(entity_id) == "Self-Use"
+
+        # Releasing must honour a timed-charge disable requested later in the cycle.
+        inv.adjust_reserve(61)
+        inv.alt_charge_discharge_enable("charge", False)
+        assert ha.get_state(entity_id) == "Backup/Reserve - No Grid Charging"
+        inv.adjust_reserve(0)
+        assert ha.get_state(entity_id) == "Self-Use - No Timed Charge/Discharge"
+        inv.adjust_reserve(0)
+        assert ha.get_state(entity_id) == "Self-Use - No Timed Charge/Discharge"
+        inv.mimic_target_soc(0)
+
+        inv.soc_percent = 100
+        inv.adjust_reserve(100)
+        assert ha.get_state(entity_id) == "Backup/Reserve - No Grid Charging"
+        inv.adjust_reserve(0)
+
+        # Recover a held switch after a restart, without relying on in-memory ownership.
+        inv.solis_reserve_hold = False
+        ha.dummy_items[entity_id] = "Backup/Reserve - No Grid Charging"
+        inv.adjust_reserve(0)
+        assert ha.get_state(entity_id) == "Self-Use"
+
+        # Neither the default GS profile nor a disabled reserve switch opts in.
+        inv.inv_has_reserve_soc = False
+        inv.adjust_reserve(61)
+        assert ha.get_state(entity_id) == "Self-Use"
+        inv.inv_has_reserve_soc = True
+        my_predbat.set_reserve_enable = False
+        inv.adjust_reserve(61)
+        assert ha.get_state(entity_id) == "Self-Use"
+    finally:
+        my_predbat.call_service_wrapper = orig_call
+        my_predbat.set_reserve_enable = saved_reserve_enable
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        ha.dummy_items.clear()
+        ha.dummy_items.update(saved_items)
+    return False
+
+
 def test_custom_type_respects_configured_time_entity(my_predbat):
     """
     Regression test for issue #4738: for an inverter type whose charge_time_format is not
@@ -5832,6 +5926,10 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_adjust_battery_target("adjust_target100", ha, inv, dummy_rest, 99, 100, True, False, 100, has_inv_time_button_press=True, expect_button_press=True)
     failed |= test_adjust_battery_target("adjust_target100r", ha, inv, dummy_rest, 100, 100, True, False, 100, has_inv_time_button_press=True, expect_button_press=False)  # No change, no button press
     failed |= test_adjust_battery_target("adjust_target0x", ha, inv, dummy_rest, 50, 0, False, True, 50, has_inv_time_button_press=False, expect_button_press=False)  # No button press feature
+    if failed:
+        return failed
+
+    failed |= test_solis_gs_reserve_hold(my_predbat, ha)
     if failed:
         return failed
 

@@ -2504,6 +2504,9 @@ class Fetch:
         if car_n == 0 and self.car_slot_owner not in (None, "octopus"):
             # Another charger component (Ohme) has wired octopus_charge_limit to its own target, a SoC to reach
             return None
+        override = self.get_arg("octopus_charge_limit_is_additive", None, index=car_n)
+        if override is not None:
+            return override
         target = self.get_arg("octopus_charge_limit", None, indirect=False, index=car_n)
         target_attribute = None
         if is_entity_id(target):

@@ -70,7 +70,7 @@
 // rate, without saving session or Axle rewards) and the slot's own rate (#5163).
 // Parity 18: energy a charge window stores in a confirmed Intelligent dispatch run (io_credit) earns a score
 // only credit off metric_keep.
-#define PK_PARITY_REVISION 18
+#define PK_PARITY_REVISION 19
 #define PK_MAX_CARS 8
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
 #define PK_EXPORT_MODE_TARGET 0 // const.py EXPORT_MODE_TARGET
@@ -111,10 +111,13 @@ double round_py(double value, int ndigits)
 // Mirror of utils.py calc_percent_limit() for a scalar value
 int32_t calc_percent_limit(double charge_limit, double soc_max)
 {
-    if (soc_max <= 0) {
+    if (!std::isfinite(charge_limit) || !std::isfinite(soc_max) || soc_max <= 0 || charge_limit <= 0) {
         return 0;
     }
-    return std::min(static_cast<int32_t>((charge_limit / soc_max * 100.0) + 0.5), 100);
+    if (charge_limit >= soc_max) {
+        return 100;
+    }
+    return static_cast<int32_t>((charge_limit / soc_max * 100.0) + 0.5);
 }
 
 // The SoC percent that Python's round(soc, 1) -> calc_percent_limit() pair produces.
@@ -458,7 +461,7 @@ inline double get_total_inverted(double battery_draw, double pv_dc, double pv_ac
 // temp_cap_base is the pre-computed find_battery_temperature_cap() value before the min with max_rate.
 inline double rate_curve_pct(int32_t soc_percent, double rate_setting, double rate_max, double temp_cap_base, const double *curve, double rate_min)
 {
-    double max_rate = rate_max * curve[soc_percent];
+    double max_rate = rate_max * curve[std::clamp(soc_percent, 0, 100)];
     double max_rate_cap = std::min(temp_cap_base, rate_max);
     max_rate = std::min(max_rate, max_rate_cap);
     return std::max(std::min(rate_setting, max_rate), rate_min);
@@ -467,7 +470,7 @@ inline double rate_curve_pct(int32_t soc_percent, double rate_setting, double ra
 inline double rate_curve(double soc_key, double rate_setting, double rate_max, double temp_cap_base, const double *curve, double soc_max, double rate_min)
 {
     int32_t soc_percent = calc_percent_limit(soc_key, soc_max);
-    double max_rate = rate_max * curve[soc_percent];
+    double max_rate = rate_max * curve[std::clamp(soc_percent, 0, 100)];
     double max_rate_cap = std::min(temp_cap_base, rate_max);
     max_rate = std::min(max_rate, max_rate_cap);
     return std::max(std::min(rate_setting, max_rate), rate_min);

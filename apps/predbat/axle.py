@@ -642,6 +642,7 @@ def load_axle_slot(base, axle_sessions, rate_dict, export, rate_replicate=None):
     if rate_replicate is None:
         rate_replicate = {}
 
+    minimum_minute = min(0, min(rate_dict, default=0))
     for axle_session in axle_sessions:
         start_time = axle_session.get("start_time")
         end_time = axle_session.get("end_time")
@@ -659,7 +660,7 @@ def load_axle_slot(base, axle_sessions, rate_dict, export, rate_replicate=None):
                 end_time = None
                 base.log("Warn: Unable to decode Axle VPP session start/end time")
         if start_time and end_time:
-            start_minutes = minutes_to_time(start_time, base.midnight_utc)
+            start_minutes = max(minimum_minute, minutes_to_time(start_time, base.midnight_utc))
             end_minutes = min(minutes_to_time(end_time, base.midnight_utc), base.forecast_minutes + base.minutes_now)
 
         if start_minutes is not None and end_minutes is not None and start_minutes < (base.forecast_minutes + base.minutes_now):

@@ -149,6 +149,9 @@ from tests.test_plan_totals_js import test_plan_totals_js
 from tests.test_metrics_dashboard_soc_refresh import test_soc_chart_center_text_reads_live_data
 from tests.test_web_functions import run_web_functions_tests, run_web_logo_image_tests, run_web_dark_mode_preference_tests
 from tests.test_web_power_flow import run_web_power_flow_tests
+from tests.test_web_theme import run_web_theme_tests
+from tests.test_web_security import run_web_security_tests
+from tests.test_interval_bounds import test_interval_bounds
 from tests.test_web_discovery import run_web_discovery_tests
 from tests.test_web_history_table import run_web_history_table_tests
 from tests.test_web_charts import run_web_charts_tests
@@ -616,7 +619,10 @@ def main():
         ("plan_totals_js", test_plan_totals_js, "Plan card summary row total cost 2dp formatting JS (#5785)", False),
         ("metrics_dashboard_soc_refresh", test_soc_chart_center_text_reads_live_data, "Metrics dashboard SoC chart live-refresh tests", False),
         ("web_functions", run_web_functions_tests, "Web function unit tests", False),
+        ("interval_bounds", test_interval_bounds, "Bounded provider time intervals", False),
+        ("web_security", run_web_security_tests, "Web listener and file security regressions", False),
         ("web_power_flow", run_web_power_flow_tests, "Power flow diagram car charging tests", False),
+        ("web_theme", run_web_theme_tests, "Shared theme settings tests", False),
         ("web_discovery", run_web_discovery_tests, "Discovery catalogue web page tests", False),
         ("web_logo_image", run_web_logo_image_tests, "Local logo image route tests (issue #4562)", False),
         ("web_dark_mode_preference", run_web_dark_mode_preference_tests, "Dark mode follows OS prefers-color-scheme when unset (issue #4800)", False),

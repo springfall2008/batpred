@@ -16,3 +16,4 @@ echo "$GIT_HASH" > ${predbat_dir}/git_version.txt
 cp ../apps/predbat/*.py ${predbat_dir}
 cp ../apps/predbat/*.proto ${predbat_dir}
 cp ../apps/predbat/*.so ${predbat_dir}
+cp ../apps/predbat/predbat_ui* ${predbat_dir}

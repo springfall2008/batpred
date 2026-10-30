@@ -19,7 +19,13 @@ import asyncio
 import json
 import os
 import tempfile
-from datetime import datetime, timedelta
+import base64
+import hashlib
+from html.parser import HTMLParser
+from urllib.parse import parse_qs, urlsplit
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+import web_mcp
 
 import agent_tools
 import web
@@ -1082,6 +1088,9 @@ def test_mcp_oauth_routes(my_predbat):
 def run_web_mcp_tests(my_predbat):
     """Run every MCP log/apps.yaml test, returning True if any of them failed."""
     failed = False
+    failed |= test_mcp_public_registration(my_predbat)
+    failed |= test_mcp_authorize_html_escaping(my_predbat)
+    failed |= test_mcp_oauth_scopes(my_predbat)
     failed |= test_mask_secret_args(my_predbat)
     failed |= test_read_predbat_log(my_predbat)
     failed |= test_log_filter_helpers(my_predbat)
@@ -1499,3 +1508,220 @@ def test_mcp_get_log_ignores_the_trailing_newline(my_predbat):
     if not failed:
         print("✓ Test passed: get_log ignores the trailing newline")
     return failed
+
+
+class OAuthMCPRequest:
+    """Provide an authenticated JSON-RPC request without opening a network socket."""
+
+    def __init__(self, token, method, params=None):
+        """Store a dummy bearer token and JSON-RPC payload."""
+        self.headers = {"Authorization": "Bearer " + token}
+        self.host = "localhost:8199"
+        self.remote = "127.0.0.1"
+        self.method = "POST"
+        self.payload = {"jsonrpc": "2.0", "id": 42, "method": method, "params": params or {}}
+
+    async def json(self):
+        """Return the native handler's JSON-RPC input."""
+        return self.payload
+
+
+def test_mcp_public_registration(my_predbat):
+    """Registration grants no authority; administrator-approved PKCE and legacy access still work."""
+    writes = []
+    item = {"name": "expert_mode", "entity": "switch.predbat_expert_mode", "type": "switch", "value": False}
+
+    async def set_state_external(entity, value):
+        """Record only dummy configuration changes."""
+        writes.append((entity, value))
+        item["value"] = value
+
+    base = SimpleNamespace(prefix="predbat", plan_interval_minutes=30, CONFIG_ITEMS=[item], ha_interface=SimpleNamespace(set_state_external=set_state_external))
+    server = web_mcp.PredbatMCPServer.__new__(web_mcp.PredbatMCPServer)
+    server.initialize(True, "dummy-private-administrator-secret", 8199)
+    server.log = lambda message: None
+    server.mcp_server = MCPServerWrapper(base, log_func=server.log)
+
+    def request(data):
+        """Make an OAuth form/JSON request without a listener."""
+
+        async def body():
+            """Return the dummy request body."""
+            return data
+
+        return SimpleNamespace(headers={"Content-Type": "application/json"}, method="POST", remote="127.0.0.1", host="localhost:8199", json=body, post=body)
+
+    async def check():
+        """Exercise registration, denied elevation, approval, exchange and protected dispatch."""
+        registered = await server.oauth_register(request({}))
+        metadata = json.loads(registered.text)
+        assert registered.status == 201 and "client_secret" not in metadata
+        assert server.mcp_secret not in registered.text
+        assert metadata["token_endpoint_auth_method"] == "none" and metadata["grant_types"] == ["authorization_code"]
+        params = {"name": "set_config", "arguments": {"entity_id": item["entity"], "value": "true"}}
+        response = await server.html_mcp_post(OAuthMCPRequest(metadata["client_id"], "tools/call", params))
+        assert response.status == 401 and not writes
+        response = await server.oauth_token(request({"grant_type": "client_credentials", "client_id": metadata["client_id"], "client_secret": metadata["client_id"]}))
+        assert response.status == 401 and not writes
+        for invalid in [{"grant_types": ["client_credentials"]}, {"grant_types": ["authorization_code", "client_credentials"]}, {"response_types": ["token"]}, {"token_endpoint_auth_method": "client_secret_post"}, []]:
+            response = await server.oauth_register(request(invalid))
+            assert response.status == 400 and server.mcp_secret not in response.text
+        verifier = "dummy-verifier-" + "x" * 43
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+        authorization = {"client_id": metadata["client_id"], "redirect_uri": "https://client.invalid/callback", "response_type": "code", "code_challenge": challenge, "code_challenge_method": "S256", "secret": "wrong-secret"}
+        response = await server.oauth_authorize(request(authorization))
+        assert response.status == 200 and not server.authorization_codes
+        authorization["secret"] = server.mcp_secret
+        response = await server.oauth_authorize(request(authorization))
+        assert response.status == 302
+        code = parse_qs(urlsplit(response.headers["Location"]).query)["code"][0]
+        exchange = {"grant_type": "authorization_code", "client_id": metadata["client_id"], "redirect_uri": authorization["redirect_uri"], "code": code, "code_verifier": "wrong-verifier"}
+        response = await server.oauth_token(request(exchange))
+        assert response.status == 400 and not writes
+        exchange["code_verifier"] = verifier
+        response = await server.oauth_token(request(exchange))
+        token = json.loads(response.text)["access_token"]
+        assert response.status == 200
+        response = await server.html_mcp_post(OAuthMCPRequest(token, "tools/call", params))
+        assert response.status == 200 and len(writes) == 1
+        response = await server.oauth_token(request(exchange))
+        assert response.status == 400
+        response = await server.oauth_token(request({"grant_type": "client_credentials", "client_id": "configured-client", "client_secret": server.mcp_secret}))
+        assert response.status == 200 and "access_token" in json.loads(response.text)
+        response = await server.html_mcp_post(OAuthMCPRequest(server.mcp_secret, "tools/call", params))
+        assert response.status == 200 and len(writes) == 2
+        for handler in [server.oauth_metadata, server.oauth_metadata_mcp]:
+            response = await handler(request({}))
+            assert "none" in json.loads(response.text)["token_endpoint_auth_methods_supported"]
+
+    asyncio.run(check())
+    return False
+
+
+def test_mcp_authorize_html_escaping(my_predbat):
+    """OAuth query and failed-form values cannot introduce markup into the secret form."""
+
+    class LoginParser(HTMLParser):
+        """Collect login elements and hidden field values from the actual response."""
+
+        def __init__(self):
+            """Initialise the HTML parser and result collections."""
+            super().__init__()
+            self.tags = []
+            self.inputs = {}
+
+        def handle_starttag(self, tag, attrs):
+            """Capture parsed tags and form fields."""
+            self.tags.append(tag)
+            attrs = dict(attrs)
+            if tag == "input":
+                self.inputs[attrs.get("name")] = attrs.get("value")
+
+    server = web_mcp.PredbatMCPServer.__new__(web_mcp.PredbatMCPServer)
+    server.initialize(True, "dummy-private-secret", 8199)
+    server.log = lambda message: None
+    marker = '"><script>audit_marker</script><input name="audit_injected" value="'
+    values = {"client_id": marker, "redirect_uri": "https://client.invalid/" + marker, "response_type": "code", "state": marker, "code_challenge": marker, "code_challenge_method": "S256"}
+
+    async def check():
+        """Check both initial GET and failed POST login responses."""
+
+        async def post():
+            """Return an unauthenticated form containing markup characters."""
+            return dict(values, secret="incorrect")
+
+        for method in ["GET", "POST"]:
+            request = SimpleNamespace(method=method, query=values, post=post, remote="127.0.0.1")
+            response = await server.oauth_authorize(request)
+            assert response.status == 200
+            parser = LoginParser()
+            parser.feed(response.text)
+            assert "script" not in parser.tags and "audit_injected" not in parser.inputs
+            assert len(parser.inputs) == 7
+            for key, value in values.items():
+                assert parser.inputs[key] == value
+
+    asyncio.run(check())
+    return False
+
+
+def test_mcp_oauth_scopes(my_predbat):
+    """Enforce signed OAuth scopes before real tools reach fake HA, retaining legacy access."""
+    print("**** Testing MCP OAuth scope enforcement ****")
+    writes = []
+    controls = []
+    item = {"name": "expert_mode", "entity": "switch.predbat_expert_mode", "type": "switch", "value": False}
+
+    async def set_state_external(entity, value):
+        """Record a fake HA write and make it available to the tool's read-back."""
+        writes.append((entity, value))
+        item["value"] = value
+
+    async def async_manual_select(name, value):
+        """Record a fake manual battery control."""
+        controls.append((name, value))
+
+    base = SimpleNamespace(
+        prefix="predbat",
+        plan_interval_minutes=30,
+        CONFIG_ITEMS=[item],
+        ha_interface=SimpleNamespace(set_state_external=set_state_external),
+        async_manual_select=async_manual_select,
+        now_utc=datetime(2026, 10, 22, 12, tzinfo=timezone.utc),
+    )
+    server = web_mcp.PredbatMCPServer.__new__(web_mcp.PredbatMCPServer)
+    server.initialize(True, "dummy-mcp-secret", 8199)
+    server.log = lambda message: None
+    server.mcp_server = MCPServerWrapper(base, log_func=server.log)
+    write_params = {"name": "set_config", "arguments": {"entity_id": item["entity"], "value": "true"}}
+    control_params = {"name": "set_plan_override", "arguments": {"action": "charge", "time": "Thu 12:30"}}
+
+    async def call(token, method, params=None):
+        """Exercise the native POST authentication and dispatch boundary."""
+        response = await server.html_mcp_post(OAuthMCPRequest(token, method, params))
+        return response, json.loads(response.text)
+
+    async def check():
+        """Check each authority independently and verify denied requests have no side effect."""
+        read_token = server.generate_access_token("dummy-client", scopes=["mcp:read"])
+        write_token = server.generate_access_token("dummy-client", scopes=["mcp:write"])
+        control_token = server.generate_access_token("dummy-client", scopes=["mcp:control"])
+        for params, scope in [(write_params, "mcp:write"), (control_params, "mcp:control")]:
+            response, result = await call(read_token, "tools/call", params)
+            assert response.status == 403 and result["id"] == 42
+            assert result["error"]["data"]["required_scope"] == scope
+            assert "insufficient_scope" in response.headers["WWW-Authenticate"]
+        assert writes == [] and controls == []
+        response, result = await call(read_token, "tools/call", {"name": "get_config"})
+        assert response.status == 200 and json.loads(result["result"]["content"][0]["text"])["success"]
+        response, result = await call(read_token, "tools/list")
+        assert response.status == 200 and result["result"]["tools"]
+        response, _ = await call(write_token, "tools/call", control_params)
+        assert response.status == 403 and controls == []
+        response, _ = await call(control_token, "tools/call", write_params)
+        assert response.status == 403 and writes == []
+        for token, params in [(write_token, write_params), (control_token, control_params), (server.mcp_secret, write_params), (server.mcp_secret, control_params)]:
+            response, result = await call(token, "tools/call", params)
+            assert response.status == 200 and json.loads(result["result"]["content"][0]["text"])["success"]
+        assert len(writes) == 2 and len(controls) == 2
+        for scopes in [[], ["unrecognised"]]:
+            response, _ = await call(server.generate_access_token("dummy-client", scopes=scopes), "tools/list")
+            assert response.status == 403
+        for claim in [None, ["mcp:read"], {"mcp:read": True}]:
+            payload = server.verify_access_token(read_token)
+            payload["scope"] = claim
+            token = web_mcp.pyjwt.encode(payload, server.jwt_secret, algorithm=server.jwt_algorithm)
+            response, _ = await call(token, "tools/call", {"name": "get_config"})
+            assert response.status == 403
+        payload.pop("scope")
+        token = web_mcp.pyjwt.encode(payload, server.jwt_secret, algorithm=server.jwt_algorithm)
+        response, _ = await call(token, "initialize")
+        assert response.status == 403
+        # An earlier privileged request must not lend its scopes to the next client.
+        response, _ = await call(read_token, "tools/call", write_params)
+        assert response.status == 403 and len(writes) == 2
+        result = await server.mcp_server.handle_request(OAuthMCPRequest("unused", "tools/call", write_params))
+        assert json.loads(result["result"]["content"][0]["text"])["success"] and len(writes) == 3
+
+    asyncio.run(check())
+    return False

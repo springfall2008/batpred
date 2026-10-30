@@ -12,6 +12,7 @@
         }
     ],
     "ignorePaths": [
+        "apps/predbat/predbat_ui*",
         "**/*.json",
         "**/*.yaml",
         "**/*_pb2.py",

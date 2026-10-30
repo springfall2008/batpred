@@ -954,6 +954,16 @@ def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=
     return results
 
 
+def normalise_entity_prefix(value):
+    """Return a Home Assistant-safe prefix for Predbat-generated entity IDs."""
+    raw = str(value or "predbat").strip().lower()
+    prefix = re.sub(r"[^a-z0-9_]+", "_", raw)
+    prefix = re.sub(r"_+", "_", prefix).strip("_")
+    if not prefix or not prefix[0].isalpha():
+        prefix = "predbat_{}".format(prefix).rstrip("_")
+    return prefix
+
+
 def is_entity_id(value):
     """
     Whether a resolved apps.yaml value names a Home Assistant entity rather than being a literal.
@@ -1593,10 +1603,11 @@ def minute_data(
             state = last_state + state * total_minutes / 60.0
 
         if to_time:
-            minute = minutes
-            if minute == minutes_to:
-                if minute >= minute_min and minute <= minute_max:
-                    mdata[minute] = state
+            minute = max(minutes, minute_min)
+            interval_end = min(minutes_to, minute_max + 1)
+            if minutes == minutes_to:
+                if minute_min <= minutes <= minute_max:
+                    mdata[minutes] = state
             else:
                 if smoothing:
                     near_midnight = (last_updated_time.time() < time(0, 6)) or (last_updated_time.time() > time(23, 58))
@@ -1605,7 +1616,7 @@ def minute_data(
                         # then smooth out the drop.
                         if debug:
                             print(f"Found drop at minute {minute}, where {state} < {last_state} (near midnight = {near_midnight}). Padding to {minutes_to}")
-                        while minute < minutes_to:
+                        while minute < interval_end:
                             if minute >= minute_min and minute <= minute_max:
                                 mdata[minute] = state
                             minute += 1
@@ -1624,8 +1635,8 @@ def minute_data(
                                 print(f"    Increment larger than max {max_increment}, setting diff to 0.")
                             diff = 0
 
-                        index = 0
-                        while minute < minutes_to:
+                        index = minute - minutes
+                        while minute < interval_end:
                             if minute >= minute_min and minute <= minute_max:
                                 if backwards:
                                     mdata[minute] = state - diff * index
@@ -1640,15 +1651,15 @@ def minute_data(
                         # (minutes+1 to minutes_to inclusive) with `last_state` (the previous value).
                         if minutes >= minute_min and minutes <= minute_max:
                             mdata[minutes] = state
-                        minute = minutes + 1
-                        while minute <= minutes_to:
+                        minute = max(minutes + 1, minute_min)
+                        while minute <= min(minutes_to, minute_max):
                             if minute >= minute_min and minute <= minute_max:
                                 mdata[minute] = last_state
                                 if adjusted:
                                     adata[minute] = True
                             minute += 1
                     else:
-                        while minute < minutes_to:
+                        while minute < interval_end:
                             if minute >= minute_min and minute <= minute_max:
                                 mdata[minute] = state
                                 if adjusted:
@@ -1656,7 +1667,7 @@ def minute_data(
                             minute += 1
         else:
             if spreading:
-                for minute in range(minutes, minutes + spreading):
+                for minute in range(max(minutes, minute_min), min(minutes + spreading, minute_max + 1)):
                     if minute >= minute_min and minute <= minute_max:
                         mdata[minute] = state
             else:

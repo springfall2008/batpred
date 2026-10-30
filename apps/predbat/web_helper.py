@@ -865,7 +865,7 @@ let pendingChanges = {{}};
 
 // All Home Assistant states for entity dropdown
 const allStates = """
-        + all_states_json
+        + all_states_json.replace("<", "\\u003c")
         + """;
 function showMessage(message, type) {
     const container = document.getElementById('messageContainer');
@@ -1180,8 +1180,8 @@ function populateEntityDropdown(rowId, currentValue, filterText = '') {
         }
 
         option.innerHTML = `
-            <div class="entity-name">${entityId}</div>
-            <div class="entity-value">${entityValue}${unit_of_measurement}</div>
+            <div class="entity-name">${escapeHtml(entityId)}</div>
+            <div class="entity-value">${escapeHtml(entityValue)}${escapeHtml(unit_of_measurement)}</div>
         `;
 
         option.addEventListener('click', () => {
@@ -1399,8 +1399,8 @@ function populateNestedEntityDropdown(rowId, currentValue, filterText = '') {
         }
 
         option.innerHTML = `
-            <div class="entity-name">${entityId}</div>
-            <div class="entity-value">${entityValue}${unit_of_measurement}</div>
+            <div class="entity-name">${escapeHtml(entityId)}</div>
+            <div class="entity-value">${escapeHtml(entityValue)}${escapeHtml(unit_of_measurement)}</div>
         `;
 
         option.addEventListener('click', () => {
@@ -9095,6 +9095,7 @@ setTimeout(function() {
 <button class="menu-dropdown-toggle" type="button" data-menu="advanced-menu" onclick="toggleMenuDropdown(event, 'advanced-menu')">Advanced &#9662;</button>
 </div>
 <a href='https://springfall2008.github.io/batpred/'>Docs</a>
+<a href='./ui/'>Try the new interface</a>
 <div class="dark-mode-toggle">
     """
         + THIS_VERSION

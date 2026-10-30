@@ -24,6 +24,7 @@ from aiohttp import web
 import secrets
 import jwt as pyjwt
 import hashlib
+from html import escape
 from component_base import ComponentBase
 from agent_tools import (  # noqa: F401
     PredbatTools,
@@ -333,7 +334,7 @@ class PredbatMCPServer(ComponentBase):
             "grant_types_supported": ["authorization_code", "client_credentials"],
             "response_types_supported": ["code"],
             "code_challenge_methods_supported": ["S256"],  # Only S256, plain is deprecated
-            "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic"],
+            "token_endpoint_auth_methods_supported": ["none", "client_secret_post", "client_secret_basic"],
             "scopes_supported": ["mcp:read", "mcp:write", "mcp:control"],
         }
 
@@ -363,7 +364,7 @@ class PredbatMCPServer(ComponentBase):
             "grant_types_supported": ["authorization_code", "client_credentials"],
             "response_types_supported": ["code"],
             "code_challenge_methods_supported": ["S256"],  # Only S256, plain is deprecated
-            "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic"],
+            "token_endpoint_auth_methods_supported": ["none", "client_secret_post", "client_secret_basic"],
             "scopes_supported": ["mcp:read", "mcp:write", "mcp:control"],
         }
 
@@ -479,6 +480,9 @@ class PredbatMCPServer(ComponentBase):
                     return web.HTTPFound(f"{error_uri}?error=invalid_request&error_description={error_desc}&state={state}")
 
             # Show login page (GET request or failed POST)
+            client_id, redirect_uri, response_type, state, code_challenge, code_challenge_method, error_message = (
+                escape(str(value or ""), quote=True) for value in (client_id, redirect_uri, response_type, state, code_challenge, code_challenge_method, error_message)
+            )
             login_html = f"""
 <!DOCTYPE html>
 <html>
@@ -632,14 +636,8 @@ class PredbatMCPServer(ComponentBase):
         """
         OAuth 2.0 Dynamic Client Registration endpoint (RFC 7591)
 
-        This endpoint allows MCP clients to automatically register and obtain
-        client credentials without manual configuration.
-
-        Note: This is a simplified implementation. In production, you may want to:
-        - Store registered clients in a database
-        - Implement client metadata validation
-        - Add rate limiting
-        - Support client authentication for updates/deletions
+        Public clients use administrator-approved authorization codes with PKCE.
+        Registration grants no access and never exposes the configured MCP secret.
         """
         self.log("MCP OAuth: Dynamic client registration request received from {}".format(request.remote))
         try:
@@ -651,6 +649,9 @@ class PredbatMCPServer(ComponentBase):
             else:
                 return web.json_response({"error": "invalid_request", "error_description": "Content-Type must be application/json"}, status=400)
 
+            if not isinstance(data, dict):
+                return web.json_response({"error": "invalid_client_metadata", "error_description": "Client metadata must be an object"}, status=400)
+
             # Extract client metadata (RFC 7591 Section 2)
             client_name = data.get("client_name", "Unnamed MCP Client")
             redirect_uris = data.get("redirect_uris", [])
@@ -658,21 +659,21 @@ class PredbatMCPServer(ComponentBase):
             response_types = data.get("response_types", ["code"])
             scope = data.get("scope", "mcp:read mcp:write mcp:control")
 
-            # Generate client credentials
-            # For MCP, we use a shared secret model where all clients use the same secret
-            # In a more sophisticated implementation, you'd generate unique credentials per client
+            if grant_types != ["authorization_code"] or response_types != ["code"] or data.get("token_endpoint_auth_method", "none") != "none":
+                return web.json_response({"error": "invalid_client_metadata", "error_description": "Public registration supports only authorization_code, code responses and token_endpoint_auth_method none"}, status=400)
+
+            # The client identifier is public; only administrator approval grants a PKCE-bound code.
             client_id = f"mcp-client-{secrets.token_urlsafe(16)}"
 
             # Return registration response (RFC 7591 Section 3.2.1)
             response = {
                 "client_id": client_id,
-                "client_secret": self.mcp_secret,  # Shared secret model
                 "client_name": client_name,
                 "redirect_uris": redirect_uris,
                 "grant_types": grant_types,
                 "response_types": response_types,
                 "scope": scope,
-                "token_endpoint_auth_method": "client_secret_post",
+                "token_endpoint_auth_method": "none",
             }
 
             self.log(f"MCP OAuth: Dynamic client registration successful for {client_name} (client_id: {client_id})")
@@ -882,7 +883,14 @@ class PredbatMCPServer(ComponentBase):
             return web.json_response({"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Unauthorized: Invalid or expired token."}}, status=401, headers={"WWW-Authenticate": www_auth})
 
         try:
-            result = await self.mcp_server.handle_mcp_request(request, self.mcp_server)
+            scopes = None
+            if token_payload:
+                scope_claim = token_payload.get("scope", "")
+                scopes = frozenset(scope_claim.split()) if isinstance(scope_claim, str) else frozenset()
+            result = await self.mcp_server.handle_mcp_request(request, self.mcp_server, scopes=scopes)
+            if result.get("error", {}).get("code") == -32003:
+                required_scope = result["error"]["data"]["required_scope"]
+                return web.json_response(result, status=403, headers={"WWW-Authenticate": f'Bearer error="insufficient_scope", scope="{required_scope}"'})
             return web.json_response(result)
         except Exception as e:
             self.log(f"Error in MCP GET endpoint: {e}")
@@ -931,7 +939,14 @@ class PredbatMCPServer(ComponentBase):
             return web.json_response({"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Unauthorized: Token verification failed."}}, status=401, headers={"WWW-Authenticate": www_auth})
 
         try:
-            result = await self.mcp_server.handle_mcp_request(request, self.mcp_server)
+            scopes = None
+            if token_payload:
+                scope_claim = token_payload.get("scope", "")
+                scopes = frozenset(scope_claim.split()) if isinstance(scope_claim, str) else frozenset()
+            result = await self.mcp_server.handle_mcp_request(request, self.mcp_server, scopes=scopes)
+            if result.get("error", {}).get("code") == -32003:
+                required_scope = result["error"]["data"]["required_scope"]
+                return web.json_response(result, status=403, headers={"WWW-Authenticate": f'Bearer error="insufficient_scope", scope="{required_scope}"'})
             return web.json_response(result)
         except Exception as e:
             self.log(f"Error in MCP POST endpoint: {e}")
@@ -974,13 +989,14 @@ class MCPServerWrapper(PredbatTools):
         """
         return await self.handle_mcp_request(request, self)
 
-    async def handle_mcp_request(self, request, mcp_server):
+    async def handle_mcp_request(self, request, mcp_server, scopes=None):
         """
         Handle HTTP requests implementing the Model Context Protocol over HTTP
 
         Args:
             request: Web request object
             mcp_server: MCP server instance
+            scopes: OAuth scopes for this request; None preserves trusted internal and legacy access
 
         Returns:
             JSON response following MCP/JSON-RPC 2.0 protocol
@@ -998,6 +1014,15 @@ class MCPServerWrapper(PredbatTools):
                 request_id = request_data.get("id")
                 method = request_data.get("method")
                 params = request_data.get("params", {})
+
+                # Keep authority local to the request: the wrapper is shared between clients.
+                required_scope = "mcp:read"
+                if method == "tools/call":
+                    tool = next((entry for entry in TOOL_DEFS if entry["name"] == params.get("name")), None)
+                    if tool and tool["writes"]:
+                        required_scope = "mcp:control" if tool["name"] == "set_plan_override" else "mcp:write"
+                if scopes is not None and required_scope not in scopes:
+                    return {"jsonrpc": jsonrpc, "id": request_id, "error": {"code": -32003, "message": "Insufficient scope", "data": {"required_scope": required_scope}}}
 
                 # Route to appropriate handler
                 if method == "initialize":

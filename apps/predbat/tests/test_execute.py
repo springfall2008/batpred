@@ -8,7 +8,7 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from tests.test_infra import reset_inverter
 from const import EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, MINUTE_WATT
@@ -543,7 +543,9 @@ def _run_fetch_inverter_data_pv_test(my_predbat, pv_sensors, pv_power=0):
     my_predbat.args["pv_power"] = pv_sensors
     # Set pv_power via config_index so get_ha_config returns it (args is bypassed for known config items)
 
+    before = datetime.now().timestamp()
     my_predbat.fetch_inverter_data()
+    assert before <= my_predbat.power_flow_updated_at <= datetime.now().timestamp(), "Power refresh must publish its completion timestamp"
     result = my_predbat.pv_power
 
     return result

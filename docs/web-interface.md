@@ -366,3 +366,122 @@ Provides a quick link to the [Predbat documentation](https://springfall2008.gith
 As it says, toggles the Predbat web interface between light and dark mode.
 
 ![image](images/web-interface-dark-mode-power-chart.png)
+
+## Use the modern interface
+
+Both interfaces are available together. The classic interface is the default; select **Try the new interface** in its menu to open the modern interface at `./ui/`.
+
+The modern interface includes the Overview, Dashboard, Plan, Charts, Compare, configuration and system pages in one responsive interface. Its **Classic interface** link returns to the original interface.
+
+Your browser remembers the interface you choose for this Predbat installation. Opening the main address uses that preference. No configuration change or restart is needed. If browser storage is unavailable, the main address uses the classic interface. Existing classic page links continue to work.
+
+### Configure the Overview page
+
+![image](images/web-interface-overview-view.webp)
+
+Overview reads the standard grid, solar, home and battery data from your existing Predbat configuration. You don't need to duplicate those entities. The electric vehicle (EV) and air-source heat pump (ASHP) cards accept extra, optional entities.
+
+The solar card can display the current weather, and optional weather effects can be enabled on the house view. To enable, add a weather entity:
+
+```yaml
+pred_bat:
+  # Weather and temperature shown on Overview
+  weather: weather.forecast_home
+```
+
+Add the EV entries only when Predbat's supported charger integrations haven't configured them automatically. Use one list item per car, in the same order for every setting:
+
+```yaml
+pred_bat:
+  # Tell Predbat how many cars the lists below describe.
+  num_cars: 1
+
+  # Current charger power in W, kW or another convertible power unit.
+  car_charging_power:
+    - sensor.your_ev_charger_power
+
+  # Charger connection state, such as unplugged, connected or charging.
+  car_charging_status:
+    - sensor.your_ev_charger_status
+
+  # Current vehicle battery state of charge as a percentage.
+  car_charging_soc:
+    - sensor.your_ev_battery_percentage
+
+  # Daily incrementing charger energy in kWh.
+  car_charging_energy:
+    - sensor.your_ev_charger_energy_today
+```
+
+To add an ASHP to overview, enable the card explicitly and provide a daily energy entity if one is available:
+
+```yaml
+pred_bat:
+  # Show the ASHP card without a PredHeat configuration.
+  ashp_enable: true
+
+  # Optional current electrical power draw and operating mode.
+  ashp_power: sensor.heat_pump_power
+  ashp_status: sensor.heat_pump_status
+
+  # Optional indoor temperature in °C.
+  internal_temperature: sensor.living_room_temperature
+
+  # Optional daily heat-pump electricity use in kWh.
+  heat_energy: sensor.heat_pump_energy_today
+```
+
+ashp_status should point to an entity that returns `off` / `hot_water` / `heating` depending on the status. An example helper for this:
+
+```yaml
+
+{% set output = states('sensor.heat_pump_energy_output') | float(0) %}
+{% set unit = state_attr('sensor.heat_pump_energy_output', 'unit_of_measurement') %}
+{% set watts = output * 1000 if unit == 'kW' else output %}
+
+{% if watts < 100 %}
+  off
+{% elif is_state('sensor.ch_or_dhw', 'HW') %}
+  hot_water
+{% else %}
+  heating
+{% endif %}
+
+```
+
+When PredHeat is configured in `pump` mode, Overview enables the ASHP card automatically. It reuses PredHeat's daily heating energy and indoor temperature from `predheat.internal_temperature`; no duplicate Overview setting is needed. PredHeat also publishes the calculated indoor temperature as `sensor.predheat_internal_temp` by default. Without PredHeat, set the top-level `internal_temperature` shown above and `ashp_enable: true` to show the ASHP card.
+
+Overview uses `predheat.weather` when PredHeat is configured. Otherwise it uses the top-level `weather` setting shown above. For compatibility with earlier test releases it will still try `weather.forecast_home` when neither is set. If the selected entity does not exist, Overview hides the weather reading, weather effects and their toggle.
+
+The modern `apps.yaml` editor validates these settings and suggests entity IDs from Home Assistant. Open **Configuration > Editor**, enter one of the entity settings, then choose the matching entity from the suggestions. Hover over a setting to read its schema description.
+
+### Chart controls
+
+When PredHeat is configured and its enable switch is on, the Charts page includes a **PredHeat** tab. It shows indoor and outdoor temperature history alongside predicted temperatures, the thermostat target and PredHeat's heating target. Choose a 12, 24 or 48-hour forecast; dashed lines identify predictions.
+
+All modern Chart.js charts can be explored directly: use the mouse wheel or a pinch gesture to zoom horizontally, drag to pan, and double-click a chart to restore its original range.
+
+### Tariff helper
+
+The modern Config view includes a tariff helper which reviews Predbat's current configuration controls and its published import and export prices. It is a review tool: it does not change the tariff source, edit `apps.yaml`, or apply a setting until you select **Apply**.
+
+The helper reads the current and next 48 hours of rates from the same data used by the Rates chart. It classifies the import tariff as:
+
+- **Dynamic** when any import price is negative, or when at least eight distinct prices are published (rounded to 0.1 in the configured minor currency unit).
+- **Time of use** when there is more than one import price, or the difference between the lowest and highest price is at least 4 per kWh.
+- **Flat** when neither of those conditions applies.
+
+Export prices are treated separately. An export tariff is considered variable when its highest and lowest prices differ by at least 3 per kWh. If Predbat has no future export-rate data, the helper reports it as unavailable and makes no export suggestions.
+
+The helper can suggest changes to these existing Predbat controls when they are available:
+
+| Control | Flat or time-of-use suggestion | Dynamic or variable suggestion |
+| --- | --- | --- |
+| **Combine Charge Slots** | On, so adjacent low-price periods form one practical window | Off, preserving individual half-hour prices |
+| **Set Charge Low Power Mode** | On, spreading charging across a known low-price window | Off, concentrating charging into the cheapest periods |
+| **Combine Export Slots** | On when export prices are broadly flat | Off when export prices vary, preserving individual peaks |
+| **Set Export Low Power Mode** | On when there is little price benefit from exporting faster | Off when export prices vary, concentrating export into the most valuable periods |
+
+Only controls whose suggested value differs from their current value are shown. Each suggestion displays the exact current and proposed values with a reason, and is selected individually so you can exclude any change before applying the remainder. Applying the selection updates the normal Home Assistant configuration entities through the same Config API as the controls below it.
+
+The tariff helper does not calculate a personalised saving or analyse historical household consumption. Predbat's normal optimiser already combines the selected controls with the load forecast, solar forecast, battery losses and available capacity when it builds the plan; the helper only chooses sensible control behaviour for the shape of the published tariff.

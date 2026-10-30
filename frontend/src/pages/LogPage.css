@@ -1,0 +1,206 @@
+.app-content > main:has(> .log-page) {
+  display: flex;
+  max-width: none;
+  height: 100dvh;
+  min-height: 0;
+  margin-block: 0;
+  padding: 1.5rem clamp(0.75rem, 2vw, 2rem);
+  overflow: hidden;
+}
+
+.log-page {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 0;
+  min-height: 0;
+}
+
+.log-page-header,
+.log-page-actions,
+.log-page-toolbar,
+.log-filter,
+.log-page-toolbar label {
+  display: flex;
+  align-items: center;
+}
+
+.log-page-header {
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.log-page-header h1,
+.log-page-header p {
+  margin: 0;
+}
+
+.log-page-header h1 {
+  color: var(--color-text);
+  font-size: 1.5rem;
+}
+
+.log-page-header p {
+  margin-top: 0.2rem;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+}
+
+.log-page-actions,
+.log-filter,
+.log-page-toolbar {
+  gap: 0.5rem;
+}
+
+.log-page-actions button,
+.log-page-actions a,
+.log-filter button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.7rem;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.log-page-actions button:hover,
+.log-page-actions a:hover,
+.log-filter button:hover,
+.log-filter button.is-active {
+  border-color: var(--color-current);
+  color: var(--color-current);
+}
+
+.log-filter button.is-active {
+  background: color-mix(in srgb, var(--color-current) 12%, var(--color-surface));
+}
+
+.log-page-toolbar {
+  flex-wrap: wrap;
+  padding: 0.7rem;
+  border: 1px solid var(--color-border);
+  border-radius: 9px;
+  background: var(--color-surface);
+}
+
+.log-page-toolbar > input {
+  flex: 1 1 18rem;
+  min-width: 10rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.8rem;
+}
+
+.log-page-toolbar label {
+  gap: 0.4rem;
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.log-viewer {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: #0d1117;
+  color: #d1d5db;
+  font: 0.74rem/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.log-line {
+  display: grid;
+  grid-template-columns: 4.5rem 13.5rem minmax(20rem, 1fr);
+  min-width: max-content;
+  padding: 0.2rem 0.6rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.log-line:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.log-line-number {
+  color: #64748b;
+  user-select: none;
+}
+
+.log-line time {
+  color: #94a3b8;
+  text-wrap: nowrap;
+}
+
+.log-line-message {
+  white-space: pre-wrap;
+}
+
+.log-line.is-error .log-line-message {
+  color: #fca5a5;
+}
+
+.log-line.is-warning .log-line-message {
+  color: #fcd34d;
+}
+
+.log-line.is-info .log-line-message {
+  color: #86efac;
+}
+
+.log-page-error,
+.log-page-empty {
+  padding: 0.8rem 1rem;
+}
+
+.log-page-error {
+  border: 1px solid var(--color-danger);
+  border-radius: 8px;
+  background: var(--color-surface);
+  color: var(--color-danger);
+  font-size: 0.8rem;
+}
+
+.log-page-empty {
+  color: #94a3b8;
+}
+
+@media (min-width: 701px) {
+  .app-shell.navigation-horizontal .app-content > main:has(> .log-page) {
+    height: calc(100dvh - 56px);
+  }
+}
+
+@media (max-width: 700px) {
+  .app-content > main:has(> .log-page) {
+    height: calc(100dvh - 52px);
+    padding: 1rem 0.75rem;
+  }
+}
+
+@media (max-width: 760px) {
+  .log-page-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .log-page-actions {
+    flex-wrap: wrap;
+  }
+
+  .log-filter {
+    width: 100%;
+    overflow-x: auto;
+  }
+}

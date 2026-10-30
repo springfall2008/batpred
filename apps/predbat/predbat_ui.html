@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="./predbat_ui_favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f3f4f6" />
+    <title>Predbat</title>
+    <script>
+      // Apply the last confirmed theme before styles and React can paint.
+      try {
+        const preference = localStorage.getItem('predbat-theme')
+        document.documentElement.dataset.theme = preference === 'dark' || (preference !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light'
+        const prefix = window.location.pathname.match(/^(.*\/)ui(?:\/|$)/)?.[1] ?? '/'
+        const cached = JSON.parse(localStorage.getItem('predbat-theme-settings:' + prefix) || 'null')
+        if (cached?.preset === 'coastal') cached.preset = 'predbat'
+        const keys = ['battery-low', 'battery-medium', 'battery-high', 'charge', 'export', 'flow-solar', 'flow-grid', 'flow-home']
+        const validPalette = palette => palette && typeof palette === 'object' && !Array.isArray(palette) && Object.entries(palette).every(([key, value]) => keys.includes(key) && typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value))
+        if (cached && cached.version === 1 && Number.isInteger(cached.revision) && cached.revision >= 0 && ['predbat', 'retro', 'custom'].includes(cached.preset) && validPalette(cached.colours?.light) && validPalette(cached.colours?.dark) && Number.isInteger(cached.socBoundaries?.low) && Number.isInteger(cached.socBoundaries?.medium) && cached.socBoundaries.low >= 0 && cached.socBoundaries.low < cached.socBoundaries.medium && cached.socBoundaries.medium <= 100) {
+          window.__predbatTheme = cached
+          document.documentElement.dataset.preset = cached.preset
+          if (cached.preset === 'custom') {
+            for (const mode of ['light', 'dark']) for (const [key, value] of Object.entries(cached.colours[mode])) document.documentElement.style.setProperty(`--user-${mode}-${key}`, value)
+          }
+        }
+      } catch { /* Storage may be unavailable; the server supplies the theme instead. */ }
+    </script>
+    <script type="module" crossorigin src="./predbat_ui.js"></script>
+    <link rel="modulepreload" crossorigin href="./predbat_ui_rolldown-runtime.js">
+    <link rel="modulepreload" crossorigin href="./predbat_ui_pages.js">
+    <link rel="stylesheet" crossorigin href="./predbat_ui_style.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

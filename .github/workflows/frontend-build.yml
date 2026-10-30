@@ -1,0 +1,35 @@
+name: Frontend build
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  frontend-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Test frontend
+        working-directory: frontend
+        run: npm test
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+      - name: Check generated frontend files match source
+        run: |
+          git diff --exit-code -- 'apps/predbat/predbat_ui*'
+          untracked=$(git ls-files --others --exclude-standard -- 'apps/predbat/predbat_ui*')
+          if [ -n "$untracked" ]; then
+            echo "Generated frontend files are missing from Git:"
+            echo "$untracked"
+            exit 1
+          fi
