@@ -25,7 +25,7 @@ from output import PLAN_SCENARIO_FIELDS, PLAN_SCENARIO_NAMES
 from tests.test_plan_why_reason import _flat_soc, _setup_baseline
 from web_helper import get_plan_renderer_js
 
-SCENARIO_ATTRIBUTES = ("predict_soc_best10", "predict_metric_best10", "predict_soc_best90", "predict_metric_best90", "pv_forecast_minute90_step", "load_minutes_step90", "pv_metric10_weight")
+SCENARIO_ATTRIBUTES = ("predict_soc_best10", "predict_metric_best10", "predict_soc_best90", "predict_metric_best90", "pv_forecast_minute90_step", "load_minutes_step90", "pv_forecast_minute10_step", "load_minutes_step10", "pv_metric10_weight")
 
 
 def _flat_metric(my_predbat, pence_per_step):
@@ -51,7 +51,7 @@ def _run_scenario_title(jsonData, row, field, expected):
     renderer_js = get_plan_renderer_js()
     start = renderer_js.index("function scenarioTitle(")
     end = renderer_js.index("function renderLoadCell(", start)
-    script = renderer_js[start:end] + "\nprocess.stdout.write(scenarioTitle({}, {}, {}, {}));\n".format(json.dumps(jsonData), json.dumps(row), field, json.dumps(expected))
+    script = renderer_js[start:end] + "\nprocess.stdout.write(scenarioTitle({}, {}, {}, {}));\n".format(json.dumps(jsonData), json.dumps(row), json.dumps(field), json.dumps(expected))
     result = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=30)
     if result.returncode != 0:
         return "NODE ERROR: " + result.stderr
@@ -93,6 +93,9 @@ def run_test_plan_scenarios(my_predbat):
         my_predbat.predict_soc_best90 = _flat_soc(my_predbat, 6.0)
         my_predbat.predict_metric_best90 = _flat_metric(my_predbat, 0.5)
         load_step10 = _flat_step(my_predbat, 0.6 / 12)
+        # The PV10 PV and load shown come from the arrays the PV10 run used, held on the instance
+        my_predbat.load_minutes_step10 = load_step10
+        my_predbat.pv_forecast_minute10_step = pv_step
         my_predbat.load_minutes_step90 = _flat_step(my_predbat, 0.3 / 12)
         my_predbat.pv_forecast_minute90_step = _flat_step(my_predbat, 0.2 / 12)
 
@@ -129,6 +132,7 @@ def run_test_plan_scenarios(my_predbat):
         my_predbat.predict_metric_best90 = _flat_metric(my_predbat, 1.0)
         my_predbat.load_minutes_step90 = load_step
         my_predbat.pv_forecast_minute90_step = pv_step
+        my_predbat.load_minutes_step10 = load_step
         html, raw_plan = my_predbat.publish_html_plan(pv_step, pv_step, load_step, load_step, my_predbat.end_record, publish=False, show_scenarios=True)
         if "scenarios" in _first_row(raw_plan) or 'title="Expected ' in html:
             print("ERROR: matching scenarios should add no per-row data or tooltip, got {}".format(_first_row(raw_plan).get("scenarios")))
@@ -182,17 +186,17 @@ def run_test_plan_scenarios(my_predbat):
         jsonData = {"scenario_fields": PLAN_SCENARIO_FIELDS, "scenario_names": PLAN_SCENARIO_NAMES, "currency_symbols": ["£", "p"]}
         row = {"scenarios": {"90": [60, 0.1, 0.25, -0.12, 1.5], "10": [40, 0.0, 0.5, 0.2, -2.25]}}
         checks = [
-            (0, 50, ' title="Expected 50%&#10;{} 40%&#10;{} 60%"'.format(PLAN_SCENARIO_NAMES["10"], PLAN_SCENARIO_NAMES["90"])),
-            (2, 0.3, ' title="Expected 0.30 kWh&#10;{} 0.50 kWh&#10;{} 0.25 kWh"'.format(PLAN_SCENARIO_NAMES["10"], PLAN_SCENARIO_NAMES["90"])),
-            (3, 0.05, ' title="Expected +5p&#10;{} +20p&#10;{} -12p"'.format(PLAN_SCENARIO_NAMES["10"], PLAN_SCENARIO_NAMES["90"])),
+            ("soc_percent", 50, ' title="Expected 50%&#10;{} 40%&#10;{} 60%"'.format(PLAN_SCENARIO_NAMES["10"], PLAN_SCENARIO_NAMES["90"])),
+            ("load_forecast", 0.3, ' title="Expected 0.30 kWh&#10;{} 0.50 kWh&#10;{} 0.25 kWh"'.format(PLAN_SCENARIO_NAMES["10"], PLAN_SCENARIO_NAMES["90"])),
+            ("cost_change", 0.05, ' title="Expected +5 p&#10;{} +20 p&#10;{} -12 p"'.format(PLAN_SCENARIO_NAMES["10"], PLAN_SCENARIO_NAMES["90"])),
             # The web UI's Total column writes the sign after the currency symbol, and the tooltip matches it
-            (4, 1.0, ' title="Expected £1.00&#10;{} £-2.25&#10;{} £1.50"'.format(PLAN_SCENARIO_NAMES["10"], PLAN_SCENARIO_NAMES["90"])),
+            ("total_cost", 1.0, ' title="Expected £1.00&#10;{} £-2.25&#10;{} £1.50"'.format(PLAN_SCENARIO_NAMES["10"], PLAN_SCENARIO_NAMES["90"])),
             # Every scenario has the same PV as the cell: no tooltip, although other values differ
-            (1, 0.1, None),
+            ("pv_forecast", 0.1, None),
         ]
         node_ran = True
         for field, expected_value, want in checks:
-            if field == 1:
+            if field == "pv_forecast":
                 row_same_pv = {"scenarios": {"90": [60, 0.1, 0.25, -0.12, 1.5], "10": [40, 0.1, 0.5, 0.2, -2.25]}}
                 got = _run_scenario_title(jsonData, row_same_pv, field, expected_value)
                 want = ""
@@ -210,16 +214,22 @@ def run_test_plan_scenarios(my_predbat):
             if python_title != checks[0][2]:
                 print("ERROR: the HTML SoC tooltip {!r} should match the web UI's {!r}".format(python_title, checks[0][2]))
                 failed = True
-            if _run_scenario_title(jsonData, {}, 0, 50) != "":
+            if _run_scenario_title(jsonData, {}, "soc_percent", 50) != "":
                 print("ERROR: a row without scenarios should get no tooltip")
                 failed = True
-            quoted = _run_scenario_title(dict(jsonData, currency_symbols=['"', "p"]), row, 4, 1.0)
+            quoted = _run_scenario_title(dict(jsonData, currency_symbols=['"', "p"]), row, "total_cost", 1.0)
             if "&quot;1.00" not in quoted or 'title=""' in quoted:
                 print("ERROR: a quote in the currency symbol should be escaped in the tooltip, got {!r}".format(quoted))
                 failed = True
+            # A cost that rounds to -0 pence reads as +0, not -0
+            zero = _run_scenario_title(jsonData, {"scenarios": {"90": [60, 0.1, 0.25, -0.004, 1.5]}}, "cost_change", 0.05)
+            if zero != ' title="Expected +5 p&#10;{} +0 p"'.format(PLAN_SCENARIO_NAMES["90"]):
+                print("ERROR: a cost rounding to -0 should read +0 p, got {!r}".format(zero))
+                failed = True
     finally:
         for name, value in saved.items():
-            setattr(my_predbat, name, value if value is not None else {})
+            # A series that was never set goes back to empty; the weight goes back to whatever it was
+            setattr(my_predbat, name, value if value is not None or name == "pv_metric10_weight" else {})
     failed |= _run_calculate_plan_tests()
 
     print("**** Plan scenario tooltip tests {} ****".format("FAILED" if failed else "PASSED"))

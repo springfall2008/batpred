@@ -1219,17 +1219,19 @@ class Output:
         charge_rate_now_curve = min(charge_rate_now_curve, charge_rate_limit)
         return dp2(charge_rate_now_curve * MINUTE_WATT / 1000.0)
 
-    def plan_scenario_sources(self, pv_forecast_minute_step10, load_minutes_step10):
+    def plan_scenario_sources(self):
         """
         The final plan's PV10 and PV90 runs to show beside the expected one (#5871), keyed by scenario.
 
-        Each entry is (soc by minute, metric by minute, PV step, load step). A scenario the plan is not scored
+        Each entry is (soc by minute, metric by minute, PV step, load step). The PV and load come from the same step
+        arrays the plan's scenario runs used, not the caller's, so a row never pairs a scenario's SoC with PV it
+        wasn't simulated against. A scenario the plan is not scored
         against is left out: PV10 at a zero weight (its run is still made, for the Best10 chart), and PV90 at a zero
         weight, when it is not run and its SoC series is empty.
         """
         sources = {}
         if self.predict_soc_best10 and self.pv_metric10_weight > 0:
-            sources["10"] = (self.predict_soc_best10, self.predict_metric_best10, pv_forecast_minute_step10, load_minutes_step10)
+            sources["10"] = (self.predict_soc_best10, self.predict_metric_best10, self.pv_forecast_minute10_step, self.load_minutes_step10)
         if self.predict_soc_best90:
             sources["90"] = (self.predict_soc_best90, self.predict_metric_best90, self.pv_forecast_minute90_step, self.load_minutes_step90)
         return sources
@@ -1313,7 +1315,7 @@ class Output:
         car_total = 0
         raw_plan = {}
         raw_plan["rows"] = []
-        scenario_sources = self.plan_scenario_sources(pv_forecast_minute_step10, load_minutes_step10) if show_scenarios else {}
+        scenario_sources = self.plan_scenario_sources() if show_scenarios else {}
         if scenario_sources:
             raw_plan["scenario_fields"] = PLAN_SCENARIO_FIELDS
             raw_plan["scenario_names"] = {key: PLAN_SCENARIO_NAMES[key] for key in scenario_sources}
