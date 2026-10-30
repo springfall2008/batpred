@@ -23,6 +23,8 @@ import asyncio
 import math
 import json
 import random
+import copy
+from bisect import bisect_left
 from component_base import ComponentBase
 from coordinator import inverter_record
 from mock_base import MockBase as SharedMockBase
@@ -319,6 +321,57 @@ GE_CLOUD_TIME_SELECT_FORMAT = "HH:MM:SS"
 # ("2025-02-09T15:00:03Z") unchanged. The GEC/GEE rows keep "%H:%M:%S" for installs that do not use
 # this component (spec D13), so the discovery record describes the sensor, not the row.
 GE_CLOUD_CLOCK_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
+
+
+class SharedMeterLoad:
+    """Measure load behind one explicitly shared grid meter from complete AC-flow samples.
+
+    Cloud consumption is inverter-relative and can be clipped at zero. It cannot be added
+    or inverted to recover site load. AC output already includes the inverter's PV/battery
+    contribution, so neither DC channel is added again here.
+    """
+
+    def __init__(self, members, grid_member=None):
+        """Track the source cohort for live power only, without creating energy history."""
+        self.members = tuple(sorted(members))
+        self.grid_member = grid_member or self.members[0]
+        self.previous = None
+
+    def sample(self, samples, now):
+        """Return site W or an unknown reason from complete, aligned raw source frames."""
+        try:
+            times, ac = {}, 0
+            for member in self.members:
+                raw = samples.get(member)
+                if str(raw.get("status", "")).lower() != "normal":
+                    raise ValueError("inverter source is not Normal")
+                stamp = datetime.fromisoformat(raw["time"].replace("Z", "+00:00"))
+                if stamp.tzinfo is None or not -30 <= (now - stamp).total_seconds() <= 300:
+                    raise ValueError("missing or stale source time")
+                times[member] = stamp.timestamp()
+                value = raw["inverter"]["power"]
+                if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
+                    raise ValueError("missing inverter AC power")
+                ac += value
+            grid = samples[self.grid_member]["grid"]["power"]
+            if not isinstance(grid, (int, float)) or isinstance(grid, bool) or not math.isfinite(grid):
+                raise ValueError("missing shared grid power")
+            if max(times.values()) - min(times.values()) > 30:
+                raise ValueError("source times differ by more than 30 seconds")
+            load = ac - grid
+            if load < 0:
+                raise ValueError("AC flows do not describe a non-negative site load")
+        except (KeyError, TypeError, ValueError, AttributeError) as exc:
+            self.previous = None
+            return None, str(exc)
+
+        if self.previous is not None:
+            previous_times = self.previous
+            if any(times[member] < previous_times[member] for member in self.members):
+                self.previous = None
+                return None, "source time moved backwards"
+        self.previous = times
+        return load, None
 
 
 def ge_code_message(data, code):
@@ -645,6 +698,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         self.settings = {}
         self.status = {}
         self.live_display_samples = {}  # unmerged measured samples, never sensor defaults
+        self.raw_meter_samples = {}  # per-poll counter provenance, before null fallback
         self.meter = {}
         self.info = {}
         self.register_entity_map = {}
@@ -1750,38 +1804,22 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         # Use the first battery serial for the ge_cloud_serial (for status)
         self.set_arg("ge_cloud_serial", devices["battery"][0])
 
-        # Detect shared CT clamp: when multiple inverters share a single physical grid CT clamp
-        # (no dedicated external meters, or duplicate meter serial numbers), grid and load
-        # measurements are identical across all inverters and must not be summed.
-        # Apply the same "single source + zeros" pattern used by the EMS path.
+        # A shared GRID meter says nothing about the scope of native consumption: each
+        # inverter combines that meter with its own AC flow, and may clip consumption at zero.
         if num_inverters > 1 and not devices.get("ems"):
-            battery_meters = devices.get("battery_meters", {})
-            all_meter_serials = []
-            for bat in batteries:
-                all_meter_serials.extend(battery_meters.get(bat, []))
-            has_duplicate_serials = len(all_meter_serials) != len(set(all_meter_serials))
-            has_shared_ct = False
-            if has_duplicate_serials:
-                has_shared_ct = True
-                reason = "duplicate meter serials"
-            else:
-                reason = "meters are not duplicated"
-            if self.get_arg("ge_cloud_automatic_split_ct", default=False):
-                has_shared_ct = False
-                reason = "split CT override"
-            elif self.get_arg("ge_cloud_automatic_shared_ct", default=False):
-                has_shared_ct = True
-                reason = "shared CT override"
-            if has_shared_ct:
-                self.log("GECloud: Multiple inverters sharing a single CT clamp detected ({}) — using first inverter only for grid and load measurements".format(reason))
-                self.set_arg("grid_power", [f"sensor.{self.prefix}_gecloud_{batteries[0]}_grid_power"] + [0 for _ in range(num_inverters - 1)])
-                self.set_arg("load_power", [f"sensor.{self.prefix}_gecloud_{batteries[0]}_consumption_power"] + [0 for _ in range(num_inverters - 1)])
-                self.set_arg("import_today", [f"sensor.{self.prefix}_gecloud_{batteries[0]}_grid_import_total"])
-                self.set_arg("export_today", [f"sensor.{self.prefix}_gecloud_{batteries[0]}_grid_export_total"])
+            if self._shared_ct(devices, batteries):
+                anchor = min(batteries)  # A source-order change must not swap lifetime counters.
+                self.log("GECloud: Shared grid meter: using {} for grid/energy and complete inverter AC flows for site load".format(anchor))
+                self.set_arg("grid_power", [f"sensor.{self.prefix}_gecloud_{anchor}_grid_power"] + [0 for _ in range(num_inverters - 1)])
+                self.set_arg("load_power", [f"sensor.{self.prefix}_gecloud_shared_load_power"] + [0 for _ in range(num_inverters - 1)])
+                self.set_arg("import_today", [f"sensor.{self.prefix}_gecloud_{anchor}_grid_import_total"])
+                self.set_arg("export_today", [f"sensor.{self.prefix}_gecloud_{anchor}_grid_export_total"])
                 if not self.get_arg("ge_cloud_load_today_ignore", default=False):
-                    self.set_arg("load_today", [f"sensor.{self.prefix}_gecloud_{batteries[0]}_consumption_total"])
+                    # Preserve the existing history binding until a cumulative-energy
+                    # correction is validated. Sparse power cannot replace that history.
+                    self.set_arg("load_today", [f"sensor.{self.prefix}_gecloud_{anchor}_consumption_total"])
             else:
-                self.log("GECloud: Multiple inverters detected, using all inverters for grid and load measurements ({})".format(reason))
+                self.log("GECloud: Separate or unconfirmed grid meters: retaining per-inverter readings")
 
         # reconfigure for EMS
         if devices["ems"]:
@@ -1869,23 +1907,41 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         names = {regname_to_ha(register.get("name", "")) for register in self.settings.get(device, {}).values()}
         return next((candidate for candidate in candidates if candidate in names), None)
 
+    async def publish_shared_meter_load(self):
+        """Publish live AC site load after raw reads, leaving consumption history unchanged."""
+        devices = self.devices_dict
+        batteries = [serial.lower() for serial in devices.get("battery", [])]
+        if not self._shared_ct(devices, batteries):
+            self._shared_meter_load = None
+            return True
+        members = sorted(set(batteries + [serial.lower() for serial in devices.get("pv", [])]))
+        meter = getattr(self, "_shared_meter_load", None)
+        if meter is None or meter.members != tuple(members):
+            meter = self._shared_meter_load = SharedMeterLoad(members, grid_member=min(batteries))
+        # An excluded PV-only contribution leaves the site balance incomplete.
+        if devices.get("pv") and not self.get_arg("ge_cloud_automatic_split_pv", default=False):
+            meter.previous = None
+            power, error = None, "PV-only sources require ge_cloud_automatic_split_pv or an independent load sensor"
+        else:
+            power, error = meter.sample(self.live_display_samples, self.now_utc_exact)
+        if error != getattr(self, "_shared_meter_error", None):
+            self.log("Warn: GECloud shared meter load unavailable: {}".format(error) if error else "GECloud: Shared meter load is available again")
+            self._shared_meter_error = error
+        attrs = {"source": "sum(inverter AC output) - shared grid export", "complete": error is None, "unknown_reason": error}
+        self.dashboard_item(f"sensor.{self.prefix}_gecloud_shared_load_power", power if power is not None else "unavailable", attributes=dict(attribute_table["consumption_power"], **attrs), app="gecloud")
+        return error is None
+
     def _shared_ct(self, devices, batteries):
-        """
-        Whether async_automatic_config() reads grid and load from the first inverter only, as it does
-        when several inverters share one CT clamp. A copy of its detection (a duplicated meter serial)
-        and of its two override settings, split winning over shared.
-        """
-        if len(batteries) <= 1 or devices.get("ems"):
+        """Whether every selected inverter reports one shared grid meter, never just a duplicate subset."""
+        if len(batteries) <= 1 or devices.get("ems") or devices.get("gateway"):
             return False
-        battery_meters = devices.get("battery_meters") or {}
-        meter_serials = []
-        for battery in batteries:
-            meter_serials.extend(battery_meters.get(battery) or [])
+        battery_meters = {serial.lower(): meters for serial, meters in (devices.get("battery_meters") or {}).items()}
         if self.get_arg("ge_cloud_automatic_split_ct", default=False):
             return False
         if self.get_arg("ge_cloud_automatic_shared_ct", default=False):
             return True
-        return len(meter_serials) != len(set(meter_serials))
+        meters = [{str(meter).strip() for meter in (battery_meters.get(battery.lower()) or []) if meter is not None and not isinstance(meter, bool) and str(meter).strip()} for battery in batteries]
+        return all(len(group) == 1 and group == meters[0] for group in meters)
 
     def _export_limit_share(self, device):
         """This logical inverter's equal share of the site grid export limit - the value publish_site_export_limit() publishes - or None."""
@@ -1975,11 +2031,18 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         if features["discharge_power_percent"] and not features["discharge_rate"]:
             register("discharge_rate_percent", "number", ["inverter_discharge_power_percentage", "discharge_power_rate"], unit="%")
 
-        if self._shared_ct(devices, batteries) and index > 0:
-            entities["grid_power"] = {"value": 0, "access": "r"}
-            entities["load_power"] = {"value": 0, "access": "r"}
-            for setting in ("import_today", "export_today", "load_today"):
-                entities.pop(setting, None)
+        if self._shared_ct(devices, batteries):
+            if index == 0:
+                sensor("grid_power", min(batteries), "grid_power")
+                sensor("import_today", min(batteries), "grid_import_total")
+                sensor("export_today", min(batteries), "grid_export_total")
+                entities["load_power"] = {"entity_id": f"sensor.{self.prefix}_gecloud_shared_load_power", "access": "r"}
+                sensor("load_today", min(batteries), "consumption_total")
+            else:
+                entities["grid_power"] = {"value": 0, "access": "r"}
+                entities["load_power"] = {"value": 0, "access": "r"}
+                for setting in ("import_today", "export_today", "load_today"):
+                    entities.pop(setting, None)
 
         ems = devices.get("ems")
         if ems:
@@ -2608,6 +2671,9 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             if device in self.pending_writes:
                 self.pending_writes[device] = []
 
+        # Load quality belongs to its sensor, not the transport lifecycle. Holding
+        # startup here would back off every Cloud sensor/control poll for a data gap.
+        await self.publish_shared_meter_load()
         self.update_success_timestamp()
         return True
 
@@ -3284,6 +3350,9 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         if previous is None:
             previous = {}
         meter = await self.async_get_inverter_data_retry(GE_API_INVERTER_METER, serial)
+        if not hasattr(self, "raw_meter_samples"):
+            self.raw_meter_samples = {}
+        self.raw_meter_samples[serial.lower()] = copy.deepcopy(meter)
         if meter is None:
             return previous
         merged = merge_non_null(meter, previous)
@@ -3427,6 +3496,93 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         return None
 
 
+class SharedMeterHistory:
+    """Reconstruct cumulative site consumption before cleaning any inverter-relative counters.
+
+    A declared shared grid reading is counted once. Native consumption is signed relative
+    to each inverter and can decrease during export. Linear alignment estimates the timing
+    between source packets; it does not turn gaps into measured minute-resolution energy.
+    """
+
+    @staticmethod
+    def combine(sources, now):
+        """Return a common-window cumulative history and explicit interpolation provenance."""
+        if len(sources) < 2:
+            raise ValueError("Shared history needs every inverter in the declared group")
+        series = {}
+        for serial, records in sorted(sources.items()):
+            by_time = {}
+            for row in records:
+                try:
+                    stamp = datetime.fromisoformat(row["last_updated"].replace("Z", "+00:00"))
+                    if stamp.tzinfo is None:
+                        raise ValueError("Source timestamp has no timezone")
+                    if stamp > now:
+                        continue
+                    values = tuple(row[key] for key in ("consumption", "import", "export", "pv"))
+                    if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in values):
+                        raise ValueError("Missing or non-finite cumulative counters")
+                    if any(v < 0 for v in values[1:]):
+                        raise ValueError("Negative directional counter")
+                    if stamp in by_time and by_time[stamp] != values:
+                        raise ValueError("Conflicting counters at one source timestamp")
+                    by_time[stamp] = values
+                except (KeyError, TypeError, AttributeError) as exc:
+                    raise ValueError("Incomplete shared-meter source record") from exc
+            samples = sorted(by_time.items())
+            if len(samples) < 2:
+                raise ValueError("Insufficient history for a shared-meter member")
+            for (_, a), (_, b) in zip(samples, samples[1:]):
+                if any(b[i] < a[i] - 1e-6 for i in (1, 2, 3)):
+                    raise ValueError("Directional counter reset in shared-meter history")
+            series[serial] = ([t for t, _ in samples], [v for _, v in samples])
+
+        start = max(times[0] for times, _ in series.values())
+        end = min(times[-1] for times, _ in series.values())
+        if start >= end:
+            raise ValueError("Shared-meter histories have no common advancing window")
+        timeline = sorted({t for times, _ in series.values() for t in times if start <= t <= end})
+        anchor = min(series)
+        result = []
+        peak = None
+        origin = None
+        for stamp in timeline:
+            aligned = {}
+            spans = []
+            for serial, (times, values) in series.items():
+                index = bisect_left(times, stamp)
+                if times[index] == stamp:
+                    aligned[serial] = values[index]
+                    spans.append(0)
+                else:
+                    span = (times[index] - times[index - 1]).total_seconds()
+                    weight = (stamp - times[index - 1]).total_seconds() / span
+                    aligned[serial] = tuple(a + (b - a) * weight for a, b in zip(values[index - 1], values[index]))
+                    spans.append(span)
+            # Anchor's own net AC plus its grid cancels to its native consumption.
+            # Other members contribute their signed AC energy, not another grid total.
+            consumption = aligned[anchor][0] + sum(c - imp + exp for serial, (c, imp, exp, _) in aligned.items() if serial != anchor)
+            if peak is not None and consumption < peak - 0.3 * len(series):
+                raise ValueError("Shared consumption falls beyond counter rounding tolerance")
+            # Keep small rounding dips as a plateau, not a reset or extra energy.
+            peak = consumption if peak is None else max(peak, consumption)
+            origin = consumption if origin is None else origin
+            interval = (stamp - timeline[len(result) - 1]).total_seconds() if result else 0
+            gap = max(spans + [interval])
+            result.append(
+                {
+                    "last_updated": stamp.isoformat(),
+                    "consumption": peak - origin,
+                    "import": aligned[anchor][1],
+                    "export": aligned[anchor][2],
+                    "pv": sum(values[3] for values in aligned.values()),
+                    "timing_estimated": bool(gap),
+                    "source_gap_seconds": gap,
+                }
+            )
+        return result
+
+
 class GECloudData(ComponentBase):
     """
     GivEnergy Cloud Data download and caching
@@ -3465,7 +3621,16 @@ class GECloudData(ComponentBase):
             self.ge_cloud_serial = self.get_arg(self.ge_cloud_serial_config_item, default="")
             self.log("GECloud: Starting up with max_days_previous {} and serial {}".format(self.max_days_previous, self.ge_cloud_serial))
 
-        if seconds % (10 * 60) == 0:
+        # Discovery and configuration can finish after the first history tick. Retry
+        # failures/transitions once a minute, without refreshing healthy history more often.
+        try:
+            expected = self.shared_meter_members()
+        except ValueError:
+            expected = None
+        changed = expected != getattr(self, "shared_history_attempt_key", ())
+        due = self.now_utc_exact >= getattr(self, "shared_history_retry_at", self.now_utc_exact)
+        retry = changed or (due and (expected != self.shared_history_key or bool(getattr(self, "shared_history_error", None))))
+        if seconds % (10 * 60) == 0 or (retry and seconds % 60 == 0):
             now_utc = self.now_utc_exact
             await self.download_ge_data(now_utc)
 
@@ -3572,6 +3737,14 @@ class GECloudData(ComponentBase):
         """
         Download consumption data from GE Cloud
         """
+        try:
+            members = self.shared_meter_members()
+        except ValueError as exc:
+            self.shared_history_error = str(exc)
+            return False
+        if members:
+            return await self.download_shared_meter_data(members, now_utc)
+        self.shared_history_attempt_key = ()
         geserial = self.ge_cloud_serial
         gekey = self.ge_cloud_key
 
@@ -3631,12 +3804,107 @@ class GECloudData(ComponentBase):
                 pass
         self.oldest_data_time = last_updated_time
         self.mdata = mdata
+        self.shared_history_snapshot = None
+        self.shared_history_error = None
 
         # Save GE URL cache to disk for next time
         if self.storage:
             await self.storage.save("gecloud_data", "ge_url_cache", self.ge_url_cache, format="yaml", expiry=None)
         self.ge_url_cache = {}
         return True
+
+    def shared_meter_members(self):
+        """Resolve the existing manual declaration against the complete discovered topology."""
+        if not self.get_arg("ge_cloud_shared_meter_history", False):
+            return ()
+        if not self.get_arg("ge_cloud_automatic_shared_ct", False) or self.get_arg("ge_cloud_automatic_split_ct", False) or self.get_arg("ge_cloud_load_today_ignore", False):
+            return ()
+        components = getattr(getattr(self, "base", None), "components", None)
+        direct = components.get_component("gecloud") if components else None
+        if direct is None or not direct.devices_dict:
+            raise ValueError("Shared history is waiting for Cloud inverter discovery")
+        devices = direct.devices_dict
+        batteries = devices.get("battery", [])
+        if not direct._shared_ct(devices, batteries):
+            return ()
+        if devices.get("pv"):
+            raise ValueError("Shared history with additional PV-only inverters is not supported")
+        return tuple(sorted(batteries))
+
+    @property
+    def shared_history_key(self):
+        """Expose the membership of the last atomically completed history download."""
+        snapshot = getattr(self, "shared_history_snapshot", None)
+        return snapshot["members"] if snapshot else ()
+
+    def shared_load_power(self):
+        """Return a complete fresh AC balance in kW, or unknown without substituting zero."""
+        members = self.shared_meter_members()
+        if not members:
+            return None
+        direct = self.base.components.get_component("gecloud")
+        power, error = SharedMeterLoad(members).sample(direct.live_display_samples, self.now_utc_exact)
+        return power / 1000 if error is None else None
+
+    async def download_shared_meter_data(self, members, now_utc):
+        """Download raw member counters and publish only an entire reconstructed cohort."""
+        self.shared_history_attempt_key = members
+        try:
+            if not self.ge_cloud_key:
+                raise ValueError("Shared history requires a GivEnergy API key")
+            try:
+                cached = await self.storage.load("gecloud_data", "ge_url_cache") if self.storage else {}
+            except OSError:
+                self.log("Warn: GECloud shared history cache read failed; retaining in-memory pages")
+                cached = {}
+            cached = cached if isinstance(cached, dict) else {}
+            cached.update(self.ge_url_cache)
+            self.ge_url_cache = cached
+            self.clean_ge_url_cache(now_utc)
+            headers = {"Authorization": "Bearer " + self.ge_cloud_key, "Accept": "application/json"}
+            sources = {}
+            for serial in members:
+                sources[serial] = []
+                for day in range(self.max_days_previous, -1, -1):
+                    date = (now_utc - timedelta(days=day)).strftime("%Y-%m-%d")
+                    url = GE_API_URL + "inverter/{}/data-points/{}?pageSize=8000".format(serial, date)
+                    visited = set()
+                    while url:
+                        if url in visited:
+                            raise ValueError("Repeated shared-history pagination link")
+                        visited.add(url)
+                        rows, url = await self.get_ge_url(url, headers, now_utc, 30 if day == 0 else 18 * 60)
+                        if not isinstance(rows, list):
+                            raise ValueError("A shared-history member download failed")
+                        sources[serial].extend(rows)
+            data = SharedMeterHistory.combine(sources, now_utc)
+            if members != self.shared_meter_members():
+                raise ValueError("Shared-meter membership changed during download")
+            gaps = [row["source_gap_seconds"] for row in data]
+            self.log("GECloud: Reconstructed shared-meter history: {} sources, {} points, maximum estimated source gap {} seconds".format(len(members), len(data), max(gaps)))
+            # The planner can read while this coroutine is downloading. Only replace
+            # the complete source cohort, never invalidate it at the start of a refresh.
+            self.shared_history_snapshot = {"members": members, "sources": sources, "downloaded_at": now_utc}
+            self.shared_history_error = None
+            self.shared_history_failures = 0
+            self.shared_history_retry_at = now_utc
+            return True
+        except ValueError as exc:
+            self.shared_history_error = str(exc)
+            self.shared_history_failures = min(getattr(self, "shared_history_failures", 0) + 1, 5)
+            self.shared_history_retry_at = now_utc + timedelta(seconds=min(600, 60 * 2 ** (self.shared_history_failures - 1)))
+            self.log("Warn: GECloud shared-meter history unavailable: {}".format(exc))
+            return False
+        finally:
+            if self.storage:
+                # Retain successful raw pages even if a later page or reconstruction
+                # failed. Keep the in-memory cache too, including without Storage.
+                try:
+                    saved = await self.storage.save("gecloud_data", "ge_url_cache", self.ge_url_cache, format="yaml", expiry=None)
+                    if saved is False:
+                        self.log("Warn: GECloud shared history cache save failed; retaining raw pages in memory")
+                except OSError:
+                    self.log("Warn: GECloud shared history cache unavailable; retaining raw pages in memory")
 
     def filter_data(self, mdata, measurement):
         """
@@ -3662,6 +3930,46 @@ class GECloudData(ComponentBase):
         """
         Get the GECloudData data
         """
+        members = self.shared_meter_members()
+        snapshot = getattr(self, "shared_history_snapshot", None)
+        if members or snapshot:
+            if not snapshot or members != snapshot["members"]:
+                raise ValueError("Shared-meter history is unavailable or its topology changed")
+            now = self.now_utc_exact
+            if (now - snapshot["downloaded_at"]).total_seconds() > 30 * 60:
+                raise ValueError("Shared-meter historical cohort has expired")
+            direct = self.base.components.get_component("gecloud")
+            sources = {serial: list(rows) for serial, rows in snapshot["sources"].items()}
+            previous = getattr(self, "shared_history_live_rows", {})
+            retained = dict(previous) if getattr(self, "shared_history_live_key", ()) == members else {}
+            for serial in members:
+                meter = getattr(direct, "raw_meter_samples", {}).get(serial.lower()) or {}
+                try:
+                    stamp = datetime.fromisoformat(meter["time"].replace("Z", "+00:00"))
+                    if stamp.tzinfo is None or stamp > now:
+                        raise ValueError("Latest counter timestamp is not observable yet")
+                    if serial in retained and stamp < datetime.fromisoformat(retained[serial]["last_updated"]):
+                        raise ValueError("Latest counter timestamp moved backwards")
+                    total = meter["total"]
+                    row = {"last_updated": meter["time"], "consumption": total["consumption"], "import": total["grid"]["import"], "export": total["grid"]["export"], "pv": total["solar"]}
+                    if any(isinstance(row[k], bool) or not isinstance(row[k], (int, float)) or not math.isfinite(row[k]) for k in ("consumption", "import", "export", "pv")):
+                        raise ValueError("Latest counters are incomplete")
+                    retained[serial] = row
+                except (KeyError, TypeError, AttributeError, ValueError):
+                    pass  # Keep the prior COMPLETE row with its original source clock.
+                if serial in retained:
+                    sources[serial].append(retained[serial])
+            data = SharedMeterHistory.combine(sources, now)
+            self.shared_history_tail_age_seconds = (now - datetime.fromisoformat(data[-1]["last_updated"])).total_seconds()
+            if self.shared_history_tail_age_seconds > 30 * 60:
+                raise ValueError("Shared-meter common source watermark is stale")
+            delayed = self.shared_history_tail_age_seconds > 300
+            if delayed != getattr(self, "shared_history_tail_delayed", False):
+                self.log("GECloud: Shared-meter history tail {} (source age {} seconds)".format("is delayed; using observed counters" if delayed else "has recovered", int(self.shared_history_tail_age_seconds)))
+            self.shared_history_tail_delayed = delayed
+            self.shared_history_live_rows = retained
+            self.shared_history_live_key = members
+            return data, datetime.fromisoformat(data[0]["last_updated"])
         return self.mdata, self.oldest_data_time
 
 

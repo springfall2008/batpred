@@ -1421,7 +1421,7 @@ class Fetch:
         if self.get_arg("ge_cloud_data", False):
             self.download_ge_data(self.now_utc)
 
-            if ("load_power" in self.args) and self.get_arg("load_power_fill_enable", True):
+            if ("load_power" in self.args) and self.get_arg("load_power_fill_enable", True) and getattr(self, "load_minutes_source", "") != "ge_cloud_shared_meter":
                 self.log("Using load_power data to fill gaps in load_today data")
                 load_power_data, _ = self.minute_data_load(self.now_utc, "load_power", self.max_days_previous, required_unit="W", load_scaling=1.0, interpolate=True, clean_increment=False)
                 self.load_minutes = self.fill_load_from_power(self.load_minutes, load_power_data)
@@ -2681,30 +2681,41 @@ class Fetch:
         self.pv_today, _ = minute_data(ge_cloud_data.filter_data(mdata, "pv"), self.max_days_previous, now_utc, "pv", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
 
         self.load_minutes_now = get_now_from_cumulative(self.load_minutes, self.minutes_now, backwards=True)
-        self.load_minutes_source = "ge_cloud"
+        shared_history = bool(getattr(ge_cloud_data, "shared_history_key", None))
+        self.load_minutes_source = "ge_cloud_shared_meter" if shared_history else "ge_cloud"
         self.load_last_period = (self.load_minutes.get(0, 0) - self.load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
         self.import_today_now = get_now_from_cumulative(self.import_today, self.minutes_now, backwards=True)
         self.export_today_now = get_now_from_cumulative(self.export_today, self.minutes_now, backwards=True)
         self.pv_today_now = get_now_from_cumulative(self.pv_today, self.minutes_now, backwards=True)
 
+        if shared_history:
+            # Use the last observed period ending at the common source watermark.
+            # A bounded source lag must not look like an idle house at the current clock.
+            latest = max(str2time(row["last_updated"]) for row in mdata)
+            age_minutes = max(0, int((now_utc - latest).total_seconds() // 60))
+            self.load_last_period = (self.load_minutes.get(age_minutes, 0) - self.load_minutes.get(age_minutes + PREDICT_STEP, 0)) * 60 / PREDICT_STEP
+            current_power = ge_cloud_data.shared_load_power()
+            if current_power is not None:
+                self.load_last_period = current_power
+
         # More up to date sensors for current values if set
-        if "load_today" in self.args:
+        if "load_today" in self.args and not shared_history:
             load_minutes, load_minutes_age = self.minute_data_load(self.now_utc, "load_today", self.max_days_previous, required_unit="kWh", load_scaling=1.0, interpolate=True)
             self.load_minutes_now = get_now_from_cumulative(load_minutes, self.minutes_now, backwards=True)
             self.load_last_period = (load_minutes.get(0, 0) - load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
             self.log("GECloudData load_last_period from immediate sensor is {} kW".format(dp2(self.load_last_period)))
 
-        if "import_today" in self.args:
+        if "import_today" in self.args and not shared_history:
             import_today = self.minute_data_import_export(self.max_days_previous, self.now_utc, "import_today", scale=self.import_export_scaling, required_unit="kWh")
             self.import_today_now = get_now_from_cumulative(import_today, self.minutes_now, backwards=True)
 
         # Load export today data
-        if "export_today" in self.args:
+        if "export_today" in self.args and not shared_history:
             export_today = self.minute_data_import_export(self.max_days_previous, self.now_utc, "export_today", scale=self.import_export_scaling, required_unit="kWh")
             self.export_today_now = get_now_from_cumulative(export_today, self.minutes_now, backwards=True)
 
         # PV today data
-        if "pv_today" in self.args:
+        if "pv_today" in self.args and not shared_history:
             pv_today = self.minute_data_import_export(self.max_days_previous, self.now_utc, "pv_today", required_unit="kWh")
             self.pv_today_now = get_now_from_cumulative(pv_today, self.minutes_now, backwards=True)
 
