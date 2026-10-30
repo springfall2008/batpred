@@ -1042,6 +1042,88 @@ def test_calibration_discards_intent_collected_so_far(my_predbat):
     return failed
 
 
+def test_calibration_writes_no_pause(my_predbat):
+    """
+    While any inverter is calibrating Predbat stands down for the whole fleet and no pause mode is written (GitHub issue 2155).
+
+    The calibration branch of execute_plan() puts every inverter to full rates and clears the intent, so the single pause
+    write in apply_inverter_rates() never runs for the inverters processed BEFORE the calibrating one. On main those
+    inverters had already written their pause from inside their own blocks, so this is a deliberate difference: an
+    inverter that is paused when calibration starts stays as it is until calibration ends, and a pause that a normal
+    cycle would have written (here a limit of 0) is not written during calibration. The next normal cycle must then
+    write the correct pause again.
+    """
+    failed = balance_fixture(my_predbat, "calibration_pause_setup")
+    if failed:
+        return failed
+    saved = save_balance_state(my_predbat)
+    saved_calibration = [inverter.in_calibration for inverter in my_predbat.inverters]
+    saved_limits = [(inverter.battery_rate_max_charge, inverter.battery_rate_max_discharge) for inverter in my_predbat.inverters]
+    try:
+        # A limit of 0 on inverter 0, which is processed BEFORE the calibrating inverter 1. On a normal cycle this pauses both directions
+        my_predbat.inverters[0].battery_rate_max_charge = 0
+        my_predbat.inverters[0].battery_rate_max_discharge = 0
+        my_predbat.inverters[0].in_calibration = False
+        my_predbat.inverters[1].in_calibration = True
+
+        # No pause is written during calibration, even though the limit of 0 asks for one
+        for inverter in my_predbat.inverters:
+            inverter.pause_charge = None
+            inverter.pause_discharge = None
+        my_predbat.execute_plan()
+        for inverter in my_predbat.inverters:
+            if inverter.pause_charge is not None or inverter.pause_discharge is not None:
+                print("ERROR: inverter {} had a pause written during calibration, got {} {}, Predbat should stand down for the whole fleet".format(inverter.id, inverter.pause_charge, inverter.pause_discharge))
+                failed = True
+
+        # An inverter that was already paused when calibration started is left as it is, not released and not rewritten
+        for inverter in my_predbat.inverters:
+            inverter.pause_charge = True
+            inverter.pause_discharge = True
+        my_predbat.execute_plan()
+        for inverter in my_predbat.inverters:
+            if inverter.pause_charge is not True or inverter.pause_discharge is not True:
+                print("ERROR: inverter {} pause should be left unchanged during calibration, got {} {}".format(inverter.id, inverter.pause_charge, inverter.pause_discharge))
+                failed = True
+
+        # The 60s poll must not apply a stale plan's pause either
+        my_predbat.balance_inverters_enable = True
+        my_predbat.balance_inverters_crosscharge = True
+        for inverter in my_predbat.inverters:
+            inverter.pause_charge = None
+            inverter.pause_discharge = None
+        my_predbat.inverter_rate_intent = {inverter.id: {"charge_rate": None, "discharge_rate": None, "pause_charge": True, "pause_discharge": True, "owner": "demand", "reset_rates": True} for inverter in my_predbat.inverters}
+        my_predbat.rebalance_inverter_rates()
+        for inverter in my_predbat.inverters:
+            if inverter.pause_charge is not None or inverter.pause_discharge is not None:
+                print("ERROR: the poll wrote a stale plan's pause to inverter {} during calibration, got {} {}".format(inverter.id, inverter.pause_charge, inverter.pause_discharge))
+                failed = True
+
+        # Calibration over: the next normal cycle writes the correct pause again, inverter 0 from its limit of 0 and inverter 1 not paused
+        my_predbat.inverters[1].in_calibration = False
+        for inverter in my_predbat.inverters:
+            inverter.pause_charge = None
+            inverter.pause_discharge = None
+        my_predbat.execute_plan()
+        if not (my_predbat.inverters[0].pause_charge and my_predbat.inverters[0].pause_discharge):
+            print("ERROR: after calibration inverter 0 with a limit of 0 should be paused for both, got {} {}".format(my_predbat.inverters[0].pause_charge, my_predbat.inverters[0].pause_discharge))
+            failed = True
+        if my_predbat.inverters[1].pause_charge or my_predbat.inverters[1].pause_discharge:
+            print("ERROR: after calibration inverter 1 has no limit of 0 and should not be paused, got {} {}".format(my_predbat.inverters[1].pause_charge, my_predbat.inverters[1].pause_discharge))
+            failed = True
+    finally:
+        for inverter, calibration, (max_charge, max_discharge) in zip(my_predbat.inverters, saved_calibration, saved_limits):
+            inverter.in_calibration = calibration
+            inverter.battery_rate_max_charge = max_charge
+            inverter.battery_rate_max_discharge = max_discharge
+            inverter.pause_charge = False
+            inverter.pause_discharge = False
+            inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
+            inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
+        restore_balance_state(my_predbat, saved)
+    return failed
+
+
 def test_read_only_mode_writes_no_rates(my_predbat):
     """
     In read-only mode Predbat must not write a rate at all.
@@ -5028,6 +5110,9 @@ def run_execute_tests(my_predbat):
         return failed
 
     failed |= test_monitor_mode_writes_no_rates(my_predbat)
+    if failed:
+        return failed
+
     failed |= test_rate_limit_zero_pauses_battery(my_predbat)
     if failed:
         return failed
@@ -5045,6 +5130,10 @@ def run_execute_tests(my_predbat):
         return failed
 
     failed |= test_calibration_discards_intent_collected_so_far(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_calibration_writes_no_pause(my_predbat)
     if failed:
         return failed
 

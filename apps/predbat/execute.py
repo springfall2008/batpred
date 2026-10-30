@@ -460,6 +460,8 @@ class Execute:
         # inverter balancer (which also takes a rate to 0) can add to what the plan asked for. A rate of 0 on its own
         # still lets the battery trickle charge or discharge at a few hundred W, only a pause stops it, and two
         # separate writes would undo each other (GitHub issue 2155).
+        # The exception is calibration: while any inverter is calibrating, Predbat stands down for the whole fleet and no pause is written.
+        #
         # Per-inverter detail segments, assembled into the status text after the headline status is
         # resolved - see build_status_extra() for why they can't be concatenated inline.
         status_extra_parts = []

@@ -82,11 +82,11 @@ Once you are ready for Predbat to take control move this setting to one of the a
 
 What Predbat writes to the inverter in each mode:
 
-- **Monitor** - Predbat does not plan or control any charging or discharging, and does not change the inverter's charge or export windows or its pause mode. The one exception is [inverter balancing](customisation.md#balance-inverters), if enabled, which can still hold an inverter's charge or discharge rate (and its pause) at 0.
+- **Monitor** - Predbat does not plan or control any charging or discharging, and does not change the inverter's charge or export windows.
+It also does not change the inverter's pause mode, with two exceptions: [inverter balancing](customisation.md#balance-inverters), if enabled, which can hold an inverter's charge or discharge rate (and its pause) at 0, and [Freeze Export during Demand](customisation.md#freeze-export-during-demand), if turned on, which can pause charging.
 - **Control SoC only** - Predbat only sets the battery's target SoC (the % the battery charges up to).
-It does not program charge or export windows, does not set the charge or discharge rate (so there is no low power charging in this mode),
-and does not switch charging or discharging on or off. The inverter charges up to the target using its own schedule and settings.
-The inverter's pause mode is not changed either, unless a pause is needed by [Freeze Export during Demand](customisation.md#freeze-export-during-demand).
+It does not program charge or export windows, does not set the charge or discharge rate (so there is no low power charging in this mode), and does not switch charging or discharging on or off.
+The inverter charges up to the target using its own schedule and settings. The inverter's pause mode is not changed either, unless a pause is needed by [Freeze Export during Demand](customisation.md#freeze-export-during-demand) or by [inverter balancing](customisation.md#balance-inverters) holding a rate at 0.
 - **Control charge** and **Control charge & discharge** - Predbat also programs the charge windows (and the export windows in Control charge & discharge),
 and sets the charge and discharge rates, and the pause mode on inverters that have one.
 
