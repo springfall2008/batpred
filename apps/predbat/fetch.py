@@ -1647,6 +1647,10 @@ class Fetch:
             # legitimate IOG discount wherever a session and a dispatch slot overlap, and the automatic
             # threshold scan could then miss a genuinely cheap slot.
             self.rate_import_pre_saving = import_rates.copy()
+            # rate_min_forward is what replacing a stored kWh costs (battery_value_rate), so it is built here from
+            # the tariff before any saving/free/Axle session - a one-off free hour tomorrow is not what refilling
+            # the battery costs
+            self.rate_min_forward = self.rate_min_forward_calc(import_rates)
             self.load_saving_slot(self.octopus_saving_slots, import_rates, export=False, rate_replicate=self.rate_import_replicated)
             self.load_free_slot(self.octopus_free_slots, import_rates, export=False, rate_replicate=self.rate_import_replicated)
             load_axle_slot(self, self.axle_sessions, import_rates, export=False, rate_replicate=self.rate_import_replicated)
@@ -1680,6 +1684,8 @@ class Fetch:
             # Built here, from the base rates, so the saving session and overrides applied below stay
             # out of it - battery_value_rate needs the tariff's own export price, not an event price
             self.rate_export_max_forward = self.rate_export_max_forward_calc(self.rate_export_base)
+            # Likewise the export floor in battery_value_rate: the lowest price the tariff itself pays
+            self.rate_export_min_base = self.rate_minmax(self.rate_export_base)[0]
             # Export has no IOG overlay, so the pre-saving tariff matches rate_export_base - copied
             # rather than aliased so the two can never be corrupted together by a future in-place
             # mutation of either.
@@ -3590,12 +3596,8 @@ class Fetch:
         curr = self.currency_symbols[1]
 
         if print:
-            # Calculate minimum forward rates only once rate replicate has run (when print is True).
-            # Use the `rates` argument, not self.rate_import: during fetch's atomic rebuild self.rate_import
-            # still holds the PREVIOUS cycle's data (publish is deferred to the end of the block), so
-            # reading it here would make rate_min_forward - which drives plan.py charge/discharge economics
-            # - a cycle stale. `rates` is the freshly-built current-cycle dict being scanned.
-            self.rate_min_forward = self.rate_min_forward_calc(rates)
+            # rate_min_forward is not built here: fetch_sensor_data() builds it from the tariff before the
+            # saving/free/Axle sessions are added, which the rates scanned here already include
             self.log("Import rates: min {}{}, max {}{}, average {}{}".format(self.rate_min, curr, self.rate_max, curr, self.rate_average, curr))
 
     def rate_export_max_forward_calc(self, rates):

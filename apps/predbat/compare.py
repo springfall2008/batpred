@@ -306,6 +306,13 @@ class Compare:
         if pb.rate_import:
             pb.rate_scan(pb.rate_import, print=False)
             pb.rate_import, pb.rate_import_replicated = pb.rate_replicate(pb.rate_import, pb.io_adjusted, is_import=True, use_future=import_future)
+            # The replacement cost of a stored kWh, built before any session as fetch_sensor_data() does. This
+            # tariff's own rates carry no session; live rates already do, so they keep the live cycle's value,
+            # which must be put back as an earlier tariff in the run may have replaced it.
+            if import_replaced:
+                pb.rate_min_forward = pb.rate_min_forward_calc(pb.rate_import)
+            else:
+                pb.rate_min_forward = dict(live_saving.get("import_min_forward", pb.rate_min_forward))
             if "rates_import_override" in tariff:
                 # A kept pre-saving snapshot must carry the same override, as fetch_sensor_data()'s does
                 if pb.rate_import_saving_minutes and pb.rate_import_pre_saving:
@@ -317,6 +324,14 @@ class Compare:
         if pb.rate_export:
             pb.rate_scan_export(pb.rate_export, print=False)
             pb.rate_export, pb.rate_export_replicated = pb.rate_replicate(pb.rate_export, is_import=False, use_future=export_future)
+            # battery_value_rate's export terms, from the tariff before any session as fetch_sensor_data() builds
+            # them - this tariff's own rates, or the live cycle's values put back for live rates (see rate_min_forward)
+            if export_replaced:
+                pb.rate_export_max_forward = pb.rate_export_max_forward_calc(pb.rate_export)
+                pb.rate_export_min_base = pb.rate_minmax(pb.rate_export)[0]
+            else:
+                pb.rate_export_max_forward = dict(live_saving.get("export_max_forward", pb.rate_export_max_forward))
+                pb.rate_export_min_base = live_saving.get("export_min_base", pb.rate_export_min_base)
             if "rates_export_override" in tariff:
                 if pb.rate_export_saving_minutes and pb.rate_export_pre_saving:
                     pb.rate_export_pre_saving = pb.override_session_rates(pb.rate_export, pb.rate_export_pre_saving, pb.rate_export_saving_minutes, tariff["rates_export_override"], "rates_export_override", {}, False, include_manual_api=False)
@@ -772,6 +787,9 @@ class Compare:
             "export_minutes": set(self.pb.rate_export_saving_minutes),
             "import_pre_saving": dict(self.pb.rate_import_pre_saving),
             "export_pre_saving": dict(self.pb.rate_export_pre_saving),
+            "import_min_forward": dict(self.pb.rate_min_forward),
+            "export_max_forward": dict(self.pb.rate_export_max_forward),
+            "export_min_base": self.pb.rate_export_min_base,
         }
 
         # Midnight SOC fallback for tariffs with no prior result
