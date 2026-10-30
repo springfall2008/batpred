@@ -329,15 +329,14 @@ class SharedMeterLoad:
     contribution, so neither DC channel is added again here.
     """
 
-    def __init__(self, members, total_kwh=0, grid_member=None):
-        """Keep a monotonic measured-energy counter, but never restore a sampling baseline."""
+    def __init__(self, members, grid_member=None):
+        """Track the source cohort for live power only, without creating energy history."""
         self.members = tuple(sorted(members))
         self.grid_member = grid_member or self.members[0]
-        self.total_kwh = total_kwh if isinstance(total_kwh, (int, float)) and not isinstance(total_kwh, bool) and math.isfinite(total_kwh) and total_kwh >= 0 else 0
         self.previous = None
 
     def sample(self, samples, now):
-        """Return site W or an unknown reason; integrate only advancing, aligned source frames."""
+        """Return site W or an unknown reason from complete, aligned raw source frames."""
         try:
             times, ac = {}, 0
             for member in self.members:
@@ -364,18 +363,12 @@ class SharedMeterLoad:
             self.previous = None
             return None, str(exc)
 
-        stamp = min(times.values())
         if self.previous is not None:
-            previous_times, previous_stamp, previous_load = self.previous
+            previous_times = self.previous
             if any(times[member] < previous_times[member] for member in self.members):
                 self.previous = None
                 return None, "source time moved backwards"
-            if any(times[member] == previous_times[member] for member in self.members):
-                return load, None  # Repeated provider samples are not new measured energy.
-            elapsed = stamp - previous_stamp
-            if 0 < elapsed <= 300:
-                self.total_kwh += (previous_load + load) / 2 * elapsed / 3600000
-        self.previous = (times, stamp, load)
+        self.previous = times
         return load, None
 
 
@@ -1819,19 +1812,11 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                 self.set_arg("import_today", [f"sensor.{self.prefix}_gecloud_{anchor}_grid_import_total"])
                 self.set_arg("export_today", [f"sensor.{self.prefix}_gecloud_{anchor}_grid_export_total"])
                 if not self.get_arg("ge_cloud_load_today_ignore", default=False):
-                    self.set_arg("load_today", [f"sensor.{self.prefix}_gecloud_shared_load_total"])
-                    if not getattr(self, "shared_meter_disabled_ge_cloud_data", False):
-                        self.ge_cloud_data_before_shared_meter = self.ge_cloud_data_before_ems if self.ems_disabled_ge_cloud_data else self.get_arg("ge_cloud_data", default=None, indirect=False)
-                        self.shared_meter_disabled_ge_cloud_data = True
-                    # The downloaded per-inverter consumption history has the same scope defect.
-                    # Record new corrected history; do not relabel the old sum as site load.
-                    self.set_arg("ge_cloud_data", False)
+                    # Preserve the existing history binding until a cumulative-energy
+                    # correction is validated. Sparse power cannot replace that history.
+                    self.set_arg("load_today", [f"sensor.{self.prefix}_gecloud_{anchor}_consumption_total"])
             else:
                 self.log("GECloud: Separate or unconfirmed grid meters: retaining per-inverter readings")
-
-        if not self._shared_ct(devices, batteries) and getattr(self, "shared_meter_disabled_ge_cloud_data", False):
-            self.set_arg("ge_cloud_data", self.ge_cloud_data_before_shared_meter)
-            self.shared_meter_disabled_ge_cloud_data = False
 
         # reconfigure for EMS
         if devices["ems"]:
@@ -1863,8 +1848,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             self.set_arg("grid_power", [f"sensor.{self.prefix}_gecloud_{ems}_grid_power"] + [0 for _ in range(num_inverters - 1)])
         elif self.ems_disabled_ge_cloud_data:
             # The EMS has left the account since it turned GE Cloud Data off, so put back what it replaced
-            shared_load = self._shared_ct(devices, batteries) and not self.get_arg("ge_cloud_load_today_ignore", default=False)
-            self.set_arg("ge_cloud_data", False if shared_load else self.ge_cloud_data_before_ems)
+            self.set_arg("ge_cloud_data", self.ge_cloud_data_before_ems)
             self.ems_disabled_ge_cloud_data = False
 
         # Determine the model of the inverter, if at least one inverter has AC or AIO in the name then we assume AC coupled and turn off the hybrid switch
@@ -1921,12 +1905,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         return next((candidate for candidate in candidates if candidate in names), None)
 
     async def publish_shared_meter_load(self):
-        """Publish measured AC site load once after all raw inverter samples have been collected.
-
-        Storage preserves only the measured total. Restart, missing samples and source gaps
-        discard the baseline, so none of the unobserved interval becomes measured energy.
-        Raw Cloud consumption entities and their old history are left unchanged.
-        """
+        """Publish live AC site load after raw reads, leaving consumption history unchanged."""
         devices = self.devices_dict
         batteries = [serial.lower() for serial in devices.get("battery", [])]
         if not self._shared_ct(devices, batteries):
@@ -1934,39 +1913,19 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             return True
         members = sorted(set(batteries + [serial.lower() for serial in devices.get("pv", [])]))
         meter = getattr(self, "_shared_meter_load", None)
-        try:
-            if meter is None or meter.members != tuple(members):
-                saved = await self.storage.load("gecloud", "shared_meter_load") if self.storage else None
-                anchor = min(batteries)
-                total = saved.get("total_kwh", 0) if isinstance(saved, dict) and saved.get("members") == members and saved.get("grid_member") == anchor else 0
-                meter = self._shared_meter_load = SharedMeterLoad(members, total, grid_member=anchor)
-            # PV-only units are included in the AC balance only when the user included them
-            # in this site's PV configuration. Otherwise the group has an unresolved scope.
-            if devices.get("pv") and not self.get_arg("ge_cloud_automatic_split_pv", default=False):
-                meter.previous = None
-                power, error = None, "PV-only sources require ge_cloud_automatic_split_pv or an independent load sensor"
-            else:
-                power, error = meter.sample(self.live_display_samples, self.now_utc_exact)
-            if power is not None and self.storage:
-                saved = await self.storage.save("gecloud", "shared_meter_load", {"members": members, "grid_member": meter.grid_member, "total_kwh": meter.total_kwh}, format="json", expiry=None)
-                if not saved:
-                    raise OSError("Storage did not save the measured total")
-        except Exception as exc:
-            # Do not retain a freshly advanced in-memory counter after persistence failed.
-            # Reload the durable total next cycle, with no baseline across the failure.
-            self._shared_meter_load = None
-            power, error = None, "could not preserve measured energy ({})".format(type(exc).__name__)
+        if meter is None or meter.members != tuple(members):
+            meter = self._shared_meter_load = SharedMeterLoad(members, grid_member=min(batteries))
+        # An excluded PV-only contribution leaves the site balance incomplete.
+        if devices.get("pv") and not self.get_arg("ge_cloud_automatic_split_pv", default=False):
+            meter.previous = None
+            power, error = None, "PV-only sources require ge_cloud_automatic_split_pv or an independent load sensor"
+        else:
+            power, error = meter.sample(self.live_display_samples, self.now_utc_exact)
         if error != getattr(self, "_shared_meter_error", None):
             self.log("Warn: GECloud shared meter load unavailable: {}".format(error) if error else "GECloud: Shared meter load is available again")
             self._shared_meter_error = error
         attrs = {"source": "sum(inverter AC output) - shared grid export", "complete": error is None, "unknown_reason": error}
         self.dashboard_item(f"sensor.{self.prefix}_gecloud_shared_load_power", power if power is not None else "unavailable", attributes=dict(attribute_table["consumption_power"], **attrs), app="gecloud")
-        self.dashboard_item(
-            f"sensor.{self.prefix}_gecloud_shared_load_total",
-            round(meter.total_kwh, 6) if power is not None else "unavailable",
-            attributes=dict(attribute_table["consumption_total"], **attrs, measured_intervals_only=True),
-            app="gecloud",
-        )
         return error is None
 
     def _shared_ct(self, devices, batteries):
@@ -2075,7 +2034,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                 sensor("import_today", min(batteries), "grid_import_total")
                 sensor("export_today", min(batteries), "grid_export_total")
                 entities["load_power"] = {"entity_id": f"sensor.{self.prefix}_gecloud_shared_load_power", "access": "r"}
-                entities["load_today"] = {"entity_id": f"sensor.{self.prefix}_gecloud_shared_load_total", "access": "r"}
+                sensor("load_today", min(batteries), "consumption_total")
             else:
                 entities["grid_power"] = {"value": 0, "access": "r"}
                 entities["load_power"] = {"value": 0, "access": "r"}

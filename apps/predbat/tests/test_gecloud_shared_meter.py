@@ -57,7 +57,7 @@ def observed_frames():
 
 
 def invalid_samples_and_energy():
-    """Unknown, stale and repeated input must not become zero load or extra measured energy."""
+    """Unknown, stale and repeated power must never create a consumption-energy counter."""
     now = datetime(2026, 10, 27, tzinfo=timezone.utc)
     original = {"a": packet(now, 1000, -1000), "b": packet(now, 1000, -1000)}
     mutations = [
@@ -78,93 +78,53 @@ def invalid_samples_and_energy():
         raw = copy.deepcopy(original)
         change(raw)
         meter = SharedMeterLoad(original)
-        assert meter.sample(raw, now)[0] is None
-        assert meter.total_kwh == 0 and meter.previous is None
-
+        assert meter.sample(raw, now)[0] is None and meter.previous is None
     meter = SharedMeterLoad(original)
-    assert meter.sample(original, now) == (3000, None)
     for _ in range(3):
         assert meter.sample(original, now) == (3000, None)
-    assert meter.total_kwh == 0
-    next_time = now + timedelta(seconds=120)
-    raw = {k: packet(next_time, 1000, -1000) for k in original}
-    assert meter.sample(raw, next_time) == (3000, None)
-    assert math.isclose(meter.total_kwh, 0.1)
-    # A gap does not get filled by assuming the last observed flow held throughout.
-    later = next_time + timedelta(hours=1)
-    assert meter.sample({k: packet(later, 1000, -1000) for k in original}, later)[0] == 3000
-    assert math.isclose(meter.total_kwh, 0.1)
-    assert meter.sample({"a": packet(later, 1000, -1000)}, later)[0] is None
-    later += timedelta(seconds=120)
-    meter.sample({k: packet(later, 1000, -1000) for k in original}, later)
-    assert math.isclose(meter.total_kwh, 0.1), "Recovery must establish a new baseline"
+    later = now + timedelta(hours=1)
+    assert meter.sample({k: packet(later, 1000, -1000) for k in original}, later) == (3000, None)
+    assert not hasattr(meter, "total_kwh"), "Sparse power samples must not be integrated into load history"
     backwards = later - timedelta(seconds=10)
     assert meter.sample({k: packet(backwards, 1000, -1000) for k in original}, later)[0] is None
-    midnight = datetime(2026, 10, 27, 23, 59, tzinfo=timezone.utc)
-    meter = SharedMeterLoad(original, total_kwh=12)
-    meter.sample({k: packet(midnight, 1000, -1000) for k in original}, midnight)
-    midnight += timedelta(minutes=2)
-    meter.sample({k: packet(midnight, 1000, -1000) for k in original}, midnight)
-    assert math.isclose(meter.total_kwh, 12.1), "A lifetime measurement counter stays continuous through local midnight"
 
 
 async def configuration_and_restart():
-    """Exercise real auto-config, raw provenance, storage and restart without any API writes."""
+    """Exercise real bindings and ensure no history replacement, download toggle or storage writes."""
+    from types import SimpleNamespace
+
     ge = configured(config={"ge_cloud_data": True})
     await ge.async_automatic_config(ge.devices_dict)
     assert ge.config_args["grid_power"] == ["sensor.predbat_gecloud_inverter_a_grid_power", 0]
     assert ge.config_args["load_power"] == ["sensor.predbat_gecloud_shared_load_power", 0]
-    assert ge.config_args["load_today"] == ["sensor.predbat_gecloud_shared_load_total"]
-    assert ge.config_args["ge_cloud_data"] is False, "Do not feed the old per-inverter consumption download into the corrected planner"
+    assert ge.config_args["load_today"] == ["sensor.predbat_gecloud_inverter_a_consumption_total"]
+    assert ge.config_args["ge_cloud_data"] is True, "Live load correction must not change the history-download preference"
     assert ge.config_args["battery_power"] == ["sensor.predbat_gecloud_inverter_a_battery_power", "sensor.predbat_gecloud_inverter_b_battery_power"]
-    # Reordering devices must not change which lifetime grid counter is read.
     ge.devices_dict["battery"].reverse()
     await ge.async_automatic_config(ge.devices_dict)
     assert ge.config_args["import_today"] == ["sensor.predbat_gecloud_inverter_a_grid_import_total"]
-    saved = {}
-
-    async def load(namespace, key):
-        """Return a copy so an in-memory counter cannot mutate the fake disk state."""
-        return copy.deepcopy(saved.get(key))
-
-    async def save(namespace, key, value, **kwargs):
-        """Persist only data the real component explicitly sends to Storage."""
-        saved[key] = copy.deepcopy(value)
-        return True
-
-    from types import SimpleNamespace
-
-    ge._mock_storage = SimpleNamespace(load=load, save=save)
+    ge._mock_storage = SimpleNamespace(load=AsyncMock(), save=AsyncMock())
     assert await ge.publish_shared_meter_load()
     assert ge.dashboard_items["sensor.predbat_gecloud_shared_load_power"]["state"] == 7000
-    ge._now_utc_exact += timedelta(seconds=120)
-    ge.live_display_samples = {sn: packet(ge.now_utc_exact, -2500, -12000) for sn in ["inverter_a", "inverter_b"]}
-    assert await ge.publish_shared_meter_load()
-    total = saved["shared_meter_load"]["total_kwh"]
-    assert math.isclose(total, 7000 * 120 / 3600000)
-
+    ge._mock_storage.load.assert_not_awaited()
+    ge._mock_storage.save.assert_not_awaited()
+    assert "sensor.predbat_gecloud_shared_load_total" not in ge.dashboard_items
     restarted = configured()
-    restarted._mock_storage = ge._mock_storage
-    restarted._now_utc_exact = ge.now_utc_exact + timedelta(seconds=120)
-    restarted.live_display_samples = {sn: packet(restarted.now_utc_exact, -2500, -12000) for sn in ["inverter_a", "inverter_b"]}
     assert await restarted.publish_shared_meter_load()
-    assert math.isclose(restarted._shared_meter_load.total_kwh, total), "Restart restores energy, never bridges downtime"
-    # A fresh envelope with an old AC field in the merged control cache is not usable.
+    assert restarted.dashboard_items["sensor.predbat_gecloud_shared_load_power"]["state"] == 7000
     restarted.status = copy.deepcopy(restarted.live_display_samples)
     restarted.live_display_samples["inverter_b"].pop("inverter")
     assert not await restarted.publish_shared_meter_load()
     assert restarted.dashboard_items["sensor.predbat_gecloud_shared_load_power"]["state"] == "unavailable"
-    assert restarted.dashboard_items["sensor.predbat_gecloud_shared_load_total"]["state"] == "unavailable"
-    assert math.isclose(saved["shared_meter_load"]["total_kwh"], total)
     ge.config_args["ge_cloud_automatic_split_ct"] = True
     await ge.async_automatic_config(ge.devices_dict)
     assert ge.config_args["ge_cloud_data"] is True
     assert await ge.publish_shared_meter_load() and ge._shared_meter_load is None
-
-    custom = configured(config={"ge_cloud_load_today_ignore": True, "load_today": ["sensor.own_load_total"], "ge_cloud_data": False})
-    await custom.async_automatic_config(custom.devices_dict)
-    assert custom.config_args["load_today"] == ["sensor.own_load_total"]
-    assert custom.config_args["ge_cloud_data"] is False
+    for download in [False, True]:
+        custom = configured(config={"ge_cloud_load_today_ignore": True, "load_today": ["sensor.own_load_total"], "ge_cloud_data": download})
+        await custom.async_automatic_config(custom.devices_dict)
+        assert custom.config_args["load_today"] == ["sensor.own_load_total"]
+        assert custom.config_args["ge_cloud_data"] is download
 
 
 async def phase_and_coordinator_scope():
@@ -198,29 +158,14 @@ async def phase_and_coordinator_scope():
 
 
 async def persistence_and_pv_failures():
-    """Failed storage or an undeclared PV contribution remains unknown, with no lost-total overwrite."""
+    """Storage failures cannot affect live power; an excluded PV contribution remains unknown."""
     from types import SimpleNamespace
 
     ge = configured()
-    saved = {"members": ["inverter_a", "inverter_b"], "grid_member": "inverter_a", "total_kwh": 12}
-    ge._mock_storage = SimpleNamespace(load=AsyncMock(return_value=saved), save=AsyncMock(side_effect=OSError("disk unavailable")))
-    ge.dashboard_items["sensor.predbat_gecloud_shared_load_power"] = {"state": 1234}
-    assert not await ge.publish_shared_meter_load()
-    assert ge._shared_meter_load is None
-    assert ge.dashboard_items["sensor.predbat_gecloud_shared_load_power"]["state"] == "unavailable"
-    ge._mock_storage.save = AsyncMock(return_value=False)
-    assert not await ge.publish_shared_meter_load()
-    assert ge._shared_meter_load is None
-    assert ge.dashboard_items["sensor.predbat_gecloud_shared_load_total"]["state"] == "unavailable"
-    ge._mock_storage.save = AsyncMock(return_value=True)
+    ge._mock_storage = SimpleNamespace(load=AsyncMock(side_effect=OSError("read unavailable")), save=AsyncMock(side_effect=OSError("write unavailable")))
     assert await ge.publish_shared_meter_load()
-    assert ge._shared_meter_load.total_kwh == 12
-    ge._shared_meter_load = None
-    ge._mock_storage.load = AsyncMock(side_effect=OSError("read unavailable"))
-    assert not await ge.publish_shared_meter_load()
-    assert ge.dashboard_items["sensor.predbat_gecloud_shared_load_total"]["state"] == "unavailable"
-
-    ge = configured()
+    ge._mock_storage.load.assert_not_awaited()
+    ge._mock_storage.save.assert_not_awaited()
     ge.devices_dict["pv"] = ["0_pv"]
     ge.live_display_samples["0_pv"] = packet(ge.now_utc_exact, 600, 0)
     assert not await ge.publish_shared_meter_load()
@@ -263,5 +208,5 @@ def run_shared_meter_tests():
     asyncio.run(phase_and_coordinator_scope())
     asyncio.run(persistence_and_pv_failures())
     asyncio.run(polling_uses_raw_sources())
-    print("PASS: shared meter scope, AC power, measured energy, raw freshness and three-phase regressions")
+    print("PASS: shared meter scope, AC power, preserved history, raw freshness and three-phase regressions")
     return 0
