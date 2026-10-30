@@ -113,7 +113,7 @@ def run_test_plan_scenarios(my_predbat):
             failed = True
 
         print("Test: the HTML cells carry a title= tooltip listing every scenario")
-        soc_title = 'title="Expected 50%, {} 40%, {} 60%"'.format(PLAN_SCENARIO_NAMES["10"], PLAN_SCENARIO_NAMES["90"])
+        soc_title = 'title="Expected 50%&#10;{} 40%&#10;{} 60%"'.format(PLAN_SCENARIO_NAMES["10"], PLAN_SCENARIO_NAMES["90"])
         if soc_title not in html:
             print("ERROR: expected the SoC tooltip {} in the plan HTML".format(soc_title))
             failed = True
@@ -162,10 +162,10 @@ def run_test_plan_scenarios(my_predbat):
         jsonData = {"scenario_fields": PLAN_SCENARIO_FIELDS, "scenario_names": PLAN_SCENARIO_NAMES, "currency_symbols": ["£", "p"]}
         row = {"scenarios": {"90": [60, 0.1, 0.25, -0.12, 1.5], "10": [40, 0.0, 0.5, 0.2, -2.25]}}
         checks = [
-            (0, 50, ' title="Expected 50%, {} 40%, {} 60%"'.format(PLAN_SCENARIO_NAMES["10"], PLAN_SCENARIO_NAMES["90"])),
-            (2, 0.3, ' title="Expected 0.30 kWh, {} 0.50 kWh, {} 0.25 kWh"'.format(PLAN_SCENARIO_NAMES["10"], PLAN_SCENARIO_NAMES["90"])),
-            (3, 0.05, ' title="Expected +5p, {} +20p, {} -12p"'.format(PLAN_SCENARIO_NAMES["10"], PLAN_SCENARIO_NAMES["90"])),
-            (4, 1.0, ' title="Expected £1.00, {} £-2.25, {} £1.50"'.format(PLAN_SCENARIO_NAMES["10"], PLAN_SCENARIO_NAMES["90"])),
+            (0, 50, ' title="Expected 50%&#10;{} 40%&#10;{} 60%"'.format(PLAN_SCENARIO_NAMES["10"], PLAN_SCENARIO_NAMES["90"])),
+            (2, 0.3, ' title="Expected 0.30 kWh&#10;{} 0.50 kWh&#10;{} 0.25 kWh"'.format(PLAN_SCENARIO_NAMES["10"], PLAN_SCENARIO_NAMES["90"])),
+            (3, 0.05, ' title="Expected +5p&#10;{} +20p&#10;{} -12p"'.format(PLAN_SCENARIO_NAMES["10"], PLAN_SCENARIO_NAMES["90"])),
+            (4, 1.0, ' title="Expected £1.00&#10;{} -£2.25&#10;{} £1.50"'.format(PLAN_SCENARIO_NAMES["10"], PLAN_SCENARIO_NAMES["90"])),
         ]
         for field, expected_value, want in checks:
             got = _run_scenario_title(jsonData, row, field, expected_value)

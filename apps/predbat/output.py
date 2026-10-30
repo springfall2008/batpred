@@ -1257,7 +1257,7 @@ class Output:
 
     def plan_scenario_title(self, field, expected, row_scenarios):
         """
-        A title attribute listing one plan cell's value in every scenario (#5871), or "" when they all agree.
+        A title attribute listing one plan cell's value in every scenario, one per line (#5871), or "" when they all agree.
 
         field is the position in PLAN_SCENARIO_FIELDS and expected the cell's own value.
         """
@@ -1272,8 +1272,10 @@ class Output:
         elif name == "cost_change":
             parts = ["{} {:+d}{}".format(label, int(round(value * 100)), self.currency_symbols[1]) for label, value in values]
         else:
-            parts = ["{} {}{:.2f}".format(label, self.currency_symbols[0], value) for label, value in values]
-        return ' title="' + ", ".join(parts) + '"'
+            # Written as the Total column is, with the minus before the currency symbol
+            parts = ["{} {}{}{:.2f}".format(label, "-" if value < 0 else "", self.currency_symbols[0], abs(value)) for label, value in values]
+        # One scenario per line - &#10; is a line break inside a title attribute
+        return ' title="' + "&#10;".join(parts) + '"'
 
     def publish_html_plan(self, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record, publish=True, prediction=None, car_hold_minutes=None, status_warnings=None, show_scenarios=False):
         """

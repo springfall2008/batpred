@@ -7588,14 +7588,16 @@ def get_plan_renderer_js():
                 const pence = Math.round(value * 100);
                 return `${pence >= 0 ? '+' : ''}${pence}${jsonData.currency_symbols[1]}`;
             }
-            return `${jsonData.currency_symbols[0]}${Number(value).toFixed(2)}`;
+            // Written as the Total column is, with the minus before the currency symbol
+            return `${value < 0 ? '-' : ''}${jsonData.currency_symbols[0]}${Math.abs(Number(value)).toFixed(2)}`;
         };
         const parts = [`Expected ${format(expected)}`];
         for (const key of Object.keys(row.scenarios).sort()) {
             const label = (jsonData.scenario_names && jsonData.scenario_names[key]) || `PV${key}`;
             parts.push(`${label} ${format(row.scenarios[key][field])}`);
         }
-        return ` title="${parts.join(', ')}"`;
+        // One scenario per line - &#10; is a line break inside a title attribute
+        return ` title="${parts.join('&#10;')}"`;
     }
 
     function renderLoadCell(timeStr, timeDisplay, loadValue, loadValue10, bgColor, showDebug, overrides, manualLoadValue, slotMinute, titleAttr = '') {
