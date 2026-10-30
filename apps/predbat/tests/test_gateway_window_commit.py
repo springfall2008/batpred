@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 import gateway_status_pb2 as pb
 import inverter as inverter_module
 from config import INVERTER_DEF
+from dispatch import InverterDispatch
 from inverter import Inverter
 from tests.test_gateway_commit import CHARGE_ENABLED, DISCHARGE_ENABLED, DISCHARGE_END, DISCHARGE_START, SLOT_END, SLOT_START, WRITE, clock, inject, make_gateway, make_status
 
@@ -124,6 +125,7 @@ def make_inverter(base):
     """A GWMQTT Inverter with just the state the window methods use."""
     inv = Inverter.__new__(Inverter)
     inv.base, inv.log, inv.id = base, base.log, 0
+    inv.dispatch = InverterDispatch(inv)
     inv.inverter_type = "GWMQTT"
     inv.count_register_writes = inv.registers_moved = 0
     inv.inv_write_backoff = False
