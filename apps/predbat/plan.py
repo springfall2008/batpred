@@ -2556,13 +2556,15 @@ class Plan:
         what the grid would ever charge for it, and floored at the export arbitrage margin and at
         1p/kWh.
 
-        Both the cap and the export recovery ratio read the base tariff (rate_max_base,
-        rate_export_max_forward), captured before saving sessions and overrides are layered on. A
+        The cap, the export recovery ratio and the export floor all read the base tariff (rate_max_base,
+        rate_export_max_forward, rate_export_min_base), captured before saving sessions and overrides are
+        layered on, and the replacement cost reads rate_min_forward, built before the sessions too. A
         session is a one-off event, not evidence about what the tariff charges for a kWh or pays for a
-        surplus one, and letting one set either term values stored energy above what discharging it can
-        realise - which the planner spends as profit by freeze charging every window up to end_record.
-        Both fall back to their whole-horizon equivalents when the base data is absent, so replaying an
-        older debug file behaves as it did before.
+        surplus one, and letting one set any of these terms values stored energy wrongly - above what
+        discharging it can realise, which the planner spends as profit by freeze charging every window up to
+        end_record, or below it when a free session makes refilling look free. The base terms fall back to
+        their whole-horizon equivalents when the base data is absent, so replaying an older debug file
+        behaves as it did before.
 
         Note `rate_export_min` here is not the export rate - it is the export earnings less the
         replacement cost, so it only raises the value when exporting beats re-importing. It can
@@ -2590,7 +2592,9 @@ class Plan:
             recovery = min(max(export_max / rate_min_raw, 0.0), 1.0)
             rate_min *= self.metric_battery_value_export_scaling + (1.0 - self.metric_battery_value_export_scaling) * recovery
 
-        rate_export_min = self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min
+        # The export tariff's own minimum, before any saving/Axle session - rate_export_min is scanned with them in
+        export_min = self.rate_export_min if self.rate_export_min_base is None else self.rate_export_min_base
+        rate_export_min = export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min
         return max(rate_min, 1.0, rate_export_min)
 
     def compute_metric(self, end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh, soc90=None, cost90=None, final_iboost90=0.0):

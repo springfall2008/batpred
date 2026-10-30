@@ -111,19 +111,26 @@ def test_rate_min_forward_calc(my_predbat):
     # Every minute in the output range should see 1.0 as the forward minimum
     failed |= _check_range(result, output_start, output_end, 1.0, "min at end of array")
 
-    # --- Test 7: rate_scan derives rate_min_forward from its `rates` argument, not self.rate_import ---
-    # Regression: fetch's atomic rebuild defers publishing self.rate_import to the end of the block, so
-    # during the build it still holds the previous cycle's data. rate_scan must scan its argument, not
-    # self.rate_import, or rate_min_forward (which drives plan.py charge/discharge economics) goes stale.
-    print("*** rate_min_forward_calc test 7: rate_scan uses passed rates, not stale self.rate_import")
+    # --- Test 7: rate_scan leaves rate_min_forward alone ---
+    # rate_min_forward is the replacement cost battery_value_rate gives a kWh left in the battery, so
+    # fetch_sensor_data() builds it from the tariff before the saving/free/Axle sessions go on. The final
+    # rate_scan sees the rates with the sessions in, and rebuilding the forward minimum there let a 0p
+    # free session tomorrow afternoon drag the value of every stored kWh down to the 1p floor.
+    print("*** rate_min_forward_calc test 7: rate_scan does not rebuild rate_min_forward from session rates")
     # rate_scan mutates several shared fields; snapshot and restore them all so later tests are unaffected.
     saved = {attr: getattr(my_predbat, attr, None) for attr in ("rate_import", "rate_min", "rate_max", "rate_average", "rate_min_minute", "rate_max_minute", "rate_min_forward")}
     total = my_predbat.forecast_minutes + my_predbat.minutes_now + 48 * 60
-    my_predbat.rate_import = {m: 99.0 for m in range(total)}  # stale previous-cycle rates (expensive)
-    my_predbat.rate_scan({m: 5.0 for m in range(total)}, print=True)  # freshly-built current-cycle rates (cheap)
-    sample = my_predbat.rate_min_forward.get(my_predbat.minutes_now)
-    if sample is None or sample > 50:
-        print("ERROR: test 7: rate_min_forward {} reflects stale self.rate_import, not the scanned rates".format(sample))
+    tariff_forward = my_predbat.rate_min_forward_calc({m: 10.0 for m in range(total)})
+    my_predbat.rate_min_forward = dict(tariff_forward)
+    session_rates = {m: 10.0 for m in range(total)}
+    for minute in range(my_predbat.minutes_now + 6 * 60, my_predbat.minutes_now + 7 * 60):
+        session_rates[minute] = 0.0
+    my_predbat.rate_scan(session_rates, print=True)
+    if my_predbat.rate_min_forward != tariff_forward:
+        print("ERROR: test 7: rate_scan rebuilt rate_min_forward from rates with a free session in, now {} at minutes_now".format(my_predbat.rate_min_forward.get(my_predbat.minutes_now)))
+        failed = 1
+    if my_predbat.rate_min != 0.0:
+        print("ERROR: test 7: rate_min should still see the free session (thresholds handle sessions themselves), got {}".format(my_predbat.rate_min))
         failed = 1
     for attr, value in saved.items():
         setattr(my_predbat, attr, value)

@@ -1125,6 +1125,12 @@ def test_compare(my_predbat):
     pb.rate_export_max = 15.0
     pb.rate_scan = lambda rates, print=True: None
     pb.rate_scan_export = lambda rates, print=True: None
+    pb.rate_min_forward_calc = lambda rates: {}
+    pb.rate_min_forward = {}
+    pb.rate_export_max_forward_calc = lambda rates: {}
+    pb.rate_export_max_forward = {}
+    pb.rate_minmax = lambda rates: (0, 0, 0, 0, 0)
+    pb.rate_export_min_base = None
     pb.rate_replicate = lambda rates, io_adjusted=None, is_import=True, **kwargs: (dict(rates), {})
     pb.set_rate_thresholds = lambda: None
     pb.rate_scan_window = lambda rates, *args: ([], 0, 0)

@@ -173,10 +173,10 @@ def run_optimise_all_windows_tests(my_predbat, prediction_kernel=False):
     print("**** Running Optimise all windows tests{} ****".format(" (C++ prediction kernel enabled)" if prediction_kernel else ""))
     reset_inverter(my_predbat)
     my_predbat.prediction_kernel_enable = prediction_kernel
-    # reset_rates() uses rate_scan(print=False) which deliberately skips the rate_min_forward
-    # recalculation, so a stale forward-min from a previous test (e.g. the Compare test's real
+    # reset_rates() uses rate_scan(), which does not build rate_min_forward (only fetch and compare
+    # do), so a stale forward-min from a previous test (e.g. the Compare test's real
     # tariffs) would leak into compute_metric's battery residual value and change the plan.
-    # Production is unaffected: fetch always ends with rate_scan(print=True) which recomputes it.
+    # Production is unaffected: fetch_sensor_data() always rebuilds it from the pre-session tariff.
     my_predbat.rate_min_forward = {}
     failed = False
 
