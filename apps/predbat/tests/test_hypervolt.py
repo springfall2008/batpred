@@ -2172,6 +2172,99 @@ def test_empty_account_reports_started():
     print("  ✓ An empty account reports started")
 
 
+# Discovery catalogue reporter
+
+
+def _capture_reports(component):
+    """Capture every report this component files, in order."""
+    component.filed_reports = []
+    component.report_discovery = component.filed_reports.append
+    return component.filed_reports
+
+
+def test_discovery_record():
+    """A charger keyed by its hardware id, with its model, a stub car and the four bound entities."""
+    component = _started_component()
+    report = component.build_discovery()
+    assert report["automatic"] is True
+    charger, car = report["chargers"][0], report["cars"][0]
+    assert charger["device_id"] == "hypervolt:{}".format(V3_ID), charger
+    assert charger["hardware_ids"] == {"serial": V3_ID}, charger
+    assert charger["info"] == {"vendor": "Hypervolt", "model": "Home 3 Pro"}, charger
+    assert set(charger["entities"]) == {"car_charging_planned", "car_charging_plugged", "car_charging_energy", "car_charging_power"}, charger["entities"]
+    assert charger["entities"]["car_charging_planned"]["entity_id"] == "binary_sensor.predbat_hypervolt_{}_connected".format(V3_ID)
+    assert car == {"device_id": "hypervolt:{}:car".format(V3_ID), "charged_by": "hypervolt:{}".format(V3_ID), "flags": ["stub"]}, car
+    print("  ✓ Discovery reports a Hypervolt charger with a stub car")
+
+
+def test_discovery_firmware_reported_when_known():
+    """The firmware version is reported once the charger has sent it."""
+    component = _started_component()
+    component.transport.chargers[V3_ID].firmware_version = "1.2.3"
+    assert component.build_discovery()["chargers"][0]["info"]["firmware"] == "1.2.3"
+    print("  ✓ Discovery reports the firmware version")
+
+
+def test_discovery_name_never_reported():
+    """The user-chosen charger name never reaches the report."""
+    component = _started_component()
+    assert component.transport.chargers[V3_ID].name == "Driveway"
+    assert "Driveway" not in str(component.build_discovery())
+    print("  ✓ Discovery never reports the charger name")
+
+
+def test_discovery_empty_account_files_nothing():
+    """Signed in with no charger: nothing to describe, and the cycle still succeeds."""
+    component = _make_component([])
+    reports = _capture_reports(component)
+    assert run_async(component.run(0, True)) is True
+    assert component.build_discovery() is None
+    assert reports == []
+    print("  ✓ Discovery files nothing for an empty account")
+
+
+def test_discovery_second_charger_refiles():
+    """A charger added to the account later is reported after the first, in car order."""
+    component = _make_component()
+    reports = _capture_reports(component)
+    assert run_async(component.run(0, True)) is True
+    added = str(int("1" * 16, 16))
+    component.transport.chargers[added] = HypervoltCharger(added, model="Home 3 Pro", last_message=time.time())
+    component.transport.listed.append(added)
+    assert run_async(component.run(CHARGER_LIST_SECONDS, False)) is True
+    assert len(reports) == 2, reports
+    assert [charger["device_id"] for charger in reports[-1]["chargers"]] == ["hypervolt:{}".format(V3_ID), "hypervolt:{}".format(added)], reports[-1]
+    print("  ✓ Discovery re-files when a second charger appears")
+
+
+def test_discovery_filed_when_chargers_stale():
+    """The report is still filed on a cycle that fails because every charger has gone quiet."""
+    component = _make_component()
+    reports = _capture_reports(component)
+    component.transport.chargers[V3_ID].last_message = time.time() - 10 * STALE_SECONDS
+    run_async(component.run(0, True))
+    assert len(reports) == 1, "a quiet charger is still hardware worth describing"
+    print("  ✓ Discovery is filed even when the chargers are stale")
+
+
+def test_discovery_round_trip():
+    """Through the real Coordinator and Redactor: entities and the stub flag survive, the hardware id stays readable."""
+    from coordinator import Coordinator
+
+    component = _started_component()
+    logs = []
+    coordinator = Coordinator(MockBase())
+    coordinator.log = logs.append
+    coordinator.report("hypervolt", component.build_discovery())
+    cleaned = coordinator.reports["hypervolt"]
+    assert len(cleaned["chargers"][0]["entities"]) == 4, cleaned
+    assert cleaned["cars"][0]["flags"] == ["stub"], cleaned
+    assert not [line for line in logs if line.startswith("Warn")], logs
+    coordinator.assemble()
+    assert V3_ID in str(coordinator.catalogue()), "the charger id is hardware, and stays readable"
+    print("  ✓ Discovery report round-trips through the Coordinator and Redactor")
+
+
 def test_hypervolt(my_predbat=None):
     """Run every Hypervolt test."""
     print("=" * 70)
@@ -2282,5 +2375,12 @@ def test_hypervolt(my_predbat=None):
     test_refused_sign_in_not_retried_by_readers()
     test_session_reader_does_not_sign_in()
     test_empty_account_reports_started()
+    test_discovery_record()
+    test_discovery_firmware_reported_when_known()
+    test_discovery_name_never_reported()
+    test_discovery_empty_account_files_nothing()
+    test_discovery_second_charger_refiles()
+    test_discovery_filed_when_chargers_stale()
+    test_discovery_round_trip()
     print("=" * 70)
     return False

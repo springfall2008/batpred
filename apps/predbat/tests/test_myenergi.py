@@ -2739,6 +2739,125 @@ def test_templates_accept_the_connected_zappi_plug_states():
     print("  ✓ {} templates accept every connected Zappi plug state".format(checked))
 
 
+# Discovery catalogue reporter
+
+
+def _eddi(serial):
+    """Build a direct-API Eddi."""
+    return normalise_direct_device(dict(MOCK_DIRECT_EDDI, sno=serial), DEVICE_KIND_EDDI)
+
+
+def _discovery_component(devices, **overrides):
+    """A component polled once with these devices, its entities published, and its reports captured.
+
+    The hub serial differs from every device serial so a leak of it into the report is detectable.
+    """
+    overrides.setdefault("hub_serial", "99887766")
+    component = _make_component(**overrides)
+    component.transport.fetch_devices = AsyncMock(return_value=list(devices))
+    component.filed_reports = []
+    component.report_discovery = component.filed_reports.append
+    assert run_async(component.run(0, True)) is True
+    return component
+
+
+def test_discovery_none_without_zappi():
+    """An account with only an Eddi has no charger to describe."""
+    component = _discovery_component([_eddi(87654321)])
+    assert component.build_discovery() is None
+    assert component.filed_reports == []
+    print("  ✓ Discovery reports nothing without a Zappi")
+
+
+def test_discovery_zappi_record():
+    """A Zappi is a charger keyed by its hardware serial, with a stub car and the four bound entities."""
+    component = _discovery_component([_zappi(12345678), _eddi(87654321)])
+    report = component.build_discovery()
+    assert report["automatic"] is True
+    assert len(report["chargers"]) == 1, report
+    charger, car = report["chargers"][0], report["cars"][0]
+    assert charger["device_id"] == "myenergi:12345678", charger
+    assert charger["hardware_ids"] == {"serial": "12345678"}, charger
+    assert charger["info"] == {"vendor": "myenergi", "model": "zappi"}, charger
+    assert charger["serves_cars"] == ["myenergi:12345678:car"], charger
+    assert set(charger["entities"]) == {"car_charging_planned", "car_charging_plugged", "car_charging_energy", "car_charging_power"}, charger["entities"]
+    assert charger["entities"]["car_charging_planned"]["entity_id"] == "sensor.predbat_myenergi_zappi_12345678_plug_status"
+    assert charger["entities"]["car_charging_plugged"]["entity_id"] == "binary_sensor.predbat_myenergi_zappi_12345678_plugged"
+    assert car == {"device_id": "myenergi:12345678:car", "charged_by": "myenergi:12345678", "flags": ["stub"]}, car
+    assert "87654321" not in str(report), "the Eddi is not a charger and must not be reported"
+    print("  ✓ Discovery reports a Zappi with a stub car and its bound entities")
+
+
+def test_discovery_automatic_follows_automatic_zappi():
+    """With myenergi_automatic_zappi off no Zappi entity is bound, so the report must not claim automatic."""
+    component = _discovery_component([_zappi(12345678)], automatic_zappi=False)
+    assert "car_charging_energy" not in component.base.args, "the Zappi must not have been wired"
+    assert component.build_discovery()["automatic"] is False
+    print("  ✓ Discovery automatic flag follows myenergi_automatic_zappi")
+
+def test_discovery_cloud_alias_never_reported():
+    """The cloud transport's user-chosen alias and the hub serial (a login identifier) never reach the report."""
+    cloud_zappi = normalise_cloud_device(MOCK_CLOUD_ZAPPI_STATUS, MOCK_CLOUD_ZAPPI_META)
+    assert cloud_zappi.name == "Driveway"
+    component = _discovery_component([cloud_zappi])
+    report = component.build_discovery()
+    assert report["chargers"][0]["device_id"] == "myenergi:12345678", "cloud and direct must give the same identity"
+    assert "Driveway" not in str(report), report
+    assert "99887766" not in str(report), report
+    print("  ✓ Discovery never reports the cloud alias or the hub serial")
+
+
+def test_discovery_round_trip():
+    """The report survives the real Coordinator: every entity, the stub flag, and a readable serial."""
+    from coordinator import Coordinator
+
+    component = _discovery_component([_zappi(12345678)])
+    logs = []
+    base = MockBase()
+    coordinator = Coordinator(base)
+    coordinator.log = logs.append
+    coordinator.report("myenergi", component.build_discovery())
+    cleaned = coordinator.reports["myenergi"]
+    assert len(cleaned["chargers"][0]["entities"]) == 4, cleaned
+    assert cleaned["cars"][0]["flags"] == ["stub"], cleaned
+    assert not [line for line in logs if line.startswith("Warn")], logs
+    coordinator.assemble()
+    assert "12345678" in str(coordinator.catalogue()), "the Zappi serial is hardware, and stays readable"
+    print("  ✓ Discovery report round-trips through the Coordinator")
+
+
+def test_discovery_login_serial_pseudonymised_without_hub():
+    """With no hub, the Zappi's own serial is the digest login username, so it must not be published in the clear.
+
+    docs/apps-yaml.md tells hub-less installs to enter the Zappi serial as myenergi_hub_serial. That
+    serial is then an account identifier, not just hardware: it goes in account_ids, which the
+    Redactor pseudonymises everywhere it appears, including the device_id, cross-links and entity ids.
+    """
+    from coordinator import Coordinator
+
+    component = _discovery_component([_zappi(12345678)], hub_serial="12345678")
+    charger = component.build_discovery()["chargers"][0]
+    assert "hardware_ids" not in charger, charger
+    assert charger["account_ids"] == {"hub_serial": "12345678"}, charger
+    coordinator = Coordinator(MockBase())
+    coordinator.report("myenergi", component.build_discovery())
+    coordinator.assemble()
+    catalogue = coordinator.catalogue()
+    assert "12345678" not in str(catalogue), catalogue["chargers"]
+    assert len(catalogue["chargers"][0]["entities"]) == 4, catalogue["chargers"]
+    print("  ✓ Discovery pseudonymises a hub-less Zappi's login serial")
+
+def test_discovery_refreshed_on_non_poll_cycle():
+    """A report that failed to build on a poll cycle is retried on the next run(), poll or not."""
+    component = _discovery_component([_zappi(12345678)])
+    assert len(component.filed_reports) == 1, "the first cycle files the report"
+    component.filed_reports.clear()
+    component._discovery_report = None
+    assert run_async(component.run(30, False)) is True
+    assert len(component.filed_reports) == 1, "a non-poll cycle still refreshes the report"
+    print("  ✓ Discovery is refreshed on a non-poll cycle")
+
+
 def test_myenergi(my_predbat=None):
     """
     ======================================================================
@@ -2876,6 +2995,13 @@ def test_myenergi(my_predbat=None):
     test_queued_boost_rejection_is_logged_as_a_failure()
     test_device_for_entity_requires_a_whole_prefix_match()
     test_number_event_handler_ignores_other_number_entities()
+    test_discovery_none_without_zappi()
+    test_discovery_zappi_record()
+    test_discovery_automatic_follows_automatic_zappi()
+    test_discovery_cloud_alias_never_reported()
+    test_discovery_round_trip()
+    test_discovery_login_serial_pseudonymised_without_hub()
+    test_discovery_refreshed_on_non_poll_cycle()
 
     print("=" * 70)
     return False

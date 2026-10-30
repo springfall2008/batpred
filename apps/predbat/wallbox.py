@@ -33,6 +33,7 @@ from typing import Optional
 import aiohttp
 
 from component_base import ComponentBase
+from coordinator import charger_with_stub_car
 from mock_base import MockBase
 from predbat_metrics import record_api_call
 from car_charger_control import CarChargerControl, ChargerControlDeferred, parse_control_setting
@@ -543,6 +544,52 @@ class WallboxAPI(ComponentBase, CarChargerControl):
         """The chargers that have been read, in car order."""
         return [self.chargers[charger_id] for charger_id in self.car_order if charger_id in self.chargers]
 
+    def build_discovery(self):
+        """Describe each charger, and the car it charges, for the discovery catalogue.
+
+        One charger record per charger in car order (ordered_chargers()), keyed "wallbox:{serial}" by
+        the hardware serial, with the Wallbox charger id - the id its entities are named by - beside it
+        in hardware_ids. Neither is secret, so both stay readable in the catalogue. A charger whose
+        status carries no serial is still reported, as "wallbox:charger:{id}", rather than going missing.
+        Wallbox knows nothing about the vehicle, so each car is a stub. The entities are the four
+        automatic_config() binds, filtered to those Home Assistant has seen; car_charging_now is left
+        out because it only re-binds the power sensor.
+
+        Never reported: the charger's name (user-chosen), its location (timezone, country, postcode),
+        and the number plate and user fields the status payload also carries.
+
+        Returns None when no charger has been read.
+        """
+        chargers = []
+        cars = []
+        for charger in self.ordered_chargers():
+            prefix = self.entity_prefix(charger)
+            descriptors = {
+                "car_charging_planned": {"entity_id": "binary_sensor.{}_connected".format(prefix), "domain": "binary_sensor", "access": "r"},
+                "car_charging_plugged": {"entity_id": "binary_sensor.{}_plugged".format(prefix), "domain": "binary_sensor", "access": "r"},
+                "car_charging_energy": {"entity_id": "sensor.{}_session_energy".format(prefix), "domain": "sensor", "access": "r"},
+                "car_charging_power": {"entity_id": "sensor.{}_power".format(prefix), "domain": "sensor", "access": "r"},
+            }
+            info = {"vendor": "Wallbox"}
+            if charger.part_number:
+                info["model"] = charger.part_number
+            if charger.software_version:
+                info["firmware"] = charger.software_version
+            device_id = "wallbox:{}".format(charger.serial) if charger.serial else "wallbox:charger:{}".format(charger.charger_id)
+            hardware_ids = {"serial": charger.serial} if charger.serial else {}
+            hardware_ids["charger_id"] = str(charger.charger_id)
+            record, car = charger_with_stub_car(
+                device_id,
+                hardware_ids=hardware_ids,
+                info=info,
+                entities=self.discovery_entities(descriptors),
+            )
+            chargers.append(record)
+            cars.append(car)
+        if not chargers:
+            return None
+        return {"automatic": self.automatic, "chargers": chargers, "cars": cars}
+
     def warn_refused_once(self, exc):
         """Log a refusal from the plan-led loop once: it would otherwise repeat on every poll."""
         if not self.refusal_warned:
@@ -597,9 +644,13 @@ class WallboxAPI(ComponentBase, CarChargerControl):
             return True
         try:
             refresh = await self.process_events()
+            ok = True
             if first or refresh or (seconds % self.poll_seconds) == 0:
-                return await self.poll(seconds, first)
-            return True
+                ok = await self.poll(seconds, first)
+            # Every cycle, polled or not: a report that failed to file is retried on the next run()
+            # rather than the next poll - see ComponentBase.refresh_discovery()
+            self.refresh_discovery()
+            return ok
         except WallboxRateLimitError:
             self.backoff_cycles = min(RATE_LIMIT_MAX_CYCLES, max(RATE_LIMIT_MIN_CYCLES, self.backoff_cycles * 2))
             self.skip_cycles = self.backoff_cycles

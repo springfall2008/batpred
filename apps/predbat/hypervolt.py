@@ -35,6 +35,7 @@ import aiohttp
 
 from car_charger_control import CarChargerControl, parse_control_setting
 from component_base import ComponentBase
+from coordinator import charger_with_stub_car
 from predbat_metrics import record_api_call
 
 HYPERVOLT_TOKEN_URL = "https://kc.prod.hypervolt.co.uk/realms/retail-customers/protocol/openid-connect/token"
@@ -891,6 +892,48 @@ class HypervoltAPI(ComponentBase, CarChargerControl):
         """The chargers with a state record, in car order."""
         return [self.transport.chargers[charger_id] for charger_id in self.car_order if charger_id in self.transport.chargers]
 
+    def build_discovery(self):
+        """Describe each charger, and the car it charges, for the discovery catalogue.
+
+        One charger record per charger in car order (ordered_chargers()), keyed "hypervolt:{id}". The
+        Hypervolt charger id is the device's own hardware id - its length even encodes the generation,
+        see charger_major_version() - so it is reported as the serial. Hypervolt knows nothing about the
+        vehicle, so each car is a stub. The entities are the four automatic_config() binds, filtered to
+        those Home Assistant has seen; car_charging_now is left out because it only re-binds the power
+        sensor. Neither the 32A maximum nor the live current setting is a device-reported rating, so no
+        ratings are reported.
+
+        Never reported: the charger's name, which the user chooses.
+
+        Returns None when the account has no charger.
+        """
+        chargers = []
+        cars = []
+        for charger in self.ordered_chargers():
+            prefix = self.entity_prefix(charger)
+            descriptors = {
+                "car_charging_planned": {"entity_id": "binary_sensor.{}_connected".format(prefix), "domain": "binary_sensor", "access": "r"},
+                "car_charging_plugged": {"entity_id": "binary_sensor.{}_plugged".format(prefix), "domain": "binary_sensor", "access": "r"},
+                "car_charging_energy": {"entity_id": "sensor.{}_session_energy".format(prefix), "domain": "sensor", "access": "r"},
+                "car_charging_power": {"entity_id": "sensor.{}_power".format(prefix), "domain": "sensor", "access": "r"},
+            }
+            info = {"vendor": "Hypervolt"}
+            if charger.model:
+                info["model"] = charger.model
+            if charger.firmware_version:
+                info["firmware"] = charger.firmware_version
+            record, car = charger_with_stub_car(
+                "hypervolt:{}".format(charger.charger_id),
+                hardware_ids={"serial": str(charger.charger_id)},
+                info=info,
+                entities=self.discovery_entities(descriptors),
+            )
+            chargers.append(record)
+            cars.append(car)
+        if not chargers:
+            return None
+        return {"automatic": self.automatic, "chargers": chargers, "cars": cars}
+
     def fresh_chargers(self, now):
         """The chargers that have sent something within STALE_SECONDS."""
         return [charger for charger in self.ordered_chargers() if not is_stale(charger, now)]
@@ -940,6 +983,10 @@ class HypervoltAPI(ComponentBase, CarChargerControl):
         except HypervoltError as exc:
             self.log("Warn: hypervolt: {}".format(exc))
             return False
+        # Every cycle, before the empty-account and stale-charger returns below: a quiet charger is still
+        # hardware to describe, and a report that failed to file is retried next run() - see
+        # ComponentBase.refresh_discovery()
+        self.refresh_discovery()
         if not self.car_order:
             # Signed in, but no charger on the account yet: started, as Wallbox does, but with no success stamped
             return True
