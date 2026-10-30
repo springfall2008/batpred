@@ -75,6 +75,7 @@ brickatius
 britkat1980
 bwignore
 byok
+byteswap
 cadata
 calcsize
 calib
@@ -257,6 +258,7 @@ foxcloud
 foxess
 foxesscloud
 freephase
+frombytes
 fromisoformat
 fronius
 funcs
@@ -724,6 +726,7 @@ timestr
 timezone
 tmpfs
 tmrw
+tobytes
 tojson
 topbar
 tottime
