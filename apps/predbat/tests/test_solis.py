@@ -2285,7 +2285,10 @@ def run_solis_tests(my_predbat):
     """
     failed = False
 
+    from tests.test_solis_handover import run_solis_handover_tests
+
     try:
+        failed |= run_solis_handover_tests()
         # Run tests
         failed |= test_oauth_bearer_headers()
         failed |= test_solis_not_activated_without_credentials()
