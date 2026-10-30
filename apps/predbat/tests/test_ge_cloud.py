@@ -331,6 +331,7 @@ def test_ge_cloud(my_predbat=None):
         ("publish_evc_data", _test_publish_evc_data, "Publish EVC data"),
         ("automatic_config", _test_async_automatic_config, "Automatic config"),
         ("shared_meter_load", _test_shared_meter_load, "Shared grid scope, AC load, freshness and restart regressions"),
+        ("shared_meter_history", _test_shared_meter_history, "Shared counter history, source alignment and forecast bindings"),
         ("grid_charge_only", _test_grid_charge_only, "Charge rate marked grid_charge_only on the 3-phase register set"),
         ("discovery_direct", _test_build_discovery_battery_only_direct, "build_discovery: single battery, direct composition"),
         ("discovery_grid_charge_only", _test_build_discovery_grid_charge_only, "build_discovery: no Freeze Export on the 3-phase register set"),
@@ -8939,3 +8940,10 @@ def _test_shared_meter_load(my_predbat):
     from tests.test_gecloud_shared_meter import run_shared_meter_tests
 
     return run_shared_meter_tests()
+
+
+def _test_shared_meter_history(my_predbat):
+    """Check the declared shared-grid history path before normal counter cleanup."""
+    from tests.test_gecloud_shared_history import run_shared_history_tests
+
+    return run_shared_history_tests()

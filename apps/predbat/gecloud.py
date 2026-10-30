@@ -23,6 +23,7 @@ import asyncio
 import math
 import json
 import random
+from bisect import bisect_left
 from component_base import ComponentBase
 from coordinator import inverter_record
 from mock_base import MockBase as SharedMockBase
@@ -3490,6 +3491,93 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         return None
 
 
+class SharedMeterHistory:
+    """Reconstruct cumulative site consumption before cleaning any inverter-relative counters.
+
+    A declared shared grid reading is counted once. Native consumption is signed relative
+    to each inverter and can decrease during export. Linear alignment estimates the timing
+    between source packets; it does not turn gaps into measured minute-resolution energy.
+    """
+
+    @staticmethod
+    def combine(sources, now):
+        """Return a common-window cumulative history and explicit interpolation provenance."""
+        if len(sources) < 2:
+            raise ValueError("Shared history needs every inverter in the declared group")
+        series = {}
+        for serial, records in sorted(sources.items()):
+            by_time = {}
+            for row in records:
+                try:
+                    stamp = datetime.fromisoformat(row["last_updated"].replace("Z", "+00:00"))
+                    if stamp.tzinfo is None:
+                        raise ValueError("Source timestamp has no timezone")
+                    if stamp > now:
+                        continue
+                    values = tuple(row[key] for key in ("consumption", "import", "export", "pv"))
+                    if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in values):
+                        raise ValueError("Missing or non-finite cumulative counters")
+                    if any(v < 0 for v in values[1:]):
+                        raise ValueError("Negative directional counter")
+                    if stamp in by_time and by_time[stamp] != values:
+                        raise ValueError("Conflicting counters at one source timestamp")
+                    by_time[stamp] = values
+                except (KeyError, TypeError, AttributeError) as exc:
+                    raise ValueError("Incomplete shared-meter source record") from exc
+            samples = sorted(by_time.items())
+            if len(samples) < 2:
+                raise ValueError("Insufficient history for a shared-meter member")
+            for (_, a), (_, b) in zip(samples, samples[1:]):
+                if any(b[i] < a[i] - 1e-6 for i in (1, 2, 3)):
+                    raise ValueError("Directional counter reset in shared-meter history")
+            series[serial] = ([t for t, _ in samples], [v for _, v in samples])
+
+        start = max(times[0] for times, _ in series.values())
+        end = min(times[-1] for times, _ in series.values())
+        if start >= end:
+            raise ValueError("Shared-meter histories have no common advancing window")
+        timeline = sorted({t for times, _ in series.values() for t in times if start <= t <= end})
+        anchor = min(series)
+        result = []
+        peak = None
+        origin = None
+        for stamp in timeline:
+            aligned = {}
+            spans = []
+            for serial, (times, values) in series.items():
+                index = bisect_left(times, stamp)
+                if times[index] == stamp:
+                    aligned[serial] = values[index]
+                    spans.append(0)
+                else:
+                    span = (times[index] - times[index - 1]).total_seconds()
+                    weight = (stamp - times[index - 1]).total_seconds() / span
+                    aligned[serial] = tuple(a + (b - a) * weight for a, b in zip(values[index - 1], values[index]))
+                    spans.append(span)
+            # Anchor's own net AC plus its grid cancels to its native consumption.
+            # Other members contribute their signed AC energy, not another grid total.
+            consumption = aligned[anchor][0] + sum(c - imp + exp for serial, (c, imp, exp, _) in aligned.items() if serial != anchor)
+            if peak is not None and consumption < peak - 0.3 * len(series):
+                raise ValueError("Shared consumption falls beyond counter rounding tolerance")
+            # Keep small rounding dips as a plateau, not a reset or extra energy.
+            peak = consumption if peak is None else max(peak, consumption)
+            origin = consumption if origin is None else origin
+            interval = (stamp - timeline[len(result) - 1]).total_seconds() if result else 0
+            gap = max(spans + [interval])
+            result.append(
+                {
+                    "last_updated": stamp.isoformat(),
+                    "consumption": peak - origin,
+                    "import": aligned[anchor][1],
+                    "export": aligned[anchor][2],
+                    "pv": sum(values[3] for values in aligned.values()),
+                    "timing_estimated": bool(gap),
+                    "source_gap_seconds": gap,
+                }
+            )
+        return result
+
+
 class GECloudData(ComponentBase):
     """
     GivEnergy Cloud Data download and caching
@@ -3528,7 +3616,14 @@ class GECloudData(ComponentBase):
             self.ge_cloud_serial = self.get_arg(self.ge_cloud_serial_config_item, default="")
             self.log("GECloud: Starting up with max_days_previous {} and serial {}".format(self.max_days_previous, self.ge_cloud_serial))
 
-        if seconds % (10 * 60) == 0:
+        # Discovery and configuration can finish after the first history tick. Retry
+        # failures/transitions once a minute, without refreshing healthy history more often.
+        try:
+            expected = self.shared_meter_members()
+        except ValueError:
+            expected = None
+        retry = expected != self.shared_history_key or bool(getattr(self, "shared_history_error", None))
+        if seconds % (10 * 60) == 0 or (retry and seconds % 60 == 0):
             now_utc = self.now_utc_exact
             await self.download_ge_data(now_utc)
 
@@ -3635,6 +3730,13 @@ class GECloudData(ComponentBase):
         """
         Download consumption data from GE Cloud
         """
+        try:
+            members = self.shared_meter_members()
+        except ValueError as exc:
+            self.shared_history_error = str(exc)
+            return False
+        if members:
+            return await self.download_shared_meter_data(members, now_utc)
         geserial = self.ge_cloud_serial
         gekey = self.ge_cloud_key
 
@@ -3694,12 +3796,90 @@ class GECloudData(ComponentBase):
                 pass
         self.oldest_data_time = last_updated_time
         self.mdata = mdata
+        self.shared_history_snapshot = None
+        self.shared_history_error = None
 
         # Save GE URL cache to disk for next time
         if self.storage:
             await self.storage.save("gecloud_data", "ge_url_cache", self.ge_url_cache, format="yaml", expiry=None)
         self.ge_url_cache = {}
         return True
+
+    def shared_meter_members(self):
+        """Resolve the existing manual declaration against the complete discovered topology."""
+        if not self.get_arg("ge_cloud_shared_meter_history", False):
+            return ()
+        if not self.get_arg("ge_cloud_automatic_shared_ct", False) or self.get_arg("ge_cloud_automatic_split_ct", False) or self.get_arg("ge_cloud_load_today_ignore", False):
+            return ()
+        components = getattr(getattr(self, "base", None), "components", None)
+        direct = components.get_component("gecloud") if components else None
+        if direct is None or not direct.devices_dict:
+            raise ValueError("Shared history is waiting for Cloud inverter discovery")
+        devices = direct.devices_dict
+        batteries = devices.get("battery", [])
+        if not direct._shared_ct(devices, batteries):
+            return ()
+        if devices.get("pv"):
+            raise ValueError("Shared history with additional PV-only inverters is not supported")
+        return tuple(sorted(batteries))
+
+    @property
+    def shared_history_key(self):
+        """Expose the membership of the last atomically completed history download."""
+        snapshot = getattr(self, "shared_history_snapshot", None)
+        return snapshot["members"] if snapshot else ()
+
+    def shared_load_power(self):
+        """Return a complete fresh AC balance in kW, or unknown without substituting zero."""
+        members = self.shared_meter_members()
+        if not members:
+            return None
+        direct = self.base.components.get_component("gecloud")
+        power, error = SharedMeterLoad(members).sample(direct.live_display_samples, self.now_utc_exact)
+        return power / 1000 if error is None else None
+
+    async def download_shared_meter_data(self, members, now_utc):
+        """Download raw member counters and publish only an entire reconstructed cohort."""
+        try:
+            if not self.ge_cloud_key:
+                raise ValueError("Shared history requires a GivEnergy API key")
+            cached = await self.storage.load("gecloud_data", "ge_url_cache") if self.storage else {}
+            self.ge_url_cache = cached if isinstance(cached, dict) else {}
+            self.clean_ge_url_cache(now_utc)
+            headers = {"Authorization": "Bearer " + self.ge_cloud_key, "Accept": "application/json"}
+            sources = {}
+            for serial in members:
+                sources[serial] = []
+                for day in range(self.max_days_previous, -1, -1):
+                    date = (now_utc - timedelta(days=day)).strftime("%Y-%m-%d")
+                    url = GE_API_URL + "inverter/{}/data-points/{}?pageSize=8000".format(serial, date)
+                    visited = set()
+                    while url:
+                        if url in visited:
+                            raise ValueError("Repeated shared-history pagination link")
+                        visited.add(url)
+                        rows, url = await self.get_ge_url(url, headers, now_utc, 30 if day == 0 else 18 * 60)
+                        if not isinstance(rows, list):
+                            raise ValueError("A shared-history member download failed")
+                        sources[serial].extend(rows)
+            data = SharedMeterHistory.combine(sources, now_utc)
+            if members != self.shared_meter_members():
+                raise ValueError("Shared-meter membership changed during download")
+            gaps = [row["source_gap_seconds"] for row in data]
+            self.log("GECloud: Reconstructed shared-meter history: {} sources, {} points, maximum estimated source gap {} seconds".format(len(members), len(data), max(gaps)))
+            if self.storage:
+                # Cache the original per-inverter counters, never the derived correction.
+                await self.storage.save("gecloud_data", "ge_url_cache", self.ge_url_cache, format="yaml", expiry=None)
+            # The planner can read while this coroutine is downloading. Only replace
+            # the complete source cohort, never invalidate it at the start of a refresh.
+            self.shared_history_snapshot = {"members": members, "sources": sources, "downloaded_at": now_utc}
+            self.shared_history_error = None
+            self.ge_url_cache = {}
+            return True
+        except ValueError as exc:
+            self.shared_history_error = str(exc)
+            self.log("Warn: GECloud shared-meter history unavailable: {}".format(exc))
+            return False
 
     def filter_data(self, mdata, measurement):
         """
@@ -3725,6 +3905,31 @@ class GECloudData(ComponentBase):
         """
         Get the GECloudData data
         """
+        members = self.shared_meter_members()
+        snapshot = getattr(self, "shared_history_snapshot", None)
+        if members or snapshot:
+            if not snapshot or members != snapshot["members"]:
+                raise ValueError("Shared-meter history is unavailable or its topology changed")
+            now = self.now_utc_exact
+            if (now - snapshot["downloaded_at"]).total_seconds() > 30 * 60:
+                raise ValueError("Shared-meter historical cohort has expired")
+            direct = self.base.components.get_component("gecloud")
+            sources = {serial: list(rows) for serial, rows in snapshot["sources"].items()}
+            for serial in members:
+                meter = direct.meter.get(serial, {})
+                try:
+                    stamp = datetime.fromisoformat(meter["time"].replace("Z", "+00:00"))
+                    if stamp.tzinfo is None or not -30 <= (now - stamp).total_seconds() <= 300:
+                        raise ValueError("Shared-meter latest counters are stale")
+                    total = meter["total"]
+                    row = {"last_updated": meter["time"], "consumption": total["consumption"], "import": total["grid"]["import"], "export": total["grid"]["export"], "pv": total["solar"]}
+                except (KeyError, TypeError, AttributeError) as exc:
+                    raise ValueError("Shared-meter latest counters are incomplete") from exc
+                sources[serial].append(row)
+            data = SharedMeterHistory.combine(sources, now)
+            if (now - datetime.fromisoformat(data[-1]["last_updated"])).total_seconds() > 300:
+                raise ValueError("Shared-meter common source watermark is stale")
+            return data, datetime.fromisoformat(data[0]["last_updated"])
         return self.mdata, self.oldest_data_time
 
 
