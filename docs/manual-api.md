@@ -97,8 +97,35 @@ The following `apps.yaml` settings can be overridden using predbat_manual_api:
 - forecast_hours
 - import_export_scaling
 - inverter_limit_charge
+- inverter_limit_charge_dc
 - inverter_limit_discharge
 - inverter_limit_export
+
+### Stopping the battery charging or discharging with inverter_limit_charge and inverter_limit_discharge
+
+You can set **inverter_limit_charge** or **inverter_limit_discharge** to 0 to stop the battery charging or discharging, for example:
+
+```text
+inverter_limit_charge[0]=0
+```
+
+Many inverters will still trickle charge or discharge at around 150-200W when the rate is set to 0.
+If your inverter has a pause mode (for example GivEnergy), Predbat therefore also sets the inverter's pause mode to match the limits:
+
+| `inverter_limit_charge` | `inverter_limit_discharge` | Pause mode |
+| --- | --- | --- |
+| 0 | 0 | Pause both |
+| 0 | above 0 | Pause charge |
+| above 0 | 0 | Pause discharge |
+| above 0 | above 0 | Disabled (unless Predbat itself needs a pause) |
+
+- This only applies to inverters that have a pause mode. Other inverters continue to rely on the rate alone.
+- It only applies when Predbat is controlling the charge and export windows (**Control charge** and **Control charge & discharge** modes).
+In **Monitor** and **Control SoC only** modes Predbat does not change the inverter's pause mode because of these limits.
+- If Predbat already needs a pause, for example for [Freeze Export during Demand](customisation.md#freeze-export-during-demand), the two are combined,
+so a pause of charge plus a discharge limit of 0 gives Pause both.
+- Predbat's inverter balancing also sets the charge or discharge rate of an inverter to 0, and it sets the pause mode in the same way in any mode where balancing is on.
+- When the limit is set back above 0, or balancing releases the inverter, the pause mode is set back to Disabled.
 
 ## Example solution to over-ride predicted house load
 

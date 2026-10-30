@@ -285,15 +285,20 @@ class Execute:
             charge_overridden = entry.get("charge_rate", None) != base.get("charge_rate", None)
             discharge_overridden = entry.get("discharge_rate", None) != base.get("discharge_rate", None)
             overridden_now[inverter.id] = {direction for direction, flag in (("charge", charge_overridden), ("discharge", discharge_overridden)) if flag}
+            # A rate the balancer has dropped to 0 is held with a pause as well, as a rate of 0 alone still lets a trickle through
+            balance_pause_charge = charge_overridden and entry.get("charge_rate", None) is not None and int(entry["charge_rate"]) <= 0
+            balance_pause_discharge = discharge_overridden and entry.get("discharge_rate", None) is not None and int(entry["discharge_rate"]) <= 0
             self.apply_inverter_rates(
                 inverter,
                 entry,
                 notify_charge=not (charge_overridden or "charge" in previously),
                 notify_discharge=not (discharge_overridden or "discharge" in previously),
+                balance_pause_charge=balance_pause_charge,
+                balance_pause_discharge=balance_pause_discharge,
             )
         self.inverter_balance_overridden = overridden_now
 
-    def apply_inverter_rates(self, inverter, intent, notify_charge=True, notify_discharge=True):
+    def apply_inverter_rates(self, inverter, intent, notify_charge=True, notify_discharge=True, balance_pause_charge=False, balance_pause_discharge=False):
         """
         Write one inverter's charge and discharge rates from its intent.
 
@@ -311,6 +316,14 @@ class Execute:
             notify_discharge (bool): likewise for discharge. apply_rate_intent() decides both;
                 balancing's own changes are silent on BOTH edges, as the old timer-based balancer
                 was, since it runs on a minute cadence.
+            balance_pause_charge (bool): the balancer has taken the charge rate to 0, so pause charge too
+            balance_pause_discharge (bool): likewise for discharge
+
+        Pause mode is also written here, once. execute_plan() only records what the plan wants as
+        pause_charge / pause_discharge in the intent. This function then adds a pause for any direction that
+        has a limit of 0 (inverter_limit_charge / inverter_limit_discharge) or that the balancer has taken to 0,
+        because a rate of 0 on its own still lets the battery trickle charge or discharge at a few hundred W
+        (GitHub issue 2155). Inverters without a timed pause ignore this, see Inverter.adjust_pause_mode().
         """
         charge_rate = intent.get("charge_rate", None)
         discharge_rate = intent.get("discharge_rate", None)
@@ -329,6 +342,22 @@ class Execute:
                 inverter.adjust_discharge_rate(int(inverter.battery_rate_max_discharge * MINUTE_WATT), notify=notify_discharge)
         else:
             inverter.adjust_discharge_rate(int(discharge_rate), notify=notify_discharge)
+
+        # The pause mode is written here, once, from everything that wants it: what the plan asked for, a
+        # limit of 0 (inverter_limit_charge/_discharge), and a balancer hold. A rate of 0 on its own still lets
+        # the battery trickle charge or discharge at a few hundred W, only a pause stops it. Merging the three into
+        # one write means they cannot undo each other. Nothing is written for an inverter with no timed pause, or
+        # where Predbat is not controlling the charge and export windows (Monitor, Control SoC only) and the plan
+        # did not ask for a pause.
+        # battery_rate_max_charge / _discharge are the inverter's hardware maximum, reduced by inverter_limit_charge /
+        # inverter_limit_discharge (apps.yaml or the manual API, see Inverter.refresh_config()). An inverter's own
+        # maximum is never 0, so a value of 0 here means the user has set a limit of 0 to stop that direction.
+        limit_pause_charge = reset_rates and inverter.battery_rate_max_charge <= 0
+        limit_pause_discharge = reset_rates and inverter.battery_rate_max_discharge <= 0
+        pause_charge = bool(intent.get("pause_charge", False)) or limit_pause_charge or balance_pause_charge
+        pause_discharge = bool(intent.get("pause_discharge", False)) or limit_pause_discharge or balance_pause_discharge
+        if reset_rates or pause_charge or pause_discharge:
+            inverter.adjust_pause_mode(pause_charge=pause_charge, pause_discharge=pause_discharge)
 
         # The rate this inverter was actually asked for, after balancing - what the control-failure
         # monitor judges measured power against. None when nothing was written (Monitor mode).
@@ -439,6 +468,15 @@ class Execute:
                 self.log(format_failure(event, self.local_tz))
 
     def execute_plan(self):
+        # Pause mode: nothing in this function writes the inverter's pause mode. The blocks below only record what the
+        # plan wants (pause_charge_requested / pause_discharge_requested, held in the per-inverter intent) and
+        # apply_inverter_rates() writes it once, after the loop, together with the rates.
+        # This is so that a charge or discharge limit of 0 (inverter_limit_charge / inverter_limit_discharge) and the
+        # inverter balancer (which also takes a rate to 0) can add to what the plan asked for. A rate of 0 on its own
+        # still lets the battery trickle charge or discharge at a few hundred W, only a pause stops it, and two
+        # separate writes would undo each other (GitHub issue 2155).
+        # The exception is calibration: while any inverter is calibrating, Predbat stands down for the whole fleet and no pause is written.
+        #
         # Per-inverter detail segments, assembled into the status text after the headline status is
         # resolved - see build_status_extra() for why they can't be concatenated inline.
         status_extra_parts = []
@@ -648,7 +686,6 @@ class Execute:
                         # needed - so on those types a sub-5% change can still write. That is
                         # deliberate: deadbanding the real control would cost precision, not
                         # writes.
-                        max_rate = inverter.battery_rate_max_charge * MINUTE_WATT
                         charge_rate = new_charge_rate
                         rate_owner = "charge"
 
@@ -672,7 +709,7 @@ class Execute:
                                 inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
 
                             if inverter.inv_has_timed_pause:
-                                inverter.adjust_pause_mode(pause_discharge=True)
+                                # Pause is written by apply_inverter_rates() from these flags, see the note at the top of execute_plan (GitHub #2155)
                                 pause_discharge_requested = True
                                 resetPause = False
                             else:
@@ -712,7 +749,7 @@ class Execute:
                                     # Pause the discharge only if we are actually at or below the target Soc.
                                     if inverter.soc_percent <= inv_target_soc_percent:
                                         if inverter.inv_has_timed_pause:
-                                            inverter.adjust_pause_mode(pause_discharge=True)
+                                            # Pause is written by apply_inverter_rates() from these flags, see the note at the top of execute_plan (GitHub #2155)
                                             pause_discharge_requested = True
                                             resetPause = False
                                         else:
@@ -732,7 +769,7 @@ class Execute:
                         if not self.set_discharge_during_charge and resetPause:
                             # Do we discharge discharge during charge
                             if inverter.inv_has_timed_pause:
-                                inverter.adjust_pause_mode(pause_discharge=True)
+                                # Pause is written by apply_inverter_rates() from these flags, see the note at the top of execute_plan (GitHub #2155)
                                 pause_discharge_requested = True
                                 resetPause = False
                             else:
@@ -886,7 +923,7 @@ class Execute:
                             if inverter.inv_charge_discharge_with_rate:
                                 charge_rate = 0
                             if inverter.inv_has_timed_pause:
-                                inverter.adjust_pause_mode(pause_charge=True)
+                                # Pause is written by apply_inverter_rates() from these flags, see the note at the top of execute_plan (GitHub #2155)
                                 pause_charge_requested = True
                                 resetPause = False
                             else:
@@ -933,7 +970,7 @@ class Execute:
                 if inverter.inv_charge_discharge_with_rate:
                     charge_rate = 0
                 if inverter.inv_has_timed_pause:
-                    inverter.adjust_pause_mode(pause_charge=True)
+                    # Pause is written by apply_inverter_rates() from these flags, see the note at the top of execute_plan (GitHub #2155)
                     pause_charge_requested = True
                     resetPause = False
                 else:
@@ -982,7 +1019,7 @@ class Execute:
                             else:
                                 if inverter.inv_has_timed_pause:
                                     if resetPause:
-                                        inverter.adjust_pause_mode(pause_discharge=True)
+                                        # Pause is written by apply_inverter_rates() from these flags, see the note at the top of execute_plan (GitHub #2155)
                                         pause_discharge_requested = True
                                         resetPause = False
                                     # The timed pause is a single write per cycle: once a freeze has claimed it to pause
@@ -1017,7 +1054,7 @@ class Execute:
                 if status not in [RUN_STATE_EXPORTING, RUN_STATE_CHARGING]:
                     if inverter.inv_has_timed_pause:
                         if resetPause:
-                            inverter.adjust_pause_mode(pause_discharge=True)
+                            # Pause is written by apply_inverter_rates() from these flags, see the note at the top of execute_plan (GitHub #2155)
                             pause_discharge_requested = True
                             resetPause = False
                     else:
@@ -1034,9 +1071,9 @@ class Execute:
                         else:
                             status_hold_iboost = ", " + RUN_STATE_HOLD_FOR_IBOOST
 
-            # Reset pause mode; rates are resolved once by the apply pass after the loop
-            if resetPause:
-                inverter.adjust_pause_mode()
+            # The pause mode is not written here. The flags below say what this plan wants and the apply pass
+            # after the loop writes it once, alongside the rates, so a limit of 0 or a balancer hold
+            # can add to it instead of racing a second write against it
 
             intent[inverter.id] = {
                 "charge_rate": charge_rate,
