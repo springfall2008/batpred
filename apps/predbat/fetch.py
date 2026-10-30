@@ -2278,6 +2278,8 @@ class Fetch:
         iog_slot_cars = []
         # The planned dispatches each car's plan used this cycle, for octopus_held_update()
         self.octopus_slots_planned = {}
+        # The slot sensor's own planned dispatches for a car whose planned dispatches come from another sensor
+        self.octopus_slots_raw_planned = {}
 
         if entity_id_list:
             # Process each car's intelligent slot configuration
@@ -2318,6 +2320,7 @@ class Fetch:
                         # What this sensor has already seen finish goes in behind the slot sensor's own
                         # completed list: it covers a slot from when it ends until the slot sensor lists
                         # it, and load_octopus_slots() drops whatever of it the slot sensor has by then
+                        self.octopus_slots_raw_planned[car_n] = planned or []
                         try:
                             planned = self.get_state_wrapper(entity_id=planned_entity_id, attribute="planned_dispatches") or self.get_state_wrapper(entity_id=planned_entity_id, attribute="plannedDispatches")
                             planned_completed = self.get_state_wrapper(entity_id=planned_entity_id, attribute="completed_dispatches") or self.get_state_wrapper(entity_id=planned_entity_id, attribute="completedDispatches")

@@ -251,6 +251,16 @@ class CarChargerControl:
             return None
         return parse_control_setting(is_charger)
 
+    def charger_control_filters_dispatches(self, car_n):
+        """Does Predbat stop car car_n's charger outside the dispatches octopus_intelligent_planned_slot keeps, though Octopus drives it?
+
+        control: true plus a planned sensor, see charger_control_drive_one(). Car 0's Ohme slots stay with the Ohme.
+        """
+        if self.charger_control_config is not True or (car_n == 0 and self.charger_control_slots_claimed()):
+            return False
+        dispatch_sensor = self.charger_control_dispatch_sensor(car_n)
+        return self.charger_control_octopus_drives_charger(car_n) is True and self.charger_control_planned_sensor(car_n, dispatch_sensor) is not None
+
     def charger_control_octopus_drives_car(self, car_n):
         """Does Octopus Intelligent deliver this car's dispatches by driving the car itself?
 
@@ -754,7 +764,7 @@ class CarChargerControl:
         # Predbat, which then plans the car itself and drives the charger to that plan
         car_driven = drives is False and self.get_arg("octopus_intelligent_charging", True) and not self.get_arg("octopus_intelligent_charger_follows_car", False) and self.charger_control_octopus_drives_car(car_n)
         # Octopus drives the charger, but control: true plus a planned sensor filtering its dispatches has Predbat stop it outside them
-        filtered = drives is True and self.charger_control_config is True and not (car_n == 0 and self.charger_control_slots_claimed()) and self.charger_control_planned_sensor(car_n, self.charger_control_dispatch_sensor(car_n)) is not None
+        filtered = self.charger_control_filters_dispatches(car_n)
         # An explicit control: true is the user saying their charger is not the Octopus
         # device, so it overrides "cannot tell" - but never a known charge point
         if (drives is True and not filtered) or car_driven or (drives is None and self.charger_control_config is not True):

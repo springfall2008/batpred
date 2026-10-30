@@ -4736,7 +4736,50 @@ class Octopus:
         part of the previous surplus still ahead is compared, so time passing alone isn't a change.
         """
         start = self.octopus_surplus_from()
-        return {minute for minute in previous if minute >= start} != self.octopus_surplus
+        return {minute for minute in previous if minute >= start} != {minute for minute in self.octopus_surplus if minute >= start}
+
+    def octopus_skipped_dispatch_minutes(self):
+        """
+        Future dispatch minutes in the slot sensor's planned dispatches that the charger will not run in, for
+        a car whose charger Predbat filters through octopus_intelligent_planned_slot (control: true).
+
+        The planned sensor leaves those dispatches out of octopus_slots, so nothing else puts the day rate back
+        on the minutes the rate feed marked at the dispatch rate. No car draws in them, so Octopus bills them
+        at the day rate (#4482). Rounded out to whole 30 minute rate periods, from the half hour after the
+        current one, or from the current one when no car has drawn in it (octopus_period_drawn()).
+        """
+        if not any(self.octopus_slots_raw_planned.values()):
+            return set()
+        skipped_minutes = set()
+        run_minutes = set()
+        for car_n in range(min(self.num_cars, len(self.octopus_slots))):
+            for slot in self.octopus_slots[car_n]:
+                start_minutes, end_minutes, _, _, _ = self.decode_octopus_slot(car_n, slot, raw=True, boundaries_only=True)
+                if start_minutes != end_minutes:
+                    run_minutes.update(range(*round_out_to_period(start_minutes, end_minutes)))
+        filtered_cars = {
+            car_n
+            for component in (self.components.components.values() if self.components else [])
+            if component and getattr(component, "charger_control_active", False) and component.charger_control_released is None
+            for car_n in range(min(self.num_cars, component.charger_control_car_count()))
+            if component.charger_control_filters_dispatches(car_n)
+        }
+        for car_n in filtered_cars:
+            first_minute = (self.minutes_now // 30) * 30 if not self.octopus_period_drawn(car_n) else self.octopus_surplus_from()
+            for slot in self.octopus_slots_raw_planned.get(car_n, []):
+                start_minutes, end_minutes, _, _, _ = self.decode_octopus_slot(car_n, slot, raw=True, boundaries_only=True)
+                if start_minutes != end_minutes:
+                    start_minutes, end_minutes = round_out_to_period(start_minutes, end_minutes)
+                    skipped_minutes.update(range(max(start_minutes, first_minute), end_minutes))
+        return skipped_minutes - run_minutes
+
+    def octopus_period_drawn(self, car_n):
+        """
+        Whether car_n has drawn power in the current half hour, which Octopus then bills off-peak whole: it is
+        held as a running dispatch (octopus_held_update()), or the car is charging now.
+        """
+        period_start = self.midnight_utc + timedelta(minutes=(self.minutes_now // 30) * 30)
+        return period_start in self.octopus_slots_held.get(car_n, {}) or (car_n < len(self.car_charging_now) and self.car_charging_now[car_n])
 
     def octopus_surplus_minutes(self):
         """
@@ -4756,9 +4799,12 @@ class Octopus:
         Rounded out to whole 30 minute rate periods, from the half hour after the current one (the car may have
         charged earlier in it, making the whole period cheap) and outside the fixed window.
         """
-        if not self.octopus_intelligent_consider_full or self.dispatch_billing_window():
+        if self.dispatch_billing_window():
             # Under the window rule a dispatch is billed off-peak whether the car draws in it or not
             return set()
+        skipped_minutes = self.octopus_skipped_dispatch_minutes()
+        if not self.octopus_intelligent_consider_full:
+            return {minute for minute in skipped_minutes if not self.in_iog_fixed_window(minute)}
         dispatch_minutes = set()
         usable_minutes = set()
         next_period = self.octopus_surplus_from()
@@ -4779,7 +4825,7 @@ class Octopus:
                 if slot.get("kwh", 0) > 0 or slot.get("kwh_cancelled", 0) > 0:
                     start_minutes, end_minutes = round_out_to_period(slot["start"], slot["end"])
                     usable_minutes.update(range(start_minutes, min(end_minutes, usable_until)))
-        return {minute for minute in dispatch_minutes - usable_minutes if not self.in_iog_fixed_window(minute)}
+        return {minute for minute in (dispatch_minutes - usable_minutes) | skipped_minutes if not self.in_iog_fixed_window(minute)}
 
     def dynamic_load_car_strip_feed_rates(self, rates):
         """

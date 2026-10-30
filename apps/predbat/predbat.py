@@ -609,6 +609,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.dynamic_load_car_stripped = 0
         self.octopus_surplus = set()
         self.octopus_slots_planned = {}
+        self.octopus_slots_raw_planned = {}
         self.octopus_slots_held = {}
         self.octopus_slots_held_saved = {}
         self.dispatch_billing_warned = None
