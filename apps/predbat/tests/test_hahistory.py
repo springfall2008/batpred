@@ -1333,6 +1333,55 @@ def test_hahistory_static_store_keeps_delta(my_predbat=None):
     return failed
 
 
+def test_hahistory_restored_flag_cleared_after_update(my_predbat=None):
+    """Test a restored entity is only treated as restored for its first update, so later cycles fetch a delta"""
+    print("\n=== Testing HAHistory restored flag is cleared after the first update ===")
+
+    async def run_test():
+        failed = 0
+        now = datetime.now(pytz.UTC)
+        # A sensor that changes often, and one that has not changed for longer than its 1 day window
+        records = {
+            "sensor.changing": [{"state": str(count), "last_updated": (now - timedelta(minutes=5 * count)).isoformat(), "attributes": {}} for count in range(48, 0, -1)],
+            "sensor.static": [{"state": "on", "last_updated": (now - timedelta(days=3)).isoformat(), "attributes": {}}],
+        }
+        source = HAHistory(MockBase())
+        source.initialize()
+        source_interface = MockTimedHistoryInterface(records)
+        source.base.components.register_component("ha", source_interface)
+        for entity_id in records:
+            source.add_entity(entity_id, 1)
+        await source.run(seconds=0, first=True)
+        snapshot = source.export_snapshot()
+
+        mock_base = MockBase()
+        ha_history = HAHistory(mock_base)
+        ha_history.initialize()
+        interface = MockTimedHistoryInterface(records)
+        mock_base.components.register_component("ha", interface)
+        if ha_history.import_snapshot(snapshot) != 2:
+            print("ERROR: Snapshot should track 2 entities")
+            return 1
+        await ha_history.run(seconds=120, first=False)
+        if ha_history.history_restored:
+            print(f"ERROR: The restored flag should be cleared after the first update, still set for {sorted(ha_history.history_restored)}")
+            failed += 1
+        first_cycle = len(interface.get_history_calls)
+        await ha_history.run(seconds=240, first=False)
+        second = {call["entity_id"]: call for call in interface.get_history_calls[first_cycle:]}
+        for entity_id in records:
+            call = second.get(entity_id)
+            if call is None or call["from_time"] is None:
+                print(f"ERROR: {entity_id} should fetch a delta on the second cycle, got {call}")
+                failed += 1
+        return failed
+
+    failed = run_async(run_test())
+    if failed == 0:
+        print("OK: test_hahistory_restored_flag_cleared_after_update")
+    return failed
+
+
 def test_hahistory_run_tolerates_import_mid_loop(my_predbat=None):
     """Test run() skips an entity that an import removed while the update loop was running"""
     print("\n=== Testing HAHistory run() tolerates an import mid-loop ===")
@@ -1656,6 +1705,7 @@ def run_hahistory_tests(my_predbat):
     failed += test_hahistory_snapshot_database_delta(my_predbat)
     failed += test_hahistory_stale_snapshot_matches_cold_start(my_predbat)
     failed += test_hahistory_static_store_keeps_delta(my_predbat)
+    failed += test_hahistory_restored_flag_cleared_after_update(my_predbat)
     failed += test_hahistory_run_tolerates_import_mid_loop(my_predbat)
     failed += test_hahistory_export_tolerates_new_entity(my_predbat)
 
