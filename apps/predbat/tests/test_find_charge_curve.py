@@ -697,6 +697,33 @@ def test_find_charge_curve_coarse_soc_steps(my_predbat):
     return failed
 
 
+def test_find_charge_curve_zero_rate(my_predbat):
+    """
+    A 0W maximum rate - Predbat's own write during a freeze export or freeze charge - must skip the
+    curve rather than raise ZeroDivisionError and stop every plan (GH#5219)
+    """
+    print("*** Running test: find_charge_curve_zero_rate ***")
+    failed = False
+    for discharge in (False, True):
+        inv = create_curve_test_inverter(my_predbat)
+        if discharge:
+            inv.battery_rate_max_discharge = 0
+        else:
+            inv.battery_rate_max_charge = 0
+        create_test_history_data(my_predbat, num_days=7)
+        try:
+            curve = inv.find_charge_curve(discharge=discharge)
+            if curve:
+                print("ERROR: Expected no curve with a 0W rate (discharge={}), got {}".format(discharge, curve))
+                failed = True
+        except Exception as e:
+            print("ERROR: find_charge_curve raised {} with a 0W rate (discharge={})".format(repr(e), discharge))
+            failed = True
+        finally:
+            remove_test_history_data(my_predbat)
+    return failed
+
+
 def run_find_charge_curve_tests(my_predbat):
     """
     Run all find_charge_curve tests
@@ -746,6 +773,7 @@ def run_find_charge_curve_tests(my_predbat):
     failed |= test_find_charge_curve_zero_soc_glitch(my_predbat)
     failed |= test_find_charge_curve_missing_soc_minute(my_predbat)
     failed |= test_find_charge_curve_coarse_soc_steps(my_predbat)
+    failed |= test_find_charge_curve_zero_rate(my_predbat)
     if failed:
         return failed
 

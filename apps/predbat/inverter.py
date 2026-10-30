@@ -698,16 +698,35 @@ class Inverter:
         # Battery rate max charge, discharge (all converted to kW/min)
         inverter_limit_charge = self.base.get_arg("inverter_limit_charge", self.battery_rate_max_raw, index=self.id, required_unit="W")
         inverter_limit_discharge = self.base.get_arg("inverter_limit_discharge", self.battery_rate_max_raw, index=self.id, required_unit="W")
+        # A live limit sensor can read 0W because Predbat itself wrote 0W to the rate it mirrors -
+        # the Sunsynk template's max-charge-rate sensor tracks the charge current Predbat zeroes for a
+        # freeze export. A 0W limit then zeroes battery_rate_max_charge, the curve search and the
+        # multi-inverter split divide by it, and the crash stops the plan that would restore the rate
+        # (GH#5219). Treat a non-positive reading as no reading, as the apps.yaml schema already does.
+        if inverter_limit_charge <= 0:
+            self.log("Warn: Inverter {} inverter_limit_charge reads {}W, ignoring it and using battery rate max {}W".format(self.id, inverter_limit_charge, self.battery_rate_max_raw))
+            inverter_limit_charge = self.battery_rate_max_raw
+        if inverter_limit_discharge <= 0:
+            self.log("Warn: Inverter {} inverter_limit_discharge reads {}W, ignoring it and using battery rate max {}W".format(self.id, inverter_limit_discharge, self.battery_rate_max_raw))
+            inverter_limit_discharge = self.battery_rate_max_raw
         inverter_limit_override = self.base.get_arg("inverter_limit_override", 0, index=self.id, required_unit="W")
         if inverter_limit_override > 0:
             self.log("Info: Inverter {} applying inverter_limit_override of {} W to charge and discharge limits".format(self.id, inverter_limit_override))
             inverter_limit_charge = min(inverter_limit_override, inverter_limit_charge)
             inverter_limit_discharge = min(inverter_limit_override, inverter_limit_discharge)
         inverter_limit_charge_dc = self.base.get_arg("inverter_limit_charge_dc", inverter_limit_charge, index=self.id, required_unit="W")
+        # The same mirror loop applies to the DC and export limits when they are bound to a sensor -
+        # fall back to the value they would take if unbound
+        if inverter_limit_charge_dc <= 0:
+            self.log("Warn: Inverter {} inverter_limit_charge_dc reads {}W, ignoring it and using charge limit {}W".format(self.id, inverter_limit_charge_dc, inverter_limit_charge))
+            inverter_limit_charge_dc = inverter_limit_charge
         self.battery_rate_max_charge = min(inverter_limit_charge, self.battery_rate_max_raw) / MINUTE_WATT
         self.battery_rate_max_charge_dc = inverter_limit_charge_dc / MINUTE_WATT
         self.battery_rate_max_discharge = min(inverter_limit_discharge, self.battery_rate_max_raw) / MINUTE_WATT
         inverter_limit_export = self.base.get_arg("inverter_limit_export", inverter_limit_discharge, index=self.id, required_unit="W")
+        if inverter_limit_export <= 0:
+            self.log("Warn: Inverter {} inverter_limit_export reads {}W, ignoring it and using discharge limit {}W".format(self.id, inverter_limit_export, inverter_limit_discharge))
+            inverter_limit_export = inverter_limit_discharge
         self.battery_rate_max_export = min(inverter_limit_export, self.battery_rate_max_raw) / MINUTE_WATT
         self.battery_rate_min = min(self.base.get_arg("inverter_battery_rate_min", 0, index=self.id, required_unit="W"), self.battery_rate_max_raw) / MINUTE_WATT
 
@@ -1377,6 +1396,11 @@ class Inverter:
             max_power = int(self.battery_rate_max_discharge * MINUTE_WATT)
         else:
             max_power = int(self.battery_rate_max_charge * MINUTE_WATT)
+
+        # Every curve point is a fraction of this rate, so with no rate there is no curve to learn (GH#5219)
+        if max_power <= 0:
+            self.log("Warn: Inverter {} skipping {} curve calculation as the maximum {} rate is {}W".format(self.id, curve_type, curve_type, max_power))
+            return {}
 
         max_power_scaled = max_power * 0.95
 
