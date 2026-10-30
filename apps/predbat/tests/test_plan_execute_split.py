@@ -650,6 +650,71 @@ def _scenario_plan_at_naive_rejected(my_predbat):
     return failed
 
 
+def _scenario_update_pred_plan_at_stamps_plan(my_predbat):
+    """test_update_pred_plan_at_stamps_plan: a forced update_pred at plan_at stamps the plan at that instant."""
+    failed = 0
+    my_predbat.args.pop("clock_skew", None)
+    plan_at = datetime(2026, 6, 15, 11, 35, tzinfo=timezone.utc)
+    with ExitStack() as stack:
+        _patch_pipeline(my_predbat, stack, real_time=True)
+        my_predbat.update_pred(scheduled=False, plan_at=plan_at)
+    failed = _check(failed, my_predbat.plan_last_updated == plan_at, "test_update_pred_plan_at_stamps_plan: plan_last_updated equals plan_at")
+    failed = _check(failed, my_predbat.now_utc == plan_at, "test_update_pred_plan_at_stamps_plan: now_utc equals plan_at")
+    return failed
+
+
+def _update_pred_after_forced_run(my_predbat, minutes_later):
+    """Force a run at a fixed instant, then run a scheduled update_pred minutes_later; returns the mocks, the version before it and the log lines."""
+    my_predbat.args.pop("clock_skew", None)
+    my_predbat.calculate_plan_every = 30
+    plan_at = datetime(2026, 6, 15, 11, 35, tzinfo=timezone.utc)
+    with ExitStack() as stack:
+        _patch_pipeline(my_predbat, stack, real_time=True)
+        my_predbat.update_pred(scheduled=False, plan_at=plan_at)
+    version_before = my_predbat.plan_version
+    logged = []
+    with ExitStack() as stack:
+        mocks = _patch_pipeline(my_predbat, stack, real_time=True)
+        stack.enter_context(patch.object(my_predbat, "log", side_effect=lambda message, *args, **kwargs: logged.append(str(message))))
+        my_predbat.update_pred(scheduled=True, plan_at=plan_at + timedelta(minutes=minutes_later))
+    return mocks, version_before, logged
+
+
+def _scenario_update_pred_scheduled_reuses_fresh_plan(my_predbat):
+    """test_update_pred_scheduled_reuses_fresh_plan: a 5 minute old plan is not recomputed."""
+    failed = 0
+    mocks, version_before, logged = _update_pred_after_forced_run(my_predbat, 5)
+    failed = _check(failed, my_predbat.plan_version == version_before, "test_update_pred_scheduled_reuses_fresh_plan: plan_version unchanged")
+    failed = _check(failed, any("Will not recompute the plan" in line for line in logged), "test_update_pred_scheduled_reuses_fresh_plan: 'Will not recompute the plan' logged")
+    failed = _check(failed, all(call.kwargs.get("recompute") is False for call in mocks["calculate_plan"].call_args_list), "test_update_pred_scheduled_reuses_fresh_plan: calculate_plan never asked to recompute")
+    return failed
+
+
+def _scenario_update_pred_scheduled_recomputes_old_plan(my_predbat):
+    """test_update_pred_scheduled_recomputes_old_plan: a 30 minute old plan is recomputed at plan_at."""
+    failed = 0
+    mocks, version_before, _logged = _update_pred_after_forced_run(my_predbat, 30)
+    failed = _check(failed, my_predbat.plan_version == version_before + 1, "test_update_pred_scheduled_recomputes_old_plan: plan_version advanced")
+    failed = _check(failed, any(call.kwargs.get("recompute") is True for call in mocks["calculate_plan"].call_args_list), "test_update_pred_scheduled_recomputes_old_plan: calculate_plan asked to recompute")
+    failed = _check(failed, my_predbat.plan_last_updated == datetime(2026, 6, 15, 12, 5, tzinfo=timezone.utc), "test_update_pred_scheduled_recomputes_old_plan: plan stamped at plan_at")
+    return failed
+
+
+def _scenario_update_pred_rejects_naive_plan_at(my_predbat):
+    """test_update_pred_rejects_naive_plan_at: a naive plan_at raises ValueError as plan_once does."""
+    failed = 0
+    raised = False
+    with ExitStack() as stack:
+        mocks = _patch_pipeline(my_predbat, stack)
+        try:
+            my_predbat.update_pred(scheduled=True, plan_at=datetime(2026, 1, 10, 9, 0))
+        except ValueError:
+            raised = True
+    failed = _check(failed, raised, "test_update_pred_rejects_naive_plan_at: ValueError raised")
+    failed = _check(failed, mocks["execute_plan"].call_count == 0, "test_update_pred_rejects_naive_plan_at: nothing executed")
+    return failed
+
+
 def test_plan_execute_split(my_predbat):
     """Entry point registered in unit_test.py - characterises update_pred and tests plan_once/execute_once."""
     print("**** Running plan/execute split tests ****")
@@ -679,6 +744,10 @@ def test_plan_execute_split(my_predbat):
         failed += _scenario_plan_at_ignores_skew(my_predbat)
         failed += _scenario_plan_at_ahead_of_clock(my_predbat)
         failed += _scenario_plan_at_naive_rejected(my_predbat)
+        failed += _scenario_update_pred_plan_at_stamps_plan(my_predbat)
+        failed += _scenario_update_pred_scheduled_reuses_fresh_plan(my_predbat)
+        failed += _scenario_update_pred_scheduled_recomputes_old_plan(my_predbat)
+        failed += _scenario_update_pred_rejects_naive_plan_at(my_predbat)
     finally:
         _restore_state(my_predbat, saved)
     return failed

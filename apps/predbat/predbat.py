@@ -1397,13 +1397,17 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 return None
         return self.execute_plan()
 
-    def update_pred(self, scheduled=True):
+    def update_pred(self, scheduled=True, plan_at=None):
         """
         Update the prediction state, everything is called from here right now
+
+        plan_at, when given, is passed to plan_once and follows its rules (timezone-aware, at or
+        behind the wall clock, naive raises ValueError). The whole cycle, including the late
+        recompute of an ageing plan below, runs at that instant. The default None uses the wall clock.
         """
         status_extra = ""
 
-        plan = self.plan_once(scheduled=scheduled)
+        plan = self.plan_once(scheduled=scheduled, plan_at=plan_at)
         if plan is None:
             return
         recompute = plan["recomputed"]
