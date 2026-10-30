@@ -584,6 +584,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
         self.slot_probe_retry_at = {}  # {inverter_sn: datetime} not before which a failed probe is tried again
         self.mode_asserted_for = {}  # Inverter -> the window whose start already had the storage mode asserted
         self.tou_v2_mode_saved = None  # {inverter_sn: {"value": CID 6798 value, "read_at": ISO time}} last read by any run, loaded from storage on first use
+        self.time_windows_reload_pending = set()  # Inverters whose TOU mode changed but whose slot registers are not yet decoded in the new layout
 
         self.log(f"Solis API: Initialised with inverter_sn={self.configured_inverter_sn}, automatic={automatic}")
 
@@ -2323,12 +2324,16 @@ class SolisAPI(ComponentBase, OAuthMixin):
         return True
 
     async def reload_time_windows(self, inverter_sn):
-        """Re-read and decode the slot registers in the layout is_tou_v2_mode() now reports, after the TOU mode changed."""
+        """Re-read and decode the slot registers in the layout is_tou_v2_mode() now reports, after the TOU mode changed. Returns True once decoded."""
         if self.is_tou_v2_mode(inverter_sn):
-            if await self.poll_inverter_data(inverter_sn, SOLIS_CID_LIST_TOU_V2):
-                await self.decode_time_windows_v2(inverter_sn)
-        elif await self.poll_inverter_data(inverter_sn, SOLIS_CID_SINGLE, batch=False):
+            if not await self.poll_inverter_data(inverter_sn, SOLIS_CID_LIST_TOU_V2):
+                return False
+            await self.decode_time_windows_v2(inverter_sn)
+        else:
+            if not await self.poll_inverter_data(inverter_sn, SOLIS_CID_SINGLE, batch=False):
+                return False
             await self.decode_time_windows(inverter_sn)
+        return True
 
     async def save_discovery_cache(self):
         """Remember the discovered inverters so a restart can auto-configure without reaching the API"""
@@ -4760,15 +4765,19 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 if not success:
                     poll_success = False
 
-        # A TOU mode never read, or last read over a day ago, is read every 5 minutes until one read succeeds
+        # A TOU mode never read, or last read over a day ago, is read every 5 minutes until one read succeeds. A read that
+        # changes the mode re-reads the slot registers in the new layout, retried on the same grid until that read succeeds too
         if not first and (seconds % 300 == 0):
             for sn in self.inverter_sn:
-                if not self.tou_v2_mode_due(sn) or self.datalogger_offline(sn) or not self.is_battery_inverter(sn):
+                if self.datalogger_offline(sn) or not self.is_battery_inverter(sn):
                     continue
-                was_v2 = self.is_tou_v2_mode(sn)
-                if await self.poll_tou_v2_mode(sn) and self.is_tou_v2_mode(sn) != was_v2:
-                    self.log(f"Warn: Solis API: Inverter {sn} is in {'Time of Use V2' if not was_v2 else 'standard Time of Use'} mode, not the mode in use until now, re-reading its time windows")
-                    await self.reload_time_windows(sn)
+                if self.tou_v2_mode_due(sn):
+                    was_v2 = self.is_tou_v2_mode(sn)
+                    if await self.poll_tou_v2_mode(sn) and self.is_tou_v2_mode(sn) != was_v2:
+                        self.log(f"Warn: Solis API: Inverter {sn} is in {'Time of Use V2' if not was_v2 else 'standard Time of Use'} mode, not the mode in use until now, re-reading its time windows")
+                        self.time_windows_reload_pending.add(sn)
+                if sn in self.time_windows_reload_pending and await self.reload_time_windows(sn):
+                    self.time_windows_reload_pending.discard(sn)
 
         # Inverters whose slot registers were successfully read this cycle, so the in-window
         # re-read below does not read them a second time on an hour boundary

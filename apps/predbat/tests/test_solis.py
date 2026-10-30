@@ -107,6 +107,7 @@ class MockSolisAPI(SolisAPI):
         self.datalogger_cooldown_code = {}
         self.automatic_config_done = False
         self.tou_v2_mode_saved = None
+        self.time_windows_reload_pending = set()
 
         # Timezone for now_utc_exact property (from ComponentBase)
         self.local_tz = datetime.now().astimezone().tzinfo
@@ -2320,6 +2321,7 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_saved_tou_mode_is_used_without_reading())
         failed |= asyncio.run(test_successful_tou_mode_read_is_not_polled_again())
         failed |= asyncio.run(test_tou_mode_older_than_a_day_is_read_again())
+        failed |= asyncio.run(test_tou_mode_change_retries_a_failed_slot_register_read())
         failed |= asyncio.run(test_automatic_config_skips_no_battery_inverter())
         failed |= asyncio.run(test_automatic_config_skips_no_battery_on_alt_firmware())
         failed |= asyncio.run(test_automatic_config_skips_no_battery_named_only_in_battery_list())
@@ -9069,8 +9071,10 @@ async def test_discovery_cache_lets_a_restart_configure_without_the_api():
     return failed
 
 
-def _tou_mode_api(storage, sn, tou_reads):
+def _tou_mode_api(storage, sn, tou_reads, slot_read_failures=0):
     """Return a run() API with storage whose CID 6798 reads follow tou_reads, a list of values or None (a timed-out read) used in turn.
+
+    The first slot_read_failures reads of the V2 slot registers fail, as a timeout does.
 
     The real is_tou_v2_mode() is bound in place of MockSolisAPI's, so the mode comes from the cached register.
     """
@@ -9090,8 +9094,12 @@ def _tou_mode_api(storage, sn, tou_reads):
             if value is None:
                 return False
             api.cached_values.setdefault(inverter_sn, {})[SOLIS_CID_TOU_V2_MODE] = value
+        if cids == SOLIS_CID_LIST_TOU_V2 and failures_left[0] > 0:
+            failures_left[0] -= 1
+            return False
         return True
 
+    failures_left = [slot_read_failures]
     api.get_inverter_list = mock_get_inverter_list
     api.poll_inverter_data = mock_poll_inverter_data
     return api
@@ -9239,6 +9247,47 @@ async def test_tou_mode_older_than_a_day_is_read_again():
 
     if not failed:
         print("PASSED: a TOU mode older than a day is read again, keeping the old value until a read succeeds")
+    return failed
+
+
+async def test_tou_mode_change_retries_a_failed_slot_register_read():
+    """A TOU mode change whose slot register re-read fails is retried on the next 5 minute boundary until it decodes.
+
+    The flag read marks the mode current, so without its own retry a failed re-read straight after it left the slots
+    decoded in the old layout for the rest of the run, as the hourly poll only decodes on the first cycle.
+    """
+    failed = False
+    print("\n=== Test: a TOU mode change retries a failed slot register read ===")
+    sn = "INV001"
+    storage = _FakeStorage()
+    api = _tou_mode_api(storage, sn, [None, "43605"], slot_read_failures=1)
+
+    with patch.object(solis_module.aiohttp, "ClientSession", return_value=_FakeAiohttpSession()), patch.object(solis_module.aiohttp, "ClientTimeout", return_value=None):
+        await api.run(0, True)  # Flag read times out, standard mode assumed
+        await api.run(300, False)  # Flag reads V2, the V2 slot register read fails
+        if api.decode_time_windows_v2_calls:
+            print("ERROR: a failed slot register read should not decode, got {}".format(api.decode_time_windows_v2_calls))
+            failed = True
+        if sn not in api.time_windows_reload_pending:
+            print("ERROR: a failed slot register read after a mode change should stay pending")
+            failed = True
+
+        await api.run(600, False)  # The retry reads and decodes them
+        if api.decode_time_windows_v2_calls != [sn]:
+            print("ERROR: the retry should decode the V2 slot registers once, got {}".format(api.decode_time_windows_v2_calls))
+            failed = True
+        if sn in api.time_windows_reload_pending:
+            print("ERROR: a decoded reload should no longer be pending")
+            failed = True
+
+        slot_polls = len([call for call in api.poll_inverter_data_calls if call[1] == SOLIS_CID_LIST_TOU_V2])
+        await api.run(900, False)
+        if len([call for call in api.poll_inverter_data_calls if call[1] == SOLIS_CID_LIST_TOU_V2]) != slot_polls:
+            print("ERROR: once decoded, the slot registers should not be re-read for the mode change again")
+            failed = True
+
+    if not failed:
+        print("PASSED: a TOU mode change retries a failed slot register read until it decodes")
     return failed
 
 
