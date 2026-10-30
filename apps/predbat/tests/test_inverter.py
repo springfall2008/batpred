@@ -757,7 +757,8 @@ def test_reserve_dummy_percent(test_name, my_predbat, ha, stale_state=None):
     It was seeded with the kWh reserve while labelled %, and the next refresh read that back as
     reserve_percent_current - the value balance_inverters() checks a peer's SoC against (#5850).
     battery_min_soc is set low because its floor on that read otherwise hides the kWh number, and
-    stale_state pre-loads an existing kWh-seeded dummy, which create_entity() alone never overwrites.
+    stale_state pre-loads an existing kWh-seeded dummy, which create_entity() alone never overwrites;
+    reserve_percent_current must be the corrected value in the same pass that corrects it.
     """
     failed = False
     print("Test: {}".format(test_name))
@@ -775,6 +776,11 @@ def test_reserve_dummy_percent(test_name, my_predbat, ha, stale_state=None):
             ha.dummy_items[entity_id] = {"state": stale_state, "unit_of_measurement": "%"}
 
         inv = Inverter(my_predbat, 0)
+        # The pass that corrects a stale dummy reports the corrected value too, not the stale one a cycle late.
+        # A fresh dummy is never rewritten, so its construction pass still reports the arg it replaced (GH#5003)
+        if stale_state is not None and inv.reserve_percent_current != 50:
+            print("ERROR: reserve_percent_current should be 50 on construction got {}".format(inv.reserve_percent_current))
+            failed = True
         inv.refresh_config()
         if inv.reserve_percent != 50:
             print("ERROR: reserve_percent should be 50 got {}".format(inv.reserve_percent))
