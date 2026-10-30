@@ -246,22 +246,39 @@ def build_entity_history_table_data(entity_selections, entity_data_fetch, local_
     return rows
 
 
+def history_row_shown(rows, index):
+    """
+    Decide whether a build_entity_history_table_data() row is shown in the /entity table and its CSV.
+
+    Only a pure duplicate is hidden: a row holding the same values as the row before it, with nothing
+    changing during it. The newest and oldest rows are always kept. A row that merely reads differently
+    from the one before it is kept even though nothing changed inside its own half hour - hiding it left
+    "N unchanged slots" holding a value the row beneath them never showed, and lost the value from the
+    CSV, which has no detail rows to find it in.
+    """
+    if index == 0 or index == len(rows) - 1:
+        return True
+    row = rows[index]
+    if any(kind for _, kind in row["cells"]):
+        return True
+    return [value for value, _ in row["cells"]] != [value for value, _ in rows[index + 1]["cells"]]
+
+
 def render_entity_history_rows(rows, num_cols):
     """
     Render the /entity history table body from build_entity_history_table_data() rows.
 
-    Each 30-minute row is clickable and followed by its hidden 5-minute detail rows. Rows where nothing
-    changed are folded into an "N unchanged slots hidden" separator, except the oldest, so the table
+    Each 30-minute row is clickable and followed by its hidden 5-minute detail rows. Pure duplicate rows
+    (see history_row_shown()) are folded into an "N unchanged slots hidden" separator, so the table
     opens on its changes.
     """
     cell_classes = {"changed": ' class="changed-cell"', "reverted": ' class="reverted-cell"'}
     text = ""
     row_index = 0
     skipped_count = 0
-    oldest_idx = len(rows) - 1
 
     for i, row in enumerate(rows):
-        if i != oldest_idx and not any(kind for _, kind in row["cells"]):
+        if not history_row_shown(rows, i):
             skipped_count += 1
             continue
 
@@ -1635,7 +1652,7 @@ class WebInterface(ComponentBase):
 
                 text += "</table><br>\n"
 
-                # Build CSV data for download (all 30-min slots, unfiltered, with carry-forward values)
+                # Build CSV data for download - the same rows the table shows, without the pure duplicates
                 csv_col_headers = ["Time"]
                 for sel in entity_selections:
                     sel_eid = sel["entity_id"]
@@ -1647,8 +1664,9 @@ class WebInterface(ComponentBase):
                     sel_attr_disp = f" - {sel_attr}" if sel_attr else ""
                     csv_col_headers.append(f"{sel_friendly}{sel_attr_disp}{sel_unit_disp}")
                 csv_all_rows = []
-                for history_row in history_rows:
-                    csv_all_rows.append([history_row["time"].strftime(TIME_FORMAT)] + [str(value) for value, _ in history_row["cells"]])
+                for index, history_row in enumerate(history_rows):
+                    if history_row_shown(history_rows, index):
+                        csv_all_rows.append([history_row["time"].strftime(TIME_FORMAT)] + [str(value) for value, _ in history_row["cells"]])
                 csv_data_json = json.dumps({"headers": csv_col_headers, "rows": csv_all_rows})
                 text += f"<script>var csvData = {csv_data_json};\n"
                 text += """function downloadEntityCSV() {

@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytz
 
-from web import build_entity_history_table_data, render_entity_history_rows, WebInterface
+from web import build_entity_history_table_data, history_row_shown, render_entity_history_rows, WebInterface
 
 
 def make_history(records):
@@ -248,19 +248,54 @@ def run_web_history_table_tests(my_predbat):
         failed += 1
 
     # -------------------------------------------------------------------------
-    print("Test: rendering colours changed cells pink, reverted cells blue, and hides unmarked rows")
-    records = [record(utc(8, 0), "A"), record(utc(10, 37), "B"), record(utc(10, 48), "A"), record(utc(12, 40), "C"), record(utc(13, 10), "C")]
+    print("Test: rendering colours changed cells pink, reverted cells blue, and hides pure duplicate rows")
+    records = [record(utc(8, 0), "A"), record(utc(10, 37), "B"), record(utc(10, 48), "A"), record(utc(12, 40), "C"), record(utc(14, 10), "C")]
     rows = build_entity_history_table_data(status, {"sensor.status": make_history(records)})
     html = render_entity_history_rows(rows, 1)
     if '<td class="reverted-cell">A</td>' not in html or '<td class="changed-cell">B</td>' not in html:
         print("  ERROR: expected the 10:30 row blue and its 10:40 slot pink")
         failed += 1
-    shown_rows = html.count('class="history-row"')
-    if shown_rows != 3:
-        print(f"  ERROR: expected the 12:30 and 10:30 rows plus the oldest (08:00) to be shown, got {shown_rows}")
+    # 14:00 is the newest, 13:00 the first to read C, 12:30 and 10:30 changed, 08:00 the oldest
+    shown = [row["time"].strftime("%H:%M") for index, row in enumerate(rows) if history_row_shown(rows, index)]
+    if shown != ["14:00", "13:00", "12:30", "10:30", "08:00"]:
+        print(f"  ERROR: expected rows 14:00, 13:00, 12:30, 10:30 and 08:00 to be shown, got {shown}")
+        failed += 1
+    rendered_rows = html.count('class="history-row"')
+    if rendered_rows != len(shown):
+        print(f"  ERROR: the table should render exactly the {len(shown)} shown rows, got {rendered_rows}")
+        failed += 1
+    if "1 unchanged slot hidden" not in html.split("14:00", 1)[-1].split("13:00", 1)[0]:
+        print("  ERROR: expected the 13:30 duplicate to be folded into '1 unchanged slot hidden' between 14:00 and 13:00")
         failed += 1
     if "3 unchanged slots hidden" not in html.split("12:30", 1)[-1]:
         print("  ERROR: expected the 11:00-12:00 rows to be folded into '3 unchanged slots hidden' beneath the 12:30 row")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    # A row whose value differs from the row before it is not a duplicate, even when nothing changed
+    # inside its own half hour - hiding it made "N unchanged slots" hold a value the row beneath them
+    # never showed, and the CSV, with no detail rows, lost the new value altogether.
+    print("Test: only pure duplicates are hidden, so every hidden row holds the values of the row beneath it")
+    selections = [{"entity_id": "predbat.status", "attribute": None}]
+    rows = build_entity_history_table_data(selections, {"predbat.status": make_history([record(when, state) for when, state in transitions])})
+    shown = [index for index in range(len(rows)) if history_row_shown(rows, index)]
+    if shown[0] != 0 or shown[-1] != len(rows) - 1:
+        print("  ERROR: the newest and the oldest rows must always be shown")
+        failed += 1
+    misreported = []
+    for index, row in enumerate(rows):
+        if index in shown:
+            continue
+        beneath = next(rows[older] for older in shown if older > index)
+        if [value for value, _ in row["cells"]] != [value for value, _ in beneath["cells"]]:
+            misreported.append("{} reads {} but is hidden above {} reading {}".format(row["time"].strftime("%d %H:%M"), row["cells"][0][0], beneath["time"].strftime("%d %H:%M"), beneath["cells"][0][0]))
+    if misreported:
+        print(f"  ERROR: {len(misreported)} hidden rows differ from the row beneath them, e.g. {misreported[0]}")
+        failed += 1
+    shown_values = [(rows[index]["time"].strftime("%d %H:%M"), rows[index]["cells"][0][0]) for index in shown]
+    expected_values = [("02 13:30", "Demand"), ("02 05:00", "Demand"), ("02 04:30", "Charging"), ("01 23:30", "Charging"), ("01 23:00", "Exporting"), ("01 22:00", "Exporting")]
+    if shown_values != expected_values:
+        print(f"  ERROR: expected the shown rows {expected_values}, got {shown_values}")
         failed += 1
 
     # -------------------------------------------------------------------------
