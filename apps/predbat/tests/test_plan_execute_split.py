@@ -685,6 +685,9 @@ def _scenario_update_pred_scheduled_reuses_fresh_plan(my_predbat):
     failed = 0
     mocks, version_before, logged = _update_pred_after_forced_run(my_predbat, 5)
     failed = _check(failed, my_predbat.plan_version == version_before, "test_update_pred_scheduled_reuses_fresh_plan: plan_version unchanged")
+    failed = _check(failed, my_predbat.now_utc == datetime(2026, 6, 15, 11, 40, tzinfo=timezone.utc), "test_update_pred_scheduled_reuses_fresh_plan: now_utc is plan_at (T + 5 min)")
+    failed = _check(failed, my_predbat.plan_last_updated == datetime(2026, 6, 15, 11, 35, tzinfo=timezone.utc), "test_update_pred_scheduled_reuses_fresh_plan: plan_last_updated still T")
+    failed = _check(failed, any("5.0 minutes old" in line for line in logged), "test_update_pred_scheduled_reuses_fresh_plan: logged age is 5.0 minutes")
     failed = _check(failed, any("Will not recompute the plan" in line for line in logged), "test_update_pred_scheduled_reuses_fresh_plan: 'Will not recompute the plan' logged")
     failed = _check(failed, all(call.kwargs.get("recompute") is False for call in mocks["calculate_plan"].call_args_list), "test_update_pred_scheduled_reuses_fresh_plan: calculate_plan never asked to recompute")
     return failed
