@@ -1944,7 +1944,7 @@ class Plan:
         metric, battery_value, cost, metric_keep, battery_cycle, final_carbon_g, import_kwh, export_kwh = self.run_prediction_metric(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=end_record)
         return metric, cost, metric_keep, battery_cycle, final_carbon_g, import_kwh
 
-    def keep_window_change_if_improved(self, baseline, candidate, typ, window_n, snapshot):
+    def keep_window_change_if_improved(self, baseline, candidate, typ, window_n, snapshot, baseline_penalty=0.0, candidate_penalty=0.0):
         """Undo a pending single-window plan change unless it improved the whole-plan metric.
 
         optimise_charge_limit/optimise_export rank their candidates against the window being turned off rather
@@ -1965,12 +1965,17 @@ class Plan:
         than the setting already held is reverted even when optimise_export preferred it. Lower metric is
         better.
 
+        For an export window, baseline_penalty and candidate_penalty are each setting's share of the export
+        threshold (export_threshold_penalty), the same charge optimise_export ranked on. Comparing on metric plus
+        share keeps a shorter export that gives up less than the share it saves, which the raw metric alone would
+        always revert.
+
         Returns the metric tuple to carry forward: the candidate when the change is kept, the baseline when not.
         """
-        if candidate[0] <= baseline[0]:
+        if candidate[0] + candidate_penalty <= baseline[0] + baseline_penalty:
             return candidate
         if self.debug_enable:
-            self.log("Reverted change to {} window {} as metric {} did not improve on {}".format(typ, window_n, dp2(candidate[0]), dp2(baseline[0])))
+            self.log("Reverted change to {} window {} as metric {} (threshold share {}) did not improve on {} (threshold share {})".format(typ, window_n, dp2(candidate[0]), dp2(candidate_penalty), dp2(baseline[0]), dp2(baseline_penalty)))
         self.plan_window_restore(typ, window_n, snapshot)
         return baseline
 
@@ -3036,6 +3041,29 @@ class Plan:
                 )
         return best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep, best_cycle, best_carbon, best_import, best_metric_plan
 
+    def export_threshold_penalty(self, export_limit, start, end, all_n=None):
+        """The share of the export threshold an export window has to earn, in pence.
+
+        A forced export is charged metric_min_improvement_export per plan interval of export still to come (from
+        now - minutes already exported are spent), scaled by its export power, so every 5 minutes of it has to earn
+        its share. A freeze carries the flat freeze threshold and idle carries nothing. Windows optimised together
+        (all_n) are charged per window, as optimise_export's threshold always has been.
+
+        An export the inverter is running carries nothing either, so the second pass cannot cancel it part way on
+        the threshold alone - only a real metric gain stops it, as the in-progress commitment (#4402) requires.
+        """
+        mode = export_mode_of(export_limit)
+        if mode == EXPORT_MODE_IDLE:
+            return 0.0
+        if mode == EXPORT_MODE_TARGET and self.isExporting and start <= self.minutes_now < end:
+            return 0.0
+        if mode == EXPORT_MODE_FREEZE:
+            return self.metric_min_improvement_export_freeze
+        if all_n:
+            return self.metric_min_improvement_export * export_power_of(export_limit) * len(all_n)
+        minutes = max(end - max(start, self.minutes_now), 0)
+        return self.metric_min_improvement_export * minutes * export_power_of(export_limit) / float(self.plan_interval_minutes)
+
     def optimise_export(self, window_n, record_charge_windows, try_charge_limit, charge_window, export_window, export_limit, all_n=None, end_record=None, freeze_only=False, allow_freeze=True):
         """
         Optimise a single export window for best export %
@@ -3045,6 +3073,7 @@ class Plan:
         # where it read as 0: a full discharge, the opposite of the intent.
         best_export = pack_export_limit(EXPORT_MODE_IDLE)
         best_metric = 9999999
+        best_score = 9999999
         best_metric_plan = 9999999
         off_metric = 9999999
         off_cost = 9999999
@@ -3249,9 +3278,15 @@ class Plan:
             if keep_export:
                 min_improvement_scaled = min(min_improvement_scaled, -max(0.5, self.metric_min_improvement_export))
 
+            # Rank on the metric plus the option's share of the threshold, so every 5 minutes of export has to earn
+            # its share: a step that earns less is only kept when the steps beyond it more than repay it. An export
+            # already under way carries no share, as stopping it part way is the flapping the commitment prevents.
+            score = metric + (0.0 if keep_export else self.export_threshold_penalty(this_export_limit, start, try_export_window[window_n]["end"], all_n))
+
             # Only select an export if it makes a notable improvement has defined by min_improvement (divided in M windows)
             # Also require cost improvement to prevent exports that only game metric_keep without actual savings (issue #2984)
-            if (metric <= off_metric) and (metric <= best_metric) and ((cost + min_improvement_scaled) <= off_cost):
+            if (score <= off_metric) and (score <= best_score) and ((cost + min_improvement_scaled) <= off_cost):
+                best_score = score
                 best_metric = metric
                 best_metric_plan = metric_plan
                 best_export = this_export_limit
@@ -4083,6 +4118,8 @@ class Plan:
                     continue
 
                 snapshot = self.plan_window_snapshot(typ, window_n)
+                window = self.export_window_best[window_n]
+                baseline_penalty = self.export_threshold_penalty(self.export_limits_best[window_n], window["start"], window["end"])
                 set_window_start(self.export_window_best[window_n], self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"]))
                 best_soc, best_start, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon, best_import, best_metric_plan = self.optimise_export(
                     window_n,
@@ -4097,7 +4134,8 @@ class Plan:
                 self.export_window_best[window_n]["start_orig"] = self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"])
                 set_window_start(self.export_window_best[window_n], best_start)
                 candidate = (best_metric_plan, best_cost, best_keep, best_cycle, best_carbon, best_import)
-                selected = self.keep_window_change_if_improved(selected, candidate, typ, window_n, snapshot)
+                candidate_penalty = self.export_threshold_penalty(best_soc, best_start, self.export_window_best[window_n]["end"])
+                selected = self.keep_window_change_if_improved(selected, candidate, typ, window_n, snapshot, baseline_penalty, candidate_penalty)
             if (count % 16) == 0 and self.debug_enable:
                 log_metric, log_cost, log_keep, log_cycle, log_carbon, log_import = selected
                 self.log("Plan pass type {} window {} metric {} metric_keep {} carbon {} import {} cost {}".format(typ, window_n, log_metric, dp2(log_keep), dp0(log_carbon), dp2(log_import), dp2(log_cost)))
@@ -4980,7 +5018,12 @@ class Plan:
                             # when the SoC limit rises). Off/freeze export no battery and force the start back to
                             # the full window, so they are exempt from the earlier-start check.
                             trim_export_ok = pass_type != "trim_export" or (export_limit_sort_key(n_best_soc) >= export_limit_sort_key(self.export_limits_best[window_n]) and (export_limit_exports_no_battery(n_best_soc) or n_best_start >= keep_start))
-                            if n_best_metric < best_metric and (n_best_soc != self.export_limits_best[window_n] or n_best_start != self.export_window_best[window_n]["start"]) and trim_export_ok:
+                            # Compare on metric plus each setting's share of the export threshold, as optimise_export
+                            # ranked them, so a shorter export that saves more share than it gives up is adopted
+                            window_end = self.export_window_best[window_n]["end"]
+                            held_score = best_metric + self.export_threshold_penalty(self.export_limits_best[window_n], keep_start, window_end)
+                            new_score = n_best_metric + self.export_threshold_penalty(n_best_soc, n_best_start, window_end)
+                            if new_score < held_score and (n_best_soc != self.export_limits_best[window_n] or n_best_start != self.export_window_best[window_n]["start"]) and trim_export_ok:
                                 # Only a strict improvement drives another refinement iteration (see
                                 # the charge block above for why equal-metric flips must not).
                                 changed_this_iteration = True

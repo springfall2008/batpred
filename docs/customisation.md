@@ -406,10 +406,12 @@ If you use **input_number.predbat_pv_metric10_weight** then you probably don't n
 Do not use it if you have multiple charge windows in a given period as it won't lead to good results (e.g. Agile)
 You could even go to something like -0.1 to say you would charge less even if it cost up to 0.1p more (best used with metric10).
 
-**input_number.predbat_metric_min_improvement_export** (_expert mode_) Sets the minimum pence cost improvement it's worth doing a forced export for.
-A value of 0.1p is the default which prevents any marginal exports as they must be worth at least 0.1 pence for a slot (less for shorter slots).
-If you increase this value (e.g. you only want to force export if very profitable), then exports will become less common.
-The value is in pence per slot of export time.
+**input_number.predbat_metric_min_improvement_export** (_expert mode_) Sets how much a forced export has to earn, in pence per slot (30 minutes) of export time, scaled down for exports at lower power.
+Every 5 minutes of a planned export has to earn its share of this, so an export is shortened, or dropped, where its later minutes would earn less than that.
+For example at 0.5p each extra 5 minutes of export must earn about 0.08p, and at 3p about 0.5p.
+A value of 0.1p is the default, which only removes export that earns almost nothing.
+If you increase this value (e.g. you only want to force export if it is clearly profitable), then exports will become shorter and less common.
+An export that is already running is not shortened by this setting.
 
 **input_number.predbat_metric_min_improvement_export_freeze** (_expert mode_) Sets the minimum pence cost improvement it's worth doing an export freeze for.
 A value of 0.1p is the default which prevents any marginal freezes as they must be worth at least 0.1 pence for a slot duration (less for shorter slots).
