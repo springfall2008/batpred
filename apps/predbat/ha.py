@@ -461,8 +461,10 @@ class HAHistory(ComponentBase):
         """
         entities = {}
         with self.history_lock:
-            for entity_id, days in self.history_entities.items():
-                store = self.history_data.get(entity_id, None)
+            # add_entity() can add to history_entities without the lock, so iterate over copies
+            history_data = dict(self.history_data)
+            for entity_id, days in list(self.history_entities.items()):
+                store = history_data.get(entity_id, None)
                 if store is None:
                     store = EntityHistory()
                 entities[entity_id] = {
@@ -481,7 +483,9 @@ class HAHistory(ComponentBase):
         Replace the tracked entities and history store with those from an export_snapshot() snapshot.
 
         The whole snapshot is decoded and validated before anything is changed, so a bad snapshot
-        leaves the current store untouched. Returns the number of entities loaded, 0 on any bad input.
+        leaves the current store untouched. Returns the number of entities tracked after the import,
+        0 on any bad input. Intended to be called before the component starts; the update loop
+        tolerates a swap while it runs but may then skip an entity for that cycle.
         """
         try:
             if not isinstance(data, (bytes, bytearray, memoryview)):
@@ -525,15 +529,25 @@ class HAHistory(ComponentBase):
             now = datetime.now(self.local_tz)
             for entity_id in list(self.history_entities.keys()):
                 # self.log("HAHistory: Updating history for {}".format(entity_id))
+                entity_days = self.history_entities.get(entity_id, None)
+                if entity_days is None:
+                    # The tracked entities were replaced (e.g. by import_snapshot) during this loop
+                    continue
                 store = self.history_data.get(entity_id, None)
                 last_updated_time = datetime.fromtimestamp(store.epochs[-1], timezone.utc) if store and len(store) > 0 else None
                 if last_updated_time:
-                    history_data = ha_interface.get_history(entity_id, now, days=1, from_time=last_updated_time)
+                    # Fetch only what is newer than the store, but never further back than the entity's
+                    # retention (a restored snapshot can be old). days spans the same window as from_time
+                    # so a history source that only honours days (the database) still covers the gap
+                    window_start = now - timedelta(days=entity_days)
+                    from_time = max(last_updated_time, window_start)
+                    days = max(1, (now - from_time).total_seconds() / (24 * 60 * 60))
+                    history_data = ha_interface.get_history(entity_id, now, days=days, from_time=from_time)
                     if history_data and len(history_data) > 0:
                         history_data = history_data[0]
                         self.update_entity(entity_id, history_data)
                 else:
-                    history_data = ha_interface.get_history(entity_id, now, days=self.history_entities[entity_id])
+                    history_data = ha_interface.get_history(entity_id, now, days=entity_days)
                     if history_data and len(history_data) > 0:
                         history_data = history_data[0]
                         self.update_entity(entity_id, history_data)
