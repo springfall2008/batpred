@@ -23,6 +23,7 @@ from const import (
     TIME_FORMAT,
     TIME_FORMAT_OCTOPUS,
     DISPATCH_SOURCE_CHARGER_SCHEDULE,
+    OCTOPUS_MANUAL_DISPATCH_SOURCES,
     DISPATCH_SOURCE_CHARGING_UNLISTED,
     REPEAT_FULL_LOG_SECONDS,
     OCTOPUS_DISPATCH_HOLD_MINUTES,
@@ -102,6 +103,7 @@ OCTOPUS_SLOT_MAX_DEFAULT = 48  # 24 hours with 30-minute slots
 OCTOPUS_SLOT_MAX_CAPPED = 12  # 6 hours with 30-minute slots
 OCTOPUS_SLOT_MAX_MINUTES = 30  # octopus_slot_max is set in 30-minute slots, the cap itself is counted in dispatch minutes (#5510)
 IO_RATE_TOLERANCE = 0.01  # A dispatch lowers a rate by pence; anything closer is rate_min_base's dp2 rounding against the unrounded tariff feed (#5392)
+SMART_CONTROL_PENDING_SECONDS = 300  # How long a Smart Control change Octopus accepted is held against its polls - over two 2-minute device polls, not just the one straight after it
 OCTOPUS_SLOT_MIN_MINUTES = 5  # Shorter dispatches are only low rate where the car was seen charging (dispatch_too_short())
 
 # Per-device settings read from the Octopus intelligent settings query. Kept as a list so a poll
@@ -114,6 +116,7 @@ INTELLIGENT_DEVICE_SETTING_KEYS = ["suspended", "weekday_target_time", "weekday_
 # rather than the catalogue drifting out of step with what apps.yaml actually points at.
 OCTOPUS_CAR_ENTITY_SPEC = {
     "octopus_intelligent_slot": ("binary_sensor", "intelligent_dispatch", "r"),
+    "octopus_intelligent_smart_control": ("switch", "intelligent_smart_charge", "rw"),
     "octopus_ready_time": ("select", "intelligent_target_time", "rw"),
     "octopus_charge_limit": ("number", "intelligent_target_soc", "rw"),
 }
@@ -434,6 +437,15 @@ intelligent_settings_mutation = """mutation {{
     mode: CHARGE
     unit: PERCENTAGE
     schedules: [{schedules}]
+  }}) {{
+    id
+  }}
+}}"""
+
+intelligent_smart_control_mutation = """mutation {{
+  updateDeviceSmartControl(input: {{
+    deviceId: "{device_id}"
+    action: {action}
   }}) {{
     id
   }}
@@ -764,6 +776,7 @@ class OctopusAPI(ComponentBase):
         self.sensor_updated_at = None
         self.automatic = automatic
         self.commands = []
+        self.smart_control_pending = {}  # device_id -> (suspended, expiry) for a Smart Control change Octopus accepted but may not yet report
         self.mpan = None
         self.tou_windows = None
         self.tou_windows_day = None
@@ -810,7 +823,66 @@ class OctopusAPI(ComponentBase):
             self.commands.append({"command": "set_intelligent_target_percentage", "value": value, "device_id": device_id})
 
     async def switch_event(self, entity_id, service):
-        pass
+        """
+        Handle a turn on/off/toggle of an Intelligent Smart Control switch by queueing the command that sends it to
+        Octopus. The switch shows the change once Octopus has accepted it, as the target time and SoC do, so it
+        never shows a state Octopus does not have. Only the latest change per device is kept in the queue.
+        """
+        suffix = self.get_entity_suffix(entity_id)
+        device_id = self.suffix_to_device_id(suffix)
+        if not device_id or self.device_id_to_index_suffix(device_id) != suffix or entity_id != self.get_entity_name("switch", "intelligent_smart_charge", index=suffix):
+            return
+        device = self.intelligent_devices.get(device_id)
+        if not device:
+            return
+        queued = [command for command in self.commands if self.is_smart_control_command(command, device_id)]
+        if service == "turn_on":
+            enabled = True
+        elif service == "turn_off":
+            enabled = False
+        elif service == "toggle":
+            # Toggle from the change already asked for, if there is one, so two toggles cancel out
+            enabled = not queued[-1]["value"] if queued else bool(device.get("suspended"))
+        else:
+            return
+        self.commands = [command for command in self.commands if not self.is_smart_control_command(command, device_id)]
+        self.commands.append({"command": "set_intelligent_smart_control", "value": enabled, "device_id": device_id})
+
+    @staticmethod
+    def is_smart_control_command(command, device_id):
+        """
+        Whether a queued command sets Smart Control for device_id.
+        """
+        return command.get("command") == "set_intelligent_smart_control" and command.get("device_id") == device_id
+
+    def apply_smart_control_pending(self, device_id, device):
+        """
+        Hold a Smart Control change Octopus has just accepted against its polls for SMART_CONTROL_PENDING_SECONDS,
+        as Octopus can go on reporting the old state for a while, and the switch would otherwise flip back.
+
+        The hold runs its full time even once a poll agrees: a poll whose settings query failed reuses the state
+        already on show, so agreeing is no sign Octopus has caught up.
+        """
+        pending = self.smart_control_pending.get(device_id)
+        if not pending:
+            return
+        suspended, expiry = pending
+        if datetime.now() >= expiry:
+            self.smart_control_pending.pop(device_id, None)
+        else:
+            device["suspended"] = suspended
+
+    def publish_smart_control_switch(self, device_id, device):
+        """
+        Publish the Smart Control switch of an Intelligent device, on while the device is not suspended. It is
+        published for suspended devices too, so that Smart Control can be turned back on.
+        """
+        self.dashboard_item(
+            self.get_entity_name("switch", "intelligent_smart_charge", index=self.device_id_to_index_suffix(device_id)),
+            "off" if device.get("suspended") else "on",
+            attributes={"friendly_name": "Octopus Intelligent Smart Control ({})".format(device.get("model") or self.device_id_to_index_suffix(device_id)), "icon": "mdi:ev-station"},
+            app="octopus",
+        )
 
     def is_alive(self):
         return self.api_started and self.account_data
@@ -954,6 +1026,11 @@ class OctopusAPI(ComponentBase):
                 value = command.get("value", None)
                 device_id = command.get("device_id", None)
                 await self.async_set_intelligent_target_schedule(account_id, target_time=value, device_id=device_id)
+                done_command = True
+            elif command_name == "set_intelligent_smart_control":
+                # A newer change for the same device, made while this batch was being sent, replaces this one
+                if not any(self.is_smart_control_command(queued, command.get("device_id", None)) for queued in self.commands):
+                    await self.async_set_intelligent_smart_control(command.get("device_id", None), command.get("value", True))
                 done_command = True
             elif command_name == "join_saving_session_event":
                 event_code = command.get("event_code", None)
@@ -1168,6 +1245,7 @@ class OctopusAPI(ComponentBase):
                 # Always call fetch_previous_dispatch when completed dispatches are available to merge historical data.
                 for device_id in intelligent_devices:
                     device = intelligent_devices[device_id]
+                    self.apply_smart_control_pending(device_id, device)
                     if "completed_dispatches" in device:
                         self.intelligent_devices[device_id] = device
                         await self.fetch_previous_dispatch(device_id)
@@ -1286,6 +1364,34 @@ class OctopusAPI(ComponentBase):
             device["weekday_target_soc"] = target_percentage
         else:
             self.log("Warn: OctopusAPI: Try to set target schedule, but no intelligent device ID {} found".format(device_id))
+
+    async def async_set_intelligent_smart_control(self, device_id, enabled):
+        """
+        Turn Octopus Smart Control on (UNSUSPEND) or off (SUSPEND) for an intelligent device, and show it on the switch
+        once Octopus accepts it. If Octopus rejects it the switch is left as it was.
+
+        It is sent even when the device already shows the asked-for state: that state can be up to a poll old, so
+        skipping it could drop a change the user really asked for.
+        """
+        device = self.intelligent_devices.get(device_id)
+        if not device:
+            self.log("Warn: OctopusAPI: Try to set Smart Control, but no intelligent device ID {} found".format(device_id))
+            return False
+        action = "UNSUSPEND" if enabled else "SUSPEND"
+        self.log("OctopusAPI: Setting Smart Control {} for intelligent device {}".format(action, device_id))
+        try:
+            result = await self.async_graphql_query(intelligent_smart_control_mutation.format(device_id=device_id, action=action), "set-intelligent-smart-control", returns_data=False)
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            self.log("Warn: OctopusAPI: Smart Control {} for intelligent device {} raised {}".format(action, device_id, error))
+            result = None
+        if not result or result.get("updateDeviceSmartControl") is None:
+            self.log("Warn: OctopusAPI: Failed to {} Smart Control for intelligent device {}, the switch stays as it was".format(action, device_id))
+            self.publish_smart_control_switch(device_id, device)
+            return False
+        device["suspended"] = not enabled
+        self.smart_control_pending[device_id] = (not enabled, datetime.now() + timedelta(seconds=SMART_CONTROL_PENDING_SECONDS))
+        self.publish_smart_control_switch(device_id, device)
+        return True
 
     async def async_join_saving_session_events(self, account_id, event_code):
         """
@@ -1625,6 +1731,7 @@ class OctopusAPI(ComponentBase):
             # num_cars past what Predbat actually supports (see fetch_config_options' clamp).
             active_devices = {device_id: device for device_id, device in devices.items() if not device.get("suspended")}
             slot_list = []
+            smart_control_list = []
             ready_list = []
             limit_list = []
             # Sort so a given device always lands in the same car slot. The slot index is what
@@ -1635,6 +1742,7 @@ class OctopusAPI(ComponentBase):
             for device_id in sorted(active_devices):
                 index_suffix = self.device_id_to_index_suffix(device_id)
                 slot_list.append(self.get_entity_name("binary_sensor", "intelligent_dispatch", index=index_suffix))
+                smart_control_list.append(self.get_entity_name("switch", "intelligent_smart_charge", index=index_suffix))
                 ready_list.append(self.get_entity_name("select", "intelligent_target_time", index=index_suffix))
                 limit_list.append(self.get_entity_name("number", "intelligent_target_soc", index=index_suffix))
             # With no active device left the wiring is cleared - but only wiring that is still what
@@ -1646,6 +1754,7 @@ class OctopusAPI(ComponentBase):
                 self.log("OctopusAPI: No active intelligent devices, and the car slot wiring is not from here - leaving it alone")
             else:
                 self.set_arg("octopus_intelligent_slot", slot_list)
+                self.set_arg("octopus_intelligent_smart_control", smart_control_list)
                 if other_owner:
                     self.log("OctopusAPI: Car ready time and charge limit are wired by the {} component, leaving them alone".format(slot_owner))
                 else:
@@ -1707,9 +1816,9 @@ class OctopusAPI(ComponentBase):
 
         One `cars` record per ACTIVE (non-suspended) intelligent device: get_active_intelligent_device_ids()
         is the exact filter automatic_config() itself applies when wiring the car slots into
-        apps.yaml, so the catalogue never lists a slot that is no longer being wired. Its three
-        entities (octopus_intelligent_slot, octopus_ready_time, octopus_charge_limit - see
-        OCTOPUS_CAR_ENTITY_SPEC) are included only when they actually exist in the state store:
+        apps.yaml, so the catalogue never lists a slot that is no longer being wired. Its four
+        entities (octopus_intelligent_slot, octopus_intelligent_smart_control, octopus_ready_time,
+        octopus_charge_limit - see OCTOPUS_CAR_ENTITY_SPEC) are included only when they actually exist in the state store:
         async_intelligent_update_sensor() publishes them per device, never as a fixed set, so the
         catalogue must not claim one exists that Home Assistant has never seen. Vehicle battery
         size and charge-point power are reported in ratings where Octopus's own vehicle/charger
@@ -3068,6 +3177,7 @@ class OctopusAPI(ComponentBase):
                         active_event = True
             dispatch_attributes = {"friendly_name": "Octopus Intelligent Dispatches", "icon": "mdi:flash", **device}
             self.dashboard_item(self.get_entity_name("binary_sensor", "intelligent_dispatch", index=device_index), "on" if active_event else "off", attributes=dispatch_attributes, app="octopus")
+            self.publish_smart_control_switch(device_id, device)
             dispatch_slots.append(planned + completed)
 
             weekday_target_time = device.get("weekday_target_time", None)
@@ -3709,7 +3819,7 @@ class Octopus:
         :return: True if the dispatch is eligible for the off-peak rate
         """
         # Ignore bump-charge slots as their cost won't change
-        if source == "bump-charge" or source == "BOOST":
+        if source in OCTOPUS_MANUAL_DISPATCH_SOURCES:
             return False
         # A charger's own schedule on a tariff with no dispatch rate: car load only, never a cheap slot
         if source == DISPATCH_SOURCE_CHARGER_SCHEDULE:
@@ -4114,7 +4224,6 @@ class Octopus:
         (start, end, kwh, source, location, dispatch_start, dispatch_end, held).
         """
         slots_decoded = []
-
         # Decode the slots
         for slot in octopus_slots:
             start_minutes, end_minutes, kwh, source, location = self.decode_octopus_slot(car_n, slot)
@@ -4150,7 +4259,12 @@ class Octopus:
                 original_span = end_minutes - start_minutes
                 segments = [(start_minutes, end_minutes)]
                 for current_slot in slots_decoded:
-                    current_start, current_end = current_slot[0], current_slot[1]
+                    current_start, current_end, _, _, _, _, _, current_held = current_slot
+                    if current_held:
+                        # A held half hour has already run and only keeps its rate: it does not trim a slot it
+                        # overlaps, which only a charger's own schedule can (#5339), so a running one is still
+                        # counted from now rather than keeping all of its energy for what is left of it
+                        continue
                     remaining = []
                     for seg_start, seg_end in segments:
                         if seg_start < current_end and seg_end > current_start:
@@ -4203,7 +4317,9 @@ class Octopus:
         # octopus_slot_segments() has cut each car's slots clear of that car's other slots, and budget_minutes
         # counts a minute two cars' dispatches share once, as the allowance is in clock time. Every car's slots take
         # their share first, so a minute of this car's that a later dispatch of another car is granted is
-        # cheap here too, and a slot can come out as any number of cheap and over-the-cap runs.
+        # cheap here too, and a slot can come out as any number of cheap and over-the-cap runs. A held half hour is
+        # left overlapping what follows it; that is safe while the only slots it overlaps are a charger's own
+        # schedule (#5339), which never take cap minutes.
         own_segments = []
         for slot, slot_car in account_segments:
             start_minutes, end_minutes, kwh, source, location, dispatch_start, dispatch_end, held = slot
@@ -4432,7 +4548,9 @@ class Octopus:
                                     self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), dp2(assumed_price), dp2(kwh), location, source, octopus_slot_low_rate
                                 )
                             )
-                elif slot_car == car_n and not held and dispatch_start > -24 * 60 and self.dispatch_too_short(car_n, dispatch_start, dispatch_end):
+                elif slot_car == car_n and source not in OCTOPUS_MANUAL_DISPATCH_SOURCES and source != DISPATCH_SOURCE_CHARGER_SCHEDULE and not held and dispatch_start > -24 * 60 and self.dispatch_too_short(car_n, dispatch_start, dispatch_end):
+                    # Only a dispatch Octopus bills off-peak can be turned down for being short; a charger's own
+                    # schedule or a bump charge never was low rate, so this reason would mislead
                     slot_lines.append(
                         "Octopus: Intelligent slot at {}-{} is under {} minutes and car {} has not been seen charging in it, not treated as low rate".format(
                             self.time_abs_str(dispatch_start), self.time_abs_str(dispatch_end), OCTOPUS_SLOT_MIN_MINUTES, car_n
@@ -4679,8 +4797,11 @@ class Octopus:
         A half hour is covered from when it was seen running (octopus_held_update()) until a completed
         dispatch overlaps it - which is then the record, including one of no energy, which is treated as
         never having happened - or the hold runs out. It is left out while a planned dispatch still reaches
-        it, so it is not counted twice against the daily slot cap. The one in progress ends at now: it has
-        finished, so load_octopus_slots() plans no car charging in it, and rate_add_io_slots() prices the
+        it, so it is not counted twice against the daily slot cap. A slot of a charger's own schedule does
+        not end a hold: it is not Octopus's record of a dispatch, and is never priced off-peak or counted
+        against the cap. While Smart Control is off a charger's own slots are re-tagged as one (#5339),
+        though Octopus did dispatch the half hour they ran in before then. The one in progress ends at now: it
+        has finished, so load_octopus_slots() plans no car charging in it, and rate_add_io_slots() prices the
         rest of the half hour as Octopus bills it once a dispatch has started in it (GH#5316).
 
         Under the window rule (dispatch_billing_window()) the half hour was billed off-peak whether the car
@@ -4696,8 +4817,8 @@ class Octopus:
         covering = [slot for slot in completed if not window or self.decode_octopus_slot(car_n, slot, raw=True)[2] > 0]
         covered = []
         for slot in covering + list(planned):
-            start_minutes, end_minutes, _, _, _ = self.decode_octopus_slot(car_n, slot, raw=True, boundaries_only=True)
-            if start_minutes != end_minutes:
+            start_minutes, end_minutes, _, source, _ = self.decode_octopus_slot(car_n, slot, raw=True, boundaries_only=True)
+            if start_minutes != end_minutes and source != DISPATCH_SOURCE_CHARGER_SCHEDULE:
                 covered.append(round_out_to_period(start_minutes, end_minutes))
 
         dispatches = []

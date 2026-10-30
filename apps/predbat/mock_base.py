@@ -147,6 +147,10 @@ class MockBase:
         """Return None - a standalone run has no Home Assistant recorder, matching PredBat's no-interface path."""
         return None
 
+    def octopus_smart_control_off(self, car_n, save=True):
+        """Return False - a standalone run has no Octopus Smart Control switch to read, so it is never off."""
+        return False
+
     def call_notify(self, message):
         """Print a notification message."""
         print(f"NOTIFY: {message}")
