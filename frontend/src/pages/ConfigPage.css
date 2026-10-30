@@ -68,23 +68,23 @@
 .config-help:hover::after, .config-help:focus::after { display: block; }
 .config-table small { margin-top: 0.2rem; color: var(--color-text-muted); font-size: 0.82rem; line-height: 1.4; }
 .config-table td.is-changed { color: var(--color-warning-text); font-weight: 700; }
+.config-mobile-label { display: none; }
 
 @media (max-width: 700px) {
-  .config-table { width: 36rem; min-width: 36rem; }
-  .config-table th:nth-child(1) { width: 9rem; }
-  .config-table th:nth-child(2), .config-table th:nth-child(3) { width: 6rem; }
-  .config-table th:nth-child(4) { width: 15rem; }
-
-  .config-table tr > :first-child {
-    position: sticky;
-    left: 0;
-    z-index: 1;
-    min-width: 9rem;
-    max-width: 9rem;
-    overflow-wrap: anywhere;
-    background: var(--color-surface);
-    box-shadow: 1px 0 var(--color-border);
-  }
+  .config-table { display: block; width: 100%; min-width: 0; }
+  .config-table thead { display: none; }
+  .config-table tbody { display: block; }
+  .config-table tbody tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, auto); align-items: center; gap: 0.35rem 0.75rem; padding: 0.75rem 0.8rem; border-bottom: 1px solid var(--color-border); }
+  .config-table tbody tr:last-child { border-bottom: 0; }
+  .config-table td { min-width: 0; padding: 0; border: 0; overflow-wrap: anywhere; }
+  .config-table td:first-child { grid-column: 1 / -1; }
+  .config-table td:nth-child(2) { grid-column: 1; grid-row: 2; }
+  .config-table td:nth-child(3) { grid-column: 1; grid-row: 3; }
+  .config-table td:nth-child(4) { grid-column: 2; grid-row: 2 / 4; justify-self: end; }
+  .config-mobile-label { display: inline; color: var(--color-text-muted); font-weight: 400; }
+  .config-table td:nth-child(4):has(select) { grid-column: 1 / -1; grid-row: 4; justify-self: stretch; }
+  .config-table td:nth-child(4) select { width: 100%; }
+  .config-table td:nth-child(4) input[type='number'] { width: 6rem; max-width: 100%; }
 }
 .config-table select, .config-table input[type='number'] { width: min(16rem, 100%); padding: 0.42rem 0.5rem; border: 1px solid var(--color-field-border); border-radius: 6px; background: var(--color-bg); color: var(--color-text); font: inherit; }
 .config-switch {
@@ -181,9 +181,6 @@
 @media (max-width: 650px) {
   .config-page-header, .config-toolbar { align-items: flex-start; flex-direction: column; }
   .config-toolbar input { width: 100%; }
-  .config-table th:nth-child(3), .config-table td:nth-child(3) { display: none; }
-  .config-table { width: 23rem; min-width: 23rem; }
-  .config-table th:nth-child(4) { width: 8rem; }
 }
 
 @media (pointer: coarse) {

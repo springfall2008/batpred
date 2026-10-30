@@ -23,8 +23,9 @@
 .theme-colour-table .theme-colour-group { background: var(--color-bg); color: var(--color-text-secondary); font-size: 0.85rem; text-align: center; vertical-align: middle; }
 .theme-colour-group span { display: inline-block; writing-mode: vertical-rl; }
 .theme-colour-name { display: flex; align-items: center; gap: 0.75rem; min-height: 2.75rem; font-weight: 500; }
-.theme-colour-icon { display: flex; flex: 0 0 1.5rem; justify-content: center; font-size: 1.5rem; }
+.theme-colour-icon { position: relative; display: flex; flex: 0 0 1.5rem; justify-content: center; font-size: 1.5rem; }
 .theme-colour-icon svg { width: 1.5rem; height: 1.5rem; }
+.theme-colour-icon svg.theme-colour-icon-badge { position: absolute; right: -0.25rem; top: -0.25rem; width: 0.7rem; height: 0.7rem; padding: 0.08rem; border-radius: 50%; background: var(--color-surface); }
 .theme-colour-table tbody th[scope='row'], .theme-colour-cell { vertical-align: top; }
 .theme-colour-cell { text-align: center; }
 .theme-colour-cell input { appearance: none; display: block; width: 2.75rem; height: 2.75rem; margin: 0 auto; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer; overflow: hidden; }
@@ -66,4 +67,13 @@
 .soc-slider input:focus-visible::-moz-range-thumb { outline: 3px solid var(--focus-ring); outline-offset: 3px; }
 .soc-slider-scale { display: flex; justify-content: space-between; margin-bottom: 1rem; color: var(--color-text-secondary); font-size: 0.8rem; }
 @media (max-width: 720px) { .theme-presets { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 440px) { .theme-colour-table thead th:nth-child(n+3) { width: 4.5rem; } .theme-colour-table th, .theme-colour-table td { padding: 0.4rem; } }
+@media (width < 540px) {
+  .theme-page { padding: 0.75rem; }
+  .theme-section { padding: 0.75rem; }
+  .theme-colour-table thead th:first-child { width: 1.5rem; }
+  .theme-colour-table thead th:nth-child(n+3) { width: 3.65rem; }
+  .theme-colour-table th, .theme-colour-table td { padding: 0.35rem; }
+  .theme-colour-name { gap: 0.35rem; font-size: 0.85rem; overflow-wrap: anywhere; }
+  .theme-colour-label { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+  .theme-colour-table .theme-colour-group { font-size: 0.75rem; }
+}

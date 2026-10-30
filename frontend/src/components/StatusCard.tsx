@@ -181,6 +181,7 @@ function StatusCard({
           <label className="toggle-switch">
             <input
               type="checkbox"
+              aria-label="Predbat Active"
               checked={active}
               onChange={(event) => onActiveChange(event.target.checked)}
             />
@@ -199,6 +200,7 @@ function StatusCard({
           <label className="toggle-switch">
             <input
               type="checkbox"
+              aria-label="Read Only"
               checked={readOnly}
               onChange={(event) => onReadOnlyChange(event.target.checked)}
             />
@@ -219,6 +221,7 @@ function StatusCard({
           <label className="toggle-switch">
             <input
               type="checkbox"
+              aria-label="Debug"
               checked={debugEnabled}
               onChange={(event) => onDebugChange(event.target.checked)}
             />

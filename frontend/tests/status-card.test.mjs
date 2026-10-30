@@ -39,3 +39,13 @@ test('unknown and starting status are neutral rather than healthy', () => {
     assert.doesNotMatch(html, /status-dot status-ok/)
   }
 })
+
+test('dashboard switches have distinct accessible names', () => {
+  const html = renderToStaticMarkup(React.createElement(module.exports.default, {
+    status: 'Idle', mode: 'Monitor', version: '', lastUpdated: null, configOk: true,
+    active: false, readOnly: true, debugEnabled: false
+  }))
+  for (const label of ['Predbat Active', 'Read Only', 'Debug']) {
+    assert.match(html, new RegExp(`<input[^>]*aria-label="${label}"`))
+  }
+})

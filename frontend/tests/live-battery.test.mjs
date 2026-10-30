@@ -33,6 +33,13 @@ const PlanSummary = load('../src/components/PlanSummary.tsx').default
 const Navigation = load('../src/components/AppNavigation.tsx').default
 const plan = JSON.parse(fs.readFileSync(new URL('./fixtures/plan-data-split-actions.json', import.meta.url), 'utf8')).plan
 
+test('plan reason is available through a named native disclosure', () => {
+  const withReason = { ...plan, reason_templates: { test_reason: 'A readable explanation' }, rows: plan.rows.map(row => ({ ...row, reasons: [{ code: 'test_reason', params: {} }] })) }
+  const html = renderToStaticMarkup(React.createElement(PlanSummary, { plan: withReason, batterySoc: 42, batteryStale: false, socBoundaries: { low: 20, medium: 50 } }))
+  assert.match(html, /<details class="reason-tooltip"><summary aria-label="Why this action\? A readable explanation"/)
+  assert.match(html, /A readable explanation/)
+})
+
 test('plan summary shows live, cached and unavailable battery readings instead of the plan snapshot', () => {
   const render = (batterySoc, batteryStale = false) => renderToStaticMarkup(React.createElement(PlanSummary, { plan, batterySoc, batteryStale, socBoundaries: { low: 20, medium: 50 } }))
   const live = render(0)
