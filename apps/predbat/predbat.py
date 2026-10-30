@@ -117,7 +117,6 @@ from ha import run_async
 from control_ledger import ControlLedger
 from control_monitor import ControlMonitor
 
-
 # Unchanged execution flags are re-saved this often, so their saved_at tracks the last time they were seen to hold
 EXECUTION_STATE_RECONFIRM_MINUTES = 10
 
