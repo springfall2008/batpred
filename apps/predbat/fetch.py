@@ -49,6 +49,7 @@ from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
 
 import ast
 import copy
+import math
 
 # Car state that changes at run time and that the plan reads (the rest is configuration, which a debug yaml holds)
 REPLAY_CAR_FIELDS = (
@@ -468,13 +469,48 @@ class Fetch:
 
         return load_yesterday, load_yesterday_raw
 
+    def load_counter_quantum(self, load_minutes, max_minute):
+        """
+        Work out the step a load counter moves in (0.01 kWh, 0.1 kWh, ...) from the gaps between the levels it
+        sits at: interpolation between readings smooths the steps but keeps the flat stretches. The levels sit
+        on the counter's grid, so the step is the greatest common divisor of the gaps between them (two flat
+        stretches can be several steps apart). Only gaps seen at least twice count: a counter that only sits
+        still where it stalled has a few one-off gaps that say nothing about its step. Returns 0 when there are
+        none - a counter that doesn't keep sitting still between steps is as fine as the history can show.
+        """
+        levels = []
+        minute = 0
+        while minute < max_minute:
+            value = load_minutes.get(minute, 0)
+            run_end = minute
+            while run_end < max_minute and load_minutes.get(run_end + 1, 0) == value:
+                run_end += 1
+            if run_end > minute:
+                levels.append(value)
+            minute = run_end + 1
+        gaps = {}
+        for newer, older in zip(levels, levels[1:]):
+            gap = int(round((newer - older) * 10000))
+            if gap > 0:
+                gaps[gap] = gaps.get(gap, 0) + 1
+        repeated = [gap for gap, count in gaps.items() if count >= 2]
+        divisor = 0
+        for gap in repeated:
+            divisor = math.gcd(divisor, gap)
+        return divisor / 10000.0
+
     def fill_load_from_power(self, load_minutes, load_power_data):
         """
         This function helps to deal with load sensors which don't increment very often leading to poor quality load data
         For example if its in kWh units then it might take many hours to increment.
         Predbat actually wants a much more real time estimate, but integrating power sensors alone leads to drift over time.
 
-        Strategy: Divide data into 30-minute periods. For each period:
+        Strategy:
+        0. Flat runs of the load sensor while power shows consumption (a counter that moves in coarse steps,
+           or stalled and caught up) are taken with the rise after them and the counter's own rise is spread
+           over them in the shape of the power. The load sensor decides how much energy, the power only when
+           (#5855), so the total is the load sensor's.
+        Then divide data into 30-minute periods. For each period:
         1. Calculate total load consumed (difference between start and end of period)
         2. Integrate power data over that period
         3. Scale power data to match the total load
@@ -535,40 +571,100 @@ class Fetch:
                     period_start = None
                 last_value = current_value
 
-        # Check final period
-        if period_start is not None and period_start < max_minute:
-            period_length = max_minute - period_start + 1
-            # Only consider it zero load if it exceeds the gap_size threshold
-            if period_length >= gap_size:
-                has_power = any(load_power_data.get(m, 0) > 0 for m in range(period_start, max_minute + 1))
-                if has_power and last_value == 0:
-                    zero_periods.append((period_start, max_minute, last_value))
-
         # Fill zero periods with integrated power data
         if zero_periods:
-            self.log("Warn: Found {} periods of zero load with power data, filling using power integration".format(len(zero_periods)))
-            # Print the first 5 periods for debugging
-            for _i, (period_start, period_end, base_value) in enumerate(zero_periods[:5]):
-                start_timestamp = self.now_utc - timedelta(minutes=period_start)
-                self.log("Zero load period starting at {} ({} minutes) for {} minutes with base value {}".format(start_timestamp.strftime(TIME_FORMAT), period_start, period_end - period_start + 1, base_value))
+            # Work on the whole flat run: detection leaves out the minutes at either edge that still hold the
+            # plateau value, and filling inside them alone would let the series step backwards
+            flat_runs = []
+            for period_start, period_end, base_value in zero_periods:
+                while period_start > 0 and load_minutes.get(period_start - 1, 0) == base_value:
+                    period_start -= 1
+                while period_end < max_minute and load_minutes.get(period_end + 1, 0) == base_value:
+                    period_end += 1
+                flat_runs.append((period_start, period_end, base_value))
 
-            for period_start, period_end, _base_value in zero_periods:
-                # Integrate power data over this period
-                # First calculate total energy consumed in this period
-                total_energy = 0
-                for minute in range(period_start, period_end + 1):
-                    power = load_power_data.get(minute, 0)
-                    total_energy += power / 60.0 / 1000.0
+            # A flat run is the load sensor standing still while the power shows consumption. Whether energy is
+            # missing depends on how coarse the sensor is: a counter that moves in steps of quantum kWh can sit
+            # still for up to a step's worth of use, and then its next step holds that energy, so adding the
+            # power's energy on top as well counts it twice (#5855). Only a flat run holding well over a step's
+            # worth of power has lost readings.
+            quantum = self.load_counter_quantum(load_minutes, max_minute)
+            filled_runs = []
+            lift_after = {}
+            for period_start, period_end, base_value in flat_runs:
+                if base_value == 0 and period_end == max_minute:
+                    # The history starts at 0, so a flat run at the oldest minute can't tell a counter that didn't
+                    # exist yet from one that stalled: left for the history and gap fillers
+                    continue
+                # The value at a minute is the reading at that time, so the energy up to it is the power of the
+                # minutes after the run's oldest reading: period_end itself is the starting point
+                run_energy = sum(max(load_power_data.get(minute, 0), 0) for minute in range(period_start, period_end)) / 60.0 / 1000.0
+                if run_energy <= 0:
+                    continue
 
-                amount_to_fill = 0
-                for minute in range(period_end, period_start, -1):
-                    power = max(load_power_data.get(minute, 0), 0)
-                    energy = power / 60.0 / 1000.0
-                    amount_to_fill += energy
-                    new_load_minutes[minute] = new_load_minutes.get(minute, 0) + amount_to_fill
-                # Fill to start
-                for minute in range(period_start, -1, -1):
-                    new_load_minutes[minute] = new_load_minutes.get(minute, 0) + amount_to_fill
+                segment_start = period_start
+                if period_start == 0:
+                    # Up to now: not counted yet, so the power's energy is all there is
+                    run_share, ramp_rise, lift = run_energy, 0.0, 0.0
+                elif run_energy <= 2 * quantum:
+                    # A step's worth or less: the counter's next step holds it, and the counter decides how much.
+                    # Take the rise up to one step (spread over the reporting interval by the interpolation)
+                    while segment_start > 0 and load_minutes.get(segment_start - 1, 0) > load_minutes.get(segment_start, 0) and load_minutes.get(segment_start, 0) - base_value < quantum - 1e-6:
+                        segment_start -= 1
+                    rise = load_minutes.get(segment_start, 0) - base_value
+                    ramp_energy = sum(max(load_power_data.get(minute, 0), 0) for minute in range(segment_start, period_start)) / 60.0 / 1000.0
+                    if rise <= 0:
+                        continue
+                    run_share = rise * run_energy / (run_energy + ramp_energy)
+                    ramp_rise, lift = rise - run_share, 0.0
+                else:
+                    # Readings were lost. Whatever the counter made up afterwards - the rise much steeper than the
+                    # power explains - belongs to the run; only what it never made up is filled from the power
+                    ramp_energy = 0.0
+                    while segment_start > 0:
+                        increase = load_minutes.get(segment_start - 1, 0) - load_minutes.get(segment_start, 0)
+                        step_energy = max(load_power_data.get(segment_start - 1, 0), 0) / 60.0 / 1000.0
+                        if increase <= 2 * step_energy + 0.0005:
+                            break
+                        ramp_energy += step_energy
+                        segment_start -= 1
+                    rise = load_minutes.get(segment_start, 0) - base_value
+                    caught_up = max(rise - ramp_energy, 0.0)
+                    run_share = max(caught_up, run_energy)
+                    ramp_rise, lift = rise - caught_up, run_share - caught_up
+
+                # Ramp the run by the power up to its share, then the rise after it up to its own share
+                energy_so_far = 0.0
+                for minute in range(period_end, period_start - 1, -1):
+                    if minute < period_end:
+                        energy_so_far += max(load_power_data.get(minute, 0), 0) / 60.0 / 1000.0
+                    new_load_minutes[minute] = new_load_minutes.get(minute, 0) + base_value + run_share * energy_so_far / run_energy - load_minutes.get(minute, 0)
+                if segment_start < period_start:
+                    ramp_power = [max(load_power_data.get(minute, 0), 0) for minute in range(segment_start, period_start)]
+                    ramp_total = sum(ramp_power)
+                    so_far = 0.0
+                    for minute in range(period_start - 1, segment_start - 1, -1):
+                        so_far += ramp_power[minute - segment_start] if ramp_total > 0 else 1
+                        share = so_far / (ramp_total if ramp_total > 0 else len(ramp_power))
+                        new_load_minutes[minute] = new_load_minutes.get(minute, 0) + base_value + run_share + ramp_rise * share - load_minutes.get(minute, 0)
+                if lift > 0 and segment_start > 0:
+                    lift_after[segment_start - 1] = lift_after.get(segment_start - 1, 0) + lift
+                filled_runs.append((period_start, period_end, base_value, run_share if period_start == 0 else lift))
+
+            # Apply the lifts in one pass from the oldest minute to now
+            if lift_after:
+                lift_total = 0
+                for minute in range(max_minute, -1, -1):
+                    lift_total += lift_after.get(minute, 0)
+                    if lift_total:
+                        new_load_minutes[minute] = new_load_minutes.get(minute, 0) + lift_total
+
+            if filled_runs:
+                self.log("Warn: Found {} periods of zero load with power data, filling using power integration (load sensor steps {} kWh)".format(len(filled_runs), dp4(quantum)))
+                # Print the first 5 periods for debugging
+                for period_start, period_end, base_value, added in filled_runs[:5]:
+                    start_timestamp = self.now_utc - timedelta(minutes=period_start)
+                    self.log("Zero load period starting at {} ({} minutes) for {} minutes with base value {}, {} kWh added from load_power".format(start_timestamp.strftime(TIME_FORMAT), period_start, period_end - period_start + 1, base_value, dp4(added)))
 
         # Process in 30-minute periods
         period_length = 30
