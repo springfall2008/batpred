@@ -19,6 +19,8 @@ import aiohttp
 
 from annual_http import fetch_json
 from annual_profiles import DAY_BAND_SLOTS, MONTH_WEIGHTS, NIGHT_BAND_SLOTS, SHAPE_TILT_FRACTION, half_hour_shape
+from const import OCTOPUS_API_URL
+from utils import migrate_octopus_url
 
 MINUTES_PER_DAY = 24 * 60
 MINUTES_PER_SLOT = 30
@@ -134,7 +136,7 @@ def build_load_forecast(source, start_day, days):
     return forecast
 
 
-OCTOPUS_API_BASE = "https://api.octopus.energy/v1"
+OCTOPUS_API_BASE = "{}/v1".format(OCTOPUS_API_URL)
 SLOTS_PER_DAY = 48
 
 
@@ -256,7 +258,8 @@ class OctopusConsumptionLoadProfile(LoadProfileSource):
                     fetch_failed = True
                     break
                 rows += data["results"]
-                url = data.get("next", None)
+                # The new host still links further pages on the old one (GH#5786)
+                url = migrate_octopus_url(data.get("next", None))
                 pages += 1
 
         # A run only reaches its natural end when `url` runs out on its own. If a page request

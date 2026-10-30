@@ -38,6 +38,8 @@ from const import (
     EXPORT_MODE_FREEZE,
     EXPORT_MODE_IDLE,
     FULL_EXPORT_POWER,
+    OCTOPUS_API_URL,
+    OCTOPUS_LEGACY_API_HOST,
 )
 import copy
 import hashlib
@@ -1371,6 +1373,18 @@ def history_attribute_to_minute_data(now_utc, data, backwards=True):
     max_days = max(max_age.days, 1)
     mdata, _ = minute_data(history, max_days, now_utc, "state", "last_updated", backwards=backwards, smoothing=False, scale=1.0, clean_increment=False, required_unit=None)
     return [mdata, max_days]
+
+
+OCTOPUS_LEGACY_API_RE = re.compile(r"^https?://" + re.escape(OCTOPUS_LEGACY_API_HOST) + r"(?=[/?#:]|$)", re.IGNORECASE)
+
+
+def migrate_octopus_url(url):
+    """Return url with the retired Octopus API host (api.octopus.energy) replaced by its successor (GH#5786).
+
+    Anything else - another host, a non-string, None - is returned unchanged."""
+    if not isinstance(url, str):
+        return url
+    return OCTOPUS_LEGACY_API_RE.sub(OCTOPUS_API_URL, url, count=1)
 
 
 def filter_payment_method(rates, preferred="DIRECT_DEBIT"):

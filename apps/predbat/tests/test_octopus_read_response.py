@@ -55,7 +55,7 @@ async def test_octopus_read_response(my_predbat):
     response_data = {"data": {"key": "value"}, "status": "success"}
     response = create_mock_response(200, json.dumps(response_data))
 
-    result = await api.async_read_response(response, "https://api.octopus.energy/test")
+    result = await api.async_read_response(response, "https://api.oegb-kraken.energy/test")
 
     if result != response_data:
         print(f"ERROR: Expected {response_data}, got {result}")
@@ -69,7 +69,7 @@ async def test_octopus_read_response(my_predbat):
 
     response = create_mock_response(500, "Internal Server Error")
 
-    result = await api.async_read_response(response, "https://api.octopus.energy/test")
+    result = await api.async_read_response(response, "https://api.oegb-kraken.energy/test")
 
     if result is not None:
         print(f"ERROR: Expected None for server error, got {result}")
@@ -83,7 +83,7 @@ async def test_octopus_read_response(my_predbat):
 
     response = create_mock_response(401, "Unauthorized")
 
-    result = await api.async_read_response(response, "https://api.octopus.energy/test")
+    result = await api.async_read_response(response, "https://api.oegb-kraken.energy/test")
 
     if result is not None:
         print(f"ERROR: Expected None for 401 error, got {result}")
@@ -97,7 +97,7 @@ async def test_octopus_read_response(my_predbat):
 
     response = create_mock_response(403, "Forbidden")
 
-    result = await api.async_read_response(response, "https://api.octopus.energy/test")
+    result = await api.async_read_response(response, "https://api.oegb-kraken.energy/test")
 
     if result is not None:
         print(f"ERROR: Expected None for 403 error, got {result}")
@@ -111,7 +111,7 @@ async def test_octopus_read_response(my_predbat):
 
     response = create_mock_response(404, "Not Found")
 
-    result = await api.async_read_response(response, "https://api.octopus.energy/test")
+    result = await api.async_read_response(response, "https://api.oegb-kraken.energy/test")
 
     if result is not None:
         print(f"ERROR: Expected None for 404 error, got {result}")
@@ -125,7 +125,7 @@ async def test_octopus_read_response(my_predbat):
 
     response = create_mock_response(400, "Bad Request")
 
-    result = await api.async_read_response(response, "https://api.octopus.energy/test")
+    result = await api.async_read_response(response, "https://api.oegb-kraken.energy/test")
 
     if result is not None:
         print(f"ERROR: Expected None for 400 error, got {result}")
@@ -139,7 +139,7 @@ async def test_octopus_read_response(my_predbat):
 
     response = create_mock_response(200, "This is not valid JSON {]}")
 
-    result = await api.async_read_response(response, "https://api.octopus.energy/test")
+    result = await api.async_read_response(response, "https://api.oegb-kraken.energy/test")
 
     if result is not None:
         print(f"ERROR: Expected None for invalid JSON, got {result}")
@@ -154,7 +154,7 @@ async def test_octopus_read_response(my_predbat):
     response_data = {"errors": [{"message": "Field error", "extensions": {"errorCode": "SOME-ERROR"}}]}
     response = create_mock_response(200, json.dumps(response_data))
 
-    result = await api.async_read_response(response, "https://api.octopus.energy/v1/graphql/", ignore_errors=False)
+    result = await api.async_read_response(response, "https://api.oegb-kraken.energy/v1/graphql/", ignore_errors=False)
 
     if result != response_data:
         print(f"ERROR: Expected full response data for GraphQL errors, got {result}")
@@ -169,7 +169,7 @@ async def test_octopus_read_response(my_predbat):
     response_data = {"errors": [{"message": "Field error", "extensions": {"errorCode": "SOME-ERROR"}}], "data": {"someField": "value"}}
     response = create_mock_response(200, json.dumps(response_data))
 
-    result = await api.async_read_response(response, "https://api.octopus.energy/v1/graphql/", ignore_errors=True)
+    result = await api.async_read_response(response, "https://api.oegb-kraken.energy/v1/graphql/", ignore_errors=True)
 
     if result != response_data:
         print(f"ERROR: Expected data to be returned when ignore_errors=True, got {result}")
@@ -185,7 +185,7 @@ async def test_octopus_read_response(my_predbat):
         response_data = {"errors": [{"message": "Token expired", "extensions": {"errorCode": error_code}}]}
         response = create_mock_response(200, json.dumps(response_data))
 
-        result = await api.async_read_response(response, "https://api.octopus.energy/v1/graphql/", ignore_errors=False)
+        result = await api.async_read_response(response, "https://api.oegb-kraken.energy/v1/graphql/", ignore_errors=False)
 
         if result != response_data:
             print(f"ERROR: Expected full response for auth token error {error_code}, got {result}")
@@ -202,7 +202,7 @@ async def test_octopus_read_response(my_predbat):
     headers = {integration_context_header: "test-context"}
     response = create_mock_response(200, json.dumps(response_data), headers)
 
-    result = await api.async_read_response(response, "https://api.octopus.energy/test")
+    result = await api.async_read_response(response, "https://api.oegb-kraken.energy/test")
 
     if result != response_data:
         print(f"ERROR: Expected {response_data}, got {result}")
@@ -217,7 +217,7 @@ async def test_octopus_read_response(my_predbat):
     response_data = {"data": "test"}
     response = create_mock_response(200, json.dumps(response_data), {})
 
-    result = await api.async_read_response(response, "https://api.octopus.energy/test")
+    result = await api.async_read_response(response, "https://api.oegb-kraken.energy/test")
 
     if result != response_data:
         print(f"ERROR: Expected {response_data}, got {result}")
@@ -233,7 +233,7 @@ async def test_octopus_read_response(my_predbat):
     response = create_mock_response(200, json.dumps(response_data))
 
     # Should not treat as GraphQL error since URL doesn't contain "graphql"
-    result = await api.async_read_response(response, "https://api.octopus.energy/v1/products/", ignore_errors=False)
+    result = await api.async_read_response(response, "https://api.oegb-kraken.energy/v1/products/", ignore_errors=False)
 
     if result != response_data:
         print(f"ERROR: Expected non-GraphQL errors to be ignored, got {result}")
@@ -247,7 +247,7 @@ async def test_octopus_read_response(my_predbat):
 
     response = create_mock_response(502, "Bad Gateway")
 
-    result = await api.async_read_response(response, "https://api.octopus.energy/test")
+    result = await api.async_read_response(response, "https://api.oegb-kraken.energy/test")
 
     if result is not None:
         print(f"ERROR: Expected None for 502 error, got {result}")
@@ -262,7 +262,7 @@ async def test_octopus_read_response(my_predbat):
     response_data = {"created": True, "id": 123}
     response = create_mock_response(201, json.dumps(response_data))
 
-    result = await api.async_read_response(response, "https://api.octopus.energy/test")
+    result = await api.async_read_response(response, "https://api.oegb-kraken.energy/test")
 
     if result != response_data:
         print(f"ERROR: Expected {response_data} for 201 status, got {result}")

@@ -587,6 +587,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.octopus_intelligent_dynamic = True
         self.notify_devices = ["notify"]
         self.octopus_url_cache = {}
+        # apps.yaml URLs already warned about naming the old Octopus API address (GH#5786)
+        self.octopus_url_migrated = set()
         self.dispatch_timeline_last = {}
         self.dispatch_timeline_pending = []
         self.octopus_charge_target_base = {}

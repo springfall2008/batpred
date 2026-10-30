@@ -98,8 +98,8 @@ def run_nordpool_test(my_predbat):
     else:
         # First run: download everything live and save for future runs
         try:
-            rates_agile = my_predbat.download_octopus_rates("https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-A/standard-unit-rates/")
-            rates_agile_export = my_predbat.download_octopus_rates("https://api.octopus.energy/v1/products/AGILE-OUTGOING-BB-23-02-28/electricity-tariffs/E-1R-AGILE-OUTGOING-BB-23-02-28-A/standard-unit-rates/")
+            rates_agile = my_predbat.download_octopus_rates("https://api.oegb-kraken.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-A/standard-unit-rates/")
+            rates_agile_export = my_predbat.download_octopus_rates("https://api.oegb-kraken.energy/v1/products/AGILE-OUTGOING-BB-23-02-28/electricity-tariffs/E-1R-AGILE-OUTGOING-BB-23-02-28-A/standard-unit-rates/")
         except ValueError:
             print("WARN: Cannot download Agile rates from Octopus (network or product unavailable), skipping nordpool test")
             return False

@@ -176,7 +176,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         print("Run compare")
         compare_tariffs = [
             {"name": "Fixed exports", "rates_export": [{"rate": 15.0}], "config": {"load_scaling": 2.0}},
-            {"name": "Agile export", "rates_export_octopus_url": "https://api.octopus.energy/v1/products/AGILE-OUTGOING-BB-23-02-28/electricity-tariffs/E-1R-AGILE-OUTGOING-BB-23-02-28-A/standard-unit-rates/"},
+            {"name": "Agile export", "rates_export_octopus_url": "https://api.oegb-kraken.energy/v1/products/AGILE-OUTGOING-BB-23-02-28/electricity-tariffs/E-1R-AGILE-OUTGOING-BB-23-02-28-A/standard-unit-rates/"},
         ]
         my_predbat.args["compare"] = compare_tariffs
         compare = Compare(my_predbat)

@@ -272,6 +272,7 @@ from tests.test_annual_profiles import test_annual_profiles
 from tests.test_annual_load import test_annual_load, test_annual_load_octopus
 from tests.test_annual_weather import test_annual_weather, test_annual_weather_orientation_cache, test_annual_weather_window
 from tests.test_annual_tariff import test_annual_tariff
+from tests.test_octopus_domain import test_octopus_domain
 from tests.test_rate_add_io_slots import run_rate_add_io_slots_tests
 from tests.test_iog_car_need_gate import run_iog_car_need_gate_tests
 from tests.test_iog_charge_skew import run_iog_charge_skew_tests
@@ -725,6 +726,7 @@ def main():
         ("annual_weather_orientation_cache", test_annual_weather_orientation_cache, "Annual weather cache keys separate roof orientations", False),
         ("annual_weather_window", test_annual_weather_window, "Annual weather month-window fetch tests", False),
         ("annual_tariff", test_annual_tariff, "Annual prediction tariff tests", False),
+        ("octopus_domain", test_octopus_domain, "Octopus API domain move to api.oegb-kraken.energy (GH#5786)", False),
         ("solax", run_solax_tests, "SolaX API tests", False),
         ("sigenergy", run_sigenergy_tests, "Sigenergy Cloud API tests", False),
         ("iboost_smart", run_iboost_smart_tests, "iBoost smart tests", False),

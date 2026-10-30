@@ -218,6 +218,7 @@ def test_annual_load_octopus(my_predbat):
         if len(calls) == 1:
             return {"properties": [{"electricity_meter_points": [{"mpan": "1200000000000", "is_export": False, "meters": [{"serial_number": "S1"}]}]}]}
         if len(calls) == 2:
+            # The new Octopus host still links further pages on the old one (GH#5786)
             return {"results": results, "next": "https://api.octopus.energy/v1/electricity-meter-points/x/meters/y/consumption/?page=2"}
         return None
 
@@ -230,6 +231,9 @@ def test_annual_load_octopus(my_predbat):
         failed = True
     if fake_storage.saved:
         print("  ERROR: a truncated download must not be written to storage")
+        failed = True
+    if len(calls) != 3 or not calls[2].startswith("https://api.oegb-kraken.energy/"):
+        print("  ERROR: page 2 linked on the old Octopus host should be fetched from the new one, got {}".format(calls))
         failed = True
 
     return failed
