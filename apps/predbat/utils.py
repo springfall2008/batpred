@@ -38,6 +38,7 @@ from const import (
     EXPORT_MODE_FREEZE,
     EXPORT_MODE_IDLE,
     FULL_EXPORT_POWER,
+    POWER_SERVICES,
 )
 import copy
 import hashlib
@@ -952,6 +953,46 @@ def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=
             last_time = timekey
             prev_value = data[key]
     return results
+
+
+def services_send_power(args, direction=None, index=None):
+    """
+    Whether any start or freeze service (POWER_SERVICES) in apps.yaml sends the charge/discharge rate as {power}.
+
+    With a direction ("charge" or "discharge") only that direction's services count, as a rate sent
+    to a charge hook says nothing about what the discharge side was given.
+
+    A service given by name alone is passed every default option, power included. A template entry
+    passes only the keys it lists, so it sends the rate only where one of its values references {power}.
+    Only a string value is formatted, or each string in a per-inverter list; a nested mapping is passed
+    as it is, so a {power} inside one is never filled in and does not count. With an inverter index only
+    that inverter's entry of a per-inverter list counts, as it is the one that inverter is sent; without
+    one, any inverter's does.
+    """
+
+    def formats_power(value):
+        """Whether call_service_template() fills in {power} for this template value."""
+        # {power}, or with a format spec or conversion such as {power:.0f}, as str.format() takes it
+        if not isinstance(value, list):
+            items = [value]
+        elif index is None:
+            items = value
+        else:
+            items = value[index : index + 1]
+        return any(isinstance(item, str) and re.search(r"\{power[}:!]", item) for item in items)
+
+    for service in POWER_SERVICES:
+        if direction and not service.startswith(direction + "_"):
+            continue
+        templates = args.get(service)
+        if not templates:
+            continue
+        for template in templates if isinstance(templates, list) else [templates]:
+            if isinstance(template, str):
+                return True
+            if isinstance(template, dict) and any(formats_power(value) for key, value in template.items() if key != "service"):
+                return True
+    return False
 
 
 def is_entity_id(value):
