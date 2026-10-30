@@ -4528,17 +4528,18 @@ class SolisAPI(ComponentBase, OAuthMixin):
     def is_tou_v2_mode(self, sn):
         """
         Check if Time of Use V2 mode is enabled for the given inverter serial number.
-        Returns "1" if enabled, "0" otherwise.
+        Return True for V2, False for V1, or None if the register has not been read reliably.
         """
-        result = self.cached_values.get(sn, {}).get(SOLIS_CID_TOU_V2_MODE, "0")
+        result = self.cached_values.get(sn, {}).get(SOLIS_CID_TOU_V2_MODE)
+        if not isinstance(result, (str, int)) or isinstance(result, bool):
+            return None
         try:
             result = int(result)
         except (ValueError, TypeError):
-            result = 0
-        if result == 43605:
-            return True
-        else:
-            return False
+            return None
+        if not 0 <= result <= 65535:
+            return None
+        return result == 43605
 
     # ==================== Component Lifecycle ====================
 
@@ -4583,6 +4584,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
         # One-time startup configuration
         if first:
+            tou_mode_unknown = False
             # Create aiohttp session. Reused across startup attempts: the component backs off and
             # re-runs this whole block on every failed start, and a fresh session each time would
             # leak the previous one - which a spent API allowance makes a routine occurrence.
@@ -4630,7 +4632,15 @@ class SolisAPI(ComponentBase, OAuthMixin):
                     self.log(f"Solis API: Inverter {sn} reports no battery attached, so Predbat will read its PV data only and will not read or write its control registers")
                     continue
                 if not self.datalogger_offline(sn):
-                    await self.poll_inverter_data(sn, [SOLIS_CID_TOU_V2_MODE])  # Get TOU V2 mode status
+                    # An empty successful batch must not reuse a value from an earlier attempt.
+                    self.cached_values.get(sn, {}).pop(SOLIS_CID_TOU_V2_MODE, None)
+                    mode_read_success = await self.poll_inverter_data(sn, [SOLIS_CID_TOU_V2_MODE])
+                    if not mode_read_success or self.is_tou_v2_mode(sn) is None:
+                        # A timeout or empty/malformed response is not evidence of V1. Keep startup
+                        # pending so the component retries before choosing slot registers or writing.
+                        self.log(f"Warn: Solis API: Time of Use mode is unknown for inverter {sn}, retrying startup")
+                        tou_mode_unknown = True
+                        continue
                 if self.datalogger_offline(sn):
                     # Refused on this attempt, so its TOU mode and startup reset wait for the next one
                     poll_success = False
@@ -4657,6 +4667,15 @@ class SolisAPI(ComponentBase, OAuthMixin):
             if not self.inverter_sn:
                 self.log("Error: Solis API: No inverters to manage after discovery")
                 return False  # Stop further processing if no inverters
+
+            # Cached discovery can restore a fleet without reading its mode on this attempt.
+            # Keep telemetry and auto-config available, but leave queued events and control alone
+            # until every battery inverter's schedule format is known.
+            if tou_mode_unknown or any(self.is_battery_inverter(sn) and self.is_tou_v2_mode(sn) is None for sn in self.inverter_sn):
+                await self.publish_entities()
+                if self.automatic and not self.automatic_config_done:
+                    self.automatic_config_done = bool(await self.automatic_config())
+                return False
 
             self.warn_reserve_bound_to_over_discharge_soc()
 

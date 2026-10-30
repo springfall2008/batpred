@@ -2307,6 +2307,10 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_quota_diagnostic_survives_until_a_request_succeeds())
         failed |= asyncio.run(test_offline_datalogger_stops_being_polled())
         failed |= asyncio.run(test_run_survives_startup_register_reset_refusal())
+        failed |= test_tou_mode_requires_a_valid_register()
+        failed |= asyncio.run(test_run_retries_unknown_tou_mode())
+        failed |= asyncio.run(test_unknown_tou_mode_preserves_read_only_and_pv_only())
+        failed |= asyncio.run(test_cached_discovery_waits_for_tou_mode())
         failed |= asyncio.run(test_b0600_backs_off_without_calling_the_datalogger_offline())
         failed |= asyncio.run(test_startup_leaves_an_inverter_in_datalogger_cooldown_alone())
         failed |= asyncio.run(test_datalogger_diagnostic_dropped_once_the_inverter_leaves_the_rotation())
@@ -9098,3 +9102,139 @@ async def test_successful_discovery_is_cached_and_session_reused():
     if not failed:
         print("PASSED: discovery is cached and the startup retry reuses one session")
     return failed
+
+
+def test_tou_mode_requires_a_valid_register():
+    """An absent or malformed TOU register is unknown, while a valid V1 zero stays V1."""
+    api = MockSolisAPI()
+    api.is_tou_v2_mode = SolisAPI.is_tou_v2_mode.__get__(api)
+    assert api.is_tou_v2_mode("BAT001") is None
+    for value in (None, "", "unavailable", "43605.0", [], {}, True, 0.5, -1, 65536):
+        api.cached_values["BAT001"] = {SOLIS_CID_TOU_V2_MODE: value}
+        assert api.is_tou_v2_mode("BAT001") is None, value
+    for value, expected in (("0", False), (0, False), ("1", False), ("43605", True), (43605, True)):
+        api.cached_values["BAT001"] = {SOLIS_CID_TOU_V2_MODE: value}
+        assert api.is_tou_v2_mode("BAT001") is expected, value
+    return False
+
+
+async def test_run_retries_unknown_tou_mode():
+    """A failed/empty/malformed mode read must retry, then decode and control the actual format."""
+    sn = "BAT001"
+    for first_response in ("timeout", {}, {SOLIS_CID_TOU_V2_MODE: ""}, {SOLIS_CID_TOU_V2_MODE: "bad"}, {SOLIS_CID_TOU_V2_MODE: None}):
+        for recovered_mode in ("0", "43605"):
+            api = _make_run_api(configured_sns=[sn], control_enable=True, automatic=True)
+            api.session = _FakeAiohttpSession()
+            api.inverter_details[sn] = dict(_DETAIL_WITH_BATTERY)
+            # A prior startup attempt must not make an empty or failed batch look successful.
+            api.cached_values[sn] = {SOLIS_CID_TOU_V2_MODE: "0"}
+            api.is_tou_v2_mode = SolisAPI.is_tou_v2_mode.__get__(api)
+            api.poll_inverter_data = SolisAPI.poll_inverter_data.__get__(api)
+            batch_reads = []
+            single_reads = []
+            events = []
+            response = first_response
+
+            async def discover():
+                """Discover the synthetic battery inverter."""
+                return [{"sn": sn}]
+
+            async def read_batch(device, cids):
+                """Fail the initial mode read, then return the selected firmware mode."""
+                batch_reads.append((device, cids))
+                if cids == [SOLIS_CID_TOU_V2_MODE]:
+                    if response == "timeout":
+                        raise asyncio.TimeoutError("atReadBatch timeout")
+                    return response, {}
+                return {}, {}
+
+            async def read_cid(device, cid):
+                """Record V1 slot reads without sending a request."""
+                single_reads.append((device, cid))
+                return "0", {}
+
+            async def queued_event():
+                """Record when a previously queued control event is allowed to run."""
+                events.append("drained")
+
+            api.get_inverter_list = discover
+            api.read_batch = read_batch
+            api.read_cid = read_cid
+            api.queued_events.append((queued_event,))
+            assert await api.run(0, True) is False, first_response
+            assert api.is_tou_v2_mode(sn) is None, first_response
+            assert batch_reads == [(sn, [SOLIS_CID_TOU_V2_MODE])], batch_reads
+            assert single_reads == []
+            assert api.decode_time_windows_calls == [] and api.decode_time_windows_v2_calls == []
+            assert api.startup_reset_registers_calls == []
+            assert api.reset_charge_windows_calls == [] and api.write_time_windows_calls == []
+            assert events == [] and len(api.queued_events) == 1
+            assert api.update_success_timestamp_calls == 0
+            assert api.publish_entities_calls == 1 and api.automatic_config_calls == 1
+            assert not any("is in standard Time of Use mode" in message for message in api.log_messages)
+
+            response = {SOLIS_CID_TOU_V2_MODE: recovered_mode}
+            assert await api.run(120, True) is True, recovered_mode
+            assert sum(cids == [SOLIS_CID_TOU_V2_MODE] for _, cids in batch_reads) == 2
+            assert api.is_tou_v2_mode(sn) is (recovered_mode == "43605")
+            assert api.decode_time_windows_v2_calls == ([sn] if recovered_mode == "43605" else [])
+            assert api.decode_time_windows_calls == ([sn] if recovered_mode == "0" else [])
+            assert any(cids == SOLIS_CID_LIST_TOU_V2 for _, cids in batch_reads) is (recovered_mode == "43605")
+            assert api.write_time_windows_calls == [sn]
+            assert events == ["drained"] and api.queued_events == []
+            assert api.update_success_timestamp_calls == 1
+    return False
+
+
+async def test_unknown_tou_mode_preserves_read_only_and_pv_only():
+    """Read-only startup keeps publishing on a failed mode read; PV-only needs no mode register."""
+    sn = "BAT001"
+    api = _make_run_api(configured_sns=[sn], control_enable=False, automatic=True)
+    api.session = _FakeAiohttpSession()
+    api.is_tou_v2_mode = SolisAPI.is_tou_v2_mode.__get__(api)
+    api.inverter_details[sn] = dict(_DETAIL_WITH_BATTERY)
+
+    async def discover():
+        """Discover one synthetic inverter."""
+        return [{"sn": sn}]
+
+    async def fail_mode_read(device, cids, batch=True):
+        """Refuse the remote mode read without changing telemetry."""
+        api.poll_inverter_data_calls.append((device, cids))
+        return False
+
+    api.get_inverter_list = discover
+    api.poll_inverter_data = fail_mode_read
+    assert await api.run(0, True) is False
+    assert api.publish_entities_calls == 1 and api.automatic_config_calls == 1
+    assert api.write_time_windows_calls == [] and api.startup_reset_registers_calls == []
+
+    # PV-only hardware has no storage registers and must still complete startup.
+    api.inverter_details[sn] = dict(_DETAIL_NO_BATTERY)
+    api.poll_inverter_data_calls.clear()
+    assert await api.run(120, True) is True
+    assert api.poll_inverter_data_calls == []
+    assert api.write_time_windows_calls == [] and api.startup_reset_registers_calls == []
+    return False
+
+
+async def test_cached_discovery_waits_for_tou_mode():
+    """A cached fleet can bind telemetry during an outage, but cannot choose a schedule format."""
+    sn = "BAT001"
+    storage = _FakeStorage({("solis", "discovery"): {"inverter_sn": [sn], "inverter_details": {sn: dict(_DETAIL_WITH_BATTERY)}}})
+    api = _storage_api(storage)
+    api.session = _FakeAiohttpSession()
+    api.is_tou_v2_mode = SolisAPI.is_tou_v2_mode.__get__(api)
+
+    async def refuse_discovery():
+        """Leave startup to restore the saved fleet during a cloud outage."""
+        raise solis_module.SolisAPIError("temporary discovery failure")
+
+    api.get_inverter_list = refuse_discovery
+    assert await api.run(0, True) is False
+    assert api.inverter_sn == [sn]
+    assert api.publish_entities_calls == 1 and api.automatic_config_calls == 1
+    assert api.poll_inverter_data_calls == []
+    assert api.decode_time_windows_calls == [] and api.decode_time_windows_v2_calls == []
+    assert api.write_time_windows_calls == [] and api.update_success_timestamp_calls == 0
+    return False
