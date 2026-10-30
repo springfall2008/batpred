@@ -98,6 +98,7 @@ The following `apps.yaml` settings can be overridden using predbat_manual_api:
 - import_export_scaling
 - inverter_limit_charge
 - inverter_limit_discharge
+- inverter_limit_export
 
 ## Example solution to over-ride predicted house load
 
